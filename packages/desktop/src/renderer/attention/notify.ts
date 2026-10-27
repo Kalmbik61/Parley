@@ -206,6 +206,20 @@ function freshMail(tops: Map<string, number>, key: string, entry: WindowWorkEntr
   return { letters, mentioned };
 }
 
+/**
+ * Комнаты события для `freshMail`. Комната с `reread` письма почти не несёт: событие урезано потолком кадра или склеено для
+ * медленного окна, а письма её окно дочитает страницей, только если комнату откроет. Упоминания человека в ней есть в
+ * `mentionCandidates` события — целиком, с текстом, — и уведомляют отсюда: иначе в неоткрытой комнате не уведомил бы никто.
+ */
+function withCandidates(event: RoomsMailEvent): readonly MailBatch[] {
+  return event.rooms.map((room) => {
+    if (room.reread !== true) return room;
+    const held = new Set(room.letters.map((message) => message.id));
+    const extra = event.mentionCandidates.filter((message) => message.roomId === room.roomId && !held.has(message.id));
+    return extra.length === 0 ? room : { ...room, letters: [...room.letters, ...extra] };
+  });
+}
+
 /** Тег решения (1.10): один на комнату — и у уведомления macOS, и у карточки в окне. */
 const decisionTag = (key: string, roomId: string): string => `proposal:${key}:${roomId}`;
 
@@ -608,7 +622,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       if (mailTops === null) return;
       const entry = deps.entries().find((item) => item.projectPath === event.projectPath && item.map.work.id === event.workId);
       if (entry === undefined || entry.map.compact?.version !== 2) return;
-      const fresh = freshMail(mailTops, workKey(event.projectPath, event.workId), entry, event.rooms);
+      const fresh = freshMail(mailTops, workKey(event.projectPath, event.workId), entry, withCandidates(event));
       if (!deps.prefs().mail) return;
       announce(entry, fresh);
     },

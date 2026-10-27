@@ -1253,6 +1253,32 @@ describe('createAttentionNotifier.onMail — письма событием rooms
     expect(h.notes).toHaveLength(3);
   });
 
+  // Находка I3 итогового ревью: склеенное для медленного окна (или урезанное потолком кадра) событие несёт комнаты с `reread`
+  // и без писем. Прямое письмо человеку хост оставляет в нём (письма человеку немногочисленны и малы), а упоминание в комнате,
+  // которой окно не открывало, — в `mentionCandidates`: они целиком и с текстом.
+  it('склеенное событие: прямое письмо и упоминание в неоткрытой комнате уведомляют один раз', () => {
+    const h = started({}, [room('r-01', 'Mobile APP', null)]);
+    const question = direct('m-1', { kind: 'question', text: 'Which API?' });
+    const mentioned = mention('m-3');
+    const glued = makeMailEvent({
+      projectPath: '/tmp/p',
+      version: 2,
+      prevVersion: 1,
+      rooms: [batch(null, [question], { reread: true }), batch('r-01', [], { reread: true, top: 3, total: 3 })],
+      mentionCandidates: [mentioned],
+    });
+    h.notifier.onMail(glued);
+    expect(h.notes.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01', mentionTag('r-01')]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Which API?', 'Ready for review, @you']);
+    expect(h.chimes).toBe(2);
+
+    // Повтор события, а затем те же письма страницами после `reread` — без второго уведомления.
+    h.notifier.onMail(glued);
+    h.entries = [holding([question, mentioned], {}, [room('r-01', 'Mobile APP', null)])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(2);
+  });
+
   it('держимые письма по onWorks: те же правила окна — не от человека, прочитанные, не человеку, без @human, архивная комната молчат', () => {
     const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Old', null, { archivedAt: '2026-01-02T00:00:00.000Z' })];
     const h = started({}, rooms);

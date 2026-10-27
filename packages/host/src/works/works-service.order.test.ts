@@ -24,7 +24,7 @@ vi.mock('@parley/core', async (importOriginal) => {
   };
 });
 
-const { addSession, createWork, readWorks, transitionSession, updateMap } =
+const { addRoom, addSession, createWork, readWorks, transitionSession, updateMap, workVersion, writeLetters } =
   await import('@parley/core');
 const { createWorksService } = await import('./works-service.js');
 
@@ -119,5 +119,40 @@ describe('порядок чтений', () => {
     await waitFor(() => refreshed);
 
     expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
+  });
+
+  // Находка I2 итогового ревью: список, начатый до письма, возвращается после того, как хост уже перечитал запись работы под
+  // письмо; наблюдатель ядра отсеивает только чтения старее принятого, а это — новее по номеру, но старее по версии работы.
+  it('чтение списка, начатое до письма, не откатывает запись работы', async () => {
+    const map = await createWork(project, { title: 'A' });
+    await updateMap(project, map.work.id, (current) => {
+      addRoom(current, { title: 'Комната', creator: 'human', members: [], lead: null });
+    });
+    const s = createWorksService(fakeHost(), { debounceMs: 20 });
+    service = s;
+    await s.start();
+    const started = s.entry(project, map.work.id)?.version;
+    expect(started).toBeDefined();
+
+    // Чтение списка началось до письма и ещё в пути.
+    const before = await readWorks();
+    writeLetters(project, map.work.id, (letters) => {
+      letters.add({ kind: 'note', from: 'human', to: [], roomId: 'r-01', text: 'письмо' });
+    });
+    const after = workVersion(project, map.work.id);
+    expect(after).toBeGreaterThan(started!);
+    // Пачка писем уходит через `MAIL_BATCH_MS`, и тогда запись работы перечитывается под письмо.
+    await waitFor(() => s.entry(project, map.work.id)?.version === after);
+
+    let refreshed = false;
+    s.onChange(() => {
+      refreshed = true;
+    });
+    deliver[0]?.(before, 5);
+    await waitFor(() => refreshed);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(s.entry(project, map.work.id)?.version).toBe(after);
+    expect(s.windowSnapshot().entries.find((entry) => entry.map.work.id === map.work.id)?.version).toBe(after);
   });
 });

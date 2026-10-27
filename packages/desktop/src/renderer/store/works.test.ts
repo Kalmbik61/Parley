@@ -537,6 +537,43 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     dispose();
   });
 
+  // Смешанная запись: снимок её версии вышел раньше события, поэтому событие (5, 6] приходит устаревшим по версии, а
+  // письма и отметки комнат, урезанных потолком кадра или склеенных для медленного окна, несёт только `reread` (находка I1).
+  it('устаревшее событие с reread у держимой комнаты дочитывает её', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 6, [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')]));
+    bridge.setHandler('context.messages', () => page([letter('m-08', { readBy: { human: 'T' } })]));
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        version: 6,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 8, top: 8, total: 8, reread: true }), makeMailRoom('r-02', { prevTop: 0, top: 0, total: 0, reread: true })],
+      }),
+    );
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
+    // Держимая комната прочитана с начала держимого, чужая — нет; разрыва нет, и починка работы не идёт.
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  it('устаревшее событие, чьи письма окно не дослало (верх ниже prevTop), дочитывается от вершины вниз', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 6));
+    bridge.setHandler('context.messages', () => page([letter('m-10'), letter('m-11'), letter('m-12')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
+    await vi.waitFor(() => expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11', 'm-12']));
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  it('устаревшее событие с reread перечитывает комнату, но числа окна не трогает', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 9));
+    bridge.setHandler('context.messages', () => page([letter('m-08')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [makeMailRoom('r-01', { prevTop: 8, top: 8, total: 8, reread: true })], unread: { letters: 5, rooms: { 'r-01': 5 } } }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: {} });
+    dispose();
+  });
+
   it('событие раньше снимка с комнатой ждёт снимка этой работы с version >= версии события и применяется', async () => {
     const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
     const delivered: string[][] = [];

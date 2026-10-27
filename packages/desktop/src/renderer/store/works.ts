@@ -12,7 +12,9 @@
  * Письма и отметки прочтения приходят событием `rooms.mail` (спека rooms.mail 6.3-6.5), если хост объявил признак
  * `rooms-mail`: без него события нет, и окно живёт по `works.changed`, как прежде. Окно помнит версию каждой работы —
  * из снимка и из последнего применённого события — и сверяет с ней версии события. Версия события не больше версии окна —
- * это повтор или обогнавший событие снимок: письма сливаются, а числа не трогаются. `prevVersion` не больше версии окна —
+ * это повтор или обогнавший событие снимок: письма сливаются, а числа не трогаются, но `reread` комнат и отставание их верха
+ * дочитываются и у такого события (его комнаты урезаны потолком кадра, а снимок писем не несёт). Снимок старее версии окна
+ * структуру берёт, а числа и кандидатов в упоминания оставляет от события. `prevVersion` не больше версии окна —
  * событие применяется: спека говорит «не равной», но смысл тот же — окно что-то упустило, только если событие начинается
  * после того, что оно держит, а пачка смешанной записи хоста держит `prevVersion` первой записи, пока в неё вливаются
  * следующие, и снимок мог выйти внутри неё (событие несёт письма и отметки всего `(prevVersion, version]`). `prevVersion`
@@ -217,10 +219,12 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       // смешанной записи, начатая до снимка, пропущенного нет (подробнее — в описании `deliver`).
       const gap = !stale && (version === undefined || event.prevVersion > version);
       // Версия сошлась, но верх держимой комнаты ниже `prevTop` (письма между ними потерялись) или комната помечена `reread`.
+      // Это и у устаревшего события: событие смешанной записи приходит после снимка своей версии, и урезанные потолком
+      // кадра или склеенные для медленного окна комнаты несут `reread` без писем — дочитать их, кроме как здесь, некому.
       const ranges = heldRanges(before);
       const lagging: Array<string | null> = [];
       const rereading: Array<string | null> = [];
-      if (!stale && !gap) {
+      if (!gap) {
         for (const room of event.rooms) {
           const range = ranges.get(room.roomId);
           if (range === undefined) continue;
@@ -237,7 +241,6 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       }));
       if (!stale) held.set(key, event.version);
       notifyMail(event);
-      if (stale) return;
 
       if (gap) {
         repairOf(key).again = true;
@@ -315,20 +318,33 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         applied = snapshot.revision;
       }
       const present = new Set<string>();
+      // Работы, чей снимок старее версии, которой окно уже располагает (событие обогнало снимок, собранный до письма).
+      const older = new Set<string>();
       for (const entry of snapshot.entries) {
         const key = mailKey(entry.projectPath, entry.map.work.id);
         present.add(key);
         // Снимок ставит `held = max(held, version)`; без версии окно не знает, чем располагает, и забывает прежнюю.
+        const prior = held.get(key);
         if (entry.version === undefined) held.delete(key);
-        else held.set(key, Math.max(held.get(key) ?? entry.version, entry.version));
+        else {
+          if (prior !== undefined && entry.version < prior) older.add(key);
+          held.set(key, Math.max(prior ?? entry.version, entry.version));
+        }
       }
       for (const key of [...held.keys()]) if (!present.has(key)) held.delete(key);
       set((state) => {
         const previous = new Map(state.entries.map((entry) => [mailKey(entry.projectPath, entry.map.work.id), entry]));
         return {
-          entries: snapshot.entries.map((entry) =>
-            keepHeld(previous.get(mailKey(entry.projectPath, entry.map.work.id)), entry, heldPolicy(entry.projectPath, entry.map.work.id).floor),
-          ),
+          entries: snapshot.entries.map((entry) => {
+            const key = mailKey(entry.projectPath, entry.map.work.id);
+            const prev = previous.get(key);
+            // Снимок старее события, уже применённого окном: структура (комнаты, сессии, план) берётся из него, а числа и
+            // кандидаты в упоминания остаются от события — иначе снимок, вышедший позже, откатил бы их, а нового события
+            // у работы может не быть (последнее письмо переписки).
+            const numbers = older.has(key) && entry.map.compact?.version === 2 ? prev?.map.compact : undefined;
+            const next = numbers?.version === 2 ? { ...entry, map: { ...entry.map, compact: numbers } } : entry;
+            return keepHeld(prev, next, heldPolicy(entry.projectPath, entry.map.work.id).floor);
+          }),
           branches: snapshot.branches,
           loading: false,
           error: null,

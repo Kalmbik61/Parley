@@ -167,6 +167,8 @@
 - [ ] **Step 4: Run** ту же команду. Expected: PASS. Плюс `pnpm --filter @parley/protocol exec vitest run`.
 - [ ] **Step 5: Commit** `feat(protocol,host): add the rooms.mail event type, one-encode broadcast and window counters`
 
+> Примечание: счётчик `lettersOnlyRefreshes` и метод `lettersOnlyRefresh()` из этой задачи убраны до слияния. Запись только писем этого процесса не может начать полный проход по построению (подписка `onMapWritten` в `watchWorks` не зовёт `schedule()`), так что считать нечего; свидетельство — `refreshCount`: от писем он не растёт. Упоминания счётчика ниже (тест строки состояния, шаг приёмки в задаче 10) — исторический текст плана.
+
 ### Task 4: Хост — путь «только письма», событие и старые окна
 
 **Files:**

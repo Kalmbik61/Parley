@@ -15,7 +15,8 @@
  * читает при открытии (`openRoom`, `openMail`), дальше письма приходят событиями, а «загрузить раньше» идёт от наименьшего
  * держимого номера. Здесь же — что окно помнит о комнатах, чтобы письма не пропадали и не копились: какие открывались
  * (`opened`: у неоткрытых событие обновляет одни числа) и докуда человек подгрузил историю (цепочка: `keepHeld` её не срежет).
- * Оригинал цитаты, которого окно не держит, берётся письмом по id (`loadQuote`, метод `context.letter`).
+ * Оригинал цитаты, которого окно не держит, берётся письмом по id (`loadQuote`, метод `context.letter`): не больше 200 на работу,
+ * отключение от хоста их забывает.
  *
  * Открытие, которое хост отклонил, повторяется само: с отступом 1 с, вдвое дольше после каждого сбоя подряд, до 30 с
  * (`openRoom`, как у починки разрыва в `works.ts`). Повтор останавливают: письма комнаты встали (событие, починка), работы
@@ -66,6 +67,9 @@ const roomKeyOf = (projectPath: string, workId: string, roomId: string | null): 
 const keyOf = (entry: WindowWorkEntry, roomId: string | null): string => roomKeyOf(entry.projectPath, entry.map.work.id, roomId);
 const quoteKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
+/** Оригиналов цитат на работу: набор растёт только от прокрутки человека, а ушедший оригинал просится заново, когда цитата снова нужна. */
+const QUOTES_MAX = 200;
+
 /** Запросы, что уже в пути: открытие комнаты и цитаты. Одно и то же дважды (повторная отрисовка, StrictMode) не шлётся. */
 const opening = new Map<string, Promise<void>>();
 const quoting = new Set<string>();
@@ -115,9 +119,13 @@ function syncOpen(key: string, markOpened: boolean): void {
   });
 }
 
-/** Снимает все повторы открытия: связи с хостом нет, а открытые панели начнут заново, когда она вернётся. */
+/**
+ * Снимает все повторы открытия: связи с хостом нет, а открытые панели начнут заново, когда она вернётся. Оригиналы цитат
+ * тоже забываются: хост после возврата мог быть другим, а нужные цитаты панель спросит заново.
+ */
 export function stopOpenRetries(): void {
   retryEpoch += 1;
+  if (Object.keys(useRoomPagesStore.getState().quotes).length > 0) useRoomPagesStore.setState({ quotes: {} });
   for (const key of [...openRetries.keys()]) {
     forgetRetry(key);
     syncOpen(key, false);
@@ -345,7 +353,13 @@ export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
     quoting.add(key);
     try {
       const { message } = await bridge.call('context.letter', { projectPath: entry.projectPath, workId: entry.map.work.id, id });
-      set((state) => ({ quotes: { ...state.quotes, [workKey]: { ...state.quotes[workKey], [id]: message } } }));
+      set((state) => {
+        // Ключи идут в порядке загрузки (`m-N` — не целое число): уходят загруженные раньше всех, только что пришедший остаётся.
+        const kept = { ...state.quotes[workKey], [id]: message };
+        const ids = Object.keys(kept);
+        for (const stale of ids.slice(0, Math.max(0, ids.length - QUOTES_MAX))) Reflect.deleteProperty(kept, stale);
+        return { quotes: { ...state.quotes, [workKey]: kept } };
+      });
     } finally {
       quoting.delete(key);
     }

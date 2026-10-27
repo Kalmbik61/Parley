@@ -207,6 +207,64 @@ describe('fitMailEvent: потолок кадра', () => {
   });
 });
 
+describe('fitMailEvent: письма человеку (итоговое ревью, I3)', () => {
+  const toHuman = (n: number, bytes: number, patch: Partial<Message> = {}): Message => ({ ...letter(n, bytes), to: [HUMAN], ...patch });
+  const directFromAgent = (n: number, bytes: number): Message => ({ ...letter(n, bytes), roomId: null, to: [HUMAN] });
+
+  it('комната, которой не хватило, оставляет письма человеку и reread: прочие письма комнаты не едут', () => {
+    const big = Array.from({ length: 80 }, (_, at) => letter(at + 1, 4000));
+    const mine = toHuman(500, 200);
+    const event = eventOf([room('r-01', { letters: [letter(400, 50)] }), room('r-02', { letters: [...big, mine] })]);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[0]?.letters).toHaveLength(1);
+    expect(fitted.rooms[1]).toMatchObject({ roomId: 'r-02', letters: [mine], reread: true });
+  });
+
+  it('прямое письмо от агента едет, даже когда Mail не влез целиком; письмо от человека в Mail — нет', () => {
+    // Письма человека агентам в Mail — не письма человеку: прямое письмо от не-человека одно, остальные тяжёлые.
+    const fromHuman = (n: number, bytes: number): Message => ({ ...letter(n, bytes), roomId: null, from: HUMAN, to: ['s-01'] });
+    const mine = directFromAgent(601, 100);
+    const filler = Array.from({ length: 80 }, (_, at) => fromHuman(at + 1, 4000));
+    const event = eventOf([room('r-01', { letters: [letter(400, 50)] }), { ...room('r-02'), roomId: null, letters: [...filler, fromHuman(600, 100), mine] }]);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[1]).toMatchObject({ roomId: null, letters: [mine], reread: true });
+  });
+
+  it('письма человека, что не влезли и сами, уходят: остаётся reread, кадр держит потолок', () => {
+    const mine = Array.from({ length: 10 }, (_, at) => toHuman(at + 1, 30_000));
+    const event = eventOf([room('r-01', { letters: mine })]);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[0]).toMatchObject({ roomId: 'r-01', letters: [], reread: true });
+  });
+
+  it('письма человека оплачены вперёд: комната без них, занявшая остаток вплотную, уступает, а комната с ними не теряет их', () => {
+    const mine = toHuman(900, 300);
+    const bare = eventOf([room('r-01'), room('r-02')]);
+    // Остаток кадра без писем и без reread двух комнат; письма первой комнаты занимают его, оставляя меньше, чем весит письмо
+    // человека во второй: без предоплаты первая комната влезла бы, а вторая осталась бы без письма человеку.
+    const free = MAIL_EVENT_MAX_BYTES - frame(bare) - 2 * Buffer.byteLength(',"reread":true');
+    const mineBytes = Buffer.byteLength(JSON.stringify([mine])) - 2;
+    const overhead = Buffer.byteLength(JSON.stringify([letter(1, 0)])) - 2;
+    const fill = letter(1, free - Math.floor(mineBytes / 2) - overhead);
+    const event = eventOf([room('r-01', { letters: [fill] }), room('r-02', { letters: [letter(800, 30_000), mine] })]);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[0]).toMatchObject({ roomId: 'r-01', letters: [], reread: true });
+    expect(fitted.rooms[1]?.letters).toContainEqual(mine);
+  });
+});
+
 describe('gluedMailEvent: склеенное событие для медленного клиента', () => {
   it('склеенное событие сохраняет отметки человека и удаления: письма и отметки других читателей не едут, reread у каждой комнаты', () => {
     const at = '2026-10-27T10:00:00.000Z';
@@ -226,6 +284,36 @@ describe('gluedMailEvent: склеенное событие для медлен�
     // Числа и кандидаты прежние: окну они нужны и по комнатам, которых оно не держит.
     expect(glued.rooms[0]).toMatchObject({ prevTop: 1, top: 2, total: 2 });
     expect(glued.mentionCandidates).toEqual(event.mentionCandidates);
+  });
+
+  // Находка I3 итогового ревью: окно уведомляет о письме человеку по самому событию, а письмо, дочитываемое страницей,
+  // неоткрытая комната не дочитает никогда; письма человеку немногочисленны и малы.
+  it('склеенное событие сохраняет письма человеку: прямое от агента и с человеком среди адресатов; прочие письма не едут', () => {
+    const direct: Message = { ...letter(5, 80), roomId: null, to: [HUMAN] };
+    const asked: Message = { ...letter(6, 80), to: [HUMAN] };
+    const ownDirect: Message = { ...letter(7, 80), roomId: null, from: HUMAN, to: ['s-01'] };
+    const event = eventOf([
+      { ...room('r-01'), roomId: null, letters: [direct, ownDirect] },
+      room('r-02', { letters: [letter(8, 80), asked, letter(9, 80)] }),
+      room('r-03', { letters: [letter(10, 80)] }),
+    ]);
+
+    const glued = gluedMailEvent(event);
+
+    expect(glued.rooms[0]).toMatchObject({ roomId: null, letters: [direct], reread: true });
+    expect(glued.rooms[1]).toMatchObject({ roomId: 'r-02', letters: [asked], reread: true });
+    expect(glued.rooms[2]).toMatchObject({ roomId: 'r-03', letters: [], reread: true });
+    expect(frame(glued)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+  });
+
+  it('письма человеку, что сами не влезли в кадр, не едут: остаётся reread, как у прочих писем', () => {
+    const mine = Array.from({ length: 10 }, (_, at) => ({ ...letter(at + 1, 30_000), to: [HUMAN] }));
+    const event = eventOf([room('r-01', { letters: mine }), room('r-02', { letters: [] })]);
+
+    const glued = gluedMailEvent(event);
+
+    expect(glued.rooms[0]).toMatchObject({ roomId: 'r-01', letters: [], reread: true });
+    expect(frame(glued)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
   });
 });
 

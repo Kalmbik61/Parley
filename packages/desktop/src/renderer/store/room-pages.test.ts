@@ -713,5 +713,30 @@ describe('снимок без писем: открытие комнаты, Mail 
       await useRoomPagesStore.getState().loadQuote(bridge, current, 'm-03');
       expect(useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01']?.['m-03']?.id).toBe('m-03');
     });
+
+    // Находка M2 итогового ревью: набор оригиналов рос на каждую цитату, до которой человек долистал, всю жизнь окна.
+    it('на работу держится не больше 200 оригиналов: самые поздно загруженные остаются, прежние уходят', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('context.letter', (params) => ({ message: unread(params.id) }));
+      const current = v2([]);
+      for (let n = 1; n <= 205; n += 1) await useRoomPagesStore.getState().loadQuote(bridge, current, `m-${n}`);
+      const quotes = useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01'] ?? {};
+      expect(Object.keys(quotes)).toHaveLength(200);
+      expect(quotes['m-5']).toBeUndefined();
+      expect(quotes['m-6']?.id).toBe('m-6');
+      expect(quotes['m-205']?.id).toBe('m-205');
+      // Ушедший оригинал просится заново: записи нет — спрашивали не «до конца жизни окна».
+      await useRoomPagesStore.getState().loadQuote(bridge, current, 'm-1');
+      expect(useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01']?.['m-1']?.id).toBe('m-1');
+    });
+
+    it('отключение от хоста (stopOpenRetries, его зовёт dispose стора работ) забывает оригиналы цитат', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('context.letter', (params) => ({ message: unread(params.id) }));
+      await useRoomPagesStore.getState().loadQuote(bridge, v2([]), 'm-03');
+      expect(Object.keys(useRoomPagesStore.getState().quotes)).toHaveLength(1);
+      stopOpenRetries();
+      expect(useRoomPagesStore.getState().quotes).toEqual({});
+    });
   });
 });

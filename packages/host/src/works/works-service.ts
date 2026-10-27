@@ -17,7 +17,7 @@
  *
  * Запись другого процесса (спека 6.11) журнала не имеет и приходит полным проходом: хост помнит по работе версию и наибольший
  * объявленный номер письма (`mailKnown`) и называет письма новее этого номера, когда версия сменилась без его собственной
- * записи — в начале прохода, перед публикацией снимка, или в своей записи, чей `prevVersion` перешагнул известную версию.
+ * записи — в конце прохода, прямо перед публикацией снимка, или в своей записи, чей `prevVersion` перешагнул известную версию.
  * Они идут той же пачкой, что и смешанная запись: после снимка, который их включает; комнаты с ними получают `reread`.
  */
 
@@ -855,6 +855,16 @@ export function createWorksService(
     for (const key of mailKnown.keys()) if (!entries.has(key)) mailKnown.delete(key);
   }
 
+  /**
+   * Запись работы из прочитанного списка против записи, которую сервис уже держит: список, начатый до письма, приходит
+   * после перечитывания записи под письмо (`refreshEntry`) и нёс бы работу прежней версии. Точная версия ниже держимой —
+   * остаётся держимая; без точной версии (чтение вклинилось в запись) список берётся как есть, как и работа, которой
+   * сервис ещё не знает. Версия работы только растёт: новая работа под прежним id получает версию по часам (`createWork`).
+   */
+  function newerOf(work: WorkEntry, current: WorkEntry | undefined): WorkEntry {
+    return work.version !== undefined && current?.version !== undefined && work.version < current.version ? current : work;
+  }
+
   /** Источник перемен списка — `watchWorks` на всю базу, источник писем — `onMapWritten`; заводятся на `start`. */
   function ensureWatcher(): void {
     if (stopped || watcher !== undefined) return;
@@ -865,7 +875,8 @@ export function createWorksService(
         // Чтение, начатое раньше уже принятого, может прийти позже свежего.
         if (seq < latestSeq) return;
         latestSeq = seq;
-        latest = works;
+        // Список мог начаться до письма, которое хост уже перечитал под своей записью (`refreshEntry`): откатывать её нельзя.
+        latest = works.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id))));
         scheduleRefresh();
       },
       {
@@ -917,13 +928,14 @@ export function createWorksService(
     }
   }
 
-  async function refreshPass(works: readonly WorkEntry[]): Promise<void> {
+  async function refreshPass(listed: readonly WorkEntry[]): Promise<void> {
     if (stopped) return;
     const previous = buildSnapshot();
 
-    // `works` — уже полный список: `readWorks` каждый раз берёт всю таблицу `works`
+    // `listed` — уже полный список: `readWorks` каждый раз берёт всю таблицу `works`
     // (неизменённая работа — из кэша по версии), поэтому карту сервиса можно просто
-    // заменить целиком, слитую по ключу `projectPath+workId`.
+    // заменить целиком, слитую по ключу `projectPath+workId`. Запись, что новее списка по версии, остаётся (`newerOf`).
+    const works = listed.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id))));
     const seenKeys = new Set<string>();
     entries.clear();
     for (const work of works) {

@@ -241,6 +241,43 @@ describe('useWorksStore: снимок без писем (спека rooms.mail 6
     dispose();
   });
 
+  // Построение карты на хосте может длиться дольше пачки писем (находка I2): снимок версии 6 выходит после события версии 7,
+  // и числа с кандидатами в упоминания окно оставляет от события, а структуру (комнаты) берёт из снимка.
+  it('снимок старее применённого события не откатывает числа и кандидатов', async () => {
+    const { bridge, dispose } = await start(bare(9, [], 5));
+    const mention = letter(11, { to: ['human'], text: '@human, look', readBy: {} });
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        version: 7,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 9, top: 11, total: 11, letters: [letter(10), mention] })],
+        unread: { letters: 0, rooms: { 'r-01': 1 } },
+        mentionCandidates: [mention],
+      }),
+    );
+    const numbers = (): ReturnType<typeof makeCompactMail> => useWorksStore.getState().entries[0]!.map.compact as ReturnType<typeof makeCompactMail>;
+    expect(numbers().rooms['r-01']).toMatchObject({ total: 11, top: 11, unread: 1 });
+    expect(numbers().mentionCandidates.map((message) => message.id)).toEqual(['m-11']);
+
+    // Снимок версии 6 — собран до письма m-11 и вышел позже события; в нём новая комната.
+    const older = bare(9, [], 6);
+    const withRoom: WindowWorkEntry = { ...older, map: { ...older.map, rooms: [...older.map.rooms, makeRoom('r-02', 'Вторая')] } };
+    bridge.emit('works.changed', snapshot(2, [withRoom]));
+
+    const entry = useWorksStore.getState().entries[0]!;
+    expect(entry.map.rooms.map((room) => room.id)).toEqual(['r-01', 'r-02']);
+    expect(numbers().rooms['r-01']).toMatchObject({ total: 11, top: 11, unread: 1 });
+    expect(numbers().unread).toEqual({ letters: 0, rooms: { 'r-01': 1 } });
+    expect(numbers().mentionCandidates.map((message) => message.id)).toEqual(['m-11']);
+
+    // Снимок не старее держимой версии числа ставит как всегда.
+    bridge.emit('works.changed', snapshot(3, [bare(12, [], 8)]));
+    expect(numbers().rooms['r-01']).toMatchObject({ total: 12, top: 12 });
+    expect(numbers().mentionCandidates).toEqual([]);
+    dispose();
+  });
+
   describe('после переподключения', () => {
     const page = (messages: Message[]) => ({ messages, page: { total: 10, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
     /** Работа, в которой окно ничего не держит: её после переподключения перечитывать нечем. */

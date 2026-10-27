@@ -284,6 +284,14 @@ const isHumanRead = (read: RoomsMailRoom['reads'][number]): boolean => read.read
 const frameBytes = (data: RoomsMailEvent): number => jsonBytes({ event: 'rooms.mail', data }) + 1;
 /** Что добавляет к комнате признак `reread`, которого в ней не было: `,"reread":true`. */
 const REREAD_BYTES = Buffer.byteLength(',"reread":true');
+/**
+ * Письмо человеку: прямое (комната `null`) от не-человека или с человеком среди адресатов. Окно уведомляет о нём по самому
+ * событию, а письмо, которое событие не несёт, неоткрытая комната не дочитает никогда, — поэтому урезанная и склеенная
+ * комната их оставляет: таких писем немного, и они малы (спека rooms.mail 6.6, итоговое ревью I3).
+ */
+const isToHuman = (message: Message): boolean => (message.roomId === null && message.from !== HUMAN) || message.to.includes(HUMAN);
+/** Что письма добавляют к кадру в `letters`, который был пуст: сами письма и запятые между ними. */
+const lettersBytes = (letters: readonly Message[]): number => (letters.length === 0 ? 0 : jsonBytes(letters) - jsonBytes([]));
 
 /**
  * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
@@ -295,7 +303,9 @@ const REREAD_BYTES = Buffer.byteLength(',"reread":true');
  *    урезаются дальше, до остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
  * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
  *    получает `reread` — окно читает её страницей. Комната целиком, а не по частям: окно, получившее хвост письма без
- *    начала, держало бы дыру, а `reread` её закрывает.
+ *    начала, держало бы дыру, а `reread` её закрывает. Исключение — письма человеку (`isToHuman`): они остаются и в такой
+ *    комнате, а их байты отложены до писем комнат, чтобы ни одна комната не вытеснила их у следующей. Не влезли они сами —
+ *    уходят и они, остаётся один `reread`.
  * Байты `,"reread":true` у комнат с письмами отложены заранее: кадр не вылезает за потолок на них.
  */
 export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
@@ -339,15 +349,23 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
   const candidates = keepNewestWithin(event.mentionCandidates, Math.min(WINDOW_MENTION_MAX_BYTES, budget));
   budget -= jsonBytes(candidates) - jsonBytes([]);
 
+  // Письма человеку оплачены вперёд: комната, которой не хватило, оставит их, а комната, которой хватило, доплатит за остальное.
+  const human = event.rooms.map((room) => room.letters.filter(isToHuman));
+  const humanBytes = human.map(lettersBytes);
+  const reserved = humanBytes.reduce((sum, bytes) => sum + bytes, 0);
+  const keepHuman = reserved <= budget;
+  if (keepHuman) budget -= reserved;
+
   const fitted = rooms.map((room, at) => {
     const letters = (event.rooms[at] as RoomsMailRoom).letters;
     if (letters.length === 0) return room;
-    const bytes = jsonBytes(letters) - jsonBytes([]);
-    if (bytes <= budget) {
-      budget -= bytes;
+    const paid = keepHuman ? (humanBytes[at] as number) : 0;
+    const extra = lettersBytes(letters) - paid;
+    if (extra <= budget) {
+      budget -= extra;
       return { ...room, letters };
     }
-    return { ...room, reread: true as const };
+    return { ...room, letters: keepHuman ? (human[at] as Message[]) : [], reread: true as const };
   });
   return { ...event, rooms: fitted, mentionCandidates: candidates };
 }
@@ -356,9 +374,20 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
  * Склеенное событие для медленного клиента: письма и отметки других читателей не едут, каждая комната названа с `reread`,
  * числа и версии прежние — окно ставит их из события и дочитывает письма страницами, когда буфер освободится (спека 6.6).
  * Кандидаты в упоминания остаются вместе с тем, что их снимает, — отметками человека и `deleted`: окно держит набор по
- * работе, а комнаты, которых оно не держит, ему не дочитать.
+ * работе, а комнаты, которых оно не держит, ему не дочитать. Остаются и письма человеку (`isToHuman`): по ним окно
+ * уведомляет, а неоткрытая комната их не дочитает. Не влезли они в кадр — не едут, как и прочие письма.
  */
-export const gluedMailEvent = (event: RoomsMailEvent): RoomsMailEvent => ({
-  ...event,
-  rooms: event.rooms.map((room) => ({ ...room, letters: [], reads: room.reads.filter(isHumanRead), reread: true as const })),
-});
+export function gluedMailEvent(event: RoomsMailEvent): RoomsMailEvent {
+  const glue = (keepHuman: boolean): RoomsMailEvent => ({
+    ...event,
+    rooms: event.rooms.map((room) => ({
+      ...room,
+      letters: keepHuman ? room.letters.filter(isToHuman) : [],
+      reads: room.reads.filter(isHumanRead),
+      reread: true as const,
+    })),
+  });
+  const kept = glue(true);
+  if (kept.rooms.every((room) => room.letters.length === 0)) return kept;
+  return frameBytes(kept) <= MAIL_EVENT_MAX_BYTES ? kept : glue(false);
+}
