@@ -323,6 +323,21 @@ describe('IPC острова: нейроголос (план 3b, B15)', () => {
     expect(second!.port1.messages).toEqual([{ type: 'state', state: { state: 'ready' } }, { type: 'state', state: { state: 'warming' } }]);
   });
 
+  it.each(['destroyed', 'render-process-gone'] as const)('окно острова пропало (%s) — порт закрыт, речь снята', (gone) => {
+    const state = setup();
+    const listeners = new Map<string, () => void>();
+    const contents = { ...islandContents(), on: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)) };
+    state.ipcMain.emit('island:tts-connect', { sender: contents });
+    state.ipcMain.emit('island:tts-connect', { sender: contents });
+    expect(contents.on).toHaveBeenCalledTimes(2);
+    const live = state.ports[1]!.port1;
+    listeners.get(gone)!();
+    expect(live.close).toHaveBeenCalledTimes(1);
+    expect(state.tts.cancelAll).toHaveBeenCalledTimes(2);
+    state.emitState({ state: 'warming' });
+    expect(live.messages).toEqual([{ type: 'state', state: { state: 'ready' } }]);
+  });
+
   it('tts-speak: куски уходят в порт острова, ответ — итог службы', async () => {
     const state = setup();
     state.ipcMain.emit('island:tts-connect', { sender: islandContents() });

@@ -110,9 +110,10 @@ function parseSpeakRequest(value: unknown): IslandSpeakRequest | null {
   return { utteranceId, text, voice, language };
 }
 
-/** Окно, которому main передаёт порт (`WebContents.postMessage`). */
+/** Окно, которому main передаёт порт (`WebContents.postMessage`); его гибель закрывает порт. */
 interface PortTarget {
   postMessage(channel: string, message: unknown, transfer: unknown[]): void;
+  on?(event: 'destroyed' | 'render-process-gone', listener: () => void): unknown;
 }
 
 export function registerIslandIpc(options: IslandIpcOptions): void {
@@ -172,16 +173,28 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
     if (fromIsland(event)) options.onFailed();
   });
 
+  /** Порт больше некому читать: закрыть и снять речь, чтобы очередь не синтезировала в пустоту. */
+  function dropPort(): void {
+    if (port === null) return;
+    port.close();
+    tts.cancelAll();
+    port = null;
+  }
+  const watched = new WeakSet<object>();
   ipcMain.on('island:tts-connect', (event) => {
     if (!fromIsland(event)) return;
     // Новый порт — новая страница острова: речь прежней ей уже не нужна.
-    if (port !== null) {
-      port.close();
-      tts.cancelAll();
+    dropPort();
+    const sender = (event as { sender: PortTarget }).sender;
+    // Окно острова закрыли (остров выключен) или его страница упала без нового connect (критик m-1463).
+    if (!watched.has(sender) && sender.on) {
+      watched.add(sender);
+      sender.on('destroyed', dropPort);
+      sender.on('render-process-gone', dropPort);
     }
     const channel = options.ttsChannel();
     port = channel.port1;
-    (event as { sender: PortTarget }).sender.postMessage('island:tts-port', null, [channel.port2]);
+    sender.postMessage('island:tts-port', null, [channel.port2]);
     port.postMessage({ type: 'state', state: tts.state() });
   });
   ipcMain.handle(
