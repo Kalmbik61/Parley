@@ -48,7 +48,7 @@ function api(): IslandApi {
   return {
     visibility: vi.fn(), onVisibility: vi.fn(() => () => {}),
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    dragEnd: vi.fn(), open: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onKeyboardBlur: vi.fn(() => () => {}),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
