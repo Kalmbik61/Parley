@@ -26,6 +26,22 @@ describe('промпт и версии', () => {
     expect(assistantPrompt('en')).toContain('Reply in English');
     expect(assistantPrompt('ru')).toContain('[[calm]]');
   });
+  it('метка эмоции — в начале каждого предложения (L3)', () => {
+    expect(assistantPrompt('ru')).toContain('Start every sentence with a mood tag');
+    expect(assistantPrompt('ru')).not.toContain('Start every reply with one mood tag');
+  });
+  it('строка рода по голосу для трёх родов (G1), по умолчанию — женский', () => {
+    const female = 'you speak as a female assistant; in languages with grammatical gender use feminine forms for yourself (ru: я проверила / я проверил)';
+    const male = 'you speak as a male assistant; in languages with grammatical gender use masculine forms for yourself (ru: я проверила / я проверил)';
+    expect(assistantPrompt('ru', 'female')).toContain(female);
+    expect(assistantPrompt('ru')).toContain(female);
+    expect(assistantPrompt('ru', 'male')).toContain(male);
+    expect(assistantPrompt('ru', 'male')).not.toContain('feminine');
+    const neutral = assistantPrompt('ru', 'neutral');
+    expect(neutral).toContain('avoid gendered forms for yourself');
+    expect(neutral).not.toContain('feminine');
+    expect(neutral).not.toContain('masculine');
+  });
   it('промпт называет любой язык Whisper по-английски, незнакомый код не роняет', () => {
     expect(assistantPrompt('uk')).toContain('Reply in Ukrainian');
     expect(assistantPrompt('zh')).toContain('Reply in Chinese');
