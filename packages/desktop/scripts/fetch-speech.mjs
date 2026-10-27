@@ -5,8 +5,8 @@
 // подмодуль ggml, а побайтовой стабильности архивов GitHub не обещает. Оба коммита (хеши git — та же проверка
 // содержимого, что sha256 архива у whisper), версия и чистота дерева сверяются. Сборка cmake — Metal со встроенной
 // библиотекой шейдеров, статически, без -march=native, — кладёт в `build/speech/darwin-arm64/`:
-// `bin/speech`, `lib/libspeech.<N>.dylib`, `LICENSE` speech.cpp и `licenses/` сторонних частей сборки (ggml,
-// cpp-httplib, miniaudio). electron-builder (`extraResources`) кладёт каталог в `Contents/Resources/speech`.
+// `bin/speech` (ggml и код speech.cpp в нём статически, libspeech ему не нужна), `LICENSE` speech.cpp и `licenses/`
+// сторонних частей сборки (ggml, cpp-httplib, miniaudio). electron-builder (`extraResources`) кладёт каталог в `Contents/Resources/speech`.
 //
 // Использование: `node scripts/fetch-speech.mjs [arm64] [x64]` — без аргументов архитектура этой машины. Повторный
 // запуск ничего не собирает, пока запись `build/speech/darwin-arm64.json` совпадает с версией, обоими коммитами и
@@ -15,7 +15,7 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -123,21 +123,17 @@ async function buildArm64(outRoot) {
     const buildDir = path.join(work, 'build');
     await checkout(sourceDir);
     await run('cmake', cmakeArgs(sourceDir, buildDir), { maxBuffer: 64 * 1024 * 1024 });
-    // `speech-cli` — исполняемый файл `speech`, `speech` — общая библиотека libspeech; проверки speech.cpp не нужны.
-    await run('cmake', ['--build', buildDir, '--config', 'Release', '--target', 'speech-cli', 'speech', '-j'], {
+    // `speech-cli` — исполняемый файл `speech`; общая библиотека libspeech и проверки speech.cpp не нужны.
+    await run('cmake', ['--build', buildDir, '--config', 'Release', '--target', 'speech-cli', '-j'], {
       maxBuffer: 256 * 1024 * 1024,
     });
     const built = path.join(buildDir, 'speech');
     if (machOArch(await readFile(built)) !== 'arm64') throw new Error('speech is not an arm64 binary');
-    // Настоящий файл libspeech.<версия C API>.dylib, без символических ссылок на него.
-    const lib = (await readdir(buildDir)).find((name) => /^libspeech\.\d+\.dylib$/.test(name));
-    if (lib === undefined) throw new Error('libspeech was not built');
 
     await rm(outDir, { recursive: true, force: true });
-    for (const dir of ['bin', 'lib', 'licenses']) await mkdir(path.join(outDir, dir), { recursive: true });
+    for (const dir of ['bin', 'licenses']) await mkdir(path.join(outDir, dir), { recursive: true });
     await copyFile(built, path.join(outDir, 'bin', 'speech'));
     await chmod(path.join(outDir, 'bin', 'speech'), 0o755);
-    await copyFile(path.join(buildDir, lib), path.join(outDir, 'lib', lib));
     await copyFile(path.join(sourceDir, 'LICENSE'), path.join(outDir, 'LICENSE'));
     for (const [from, to] of THIRD_PARTY_LICENSES) {
       await copyFile(path.join(sourceDir, from), path.join(outDir, 'licenses', to));

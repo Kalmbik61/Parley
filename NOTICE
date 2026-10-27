@@ -351,8 +351,8 @@ speech.cpp
 Нейроголос помощника (только Mac на Apple silicon) синтезирует речь на этом
 Mac движком speech.cpp (https://github.com/nyosegawa/speech.cpp), версия
 0.9.0, коммит 49f022a48bc1c7e797aa64dd08d2d9655baf299e. Собранное приложение
-для arm64 везёт его исполняемый файл и библиотеку без изменений —
-Contents/Resources/speech/bin/speech и Contents/Resources/speech/lib/; исходник
+для arm64 везёт его исполняемый файл без изменений —
+Contents/Resources/speech/bin/speech; исходник
 на сборке берёт packages/desktop/scripts/fetch-speech.mjs (git clone на
 закреплённом коммите, коммиты speech.cpp и подмодуля ggml сверяются). В
 репозитории файлов нет. Тот же текст лицензии лежит в приложении, рядом с
