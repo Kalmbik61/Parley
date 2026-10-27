@@ -24,6 +24,7 @@ import {
   MAP_SNAPSHOT_LIMIT,
   mapCacheStats,
   MapLockTimeoutError,
+  type MapWrittenEvent,
   onMapWritten,
   pruneWorksIndex,
   readMap,
@@ -1312,9 +1313,33 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
     const created = events[0]!.version;
     expect(events).toEqual([
       { projectPath: project, workId: 'w-0001', version: created },
-      { projectPath: project, workId: 'w-0001', version: created + 1 },
+      {
+        projectPath: project,
+        workId: 'w-0001',
+        version: created + 1,
+        prevVersion: created,
+        structural: true,
+        journal: { added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] },
+      },
     ]);
     expect(versionOf('w-0001')).toBe(created + 2);
+  });
+
+  it('createWork и replaceStoredMap шлют событие без журнала писем, и оно структурное (спека rooms.mail 6.2)', async () => {
+    const events: MapWrittenEvent[] = [];
+    const stop = onMapWritten((event) => events.push(event));
+
+    await createWork(project, { title: 'Авторизация' });
+    replaceStoredMap(project, 'w-0001', readStoredMap(project, 'w-0001'));
+    stop();
+
+    expect(events).toHaveLength(2);
+    for (const event of events) {
+      expect(event.journal).toBeUndefined();
+      expect(event.prevVersion).toBeUndefined();
+      // Нет признака — запись структурная: подписчик не должен принять её за запись одних писем.
+      expect(event.structural).not.toBe(false);
+    }
   });
 
   it('слушатель, который бросает, не ломает уже записанное', async () => {
