@@ -27,6 +27,7 @@ import { encodeIpcError } from '../../shared/ipc-error.js';
 import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
 import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandPresentationOutcome, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
+import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -179,9 +180,10 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
 let pendingNavigationHandler: (() => void) | null = null;
 
 /** Мост острова поверх подставного моста окна: хост «подключён», `works.list` и `feed.snapshot` отвечают из таблиц выше. */
-function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: ConsentCard[] = []) {
+function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: ConsentCard[] = [], providers: unknown[] = []) {
   const fake = createFakeBridge();
   fake.setHandler('works.list', () => ({ entries, branches: {} }) as never);
+  fake.setHandler('providers.list', () => ({ providers }) as never);
   fake.setHandler('consents.list', () => ({ items: consents }));
   fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions: 'window' }) as never);
   const island = islandApi(config);
@@ -266,6 +268,7 @@ beforeEach(() => {
   useConsentsStore.getState().replace([]);
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useActivityStore.setState({ byRef: {}, loaded: false });
+  useProvidersStore.setState({ providers: [], loaded: false });
   useAssistantStore.setState({ host: HOST_IDLE, open: false, collapsed: false, byHover: false, input: 'idle', level: 0, draft: '', notice: null, cardError: null });
 });
 
@@ -278,6 +281,18 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
+  it('значок своего провайдера по пресету: остров сам читает providers.list, а не рисует значок Parley', async () => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider: 'custom-ds' })] })];
+    const deepseek = { id: 'custom-ds', label: 'DeepSeek', available: true, family: 'claude', version: null, limits: null,
+      custom: { kind: 'endpoint', preset: 'deepseek', baseUrl: 'https://api.deepseek.com/anthropic', auth: 'bearer', models: {}, contextWindow: null, linkClaude: true, folder: '/x' } };
+    const { bridge, fake, working } = setup({}, entries, [], [deepseek]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    working('s-01');
+    await waitFor(() => expect(screen.getByTestId('island-counters').querySelector('img')?.getAttribute('src')).toMatch(/deepseek\.svg$/));
+    expect(fake.calls.some((call) => call.method === 'providers.list')).toBe(true);
+  });
+
   it('shows a brief empty-queue message and immediately returns keyboard focus', async () => {
     const { bridge, fake, island } = setup();
     render(<IslandApp bridge={bridge} />);
