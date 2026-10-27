@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { ROOMS_MAIL_FEATURE, type WorksSnapshot } from '@parley/protocol';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { openRoom, useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
 const flush = async (): Promise<void> => {
@@ -32,6 +34,7 @@ const snapshot = (revision: number | undefined, entries: WindowWorkEntry[]): Wor
 
 beforeEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+  useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
 });
 
 describe('useWorksStore: номер снимка (P35)', () => {
@@ -133,6 +136,95 @@ describe('useWorksStore: номер снимка (P35)', () => {
     // Событие 9 при версии окна 7: пропущено 8, окно перечитывает держимое.
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [makeMailRoom('r-01', { prevTop: 6, top: 7, total: 7, letters: [note('m-07')] })] }));
     await vi.waitFor(() => expect(requests).toEqual([undefined]));
+    dispose();
+  });
+});
+
+describe('useWorksStore: снимок без писем (спека rooms.mail 6.9)', () => {
+  const letter = (seq: number, patch: Partial<Message> = {}): Message => note(`m-${seq}`, patch);
+  function note(id: string, patch: Partial<Message> = {}): Message {
+    return makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' }, ...patch });
+  }
+  /** Снимок без писем: в `r-01` — `total` писем; держимые окном письма в нём — `held`. */
+  const bare = (total: number, held: Message[] = [], version = 5): WindowWorkEntry => ({
+    ...withCompactMail(
+      makeWork('w-01', { rooms: [makeRoom('r-01', 'К')] }),
+      makeCompactMail({ rooms: { 'r-01': makeRoomNumbers({ total, top: total }) } }),
+      held,
+    ),
+    version,
+  });
+  const heldIds = (): string[] => useWorksStore.getState().entries[0]!.map.messages.map((message) => message.id);
+  const start = async (current: WindowWorkEntry) => {
+    const bridge = createFakeBridge();
+    bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+    bridge.setHandler('works.list', () => snapshot(1, [current]));
+    const dispose = useWorksStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useWorksStore.getState().loading).toBe(false));
+    return { bridge, dispose };
+  };
+
+  it('письма, прочитанные страницей при открытии комнаты, переживают следующий снимок, а письма события — только открытой комнаты', async () => {
+    const { bridge, dispose } = await start(bare(9));
+    bridge.setHandler('context.messages', () => ({
+      messages: [letter(8), letter(9)],
+      page: { total: 9, returned: 2, complete: false, next: 'before:8', bytes: 1, cut: 0 },
+    }));
+    await openRoom(bridge, useWorksStore.getState().entries[0]!, 'r-01');
+    expect(heldIds()).toEqual(['m-8', 'm-9']);
+
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [makeMailRoom('r-01', { prevTop: 9, top: 10, total: 10, letters: [letter(10)] })] }));
+    expect(heldIds()).toEqual(['m-8', 'm-9', 'm-10']);
+
+    // Структурный снимок письма не несёт — окно переносит свои, а числа берёт новые.
+    bridge.emit('works.changed', snapshot(2, [bare(10, [], 6)]));
+    expect(heldIds()).toEqual(['m-8', 'm-9', 'm-10']);
+    expect((useWorksStore.getState().entries[0]!.map.compact as ReturnType<typeof makeCompactMail>).rooms['r-01']?.total).toBe(10);
+    dispose();
+  });
+
+  it('событие неоткрытой комнаты письмо не кладёт: числа обновились, лента пуста', async () => {
+    const { bridge, dispose } = await start(bare(9));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [makeMailRoom('r-01', { prevTop: 9, top: 10, total: 10, letters: [letter(10)] })] }));
+    expect(heldIds()).toEqual([]);
+    expect((useWorksStore.getState().entries[0]!.map.compact as ReturnType<typeof makeCompactMail>).rooms['r-01']).toMatchObject({ total: 10, top: 10 });
+    dispose();
+  });
+
+  it('держится не больше 300 писем на комнату; подгруженная раньше история остаётся', async () => {
+    const many = Array.from({ length: 450 }, (_, index) => letter(index + 1));
+    const { bridge, dispose } = await start(bare(450));
+    useRoomPagesStore.setState({ opened: { '/tmp/proj\u0000w-01\u0000r-01': true } });
+    useWorksStore.setState({ entries: [bare(450, many)] });
+    bridge.emit('works.changed', snapshot(2, [bare(450, [], 6)]));
+    expect(heldIds()).toHaveLength(300);
+    expect(heldIds()[0]).toBe('m-151');
+
+    // Человек подгрузил историю до m-101: следующий снимок её не срезает.
+    useWorksStore.setState({ entries: [bare(450, many)] });
+    useRoomPagesStore.setState({ chains: { '/tmp/proj\u0000w-01\u0000r-01': { next: 'before:101', done: false } } });
+    bridge.emit('works.changed', snapshot(3, [bare(450, [], 7)]));
+    expect(heldIds()).toHaveLength(350);
+    expect(heldIds()[0]).toBe('m-101');
+    dispose();
+  });
+
+  it('комната, которой нет в новом снимке, свои письма уносит', async () => {
+    const { bridge, dispose } = await start(bare(2));
+    useWorksStore.setState({ entries: [bare(2, [letter(1), letter(2)])] });
+    const without: WindowWorkEntry = { ...bare(0, [], 6), map: { ...bare(0).map, rooms: [] } };
+    bridge.emit('works.changed', snapshot(2, [without]));
+    expect(heldIds()).toEqual([]);
+    dispose();
+  });
+
+  it('прежний хост (compact версии 1): письма снимка на месте, ушедшие из хвоста прочитанные остаются, как раньше', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('works.list', () => snapshot(1, [entry([note('m-03'), note('m-04')], 4, 3)]));
+    const dispose = useWorksStore.getState().init(bridge);
+    await flush();
+    bridge.emit('works.changed', snapshot(2, [entry([note('m-04'), note('m-05')], 5, 4)]));
+    expect(heldIds()).toEqual(['m-03', 'm-04', 'm-05']);
     dispose();
   });
 });

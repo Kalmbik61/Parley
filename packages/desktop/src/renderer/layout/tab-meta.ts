@@ -11,7 +11,7 @@ import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
-import { humanUnreadLetters, roomAwaitsDecision, type Attention } from '../attention/derive.js';
+import { humanUnreadDirect, roomAwaitsDecision, type Attention } from '../attention/derive.js';
 import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { isRoomArchived } from '../lib/room-archive.js';
@@ -161,7 +161,7 @@ export function tabMeta(tab: TabSpec, entry: WindowWorkEntry | null, extras: Tab
     case 'mail': {
       // Письма без комнаты, которые человек ещё не прочёл: вкладка показывает только их. `✉N` карточки считает больше —
       // ещё и упоминания `@human` в комнатах (`WorkAttention.humanUnread`): они живут во вкладке своей комнаты.
-      const unread = entry !== null && humanUnreadLetters(entry.map).length > 0;
+      const unread = entry !== null && humanUnreadDirect(entry.map) > 0;
       return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty, tint: unread ? 'accent' : null };
     }
     case 'room': {

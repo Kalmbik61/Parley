@@ -67,7 +67,7 @@ import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
 import type { ActivityEntry } from '../../store/activity.js';
-import { useRoomPagesStore } from '../../store/room-pages.js';
+import { openRoom, quotesOf, useRoomPagesStore } from '../../store/room-pages.js';
 import { openPlanInPanel } from '../../agents/open-agents.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
@@ -117,7 +117,9 @@ const REPLY_FLASH_MS = 1200;
 const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
-  const model = buildRoomModel({ entry, roomId, providers, activity });
+  // Оригиналы цитат, которых окно не держит, подгружаются по id (`context.letter`, спека rooms.mail 6.9) и приходят в модель.
+  const quoted = useRoomPagesStore((state) => quotesOf(state, entry));
+  const model = buildRoomModel({ entry, roomId, providers, activity, ...(quoted === undefined ? {} : { quoted }) });
   const halted = model?.plan?.mode === 'autonomous' ? model.plan.autonomous?.halted : null;
   const roomRecord = entry.map.rooms.find((room) => room.id === roomId);
   const recipe = roomRecord?.recipe;
@@ -135,7 +137,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const canReopen = useHostSupports('rooms.reopen');
   // История старше хвоста, который прислал хост (P35): кнопка над лентой подгружает страницу `context.messages`.
   const canLoadEarlier = useHostSupports('context.messages');
-  const earlier = earlierRemaining(entry, roomId);
+  // Снимок без писем (`compact` версии 2, спека rooms.mail 6.9): окно читает последнюю страницу при открытии комнаты, а
+  // дальше письма приходят событиями. Пока оно не держит ни одного письма комнаты, кнопки «раньше» нет: страница ещё в пути.
+  const compact = entry.map.compact;
+  const bare = compact?.version === 2;
+  const held = entry.map.messages.some((message) => message.roomId === roomId);
+  const earlier = bare && !held ? 0 : earlierRemaining(entry, roomId);
   const earlierKey = `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
   const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
@@ -144,6 +151,29 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
+  const currentEntry = useRef(entry); currentEntry.current = entry;
+  // Последняя страница при открытии комнаты. Заново — когда по числам снимка письма в ней есть, а окно их не держит
+  // (событие пропущено, комната была пуста): `unheld` меняется, и эффект идёт снова.
+  const unheld = compact?.version === 2 && !held && (compact.rooms[roomId]?.total ?? 0) > 0;
+  useEffect(() => {
+    if (!bare || !canLoadEarlier) return;
+    openRoom(currentBridge.current, currentEntry.current, roomId).catch((error: unknown) => console.warn('[parley] open room', error));
+  }, [bare, canLoadEarlier, entry.projectPath, entry.map.work.id, roomId, unheld]);
+  // Цитаты, оригинала которых нет ни в ленте, ни среди подгруженных: каждый id запрашивается один раз.
+  const canQuote = useHostSupports('context.letter');
+  const missingQuotes = new Set<string>();
+  if (canQuote) {
+    for (const message of model?.messages ?? []) {
+      if (message.reply !== null && !message.reply.found && quoted?.[message.reply.id] === undefined) missingQuotes.add(message.reply.id);
+    }
+  }
+  const missingKey = [...missingQuotes].join(' ');
+  useEffect(() => {
+    if (missingKey === '') return;
+    for (const id of missingKey.split(' ')) {
+      useRoomPagesStore.getState().loadQuote(currentBridge.current, currentEntry.current, id).catch((error: unknown) => console.warn('[parley] context.letter', error));
+    }
+  }, [missingKey, entry.projectPath, entry.map.work.id]);
   /** Над вкладкой тащат файлы — подсветка места броска. */
   const [dropping, setDropping] = useState(false);
   const resolveMounted = useRef(true);
@@ -286,6 +316,9 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // открытие — первое её расположение.
   useLayoutEffect(() => {
     if (containerRef.current === null) return;
+    // Снимок без писем: страница комнаты ещё в пути. Первое расположение ленты будет, когда она придёт, — иначе лента
+    // «открылась» бы пустой и к упоминанию уже не перешла.
+    if (openedRef.current === null && unheld) return;
     const messages = model?.messages ?? [];
     const waiting = model?.proposal ?? null;
     const proposal = waiting === null ? '' : `${waiting.id}\u0000${waiting.rev}`;
@@ -327,6 +360,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     pinToBottom,
     showMessage,
     onFeedScroll,
+    unheld,
     model?.messages.length,
     model?.proposal?.id,
     model?.proposal?.rev,

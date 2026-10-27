@@ -8,11 +8,12 @@ import type { WorksSnapshot } from './types.js';
 
 const messages = contextPageMethodSchemas['context.messages'];
 const text = contextPageMethodSchemas['context.text'];
+const letter = contextPageMethodSchemas['context.letter'];
 const location = { projectPath: '/p', workId: 'w-0001' };
 
 describe('страницы переписки: методы окна', () => {
   it('методы входят в общую таблицу протокола, hello принимает features', () => {
-    expect(Object.keys(METHODS)).toEqual(expect.arrayContaining(['context.messages', 'context.text']));
+    expect(Object.keys(METHODS)).toEqual(expect.arrayContaining(['context.messages', 'context.letter', 'context.text']));
     const hello = METHODS.hello;
     expect(hello.safeParse({ token: 't', protocol: 1, client: 'desktop', features: [COMPACT_WORKS_FEATURE] }).success).toBe(true);
     expect(hello.safeParse({ token: 't', protocol: 1, client: 'desktop' }).success).toBe(true);
@@ -29,6 +30,14 @@ describe('страницы переписки: методы окна', () => {
     ]) expect(messages.safeParse({ ...location, ...bad }).success, JSON.stringify(bad)).toBe(false);
     expect(messages.safeParse({ projectPath: '', workId: 'w-1', roomId: null }).success).toBe(false);
     expect(messages.safeParse({ projectPath: '/p\0', workId: 'w-1', roomId: null }).success).toBe(false);
+  });
+
+  it('context.letter: письмо по id вида m-N, лишние поля и чужие id отвергаются', () => {
+    expect(letter.safeParse({ ...location, id: 'm-12' }).success).toBe(true);
+    for (const bad of [{ id: '12' }, { id: 'r-01' }, { id: 'm-' }, { id: undefined }, { id: 'm-1', extra: 1 }]) {
+      expect(letter.safeParse({ ...location, ...bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+    expect(letter.safeParse({ projectPath: '', workId: 'w-1', id: 'm-1' }).success).toBe(false);
   });
 
   it('context.text: письмо, цель или поле сессии; курсор несёт хеш текста', () => {

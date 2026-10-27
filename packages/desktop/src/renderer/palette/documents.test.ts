@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { WindowWorkEntry } from '@parley/core';
+import type { MapCompactMail, WindowWorkEntry } from '@parley/core';
 import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { workAttention, type WorkAttention } from '../attention/derive.js';
@@ -12,6 +12,7 @@ import { tabId } from '../layout/ids.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { buildDocuments, filesQuery, rankDocuments, SECTION_LIMITS, type PaletteDoc, type PaletteSection } from './documents.js';
 import type { PaletteMode } from './store.js';
@@ -236,6 +237,15 @@ describe('buildDocuments (тест 5)', () => {
     expect(mail).toHaveLength(1);
     expect(mail[0]?.subtitle).toBe('С почтой');
     expect(mail[0]?.section).toBe('works');
+  });
+
+  it('«Open mail» по снимку без писем: пункт есть, если по числам снимка в работе есть письма, хотя окно ни одного не держит', () => {
+    const bare = (title: string, rooms: MapCompactMail['rooms']): WindowWorkEntry =>
+      withCompactMail(makeWork('w-0' + title.length, { projectPath: '/tmp/' + title, title }), makeCompactMail({ rooms }));
+    const withMail = bare('С почтой', { '': makeRoomNumbers({ total: 3, top: 3 }), 'r-01': makeRoomNumbers({ total: 0 }) });
+    const noMail = bare('Пусто', { '': makeRoomNumbers(), 'r-01': makeRoomNumbers() });
+    const mail = build({ works: [withMail, noMail] }).filter((d) => d.title === 'Open mail');
+    expect(mail.map((d) => d.subtitle)).toEqual(['С почтой']);
   });
 
   it('wake.toggle при wakePaused: true — Resume auto-wake, иначе Pause auto-wake', () => {

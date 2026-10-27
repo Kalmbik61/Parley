@@ -8,12 +8,15 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Message, WindowWorkEntry, WorkSession } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
+import { useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
+import { useWorksStore } from '../../store/works.js';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../../test-utils/compact-mail-fixtures.js';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { MailPanel } from './MailPanel.js';
 
@@ -302,5 +305,49 @@ describe('MailPanel — облик Organic (1.8)', () => {
     rerender(<MailPanel entry={entryWith([...initial, message('m-3', '2026-01-01T10:02:00.000Z')])} providers={[]} models={{}} bridge={bridge} active onOpenExternal={() => {}} />);
     const chip = [...container.querySelectorAll('button')].find((button) => button.textContent === '↓1');
     expect(chip?.className).toMatch(/\brounded-full\b/);
+  });
+});
+
+// Снимок без писем (спека rooms.mail 6.9): прямые письма Mail окно читает страницей `context.messages` с `roomId: null` при
+// открытии, дальше они приходят событиями.
+describe('MailPanel — снимок без писем (compact версии 2)', () => {
+  const page = (messages: Message[]) => ({ messages, page: { total: 3, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
+  /** Работа с тремя прямыми письмами по снимку; окно держит `held`. */
+  const bare = (held: Message[]): WindowWorkEntry =>
+    withCompactMail(entryWith([]), makeCompactMail({ rooms: { '': makeRoomNumbers({ total: 3, top: 3 }) } }), held);
+  function Live({ fake }: { fake: ReturnType<typeof createFakeBridge> }): JSX.Element | null {
+    const current = useWorksStore((state) => state.entries[0]);
+    return current === undefined ? null : <MailPanel entry={current} providers={[]} models={{}} bridge={fake} active onOpenExternal={() => {}} />;
+  }
+
+  it('Mail при открытии читает roomId null; письма встают в ленту, повторное открытие уже держимого не читает', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    const fake = createFakeBridge();
+    const asked: unknown[] = [];
+    fake.setHandler('context.messages', (params) => {
+      asked.push(params);
+      return page([message('m-2', '2026-01-01T10:01:00.000Z'), message('m-3', '2026-01-01T10:02:00.000Z')]);
+    });
+    useWorksStore.setState({ entries: [bare([])], branches: {}, loading: false, error: null });
+    const view = render(<Live fake={fake} />);
+
+    await waitFor(() => expect(screen.getByText('письмо m-3')).toBeDefined());
+    expect(asked).toEqual([{ projectPath: '/tmp/w-01', workId: 'w-01', roomId: null }]);
+    view.unmount();
+
+    render(<Live fake={fake} />);
+    await act(async () => {});
+    expect(asked).toHaveLength(1);
+  });
+
+  it('прежний хост: письма в снимке, при открытии Mail ничего не читает', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    const fake = createFakeBridge();
+    useWorksStore.setState({ entries: [entryWith([message('m-1', '2026-01-01T10:00:00.000Z')])], branches: {}, loading: false, error: null });
+    render(<Live fake={fake} />);
+    await act(async () => {});
+    expect(fake.calls).toEqual([]);
   });
 });

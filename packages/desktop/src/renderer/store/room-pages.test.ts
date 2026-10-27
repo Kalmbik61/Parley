@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
-import { MAIL_PAGES_MAX, followRoom, repairWork, rereadRoom, useRoomPagesStore } from './room-pages.js';
+import { MAIL_PAGES_MAX, followRoom, heldPolicy, openMail, openRoom, repairWork, rereadRoom, useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
 const note = (id: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' } });
@@ -21,7 +22,7 @@ function entry(messages: Message[], total: number, tailFrom: number | null, vers
 }
 
 beforeEach(() => {
-  useRoomPagesStore.setState({ chains: {}, loading: {} });
+  useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
 });
 
@@ -107,6 +108,8 @@ describe('rooms.mail: письма события и дочитывание', ()
     page: { total: 10, returned: messages.length, complete: next === null, next, bytes: 1, cut: 0 },
   });
   const ids = (): string[] => useWorksStore.getState().entries[0]!.map.messages.map((message) => message.id);
+  /** Компактная карта версии 1 (хвосты писем) первой работы стора. */
+  const v1 = (): MapCompact => useWorksStore.getState().entries[0]!.map.compact as MapCompact;
   const pageCalls = (bridge: ReturnType<typeof createFakeBridge>): unknown[] => bridge.calls.filter((call) => call.method === 'context.messages');
   /** Хост листает комнату `r-01` от вершины вниз по сотне писем (номера 1..top): без курсора — вершина, `before:N` — старше номера N. */
   const hostPaging =
@@ -138,7 +141,7 @@ describe('rooms.mail: письма события и дочитывание', ()
     expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
     expect(pageCalls(bridge)).toEqual([]);
     // счётчики хоста растут вместе с лентой: «ещё старых» не появляется от нового письма
-    const compact = useWorksStore.getState().entries[0]!.map.compact!;
+    const compact = v1();
     expect(compact.messages.total).toBe(10);
     expect(compact.messages.rooms['r-01']).toMatchObject({ total: 10, included: 3 });
     expect(compact.messages.latestId).toBe('m-10');
@@ -154,8 +157,8 @@ describe('rooms.mail: письма события и дочитывание', ()
     );
     await followRoom(bridge, useWorksStore.getState().entries[0]!, 'r-01');
     expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
-    expect(useWorksStore.getState().entries[0]?.map.compact?.messages.total).toBe(10);
-    expect(useWorksStore.getState().entries[0]?.map.compact?.messages.rooms['r-01']).toMatchObject({ total: 10, included: 3 });
+    expect(v1().messages.total).toBe(10);
+    expect(v1().messages.rooms['r-01']).toMatchObject({ total: 10, included: 3 });
     dispose();
   });
 
@@ -297,6 +300,141 @@ describe('rooms.mail: письма события и дочитывание', ()
       bridge.setHandler('context.messages', () => pageOf([]));
       await rereadRoom(bridge, entry([], 9, null, 5), 'r-01');
       expect(pageCalls(bridge)).toEqual([]);
+    });
+  });
+});
+
+describe('снимок без писем: открытие комнаты, Mail и «загрузить раньше»', () => {
+  const unread = (id: string, patch: Partial<Message> = {}): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-02', readBy: {}, ...patch });
+  const pageOf = (messages: Message[], next: string | null = null) => ({
+    messages,
+    page: { total: 10, returned: messages.length, complete: next === null, next, bytes: 1, cut: 0 },
+  });
+  /** Работа с компактной картой версии 2: в комнате `r-01` девять писем, в Mail два; окно держит `held`. */
+  const v2 = (held: Message[]): WindowWorkEntry =>
+    withCompactMail(
+      makeWork('w-01', { rooms: [makeRoom('r-01', 'К')] }),
+      makeCompactMail({ rooms: { '': makeRoomNumbers({ total: 2, top: 2 }), 'r-01': makeRoomNumbers({ total: 9, top: 9 }) } }),
+      held,
+    );
+  const ids = (): string[] => useWorksStore.getState().entries[0]!.map.messages.map((message) => message.id);
+
+  it('открытие комнаты без писем читает последнюю страницу (без курсора) и кладёт её в карту', async () => {
+    const bridge = createFakeBridge();
+    const asked: unknown[] = [];
+    bridge.setHandler('context.messages', (params) => {
+      asked.push(params);
+      return pageOf([unread('m-08'), unread('m-09')], 'before:8');
+    });
+    const current = v2([]);
+    useWorksStore.setState({ entries: [current] });
+    await openRoom(bridge, current, 'r-01');
+    expect(asked).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01' }]);
+    expect(ids()).toEqual(['m-08', 'm-09']);
+    expect(heldPolicy('/tmp/proj', 'w-01').isOpen('r-01')).toBe(true);
+    expect(heldPolicy('/tmp/proj', 'w-01').isOpen('r-02')).toBe(false);
+  });
+
+  it('комната, письма которой окно уже держит, не читается заново, но помечается открытой; два открытия подряд — один запрос', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('context.messages', () => pageOf([unread('m-09')]));
+    const held = v2([unread('m-09')]);
+    await openRoom(bridge, held, 'r-01');
+    expect(bridge.calls).toEqual([]);
+    expect(heldPolicy('/tmp/proj', 'w-01').isOpen('r-01')).toBe(true);
+
+    useWorksStore.setState({ entries: [v2([])] });
+    await Promise.all([openRoom(bridge, v2([]), 'r-02'), openRoom(bridge, v2([]), 'r-02')]);
+    expect(bridge.calls.filter((call) => call.method === 'context.messages')).toHaveLength(1);
+  });
+
+  it('Mail при открытии читает roomId null; комната или работа удалены, пока шёл запрос, — не сбой; другой отказ уходит вызывающему', async () => {
+    const bridge = createFakeBridge();
+    const asked: unknown[] = [];
+    bridge.setHandler('context.messages', (params) => {
+      asked.push(params);
+      return pageOf([unread('m-01', { roomId: null, to: ['human'] }), unread('m-02', { roomId: null, to: ['human'] })]);
+    });
+    const current = v2([]);
+    useWorksStore.setState({ entries: [current] });
+    await openMail(bridge, current);
+    expect(asked).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: null }]);
+    expect(ids()).toEqual(['m-01', 'm-02']);
+    expect(heldPolicy('/tmp/proj', 'w-01').isOpen(null)).toBe(true);
+
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'not_found', message: 'room r-01 does not exist' };
+    });
+    await expect(openRoom(bridge, v2([]), 'r-01')).resolves.toBeUndefined();
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'internal', message: 'нет' };
+    });
+    await expect(openRoom(bridge, v2([]), 'r-01')).rejects.toMatchObject({ code: 'internal' });
+    // После отказа комната снова просится в чтение: следующее открытие не считает её прочитанной.
+    expect(asked).toHaveLength(1);
+    bridge.setHandler('context.messages', () => pageOf([]));
+    await expect(openRoom(bridge, v2([]), 'r-01')).resolves.toBeUndefined();
+  });
+
+  it('загрузить раньше: итог берётся из compact версии 2, курсор — перед наименьшим держимым номером', async () => {
+    const bridge = createFakeBridge();
+    const cursors: Array<string | undefined> = [];
+    bridge.setHandler('context.messages', (params) => {
+      cursors.push(params.cursor);
+      return pageOf([unread('m-06'), unread('m-07')], 'before:6');
+    });
+    const current = v2([unread('m-08'), unread('m-09')]);
+    useWorksStore.setState({ entries: [current] });
+    await useRoomPagesStore.getState().loadEarlier(bridge, current, 'r-01', (messages) => useWorksStore.getState().addMessages('/tmp/proj', 'w-01', messages));
+    expect(cursors).toEqual(['before:8']);
+    expect(ids()).toEqual(['m-06', 'm-07', 'm-08', 'm-09']);
+    // Подгруженная история переживает следующий снимок: граница — по цепочке.
+    expect(heldPolicy('/tmp/proj', 'w-01').floor('r-01')).toBe(6);
+    expect(heldPolicy('/tmp/proj', 'w-01').floor('r-02')).toBeUndefined();
+  });
+
+  it('дочитанная цепочка: всю историю окно не отбрасывает (граница 0)', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('context.messages', () => pageOf([unread('m-01')]));
+    const current = v2([unread('m-02')]);
+    await useRoomPagesStore.getState().loadEarlier(bridge, current, 'r-01', () => {});
+    expect(heldPolicy('/tmp/proj', 'w-01').floor('r-01')).toBe(0);
+  });
+
+  describe('оригинал цитаты по id', () => {
+    it('loadQuote запрашивает context.letter один раз на id и помнит ответ, в том числе «письма нет»', async () => {
+      const bridge = createFakeBridge();
+      const asked: unknown[] = [];
+      bridge.setHandler('context.letter', (params) => {
+        asked.push(params);
+        return { message: params.id === 'm-03' ? unread('m-03', { text: 'исходное' }) : null };
+      });
+      const current = v2([]);
+      const { loadQuote } = useRoomPagesStore.getState();
+      await Promise.all([loadQuote(bridge, current, 'm-03'), loadQuote(bridge, current, 'm-03'), loadQuote(bridge, current, 'm-04')]);
+      await loadQuote(bridge, current, 'm-03');
+      expect(asked).toEqual([
+        { projectPath: '/tmp/proj', workId: 'w-01', id: 'm-03' },
+        { projectPath: '/tmp/proj', workId: 'w-01', id: 'm-04' },
+      ]);
+      const quotes = useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01'];
+      expect(quotes?.['m-03']?.text).toBe('исходное');
+      expect(quotes?.['m-04']).toBeNull();
+    });
+
+    it('сбой запроса не оставляет id вечно «ожидающим»: следующая попытка идёт заново', async () => {
+      const bridge = createFakeBridge();
+      let fail = true;
+      bridge.setHandler('context.letter', () => {
+        if (fail) throw { code: 'internal', message: 'нет' };
+        return { message: unread('m-03') };
+      });
+      const current = v2([]);
+      await expect(useRoomPagesStore.getState().loadQuote(bridge, current, 'm-03')).rejects.toBeDefined();
+      expect(useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01']?.['m-03']).toBeUndefined();
+      fail = false;
+      await useRoomPagesStore.getState().loadQuote(bridge, current, 'm-03');
+      expect(useRoomPagesStore.getState().quotes['/tmp/proj\u0000w-01']?.['m-03']?.id).toBe('m-03');
     });
   });
 });

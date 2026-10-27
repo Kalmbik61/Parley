@@ -6,7 +6,8 @@
  * Снимок компактный (P35): письма комнаты — хвостом, старше — страницами (`addMessages`). Снимок несёт номер
  * `revision`, и применяется только новее уже применённого: поздно пришедший ответ `works.list` не откатывает
  * свежее событие. Номер считается от подключения — после переподключения (новый `init`) отсчёт начинается заново,
- * хост мог быть другим процессом. Письма, что окно уже показывало, а хвост сдвинулся, остаются (`retainSeen`).
+ * хост мог быть другим процессом. Письма, что окно уже показывало, остаются в новом снимке (`keepHeld`): у хоста с
+ * признаком `rooms-mail` снимок писем не несёт, и окно переносит свои, у прежнего хоста — тех, что ушли из хвоста.
  *
  * Письма и отметки прочтения приходят событием `rooms.mail` (спека rooms.mail 6.3-6.5), если хост объявил признак
  * `rooms-mail`: без него события нет, и окно живёт по `works.changed`, как прежде. Окно помнит версию каждой работы —
@@ -26,8 +27,10 @@ import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type WorksSnapshot } from '@pa
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostFeatures } from '../lib/capabilities.js';
-import { heldRanges, retainSeen, withFreshMessages, withMail, withMessages } from '../lib/window-merge.js';
-import { followRoom, repairWork, rereadRoom } from './room-pages.js';
+import { heldRanges, keepHeld, withFreshMessages, withMail, withMessages } from '../lib/window-merge.js';
+import { followRoom, heldPolicy, repairWork, rereadRoom } from './room-pages.js';
+
+export { WINDOW_ROOM_KEEP, keepHeld } from '../lib/window-merge.js';
 
 /** Отказ `works.list`: код протокола и причина хоста (`works-unreadable`, раунд lane-r5). */
 export interface WorksLoadError {
@@ -237,7 +240,9 @@ export const useWorksStore = create<WorksState>((set, get) => ({
 
       set((state) => ({
         entries: state.entries.map((entry) =>
-          entry.projectPath === event.projectPath && entry.map.work.id === event.workId ? withMail(entry, event, stale) : entry,
+          entry.projectPath === event.projectPath && entry.map.work.id === event.workId
+            ? withMail(entry, event, stale, heldPolicy(event.projectPath, event.workId).isOpen)
+            : entry,
         ),
       }));
       if (!stale) held.set(key, event.version);
@@ -311,7 +316,9 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       set((state) => {
         const previous = new Map(state.entries.map((entry) => [mailKey(entry.projectPath, entry.map.work.id), entry]));
         return {
-          entries: snapshot.entries.map((entry) => retainSeen(previous.get(mailKey(entry.projectPath, entry.map.work.id)), entry)),
+          entries: snapshot.entries.map((entry) =>
+            keepHeld(previous.get(mailKey(entry.projectPath, entry.map.work.id)), entry, heldPolicy(entry.projectPath, entry.map.work.id).floor),
+          ),
           branches: snapshot.branches,
           loading: false,
           error: null,

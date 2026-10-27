@@ -13,7 +13,7 @@ import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import type { RequestInfo } from '../context.js';
-import { contextMessages, contextText } from './context-pages.js';
+import { contextLetter, contextMessages, contextText } from './context-pages.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -239,6 +239,51 @@ describe('context.messages', () => {
     const stale = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'session', sessionId: 's-01', field: 'task' }, cursor: next });
     expect(stale.error).toMatchObject({ code: 'bad_request', data: { reason: 'stale-cursor' } });
     client.close();
+  });
+});
+
+describe('context.letter', () => {
+  // Спека rooms.mail 6.9: оригинал цитаты, которого окно не держит, берётся письмом по id.
+  it('отдаёт письмо по id с обрезкой как у страниц; чужой и несуществующий id — null; работы нет — not_found', async () => {
+    // ASCII: сырой тестовый клиент декодирует каждый кусок сокета отдельно и рвёт многобайтовые знаки на стыках.
+    const long = 'x'.repeat(200_000);
+    const { home, token, dir, prepared } = await bootWith(async (dir) => {
+      const first = await seed(dir, 2, 20);
+      await updateMap(dir, first, (current, letters) => { letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: long }); });
+      const other = await seed(dir, 1, 20);
+      return { first, other };
+    });
+    const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);
+
+    const short = await ask(client, 'context.letter', { projectPath: dir, workId: prepared.first, id: 'm-02' });
+    expect(short.result).toEqual({ message: expect.objectContaining({ id: 'm-02', roomId: 'r-01', text: '1:'.padEnd(20, 'я') }) });
+    expect((short.result as { message: Message }).message.textBytes).toBeUndefined();
+
+    const big = (await ask(client, 'context.letter', { projectPath: dir, workId: prepared.first, id: 'm-03' })).result as { message: Message };
+    expect(big.message.textBytes).toBe(200_000);
+    expect(big.message.text.length).toBeLessThan(40_000);
+
+    // m-03 есть только в первой работе: во второй такого письма нет.
+    expect((await ask(client, 'context.letter', { projectPath: dir, workId: prepared.other, id: 'm-03' })).result).toEqual({ message: null });
+    expect((await ask(client, 'context.letter', { projectPath: dir, workId: prepared.first, id: 'm-99' })).result).toEqual({ message: null });
+    expect((await ask(client, 'context.letter', { projectPath: dir, workId: 'w-9999', id: 'm-01' })).error?.code).toBe('not_found');
+    expect((await ask(client, 'context.letter', { projectPath: dir, workId: prepared.first, id: 'x-01' })).error?.code).toBe('bad_request');
+    client.close();
+  });
+
+  it('не зовёт readMap: письмо читается запросом по номеру', async () => {
+    const home = await tempHome();
+    homes.push(home);
+    process.env.PARLEY_HOME = home;
+    const dir = await project();
+    const workId = await seed(dir, 2, 40);
+    const readMap = vi.spyOn(core, 'readMap');
+    try {
+      await expect(contextLetter({ projectPath: dir, workId, id: 'm-02' }, {} as RequestInfo)).resolves.toMatchObject({ message: { id: 'm-02' } });
+      expect(readMap).not.toHaveBeenCalled();
+    } finally {
+      readMap.mockRestore();
+    }
   });
 });
 

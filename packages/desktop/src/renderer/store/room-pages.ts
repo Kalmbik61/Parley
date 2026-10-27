@@ -9,13 +9,19 @@
  * Здесь же — чтение страниц после разрыва `rooms.mail` (спека rooms.mail 6.5): `repairWork` перечитывает держимое окном
  * по всем комнатам и Mail, `followRoom` дочитывает комнату после её верха, `rereadRoom` — весь держимый диапазон комнаты.
  * Страницы встают в карту через `useWorksStore.addMail`; сам разрыв находит стор работ (`works.ts`).
+ *
+ * Окно с признаком `rooms-mail` получает снимок без писем (спека rooms.mail 6.8-6.9): последнюю страницу комнаты и Mail оно
+ * читает при открытии (`openRoom`, `openMail`), дальше письма приходят событиями, а «загрузить раньше» идёт от наименьшего
+ * держимого номера. Здесь же — что окно помнит о комнатах, чтобы письма не пропадали и не копились: какие открывались
+ * (`opened`: у неоткрытых событие обновляет одни числа) и докуда человек подгрузил историю (цепочка: `keepHeld` её не срежет).
+ * Оригинал цитаты, которого окно не держит, берётся письмом по id (`loadQuote`, метод `context.letter`).
  */
 
 import { create } from 'zustand';
 import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { earlierCursor, heldRanges, messageSeq } from '../lib/window-merge.js';
+import { earlierCursor, heldRanges, messageSeq, type HeldPolicy } from '../lib/window-merge.js';
 import { useWorksStore } from './works.js';
 
 interface Chain {
@@ -26,15 +32,34 @@ interface Chain {
 export interface RoomPagesState {
   chains: Record<string, Chain>;
   loading: Record<string, boolean>;
+  /** Комнаты и Mail, которые окно открывало (ключ — `keyOf`): письма их событий окно держит. */
+  opened: Record<string, true>;
+  /**
+   * Оригиналы цитат по работе (ключ — проект и работа, затем id письма): письмо или `null`, если его в работе нет.
+   * Нет записи — ещё не спрашивали. Цитату показывает комната письма, поэтому сверка `roomId` — у читателя.
+   */
+  quotes: Record<string, Record<string, Message | null>>;
   /**
    * Подгружает страницу писем старше уже имеющихся. `apply` получает письма синхронно, сразу по ответу, — до смены
    * состояния цепочки: панель успевает запомнить положение ленты. Ошибку хоста бросает наружу (вызывающий решает, что
    * показать); при ошибке цепочка не двигается.
    */
   loadEarlier: (bridge: ParleyBridge, entry: WindowWorkEntry, roomId: string, apply: (messages: Message[]) => void) => Promise<void>;
+  /**
+   * Запрашивает оригинал цитаты `context.letter` один раз на id: повтор и запрос, что уже в пути, ничего не шлют. Ошибку
+   * хоста бросает наружу и записи не оставляет — следующая попытка пойдёт заново.
+   */
+  loadQuote: (bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, id: string) => Promise<void>;
 }
 
-const keyOf = (entry: WindowWorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
+/** Ключ комнаты в состоянии окна; `null` — Mail (прямые письма). */
+const roomKeyOf = (projectPath: string, workId: string, roomId: string | null): string => `${projectPath}\u0000${workId}\u0000${roomId ?? ''}`;
+const keyOf = (entry: WindowWorkEntry, roomId: string | null): string => roomKeyOf(entry.projectPath, entry.map.work.id, roomId);
+const quoteKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/** Запросы, что уже в пути: открытие комнаты и цитаты. Одно и то же дважды (повторная отрисовка, StrictMode) не шлётся. */
+const opening = new Map<string, Promise<void>>();
+const quoting = new Set<string>();
 
 /**
  * Страниц одной комнаты за одно дочитывание не больше. Страница — до сотни писем и 64 КиБ, поэтому потолок — не способ
@@ -114,9 +139,73 @@ export async function repairWork(bridge: Pick<ParleyBridge, 'call'>, entry: Wind
   if (failure !== null) throw failure.error;
 }
 
+/**
+ * Комната (или Mail при `roomId: null`) открывается в окне: она помечается открытой, и если окно не держит ни одного её
+ * письма, читается последняя страница `context.messages` (спека rooms.mail 6.9). Держимые письма заново не читаются: события
+ * и починки разрыва поддерживают их сами. Открытие, что уже в пути, не повторяется; комната или работа, удалённые за это
+ * время, — не сбой, другой отказ хоста бросается наружу. `entry` — карта на момент открытия.
+ */
+export function openRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null): Promise<void> {
+  const key = keyOf(entry, roomId);
+  if (useRoomPagesStore.getState().opened[key] !== true) useRoomPagesStore.setState((state) => ({ opened: { ...state.opened, [key]: true } }));
+  if (heldRanges(entry).has(roomId)) return Promise.resolve();
+  const running = opening.get(key);
+  if (running !== undefined) return running;
+  const read = readPage(bridge, entry, roomId, null)
+    .then((answer) => {
+      if (answer !== null) useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
+    })
+    .finally(() => opening.delete(key));
+  opening.set(key, read);
+  return read;
+}
+
+/** Подгруженные оригиналы цитат работы (`RoomModelInput.quoted`); ничего не спрашивали — `undefined`. */
+export const quotesOf = (state: RoomPagesState, entry: WindowWorkEntry): Record<string, Message | null> | undefined =>
+  state.quotes[quoteKeyOf(entry.projectPath, entry.map.work.id)];
+
+/** Mail открывается так же, как комната: прямые письма — это `roomId: null`. */
+export const openMail = (bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry): Promise<void> => openRoom(bridge, entry, null);
+
+/** Номер из курсора `before:N` цепочки: письма от него и новее окно держит. */
+const cursorSeq = (cursor: string | null): number | undefined => {
+  const seq = cursor === null ? Number.NaN : Number(cursor.slice('before:'.length));
+  return Number.isInteger(seq) ? seq : undefined;
+};
+
+/**
+ * Что окно помнит о комнатах работы для `withMail` и `keepHeld` (`works.ts`): открывалась ли комната и докуда человек
+ * подгрузил её историю — цепочка, которую ведёт `loadEarlier` (дочитанная — до самого начала, `0`).
+ */
+export function heldPolicy(projectPath: string, workId: string): HeldPolicy {
+  const { opened, chains } = useRoomPagesStore.getState();
+  return {
+    isOpen: (roomId) => opened[roomKeyOf(projectPath, workId, roomId)] === true,
+    floor: (roomId) => {
+      const chain = chains[roomKeyOf(projectPath, workId, roomId)];
+      if (chain === undefined) return undefined;
+      return chain.done ? 0 : cursorSeq(chain.next);
+    },
+  };
+}
+
 export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
   chains: {},
   loading: {},
+  opened: {},
+  quotes: {},
+  loadQuote: async (bridge, entry, id) => {
+    const workKey = quoteKeyOf(entry.projectPath, entry.map.work.id);
+    const key = `${workKey}\u0000${id}`;
+    if (get().quotes[workKey]?.[id] !== undefined || quoting.has(key)) return;
+    quoting.add(key);
+    try {
+      const { message } = await bridge.call('context.letter', { projectPath: entry.projectPath, workId: entry.map.work.id, id });
+      set((state) => ({ quotes: { ...state.quotes, [workKey]: { ...state.quotes[workKey], [id]: message } } }));
+    } finally {
+      quoting.delete(key);
+    }
+  },
   loadEarlier: async (bridge, entry, roomId, apply) => {
     const key = keyOf(entry, roomId);
     if (get().loading[key] === true) return;

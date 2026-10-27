@@ -4,8 +4,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, Room, WorkSession } from '@parley/core';
+import type { MapCompactMail, Message, Room, WorkSession } from '@parley/core';
 import type { WorkLayout } from '../../shared/layout-types.js';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { roomKey, roomLastAt, roomSessions, roomTabState } from './room-view.js';
 
@@ -70,6 +71,27 @@ describe('roomLastAt — время последнего события комн
   it('комната старой карты без поля proposal читается', () => {
     const old = { id: 'r-01', title: 'R', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
     expect(roomLastAt(mapWith([]), old)).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  describe('снимок без писем (compact версии 2)', () => {
+    const bare = (rooms: MapCompactMail['rooms']) =>
+      withCompactMail(makeWork('w-01', { rooms: [room] }), makeCompactMail({ rooms })).map;
+
+    it('время последнего письма комнаты — lastAt снимка; письма других комнат и прямые не в счёт; решение позднее — время решения', () => {
+      const map = bare({
+        'r-01': makeRoomNumbers({ total: 5, top: 5, lastAt: '2026-09-29T11:00:00.000Z' }),
+        'r-02': makeRoomNumbers({ total: 1, top: 6, lastAt: '2026-09-29T12:00:00.000Z' }),
+        '': makeRoomNumbers({ total: 1, top: 7, lastAt: '2026-09-29T13:00:00.000Z' }),
+      });
+      expect(roomLastAt(map, room)).toBe('2026-09-29T11:00:00.000Z');
+      const waiting = { ...room, proposal: { id: 'p-01', from: 's-01', text: 'x', rev: 0, at: '2026-09-29T12:30:00.000Z' } };
+      expect(roomLastAt(map, waiting)).toBe('2026-09-29T12:30:00.000Z');
+    });
+
+    it('в пустой комнате или без записи в снимке — время создания', () => {
+      expect(roomLastAt(bare({ 'r-01': makeRoomNumbers({ lastAt: null }) }), room)).toBe('2026-09-29T08:00:00.000Z');
+      expect(roomLastAt(bare({}), room)).toBe('2026-09-29T08:00:00.000Z');
+    });
   });
 });
 

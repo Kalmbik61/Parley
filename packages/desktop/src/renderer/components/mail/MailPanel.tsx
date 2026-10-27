@@ -12,14 +12,16 @@
  * этот же код проверяется без реального рендера (`MailPanel.test.ts`).
  */
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { useHostSupports } from '../../lib/capabilities.js';
 import { mailView } from '../../lib/mail-view.js';
 import { sessionRowLabel, workTitleText } from '../../lib/participant.js';
+import { openMail } from '../../store/room-pages.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
 
@@ -47,6 +49,21 @@ function isAtBottom(container: HTMLDivElement): boolean {
 
 export function MailPanel({ entry, providers, models, bridge, active, onOpenExternal }: MailPanelProps): JSX.Element {
   const view = mailView(entry, providers, models);
+  // Снимок без писем (`compact` версии 2, спека rooms.mail 6.9): прямые письма окно читает страницей `context.messages` с
+  // `roomId: null` при открытии, дальше они приходят событиями. Заново — когда по числам снимка письма есть, а окно их не
+  // держит (событие пропущено): `unheld` меняется, и эффект идёт снова.
+  const compact = entry.map.compact;
+  const bare = compact?.version === 2;
+  const canRead = useHostSupports('context.messages');
+  const unheld = compact?.version === 2 && (compact.rooms['']?.total ?? 0) > 0 && !entry.map.messages.some((message) => message.roomId === null);
+  const latest = useRef(entry);
+  latest.current = entry;
+  const latestBridge = useRef(bridge);
+  latestBridge.current = bridge;
+  useEffect(() => {
+    if (!bare || !canRead) return;
+    openMail(latestBridge.current, latest.current).catch((error: unknown) => console.warn('[parley] open mail', error));
+  }, [bare, canRead, entry.projectPath, entry.map.work.id, unheld]);
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const messages = new Map(entry.map.messages.map((message) => [message.id, message]));
   const containerRef = useRef<HTMLDivElement | null>(null);

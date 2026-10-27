@@ -178,8 +178,11 @@ export function buildDocuments(input: {
         visitedAt: workAt.get(key) ?? null,
         run: () => useLayoutStore.getState().setActiveWork(key),
       });
-      // Как у прежней команды «вся почта работы»: пустая почта не засоряет список.
-      if (entry.map.messages.length > 0) {
+      // Как у прежней команды «вся почта работы»: пустая почта не засоряет список. Снимок без писем (`compact` версии 2)
+      // писем не несёт — есть ли они, видно по итогам комнат и прямых писем.
+      const compact = entry.map.compact;
+      const hasLetters = compact?.version === 2 ? Object.values(compact.rooms).some((room) => room.total > 0) : entry.map.messages.length > 0;
+      if (hasLetters) {
         docs.push({
           id: `mail:${key}`,
           section: 'works',

@@ -8,6 +8,7 @@ import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { bufferKey } from '../files/buffer.js';
+import { makeCompactMail, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { makeLetter, makeRoom } from '../test-utils/work-fixtures.js';
 import { EMPTY_EXTRAS, fileTabHint, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
@@ -250,6 +251,15 @@ describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', (
     expect(tabMeta(mail, withMessages([letter({ to: ['s-02'] })])).tint).toBeNull();
     expect(tabMeta(mail, withMessages([letter({ roomId: 'r-01' })])).tint).toBeNull();
     expect(tabMeta(mail, withMessages([])).tint).toBeNull();
+  });
+
+  it('почта по снимку без писем: точка — по числу прямых непрочитанных из снимка, а не по держимым письмам; сообщения комнат не в счёт', () => {
+    const mail = { kind: 'mail', id: 'mail' } as const;
+    const bare = (unread: { letters: number; rooms: Record<string, number> }): WindowWorkEntry =>
+      withCompactMail(entry([]), makeCompactMail({ unread }));
+    expect(tabMeta(mail, bare({ letters: 3, rooms: { '': 3 } })).tint).toBe('accent');
+    expect(tabMeta(mail, bare({ letters: 40, rooms: { 'r-01': 40 } })).tint).toBeNull();
+    expect(tabMeta(mail, bare({ letters: 0, rooms: {} })).tint).toBeNull();
   });
 
   it('файл, дифф и браузер без подкраски', () => {
