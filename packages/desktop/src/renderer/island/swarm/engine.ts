@@ -7,7 +7,9 @@
  * генератора, а не на `Math.random`, и рот идёт по кадру настоящего голоса `voice`, а не по синтетической кривой.
  * Рот слушает голос (#9 §6.7, L1): формы рта смешиваются с высотой по громкости, и рот всегда читается как рот —
  * пороги F5 по `Swarm.face()` прототипа island-motion-sound (ограниченные множители, наименьшие длина и штрих, морф
- * «о/у» из линии в овал по параметрам, без усреднения положений).
+ * «о/у» из линии в овал по параметрам, без усреднения положений). Лицо слушает интонацию (L2): после вопроса глаза
+ * расширяются и поднимаются (бровей нет), пауза зовёт моргание, ударный слог даёт импульс размера и яркости, громче —
+ * ярче. В режиме громкости и при reduced motion L2 не действует.
  * Все души живут в долях `d` (радиус сферы 0.5), экран — `cx + x * d`, `cy + y * d`.
  * Поверх облика — одноразовые реакции (#9 §4.1): масштаб, сдвиг, оборот с закруткой, волна яркости, искры. Они
  * меняют только отрисовку относительно `cx`/`cy` и к концу реакции сходят на нет; положения `souls` не трогают.
@@ -25,7 +27,8 @@ export interface SwarmOptions {
   minPx?: number;
   seed?: number;
   /**
-   * Что рот берёт из кадра голоса: `full` — громкость и формы (L1), `loudness` — только громкость, как план 3 v1.
+   * Что лицо берёт из кадра голоса: `full` — громкость, формы (L1) и интонацию (L2), `loudness` — только громкость,
+   * как план 3 v1.
    * Внутренний флаг для тестов F1 (#9 §11.10): в UI переключателя нет, по умолчанию `full`.
    */
   voiceMode?: 'loudness' | 'full';
@@ -272,6 +275,9 @@ class SwarmImpl implements SwarmEngine {
   private nb = 0;
   private b0 = 0;
   private dbl = false;
+  /** Интонация кадра (L2): подъём глаз и ударный импульс 0..1. */
+  private eyesUp = 0;
+  private pulse = 0;
   private palTo: SwarmPalette = 'amber';
   private palFrom: SwarmPalette = 'amber';
   private palT = 1;
@@ -488,7 +494,10 @@ class SwarmImpl implements SwarmEngine {
     o.z = 0.35;
     if (s.role < 2) {
       const ex = 0.41 * sx;
-      const ey = -F.ey;
+      // Вопрос: глаза расширяются и поднимаются — бровей у лица нет.
+      const ey = -(F.ey + 0.03 * this.eyesUp);
+      const ea = F.a! * (1 + 0.12 * this.eyesUp);
+      const eb = F.b! * (1 + 0.25 * this.eyesUp);
       if (F.x === true) {
         const q = (s.ru * 2 - 1) * F.len!;
         const k = s.rv < 0.5 ? 1 : -1;
@@ -505,8 +514,8 @@ class SwarmImpl implements SwarmEngine {
           const ym = clamp(F.cut[0] + F.cut[1] * sx * X, -1, 0.8);
           Y = ym + ((Y + 1) / 2) * (1 - ym);
         }
-        o.x = ex + F.a! * X;
-        o.y = ey + F.b! * Y * bl;
+        o.x = ex + ea * X;
+        o.y = ey + eb * Y * bl;
       }
     } else {
       // Формы рта (L1): «о/у» сужает и ведёт в овал, «а» поднимает, «и/е» растягивает, понижает и даёт улыбку,
@@ -550,10 +559,18 @@ class SwarmImpl implements SwarmEngine {
       o.y += s.gy * 0.045;
       o.m = 0.7;
     }
-    // Лицо на 20 % крупнее сферы, чтобы черты читались.
+    // Лицо на 20 % крупнее сферы, чтобы черты читались; ударный слог раздувает души на 10 %.
     o.x *= 1.2;
     o.y *= 1.2;
-    o.sm = 1.15;
+    o.sm = 1.15 * (1 + 0.1 * this.pulse);
+  }
+
+  /** Моргание по паузе голоса (L2), не чаще раза в 600 мс от начала прошлого; следующее своё — через 2,4–4,4 с. */
+  private forceBlink(now: number): void {
+    if (now - this.b0 <= 600) return;
+    this.b0 = now;
+    this.dbl = false;
+    this.nb = now + 2400 + this.R2() * 2000;
   }
 
   /** Открытость глаз 1..0,06: моргание раз в 2,4–4,4 с по 220 мс, в 20 % двойное; `nb` и reduced motion — без него. */
@@ -598,6 +615,13 @@ class SwarmImpl implements SwarmEngine {
     const amp = rm ? 0.3 : E.shape === 'face' ? (voice?.amp ?? 0) : 0;
     // Reduced motion выключает L1 (F4); режим громкости — рот плана 3 v1 без форм (F1).
     const vis = !rm && E.shape === 'face' && this.voiceMode === 'full' ? (voice?.visemes ?? null) : null;
+    // Интонация (L2) — там же, где формы: в лице, в полном режиме и без reduced motion (F4).
+    const pro = vis === null ? null : voice;
+    this.eyesUp = pro?.eyesUp ?? 0;
+    this.pulse = pro?.pulse ?? 0;
+    if (pro?.blink === true) this.forceBlink(now);
+    // Громче — ярче, ударный слог — вспышка яркости +45 %.
+    const lit = pro === null ? 1 : (0.9 + 0.25 * pro.loud) * (1 + 0.45 * pro.pulse);
     const bl = E.shape === 'face' ? this.blink(now, F, rm) : 1;
     // Реакции — в один общий модификатор; кончившиеся снимаются, и кадров они больше не просят.
     let sc = 1;
@@ -649,7 +673,7 @@ class SwarmImpl implements SwarmEngine {
     const sb = spr === null ? null : spr[this.palFrom];
     const pt = this.palT;
     const o = this.o;
-    const dim = E.dim * (1 + 0.8 * this.flash);
+    const dim = E.dim * (1 + 0.8 * this.flash) * lit;
     for (const s of this.souls) {
       this.tg(s, t, amp, bl, vis);
       let x = o.x;
