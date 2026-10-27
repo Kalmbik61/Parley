@@ -270,13 +270,14 @@ describe('окно острова', () => {
       expect(controller.notch()).toEqual({ width: 185, height: 32, centerX: 239.5 });
     });
 
-    it.each<IslandPlacement['anchor']>(['left', 'right'])('точка %s на дисплее с вырезом — notch null, полоса у края (N9)', (anchor) => {
+    it.each<IslandPlacement['anchor']>(['left', 'right'])('точка %s на дисплее с вырезом — notch null, полоса у края с сегодняшним отступом (N9, Н-3)', (anchor) => {
       const { controller, windows, setNotch } = setup({ displayId: 1, anchor });
       setNotch(1, NOTCH);
       controller.open();
       expect(controller.notch()).toBeNull();
       expect(windows[0]?.bounds.x).toBe(anchor === 'left' ? 12 : 1512 - 480 - 12);
-      expect(controller.topInset()).toBe(32);
+      // Отступ — по строке меню, как без выреза (критик m-1471), а не по высоте выреза.
+      expect(controller.topInset()).toBe(38);
     });
 
     it('без выреза — notch null, прежние кадр и отступ (N2)', () => {

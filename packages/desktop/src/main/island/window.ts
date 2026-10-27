@@ -321,7 +321,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
     },
     topInset: () => {
       const target = display();
-      return notchInset(target, deps.notch(target));
+      // У точек слева и справа на дисплее с вырезом остаётся сегодняшняя полоса (Н-3): вырез — только в центре.
+      return notchInset(target, deps.placement().anchor === 'center' ? deps.notch(target) : null);
     },
     anchor: () => deps.placement().anchor,
     notch: () => {
