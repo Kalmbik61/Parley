@@ -21,6 +21,7 @@ import { useMarkRead } from '../../attention/use-mark-read.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { mailView } from '../../lib/mail-view.js';
 import { sessionRowLabel, workTitleText } from '../../lib/participant.js';
+import { messageSeq } from '../../lib/window-merge.js';
 import { openMail } from '../../store/room-pages.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
@@ -71,12 +72,17 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
   // `ref`, а не состояние: значение нужно синхронно внутри layout-эффекта и
   // обработчика скролла, а перерисовка панели из-за него не нужна.
   const stuckToBottomRef = useRef(true);
-  const previousCountRef = useRef(view.letters.length);
+  // Новое — по номеру новейшего письма, а не по длине: у потолка окна (300 писем) новое письмо вытесняет старейшее, и
+  // длина остаётся той же.
+  const newestId = view.letters.at(-1)?.id ?? null;
+  const previousNewestRef = useRef(newestId);
   const [below, setBelow] = useState(0);
 
   useLayoutEffect(() => {
-    const added = view.letters.length - previousCountRef.current;
-    previousCountRef.current = view.letters.length;
+    const previous = previousNewestRef.current;
+    // Сколько писем новее прежнего новейшего; ленты не было — все письма новые.
+    const added = previous === null ? view.letters.length : view.letters.filter((letter) => messageSeq(letter) > messageSeq({ id: previous })).length;
+    previousNewestRef.current = newestId ?? previous;
 
     const container = containerRef.current;
     if (container === null) return;
@@ -88,7 +94,7 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
       // Пользователь ушёл вверх — позицию не трогаем, счёт новых писем растёт.
       setBelow((count) => count + added);
     }
-  }, [view.letters.length]);
+  }, [view.letters.length, newestId]);
 
   const handleScroll = (): void => {
     const container = containerRef.current;

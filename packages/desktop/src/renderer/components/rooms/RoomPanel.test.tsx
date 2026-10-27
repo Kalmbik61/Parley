@@ -1847,6 +1847,39 @@ describe('RoomPanel — прокрутка к низу', () => {
     }
   });
 
+  it('лента у потолка в 300 писем по-прежнему прилипает к низу и считает ↓N: длина не меняется, новое письмо вытесняет старейшее', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const at = (n: number): string => new Date(Date.UTC(2026, 8, 27, 10, 0, n)).toISOString();
+      /** Триста писем агента, от m-`first`: сдвиг окна на единицу — это одно новое письмо у потолка. */
+      const ring = (first: number): Message[] => Array.from({ length: 300 }, (_, index) => fromAgent(`m-${first + index}`, at(first + index)));
+      const { update } = renderPanel(entryOf({ messages: ring(1) }));
+      expect(feed().scrollTop).toBe(500);
+
+      // У низа: m-301 вытеснило m-1, длина прежняя, а лента прижимается к новому низу.
+      setScrollHeight(feed(), 800);
+      update(entryOf({ messages: ring(2) }));
+      expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+
+      // Читают историю: позиция стоит, «↓N» растёт с каждым вытеснившим письмом.
+      scrollUp();
+      update(entryOf({ messages: ring(3) }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓1');
+      update(entryOf({ messages: ring(4) }));
+      expect(newBelow()?.textContent).toBe('↓2');
+
+      // Своё письмо у потолка прижимает ленту и гасит «↓N», как и без потолка.
+      setScrollHeight(feed(), 900);
+      update(entryOf({ messages: [...ring(4).slice(1), message('m-304', { at: at(304) })] }));
+      expect(feed().scrollTop).toBe(900);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('новое решение, пока читают историю, ленту не уводит: карточка при появлении не прижимает ленту к низу', () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
     try {

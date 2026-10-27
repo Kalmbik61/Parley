@@ -97,6 +97,32 @@ describe('MailPanel (тест 6)', () => {
     expect(container.textContent).toContain('↓1');
   });
 
+  it('лента у потолка в 300 писем по-прежнему прилипает к низу и считает ↓N: длина не меняется, новое письмо вытесняет старейшее', () => {
+    const at = (n: number): string => new Date(Date.UTC(2026, 0, 1, 10, 0, n)).toISOString();
+    /** Триста писем, от m-`first`: сдвиг окна на единицу — это одно новое письмо у потолка. */
+    const ring = (first: number): Message[] => Array.from({ length: 300 }, (_, index) => message(`m-${first + index}`, at(first + index)));
+    const mount = (messages: Message[]) => <MailPanel entry={entryWith(messages)} providers={[]} models={{}} bridge={bridge} active onOpenExternal={() => {}} />;
+    const { container, rerender } = render(mount(ring(1)));
+    const scroller = container.querySelector('[data-letter-id]')?.parentElement as HTMLDivElement;
+
+    // У низа: m-301 вытеснило m-1, лента прижимается к новому низу, счёта нет.
+    setScrollMetrics(scroller, { scrollTop: 700, scrollHeight: 1000, clientHeight: 300 });
+    fireEvent.scroll(scroller);
+    setScrollMetrics(scroller, { scrollTop: 700, scrollHeight: 1200, clientHeight: 300 });
+    rerender(mount(ring(2)));
+    expect(scroller.scrollTop).toBe(1200);
+    expect(container.textContent).not.toContain('↓');
+
+    // Читают историю: позиция стоит, «↓N» растёт с каждым вытеснившим письмом.
+    setScrollMetrics(scroller, { scrollTop: 100, scrollHeight: 1200, clientHeight: 300 });
+    fireEvent.scroll(scroller);
+    rerender(mount(ring(3)));
+    expect(scroller.scrollTop).toBe(100);
+    expect(container.textContent).toContain('↓1');
+    rerender(mount(ring(4)));
+    expect(container.textContent).toContain('↓2');
+  });
+
   it('у хвоста ленты новое письмо докручивает вниз и счёт не растёт', () => {
     const initial = [message('m-1', '2026-01-01T10:00:00.000Z')];
     const { container, rerender } = render(

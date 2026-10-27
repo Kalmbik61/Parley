@@ -8,7 +8,8 @@
  *
  * Здесь же — чтение страниц после разрыва `rooms.mail` (спека rooms.mail 6.5): `repairWork` перечитывает держимое окном
  * по всем комнатам и Mail, `followRoom` дочитывает комнату после её верха, `rereadRoom` — весь держимый диапазон комнаты.
- * Страницы встают в карту через `useWorksStore.addMail`; сам разрыв находит стор работ (`works.ts`).
+ * Страницы встают в карту через `addPage`: свежими копиями и со срезом потолка (`withFreshMessages`), как письма событий;
+ * сам разрыв находит стор работ (`works.ts`).
  *
  * Окно с признаком `rooms-mail` получает снимок без писем (спека rooms.mail 6.8-6.9): последнюю страницу комнаты и Mail оно
  * читает при открытии (`openRoom`, `openMail`), дальше письма приходят событиями, а «загрузить раньше» идёт от наименьшего
@@ -18,14 +19,16 @@
  *
  * Открытие, которое хост отклонил, повторяется само: с отступом 1 с, вдвое дольше после каждого сбоя подряд, до 30 с
  * (`openRoom`, как у починки разрыва в `works.ts`). Повтор останавливают: письма комнаты встали (событие, починка), работы
- * больше нет, комната уже не открыта, успешное открытие и отключение от хоста (`stopOpenRetries`).
+ * больше нет, комната уже не открыта, успешное открытие и отключение от хоста (`stopOpenRetries`): сбой чтения, дошедший
+ * после отключения, нового повтора не заводит. Пока страница открытия читается или ждёт повтора, комната «ждёт»
+ * (`pending`, `awaitsOpen`): лента в это время не показывает пустую подсказку.
  */
 
 import { create } from 'zustand';
 import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { earlierCursor, heldRanges, messageSeq, type HeldPolicy } from '../lib/window-merge.js';
+import { earlierCursor, heldRanges, messageSeq, withFreshMessages, type HeldPolicy } from '../lib/window-merge.js';
 import { useWorksStore } from './works.js';
 
 interface Chain {
@@ -38,6 +41,8 @@ export interface RoomPagesState {
   loading: Record<string, boolean>;
   /** Комнаты и Mail, которые окно открывало (ключ — `keyOf`): письма их событий окно держит. */
   opened: Record<string, true>;
+  /** Комнаты и Mail, чья страница открытия читается или ждёт повтора после сбоя (ключ — `keyOf`); сняты, когда читать больше нечего. */
+  pending: Record<string, true>;
   /**
    * Оригиналы цитат по работе (ключ — проект и работа, затем id письма): письмо или `null`, если его в работе нет.
    * Нет записи — ещё не спрашивали. Цитату показывает комната письма, поэтому сверка `roomId` — у читателя.
@@ -75,6 +80,11 @@ interface OpenRetry {
   timer: ReturnType<typeof setTimeout> | null;
 }
 const openRetries = new Map<string, OpenRetry>();
+/**
+ * Поколение повторов: растёт при `stopOpenRetries`. Чтение, начатое до отключения, а упавшее после него, видит чужое
+ * поколение и повтора не заводит — иначе таймер пережил бы отключение.
+ */
+let retryEpoch = 0;
 
 /** Снимает повтор комнаты вместе со счётом сбоев. */
 function forgetRetry(key: string): void {
@@ -83,9 +93,35 @@ function forgetRetry(key: string): void {
   openRetries.delete(key);
 }
 
+/**
+ * Приводит состояние комнаты в сторе к тому, что есть: `pending` — чтение идёт или повтор в очереди; `opened` ставится,
+ * когда `markOpened`. Одно изменение стора на вызов, и только если что-то изменилось: панели не перерисовываются зря.
+ */
+function syncOpen(key: string, markOpened: boolean): void {
+  const pending = opening.has(key) || openRetries.get(key)?.timer != null;
+  const state = useRoomPagesStore.getState();
+  const needsOpened = markOpened && state.opened[key] !== true;
+  if (!needsOpened && pending === (state.pending[key] === true)) return;
+  useRoomPagesStore.setState((current) => {
+    const patch: Partial<RoomPagesState> = {};
+    if (needsOpened) patch.opened = { ...current.opened, [key]: true };
+    if (pending !== (current.pending[key] === true)) {
+      const next = { ...current.pending };
+      if (pending) next[key] = true;
+      else Reflect.deleteProperty(next, key);
+      patch.pending = next;
+    }
+    return patch;
+  });
+}
+
 /** Снимает все повторы открытия: связи с хостом нет, а открытые панели начнут заново, когда она вернётся. */
 export function stopOpenRetries(): void {
-  for (const key of [...openRetries.keys()]) forgetRetry(key);
+  retryEpoch += 1;
+  for (const key of [...openRetries.keys()]) {
+    forgetRetry(key);
+    syncOpen(key, false);
+  }
 }
 
 /**
@@ -103,11 +139,13 @@ function scheduleReopen(bridge: Pick<ParleyBridge, 'call'>, projectPath: string,
     const current = useWorksStore.getState().entries.find((entry) => entry.projectPath === projectPath && entry.map.work.id === workId);
     if (current === undefined || useRoomPagesStore.getState().opened[key] !== true || heldRanges(current).has(roomId)) {
       forgetRetry(key);
+      syncOpen(key, false);
       return;
     }
     openRoom(bridge, current, roomId).catch((error: unknown) => console.warn('[parley] open room retry', error));
   }, delay);
   openRetries.set(key, retry);
+  syncOpen(key, false);
 }
 
 /**
@@ -115,6 +153,20 @@ function scheduleReopen(bridge: Pick<ParleyBridge, 'call'>, projectPath: string,
  * «дочитать часть», а защита от бесконечного чтения: диапазон, не уложившийся в него, — сбой (`readDown` бросает).
  */
 export const MAIL_PAGES_MAX = 20;
+
+/**
+ * Страница писем встаёт в карту работы свежими копиями (отметки прочтения только прибавляются) и проходит срез потолка с
+ * границей подгруженного раньше (`withFreshMessages`, `heldPolicy().floor`): перечитывание после обрыва не поднимает
+ * комнату выше `WINDOW_ROOM_KEEP`. Тот же путь у страницы открытия.
+ */
+function addPage(projectPath: string, workId: string, messages: readonly Message[]): void {
+  const { floor } = heldPolicy(projectPath, workId);
+  useWorksStore.setState((state) => ({
+    entries: state.entries.map((entry) =>
+      entry.projectPath === projectPath && entry.map.work.id === workId ? withFreshMessages(entry, messages, floor) : entry,
+    ),
+  }));
+}
 
 /** Одна страница `context.messages`; `null` — комнату или работу удалили, пока шли страницы: читать больше нечего, это не сбой. */
 function readPage(
@@ -143,7 +195,7 @@ async function readDown(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEnt
   for (let page = 0; page < MAIL_PAGES_MAX; page += 1) {
     const answer = await readPage(bridge, entry, roomId, cursor);
     if (answer === null) return;
-    useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
+    addPage(entry.projectPath, entry.map.work.id, answer.messages);
     const oldest = Math.min(...answer.messages.map(messageSeq));
     if (answer.page.complete || answer.page.next === null || oldest <= reach) return;
     cursor = answer.page.next;
@@ -197,33 +249,52 @@ export async function repairWork(bridge: Pick<ParleyBridge, 'call'>, entry: Wind
  */
 export function openRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null): Promise<void> {
   const key = keyOf(entry, roomId);
-  if (useRoomPagesStore.getState().opened[key] !== true) useRoomPagesStore.setState((state) => ({ opened: { ...state.opened, [key]: true } }));
   if (heldRanges(entry).has(roomId)) {
     forgetRetry(key);
+    syncOpen(key, true);
     return Promise.resolve();
   }
   const running = opening.get(key);
-  if (running !== undefined) return running;
+  if (running !== undefined) {
+    syncOpen(key, true);
+    return running;
+  }
   const retry = openRetries.get(key);
   if (retry?.timer != null) {
     clearTimeout(retry.timer);
     retry.timer = null;
   }
+  const epoch = retryEpoch;
   const read = readPage(bridge, entry, roomId, null)
     .then(
       (answer) => {
         forgetRetry(key);
-        if (answer !== null) useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
+        if (answer !== null) addPage(entry.projectPath, entry.map.work.id, answer.messages);
       },
       (error: unknown) => {
-        scheduleReopen(bridge, entry.projectPath, entry.map.work.id, roomId);
+        // Связь оборвалась, пока страница была в пути (`stopOpenRetries`): открытые панели начнут заново сами.
+        if (epoch === retryEpoch) scheduleReopen(bridge, entry.projectPath, entry.map.work.id, roomId);
         throw error;
       },
     )
-    .finally(() => opening.delete(key));
+    .finally(() => {
+      opening.delete(key);
+      syncOpen(key, false);
+    });
   opening.set(key, read);
+  syncOpen(key, true);
   return read;
 }
+
+/**
+ * Страница открытия комнаты ещё придёт: чтение не начиналось (панель начнёт его эффектом), идёт или ждёт повтора после
+ * сбоя. Пока так, лента комнаты с письмами в снимке не показывает пустую подсказку; когда читать больше нечего (страница
+ * встала, комнаты нет, связь оборвалась), — `false`.
+ */
+export const awaitsOpen = (state: RoomPagesState, entry: WindowWorkEntry, roomId: string | null): boolean => {
+  const key = keyOf(entry, roomId);
+  return state.opened[key] !== true || state.pending[key] === true;
+};
 
 /** Подгруженные оригиналы цитат работы (`RoomModelInput.quoted`); ничего не спрашивали — `undefined`. */
 export const quotesOf = (state: RoomPagesState, entry: WindowWorkEntry): Record<string, Message | null> | undefined =>
@@ -239,17 +310,24 @@ const cursorSeq = (cursor: string | null): number | undefined => {
 };
 
 /**
- * Что окно помнит о комнатах работы для `withMail` и `keepHeld` (`works.ts`): открывалась ли комната и докуда человек
- * подгрузил её историю — цепочка, которую ведёт `loadEarlier` (дочитанная — до самого начала, `0`).
+ * Что окно помнит о комнатах работы для `withMail`, `keepHeld` (`works.ts`) и `withFreshMessages` (`addPage`): открывалась
+ * ли комната и докуда человек подгрузил её историю — цепочка, которую ведёт `loadEarlier` (дочитанная — до самого начала,
+ * `0`). Пока страница «раньше» в пути, граница — наименьший номер, который окно держит сейчас: срез потолка не уберёт
+ * письмо, к которому страница вот-вот примкнёт, и между ними не останется дыры.
  */
 export function heldPolicy(projectPath: string, workId: string): HeldPolicy {
-  const { opened, chains } = useRoomPagesStore.getState();
+  const { opened, chains, loading } = useRoomPagesStore.getState();
   return {
     isOpen: (roomId) => opened[roomKeyOf(projectPath, workId, roomId)] === true,
     floor: (roomId) => {
-      const chain = chains[roomKeyOf(projectPath, workId, roomId)];
-      if (chain === undefined) return undefined;
-      return chain.done ? 0 : cursorSeq(chain.next);
+      const key = roomKeyOf(projectPath, workId, roomId);
+      const chain = chains[key];
+      const chained = chain === undefined ? undefined : chain.done ? 0 : cursorSeq(chain.next);
+      if (loading[key] !== true) return chained;
+      const current = useWorksStore.getState().entries.find((entry) => entry.projectPath === projectPath && entry.map.work.id === workId);
+      const lowest = current === undefined ? undefined : heldRanges(current).get(roomId)?.min;
+      if (lowest === undefined) return chained;
+      return chained === undefined ? lowest : Math.min(chained, lowest);
     },
   };
 }
@@ -258,6 +336,7 @@ export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
   chains: {},
   loading: {},
   opened: {},
+  pending: {},
   quotes: {},
   loadQuote: async (bridge, entry, id) => {
     const workKey = quoteKeyOf(entry.projectPath, entry.map.work.id);

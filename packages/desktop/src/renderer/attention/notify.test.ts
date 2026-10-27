@@ -1320,6 +1320,31 @@ describe('createAttentionNotifier.onMail — письма событием rooms
     ]);
   });
 
+  it('новая работа, чей первый снимок уже считает письмо, уведомляет о нём; восстановленная, созданная до запуска, — молчит', () => {
+    const h = started();
+    /** Работа `id` со снимком, который уже считает прямое письмо m-1 (`top` 1): смешанная запись, снимок идёт раньше её события. */
+    const counted = (id: string, createdAt: string): WindowWorkEntry => {
+      const base = snapshot({ '': 1 });
+      return { ...base, map: { ...base.map, work: { ...base.map.work, id, createdAt } } };
+    };
+    const eventOf = (workId: string): RoomsMailEvent => makeMailEvent({ projectPath: '/tmp/p', workId, version: 2, prevVersion: 1, rooms: [batch(null, [direct('m-1', { text: 'first' })])] });
+
+    // Создана после запуска уведомителя (дата в будущем — от часов теста не зависит): базы нет, письмо события уведомляет.
+    const created = counted('w-02', '2999-01-01T00:00:00.000Z');
+    h.entries = [snapshot(), created];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.notifier.onMail(eventOf('w-02'));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([['mail:/tmp/p w-02', 'first']]);
+
+    // Была до запуска (восстановлена из архива, первый снимок частичный): письмо m-1 уже было, база — по `top`.
+    const restored = counted('w-03', '2026-01-01T00:00:00.000Z');
+    h.entries = [snapshot(), created, restored];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-03'));
+    expect(h.notes).toHaveLength(1);
+  });
+
   it('prefs().mail: false — страница письма не уведомляет и тоже запоминается: включение настройки его не повторяет', () => {
     const h = started();
     h.prefs = { ...h.prefs, mail: false };

@@ -259,6 +259,38 @@ describe('снимок без писем (compact версии 2, спека roo
   const batch = (roomPatch: Parameters<typeof makeMailRoom>[1], eventPatch: Partial<Parameters<typeof makeMailEvent>[0]> = {}) =>
     makeMailEvent({ version: 6, prevVersion: 5, ...eventPatch, rooms: [makeMailRoom('r-01', { prevTop: 9, top: 10, total: 10, lastAt: 'a10', ...roomPatch })] });
 
+  describe('withFreshMessages: срез по потолку (страницы починки, дочитывания и перечитывания)', () => {
+    const of = (value: WindowWorkEntry, room: string | null): Message[] => value.map.messages.filter((message) => message.roomId === room);
+
+    it('страница в комнате: не больше 300 новейших плюс подгруженное раньше; другие комнаты и Mail не трогаются', () => {
+      const current = v2([...letters('r-01', 1, 300), ...letters('r-02', 401, 705), ...letters(null, 801, 820)]);
+      const page = letters('r-01', 301, 310);
+
+      const next = withFreshMessages(current, page);
+      expect(of(next, 'r-01')).toHaveLength(300);
+      expect(of(next, 'r-01')[0]?.id).toBe('m-011');
+      expect(of(next, 'r-01').at(-1)?.id).toBe('m-310');
+      // Комната без письма в странице держит, что держала.
+      expect(of(next, 'r-02')).toHaveLength(305);
+      expect(of(next, null)).toHaveLength(20);
+
+      // Человек подгрузил историю до m-005: срез опускается до неё; подгружена вся (`0`) — остаётся всё.
+      expect(of(withFreshMessages(current, page, (room) => (room === 'r-01' ? 5 : undefined)), 'r-01')).toHaveLength(306);
+      expect(of(withFreshMessages(current, page, (room) => (room === 'r-01' ? 0 : undefined)), 'r-01')).toHaveLength(310);
+      // Граница выше порога ничего не удерживает: на комнату по-прежнему 300.
+      expect(of(withFreshMessages(current, page, (room) => (room === 'r-01' ? 200 : undefined)), 'r-01')).toHaveLength(300);
+    });
+
+    it('Mail режется так же; карта без снимка версии 2 не режется вовсе', () => {
+      const direct = withFreshMessages(v2(letters(null, 1, 300)), letters(null, 301, 305));
+      expect(of(direct, null)).toHaveLength(300);
+      expect(of(direct, null)[0]?.id).toBe('m-006');
+
+      const old = entry(letters('r-01', 1, 300));
+      expect(withFreshMessages(old, letters('r-01', 301, 305)).map.messages).toHaveLength(305);
+    });
+  });
+
   describe('withMail', () => {
     it('числа берутся из события как есть: итоги комнат, непрочитанное по работе и по комнатам (в том числе у нетронутых), без перевода ключей', () => {
       const next = withMail(

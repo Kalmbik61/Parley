@@ -99,9 +99,9 @@ function keepFrom(list: readonly Message[], floor: number | undefined): number {
 }
 
 /**
- * Тот же срез для писем, что пришли событием (спека rooms.mail 6.9, «Память окна»): письма только пишутся, снимка между
- * событиями нет, и открытая шумная комната иначе росла бы без предела. Срез — у комнат `rooms`, куда события что-то
- * положили; остальные комнаты и Mail не трогаются. `messages` — по возрастанию номера.
+ * Тот же срез для писем, что пришли событием или страницей (спека rooms.mail 6.9, «Память окна»): письма только пишутся,
+ * снимка между событиями нет, и открытая шумная комната иначе росла бы без предела. Срез — у комнат `rooms`, куда
+ * что-то положили; остальные комнаты и Mail не трогаются. `messages` — по возрастанию номера.
  */
 function capRooms(messages: Message[], rooms: ReadonlySet<string | null>, floor?: HeldPolicy['floor']): Message[] {
   const byRoom = new Map<string | null, Message[]>();
@@ -184,15 +184,19 @@ export function heldRanges(entry: WindowWorkEntry): Map<string | null, { min: nu
 const roomIdsOf = (entry: WindowWorkEntry): Set<string> => new Set(entry.map.rooms.map((room) => room.id));
 
 /**
- * Страница писем, пришедшая после разрыва (`repairWork`, `followRoom`): свежие копии встают в карту, письма комнат,
- * которых в карте уже нет, — нет: запоздавшая страница не воскрешает удалённую комнату. Числа страница не трогает —
- * их ставят события и снимки.
+ * Страница писем, пришедшая после разрыва или при открытии (`repairWork`, `followRoom`, `rereadRoom`, `openRoom`): свежие
+ * копии встают в карту, письма комнат, которых в карте уже нет, — нет: запоздавшая страница не воскрешает удалённую
+ * комнату. Числа страница не трогает — их ставят события и снимки. Снимок без писем (версия 2): в комнате, куда страница
+ * что-то положила, остаётся не больше `WINDOW_ROOM_KEEP` новейших плюс подгруженное человеком «раньше» (`floor`) — тот же
+ * срез, что у событий (`capRooms`): перечитывание после обрыва не поднимает комнату выше потолка.
  */
-export function withFreshMessages(entry: WindowWorkEntry, messages: readonly Message[]): WindowWorkEntry {
+export function withFreshMessages(entry: WindowWorkEntry, messages: readonly Message[], floor?: HeldPolicy['floor']): WindowWorkEntry {
   const rooms = roomIdsOf(entry);
   const known = messages.filter((message) => message.roomId === null || rooms.has(message.roomId));
   if (known.length === 0) return entry;
-  return { ...entry, map: { ...entry.map, messages: unionFresh(entry.map.messages, known) } };
+  const merged = unionFresh(entry.map.messages, known);
+  const held = entry.map.compact?.version === 2 ? capRooms(merged, new Set(known.map((message) => message.roomId)), floor) : merged;
+  return { ...entry, map: { ...entry.map, messages: held } };
 }
 
 /** Отметки прочтения и пометки «удалено» события на держимых письмах; порядок писем сохраняется. */

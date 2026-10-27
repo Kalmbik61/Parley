@@ -197,6 +197,36 @@ describe('RoomPanel: снимок без писем (compact версии 2, с�
     expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
   });
 
+  it('прочитать страницу некому — хост без context.messages, связи нет, комнату стёрли: лента как прежде, подсказка на месте, ожидания нет', async () => {
+    const quiet = (): void => {
+      expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined();
+      expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+    };
+    // Хост не умеет читать страницы: страницы не будет, ждать нечего.
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    quiet();
+    expect(bridge.calls.filter((call) => call.method === 'context.messages')).toEqual([]);
+    cleanup();
+
+    // Связи нет: чтение не отправить, пока она не вернётся.
+    useHostStore.setState({ status: { state: 'disconnected', reason: 'host gone' } });
+    render(<Live bridge={bridge} />);
+    quiet();
+    cleanup();
+
+    // Хост ответил «комнаты нет»: чтение закончилось без писем, ленте ждать больше нечего.
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages', 'context.letter'] } });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'not_found', message: 'room r-01 does not exist' };
+    });
+    render(<Live bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined());
+    quiet();
+  });
+
   it('неудачное открытие повторяется: комната с историей после сбоя чтения получает страницу без перемонтирования', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
