@@ -29,19 +29,26 @@
  * агентов чип остаётся — по нему агент зовёт человека.
  *
  * Сообщение человека стоит справа и текстом лежит на пузыре `bg-secondary`, как промпт в Chat
- * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря.
+ * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря. Его вложения (хвост «Attachments:»
+ * от `composeRoomMessage`) — чипами в пузыре под текстом, картинки миниатюрами, как в Chat.
  */
 
+import { useContext } from 'react';
 import type { SessionNeed } from '@parley/core';
 import type { MailWait } from '@parley/protocol';
 import { LoaderCircle } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { mailWaitText } from '../../attention/derive.js';
+import { AttachmentChip } from '../../chat/AttachmentChip.js';
+import { pairContextAttachments } from '../../chat/context-attachments.js';
+import { useOpenAttachmentImage } from '../../chat/open-attachment.js';
 import { cn } from '../../lib/cn.js';
 import { isoMs } from '../../lib/iso-time.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { Badge } from '../../ui/badge.js';
+import { splitRoomAttachments } from './attachments.js';
 import type { MessageModel, ReplyModel } from './feed-model.js';
+import { FilePathLinksContext } from './FilePathText.js';
 import { planLetterMarkdown } from './plan-letter.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 import { SenderAvatar } from './SenderAvatar.js';
@@ -144,6 +151,9 @@ export function RoomMessage({
   const system = message.sender.kind === 'system';
   /** Сообщение человека — справа, на пузыре. */
   const human = message.sender.kind === 'human';
+  // Вложения человека (`composeRoomMessage`) — чипами под текстом, картинки миниатюрами; у агентов «Attachments:» — текст.
+  const { text: body, attachments } = human ? splitRoomAttachments(message.text) : { text: message.text, attachments: [] };
+  const shown = pairContextAttachments(attachments);
   return (
     <div
       data-message-id={message.id}
@@ -190,12 +200,13 @@ export function RoomMessage({
         >
           <RoomMarkdown
             // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
-            text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
+            text={system ? (planLetterMarkdown(message.text) ?? message.text) : body}
             labelOf={labelOf}
             onOpenExternal={onOpenExternal}
             humanChips={!human}
             codePaths={system}
           />
+          {shown.length === 0 ? null : <RoomAttachments paths={shown} />}
         </div>
         {picked.length === 0 && waiting.length === 0 ? null : (
           <div
@@ -233,6 +244,25 @@ export function RoomMessage({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Вложения сообщения человека: те же чипы, что в пузыре промпта «Chat»; мост и работа — из `FilePathLinksContext`. */
+function RoomAttachments({ paths }: { paths: readonly string[] }): JSX.Element {
+  const bridge = useContext(FilePathLinksContext)?.bridge ?? null;
+  const openImage = useOpenAttachmentImage();
+  return (
+    <div data-room-message-attachments="" className="mt-1.5 flex flex-wrap items-center justify-end gap-2">
+      {paths.map((path, index) => (
+        <AttachmentChip
+          key={`${index}:${path}`}
+          path={path}
+          bridge={bridge}
+          size="feed"
+          {...(openImage === null ? {} : { onOpen: openImage })}
+        />
+      ))}
     </div>
   );
 }

@@ -4,11 +4,13 @@
  * один раз при монтировании, модель каждой сессии берётся из живой activity.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { MailPanel } from '../../components/mail/MailPanel.js';
+import { FilePathLinksContext, type FilePathLinks } from '../../components/rooms/FilePathText.js';
+import { workKey as workKeyOf } from '../../lib/tree-order.js';
 import { activityFor, useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 
@@ -39,14 +41,22 @@ export function MailBody({ bridge, entry, active }: MailBodyProps): JSX.Element 
     models[session.id] = activityFor(activityByRef, ref)?.metrics?.model ?? null;
   }
 
+  // Пути в письмах (⌘/Ctrl-ссылки, `FilePathText`): относительные — от папки проекта.
+  const pathLinks = useMemo<FilePathLinks>(
+    () => ({ bridge, workKey: workKeyOf(entry.projectPath, entry.map.work.id), cwd: entry.projectPath }),
+    [bridge, entry.projectPath, entry.map.work.id],
+  );
+
   return (
-    <MailPanel
-      entry={entry}
-      providers={providers}
-      models={models}
-      bridge={bridge}
-      active={active}
-      onOpenExternal={(url) => void bridge.app.openExternal(url)}
-    />
+    <FilePathLinksContext.Provider value={pathLinks}>
+      <MailPanel
+        entry={entry}
+        providers={providers}
+        models={models}
+        bridge={bridge}
+        active={active}
+        onOpenExternal={(url) => void bridge.app.openExternal(url)}
+      />
+    </FilePathLinksContext.Provider>
   );
 }

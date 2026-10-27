@@ -1,7 +1,8 @@
 /**
  * Вложения сообщения комнаты (скрепка поля ввода и файлы, брошенные на вкладку комнаты). Агенты получают письмо комнаты
  * текстом (`check_inbox`), а не промптом CLI, поэтому вложение — абсолютный путь в конце сообщения: агент откроет файл
- * сам. В ленте это список путей кодом. Текст — для агентов, поэтому по-английски.
+ * сам. Текст — для агентов, поэтому по-английски. Лента делает обратное (`splitRoomAttachments`): у сообщения человека
+ * список путей — чипами, картинка — миниатюрой, как в пузыре промпта «Chat».
  */
 
 import { withContextImages } from '../../chat/context-attachments.js';
@@ -14,4 +15,23 @@ export function composeRoomMessage(text: string, paths: readonly string[]): stri
   if (paths.length === 0) return text;
   const list = withContextImages(paths).map((path) => `- ${codeSpan(path)}`).join('\n');
   return `${text === '' ? '' : `${text}\n\n`}Attachments:\n${list}`;
+}
+
+/** Хвост «Attachments:» с пунктами списка `composeRoomMessage`. */
+const TAIL = /(?:^|\n\n)Attachments:\n((?:- [^\n]+(?:\n|$))+)$/;
+/** Пункт: путь кодом или, с обратной кавычкой внутри, как есть. */
+const ITEM = /^- (?:`([^`]+)`|(.+))$/;
+
+/** Обратное `composeRoomMessage`: текст до «Attachments:» и пути по порядку. Хвоста нет — всё текст, вложений нет. */
+export function splitRoomAttachments(text: string): { text: string; attachments: string[] } {
+  const tail = TAIL.exec(text);
+  if (tail === null) return { text, attachments: [] };
+  const attachments = (tail[1] ?? '')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => {
+      const item = ITEM.exec(line);
+      return item?.[1] ?? item?.[2] ?? '';
+    });
+  return { text: text.slice(0, tail.index), attachments };
 }

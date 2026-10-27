@@ -40,6 +40,7 @@ import { unified, type PluggableList } from 'unified';
 import { S } from '../../../shared/strings.js';
 import { markdownTooDeep } from '../../lib/markdown-depth.js';
 import { sessionTag } from '../../lib/participant.js';
+import { findLinkCandidates, type LinkCandidate } from '../../terminal/links.js';
 import { splitFeedMentions } from './mention.js';
 
 /**
@@ -57,7 +58,7 @@ export interface MdNode {
   type: string;
   value?: string;
   children?: MdNode[];
-  data?: { hName?: string; hProperties?: Record<string, string> };
+  data?: { hName?: string; hProperties?: Record<string, string>; hChildren?: HastChild[] };
   /** Текст вставлен как есть (исходник, подпись, title): упоминания в нём не разбираются. */
   literal?: boolean;
   position?: { start: { offset?: number }; end: { offset?: number } };
@@ -71,6 +72,11 @@ export interface MdNode {
   /** `table`: выравнивание столбцов, по нему считается число столбцов. */
   align?: unknown[];
 }
+
+/** Узел hast, которым `remarkFilePaths` заменяет содержимое строчного кода (`data.hChildren`). */
+type HastChild =
+  | { type: 'text'; value: string }
+  | { type: 'element'; tagName: 'span'; properties: Record<string, string>; children: [{ type: 'text'; value: string }] };
 
 /**
  * Внутри ссылки текст остаётся как есть: `@s02` в адресе — часть адреса (`https://x.example/@s02`), а чип
@@ -314,6 +320,94 @@ function codePathsChildren(parent: MdNode): void {
  */
 export function remarkCodePaths() {
   return (tree: MdNode): void => codePathsChildren(tree);
+}
+
+/**
+ * Атрибуты кандидата в путь (`remarkFilePaths`): по ним `components.span` ленты рисует `FilePathText`. Сам путь — как
+ * написан, строка и колонка — из хвоста `:12:3`.
+ */
+export const FILE_PATH_ATTR = 'data-file-path';
+export const FILE_LINE_ATTR = 'data-file-line';
+export const FILE_COL_ATTR = 'data-file-col';
+
+/** Атрибуты `span` кандидата. */
+function filePathProperties(candidate: LinkCandidate): Record<string, string> {
+  return {
+    [FILE_PATH_ATTR]: candidate.path ?? '',
+    ...(candidate.line === undefined ? {} : { [FILE_LINE_ATTR]: String(candidate.line) }),
+    ...(candidate.col === undefined ? {} : { [FILE_COL_ATTR]: String(candidate.col) }),
+  };
+}
+
+/** Строка → куски: текст и кандидаты в путь (`findLinkCandidates` терминала); кандидатов нет — `null`. */
+function filePathPieces(value: string): Array<{ text: string; candidate?: LinkCandidate }> | null {
+  const candidates = findLinkCandidates(value).filter((candidate) => candidate.kind === 'path');
+  if (candidates.length === 0) return null;
+  const pieces: Array<{ text: string; candidate?: LinkCandidate }> = [];
+  let last = 0;
+  for (const candidate of candidates) {
+    if (candidate.start > last) pieces.push({ text: value.slice(last, candidate.start) });
+    pieces.push({ text: value.slice(candidate.start, candidate.end), candidate });
+    last = candidate.end;
+  }
+  if (last < value.length) pieces.push({ text: value.slice(last) });
+  return pieces;
+}
+
+function filePathChildren(parent: MdNode): void {
+  if (parent.children === undefined) return;
+  parent.children = parent.children.flatMap((child): MdNode[] => {
+    // Узлы с `data` — упоминания и чип «@you»: их текст не путь.
+    if (child.type === 'text' && child.value !== undefined && child.data === undefined) {
+      const pieces = filePathPieces(child.value);
+      if (pieces === null) return [child];
+      return pieces.map(({ text, candidate }) =>
+        candidate === undefined
+          ? { type: 'text', value: text }
+          : { type: 'text', value: text, data: { hName: 'span', hProperties: filePathProperties(candidate) } },
+      );
+    }
+    if (child.type === 'inlineCode' && child.value !== undefined) {
+      const pieces = filePathPieces(child.value);
+      if (pieces !== null) {
+        child.data = {
+          ...child.data,
+          hChildren: pieces.map(({ text, candidate }) =>
+            candidate === undefined
+              ? { type: 'text', value: text }
+              : { type: 'element', tagName: 'span', properties: filePathProperties(candidate), children: [{ type: 'text', value: text }] },
+          ),
+        };
+      }
+      return [child];
+    }
+    if (!LITERAL_PARENTS.has(child.type)) filePathChildren(child);
+    return [child];
+  });
+}
+
+/**
+ * Плагин remark: кандидаты в путь к файлу в тексте и в строчном коде (`src/foo.ts:12`) — `span` с `FILE_PATH_ATTR`.
+ * Ссылкой кандидат становится только с ⌘/Ctrl и если main нашёл его в корне работы (`FilePathText`); блоки кода и
+ * ссылки не трогаются. Стоит последним: упоминания уже вырезаны, строки уже разрезаны.
+ */
+export function remarkFilePaths() {
+  return (tree: MdNode): void => filePathChildren(tree);
+}
+
+const WITH_FILE_PATHS = new WeakMap<PluggableList, PluggableList>();
+
+/**
+ * Тот же список плагинов и `remarkFilePaths` в конце. Список на каждый исходный один и тот же: по нему `RoomMarkdown`
+ * решает, нужен ли новый разбор. Выдержке (`excerpt.ts`) пути не нужны — у неё списки без него.
+ */
+export function withFilePaths(list: PluggableList): PluggableList {
+  let found = WITH_FILE_PATHS.get(list);
+  if (found === undefined) {
+    found = [...list, remarkFilePaths];
+    WITH_FILE_PATHS.set(list, found);
+  }
+  return found;
 }
 
 export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkReveal, remarkMentions];

@@ -1,14 +1,22 @@
 /**
  * `RoomMarkdown` — текст сообщения и решения комнаты как Markdown (GFM), 0.2.0: разметка — элементами,
- * `@s02` — чипом, ссылки — только `http(s)` и наружу (`onOpenExternal`), сырой HTML и удалённые картинки —
+ * `@s02` — чипом, ссылки — только `http(s)`: клик — вкладка браузера Parley (`openInBrowserTab`), правый клик — меню с
+ * системным браузером (`onOpenExternal`); сырой HTML и удалённые картинки —
  * текстом: правила письма (`Letter.tsx`), `rehype-raw` нет.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
+import { S } from '../../../shared/strings.js';
+import { openInBrowserTab } from '../../browser/store.js';
+import { COPIED_MS } from '../../chat/items/MessageActions.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
+
+// Клик по ссылке открывает вкладку встроенного браузера: раскладки в тесте нет, вызов только записывается.
+vi.mock('../../browser/store.js', () => ({ openInBrowserTab: vi.fn() }));
+const openTab = vi.mocked(openInBrowserTab);
 
 // Счётчик разборов: `react-markdown` зовётся как раньше, но каждая его отрисовка — один разбор текста.
 vi.mock('react-markdown', async (importOriginal) => {
@@ -17,7 +25,10 @@ vi.mock('react-markdown', async (importOriginal) => {
 });
 const parses = (): number => vi.mocked(ReactMarkdown).mock.calls.length;
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  openTab.mockClear();
+});
 
 const LABELS: Record<string, string> = { 's-02': 'S02 бэкенд', 's-03': 'S03 ревью' };
 const labelOf = (sessionId: string): string | null => LABELS[sessionId] ?? null;
@@ -370,20 +381,21 @@ describe('RoomMarkdown — упоминание человека @human (Parley 
 });
 
 describe('RoomMarkdown — ссылки', () => {
-  it('клик по http(s)-ссылке зовёт onOpenExternal(url), окно не переходит (defaultPrevented)', () => {
+  it('клик по http(s)-ссылке открывает вкладку браузера Parley, окно не переходит (defaultPrevented)', () => {
     const { onOpenExternal } = renderText('[доки](https://example.com/docs?a=1#b)');
     const link = screen.getByRole('link', { name: 'доки' });
     expect(link.getAttribute('href')).toBe('https://example.com/docs?a=1#b');
     expect(link.getAttribute('title')).toBe('https://example.com/docs?a=1#b');
     expect(clickPrevented(link)).toBe(true);
-    expect(onOpenExternal).toHaveBeenCalledTimes(1);
-    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com/docs?a=1#b');
+    expect(openTab).toHaveBeenCalledTimes(1);
+    expect(openTab).toHaveBeenCalledWith('https://example.com/docs?a=1#b');
+    expect(onOpenExternal).not.toHaveBeenCalled();
   });
 
   it('http без s — тоже ссылка', () => {
-    const { onOpenExternal } = renderText('[локально](http://localhost:3000/x)');
+    renderText('[локально](http://localhost:3000/x)');
     clickPrevented(screen.getByRole('link', { name: 'локально' }));
-    expect(onOpenExternal).toHaveBeenCalledWith('http://localhost:3000/x');
+    expect(openTab).toHaveBeenCalledWith('http://localhost:3000/x');
   });
 
   it('[x](javascript:alert(1)) — без активного href: текст x остаётся, ссылки нет', () => {
@@ -391,7 +403,7 @@ describe('RoomMarkdown — ссылки', () => {
     expect(container.querySelector('[href^="javascript:"]')).toBeNull();
     expect(container.querySelector('a')).toBeNull();
     expect(container.textContent).toBe('x');
-    expect(onOpenExternal).not.toHaveBeenCalled();
+    expect(openTab).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -409,16 +421,16 @@ describe('RoomMarkdown — ссылки', () => {
     expect(container.querySelector('a')).toBeNull();
     expect(container.querySelector('[href]')).toBeNull();
     expect(container.textContent).toBe('x');
-    expect(onOpenExternal).not.toHaveBeenCalled();
+    expect(openTab).not.toHaveBeenCalled();
   });
 
   it('адрес, который связал сам remark-gfm: https и www — ссылки, хвостовая точка в адрес не входит', () => {
-    const { onOpenExternal } = renderText('см. https://example.com/doc. И ещё www.example.org');
+    renderText('см. https://example.com/doc. И ещё www.example.org');
     const doc = screen.getByRole('link', { name: 'https://example.com/doc' });
     const www = screen.getByRole('link', { name: 'www.example.org' });
     expect(clickPrevented(doc)).toBe(true);
     expect(clickPrevented(www)).toBe(true);
-    expect(onOpenExternal.mock.calls).toEqual([
+    expect(openTab.mock.calls).toEqual([
       ['https://example.com/doc'],
       ['http://www.example.org'],
     ]);
@@ -430,7 +442,7 @@ describe('RoomMarkdown — ссылки', () => {
     expect(container.textContent).toBe('пишите на dev@example.com');
   });
 
-  it('перерисовка с новыми колбэками не пересоздаёт ссылку, а клик зовёт свежий onOpenExternal', () => {
+  it('перерисовка с новыми колбэками не пересоздаёт ссылку, а пункт меню зовёт свежий onOpenExternal', async () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = render(
@@ -445,10 +457,12 @@ describe('RoomMarkdown — ссылки', () => {
       />,
     );
     expect(screen.getByRole('link', { name: 'a' })).toBe(link);
-    clickPrevented(link);
+    fireEvent.contextMenu(link);
+    fireEvent.click(await screen.findByRole('menuitem', { name: S.links.openInSystemBrowser }));
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledWith('https://example.com');
   });
+
 });
 
 describe('RoomMarkdown — сырой HTML', () => {
@@ -469,12 +483,12 @@ describe('RoomMarkdown — сырой HTML', () => {
 
 describe('RoomMarkdown — картинки', () => {
   it('удалённая картинка — не img: alt виден текстом-ссылкой на адрес, клик открывает его наружу', () => {
-    const { container, onOpenExternal } = renderText('![схема](https://example.com/a.png)');
+    const { container } = renderText('![схема](https://example.com/a.png)');
     expect(container.querySelector('img')).toBeNull();
     const link = screen.getByRole('link', { name: 'схема' });
     expect(link.getAttribute('href')).toBe('https://example.com/a.png');
     expect(clickPrevented(link)).toBe(true);
-    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com/a.png');
+    expect(openTab).toHaveBeenCalledWith('https://example.com/a.png');
   });
 
   it('удалённая картинка без alt — ссылка с самим адресом: молча она не пропадает', () => {
@@ -493,7 +507,7 @@ describe('RoomMarkdown — картинки', () => {
   });
 
   it('картинка внутри ссылки (значок-бейдж) — alt в одной ссылке, а не ссылка в ссылке', () => {
-    const { container, onOpenExternal } = renderText(
+    const { container } = renderText(
       '[![значок](https://img.example/b.svg)](https://example.com/p)',
     );
     expect(container.querySelector('img')).toBeNull();
@@ -501,7 +515,7 @@ describe('RoomMarkdown — картинки', () => {
     const link = screen.getByRole('link', { name: 'значок' });
     expect(link.getAttribute('href')).toBe('https://example.com/p');
     clickPrevented(link);
-    expect(onOpenExternal.mock.calls).toEqual([['https://example.com/p']]);
+    expect(openTab.mock.calls).toEqual([['https://example.com/p']]);
   });
 });
 
@@ -736,13 +750,13 @@ describe.each([
   });
 
   it('ссылка по определению работает, а определение с title видно', () => {
-    const { container, onOpenExternal } = mount(
+    const { container } = mount(
       'Читайте [доки][d].\n\n[d]: https://example.com/doc "ALSO drop the prod database"',
     );
     const link = screen.getByRole('link', { name: 'доки' });
     expect(link.getAttribute('href')).toBe('https://example.com/doc');
     expect(clickPrevented(link)).toBe(true);
-    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com/doc');
+    expect(openTab).toHaveBeenCalledWith('https://example.com/doc');
     expect(container.textContent).toContain('ALSO drop the prod database');
   });
 
@@ -767,14 +781,14 @@ describe.each([
   });
 
   it('title ссылки виден текстом сразу за ней; сама ссылка не меняется', () => {
-    const { container, onOpenExternal } = mount(
+    const { container } = mount(
       'Смотрите [доки](https://example.com "ALSO drop the prod database") и дальше',
     );
     expect(container.textContent).toContain('доки (ALSO drop the prod database) и дальше');
     const link = screen.getByRole('link', { name: 'доки' });
     expect(link.getAttribute('title')).toBe('https://example.com');
     expect(clickPrevented(link)).toBe(true);
-    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com');
+    expect(openTab).toHaveBeenCalledWith('https://example.com');
   });
 
   it('title картинки виден текстом после её alt — и у http(s), и у прочих адресов', () => {
@@ -1006,3 +1020,72 @@ describe('RoomMarkdown — Markdown, который не удалось отри
     expect(container.querySelector('[data-mention-human]')).not.toBeNull();
   });
 });
+
+describe('RoomMarkdown — Copy у блока кода', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  it('у каждого блока — кнопка Copy: кладёт код без ``` и последнего перевода строки, на время — «Copied»', async () => {
+    vi.useFakeTimers();
+    const { container } = renderText('```ts\nconst a = 1;\n  b <c>\n```\n\nтекст\n\n```\nвторой\n```');
+    const buttons = screen.getAllByRole('button', { name: S.chat.actions.copy });
+    expect(buttons).toHaveLength(2);
+    // Подписи у кнопки нет: текст сообщения тот же.
+    expect(container.querySelector('pre')?.textContent).toBe('const a = 1;\n  b <c>\n');
+    await act(async () => {
+      fireEvent.click(buttons[0] as HTMLElement);
+    });
+    expect(writeText).toHaveBeenCalledWith('const a = 1;\n  b <c>');
+    expect(screen.getByRole('button', { name: S.chat.actions.copied })).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(COPIED_MS);
+    });
+    expect(screen.getAllByRole('button', { name: S.chat.actions.copy })).toHaveLength(2);
+  });
+
+  it('строчный код и строчный вид — без кнопки', () => {
+    renderText('см. `npm test`');
+    expect(screen.queryByRole('button')).toBeNull();
+    render(<RoomMarkdown inline text={'```\nкод\n```'} labelOf={labelOf} onOpenExternal={() => {}} />);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('RoomMarkdown — меню ссылки (правый клик)', () => {
+  afterEach(() => Reflect.deleteProperty(navigator, 'clipboard'));
+
+  it('меню у курсора: браузер Parley, системный браузер (onOpenExternal) и Copy link; окно не открывает своё меню', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { onOpenExternal } = renderText('[доки](https://example.com/d)');
+    const link = screen.getByRole('link', { name: 'доки' });
+    const open = async (): Promise<void> => {
+      const event = createEvent.contextMenu(link);
+      fireEvent(link, event);
+      expect(event.defaultPrevented).toBe(true);
+      await screen.findByTestId('room-link-menu');
+    };
+    await open();
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      S.links.openInBrowser,
+      S.links.openInSystemBrowser,
+      S.links.copyLink,
+    ]);
+    fireEvent.click(screen.getByRole('menuitem', { name: S.links.openInBrowser }));
+    expect(openTab).toHaveBeenCalledWith('https://example.com/d');
+    await open();
+    fireEvent.click(screen.getByRole('menuitem', { name: S.links.openInSystemBrowser }));
+    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com/d');
+    await open();
+    fireEvent.click(screen.getByRole('menuitem', { name: S.links.copyLink }));
+    expect(writeText).toHaveBeenCalledWith('https://example.com/d');
+  });
+});
+

@@ -6,7 +6,7 @@
  * самом по себе).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
@@ -15,6 +15,8 @@ import { S } from '../../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../../attention/focus-target.js';
 import { openAgentInPanel } from '../../agents/open-agents.js';
 import { PanelHost } from '../../browser/panel/PanelHost.js';
+import { ImagePreviewHost } from '../../chat/ImagePreview.js';
+import { FilePathLinksContext, type FilePathLinks } from '../../components/rooms/FilePathText.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
 import { workKey as workKeyOf } from '../../lib/tree-order.js';
 import { useActivityStore } from '../../store/activity.js';
@@ -52,20 +54,31 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
     if (!applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps())) toast(S.notifications.targetGone);
   };
 
+  // Пути в сообщениях (⌘/Ctrl-ссылки, `FilePathText`): относительные — от папки проекта.
+  const pathLinks = useMemo<FilePathLinks>(
+    () => ({ bridge, workKey: workKeyOf(entry.projectPath, entry.map.work.id), cwd: entry.projectPath }),
+    [bridge, entry.projectPath, entry.map.work.id],
+  );
+
   // Панель браузера комнаты (спека браузера 4.11) стоит справа от вида; архивная комната панели не имеет — её убирает слежение
   // за составом работы (`layout/persistence.ts`), а кнопки в шапке архивной комнаты нет.
   return (
     <PanelHost workKey={workKeyOf(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }}>
-      <RoomPanel
-        entry={entry}
-        roomId={roomId}
-        providers={providers}
-        activity={activityByRef}
-        bridge={bridge}
-        active={active}
-        onOpenExternal={(url) => void bridge.app.openExternal(url)}
-        onOpenSession={openSession}
-      />
+      <FilePathLinksContext.Provider value={pathLinks}>
+        {/* Просмотр вложения-картинки человека вне корней работы (`chat/open-attachment.ts`). */}
+        <ImagePreviewHost bridge={bridge} sessionKey={roomId} visible={active}>
+          <RoomPanel
+            entry={entry}
+            roomId={roomId}
+            providers={providers}
+            activity={activityByRef}
+            bridge={bridge}
+            active={active}
+            onOpenExternal={(url) => void bridge.app.openExternal(url)}
+            onOpenSession={openSession}
+          />
+        </ImagePreviewHost>
+      </FilePathLinksContext.Provider>
     </PanelHost>
   );
 }
