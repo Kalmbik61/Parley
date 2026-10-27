@@ -114,7 +114,7 @@ describe('createUiStore', () => {
     const store = createUiStore(file);
     await store.save({ island: { enabled: false, displayId: null, anchor: 'center' } });
     const saved = await store.save({ island: { displayId: 7, anchor: 'right' } } as Partial<Omit<UiFile, 'version'>>);
-    expect(saved.island).toEqual({ enabled: false, displayId: 7, anchor: 'right' });
+    expect(saved.island).toEqual({ ...DEFAULT_UI.island, enabled: false, displayId: 7, anchor: 'right' });
   });
 
   // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать

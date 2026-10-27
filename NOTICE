@@ -216,8 +216,8 @@ openrouter-light.svg: 385bbf00cd5718ad652fdfc05b4b4e7d0ea3a834cfd807e1133d3bee2b
 Файлы packages/desktop/src/renderer/assets/providers/deepseek.svg, minimax.svg и
 qwen.svg — знаки DeepSeek, MiniMax и Qwen. Отдельного SVG-знака на сайтах
 вендоров нет, поэтому файлы скопированы без правок 2026-10-28 из пакета npm
-`@lobehub/icons-static-svg` 1.101.0 (https://github.com/lobehub/lobe-icons,
-лицензия MIT, Copyright (c) LobeHub): icons/deepseek-color.svg,
+`@lobehub/icons-static-svg` 1.101.0 (https://github.com/lobehub/lobe-icons, см.
+раздел LobeHub Icons ниже): icons/deepseek-color.svg,
 icons/minimax-color.svg и icons/qwen-color.svg. Цветные знаки одинаково читаются
 в обеих темах, отдельного варианта для тёмной темы нет.
 Знаки принадлежат их владельцам: DeepSeek — Hangzhou DeepSeek Artificial
@@ -231,6 +231,25 @@ qwen.svg: a158a0e3ed5b541e4f91384ece02c3acf0a0d81b7b11a46d77bafb248b09e32c
 Файл packages/desktop/src/renderer/assets/providers/parley.svg — собственный знак
 проекта Parley, копия docs/media/brand/parley-icon.svg. Окно рисует его у своих
 (пользовательских) провайдеров, пока у них нет вендорских значков.
+
+------------------------------------------------------------------------------
+LobeHub Icons
+------------------------------------------------------------------------------
+
+Файлы packages/desktop/src/renderer/assets/providers/deepseek.svg, minimax.svg и
+qwen.svg скопированы без правок из пакета npm `@lobehub/icons-static-svg`
+1.101.0 (https://github.com/lobehub/lobe-icons). Чьи это знаки, сказано в
+разделе «Значки провайдеров».
+
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
 Material Icon Theme
