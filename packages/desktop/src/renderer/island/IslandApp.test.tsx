@@ -25,12 +25,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
-import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
+import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandPresentationOutcome, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
 import { createVoiceAnalysis } from './assistant/voice-features.js';
@@ -2576,6 +2576,26 @@ describe('согласия на папку', () => {
       advance(1);
       expect(isRetracted()).toBe(true);
     });
+  });
+});
+
+describe('presentationEvent: реакция мини-роя на исходы present() (критик m-1485)', () => {
+  const outcome = (kind: IslandPresentationOutcome['kind'], fresh: boolean, expand: boolean): IslandPresentationOutcome =>
+    ({ key: `${kind}:1`, kind, fresh, expand, soundEligible: true }) as IslandPresentationOutcome;
+
+  it('свежий выдвигающий исход — его событие; уже виденный — ничего', () => {
+    expect(presentationEvent([outcome('consent', true, true)], true)).toBe('permission');
+    expect(presentationEvent([outcome('room-proposal', true, true)], true)).toBe('question');
+    expect(presentationEvent([outcome('plan', false, false)], false)).toBeNull();
+  });
+
+  it('тихий Done: реакция только у уже выдвинутого острова (#9 §3.7)', () => {
+    expect(presentationEvent([outcome('done', true, false)], true)).toBeNull();
+    expect(presentationEvent([outcome('done', true, false)], false)).toBe('done');
+  });
+
+  it('несколько исходов разом — самый важный по порядку сигналов', () => {
+    expect(presentationEvent([outcome('done', true, true), outcome('consent', true, true)], true)).toBe('permission');
   });
 });
 

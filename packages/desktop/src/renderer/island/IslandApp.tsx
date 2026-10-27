@@ -76,8 +76,9 @@ import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
 import { islandSound } from './sound/graph.js';
+import { CUE_PRIORITY } from './sound/cues.js';
 import { REACTION_FOR, type SwarmEvent, type SwarmPulse } from './swarm/spec.js';
-import { useIslandCues } from './useIslandCues.js';
+import { OUTCOME_SIGNAL, useIslandCues } from './useIslandCues.js';
 import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 
 /** Через сколько покоя (ничего не идёт, очереди нет, курсор не над формой, форму не тащат) остров убирается сам. */
@@ -113,6 +114,17 @@ const voiceFrame = (): VoiceFrame | null => useAssistantStore.getState().voiceFr
 
 /** Реакция роя на событие (#9 §4.1): новый объект на каждое событие, между событиями — тот же. */
 const pulseOf = (event: SwarmEvent): SwarmPulse => ({ reaction: REACTION_FOR[event], at: performance.now() });
+
+/**
+ * Событие мини-роя на исходы `present()`. Уже виденное (переподключение) роем не отвечает. Тихий Done реагирует, только
+ * если остров уже выдвинут (#9 §3.7). Из нескольких исходов разом — самый важный, в порядке сигналов (критик m-1485).
+ */
+export function presentationEvent(outcomes: readonly IslandPresentationOutcome[], retracted: boolean): SwarmEvent | null {
+  const shown = outcomes
+    .filter((outcome) => outcome.fresh && (outcome.expand || (outcome.kind === 'done' && !retracted)))
+    .sort((a, b) => CUE_PRIORITY[OUTCOME_SIGNAL[b.kind]] - CUE_PRIORITY[OUTCOME_SIGNAL[a.kind]])[0];
+  return shown === undefined ? null : OUTCOME_EVENT[shown.kind];
+}
 
 /** Исход показа → событие роя (#9 §4.1): согласие и терминал — как разрешение, предложение комнаты — как вопрос. */
 const OUTCOME_EVENT: Readonly<Record<IslandPresentationOutcome['kind'], SwarmEvent>> = {
@@ -458,11 +470,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   /** Реакции роёв: мини-рой (события агентов, наведение, фазы помощника) и большой рой помощника (только его фазы). */
   const [miniPulse, setMiniPulse] = useState<SwarmPulse | null>(null);
   const [assistantPulse, setAssistantPulse] = useState<SwarmPulse | null>(null);
+  const retractedRef = useRef(retracted);
+  retractedRef.current = retracted;
   const present = useCallback((outcomes: IslandPresentationOutcome[]): void => {
     if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
-    // Тихий Done и уже виденное (переподключение) не выдвигают остров — и рой на них не отвечает.
-    const shown = outcomes.find((outcome) => outcome.fresh && outcome.expand);
-    if (shown !== undefined) setMiniPulse(pulseOf(OUTCOME_EVENT[shown.kind]));
+    const event = presentationEvent(outcomes, retractedRef.current);
+    if (event !== null) setMiniPulse(pulseOf(event));
     if (onPresentation !== undefined) {
       for (const outcome of outcomes) onPresentation(outcome);
     } else cues.present(outcomes);
