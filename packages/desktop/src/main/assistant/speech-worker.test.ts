@@ -360,7 +360,8 @@ describe('createSpeechWorker', () => {
         { type: 'synthesize', id: 'm1', text, voice: 'serena', language: 'ru', seed: 777, max_seconds: 10 },
       ]);
       expect(onRunaway).toHaveBeenCalledTimes(2);
-      expect(chunks).toHaveLength(8);
+      // Потребитель успел забрать только первый кусок; остальные куски обеих попыток выброшены на срыве.
+      expect(chunks).toHaveLength(1);
       expect(worker.status().state).toBe('ready');
     });
 
@@ -371,8 +372,20 @@ describe('createSpeechWorker', () => {
       const stream = worker.synthesize({ id: 'm1', text: 'Готово.', voice: 'serena', language: 'ru' }, { onRunaway });
       const chunks = await drain(stream);
       expect(onRunaway).toHaveBeenCalledTimes(1);
-      expect(chunks).toHaveLength(4 + 7);
+      // Первый кусок срыва потребитель уже забрал, три незабранных выброшены; дальше — семь кусков повтора.
+      expect(chunks).toHaveLength(1 + 7);
       expect(h.children[0]?.written.filter((line) => line.type === 'synthesize')).toHaveLength(2);
+    });
+
+    it('незабранные куски сорвавшейся попытки не отдаются: потребитель видит только повтор', async () => {
+      const h = harness({ script: replay(fixture('max-seconds'), fixture('normal')) });
+      const worker = createSpeechWorker(h.deps);
+      const onRunaway = vi.fn();
+      const stream = worker.synthesize({ id: 'm1', text: 'Готово.', voice: 'serena', language: 'ru' }, { onRunaway });
+      await flush();
+      expect(onRunaway).toHaveBeenCalledTimes(1);
+      const chunks = await drain(stream);
+      expect(chunks).toHaveLength(7);
     });
   });
 

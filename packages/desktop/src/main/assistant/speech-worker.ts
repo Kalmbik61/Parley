@@ -311,6 +311,8 @@ export function createSpeechWorker(deps: SpeechWorkerDeps): SpeechWorker {
 
   function onRunaway(entry: Pending, message: Message): void {
     deps.log(`speech worker: ${entry.request.id} ran to max_seconds (seed ${String(message.seed)})${entry.retried ? ', skipped' : ', retrying'}`);
+    // Незабранные куски сорвавшейся попытки не должны уйти потребителю вперемешку с повтором.
+    entry.channel.drop();
     entry.options.onRunaway?.();
     clearTimer(entry);
     if (entry.retried || entry.proc !== proc) {
