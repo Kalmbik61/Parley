@@ -128,8 +128,10 @@ function fakeModels(downloaded = true) {
       state.downloaded = true;
       return { ok: true as const };
     }),
-    cancel: () => undefined,
-    remove: async () => undefined,
+    cancel: vi.fn(),
+    remove: vi.fn(async () => {
+      state.downloaded = false;
+    }),
   };
   return { store, state };
 }
@@ -474,6 +476,35 @@ describe('createTtsService: выгрузка и прогрев', () => {
     expect(states).toEqual(['warming', 'ready']);
     expect(createWorker).toHaveBeenCalledTimes(1);
     expect((await tts.voices()).every((voice) => voice.downloaded)).toBe(true);
+  });
+
+  it('D5: cancelDownload отменяет скачивание весов в хранилище', () => {
+    const models = fakeModels(false);
+    const { tts } = service({ models: models.store });
+    tts.cancelDownload();
+    expect(models.store.cancel).toHaveBeenCalledWith(MODEL);
+  });
+
+  it('D5: remove — речь снята, worker остановлен, файл удалён; дальше not-downloaded, текст, само не качается', async () => {
+    const models = fakeModels();
+    const { tts, fake, createWorker } = service({ models: models.store });
+    await tts.warmup();
+    const first = collect();
+    const speaking = tts.speak(request('u1'), first.sink);
+    await flush();
+    await tts.remove();
+    expect(fake.calls.stop).toBe(1);
+    expect(models.store.remove).toHaveBeenCalledWith(MODEL);
+    expect(tts.state()).toEqual({ state: 'not-downloaded' });
+    expect((await tts.voices()).some((voice) => voice.downloaded)).toBe(false);
+    fake.last().stream.end();
+    await speaking;
+    expect(first.chunks.filter((chunk) => chunk.pcm.length > 0)).toEqual([]);
+    const after = collect();
+    await expect(tts.speak(request('u2'), after.sink)).resolves.toEqual({ state: 'not-downloaded' });
+    expect(after.chunks.map((chunk) => chunk.final)).toEqual([true]);
+    expect(models.store.download).not.toHaveBeenCalled();
+    expect(createWorker).toHaveBeenCalledTimes(1);
   });
 });
 

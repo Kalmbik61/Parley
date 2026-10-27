@@ -78,6 +78,13 @@ export interface TtsService {
   voices(): Promise<AssistantVoice[]>;
   /** Качает веса (только по кнопке, E5); после успеха — новый клиент worker и прогрев. */
   download(onProgress: (progress: ModelProgress<TtsModelId>) => void): Promise<DownloadResult>;
+  /** Отмена идущего скачивания весов (D5: как у моделей Whisper). */
+  cancelDownload(): void;
+  /**
+   * Удаление весов (D5): речь отменяется, worker останавливается, файл удаляется; дальше голоса `downloaded: false`,
+   * ответы — текстом (G3), само ничего не качается.
+   */
+  remove(): Promise<void>;
   /** Выход приложения: отмена всего и `SIGKILL` worker. */
   stop(): void;
 }
@@ -354,6 +361,21 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
       });
       return result;
     },
+    cancelDownload() {
+      deps.models.cancel(MODEL_ID);
+    },
+    async remove() {
+      clearIdle();
+      cancelQueued(() => true);
+      if (current !== null) current.cancelled = true;
+      worker?.stop();
+      worker = null;
+      failure = null;
+      downloaded = false;
+      notify();
+      await deps.models.remove(MODEL_ID);
+      await refresh();
+    },
     stop() {
       clearIdle();
       cancelQueued(() => true);
@@ -394,6 +416,8 @@ export function createFakeTtsService(): TtsService {
       onProgress({ id: MODEL_ID, receivedBytes: bytes, totalBytes: bytes });
       return { ok: true };
     },
+    cancelDownload: () => undefined,
+    remove: async () => undefined,
     stop: () => undefined,
   };
 }
