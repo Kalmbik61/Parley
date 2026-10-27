@@ -172,3 +172,85 @@ describe('wait_for("inbox"): письма забираются после зап
     expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['после отмены']);
   });
 });
+
+describe('wait_for("inbox"): брошенный вызов — ход сессии кончился или начался заново после его старта (turnBoundarySince)', () => {
+  /** Раннер хоста: к обычному контексту добавлен вопрос «была ли граница хода после `sinceMs`». */
+  const runnerWith = (turnBoundarySince: (sinceMs: number) => boolean): ToolRunner =>
+    createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, pollMs: 40, turnBoundarySince });
+  /** Ждёт начала ожидания (`ParleyWaitStart` в журнале), чтобы письмо пришло уже во время него. */
+  const waitStarted = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      journal.beforeLine = (line) => {
+        if (line.includes('ParleyWaitStart')) resolve();
+      };
+    });
+
+  it('граница была: письмо пришло, ответ running, письмо осталось непрочитанным и check_inbox его отдаёт', async () => {
+    runner = runnerWith(() => true);
+    const hasStarted = waitStarted();
+
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    await hasStarted;
+    await addLetter('письмо');
+
+    expect(body(await waiting)).toEqual({ state: 'running' });
+    expect(unreadTexts()).toEqual(['письмо']);
+    // Ожидание закончено как положено: Start и End остались парой.
+    expect((await journalLines()).map((line) => line['hook_event_name'])).toEqual(['ParleyWaitStart', 'ParleyWaitEnd']);
+    expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('границы не было: обычный message, письмо отмечено прочитанным', async () => {
+    runner = runnerWith(() => false);
+    const hasStarted = waitStarted();
+
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    await hasStarted;
+    await addLetter('письмо');
+    const answer = body(await waiting);
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('вопрос получает время старта вызова: не позже прихода письма и не раньше вызова', async () => {
+    const asked: number[] = [];
+    runner = runnerWith((sinceMs) => {
+      asked.push(sinceMs);
+      return false;
+    });
+    const hasStarted = waitStarted();
+
+    const before = Date.now();
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    await hasStarted;
+    // Пауза, чтобы время прихода письма заведомо отличалось от времени старта вызова.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const letterAt = Date.now();
+    await addLetter('письмо');
+    await waiting;
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toBeGreaterThanOrEqual(before);
+    expect(asked[0]).toBeLessThan(letterAt);
+  });
+
+  it('target — id сессии: вопрос о границе не задаётся, итог сессии отдаётся как раньше', async () => {
+    const asked: number[] = [];
+    runner = runnerWith((sinceMs) => {
+      asked.push(sinceMs);
+      return true;
+    });
+    await updateMap(project, workId, (map) => {
+      const found = map.sessions.find((session) => session.id === 's-02');
+      if (found !== undefined) found.result = 'done';
+    });
+
+    const answer = body(await runner.call('wait_for', { target: 's-02', timeoutSec: 30 }, undefined));
+
+    expect(answer['state']).toBe('done');
+    expect(asked).toEqual([]);
+  });
+});

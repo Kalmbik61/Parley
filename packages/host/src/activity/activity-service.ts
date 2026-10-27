@@ -450,6 +450,13 @@ export function createActivityService(
   const live = new Map<string, SessionLive>();
   /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
   const derivedActivity = new Map<string, Activity>();
+  /**
+   * Наибольшая граница хода (`SessionActivity.turnBoundaryAt`), виденная у сессии, по ключу сессии. У Codex `eventsFor`
+   * держит только последнее событие хода: `Stop` от прерывания человеком (`turn_aborted`) пропадает из потока, как только
+   * начался следующий ход, и без защёлки брошенный `wait_for` увидел бы границу снятой и забрал следующее письмо.
+   * Старое значение вреда не делает: вызов сравнивает его со своим временем старта.
+   */
+  const turnBoundaries = new Map<string, string>();
   const journals = new Map<string, readonly EventRecord[] | null>();
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
@@ -1065,10 +1072,19 @@ export function createActivityService(
     }
     // `hooksMissing` — по настоящему журналу: экран старта делает события непустыми, но хуки от этого не появились.
     const hooksMissing = journalEvents === null;
+    // Граница хода только растёт (`turnBoundaries`); `null` свёртки её не снижает. Непонятное время ни ставится, ни мешает:
+    // защёлка с ним уступает любому разобранному.
+    const latched = turnBoundaries.get(key) ?? null;
+    const nextMs = Date.parse(folded.turnBoundaryAt ?? '');
+    const turnBoundaryAt =
+      folded.turnBoundaryAt !== null && !Number.isNaN(nextMs) && !(Date.parse(latched ?? '') >= nextMs)
+        ? folded.turnBoundaryAt
+        : latched;
+    if (turnBoundaryAt !== null) turnBoundaries.set(key, turnBoundaryAt);
     const activity: SessionActivity =
-      lastEventAt === folded.lastEventAt && hooksMissing === folded.hooksMissing
+      lastEventAt === folded.lastEventAt && hooksMissing === folded.hooksMissing && turnBoundaryAt === folded.turnBoundaryAt
         ? folded
-        : { ...folded, lastEventAt, hooksMissing };
+        : { ...folded, lastEventAt, hooksMissing, turnBoundaryAt };
 
     const index = logIndex.index(session);
     const metrics = metricsFor(ref, key, entry, session, activity, index);
@@ -1351,6 +1367,7 @@ export function createActivityService(
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
     for (const key of Array.from(derivedActivity.keys())) if (!validSessions.has(key)) derivedActivity.delete(key);
+    for (const key of Array.from(turnBoundaries.keys())) if (!validSessions.has(key)) turnBoundaries.delete(key);
     for (const [key] of Array.from(subagentCaches)) {
       if (!validSessions.has(key)) subagentCaches.delete(key);
     }

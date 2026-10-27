@@ -183,6 +183,8 @@ describe('сигналы терминала codex → активность', () 
       );
       await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
       expect(a.get(ref)?.activity.turnEndedAt).toBe(endedAt);
+      // Явное событие хода из rollout (в том числе прерывание человеком) — граница хода для брошенного `wait_for`.
+      expect(a.get(ref)?.activity.turnBoundaryAt).toBe(endedAt);
       a.markSeen(ref);
       expect(a.get(ref)?.activity.activity).toBe('idle');
 
@@ -201,6 +203,38 @@ describe('сигналы терминала codex → активность', () 
     },
     15_000,
   );
+
+  it('turnBoundaryAt: граница от turn_aborted переживает начало следующего хода, а task_complete её поднимает', async () => {
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-boundary' });
+    const dir = path.join(codexRoot, '2026', '10', '27');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'rollout-2026-10-27T10-00-00-rollout-boundary.jsonl');
+    const record = (type: string, timestamp: string) =>
+      `${JSON.stringify({ timestamp, type: 'event_msg', payload: { type } })}\n`;
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    const abortedAt = new Date().toISOString();
+    await writeFile(
+      file,
+      `${JSON.stringify({ timestamp: abortedAt, type: 'session_meta', payload: { id: 'rollout-boundary', cwd: project, source: 'cli' } })}\n` +
+        record('turn_aborted', abortedAt),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(abortedAt);
+
+    // Следующий ход: в потоке Codex остаётся одно последнее событие хода (`task_started`), `Stop` от прерывания из него
+    // пропал, но граница держится на прежнем времени.
+    await appendFile(file, record('task_started', new Date(Date.parse(abortedAt) + 1000).toISOString()));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(a.get(ref)?.activity.turnEndedAt).toBeNull();
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(abortedAt);
+
+    // Конец следующего хода двигает границу вперёд.
+    const completedAt = new Date(Date.parse(abortedAt) + 2000).toISOString();
+    await appendFile(file, record('task_complete', completedAt));
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(completedAt);
+  }, 20_000);
 
   it('без строк notify в журнале событий конец хода и «хуки приходили» берутся из терминала и rollout', async () => {
     // Журнала `events/` нет вовсе: ни одной строки Stop от notify.

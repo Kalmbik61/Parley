@@ -830,6 +830,7 @@ async function waitFor(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const startedAt = Date.now();
   const target = stringArg(args, 'target');
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
@@ -930,6 +931,9 @@ async function waitFor(
     // до `return` ни одного `await`: отмена приходит отдельным событием, а не микрозадачей, и между пометкой и ответом
     // вклиниться не может. Отменённый вызов ничего не отмечает: письмо остаётся для следующего `check_inbox`.
     if (cancelled()) return { state: 'running' };
+    // Брошенный вызов: ход сессии кончился или начался заново после старта вызова (человек прервал ход, а клиент отмену не
+    // прислал — Codex). Агент ответа не увидит; письмо остаётся непрочитанным, и хост напечатает на него указатель.
+    if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
     const messages = takeInbox(context, sessionId);
     if (messages.length > 0) return { state: 'message', messages };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед

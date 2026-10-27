@@ -1440,6 +1440,7 @@ describe('возврат после сброса лимита', () => {
     waitingFor: null,
     heldByBackground: false,
     turnEndedAt: null,
+    turnBoundaryAt: null,
     lastEventAt: new Date(Date.now()).toISOString(),
     source: 'hooks',
     hooksMissing: false,

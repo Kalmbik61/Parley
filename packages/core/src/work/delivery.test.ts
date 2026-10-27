@@ -53,6 +53,7 @@ const activityOf = (
   waitingFor: null,
   heldByBackground: false,
   turnEndedAt: null,
+  turnBoundaryAt: null,
   lastEventAt: null,
   source: 'hooks',
   hooksMissing: false,
