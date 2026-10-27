@@ -34,6 +34,82 @@ function work() {
 }
 
 describe('модель острова', () => {
+  const tasks = (count: number) => Array.from({ length: count }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), agentType: 'worker', description: `Task ${index}`, background: true }));
+  const metrics = (items = tasks(1), subagents = 1) => ({ tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents, model: null, tasks: items });
+
+  it('Done is orthogonal to children; Clear retains one background parent without phantom work', () => {
+    const entry = work();
+    const live = makeActivity(ref('s-05'), 'unseen', { turnEndedAt: ENDED, metrics: metrics() });
+    const model = islandModel([entry], activityMap([live]), NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, done: 1, subagents: 1 });
+    expect(model.groups[0]?.rows.filter((row) => row.kind === 'session')).toHaveLength(1);
+    expect(model.groups[0]?.rows[0]).toMatchObject({ state: 'done', doneKey: doneKey('s-05'), tasks: { items: tasks(1), reported: 1, total: 1 } });
+    const cleared = new Set([doneKey('s-05')]);
+    expect(islandModel([entry], activityMap([live]), NONE, cleared, NONE).groups[0]?.rows[0]).toMatchObject({ state: 'subagents' });
+    expect(islandModel([entry], activityMap([live]), NONE, cleared, NONE)).toMatchObject({ working: 0, done: 0, active: true });
+    const ended = { ...live, metrics: metrics([], 0) };
+    expect(islandModel([entry], activityMap([ended]), NONE, cleared, NONE).groups).toEqual([]);
+    const next = makeActivity(ref('s-05'), 'unseen', { turnEndedAt: '2026-10-14T10:00:00.000Z', metrics: metrics([], 0) });
+    expect(islandModel([entry], activityMap([next]), NONE, cleared, NONE).done).toBe(1);
+    expect(islandModel([], activityMap([live]), NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('held background without an end marker stays idle parent with no invented Done or working count', () => {
+    const live = makeActivity(ref('s-01'), 'working', { heldByBackground: true, metrics: metrics(), turnEndedAt: null });
+    const model = islandModel([work()], activityMap([live]), NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, waiting: 0, done: 0, subagents: 1, active: true });
+    expect(model.groups[0]?.rows[0]).toMatchObject({ state: 'subagents' });
+    const stopped = makeActivity(ref('s-01'), 'idle', { metrics: metrics([], 0) });
+    expect(islandModel([work()], activityMap([stopped]), NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('task source total, delivered items and reported count remain independent', () => {
+    for (const [items, total, reported] of [[tasks(8), 12, 5], [tasks(3), 3, 12], [[], 0, 12]] as const) {
+      const live = { ...makeActivity(ref('s-01'), 'idle', { metrics: metrics([...items], reported) }), islandTasksTotal: total };
+      const row = islandModel([work()], activityMap([live]), NONE, NONE, NONE).groups[0]?.rows[0];
+      expect(row).toMatchObject({ state: 'subagents', tasks: { items, total, reported } });
+    }
+    const absent = makeActivity(ref('s-01'), 'idle', { metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 12, model: null } });
+    expect(islandModel([work()], activityMap([absent]), NONE, NONE, NONE).groups[0]?.rows[0]).toMatchObject({ tasks: { items: [], total: null, reported: 12 } });
+  });
+
+  it.each([undefined, 'decision', 'completion'] as const)('pending room %s survives busy0/done0 with current live lead and opaque revision identity', (kind) => {
+    const entry = work(); const room = entry.map.rooms[0]!;
+    room.proposal = { id: 'p-1', from: 's-01', text: 'SECRET-proposal', rev: 1, at: ENDED, ...(kind === undefined ? {} : { kind }) };
+    room.lead = 's-02';
+    const model = islandModel([entry], {}, NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, done: 0, proposals: 1, active: true });
+    const row = model.groups[0]?.rows[0];
+    expect(row).toMatchObject({ kind: 'room', busy: 0, done: false, proposal: { kind: kind ?? 'decision', lead: 's-02' } });
+    expect(JSON.stringify(row)).not.toContain('SECRET');
+    const key = row?.kind === 'room' ? row.proposal?.key : null;
+    room.proposal.rev = 2; entry.map.sessions.find((s) => s.id === 's-02')!.lifecycle = 'closed';
+    const revised = islandModel([entry], {}, NONE, NONE, NONE).groups[0]?.rows[0];
+    expect(revised).toMatchObject({ proposal: { lead: 's-03' } });
+    expect(revised?.kind === 'room' ? revised.proposal?.key : null).not.toBe(key);
+    room.proposal = null;
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('proposals respect active work/archive boundaries and full refs; halted alone adds nothing', () => {
+    const entry = work(); const room = entry.map.rooms[0]!;
+    room.proposal = { id: 'p-1', from: 's-01', text: 'SECRET', rev: 0, at: ENDED };
+    const other = { ...entry, projectPath: '/other/proj' };
+    const models = islandModel([entry, other], {}, NONE, NONE, NONE);
+    expect(models.groups).toHaveLength(2);
+    const keys = models.groups.flatMap((g) => g.rows).map((r) => r.kind === 'room' ? r.proposal?.key : null);
+    expect(new Set(keys).size).toBe(2);
+    for (const status of ['suspended', 'closed', 'done', 'archived']) {
+      Object.assign(entry.map.work, { status });
+      expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+    }
+    entry.map.work.status = 'active'; room.archivedAt = ENDED;
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+    room.archivedAt = null; room.proposal = null;
+    Object.assign(room, { halted: 'stuck' });
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+  });
+
   it('работает и ждёт — в пилюле для всех провайдеров; «finished» — Done, а не работа', () => {
     const byRef = activityMap([
       makeActivity(ref('s-01'), 'working'),

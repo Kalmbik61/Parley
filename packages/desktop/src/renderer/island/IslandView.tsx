@@ -152,7 +152,7 @@ function Pill(props: IslandViewProps): JSX.Element {
           {model.providers.map((provider) => (
             <AgentIcon key={provider} provider={provider} size={14} />
           ))}
-          <span>{S.island.pill(model.working, model.waiting, model.done)}</span>
+          <span>{S.island.pill(model.working, model.waiting, model.done, model.subagents, model.proposals)}</span>
         </div>
       ) : (
         <span data-testid="island-idle" className="text-muted-foreground">
@@ -165,6 +165,37 @@ function Pill(props: IslandViewProps): JSX.Element {
 
 type RoomRow = Extract<IslandRow, { kind: 'room' }>;
 type SessionRow = Extract<IslandRow, { kind: 'session' }>;
+
+function RoomLine({ room, api }: { room: RoomRow; api: IslandApi }): JSX.Element {
+  return <div data-testid="island-room" className="flex min-w-0 flex-wrap gap-1 text-[13px] text-foreground/75">
+    {room.proposal === undefined ? null : <span className="min-w-0 truncate">{room.title}</span>}
+    <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
+      {room.proposal === undefined ? room.title : S.island.openRoom}
+    </button>
+    <span className="shrink-0">· {room.proposal === undefined
+      ? room.busy > 0 ? S.island.roomBusy(room.busy) : S.island.roomDone
+      : <span className="rounded bg-white/10 px-1">{S.island.roomWaiting}</span>}</span>
+    {room.proposal === undefined ? null : <span className="min-w-0 truncate">{room.proposal.leadLabel === null ? S.island.noLiveLead : S.island.roomLead(room.proposal.leadLabel)}</span>}
+  </div>;
+}
+
+function Subagents({ row }: { row: SessionRow }): JSX.Element | null {
+  const tasks = row.tasks;
+  if (tasks === undefined) return null;
+  const more = Math.max(0, (tasks.total ?? tasks.items.length) - tasks.items.length);
+  return <div className="mb-2 ml-4 rounded border border-white/10 p-2 text-[13px]">
+    <div className="flex items-center justify-between gap-2"><span>{S.island.subagentsActive}</span><span className="text-muted-foreground">{S.island.subagentsReported(tasks.reported)}</span></div>
+    {tasks.total === null ? <p className="text-muted-foreground">{S.island.tasksUnknown}</p>
+      : tasks.items.length === 0 ? <p className="text-muted-foreground">{S.island.tasksEmpty}</p> : null}
+    <ul className="mt-1 flex flex-col gap-1">
+      {tasks.items.slice(0, 8).map((task) => <li key={`${row.key}\u0000${task.id}`} data-testid="island-subagent" className="min-w-0">
+        <span className="font-medium">{task.agentType ?? S.island.subagent}</span>
+        {task.description === null ? null : <span className="ml-1 break-words text-muted-foreground">{task.description}</span>}
+      </li>)}
+    </ul>
+    {more > 0 ? <p className="mt-1 text-muted-foreground">{S.island.tasksMore(more)}</p> : null}
+  </div>;
+}
 
 /** Строка Done: имя и время конца хода, под ними последний ответ агента (если снимок ленты его нашёл). */
 function DoneLine({ row, api }: { row: Extract<SessionRow, { state: 'done' }>; api: IslandApi }): JSX.Element {
@@ -198,14 +229,7 @@ function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Eleme
             {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
             {group.rows
               .filter((row): row is RoomRow => row.kind === 'room')
-              .map((room) => (
-                <div key={room.key} data-testid="island-room" className="flex min-w-0 gap-1 text-[13px] text-foreground/75">
-                  <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
-                    {room.title}
-                  </button>
-                  <span className="shrink-0">· {room.busy > 0 ? S.island.roomBusy(room.busy) : S.island.roomDone}</span>
-                </div>
-              ))}
+              .map((room) => <RoomLine key={room.key} room={room} api={api} />)}
             {group.rows
               .filter((row): row is SessionRow => row.kind === 'session')
               .map((row) => {
@@ -216,7 +240,7 @@ function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Eleme
                       {row.state === 'done' ? <DoneLine row={row} api={api} /> : (
                         <button type="button" className="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
                           {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
-                          <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                          <AgentStateDot state={row.state === 'subagents' ? 'idle' : row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
                           <span className="min-w-0 flex-1 truncate">{row.label}</span>
                           {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
                         </button>
@@ -226,6 +250,7 @@ function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Eleme
                       className="cursor-pointer rounded px-2 py-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
                       onClick={() => selected ? progress.onClose() : progress.onSelect(row.ref)}>≡</button> : null}
                   </div>
+                  <Subagents row={row} />
                   {selected && progress !== undefined ? <ProgressView state={progress.state} onClose={progress.onClose}
                     onOpen={() => api.open({ kind: 'session', ref: row.ref })} /> : null}
                 </div>;
@@ -493,6 +518,12 @@ export function IslandView(props: IslandViewProps): JSX.Element {
                 {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
               </>
             )}
+            {!assistantBig && (consent !== null || items.length > 0) && (model.proposals ?? 0) > 0 ? (
+              <div className="flex max-w-[400px] flex-col gap-1 px-3 pb-3">
+                {model.groups.flatMap((group) => group.rows).filter((row): row is RoomRow => row.kind === 'room' && row.proposal !== undefined)
+                  .map((room) => <RoomLine key={room.key} room={room} api={api} />)}
+              </div>
+            ) : null}
             {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
             {hovered ? (
               <div className="flex justify-center pb-2 pt-1.5">

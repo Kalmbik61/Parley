@@ -25,7 +25,7 @@ import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
 import { useConsentsStore } from './consents/store.js';
@@ -37,6 +37,11 @@ import { useIslandRequests } from './requests.js';
 const PROJECT = '/tmp/proj';
 const ref = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-1', sessionId });
 const ENTRIES = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')] })];
+
+const proposalWork = (rev = 1, projectPath = PROJECT) => makeWork('w-1', { projectPath, sessions: ENTRIES[0]!.map.sessions,
+  rooms: [{ ...makeRoom('r-1', 'Room one'), members: ['s-01', 's-02'], lead: 's-02',
+    proposal: { id: 'p-1', from: 's-01', text: 'SECRET-proposal', at: '2026-10-27T00:00:00.000Z', rev } }],
+});
 
 function permission(cardId: string, command: string): FeedCard {
   return {
@@ -176,7 +181,7 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
-  it.each(['close', 'collapse', 'hidden', 'disconnect', 'assistant', 'pending'] as const)('progress polls only the selected detail and stops on %s', async (pause) => {
+  it.each(['close', 'collapse', 'hidden', 'disconnect', 'assistant', 'pending', 'room'] as const)('progress polls only the selected detail and stops on %s', async (pause) => {
     vi.useFakeTimers();
     const { fake, bridge, hover, disconnect, blocked } = setup({ assistant: ASSISTANT_ON });
     fake.setHostMethods(['feed.progress']);
@@ -204,14 +209,75 @@ describe('проводка острова', () => {
       act(() => document.dispatchEvent(new Event('visibilitychange')));
     } else if (pause === 'disconnect') disconnect();
     else if (pause === 'assistant') act(() => useAssistantStore.setState({ open: true }));
-    else blocked('s-01');
+    else if (pause === 'pending') blocked('s-01');
+    else act(() => fake.emit('works.changed', { entries: [proposalWork()], branches: {} }));
     resolveLate({ ...result, revision: 99, recent: [{ id: 'late', at: '2026-10-26T10:00:00.000Z', category: 'execute', status: 'done' }] });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     const count = read.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
     expect(read).toHaveBeenCalledTimes(count);
     expect(screen.queryByText('Run command')).toBeNull();
+    if (pause === 'room') {
+      expect(screen.getByText('Update delayed')).toBeTruthy();
+      act(() => fake.emit('works.changed', { entries: ENTRIES, branches: {} }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(read).toHaveBeenCalledTimes(count + 1);
+      expect(fake.calls.filter((call) => call.method === 'feed.progress').at(-1)?.params).toEqual({ ref: ref('s-01') });
+    }
     hidden?.mockRestore();
+  });
+
+  it('room proposals reveal once per full revision identity and only open the current room', async () => {
+    vi.useFakeTimers();
+    const { fake, bridge, island, hover } = setup({ sound: true });
+    render(<IslandApp bridge={bridge} />);
+    const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+    await settle();
+    expect(isRetracted()).toBe(true);
+    const update = async (entries = [proposalWork()]) => {
+      act(() => fake.emit('works.changed', { entries, branches: {} })); await settle();
+    };
+    await update();
+    expect(isRetracted()).toBe(false);
+    expect(island.beep).toHaveBeenCalledOnce();
+    hover(true);
+    expect(screen.getByText('Lead: S02 b')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('SECRET');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
+    tuck(hover); await update();
+    expect(isRetracted()).toBe(true);
+    expect(island.beep).toHaveBeenCalledOnce();
+    await update([proposalWork(2)]);
+    expect(isRetracted()).toBe(false);
+    expect(island.beep).toHaveBeenCalledTimes(2);
+    await update([proposalWork(2), proposalWork(2, '/other/proj')]);
+    expect(island.beep).toHaveBeenCalledTimes(3);
+    await update(ENTRIES);
+    expect(screen.queryByRole('button', { name: 'Open room' })).toBeNull();
+    expect(fake.calls.filter((call) => /resolveProposal|resumeAutonomous|feed.decide/.test(call.method))).toEqual([]);
+  });
+
+  it('parent removal and disconnect clear child rows; an empty reconnect cannot restore stale children', async () => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover, disconnect, reconnect } = setup();
+    const child = makeActivity(ref('s-01'), 'idle', { heldByBackground: true, metrics: { tokensIn: null, tokensOut: null,
+      durationMs: null, unread: 0, model: null, subagents: 1, tasks: [{ id: 'a'.repeat(64), agentType: 'worker', description: 'child one', background: true }] } });
+    fake.setActivitySnapshot([child]);
+    render(<IslandApp bridge={bridge} />);
+    const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+    await settle(); hover(true);
+    expect(screen.getByText('child one')).toBeTruthy();
+    expect(screen.queryByTestId('island-done')).toBeNull();
+    act(() => fake.emit('works.changed', { entries: [makeWork('w-1', { projectPath: PROJECT })], branches: {} }));
+    await settle();
+    expect(screen.queryByText('child one')).toBeNull();
+    act(() => fake.emit('works.changed', { entries: ENTRIES, branches: {} })); await settle();
+    disconnect(); await settle();
+    expect(useActivityStore.getState().byRef).toEqual({});
+    fake.setActivitySnapshot([]); reconnect(); await settle(); hover(true);
+    expect(screen.queryByText('child one')).toBeNull();
+    expect(useActivityStore.getState().byRef).toEqual({});
   });
 
   it.each([null, []])('progress old host %j shows unavailable with no periodic calls', async (methods) => {
@@ -331,7 +397,8 @@ describe('проводка острова', () => {
   });
 
   it('после переподключения всё ещё ждущая карточка — новая: выдвигает убранный стрелкой остров', async () => {
-    const { island, bridge, blocked, disconnect, reconnect, hover } = setup();
+    const { fake, island, bridge, blocked, disconnect, reconnect, hover } = setup();
+    fake.setActivitySnapshot([makeActivity(ref('s-01'), 'blocked')]);
     render(<IslandApp bridge={bridge} />);
     blocked('s-01');
     await screen.findByTitle('Run: rm -rf build');
@@ -1340,6 +1407,27 @@ describe('QuestionForm — настоящая проводка острова', 
     expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
   });
 
+  it('new room proposal preserves the question draft, page, selection and keyboard owner', async () => {
+    const state = await mount('window', { sound: true }); fill(); act(() => other().focus());
+    const selected = useIslandRequests.getState().selectedKey;
+    const input = other();
+    vi.mocked(state.island.beep).mockClear(); vi.mocked(state.island.keyboard).mockClear();
+    act(() => state.fake.emit('works.changed', { entries: [proposalWork()], branches: {} })); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other()).toBe(input);
+    expect(other().value).toBe('  Custom answer  ');
+    expect(document.activeElement).toBe(input);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(state.island.beep).toHaveBeenCalledOnce();
+    expect(document.body.textContent).not.toContain('SECRET');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(state.island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
+    expect(state.fake.calls.filter((call) => /resolveProposal|resumeAutonomous|feed.decide/.test(call.method))).toEqual([]);
+    expect(other().value).toBe('  Custom answer  ');
+  });
+
   it.each(['blur', 'retract', 'blur and retract'])('new pending after %s preserves selected question, draft and page; still expands and sounds', async (mode) => {
     const state = await mount('window', { sound: true }); fill(); act(() => other().focus());
     const selected = useIslandRequests.getState().selectedKey;
@@ -1389,7 +1477,10 @@ describe('QuestionForm — настоящая проводка острова', 
       await settle();
     }
     if (mode === 'resolved') { await state.update(null); await state.update(card()); state.blocked('s-01'); await settle(); }
-    if (mode === 'disconnect') { state.disconnect(); state.reconnect(); await settle(); }
+    if (mode === 'disconnect') {
+      state.fake.setActivitySnapshot([makeActivity(ref('s-01'), 'blocked')]);
+      state.disconnect(); state.reconnect(); await settle();
+    }
     expect(screen.getByText('Question 1 of 3')).toBeTruthy();
     expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
   });

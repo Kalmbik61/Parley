@@ -113,6 +113,51 @@ describe('selected progress detail', () => {
   });
 });
 
+describe('subagents and room proposal badges', () => {
+  const tasks = Array.from({ length: 8 }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), agentType: '<b>worker</b>', description: `Task ${index}`, background: true }));
+  function childrenModel(items = tasks, total: number | null = 12, reported = 5): IslandModel {
+    return { ...DONE_MODEL, active: true, subagents: Math.max(total ?? 0, reported), groups: DONE_MODEL.groups.map((group) => ({ ...group,
+      rows: group.rows.map((row) => row.kind === 'session' ? { ...row, tasks: { items, total, reported } } : row),
+    })) };
+  }
+
+  it('keeps one Done parent/reply, caps8 children, reports actual overflow independently and preserves keyed nodes', () => {
+    useIslandReplies.setState({ texts: { [DONE_KEY]: REPLY } });
+    const props = viewProps({ model: childrenModel(), listOpen: true });
+    const { container, rerender } = render(<IslandView {...props} />);
+    expect(screen.getAllByTestId('island-done')).toHaveLength(1);
+    expect(screen.getByText(REPLY)).toBeTruthy(); expect(screen.getAllByTestId('island-subagent')).toHaveLength(8);
+    expect(screen.getByText('+4 more')).toBeTruthy(); expect(screen.getByText('5 reported')).toBeTruthy();
+    expect(container.querySelector('b')).toBeNull();
+    const first = screen.getByText('Task 0').closest('li');
+    rerender(<IslandView {...props} model={childrenModel([...tasks].reverse())} />);
+    expect(screen.getByText('Task 0').closest('li')).toBe(first);
+    rerender(<IslandView {...props} model={childrenModel(tasks.slice(0, 3), 3, 12)} />);
+    expect(screen.getAllByTestId('island-subagent')).toHaveLength(3); expect(screen.queryByText('+9 more')).toBeNull();
+    expect(screen.getByText('12 reported')).toBeTruthy();
+    rerender(<IslandView {...props} model={childrenModel([], 0, 12)} />);
+    expect(screen.getByText('No task details reported')).toBeTruthy();
+    rerender(<IslandView {...props} model={childrenModel([], null, 12)} />);
+    expect(screen.getByText('Task details unavailable')).toBeTruthy();
+  });
+
+  it('room waiting is a badge with current lead and Open room only, without proposal preview', () => {
+    const model: IslandModel = { working: 0, waiting: 0, done: 0, providers: [], active: true, proposals: 1, groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
+      { kind: 'room', key: 'r', projectPath: '/p', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: false,
+        proposal: { key: 'rev-key', kind: 'completion', lead: 's-02', leadLabel: 'S02 api' } },
+    ] }] };
+    Object.assign(model.groups[0]!.rows[0]!, { text: 'SECRET-proposal-preview' });
+    const props = viewProps({ model, listOpen: true });
+    render(<IslandView {...props} />);
+    expect(screen.getByText('Waiting for you')).toBeTruthy(); expect(screen.getByText('Lead: S02 api')).toBeTruthy();
+    expect(screen.queryByText('SECRET-proposal-preview')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open room' }).textContent).toBe('Open room');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'room', projectPath: '/p', workId: 'w-1', roomId: 'r-1' });
+    expect(props.onDecide).not.toHaveBeenCalled();
+  });
+});
+
 /** Проходит паузу `CARD_ARM_MS`: после неё кнопки решения нажимаются. */
 function arm(): void {
   act(() => {

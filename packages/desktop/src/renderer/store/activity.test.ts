@@ -10,6 +10,18 @@ beforeEach(() => {
 });
 
 describe('useActivityStore', () => {
+  it('preserves optional island task totals in snapshot and newer live events', async () => {
+    const bridge = createFakeBridge();
+    const entry: ActivityEntry = { ref, activity: { activity: 'idle', subagents: 12, tasks: [], waitingFor: null, heldByBackground: false,
+      turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false, need: null }, metrics: null, islandTasksTotal: 12 };
+    bridge.setActivitySnapshot([entry]);
+    const dispose = useActivityStore.getState().init(bridge);
+    await vi.waitFor(() => expect(activityFor(useActivityStore.getState().byRef, ref)?.islandTasksTotal).toBe(12));
+    bridge.emit('activity.changed', { ...entry, islandTasksTotal: 0 } as ActivityEntry);
+    expect(activityFor(useActivityStore.getState().byRef, ref)?.islandTasksTotal).toBe(0);
+    dispose();
+  });
+
   it('activity.changed кладёт запись по refKey', () => {
     const bridge = createFakeBridge();
     const dispose = useActivityStore.getState().init(bridge);

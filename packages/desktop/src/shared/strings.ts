@@ -2134,11 +2134,17 @@ export const S = {
 
   /** Остров одобрений (спека 2026-10-12). */
   island: {
-    pill: (working: number, waiting: number, done: number): string =>
-      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null]
+    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0): string =>
+      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null,
+        subagents === undefined ? null : subagents > 0 ? `${subagents} subagents active` : 'Subagents active',
+        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null]
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
+    subagentsActive: 'Subagents active', subagent: 'Subagent',
+    subagentsReported: (count: number): string => `${count} reported`,
+    tasksMore: (count: number): string => `+${count} more`, tasksEmpty: 'No task details reported', tasksUnknown: 'Task details unavailable',
+    roomWaiting: 'Waiting for you', openRoom: 'Open room', roomLead: (name: string): string => `Lead: ${name}`, noLiveLead: 'Lead unavailable',
     progress: {
       title: 'Recent actions', show: 'Show recent actions', close: 'Close history', current: 'Current',
       loading: 'Loading recent actions…', unavailable: 'Recent actions unavailable', empty: 'No recent actions',

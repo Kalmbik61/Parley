@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
+import { needReason } from '@parley/core/stuck';
+import { projectIslandActivity } from '../../main/island/activity-projection.js';
 import { activityMap, makeActivity, makeNeed, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { ASK_RETRY_SCHEDULE_MS, ELSEWHERE_MS, useIslandRequests } from './requests.js';
 
@@ -47,6 +49,21 @@ describe('очередь запросов острова', () => {
   afterEach(() => {
     useIslandRequests.getState().bind(null);
     vi.useRealTimers();
+  });
+
+  it('island projection makes activity-derived approval generic while shared K16 detail remains unchanged', async () => {
+    const need = makeNeed('approval', { detail: 'SECRET-command --token=SECRET-token' });
+    const original = makeActivity(ref('s-03'), 'blocked', { need });
+    const projected = projectIslandActivity(original);
+    const { call, decide } = bridge({});
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([projected]));
+    await flush();
+    expect(useIslandRequests.getState().items[0]?.summary).toBe('Waiting for your approval in its terminal');
+    expect(needReason(need, new Date(), 'Codex')).toContain('SECRET-command');
+    expect(original.activity.need?.detail).toBe(need.detail);
+    expect(JSON.stringify(projected)).not.toContain('SECRET');
+    expect(decide).not.toHaveBeenCalled();
   });
 
   it('сессия начала ждать — в очередь карточки и запрос терминала Codex', async () => {

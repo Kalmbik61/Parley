@@ -5,7 +5,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
-import { sessionRef, type EventName, type SessionRef } from '@parley/protocol';
+import { sessionRef, type EventData, type EventName, type SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 import type { IslandAnchor } from './ui-types.js';
 import type { VoiceApi, VoiceModelId } from './voice-types.js';
@@ -99,6 +99,8 @@ export interface IslandApi {
 }
 
 export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };
+/** Только desktop delivery: число валидных уникальных tasks до ограничения списка. */
+export type IslandActivityEntry = EventData<'activity.changed'> & { islandTasksTotal?: number };
 
 export const SESSION_VISIBILITY_LIMIT = 50;
 export interface SessionVisibilityReport {

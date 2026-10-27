@@ -7,8 +7,9 @@
 import { create } from 'zustand';
 import { refKey, type EventData, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import type { IslandActivityEntry } from '../../shared/island.js';
 
-export type ActivityEntry = EventData<'activity.changed'>;
+export type ActivityEntry = EventData<'activity.changed'> & Pick<IslandActivityEntry, 'islandTasksTotal'>;
 
 export interface ActivityState {
   byRef: Record<string, ActivityEntry>;

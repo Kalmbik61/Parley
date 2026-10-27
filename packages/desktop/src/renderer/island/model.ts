@@ -17,18 +17,22 @@
  */
 
 import type { WorkEntry } from '@parley/core';
-import { refKey, type SessionRef } from '@parley/protocol';
+import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import { sessionAttention } from '../attention/derive.js';
 import { sessionRowLabel, workTitleText } from '../lib/participant.js';
 import { projectName } from '../lib/project-name.js';
 import { isRoomArchived } from '../lib/room-archive.js';
+import { roomLiveLead } from '../lib/room-lead.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 
+export interface IslandTaskSummary { items: readonly LiveTask[]; total: number | null; reported: number; }
+type SessionBase = { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; tasks?: IslandTaskSummary };
 export type IslandRow =
-  | { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; state: 'working' | 'needs-you'; inTerminal: boolean }
-  | { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null; seen: boolean }
-  | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; title: string; busy: number; done: boolean };
+  | (SessionBase & { state: 'working' | 'needs-you' | 'subagents'; inTerminal: boolean })
+  | (SessionBase & { state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null; seen: boolean })
+  | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; title: string; busy: number; done: boolean;
+      proposal?: { key: string; kind: 'decision' | 'completion'; lead: string | null; leadLabel: string | null } };
 
 export interface IslandGroup {
   key: string;
@@ -45,6 +49,21 @@ export interface IslandModel {
   providers: string[];
   groups: IslandGroup[];
   active: boolean;
+  subagents?: number;
+  proposals?: number;
+}
+
+function tasksFor(entry: ActivityEntry | undefined): IslandTaskSummary {
+  const known = Array.isArray(entry?.metrics?.tasks);
+  const seen = new Set<string>();
+  const items = (entry?.metrics?.tasks ?? []).filter((task) => {
+    if (typeof task.id !== 'string' || task.id.length === 0 || seen.has(task.id)) return false;
+    seen.add(task.id); return true;
+  }).slice(0, 8);
+  const count = entry?.metrics?.subagents ?? entry?.activity.subagents ?? 0;
+  const total = entry?.islandTasksTotal;
+  return { items, reported: Number.isSafeInteger(count) && count >= 0 ? count : 0,
+    total: total !== undefined && Number.isSafeInteger(total) && total >= 0 ? Math.max(items.length, total) : known ? items.length : null };
 }
 
 export function islandModel(
@@ -57,6 +76,9 @@ export function islandModel(
   let working = 0;
   let waiting = 0;
   let done = 0;
+  let subagents = 0;
+  let childrenActive = false;
+  let proposals = 0;
   const providers = new Set<string>();
   const groups: IslandGroup[] = [];
   for (const entry of entries) {
@@ -70,15 +92,26 @@ export function islandModel(
       const ref = { projectPath: entry.projectPath, workId: work.id, sessionId: session.id };
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
-      const state = sessionAttention(session, live);
+      const attention = sessionAttention(session, live);
+      if (attention === 'off') continue;
+      const state = attention === 'working' && live?.heldByBackground ? 'idle' : attention;
+      const tasks = tasksFor(byRef[key]);
+      const activeTasks = Math.max(tasks.reported, tasks.total ?? 0, tasks.items.length);
+      const hasChildren = activeTasks > 0 || live?.heldByBackground === true;
+      if (hasChildren) { childrenActive = true; subagents += activeTasks; }
+      const base: SessionBase = { kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider,
+        ...(hasChildren ? { tasks } : {}) };
       const turnEndedAt = live?.turnEndedAt ?? null;
       const doneKey = `${key}\u0000${turnEndedAt ?? ''}`;
       const unseen = state === 'unseen';
-      if (unseen || (state === 'idle' && turnEndedAt !== null && held.has(doneKey))) {
-        if (cleared.has(doneKey)) continue;
+      if ((unseen || (state === 'idle' && turnEndedAt !== null && held.has(doneKey))) && !cleared.has(doneKey)) {
         finished.add(session.id);
         done += 1;
-        doneRows.push({ kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider, state: 'done', inTerminal: false, doneKey, turnEndedAt, seen: !unseen });
+        doneRows.push({ ...base, state: 'done', inTerminal: false, doneKey, turnEndedAt, seen: !unseen });
+        continue;
+      }
+      if (hasChildren && state !== 'working' && state !== 'needs-you') {
+        rows.push({ ...base, state: 'subagents', inTerminal: false });
         continue;
       }
       if (state !== 'working' && state !== 'needs-you') continue;
@@ -87,11 +120,7 @@ export function islandModel(
       if (state === 'working') working += 1;
       else waiting += 1;
       rows.push({
-        kind: 'session',
-        key,
-        ref,
-        label: sessionRowLabel(session.id, session.label),
-        provider: session.provider,
+        ...base,
         state,
         inTerminal: state === 'needs-you' && !withCard.has(key),
       });
@@ -103,12 +132,21 @@ export function islandModel(
       if (isRoomArchived(room)) continue;
       const count = room.members.filter((id) => busy.has(id)).length;
       const isDone = count === 0 && room.members.some((id) => finished.has(id));
-      if (count === 0 && !isDone) continue;
-      rows.push({ kind: 'room', key: `${groupKey}\u0000room\u0000${room.id}`, projectPath: entry.projectPath, workId: work.id, roomId: room.id, title: room.title, busy: count, done: isDone });
+      const proposal = room.proposal != null && (room.proposal.kind === undefined || room.proposal.kind === 'decision' || room.proposal.kind === 'completion') ? room.proposal : null;
+      if (count === 0 && !isDone && proposal === null) continue;
+      const lead = proposal === null ? null : roomLiveLead(entry.map, room);
+      const leader = entry.map.sessions.find((session) => session.id === lead);
+      if (proposal !== null) proposals += 1;
+      rows.push({ kind: 'room', key: `${groupKey}\u0000room\u0000${room.id}`, projectPath: entry.projectPath, workId: work.id, roomId: room.id, title: room.title, busy: count, done: isDone,
+        ...(proposal === null ? {} : { proposal: { key: JSON.stringify([entry.projectPath, work.id, room.id, proposal.id, proposal.rev]), kind: proposal.kind ?? 'decision',
+          lead, leadLabel: leader === undefined ? null : sessionRowLabel(leader.id, leader.label) } }),
+      });
     }
     if (rows.length > 0) groups.push({ key: groupKey, title: workTitleText(work.title), project: projectName(entry.projectPath), rows });
   }
-  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 };
+  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 || childrenActive || proposals > 0,
+    ...(childrenActive ? { subagents } : {}), ...(proposals > 0 ? { proposals } : {}),
+  };
 }
 
 /** Шапка карточки запроса: сессия, работа и проект по `refKey`. */

@@ -221,6 +221,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       useIslandRequests.getState().bind(null);
       useIslandReplies.getState().bind(null);
       for (const dispose of disposers) dispose();
+      useActivityStore.setState({ byRef: {}, loaded: false });
     };
   }, [connected, bridge]);
   useEffect(() => {
@@ -251,6 +252,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
   );
+  const pendingProposals = useMemo(() => model.groups.flatMap((group) => group.rows.flatMap((row) =>
+    row.kind === 'room' && row.proposal !== undefined ? [row.proposal.key] : [])), [model]);
   /** Непросмотренные Done: их число показывает убранный остров (`✅ N`). */
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
@@ -343,6 +346,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     };
   }, [retracted]);
   useEffect(() => {
+    if (!connected) return;
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
     let firstFresh = -1;
     const outcomes: IslandPresentationOutcome[] = [];
@@ -353,20 +357,23 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       if (firstFresh === -1) firstFresh = at;
     });
     // Новая карточка согласия (id `c-NN` не пересекается с ключами запросов) выдвигает остров и звучит так же.
-    let freshConsent = false;
     for (const card of consents) {
       if (seen.current.has(card.id)) continue;
       seen.current.add(card.id);
       outcomes.push({ key: card.id, kind: 'consent', fresh: true, expand: true, soundEligible: true });
-      freshConsent = true;
     }
-    if (firstFresh === -1 && !freshConsent) return;
+    for (const key of pendingProposals) {
+      if (seen.current.has(key)) continue;
+      seen.current.add(key);
+      outcomes.push({ key, kind: 'room-proposal', fresh: true, expand: true, soundEligible: true });
+    }
+    if (outcomes.length === 0) return;
     // Вопрос сохраняет выбор и draft даже после blur/уборки; остальные запросы не уводим из-под текущего ввода.
     const selected = items.find((item) => item.key === selectedKey);
     const keepQuestion = selected?.inWindow && selected.card?.kind === 'question' && selected.card.state === 'pending' && selected.note !== 'elsewhere';
     if (firstFresh !== -1 && !keepQuestion && !shapeRef.current?.contains(document.activeElement)) useIslandRequests.getState().select(firstFresh);
     present(outcomes);
-  }, [items, consents, present, selectedKey]);
+  }, [connected, items, consents, pendingProposals, present, selectedKey]);
   // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: стрелка среди работы его не возвращает.
   useEffect(() => {
     if (model.active) setRetracted(false);
@@ -433,7 +440,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const progressScope = JSON.stringify([progressKey, progressConnection.generation, progressLifecycle]);
   const progressRowPresent = progressKey !== null && model.groups.some((group) => group.rows.some((row) => row.kind === 'session' && refKey(row.ref) === progressKey));
   const progressActive = shown && progressDocumentVisible && config.islandEnabled && listOpen && progressRowPresent &&
-    progressSession !== undefined && !assistant.open && !busy && items.length === 0 && consents.length === 0;
+    progressSession !== undefined && !assistant.open && !busy && items.length === 0 && consents.length === 0 && pendingProposals.length === 0;
+  const progressState: ProgressState = progressData.scope === progressScope ? progressData.state : { kind: 'loading' };
+  const displayedProgress = !progressActive && progressState.kind === 'available' ? { ...progressState, delayed: true } : progressState;
   useEffect(() => {
     progressScopeRef.current = progressScope;
     const selection = { ref: progressSelected, active: progressActive, connectionGeneration: progressConnection.generation,
@@ -542,7 +551,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         index={index}
         config={config}
         listOpen={listOpen}
-        progress={{ selected: progressSelected, state: progressData.scope === progressScope ? progressData.state : { kind: 'loading' },
+        progress={{ selected: progressSelected, state: displayedProgress,
           onSelect: (ref) => setProgressSelected({ ...ref }), onClose: () => setProgressSelected(null) }}
         retracted={retracted}
         doneCount={unseenDone}

@@ -24,6 +24,8 @@ import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { projectIslandWorks } from './island/works-projection.js';
+import { projectIslandActivity } from './island/activity-projection.js';
+import type { IslandActivityEntry } from '../shared/island.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
@@ -456,7 +458,10 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle(
     'host:activity-snapshot',
-    withIpcError(async () => connection.activitySnapshot()),
+    withIpcError(async (event) => {
+      const snapshot = connection.activitySnapshot();
+      return isIslandSender?.((event as { sender?: unknown }).sender) === true ? snapshot.map(projectIslandActivity) : snapshot;
+    }),
   );
 
   // Есть ли окно острова: `sendSync` прелоада главного окна, чтобы `notify.ts` знал, слать ли системное уведомление.
@@ -1041,7 +1046,9 @@ export function forwardHostToWindow(
     // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
     if (message.event === 'browser.agentOp') return;
     if (events !== undefined && !events.has(message.event)) return;
-    window.webContents.send('host:event', options.island && message.event === 'works.changed'
+    if (options.island && message.event === 'activity.changed') {
+      window.webContents.send('host:event', { ...message, data: projectIslandActivity(message.data as IslandActivityEntry) });
+    } else window.webContents.send('host:event', options.island && message.event === 'works.changed'
       ? { ...message, data: projectIslandWorks(message.data as Result<'works.list'>) } : message);
   });
   const unsubStatus = connection.onStatus((status) => {

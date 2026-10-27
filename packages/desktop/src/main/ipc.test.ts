@@ -1817,6 +1817,31 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     expect(await ipcMain.invoke('host:call', 'works.list', {})).toBe(source);
   });
 
+  it('island activity snapshot/event share projection while main receives raw payload unchanged', async () => {
+    const island = { id: 99 };
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+    const task = { id: 'RAW-SHORT-ID', agentType: 'agent', description: 'token=SECRET-token', background: true };
+    const source = { ref, activity: { activity: 'blocked' as const, subagents: 1,
+      tasks: [{ ...task, transcriptPath: '/SECRET-transcript' }], waitingFor: 'RAW-SHORT-ID', heldByBackground: false,
+      turnEndedAt: null, lastEventAt: null, source: 'hooks' as const, hooksMissing: false,
+      need: { kind: 'approval' as const, since: '2026-10-27T00:00:00.000Z', detail: 'SECRET-command', resetsAt: null, window: null, account: null } },
+      metrics: { tokensIn: 1, tokensOut: 2, durationMs: null, unread: 0, subagents: 1, model: 'SECRET-model', tasks: [task] } };
+    Object.assign(source.metrics, { plan: { raw: 'SECRET-plan' } });
+    const before = JSON.stringify(source);
+    const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island });
+    vi.mocked(connection.activitySnapshot).mockReturnValue([source]);
+    const rpc = await ipcMain.invokeWithEvent('host:activity-snapshot', { sender: island }) as unknown[];
+    const projected = fakeForwarding({ events: new Set(['activity.changed']), island: true });
+    projected.emit('activity.changed', source);
+    expect(projected.sent.at(-1)).toEqual(['host:event', { event: 'activity.changed', data: rpc[0] }]);
+    expect(JSON.stringify(rpc)).not.toMatch(/SECRET|RAW-SHORT-ID/);
+    expect(rpc[0]).toMatchObject({ islandTasksTotal: 1 });
+    expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([source]);
+    const main = fakeForwarding(); main.emit('activity.changed', source);
+    expect(main.sent.at(-1)).toEqual(['host:event', { event: 'activity.changed', data: source }]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
   it('с белым списком окну уходят только события из списка, статус — всегда (остров: без pty.output)', () => {
     const { sent, emit } = fakeForwarding({ events: new Set(['works.changed', 'activity.changed']) });
     emit('pty.output');
