@@ -2139,6 +2139,13 @@ export const S = {
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
+    progress: {
+      title: 'Recent actions', show: 'Show recent actions', close: 'Close history', current: 'Current',
+      loading: 'Loading recent actions…', unavailable: 'Recent actions unavailable', empty: 'No recent actions',
+      delayed: 'Update delayed', truncated: 'Earlier actions omitted',
+      category: { read: 'Read files', edit: 'Edit files', execute: 'Run command', search: 'Search', delegate: 'Delegate', other: 'Other action' },
+      status: { running: 'Running', done: 'Done', failed: 'Failed', rejected: 'Rejected' },
+    },
     codexTerminalAction: 'Codex needs your attention in the terminal',
     question: {
       back: 'Back',

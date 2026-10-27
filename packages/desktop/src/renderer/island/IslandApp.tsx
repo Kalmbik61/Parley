@@ -44,7 +44,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { refKey, type AssistantProposal } from '@parley/protocol';
+import { refKey, type AssistantProposal, type SessionRef } from '@parley/protocol';
 import { markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
@@ -61,6 +61,7 @@ import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandVie
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
+import { createProgressPoller, type ProgressState } from './progress.js';
 
 /** Через сколько покоя (ничего не идёт, очереди нет, курсор не над формой, форму не тащат) остров убирается сам. */
 export const IDLE_RETRACT_MS = 4000;
@@ -116,6 +117,21 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
   const [listOpen, setListOpen] = useState(false);
+  const [progressSelected, setProgressSelected] = useState<SessionRef | null>(null);
+  const [progressConnection, setProgressConnection] = useState<{ generation: number; methods: readonly string[] | null }>({ generation: 0, methods: null });
+  const [progressDocumentVisible, setProgressDocumentVisible] = useState(!document.hidden);
+  const progressScopeRef = useRef('');
+  const [progressData, setProgressData] = useState<{ scope: string; state: ProgressState }>({ scope: '', state: { kind: 'loading' } });
+  const progressCall = useRef(bridge.call);
+  progressCall.current = bridge.call;
+  const progressPoller = useMemo(() => createProgressPoller({ call: (method, params) => progressCall.current(method, params),
+    onChange: (state) => setProgressData({ scope: progressScopeRef.current, state }),
+  }), []);
+  useEffect(() => {
+    const visibility = (): void => setProgressDocumentVisible(!document.hidden);
+    document.addEventListener('visibilitychange', visibility);
+    return () => document.removeEventListener('visibilitychange', visibility);
+  }, []);
   /** Курсор над областью острова (от main) и идёт перетаскивание — условия покоя; их смена отменяет и заново заводит таймер уборки. */
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -182,6 +198,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       bridge.onStatus((status) => {
         const ok = status.state === 'connected';
         setConnected(ok);
+        setProgressConnection((current) => status.state === 'connected'
+          ? { generation: current.generation + 1, methods: status.methods }
+          : { ...current, methods: null });
         if (!ok) {
           releaseKeyboard();
           useIslandRequests.getState().clear();
@@ -403,6 +422,29 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     return () => window.removeEventListener('keydown', onKey);
   }, [assistant.open, keyboardOwner, releaseKeyboard]);
   const shown = connected && !retracted;
+  const progressKey = progressSelected === null ? null : refKey(progressSelected);
+  const progressSession = progressSelected === null ? undefined : entries
+    .find((entry) => entry.projectPath === progressSelected.projectPath && entry.map.work.id === progressSelected.workId)
+    ?.map.sessions.find((session) => session.id === progressSelected.sessionId);
+  const progressLifecycle = progressSession === undefined ? '' : JSON.stringify([
+    progressSession.provider, progressSession.providerSessionId, progressSession.pid, progressSession.startedAtProcess,
+    progressSession.lifecycle, progressSession.startedAt, progressSession.endedAt,
+  ]);
+  const progressScope = JSON.stringify([progressKey, progressConnection.generation, progressLifecycle]);
+  const progressRowPresent = progressKey !== null && model.groups.some((group) => group.rows.some((row) => row.kind === 'session' && refKey(row.ref) === progressKey));
+  const progressActive = shown && progressDocumentVisible && config.islandEnabled && listOpen && progressRowPresent &&
+    progressSession !== undefined && !assistant.open && !busy && items.length === 0 && consents.length === 0;
+  useEffect(() => {
+    progressScopeRef.current = progressScope;
+    const selection = { ref: progressSelected, active: progressActive, connectionGeneration: progressConnection.generation,
+      lifecycle: progressLifecycle, methods: progressConnection.methods };
+    progressPoller.update(selection);
+    // При повторе эффекта StrictMode пауза сохраняет блокировку незавершённого IPC.
+    return () => progressPoller.update({ ...selection, active: false });
+  }, [progressPoller, progressSelected, progressActive, progressConnection, progressLifecycle, progressScope]);
+  useEffect(() => {
+    if (progressSelected !== null && !progressRowPresent) setProgressSelected(null);
+  }, [progressSelected, progressRowPresent]);
   const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && consents.length === 0;
   const requestAvailable = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && (consents.length > 0 || selectedKey !== null);
   useEffect(() => {
@@ -500,6 +542,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         index={index}
         config={config}
         listOpen={listOpen}
+        progress={{ selected: progressSelected, state: progressData.scope === progressScope ? progressData.state : { kind: 'loading' },
+          onSelect: (ref) => setProgressSelected({ ...ref }), onClose: () => setProgressSelected(null) }}
         retracted={retracted}
         doneCount={unseenDone}
         hovered={hovered}

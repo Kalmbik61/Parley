@@ -874,6 +874,51 @@ describe('host:call от острова', () => {
   const options = { isIslandSender: (sender: unknown) => sender === island };
   const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
   const at = '2026-10-26T10:00:00.000Z';
+  const progress = { revision: 1, availability: 'available', current: null, recent: [], truncated: false };
+
+  it('progress строго валидирует params/result и ограничивает каждый sender интервалом 250ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const other = { id: 100 };
+      const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island || sender === other });
+      vi.mocked(connection.call).mockResolvedValue(progress);
+      const invoke = (sender: object, params: unknown = { ref: REF }) => ipcMain.invokeWithEvent('host:call', { sender }, 'feed.progress', params);
+      await expect(invoke(island, { ref: REF, extra: 'SECRET' })).rejects.toSatisfy((error: unknown) => decodeIpcError(error).code === 'bad_request');
+      expect(connection.call).not.toHaveBeenCalled();
+      expect(await invoke(island)).toEqual(progress);
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => {
+        const info = decodeIpcError(error);
+        return info.code === 'conflict' && info.data?.reason === 'island-progress-rate-limit' && info.data?.retryAfterMs === 250;
+      });
+      expect(await invoke(other)).toEqual(progress);
+      await vi.advanceTimersByTimeAsync(249);
+      await expect(invoke(island)).rejects.toBeTruthy();
+      await vi.advanceTimersByTimeAsync(1);
+      vi.mocked(connection.call).mockResolvedValue({ ...progress, command: 'SECRET-command' });
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => !String(error).includes('SECRET') && decodeIpcError(error).code === 'failed');
+      await vi.advanceTimersByTimeAsync(250);
+      vi.mocked(connection.call).mockRejectedValue(new HostError('failed', 'SECRET-source-error'));
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => !String(error).includes('SECRET'));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([{ ref: null }, { ref: { ...REF, sessionId: '' } }, { ref: REF, agentId: 'child' }])('progress invalid params не доходят до хоста: %j', async (params) => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.progress', params)).rejects.toSatisfy((error: unknown) => decodeIpcError(error).code === 'bad_request');
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it.each(['conflict', 'unknown_method'])('progress сохраняет безопасный %s код без raw ошибки', async (code) => {
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockRejectedValue(new HostError(code, 'SECRET-source', {
+      reason: 'island-progress-rate-limit', retryAfterMs: 125, command: 'SECRET-command',
+    }));
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.progress', { ref: REF })).rejects.toSatisfy((error: unknown) => {
+      const info = decodeIpcError(error);
+      return info.code === code && !String(error).includes('SECRET') &&
+        (code !== 'conflict' || JSON.stringify(info.data) === JSON.stringify({ reason: 'island-progress-rate-limit', retryAfterMs: 125 }));
+    });
+  });
   const text = (id: string): FeedItem => ({ id, at, kind: 'text', messageId: null, text: id, streaming: false });
   const prompt = (id: string): FeedItem => ({ id, at, kind: 'prompt', text: id, images: 0 });
   const card = (kind: FeedCard['kind'], id: string, state: FeedCard['state'] = 'pending'): FeedCard => {

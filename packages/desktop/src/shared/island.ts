@@ -133,6 +133,7 @@ export interface IslandPresentationOutcome {
 export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'works.list',
   'feed.snapshot',
+  'feed.progress',
   'feed.decide',
   'assistant.ask',
   'assistant.cancel',

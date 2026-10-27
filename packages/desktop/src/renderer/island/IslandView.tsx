@@ -34,7 +34,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import type { FocusTarget } from '../../shared/bridge.js';
 import type { IslandApi, IslandConfig } from '../../shared/island.js';
@@ -53,6 +53,8 @@ import type { IslandRequest } from './requests.js';
 import { EMPTY_QUESTION_FORM_DRAFT, QuestionForm, type QuestionFormDraft } from './QuestionForm.js';
 import { PlanView } from './PlanView.js';
 import { Swarm } from './swarm/Swarm.js';
+import { ProgressView } from './ProgressView.js';
+import type { ProgressState } from './progress.js';
 import { swarmSpecFor } from './swarm/spec.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
@@ -110,6 +112,7 @@ export interface IslandViewProps {
   assistant: IslandAssistantProps | null;
   /** Карточка согласия (держит запуск Codex): показывается раньше карточек ленты; `null` — ждущих нет. */
   consent: IslandConsentProps | null;
+  progress?: { selected: SessionRef | null; state: ProgressState; onSelect(ref: SessionRef): void; onClose(): void };
 }
 
 export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
@@ -182,7 +185,7 @@ function DoneLine({ row, api }: { row: Extract<SessionRow, { state: 'done' }>; a
   );
 }
 
-function List({ model, api, onClearDone }: IslandViewProps): JSX.Element {
+function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Element {
   return (
     <div data-testid="island-list" className="island-reveal flex w-[400px] flex-col text-sm">
       {/* Прокручиваются только работы; «Clear» — ниже, вне прокрутки, и с ней не уезжает. */}
@@ -205,18 +208,28 @@ function List({ model, api, onClearDone }: IslandViewProps): JSX.Element {
               ))}
             {group.rows
               .filter((row): row is SessionRow => row.kind === 'session')
-              .map((row) =>
-                row.state === 'done' ? (
-                  <DoneLine key={row.key} row={row} api={api} />
-                ) : (
-                  <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
-                    {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
-                    <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
-                    <span className="min-w-0 flex-1 truncate">{row.label}</span>
-                    {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
-                  </button>
-                ),
-              )}
+              .map((row) => {
+                const selected = progress?.selected != null && refKey(progress.selected) === refKey(row.ref);
+                return <div key={row.key} data-testid="island-session">
+                  <div className="flex items-center gap-1">
+                    <div className="min-w-0 flex-1">
+                      {row.state === 'done' ? <DoneLine row={row} api={api} /> : (
+                        <button type="button" className="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
+                          {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
+                          <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                          <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                          {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+                        </button>
+                      )}
+                    </div>
+                    {progress !== undefined ? <button type="button" aria-label={S.island.progress.show} aria-expanded={selected}
+                      className="cursor-pointer rounded px-2 py-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                      onClick={() => selected ? progress.onClose() : progress.onSelect(row.ref)}>≡</button> : null}
+                  </div>
+                  {selected && progress !== undefined ? <ProgressView state={progress.state} onClose={progress.onClose}
+                    onOpen={() => api.open({ kind: 'session', ref: row.ref })} /> : null}
+                </div>;
+              })}
           </div>
         ))}
       </div>

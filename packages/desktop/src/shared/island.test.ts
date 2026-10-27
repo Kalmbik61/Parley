@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { ISLAND_EVENTS, ISLAND_MARK_SEEN_LIMIT, ISLAND_METHODS, markSeenBatches } from './island.js';
 
 describe('остров: белый список методов хоста', () => {
+  it('добавляет только progress чтение без подписок или новых событий', () => {
+    expect(ISLAND_METHODS.has('feed.progress')).toBe(true);
+    for (const method of ['feed.subscribe', 'feed.unsubscribe', 'pty.attach', 'pty.input', 'rooms.resolve', 'plans.submit']) expect(ISLAND_METHODS.has(method)).toBe(false);
+    expect([...ISLAND_EVENTS]).toEqual(['works.changed', 'activity.changed', 'assistant.changed', 'consents.changed']);
+  });
+
   it('каждое имя из ISLAND_METHODS — метод протокола (опечатка не оставит остров без данных молча)', () => {
     const known = new Set<string>(Object.keys(METHODS));
     for (const method of ISLAND_METHODS) expect(known.has(method), method).toBe(true);

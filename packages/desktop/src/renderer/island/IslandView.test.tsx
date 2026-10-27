@@ -95,6 +95,24 @@ function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   };
 }
 
+describe('selected progress detail', () => {
+  it('opens one explicit session detail and preserves the existing session action', () => {
+    const select = vi.fn(); const close = vi.fn();
+    const progress = { selected: null, state: { kind: 'loading' as const }, onSelect: select, onClose: close };
+    const props = viewProps({ listOpen: true, progress });
+    const { rerender } = render(<IslandView {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show recent actions' })); expect(select).toHaveBeenCalledWith(REF);
+    expect(props.api.open).not.toHaveBeenCalled();
+    rerender(<IslandView {...props} progress={{ ...progress, selected: REF }} />);
+    expect(screen.getAllByTestId('island-progress')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
+    fireEvent.click(screen.getByRole('button', { name: 'Close history' })); expect(close).toHaveBeenCalledOnce();
+    rerender(<IslandView {...props} progress={{ ...progress, selected: REF }} retracted />);
+    expect(screen.queryByTestId('island-progress')).toBeNull();
+  });
+});
+
 /** Проходит паузу `CARD_ARM_MS`: после неё кнопки решения нажимаются. */
 function arm(): void {
   act(() => {
@@ -193,7 +211,7 @@ describe('вид острова', () => {
     expect(room.textContent).toBe('Refunds· 1 in work');
     // Подзаголовок идёт сразу после названия работы и раньше строк сессий.
     const group = room.parentElement as HTMLElement;
-    expect(Array.from(group.children).map((child) => child.getAttribute('data-testid') ?? child.tagName)).toEqual(['DIV', 'island-room', 'BUTTON']);
+    expect(Array.from(group.children).map((child) => child.getAttribute('data-testid') ?? child.tagName)).toEqual(['DIV', 'island-room', 'island-session']);
     fireEvent.click(within(room).getByRole('button', { name: 'Refunds' }));
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'room', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1' });
   });

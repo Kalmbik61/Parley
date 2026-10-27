@@ -20,7 +20,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
-import { refKey, type ConsentCard } from '@parley/protocol';
+import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
 import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -176,6 +176,82 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
+  it.each(['close', 'collapse', 'hidden', 'disconnect', 'assistant', 'pending'] as const)('progress polls only the selected detail and stops on %s', async (pause) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover, disconnect, blocked } = setup({ assistant: ASSISTANT_ON });
+    fake.setHostMethods(['feed.progress']);
+    fake.setActivitySnapshot(['s-01', 's-02'].map((id) => makeActivity(ref(id), 'working')));
+    const result: ProgressResult = { revision: 1, availability: 'available', current: null, recent: [], truncated: false };
+    const read = vi.fn<() => ProgressResult | Promise<ProgressResult>>().mockReturnValue(result);
+    fake.setHandler('feed.progress', read);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    hover(true);
+    expect(read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[0]!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(read).toHaveBeenCalledOnce();
+    expect(fake.calls.filter((call) => call.method === 'feed.progress')[0]?.params).toEqual({ ref: ref('s-01') });
+    let resolveLate!: (value: ProgressResult) => void;
+    read.mockReturnValueOnce(new Promise<ProgressResult>((resolve) => { resolveLate = resolve; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(read).toHaveBeenCalledTimes(2);
+    let hidden: ReturnType<typeof vi.spyOn> | undefined;
+    if (pause === 'close') fireEvent.click(screen.getByRole('button', { name: 'Close history' }));
+    else if (pause === 'collapse') tuck(hover);
+    else if (pause === 'hidden') {
+      hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+    } else if (pause === 'disconnect') disconnect();
+    else if (pause === 'assistant') act(() => useAssistantStore.setState({ open: true }));
+    else blocked('s-01');
+    resolveLate({ ...result, revision: 99, recent: [{ id: 'late', at: '2026-10-26T10:00:00.000Z', category: 'execute', status: 'done' }] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const count = read.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(read).toHaveBeenCalledTimes(count);
+    expect(screen.queryByText('Run command')).toBeNull();
+    hidden?.mockRestore();
+  });
+
+  it.each([null, []])('progress old host %j shows unavailable with no periodic calls', async (methods) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover } = setup();
+    fake.setHostMethods(methods); fake.setActivitySnapshot([makeActivity(ref('s-01'), 'working')]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); hover(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show recent actions' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText('Recent actions unavailable')).toBeTruthy();
+    expect(fake.calls.filter((call) => call.method === 'feed.progress')).toHaveLength(0);
+  });
+
+  it.each(['selection', 'process'] as const)('progress drops the old %s response before showing a new detail', async (change) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover } = setup();
+    fake.setHostMethods(['feed.progress']); fake.setActivitySnapshot(['s-01', 's-02'].map((id) => makeActivity(ref(id), 'working')));
+    let resolveOld!: (value: ProgressResult) => void;
+    const first = new Promise<ProgressResult>((resolve) => { resolveOld = resolve; });
+    const read = vi.fn<() => ProgressResult | Promise<ProgressResult>>().mockResolvedValue({ revision: 1, availability: 'available', current: null,
+      recent: [{ id: 'fresh', at: '2026-10-26T10:00:00.000Z', category: 'read', status: 'done' }], truncated: false }).mockReturnValueOnce(first);
+    fake.setHandler('feed.progress', read);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); hover(true);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[0]!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    if (change === 'selection') fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[1]!);
+    else act(() => fake.emit('works.changed', { entries: ENTRIES.map((entry) => ({ ...entry, map: { ...entry.map,
+      sessions: entry.map.sessions.map((session) => session.id === 's-01' ? { ...session, pid: 77, startedAtProcess: 'process-new' } : session),
+    } })), branches: {} }));
+    expect(read).toHaveBeenCalledOnce();
+    resolveOld({ revision: 99, availability: 'available', current: null,
+      recent: [{ id: 'old', at: '2026-10-26T10:00:00.000Z', category: 'execute', status: 'done' }], truncated: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.queryByText('Run command')).toBeNull(); expect(screen.getByText('Loading recent actions…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.getByText('Read files')).toBeTruthy(); expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('Codex без карточки: действие в терминале выдвигает Island, открывает сессию и уходит после ответа', async () => {
     const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-03', 'codex', { provider: 'codex' })] })];
     const { island, bridge, blocked, working, hover } = setup({ sound: true }, entries);

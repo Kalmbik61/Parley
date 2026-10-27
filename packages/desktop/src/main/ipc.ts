@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createParleyMd, sharedProjectPaths } from '@parley/core';
-import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@parley/protocol';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressResult, FEED_PROGRESS_RETRY_AFTER_MAX_MS } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -71,6 +71,9 @@ const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
 /** Тот же sessionRef, но острову обязателен attention и запрещены agentId/лишние поля. */
 const ISLAND_SNAPSHOT_PARAMS = METHODS['feed.snapshot'].pick({ ref: true, scope: true }).required().strict();
+const ISLAND_PROGRESS_PARAMS = METHODS['feed.progress'].extend({
+  ref: METHODS['feed.progress'].shape.ref.strict().refine((ref) => Object.values(ref).every((part) => part.length > 0)),
+}).strict();
 
 /**
  * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
@@ -397,6 +400,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     browser,
   } = options;
 
+  const progressSent = new WeakMap<object, number>();
   ipcMain.handle(
     'host:call',
     withIpcError(async (event, method: unknown, params: unknown) => {
@@ -407,6 +411,28 @@ export function registerIpc(options: RegisterIpcOptions): void {
       const fromIsland = isIslandSender?.((event as { sender?: unknown }).sender) === true;
       if (fromIsland && !ISLAND_METHODS.has(method)) {
         throw new Error(`method not allowed for the island: ${method}`);
+      }
+      if (fromIsland && method === 'feed.progress') {
+        const parsed = ISLAND_PROGRESS_PARAMS.safeParse(params);
+        const sender = (event as { sender?: unknown }).sender;
+        if (!parsed.success || typeof sender !== 'object' || sender === null) throw new HostError('bad_request', 'Invalid progress request');
+        const now = Date.now();
+        const previous = progressSent.get(sender);
+        if (previous !== undefined && now - previous < 250) throw new HostError('conflict', 'Progress update delayed', {
+          reason: 'island-progress-rate-limit', retryAfterMs: Math.max(0, Math.min(250, 250 - (now - previous))),
+        });
+        progressSent.set(sender, now);
+        try {
+          const result = progressResult.safeParse(await connection.call('feed.progress', parsed.data));
+          if (!result.success) throw new HostError('failed', 'Progress unavailable');
+          return result.data;
+        } catch (error) {
+          if (error instanceof HostError && error.code === 'conflict' && error.data?.reason === 'island-progress-rate-limit' &&
+              Number.isSafeInteger(error.data.retryAfterMs) && (error.data.retryAfterMs as number) >= 0 && (error.data.retryAfterMs as number) <= FEED_PROGRESS_RETRY_AFTER_MAX_MS) {
+            throw new HostError('conflict', 'Progress update delayed', { reason: 'island-progress-rate-limit', retryAfterMs: error.data.retryAfterMs });
+          }
+          throw new HostError(error instanceof HostError && error.code === 'unknown_method' ? 'unknown_method' : 'failed', 'Progress unavailable');
+        }
       }
       if (fromIsland && method === 'works.list') {
         return projectIslandWorks(await connection.call('works.list', params) as Result<'works.list'>);
