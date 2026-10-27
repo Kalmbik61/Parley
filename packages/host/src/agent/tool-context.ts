@@ -40,7 +40,7 @@ export async function hostToolContext(
     channel: false,
     messageRate: config.messageRate,
     worktreeRoot: config.worktreeRoot,
-    // Исключение — «строки неизвестны»: `get_map` отдаст локальный реестр с пометкой, а не откажет целиком.
+    // Исключение — «строки неизвестны»: `get_map {field: "providers"}` отдаст локальный реестр с пометкой, а не откажет целиком.
     providerRows: async () => {
       try {
         return await deps.providerRows();

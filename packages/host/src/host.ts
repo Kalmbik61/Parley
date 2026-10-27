@@ -414,9 +414,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // `list_roles` агента заново читал бы конфигурацию Codex (`codex app-server`, до 8 с) — так хост уже подвисал.
   const roleCatalog = createCachedCatalog();
   // Инструменты агента исполняются здесь, в процессе хоста (спека хранилища 6.3, 6.9): карту работы открывает только хост.
-  // Строки провайдеров для `get_map` — те же, что у `/agent/providers`: ходить к себе по HTTP незачем; `wait_for` будит
-  // изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен тот же, что у остальных
-  // маршрутов агента.
+  // Строки провайдеров для `get_map {field: "providers"}` — те же, что у `/agent/providers`: ходить к себе по HTTP
+  // незачем; `wait_for` будит изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен
+  // тот же, что у остальных маршрутов агента.
   const toolsEndpoint = createToolsEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
     contextFor: (ref, launch) =>

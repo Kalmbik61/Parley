@@ -73,7 +73,7 @@ export const ATTEMPT_TOOLS: Tool[] = [
   {
     name: "attempt_submit",
     description:
-      "Autonomous worker: submit your handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.",
+      "Autonomous worker: submit your handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Read attempt_status before retrying a lost response.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -118,7 +118,7 @@ export const ATTEMPT_TOOLS: Tool[] = [
   {
     name: "attempt_status",
     description:
-      "Autonomous room members: read attempt cards, newest page first. With attemptId, read the full attempt as paged JSON text, including its manifest; pass next as cursor. This only reads the map.",
+      "Autonomous room members: read attempt cards, newest page first. With attemptId, read the full attempt as paged JSON text, including its manifest; pass next as cursor.",
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,

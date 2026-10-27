@@ -313,7 +313,10 @@ describe('список инструментов', () => {
     expect(replyTo?.type).toBe('string');
     expect(replyTo?.description).toMatch(/check_inbox or read_room/);
     expect(replyTo?.description).toMatch(/quote/);
-    expect(replyTo?.description).toMatch(/Only together with room/);
+    expect(replyTo?.description).toMatch(/Only with room/);
+    expect(replyTo?.description).toMatch(/in this room/);
+    // Подсказка, экономящая ход: отвечать только на question.
+    expect(send?.description).toContain('Answer only a question');
   });
 
   it('гид называет в подписи send_message все параметры инструмента, в том же порядке', async () => {
@@ -327,7 +330,7 @@ describe('список инструментов', () => {
     );
   });
 
-  it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
+  it('read_guide: topic необязателен, enum — темы гида; в описании их нет (список уже в enum, сумма описаний ограничена)', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
     const guide = tools.find((tool) => tool.name === 'read_guide');
@@ -336,7 +339,9 @@ describe('список инструментов', () => {
     expect(guide?.inputSchema.required ?? []).toEqual([]);
     expect(Object.keys(guide?.inputSchema.properties ?? {})).toEqual(['topic']);
     expect(guide?.inputSchema.properties?.['topic']).toMatchObject({ type: 'string', enum: names });
-    for (const name of names) expect(guide?.description).toContain(name);
+    // Список тем уже в enum схемы; в описании он только тратил бы токены каждого хода.
+    expect(guide?.description).toContain('topic picks one section');
+    expect(guide?.description).not.toContain(names.join(', '));
   });
 
   it('create_room: lead обязателен, описание отделяет владельца от участников', async () => {
@@ -358,8 +363,8 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const getMap = tools.find((tool) => tool.name === 'get_map');
 
-    expect(getMap?.description).toMatch(/the detailed guide is the read_guide tool$/);
-    expect(getMap?.description).toContain('models with their effort levels');
+    expect(getMap?.description).toMatch(/Details: read_guide\.$/);
+    expect(getMap?.description).toContain('The provider catalog comes with field "providers"');
   });
 
   it('описания инструментов и параметров — по-английски: кириллицы в списке инструментов нет', async () => {
@@ -393,7 +398,8 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const waitFor = tools.find((tool) => tool.name === 'wait_for');
 
-    expect(waitFor?.description).toMatch(/"inbox"[\s\S]*not by id/);
+    expect(waitFor?.description).toContain('marked read');
+    expect(waitFor?.description).toMatch(/already handed in its report returns the old result at once by id: wait for its answer[\s\S]*via "inbox"/);
   });
 });
 
@@ -659,7 +665,7 @@ describe('get_map: строки провайдеров от хоста (спек
     const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
     const tool = (await client.listTools()).tools.find((item) => item.name === 'create_session');
     expect(tool?.description).toContain('limits from get_map {field: "providers"}');
-    expect(tool?.description).toContain('an account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits');
+    expect(tool?.description).toContain('an account of the same CLI (for example custom-claude-2) is a separate subscription');
     const getMap = (await client.listTools()).tools.find((item) => item.name === 'get_map');
     expect(getMap?.description).toContain('field "providers"');
     expect(JSON.stringify(getMap?.inputSchema)).toContain('"providers"');
@@ -3330,7 +3336,7 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     const description = (name: string): string => tools.find((tool) => tool.name === name)?.description ?? '';
 
     expect(description('wait_for')).toContain(
-      '{"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back.',
+      '{"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back.',
     );
     expect(description('send_message')).toContain('stuck');
   });
