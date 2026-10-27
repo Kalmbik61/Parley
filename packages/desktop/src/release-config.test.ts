@@ -100,6 +100,23 @@ describe('упаковка macOS (V2)', () => {
     );
   });
 
+  // План 3b, B03 (E7): движок нейроголоса — только arm64, на x64 каталога нет, и electron-builder лишь предупреждает.
+  // Текст Apache-2.0 Qwen3-TTS едет рядом с NOTICE, как OFL шрифтов.
+  it('движок нейроголоса: build/speech/darwin-${arch} → Resources/speech; лицензия Qwen3-TTS → Resources/licenses', () => {
+    expect(builder).toMatch(/- from: build\/speech\/darwin-\$\{arch\}\n\s+to: speech\n/);
+    expect(builder).toMatch(
+      /- from: src\/main\/assistant\/licenses\/Qwen3-TTS-LICENSE\.txt\n\s+to: licenses\/Qwen3-TTS-LICENSE\.txt\n/,
+    );
+  });
+
+  it('релиз собирает движок нейроголоса arm64 после движка голосового ввода и до упаковки', () => {
+    const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    const step = release.indexOf('run: pnpm --filter @parley/desktop fetch-speech arm64\n');
+    expect(step).toBeGreaterThan(release.indexOf('fetch-whisper arm64 x64'));
+    expect(step).toBeLessThan(release.indexOf('Package for macOS'));
+    expect(release).not.toMatch(/fetch-speech[^\n]*x64/);
+  });
+
   it('релиз собирает движок обеих архитектур до упаковки', () => {
     const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
     expect(release.indexOf('fetch-whisper arm64 x64')).toBeGreaterThan(-1);
