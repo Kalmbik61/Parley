@@ -82,10 +82,11 @@ or any credential file.
 ## The island and the assistant
 
 The island is a black panel at the top of the screen: which agents work, who needs you, what just
-finished, and cards for requests. On a MacBook with a notch the tucked island continues the notch:
-the left ear holds a small swarm, the right one the main status ("2 waiting for you", "3 working",
-✅ N). A request, a card, the assistant or the pointer over the open island drop the shape down
-below the notch. Displays without a notch, and an island moved to the left or right edge, keep the
+finished, and cards for requests. On a MacBook with a notch the island at rest is exactly the size
+of the notch, whatever runs behind it: working agents, Done or a finished conversation with the
+assistant do not widen it. It drops down below the notch only when you open it (a click, the
+hotkey, pulling the tab or the pointer over it) or when something needs you: a request, a card or
+the assistant. Displays without a notch, and an island moved to the left or right edge, keep the
 strip.
 
 **Sounds and motion.** The island plays its own short cues, synthesized on the fly (there are no
