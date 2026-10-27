@@ -1,8 +1,12 @@
-/** Движок роя без canvas (`ctx = null`): детерминизм, границы облака, радиус сферы, лицо, переходы и reduced motion. */
+/**
+ * Движок роя без canvas (`ctx = null`): детерминизм, границы облака, радиус сферы, лицо, переходы и reduced motion;
+ * формы рта по кадру голоса (L1, F1) и пороги «рот не пропадает» (F5).
+ */
 
 import { describe, expect, it } from 'vitest';
-import { createSwarm, type SwarmEngine } from './engine.js';
-import { DUR, type SwarmEmotion, type SwarmSpec } from './spec.js';
+import type { VoiceFrame, Visemes } from '../assistant/voice-features.js';
+import { createSwarm, type SwarmEngine, type SwarmOptions } from './engine.js';
+import { DUR, EMO, type SwarmEmotion, type SwarmSpec } from './spec.js';
 
 const OPTIONS = { width: 420, height: 136, d: 86, cy: 62, k: 0.058, minPx: 2.4 };
 const CLOUD: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false, emo: null };
@@ -10,14 +14,17 @@ const SPHERE: SwarmSpec = { ...CLOUD, shape: 'sphere' };
 const face = (emo: SwarmEmotion, pal: SwarmSpec['pal'] = 'amber'): SwarmSpec => ({ ...CLOUD, shape: 'face', emo, pal });
 
 const make = (seed?: number): SwarmEngine => createSwarm(300, { ...OPTIONS, ...(seed === undefined ? {} : { seed }) });
+const NO_SHAPE: Visemes = { a: 0, i: 0, u: 0, m: 0 };
+/** Кадр голоса: громкость и веса форм (по умолчанию — без формы). */
+const voice = (amp: number, visemes: Partial<Visemes> = {}): VoiceFrame => ({ amp, visemes: { ...NO_SHAPE, ...visemes } });
 const snapshot = (engine: SwarmEngine): number[] => engine.souls.flatMap((s) => [s.x, s.y, s.z]);
 /** Облако с 0 мс, лицо с 1000 мс; кадр после конца перехода облако → лицо (1,4 с + 0,2 с рта). */
 const FACE_DONE = 1000 + (DUR.cloudface + 0.2 + 0.1) * 1000;
-const toFace = (engine: SwarmEngine, spec: SwarmSpec, mouth = 0): void => {
+const toFace = (engine: SwarmEngine, spec: SwarmSpec, frame: VoiceFrame | null = null): void => {
   engine.setSpec(CLOUD, 0, false);
   engine.frame(0, null, false, 0);
   engine.setSpec(spec, 1000, false);
-  engine.frame(FACE_DONE, null, false, 0, mouth);
+  engine.frame(FACE_DONE, null, false, 0, frame);
 };
 /** Высота рта: разброс y душ роли 2 без короны. */
 const mouthHeight = (engine: SwarmEngine): number => {
@@ -138,11 +145,11 @@ describe('движок роя', () => {
     }
   });
 
-  it('рот: mouth 1 выше, чем mouth 0', () => {
+  it('рот: amp 1 выше, чем amp 0', () => {
     const closed = make();
     const open = make();
-    toFace(closed, face('calm'), 0);
-    toFace(open, face('calm'), 1);
+    toFace(closed, face('calm'), voice(0));
+    toFace(open, face('calm'), voice(1));
     expect(mouthHeight(open)).toBeGreaterThan(mouthHeight(closed) * 1.5);
   });
 
@@ -153,7 +160,7 @@ describe('движок роя', () => {
       engine.setSpec(SPHERE, 0, false);
       engine.frame(0, null, false, 0);
       engine.setSpec(face('calm'), 100, false);
-      for (let t = 100; t <= 5100; t += 16) engine.frame(t, null, false, 0, 0.5 + 0.5 * Math.sin(t / 90));
+      for (let t = 100; t <= 5100; t += 16) engine.frame(t, null, false, 0, voice(0.5 + 0.5 * Math.sin(t / 90), { u: 0.4 + 0.4 * Math.sin(t / 70) }));
     }
     expect(snapshot(a)).toEqual(snapshot(b));
   });
@@ -215,29 +222,167 @@ describe('движок роя', () => {
     expect(engine.debug.flash).toBe(0);
   });
 
-  it('reduced motion в лице: рот amp 0.3 независимо от mouth, без моргания и вспышки', () => {
+  it('F4, reduced motion в лице: L1 выключен — рот amp 0.3 при любом кадре голоса, без моргания и вспышки', () => {
     const a = make();
     const b = make();
-    for (const [engine, mouth] of [[a, 0], [b, 1]] as const) {
+    for (const [engine, frame] of [[a, null], [b, voice(1, { u: 0.8 })]] as const) {
       engine.setSpec(face('surprise'), 0, true);
-      engine.frame(0, null, true, 0, mouth);
+      engine.frame(0, null, true, 0, frame);
       expect(engine.debug.flash).toBe(0);
     }
     expect(snapshot(a)).toEqual(snapshot(b));
     const calm = make();
     calm.setSpec(face('calm'), 0, true);
-    calm.frame(0, null, true, 0, 0);
+    calm.frame(0, null, true, 0, voice(0));
     const before = snapshot(calm);
+    const shapes: Array<Partial<Visemes>> = [{ a: 0.8 }, { i: 0.8 }, { u: 0.8 }, { m: 0.8 }];
     for (let t = 100; t <= 6000; t += 100) {
       calm.setSpec(face('calm'), t, true);
-      calm.frame(t, null, true, 0, 1);
+      calm.frame(t, null, true, 0, voice((t / 100) % 2, shapes[(t / 100) % 4]));
       expect(snapshot(calm)).toEqual(before);
     }
+    const reference = make();
+    reference.setSpec(face('calm'), 0, false);
+    reference.frame(0, null, false, 0, voice(0.3));
+    expect(mouthHeight(calm)).toBeCloseTo(mouthHeight(reference), 9); // статичный рот — amp 0,3 без форм
   });
 
   it('кадр до первой спеки ничего не делает', () => {
     const engine = make();
     expect(() => engine.frame(0, null, false, 0)).not.toThrow();
     expect(engine.needsFrame()).toBe(false);
+  });
+});
+
+/** Рой лица как в окне помощника (700 душ) с данным режимом голоса; кадр после входа в лицо. */
+const faceSwarm = (emo: SwarmEmotion, frame: VoiceFrame | null, voiceMode?: SwarmOptions['voiceMode']): SwarmEngine => {
+  const engine = createSwarm(700, { ...OPTIONS, ...(voiceMode === undefined ? {} : { voiceMode }) });
+  toFace(engine, face(emo), frame);
+  return engine;
+};
+const mouthSouls = (engine: SwarmEngine): Array<{ x: number; y: number }> => engine.souls.filter((s) => s.role === 2 && !s.corona);
+/** Ширина рта: размах x душ рта. */
+const mouthWidth = (engine: SwarmEngine): number => {
+  const xs = mouthSouls(engine).map((s) => s.x);
+  return Math.max(...xs) - Math.min(...xs);
+};
+const percentile = (values: readonly number[], p: number): number => {
+  const sorted = [...values].sort((x, y) => x - y);
+  return sorted[Math.round(p * (sorted.length - 1))]!;
+};
+/** Толщина штриха у `cx`: размах души поперёк средней линии (линейная подгонка) в полосе ±0,03 d. */
+const strokeAt = (souls: ReadonlyArray<{ x: number; y: number }>, cx: number): number => {
+  const near = souls.filter((s) => Math.abs(s.x - cx) <= 0.03);
+  const mx = near.reduce((a, s) => a + s.x, 0) / near.length;
+  const my = near.reduce((a, s) => a + s.y, 0) / near.length;
+  const sxx = near.reduce((a, s) => a + (s.x - mx) ** 2, 0);
+  const slope = sxx > 0 ? near.reduce((a, s) => a + (s.x - mx) * (s.y - my), 0) / sxx : 0;
+  const rest = near.map((s) => s.y - my - slope * (s.x - mx));
+  return Math.max(...rest) - Math.min(...rest);
+};
+/**
+ * Рот-линия по F5 (в долях d): длина — между 5-м и 95-м перцентилями x душ рта; толщина в середине и на концах — штрих
+ * в точке середины и в точках этих перцентилей.
+ */
+const lineMouth = (engine: SwarmEngine): { length: number; middle: number; ends: number } => {
+  const souls = mouthSouls(engine);
+  const xs = souls.map((s) => s.x);
+  const x5 = percentile(xs, 0.05);
+  const x95 = percentile(xs, 0.95);
+  return { length: x95 - x5, middle: strokeAt(souls, (x5 + x95) / 2), ends: Math.min(strokeAt(souls, x5), strokeAt(souls, x95)) };
+};
+/** Формы рта F5: тишина, тихая речь, закрыт, «о/у» наполовину и полностью, «а», «и/е» — и громкие варианты. */
+const FORMS: Array<{ name: string; frame: VoiceFrame; round: boolean }> = [
+  { name: 'тишина', frame: voice(0), round: false },
+  { name: 'тихая речь', frame: voice(0.15), round: false },
+  { name: 'закрыт', frame: voice(0.6, { m: 1 }), round: false },
+  { name: '«о/у» наполовину', frame: voice(0.5, { u: 0.5 }), round: true },
+  { name: '«о/у» полностью', frame: voice(0.5, { u: 1 }), round: true },
+  { name: '«о/у» тихо', frame: voice(0, { u: 1 }), round: true },
+  { name: '«а»', frame: voice(1, { a: 1 }), round: false },
+  { name: '«и/е»', frame: voice(0.8, { i: 1 }), round: false },
+  { name: '«и/е» тихо', frame: voice(0, { i: 1 }), round: false },
+];
+const LINE_EMOTIONS: SwarmEmotion[] = ['calm', 'joy', 'sad', 'anger', 'error'];
+
+describe('лицо: формы рта по голосу (L1, F1)', () => {
+  it('«о/у» сужает рот, «а» поднимает, «и/е» растягивает и понижает, закрытый — тонкая линия', () => {
+    const plain = faceSwarm('calm', voice(0.5));
+    const round = faceSwarm('calm', voice(0.5, { u: 1 }));
+    const wide = faceSwarm('calm', voice(0.5, { a: 1 }));
+    const smile = faceSwarm('calm', voice(0.5, { i: 1 }));
+    const closed = faceSwarm('calm', voice(0.5, { m: 1 }));
+    expect(mouthWidth(round)).toBeLessThan(mouthWidth(plain) * 0.75);
+    expect(mouthHeight(wide)).toBeGreaterThan(mouthHeight(plain) * 1.25);
+    expect(mouthWidth(smile)).toBeGreaterThan(mouthWidth(plain) * 1.15);
+    expect(lineMouth(smile).middle).toBeLessThan(lineMouth(plain).middle);
+    expect(lineMouth(closed).middle).toBeLessThan(lineMouth(plain).middle * 0.6);
+  });
+
+  it('surprise: свой овал, L1 меняет только его высоту и ширину в пределах; овал не уже 0,65·mw и не ниже 0,5·H0', () => {
+    const { mw, H0 } = EMO.surprise;
+    for (const frame of [voice(0), voice(0.5, { u: 1 }), voice(0.5, { m: 1 }), voice(1, { a: 1 }), voice(1, { i: 1 })]) {
+      const engine = faceSwarm('surprise', frame);
+      const ys = mouthSouls(engine).map((s) => s.y);
+      expect(mouthWidth(engine)).toBeGreaterThanOrEqual(0.65 * mw);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(0.5 * H0);
+    }
+  });
+
+  it('режим громкости = v1: формы не действуют, рот идёт только по amp; в полном режиме формы действуют', () => {
+    for (const shape of [{ a: 0.8 }, { i: 0.8 }, { u: 0.8 }, { m: 0.8 }]) {
+      for (const amp of [0, 0.4, 1]) {
+        expect(snapshot(faceSwarm('calm', voice(amp, shape), 'loudness'))).toEqual(snapshot(faceSwarm('calm', voice(amp), 'loudness')));
+        expect(snapshot(faceSwarm('calm', voice(amp, shape)))).not.toEqual(snapshot(faceSwarm('calm', voice(amp))));
+      }
+    }
+    expect(mouthHeight(faceSwarm('calm', voice(1), 'loudness'))).toBeGreaterThan(mouthHeight(faceSwarm('calm', voice(0), 'loudness')) * 1.5);
+  });
+
+  it('без кадра голоса рот закрыт: как amp 0 без форм', () => {
+    expect(snapshot(faceSwarm('joy', null))).toEqual(snapshot(faceSwarm('joy', voice(0))));
+  });
+});
+
+describe('лицо: рот не пропадает (F5)', () => {
+  for (const emo of LINE_EMOTIONS) {
+    it(`${emo}: длина ≥ 0,95·mw (у «о/у» ≥ 0,6·mw), штрих в середине ≥ 0,055 d, на концах ≥ 0,05 d`, () => {
+      const { mw } = EMO[emo];
+      for (const form of FORMS) {
+        for (const voiceMode of ['full', 'loudness'] as const) {
+          const m = lineMouth(faceSwarm(emo, form.frame, voiceMode));
+          const where = `${emo}, ${form.name}, ${voiceMode}`;
+          expect(m.length, where).toBeGreaterThanOrEqual((form.round && voiceMode === 'full' ? 0.6 : 0.95) * mw);
+          expect(m.middle, where).toBeGreaterThanOrEqual(0.055);
+          expect(m.ends, where).toBeGreaterThanOrEqual(0.05);
+        }
+      }
+    });
+  }
+
+  it('речь в обоих режимах: пороги держатся в каждом кадре вне переходов', () => {
+    // Кадры речи — как у анализа: веса с нейтральной долей 0,25, громкость скачет; генератор с фиксированным seed.
+    let seed = 11;
+    const random = (): number => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    for (const emo of LINE_EMOTIONS) {
+      for (const voiceMode of ['full', 'loudness'] as const) {
+        const engine = createSwarm(700, { ...OPTIONS, voiceMode });
+        toFace(engine, face(emo));
+        const { mw } = EMO[emo];
+        for (let t = FACE_DONE; t < FACE_DONE + 2000; t += 16) {
+          const w = [random(), random(), random(), random()].map((v) => (random() < 0.5 ? 0 : v));
+          const sum = w.reduce((a, v) => a + v, 0.25);
+          engine.frame(t, null, false, 0, voice(random() < 0.2 ? 0 : random(), { a: w[0]! / sum, i: w[1]! / sum, u: w[2]! / sum, m: w[3]! / sum }));
+          const m = lineMouth(engine);
+          const where = `${emo}, ${voiceMode}, ${t} мс`;
+          expect(m.length, where).toBeGreaterThanOrEqual((voiceMode === 'full' ? 0.6 : 0.95) * mw);
+          expect(m.middle, where).toBeGreaterThanOrEqual(0.055);
+          expect(m.ends, where).toBeGreaterThanOrEqual(0.05);
+        }
+      }
+    }
   });
 });

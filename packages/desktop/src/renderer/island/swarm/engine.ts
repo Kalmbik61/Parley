@@ -4,12 +4,16 @@
  * Душа — точка со спрайтом «ядро + мягкое свечение»; формы: точка, облако пятен, сфера Фибоначчи с короной-кольцом,
  * лицо (два глаза и рот из тех же душ, эмоции — таблица `EMO`); эффекты: слушание (сжатие по громкости и волна),
  * кольцо подтверждения, поток ответа, дуга инструмента. Отличия лица от макета: моргание — на втором потоке
- * генератора, а не на `Math.random`, и рот идёт по переданной громкости `mouth`, а не по синтетической кривой.
+ * генератора, а не на `Math.random`, и рот идёт по кадру настоящего голоса `voice`, а не по синтетической кривой.
+ * Рот слушает голос (#9 §6.7, L1): формы рта смешиваются с высотой по громкости, и рот всегда читается как рот —
+ * пороги F5 по `Swarm.face()` прототипа island-motion-sound (ограниченные множители, наименьшие длина и штрих, морф
+ * «о/у» из линии в овал по параметрам, без усреднения положений).
  * Все души живут в долях `d` (радиус сферы 0.5), экран — `cx + x * d`, `cy + y * d`.
  * Поверх облика — одноразовые реакции (#9 §4.1): масштаб, сдвиг, оборот с закруткой, волна яркости, искры. Они
  * меняют только отрисовку относительно `cx`/`cy` и к концу реакции сходят на нет; положения `souls` не трогают.
  */
 
+import type { Visemes, VoiceFrame } from '../assistant/voice-features.js';
 import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
 
 export interface SwarmOptions {
@@ -20,15 +24,20 @@ export interface SwarmOptions {
   k?: number;
   minPx?: number;
   seed?: number;
+  /**
+   * Что рот берёт из кадра голоса: `full` — громкость и формы (L1), `loudness` — только громкость, как план 3 v1.
+   * Внутренний флаг для тестов F1 (#9 §11.10): в UI переключателя нет, по умолчанию `full`.
+   */
+  voiceMode?: 'loudness' | 'full';
 }
 
 export interface SwarmEngine {
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void;
   /**
    * Шаг и отрисовка одного кадра; `ctx` null — только шаг (тесты, jsdom). `mic` — громкость 0..1 для fx listen,
-   * `mouth` — открытие рта лица 0..1.
+   * `voice` — кадр голоса для рта лица; `null` — голос молчит, рот закрыт.
    */
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, mouth?: number): void;
+  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
   /** Нужен ли кадр: идёт переход или реакция, сменилась палитра или спека. */
   needsFrame(): boolean;
   /**
@@ -226,6 +235,9 @@ function sprites(): Sprites | null {
   return spriteCache;
 }
 
+/** Наименьший штрих рта-линии в долях d до масштаба лица (#9 §6.7: «рот всегда читается»). */
+const MOUTH_STROKE = 0.07;
+
 const shapeClass = (shape: SwarmSpec['shape']): 'cloud' | 'sphere' | 'face' => (shape === 'dot' ? 'cloud' : shape);
 
 class SwarmImpl implements SwarmEngine {
@@ -239,6 +251,7 @@ class SwarmImpl implements SwarmEngine {
   private readonly minPx: number;
   /** Малый рой (≤ 32 px): реакции со сдвигом — вспышкой (#9 §4.3). */
   private readonly mini: boolean;
+  private readonly voiceMode: 'loudness' | 'full';
   /** Идущие реакции и их начало, мс. */
   private reacts: Array<{ name: SwarmReaction | 'flash'; t0: number }> = [];
   private readonly bd: Array<{ ax: number; ay: number; per: number; ph: number }>;
@@ -281,6 +294,7 @@ class SwarmImpl implements SwarmEngine {
     this.k = o.k ?? 0.058;
     this.minPx = o.minPx ?? 2.4;
     this.mini = Math.max(o.width, o.height) <= 32;
+    this.voiceMode = o.voiceMode ?? 'full';
     const R = rng(o.seed ?? 7);
     this.R2 = rng((o.seed ?? 7) ^ 0x9e3779b9);
     const tot = BLOBS.reduce((a, b) => a + b[4], 0);
@@ -392,8 +406,11 @@ class SwarmImpl implements SwarmEngine {
     this.dirty = true;
   }
 
-  /** Живая цель души `s` в долях d (начало — центр); пишет в `this.o`. `amp` — открытие рта, `bl` — открытость глаз. */
-  private tg(s: Soul, t: number, amp: number, bl: number): void {
+  /**
+   * Живая цель души `s` в долях d (начало — центр); пишет в `this.o`. `amp` — открытие рта, `bl` — открытость глаз,
+   * `vis` — формы рта (`null` — без форм).
+   */
+  private tg(s: Soul, t: number, amp: number, bl: number, vis: Visemes | null): void {
     const E = this.sp!;
     const o = this.o;
     const T = this.T;
@@ -461,11 +478,11 @@ class SwarmImpl implements SwarmEngine {
           o.y *= 1 + 0.07 * b;
         }
       }
-    } else this.face(s, EMO[E.emo ?? 'calm'], amp, bl, t);
+    } else this.face(s, EMO[E.emo ?? 'calm'], amp, bl, t, vis);
   }
 
   /** Лицо из тех же душ: два глаза (роли 0, 1) и рот (роль 2); корона — пыль вокруг силуэта. */
-  private face(s: Soul, F: FaceSpec, amp: number, bl: number, t: number): void {
+  private face(s: Soul, F: FaceSpec, amp: number, bl: number, t: number, vis: Visemes | null): void {
     const o = this.o;
     const sx = s.role === 0 ? -1 : 1;
     o.z = 0.35;
@@ -492,9 +509,19 @@ class SwarmImpl implements SwarmEngine {
         o.y = ey + F.b! * Y * bl;
       }
     } else {
-      const H = lerp(F.H0, F.H1, amp);
-      const w = F.mw;
+      // Формы рта (L1): «о/у» сужает и ведёт в овал, «а» поднимает, «и/е» растягивает, понижает и даёт улыбку,
+      // закрытый — линия. Множители ограничены, а не перемножаются без предела.
+      const ro = vis?.u ?? 0;
+      const wi = vis?.a ?? 0;
+      const sm = vis?.i ?? 0;
+      const cl = vis?.m ?? 0;
+      const hf = clamp(1 + 0.45 * wi - 0.35 * sm, 0.6, 1.45);
+      const open = lerp(lerp(F.H0, F.H1, amp) * hf, 0, cl);
+      const curl = (F.curl ?? 0) + 0.06 * sm;
       if (F.mo === true) {
+        // Овал surprise — свой: не уже 0,65·mw, не ниже 0,5·H0.
+        const w = F.mw * clamp(1 - 0.35 * ro + 0.2 * sm, 0.65, 1.25);
+        const H = Math.max(0.5 * F.H0, open);
         const r = Math.sqrt(s.ru);
         const th = TAU * s.rv;
         const c = Math.cos(th);
@@ -502,11 +529,20 @@ class SwarmImpl implements SwarmEngine {
         o.x = ((Math.sign(c) * Math.pow(Math.abs(c), 0.8) * r * w) / 2) * (0.92 + 0.16 * amp);
         o.y = 0.25 + (Math.sign(n) * Math.pow(Math.abs(n), 0.8) * r * H) / 2;
       } else {
+        // Линия не короче закрытой ширины эмоции; «о/у» сужает её не больше чем до 0,65·mw.
+        const wLine = F.mw * clamp(1 + 0.05 * wi + 0.2 * sm, 1, 1.25);
+        const W = lerp(wLine, 0.65 * F.mw, ro);
         const q = s.ru * 2 - 1;
-        o.x = (q * w) / 2;
-        let yc = 0.25 - (F.curl ?? 0) * q * q;
+        const tap = Math.pow(Math.max(0, 1 - q * q), F.pw!);
+        // Наименьший штрих — и на концах (55 %); закрытый рот — видимая линия этой толщины во всю ширину.
+        const lineT = Math.max(open * tap, MOUTH_STROKE * (0.55 + 0.45 * tap));
+        const ovalT = Math.max(open, 0.45 * W) * Math.sqrt(Math.max(0, 1 - q * q));
+        let yc = 0.25 - curl * q * q * (1 - ro);
         if (F.wave === true) yc += 0.035 * Math.sin(q * 3.4 * Math.PI);
-        o.y = yc + (s.rv - 0.4) * H * Math.pow(Math.max(0, 1 - q * q), F.pw!);
+        o.x = (q * W) / 2;
+        // «о/у» — морф тех же душ из линии в овал по толщине, без усреднения координат.
+        o.y = yc + (s.rv - 0.4) * lerp(lineT, Math.max(ovalT, lineT), ro);
+        o.m = 1.1; // души рта на 10 % ярче
       }
     }
     if (s.corona) {
@@ -538,7 +574,7 @@ class SwarmImpl implements SwarmEngine {
     return 1 - 0.94 * k;
   }
 
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, mouth = 0): void {
+  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice: VoiceFrame | null = null): void {
     const E = this.sp;
     if (E === null) return;
     const rm = reducedMotion;
@@ -559,7 +595,9 @@ class SwarmImpl implements SwarmEngine {
     if (this.palT < 1) this.palT = clamp(this.palT + dt / 0.3);
     this.flash = Math.max(0, this.flash - dt / 0.6);
     const F = EMO[E.emo ?? 'calm'];
-    const amp = rm ? 0.3 : E.shape === 'face' ? mouth : 0;
+    const amp = rm ? 0.3 : E.shape === 'face' ? (voice?.amp ?? 0) : 0;
+    // Reduced motion выключает L1 (F4); режим громкости — рот плана 3 v1 без форм (F1).
+    const vis = !rm && E.shape === 'face' && this.voiceMode === 'full' ? (voice?.visemes ?? null) : null;
     const bl = E.shape === 'face' ? this.blink(now, F, rm) : 1;
     // Реакции — в один общий модификатор; кончившиеся снимаются, и кадров они больше не просят.
     let sc = 1;
@@ -613,7 +651,7 @@ class SwarmImpl implements SwarmEngine {
     const o = this.o;
     const dim = E.dim * (1 + 0.8 * this.flash);
     for (const s of this.souls) {
-      this.tg(s, t, amp, bl);
+      this.tg(s, t, amp, bl, vis);
       let x = o.x;
       let y = o.y;
       let z = o.z;

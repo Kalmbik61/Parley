@@ -4,11 +4,14 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { swarmSpecFor } from './spec.js';
 import { HOST_IDLE } from '../assistant/store.js';
+import type { VoiceFrame } from '../assistant/voice-features.js';
+import * as engineModule from './engine.js';
 import { Swarm } from './Swarm.js';
 
 const IDLE = swarmSpecFor(HOST_IDLE, 'idle', true);
 const THINKING = swarmSpecFor({ ...HOST_IDLE, phase: 'thinking' }, 'idle', true);
 const JOY = swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false);
+const VOICE: VoiceFrame = { amp: 0.7, visemes: { a: 0.5, i: 0, u: 0, m: 0 } };
 
 /**
  * Поддельный цикл кадров: контекст считает кадры (`clearRect`), rAF копит колбэки, `tick(from, to)` гоняет их каждые
@@ -71,15 +74,15 @@ describe('Swarm', () => {
   });
 
   it('лицо: data-shape="face" и data-emo; у сферы data-emo нет', () => {
-    const { rerender } = render(<Swarm spec={JOY} souls={20} width={420} height={136} d={86} cy={62} fps={0} mouth={() => 0.5} />);
+    const { rerender } = render(<Swarm spec={JOY} souls={20} width={420} height={136} d={86} cy={62} fps={0} voice={() => VOICE} />);
     const canvas = screen.getByTestId('swarm');
     expect(canvas.getAttribute('data-shape')).toBe('face');
     expect(canvas.getAttribute('data-emo')).toBe('joy');
-    rerender(<Swarm spec={THINKING} souls={20} width={420} height={136} d={86} cy={62} fps={0} mouth={() => 0.5} />);
+    rerender(<Swarm spec={THINKING} souls={20} width={420} height={136} d={86} cy={62} fps={0} voice={() => VOICE} />);
     expect(canvas.getAttribute('data-emo')).toBeNull();
   });
 
-  it('mouth — геттер: читается в кадре, без ререндера', () => {
+  it('voice — геттер: читается в кадре, без ререндера, и кадр голоса уходит в движок', () => {
     const ctx = {
       setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
       createRadialGradient: () => ({ addColorStop: vi.fn() }),
@@ -90,11 +93,15 @@ describe('Swarm', () => {
       frames.push(cb);
       return frames.length;
     });
-    const mouth = vi.fn(() => 0.7);
-    render(<Swarm spec={JOY} souls={20} width={420} height={136} d={86} cy={62} fps={60} mouth={mouth} />);
-    expect(mouth).not.toHaveBeenCalled();
+    const voice = vi.fn(() => VOICE);
+    const create = vi.spyOn(engineModule, 'createSwarm');
+    render(<Swarm spec={JOY} souls={20} width={420} height={136} d={86} cy={62} fps={60} voice={voice} />);
+    const engine = create.mock.results[0]!.value as ReturnType<typeof engineModule.createSwarm>;
+    const step = vi.spyOn(engine, 'frame');
+    expect(voice).not.toHaveBeenCalled();
     frames.shift()!(1000);
-    expect(mouth).toHaveBeenCalled();
+    expect(voice).toHaveBeenCalled();
+    expect(step).toHaveBeenLastCalledWith(1000, ctx, false, 0, VOICE);
   });
 
   it('P1: мини-рой в покое — 0 кадров; pulse даёт кадры на длительность реакции, потом снова 0', () => {
