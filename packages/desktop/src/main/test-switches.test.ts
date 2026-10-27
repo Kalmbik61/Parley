@@ -121,6 +121,17 @@ describe('testSwitches', () => {
     expect(testSwitches({}, false).appData).toBeUndefined();
   });
 
+  it('PARLEY_NOTCH=185x32 — подменный вырез: только в неупакованном окне или с PARLEY_E2E=1, не по форме — не задан', () => {
+    expect(testSwitches({ PARLEY_NOTCH: '185x32' }, false).notch).toEqual({ width: 185, height: 32 });
+    expect(testSwitches({ PARLEY_NOTCH: '185x32' }, true).notch).toBeUndefined();
+    expect(testSwitches({ PARLEY_NOTCH: '185x32', PARLEY_E2E: '1' }, true).notch).toEqual({ width: 185, height: 32 });
+    expect(testSwitches({ HARNAS_NOTCH: '200x30' }, false).notch).toEqual({ width: 200, height: 30 });
+    for (const value of ['', '185', '185x', 'x32', '185×32', '0x32', '185x0', '-185x32', '185.5x32', ' 185x32']) {
+      expect(testSwitches({ PARLEY_NOTCH: value }, false).notch).toBeUndefined();
+    }
+    expect(testSwitches({}, false).notch).toBeUndefined();
+  });
+
   it('без переменных и в неупакованном окне всё выключено; значение должно совпасть точно', () => {
     expect(testSwitches({}, false)).toEqual({
       downloads: false,

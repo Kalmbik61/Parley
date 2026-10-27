@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +64,8 @@ import { createSpeechWorker, resolveSpeech, spawnSpeech } from './assistant/spee
 import { createFakeTtsService, createTtsService } from './assistant/tts.js';
 import { createIslandShortcut } from './island/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
-import type { IslandPlacement } from './island/placement.js';
+import { createNotchProbe } from './island/notch-probe.js';
+import type { DisplayLike, IslandPlacement, NotchGeometry } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
 import { createSessionVisibility } from './island/visibility.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
@@ -486,6 +488,24 @@ if (!gotLock) {
 
     // Остров одобрений (спека 2026-10-12): окно по настройке «Island»; место — кеш из ui.json (читается один раз на старте), запись асинхронная.
     let islandPlacement: IslandPlacement = { displayId: ui.island.displayId, anchor: ui.island.anchor };
+    // Вырез дисплея (#9 §12.2): датчик `osascript` только на macOS; `PARLEY_NOTCH` (E2E) — подменный вырез посередине
+    // каждого дисплея, датчик тогда не запускается.
+    const notchProbe =
+      switches.notch === undefined && process.platform === 'darwin'
+        ? createNotchProbe({
+            execFile: (file, args, options, callback) => {
+              execFile(file, [...args], { ...options, encoding: 'utf8' }, (error, stdout) => callback(error, stdout));
+            },
+            displays: () => screen.getAllDisplays(),
+            onChange: () => relayoutIsland(),
+            warn: (message) => console.warn('[parley]', message),
+          })
+        : null;
+    const notchOf = (display: DisplayLike): NotchGeometry | null => {
+      const fake = switches.notch;
+      if (fake !== undefined) return { ...fake, centerX: display.bounds.width / 2 };
+      return notchProbe?.geometry(display.id) ?? null;
+    };
     const island = createIslandController<BrowserWindow>({
       createWindow: () => {
         const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
@@ -500,6 +520,7 @@ if (!gotLock) {
         islandPlacement = placement;
         void uiStore.save({ island: { ...placement } } as Partial<Omit<UiFile, 'version'>>).catch(() => undefined);
       },
+      notch: notchOf,
       cursor: () => screen.getCursorScreenPoint(),
       onHover: (hovered) => {
         const window = island.current();
@@ -624,6 +645,7 @@ if (!gotLock) {
         motion: current.island.motion,
         topInset: island.topInset(),
         anchor: island.anchor(),
+        notch: island.notch(),
       };
     };
     const pushIslandConfig = (): void => {
@@ -661,13 +683,25 @@ if (!gotLock) {
       console.warn('[parley] island sync failed', error);
     }
     // Мониторы подключили, отключили, сменили разрешение — место заново из сохранённой точки, отступ под чёлку заново.
+    // Новый замер выреза (`notchProbe.onChange`) переставляет остров так же.
     const relayoutIsland = (): void => {
       island.relayout();
       pushIslandConfig();
     };
-    screen.on('display-added', relayoutIsland);
-    screen.on('display-removed', relayoutIsland);
-    screen.on('display-metrics-changed', relayoutIsland);
+    // Датчик выреза: замер при старте; на событиях `screen` — по правилам `displaysChanged` (один `workArea` замера не даёт).
+    notchProbe?.measure();
+    screen.on('display-added', () => {
+      relayoutIsland();
+      notchProbe?.displaysChanged();
+    });
+    screen.on('display-removed', () => {
+      relayoutIsland();
+      notchProbe?.displaysChanged();
+    });
+    screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
+      relayoutIsland();
+      notchProbe?.displaysChanged(changedMetrics);
+    });
     registerIslandIpc({
       ipcMain,
       controller: island,

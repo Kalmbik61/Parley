@@ -152,6 +152,12 @@ export interface IslandConfig {
   topInset: number;
   /** Точка, у которой стоит остров: форма выравнивается внутри фиксированного кадра окна влево, по центру или вправо. */
   anchor: IslandAnchor;
+  /**
+   * Вырез дисплея острова (#9 §12), pt: ширина, высота и центр выреза от левого края кадра окна. Только у точки
+   * `center` (Н-3); `null` или нет поля — выреза нет, остаётся полоса. Необязательное — только ради фикстур
+   * `IslandConfig` в тестах renderer (план 3b, B27).
+   */
+  notch?: { width: number; height: number; centerX: number } | null;
 }
 
 export interface IslandApi {

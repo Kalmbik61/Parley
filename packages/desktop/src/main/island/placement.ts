@@ -1,8 +1,9 @@
 /**
  * Место острова у верхнего края монитора (спека острова, разделы 3–5.1): чистые функции без Electron, в DIP.
- * Признак чёлки — встроенный дисплей со строкой меню не ниже `NOTCH_MENU_BAR_MIN` (у MacBook с вырезом 38 px,
- * у внешнего монитора 25 px): API безопасной зоны у Electron нет. Отступ — на всю высоту строки меню, чтобы
- * содержимое острова начиналось ниже физического выреза.
+ * Вырез меряет датчик (`notch-probe.ts`, #9 §12.2): с его геометрией отступ — высота выреза, а кадр у точки `center`
+ * стоит по центру выреза. Без геометрии (датчик отказал, ещё не мерил) — прежняя эвристика: признак чёлки —
+ * встроенный дисплей со строкой меню не ниже `NOTCH_MENU_BAR_MIN` (у MacBook с вырезом 38 px, у внешнего монитора
+ * 25 px), отступ — на всю высоту строки меню, чтобы содержимое острова начиналось ниже физического выреза.
  */
 
 import type { IslandAnchor } from '../../shared/ui-types.js';
@@ -32,11 +33,20 @@ export interface Size {
   height: number;
 }
 
+/** Вырез дисплея по датчику (pt = DIP): ширина, высота и центр от левого края дисплея. */
+export interface NotchGeometry {
+  width: number;
+  height: number;
+  centerX: number;
+}
+
 /** Поле от бокового края монитора у левой и правой точки. */
 export const ISLAND_MARGIN = 12;
 const NOTCH_MENU_BAR_MIN = 32;
 
-export function notchInset(display: DisplayLike): number {
+/** С геометрией — высота выреза: от `workArea` она не зависит (полный экран прячет строку меню, а вырез остаётся). */
+export function notchInset(display: DisplayLike, notch: NotchGeometry | null = null): number {
+  if (notch !== null) return notch.height;
   const menuBar = display.workArea.y - display.bounds.y;
   return display.internal && menuBar >= NOTCH_MENU_BAR_MIN ? menuBar : 0;
 }
@@ -49,7 +59,8 @@ export function resolveDisplay(displays: readonly DisplayLike[], primaryId: numb
   return result;
 }
 
-export function islandBounds(display: DisplayLike, anchor: IslandAnchor, size: Size): Rect {
+/** У точки `center` с геометрией выреза кадр стоит по центру выреза, а не дисплея (на 14″ это 755,5 против 756). */
+export function islandBounds(display: DisplayLike, anchor: IslandAnchor, size: Size, notch: NotchGeometry | null = null): Rect {
   const { bounds } = display;
   // У левой и правой точки поле входит в доступную ширину: иначе окно шире монитора с полем вылезло бы за его край.
   const width = Math.min(size.width, anchor === 'center' ? bounds.width : bounds.width - 2 * ISLAND_MARGIN);
@@ -58,7 +69,7 @@ export function islandBounds(display: DisplayLike, anchor: IslandAnchor, size: S
       ? bounds.x + ISLAND_MARGIN
       : anchor === 'right'
         ? bounds.x + bounds.width - width - ISLAND_MARGIN
-        : Math.round(bounds.x + (bounds.width - width) / 2);
+        : Math.round(bounds.x + (notch === null ? bounds.width / 2 : notch.centerX) - width / 2);
   return { x, y: bounds.y, width, height: size.height };
 }
 
