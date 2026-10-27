@@ -43,6 +43,7 @@ import {
   feedFromTranscript,
   forEachJsonlRecord,
   interruptedAt,
+  isCodexThreadBinding,
   isClaudeCode,
   loadConfig,
   parleyHome,
@@ -209,6 +210,9 @@ interface CodexFeed {
   agents: Map<string, CodexAgentTrack>;
   /** Чтения хвостов идут по одному: у каждого хвоста своя позиция, второе чтение рядом её испортило бы. */
   queue: Promise<void>;
+  /** Binding конкретного tail неизменен; другой thread/file требует настоящего пересоздания source. */
+  progressBinding: { providerSessionId: string; file: string } | null;
+  progressBindingValid: boolean;
 }
 
 interface Batch {
@@ -220,6 +224,19 @@ interface SourceStamp {
   provider: string;
   providerSessionId: string;
   startedAtProcess: string;
+  launchRevision?: string;
+  pid?: number;
+  file?: string;
+}
+
+interface ProgressEpoch {
+  stamp: SourceStamp;
+  eligible: Set<string>;
+}
+
+interface ProgressProof {
+  stamp: SourceStamp | null;
+  generation: number;
 }
 
 interface ProgressCall {
@@ -249,10 +266,10 @@ interface SessionFeed {
   seeded: boolean;
   seeding: Promise<void> | undefined;
   /** Provenance только для progress; существующая лента и подписчики не сбрасываются. */
-  sourceStamp: SourceStamp | null;
-  sourceReady: boolean;
-  progressInvalidated: boolean;
+  observedSource: SourceStamp | null;
+  progressEpoch: ProgressEpoch | null;
   sourceGeneration: number;
+  pendingStart: { pid: number | null; previousStartedAt: string | null } | null;
   /** Последний `transcript_path` из хуков: запасной путь к журналам субагентов. */
   transcriptPath: string | null;
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
@@ -452,10 +469,10 @@ export function createFeedService(
         live: false,
         seeded: false,
         seeding: undefined,
-        sourceStamp: sourceOf(ref),
-        sourceReady: false,
-        progressInvalidated: false,
+        observedSource: sourceOf(ref),
+        progressEpoch: null,
         sourceGeneration: 0,
+        pendingStart: null,
         transcriptPath: null,
         decisions: null,
       };
@@ -483,10 +500,14 @@ export function createFeedService(
       if (isPendingCard(item)) evicted.push(item.cardId);
       drop += 1;
     }
-    if (drop === 0) return;
+    if (drop === 0) {
+      pruneProgress(feed);
+      return;
+    }
     feed.state = { ...feed.state, items: items.slice(drop) };
     // Ждущая карточка ушла из ленты — решить её окну уже нечем: хуку `{}`, диалог остаётся в терминале.
     if (evicted.length > 0) pending.settle(feed.ref, evicted);
+    pruneProgress(feed);
   }
 
   /** Таймер пачки заведён, если есть что слать: элементы, вытеснения или смена режима. */
@@ -499,11 +520,17 @@ export function createFeedService(
     }
   }
 
-  function commit(feed: SessionFeed, update: FeedUpdate): void {
+  function commit(feed: SessionFeed, update: FeedUpdate, proof?: ProgressProof): void {
     if (!feedCurrent(feed)) return;
+    const before = proof === undefined ? null : new Set(feed.state.items.map((item) => item.id));
+    const epoch = proof === undefined ? null : confirmProgress(feed, proof);
     if (update.state.permissionMode !== feed.state.permissionMode) feed.modeChanged = true;
     feed.state = update.state;
     for (const item of update.changes) {
+      if (proof !== undefined && item.kind === 'tool' && item.agentId === undefined) {
+        if (epoch !== null && !before?.has(item.id)) epoch.eligible.add(item.id);
+        else if (epoch === null) feed.progressEpoch?.eligible.delete(item.id);
+      }
       const size = itemBytes(item);
       feed.bytes += size - (feed.sizes.get(item.id) ?? 0);
       feed.sizes.set(item.id, size);
@@ -677,7 +704,8 @@ export function createFeedService(
     }
     const feed = feedOf(ref);
     feed.live = true;
-    feed.sourceReady = true;
+    const proof = captureProgress(feed);
+    if (body['session_id'] !== proof.stamp?.providerSessionId) proof.stamp = null;
     const transcript = textOf(body['transcript_path']);
     if (transcript !== null) feed.transcriptPath = transcript;
 
@@ -690,7 +718,7 @@ export function createFeedService(
       update.state = { ...update.state, items: update.state.items.map((item) => item.id === retry.id ? resolved : item) };
       update.changes.push(resolved);
     }
-    commit(feed, update);
+    commit(feed, update, proof);
 
     const card = heldCard(feed, body, update.changes);
     if (card === undefined) {
@@ -726,10 +754,6 @@ export function createFeedService(
     const key = refKey(feed.ref);
     const existing = coldReads.get(key);
     if (existing !== undefined) return existing;
-    // Stamp можно установить при первом настоящем source seed, но не поверх старой истории/live событий.
-    if (feed.sourceStamp === null && !feed.progressInvalidated && !feed.live && !feed.seeded && feed.state.items.length === 0) {
-      feed.sourceStamp = sourceOf(feed.ref);
-    }
     const run = provider === 'codex' ? seedCodex(feed) : seedClaude(feed, provider);
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
@@ -743,6 +767,7 @@ export function createFeedService(
     if (feed.seeding !== undefined) return feed.seeding;
     const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
+    const proof = captureProgress(feed);
     feed.seeding = (async () => {
       try {
         const records = await readTranscript(file);
@@ -751,7 +776,6 @@ export function createFeedService(
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
-        feed.sourceReady = true;
         feed.sizes = new Map();
         feed.bytes = 0;
         for (const item of state.items) {
@@ -760,6 +784,7 @@ export function createFeedService(
           feed.bytes += size;
         }
         trim(feed, false);
+        seedProgress(feed, proof);
       } catch (error) {
         log.warn('лента: журнал сессии не прочитан', {
           sessionId: feed.ref.sessionId,
@@ -778,6 +803,8 @@ export function createFeedService(
     if (feed.seeding !== undefined) return feed.seeding;
     const file = deps.activity.logFile(feed.ref);
     if (file === null) return Promise.resolve();
+    const proof = captureProgress(feed);
+    const binding = sessionOf(feed.ref).providerSessionId;
     feed.seeding = (async () => {
       try {
         const tail = createRolloutTail(file);
@@ -789,8 +816,11 @@ export function createFeedService(
         const state =
           deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
         feed.state = state;
-        feed.sourceReady = true;
-        feed.codex = { tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve() };
+        feed.codex = {
+          tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve(),
+          progressBinding: typeof binding === 'string' && binding.length > 0 ? { providerSessionId: binding, file } : null,
+          progressBindingValid: typeof binding === 'string' && binding.length > 0,
+        };
         feed.sizes = new Map();
         feed.bytes = 0;
         for (const item of state.items) {
@@ -799,6 +829,7 @@ export function createFeedService(
           feed.bytes += size;
         }
         trim(feed, false);
+        seedProgress(feed, proof);
         if (seeded.cursor.skipped > 0) {
           log.info('лента Codex: пропущены незнакомые элементы', {
             sessionId: feed.ref.sessionId,
@@ -833,13 +864,14 @@ export function createFeedService(
       const codex = feed.codex;
       // Raw Chat сохраняет свой source lifecycle. Исходный progress stamp проверяется только при проекции.
       if (codex === undefined || !feedCurrent(feed)) return;
+      const proof = captureProgress(feed);
       const records = await codex.tail.read();
       if (!feedCurrent(feed)) return;
       if (records.length > 0) {
         const { update, cursor } = applyCodexRecords(feed.state, stashCodex(records), codex.cursor);
         codex.cursor = cursor;
-        commit(feed, update);
-      }
+        commit(feed, update, proof);
+      } else confirmProgress(feed, proof);
       await syncCodexAgents(feed);
     });
   }
@@ -977,26 +1009,114 @@ export function createFeedService(
       if ((!isClaudeCode(session.provider) && session.provider !== 'codex') ||
           typeof session.providerSessionId !== 'string' || session.providerSessionId.length === 0 ||
           typeof session.startedAtProcess !== 'string' || session.startedAtProcess.length === 0) return null;
-      return { provider: session.provider, providerSessionId: session.providerSessionId, startedAtProcess: session.startedAtProcess };
+      const handle = deps.pty.get(ref);
+      if (handle !== undefined && session.pid !== handle.pid) return null;
+      const stamp = { provider: session.provider, providerSessionId: session.providerSessionId, startedAtProcess: session.startedAtProcess };
+      if (session.provider !== 'codex') return stamp;
+      const proof = session.codexThreadBinding;
+      if (!isCodexThreadBinding(proof) || proof.threadId === null || proof.threadId !== session.providerSessionId ||
+          proof.pid !== session.pid || proof.startedAtProcess !== session.startedAtProcess) return null;
+      const file = deps.activity.logFile(ref);
+      if (file === null) return null;
+      return { ...stamp, launchRevision: proof.launchRevision, pid: proof.pid, file };
     } catch {
       return null;
     }
   }
 
   function sameSource(left: SourceStamp, right: SourceStamp | null): boolean {
-    return right !== null && left.provider === right.provider && left.providerSessionId === right.providerSessionId && left.startedAtProcess === right.startedAtProcess;
+    return right !== null && left.provider === right.provider && left.providerSessionId === right.providerSessionId &&
+      left.startedAtProcess === right.startedAtProcess && left.launchRevision === right.launchRevision &&
+      left.pid === right.pid && left.file === right.file;
   }
 
   function feedCurrent(feed: SessionFeed): boolean {
     return !stopped && feeds.get(refKey(feed.ref)) === feed;
   }
 
-  function progressCurrent(feed: SessionFeed): boolean {
-    if (!feedCurrent(feed) || feed.progressInvalidated || feed.sourceStamp === null) return false;
-    if (sameSource(feed.sourceStamp, sourceOf(feed.ref))) return true;
-    feed.progressInvalidated = true;
+  function invalidateProgress(feed: SessionFeed): void {
+    feed.progressEpoch?.eligible.clear();
+    feed.progressEpoch = null;
     feed.sourceGeneration += 1;
-    return false;
+    clearProgress(refKey(feed.ref));
+  }
+
+  function observeSource(feed: SessionFeed): SourceStamp | null {
+    let stamp = sourceOf(feed.ref);
+    if (feed.pendingStart !== null) {
+      const handle = deps.pty.get(feed.ref);
+      if (stamp === null || handle === undefined || handle.pid !== feed.pendingStart.pid ||
+          stamp.startedAtProcess === feed.pendingStart.previousStartedAt) stamp = null;
+      else feed.pendingStart = null;
+    }
+    // Чужой binding/file фиксируется даже при missing proof и до works.changed.
+    if (feed.codex !== undefined && !codexBindingCurrent(feed, stamp)) stamp = null;
+    if (feed.observedSource !== null && !sameSource(feed.observedSource, stamp)) invalidateProgress(feed);
+    feed.observedSource = stamp;
+    return stamp;
+  }
+
+  function codexBindingCurrent(feed: SessionFeed, stamp: SourceStamp | null): boolean {
+    const codex = feed.codex;
+    if (codex === undefined || !codex.progressBindingValid || codex.progressBinding === null) return false;
+    const binding = codex.progressBinding;
+    let session: WorkSession;
+    try { session = sessionOf(feed.ref); } catch { return false; }
+    const file = deps.activity.logFile(feed.ref);
+    if (session.provider !== 'codex' ||
+        (session.providerSessionId !== null && session.providerSessionId !== binding.providerSessionId) ||
+        (file !== null && file !== binding.file)) {
+      codex.progressBindingValid = false;
+      invalidateProgress(feed);
+      return false;
+    }
+    return stamp !== null && stamp.provider === 'codex' && stamp.providerSessionId === binding.providerSessionId &&
+      stamp.file === binding.file && file === binding.file;
+  }
+
+  function captureProgress(feed: SessionFeed): ProgressProof {
+    let stamp = observeSource(feed);
+    if (stamp?.provider === 'codex' && feed.codex !== undefined && !codexBindingCurrent(feed, stamp)) stamp = null;
+    return { stamp, generation: feed.sourceGeneration };
+  }
+
+  function confirmProgress(feed: SessionFeed, proof: ProgressProof): ProgressEpoch | null {
+    const current = observeSource(feed);
+    if (!feedCurrent(feed) || proof.stamp === null || proof.generation !== feed.sourceGeneration || !sameSource(proof.stamp, current)) return null;
+    if (proof.stamp.provider === 'codex' && !codexBindingCurrent(feed, current)) return null;
+    feed.progressEpoch ??= { stamp: proof.stamp, eligible: new Set() };
+    return feed.progressEpoch;
+  }
+
+  function pruneProgress(feed: SessionFeed): void {
+    if (feed.progressEpoch === null) return;
+    const current = new Set(feed.state.items.filter((item) => item.kind === 'tool' && item.agentId === undefined).slice(-FEED_MAX_ITEMS).map((item) => item.id));
+    for (const id of feed.progressEpoch.eligible) if (!current.has(id)) feed.progressEpoch.eligible.delete(id);
+  }
+
+  function seedProgress(feed: SessionFeed, proof: ProgressProof): void {
+    const epoch = confirmProgress(feed, proof);
+    if (epoch === null) {
+      if (feed.progressEpoch !== null) invalidateProgress(feed);
+      return;
+    }
+    epoch.eligible.clear();
+    // Вся история допустима только для первого verified seed до любой lifecycle invalidation.
+    if (proof.generation === 0) {
+      for (const item of feed.state.items) if (item.kind === 'tool' && item.agentId === undefined) epoch.eligible.add(item.id);
+    }
+    pruneProgress(feed);
+  }
+
+  function progressCurrent(feed: SessionFeed): boolean {
+    const current = observeSource(feed);
+    const epoch = feed.progressEpoch;
+    if (!feedCurrent(feed) || epoch === null || !sameSource(epoch.stamp, current)) return false;
+    if (epoch.stamp.provider === 'codex' && !codexBindingCurrent(feed, current)) {
+      if (feed.progressEpoch !== null) invalidateProgress(feed);
+      return false;
+    }
+    return feed.progressEpoch === epoch;
   }
 
   function unavailableProgress(feed?: SessionFeed): ProgressResult {
@@ -1149,6 +1269,8 @@ export function createFeedService(
       clearCodexGrace(feed);
       stopCodexPoll(feed);
       pending.settle(feed.ref);
+      feed.progressEpoch?.eligible.clear();
+      feed.progressEpoch = null;
       feeds.delete(key);
     }
     lastActivity.delete(key);
@@ -1172,11 +1294,8 @@ export function createFeedService(
       if (!alive.has(key)) forget(key);
     }
     for (const feed of feeds.values()) {
-      if (feed.sourceStamp !== null && !feed.progressInvalidated && !sameSource(feed.sourceStamp, sourceOf(feed.ref))) {
-        feed.progressInvalidated = true;
-        feed.sourceGeneration += 1;
-        clearProgress(refKey(feed.ref));
-      }
+      const stamp = observeSource(feed);
+      if (feed.codex !== undefined) codexBindingCurrent(feed, stamp);
     }
     for (const [key, ref] of [...graceWaiting]) {
       if (!alive.has(key)) continue;
@@ -1192,9 +1311,11 @@ export function createFeedService(
     sentAt.delete(refKey(ref));
     const previous = feeds.get(refKey(ref));
     if (previous !== undefined) {
-      previous.progressInvalidated = true;
-      previous.sourceGeneration += 1;
-      clearProgress(refKey(ref));
+      previous.pendingStart = {
+        pid: deps.pty.get(ref)?.pid ?? null,
+        previousStartedAt: previous.observedSource?.startedAtProcess ?? null,
+      };
+      invalidateProgress(previous);
     }
     void seedAside(ref);
     void armCodexGrace(ref);
@@ -1337,20 +1458,18 @@ export function createFeedService(
       timer.unref();
       const feed = feedOf(parsed.data);
       try {
-        // Только ещё пустой source ДО начала любого чтения можно впервые связать с provenance.
-        if (feed.sourceStamp === null && !feed.progressInvalidated && !feed.live && !feed.seeded &&
-            feed.seeding === undefined && !coldReads.has(key) && feed.state.items.length === 0) {
-          feed.sourceStamp = sourceOf(feed.ref);
-        }
-        if (!progressCurrent(feed)) return unavailableProgress(feed);
+        const stamp = observeSource(feed);
+        const generation = feed.sourceGeneration;
+        if (stamp === null) return unavailableProgress(feed);
         if (!feed.live && !feed.seeded) {
           const settled = await Promise.race([seed(feed, session.provider).then(() => true, () => false), cancelled]);
           if (!settled) return unavailableProgress(feed);
         }
-        if (progressClients.get(client) !== quota || quota.active !== call || !progressCurrent(feed) || !feed.sourceReady) return unavailableProgress(feed);
+        if (progressClients.get(client) !== quota || quota.active !== call || generation !== feed.sourceGeneration || !progressCurrent(feed) || feed.progressEpoch === null) return unavailableProgress(feed);
         // Как snapshot: feed revision принадлежит уже накопленной пачке, не числу progress вызовов.
         flush(feed);
-        const result = projectProgress(feed.state, feed.revision);
+        const eligible = feed.progressEpoch.eligible;
+        const result = projectProgress({ ...feed.state, items: feed.state.items.filter((item) => eligible.has(item.id)) }, feed.revision);
         return progressCurrent(feed) && progressClients.get(client) === quota ? result : unavailableProgress(feed);
       } finally {
         clearTimeout(timer);
