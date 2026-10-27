@@ -25,7 +25,6 @@ import {
   planRefOf,
   sessionDotState,
   sessionMention,
-  splitMood,
   type AssistantLanguage,
   type FeedCard,
   type FeedDecision,
@@ -33,6 +32,7 @@ import {
   type SessionLifecycle,
   type WorkMap,
 } from '@parley/core';
+import { createMoodStripper, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
 import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -110,6 +110,8 @@ interface Conversation {
   provider: string;
   model: string | null;
   language: AssistantLanguage;
+  /** Род, с которым идёт разговор: сменился в зеркале — следующий ход несёт строку `[system: voice changed …]`. */
+  gender: AssistantGender;
   token: string;
   sessionId: string | null;
   endAfterTurn: boolean;
@@ -149,7 +151,7 @@ type PendingBody =
       ref: SessionRef;
     };
 
-const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0, askId: null };
+const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', moods: [], proposal: null, outcome: null, error: null, turn: 0, askId: null };
 
 /** Вопрос, по которому запускается ход: `id` окна и билет — отмена или новый вопрос его гасят, и ход не стартует. */
 interface Ask {
@@ -162,6 +164,18 @@ interface Ask {
 type StartReason = 'started' | 'not-ready' | 'evicted' | 'failed';
 
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
+/** Эмоция первой фразы: отметка в самом начале ответа; нет её — `calm`. */
+const firstMood = (moods: readonly MoodMark[]): AssistantMood => (moods[0]?.at === 0 ? moods[0].mood : 'calm');
+/** Строка Claude, с которой начинается новый блок ответа (`content_block_start`): его текст склеивается с прошлым. */
+function startsBlock(line: string): boolean {
+  if (!line.includes('content_block_start')) return false;
+  try {
+    const value = JSON.parse(line) as { type?: unknown; event?: { type?: unknown } } | null;
+    return value?.type === 'stream_event' && value.event?.type === 'content_block_start';
+  } catch {
+    return false;
+  }
+}
 /** Почему сессии в этом состоянии нельзя передать сообщение; `null` — можно (`active` — отправка, `sleeping` — подъём). Нет сессии — закрыта. */
 const unreachable = (name: string, lifecycle: SessionLifecycle | undefined): string | null =>
   lifecycle === undefined || lifecycle === 'closed' ? `${name} is closed` : lifecycle === 'pending' ? `${name} has not started yet` : null;
@@ -283,24 +297,27 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { offline: reason ?? 'No connected provider can run the assistant — open Settings' };
   }
 
+  /** Род помощника по голосу из зеркала (#9 §6.8); без поля — `female`, как у голоса по умолчанию. */
+  const voiceGender = (): AssistantGender => mirror?.voiceGender ?? 'female';
+
   async function ensure(entry: ProviderEntry, model: string | null, language: AssistantLanguage): Promise<Conversation> {
     if (conversation !== null && (conversation.provider !== entry.id || conversation.model !== model || conversation.language !== language)) {
       endConversation();
     }
     if (conversation === null) {
-      conversation = { provider: entry.id, model, language, token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false };
+      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false };
       deps.endpoint.setToken(conversation.token);
     }
     return conversation;
   }
 
-  async function files(current: Conversation, url: string): Promise<{ mcpFile: string; promptFile: string }> {
+  async function files(current: Conversation, url: string, gender: AssistantGender): Promise<{ mcpFile: string; promptFile: string }> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const mcpFile = path.join(dir, 'mcp.json');
     const promptFile = path.join(dir, `prompt-${current.language}.md`);
     await writeFile(mcpFile, assistantMcpJson({ url, token: current.token }), { mode: 0o600 });
     await chmod(mcpFile, 0o600);
-    await writeFile(promptFile, assistantPrompt(current.language), { mode: 0o600 });
+    await writeFile(promptFile, assistantPrompt(current.language, gender), { mode: 0o600 });
     return { mcpFile, promptFile };
   }
 
@@ -329,16 +346,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return 'not-ready';
     }
     const url = `${base}${ASSISTANT_PATH}`;
-    const { mcpFile, promptFile } = await files(current, url);
+    const gender = voiceGender();
+    const { mcpFile, promptFile } = await files(current, url, gender);
     const codex = entry.runner.mcpConfig === 'codex-override';
-    const prompt = outcomeNote === null ? text : `${outcomeNote}\n${text}`;
+    // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
+    const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
+    const prompt = [voiceNote, outcomeNote, text].filter((part) => part !== null).join('\n');
     outcomeNote = null;
     const command = assistantCommand(
       entry,
       {
         prompt,
         mcpConfig: codex ? assistantCodexMcp({ url, token: current.token }) : mcpFile,
-        systemPrompt: assistantPrompt(language),
+        systemPrompt: assistantPrompt(language, gender),
         developerInstructions: codexInstructionsFile(promptFile),
         ...(model === null ? {} : { model }),
         ...(current.sessionId === null ? {} : { providerSessionId: current.sessionId }),
@@ -360,29 +380,56 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Пока запуск ждал, человек отменил вопрос (закрыл остров) или задал новый: этот ход не нужен.
     // Остановка хоста во время запуска — то же самое: процесс уже не нужен.
     if (ask.ticket !== asks || stopped) return 'evicted';
-    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', outcome: null, error: null, turn: next, askId, origin: ask.origin });
+    current.gender = gender;
+    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin });
 
-    // Эмоцию решает первый текст после последнего инструмента: GLM ставит метку до инструмента отдельным блоком.
-    let moodBuffer: string | null = '';
+    // Метки эмоций срезаются все, по предложениям (#9 §6.7 L3). Эмоцию решает первый текст после последнего
+    // инструмента: GLM ставит метку до инструмента отдельным блоком.
+    let stripper = createMoodStripper();
+    let answer = '';
+    let moods: MoodMark[] = [];
+    /** Последний знак сырого текста после инструмента и признак, что следующая дельта начинает новый блок. */
+    let tail = '';
+    let block = false;
+    /** Добавляет готовую часть к ответу; `false` — добавлять нечего. */
+    const take = (part: MoodStrip): boolean => {
+      if (part.text === '' && part.marks.length === 0) return false;
+      answer += part.text;
+      moods = [...moods, ...part.marks];
+      return true;
+    };
+    const parse = codex ? parseCodexLine : parseClaudeLine;
     const handle: TurnHandle = run(
-      { command: binary, args: command.args, env, cwd: dir, parse: codex ? parseCodexLine : parseClaudeLine, timeoutMs: deps.turnTimeoutMs ?? ASSISTANT_TURN_MS },
+      {
+        command: binary,
+        args: command.args,
+        env,
+        cwd: dir,
+        parse: (line) => {
+          if (!codex && startsBlock(line)) block = true;
+          return parse(line);
+        },
+        timeoutMs: deps.turnTimeoutMs ?? ASSISTANT_TURN_MS,
+      },
       (event) => {
         if (turn !== handle) return;
         if (event.type === 'session') {
           current.sessionId = event.id;
         } else if (event.type === 'tool') {
-          moodBuffer = '';
-          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(source())), answer: '' });
+          stripper = createMoodStripper();
+          answer = '';
+          moods = [];
+          tail = '';
+          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(source())), answer, moods });
         } else if (event.type === 'text') {
-          if (moodBuffer === null) {
-            publish({ phase: 'answering', detail: null, answer: state.answer + event.delta });
-            return;
-          }
-          moodBuffer += event.delta;
-          const split = splitMood(moodBuffer, false);
-          if (split === null) return;
-          moodBuffer = null;
-          publish({ phase: 'answering', detail: null, mood: split.mood, answer: split.text });
+          // Дельты всех блоков хода идут подряд: «посмотрю.» + «[[calm]] В работе» склеились бы в «посмотрю.В работе».
+          // Блок Claude начинает `content_block_start`, у Codex каждый текст — целое сообщение.
+          const fresh = codex || block;
+          block = false;
+          const delta = fresh && tail !== '' && !/\s/.test(tail) && !/^\s/.test(event.delta) ? ` ${event.delta}` : event.delta;
+          tail = delta.at(-1) ?? tail;
+          if (!take(stripper.push(delta))) return;
+          publish({ phase: 'answering', detail: null, mood: firstMood(moods), answer, moods });
         }
       },
     );
@@ -392,10 +439,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       .then(async (end) => {
         if (turn !== handle) return;
         turn = null;
-        if (moodBuffer !== null && moodBuffer !== '') {
-          const split = splitMood(moodBuffer, true);
-          if (split !== null) publish({ mood: split.mood, answer: split.text });
-        }
+        if (take(stripper.end())) publish({ mood: firstMood(moods), answer, moods });
         await finish(end, entry, model, language, text, retried, current, ask);
       })
       .catch((error: unknown) => {

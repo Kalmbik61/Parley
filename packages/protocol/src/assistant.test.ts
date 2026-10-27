@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { AssistantMood } from '@parley/core';
 import type { AssistantOrigin, AssistantProposal, AssistantState, ProposalCardView, RoomProposalView } from './assistant.js';
 import { METHODS } from './methods.js';
 
@@ -21,6 +22,15 @@ describe('схемы методов помощника', () => {
   });
   it('assistant.sent: ссылка на сессию', () => {
     expect(METHODS['assistant.sent'].safeParse({ ref: { projectPath: '/p', workId: 'w', sessionId: 's' } }).success).toBe(true);
+  });
+  it('assistant.configure: voiceGender необязателен, только female, male и neutral', () => {
+    const settings = { enabled: true, provider: null, model: null, language: 'ru', voiceModel: null };
+    const configure = (extra: object) => METHODS['assistant.configure'].safeParse({ ...settings, ...extra });
+    expect(configure({}).success).toBe(true);
+    for (const voiceGender of ['female', 'male', 'neutral']) {
+      expect(configure({ voiceGender }).data).toMatchObject({ voiceGender });
+    }
+    expect(configure({ voiceGender: 'robot' }).success).toBe(false);
   });
 });
 
@@ -63,5 +73,9 @@ describe('виды карточки помощника', () => {
     expectTypeOf<AssistantState['outcome']>().toEqualTypeOf<'sent' | 'done' | 'cancelled' | null>();
     expectTypeOf<AssistantState['origin']>().toEqualTypeOf<AssistantOrigin | undefined>();
     expectTypeOf<AssistantOrigin>().toEqualTypeOf<'island' | 'reminder'>();
+  });
+
+  it('AssistantState.moods необязателен: позиции эмоций в очищенном ответе', () => {
+    expectTypeOf<AssistantState['moods']>().toEqualTypeOf<Array<{ at: number; mood: AssistantMood }> | undefined>();
   });
 });
