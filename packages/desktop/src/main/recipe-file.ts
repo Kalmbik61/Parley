@@ -27,7 +27,7 @@ export function parseRecipeSaveRequest(value: unknown): RecipeSaveRequest | null
   if (typeof projectPath !== 'string' || projectPath.includes('\0') || !path.isAbsolute(projectPath) || projectPath.length > 32768) return null;
   if (typeof file !== 'string' || !RECIPE_FILE_STEM.test(file)) return null;
   if (typeof name !== 'string' || typeof description !== 'string' || typeof playbook !== 'string' || playbook.length > MAX_TEXT) return null;
-  if (mode !== 'free' && mode !== 'checklist' && mode !== 'verified') return null;
+  if (mode !== 'free' && mode !== 'checklist' && mode !== 'verified' && mode !== 'autonomous') return null;
   if (typeof replace !== 'boolean' || !Array.isArray(agents) || agents.length > MAX_AGENT_ROWS) return null;
   const rows: RecipeAgent[] = [];
   for (const row of agents) {

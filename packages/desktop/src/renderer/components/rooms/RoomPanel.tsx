@@ -80,12 +80,12 @@ import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { PlanPanel, RoomModeControl } from './PlanPanel.js';
+import { HaltCard } from './HaltCard.js';
 import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel, type ParticipantModel } from './feed-model.js';
 import { RoomContextChip } from './RoomContextChip.js';
 import { RoomHeader } from './RoomHeader.js';
-import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
 import { RoomRecipeChip } from './RoomRecipeChip.js';
 import { RoomUsageChip } from './RoomUsageChip.js';
@@ -118,6 +118,7 @@ const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
+  const halted = model?.plan?.mode === 'autonomous' ? model.plan.autonomous?.halted : null;
   const roomRecord = entry.map.rooms.find((room) => room.id === roomId);
   const recipe = roomRecord?.recipe;
   const archived = roomRecord !== undefined && isRoomArchived(roomRecord);
@@ -411,9 +412,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       return resolveMounted.current && captured === currentResolve.current && currentBridge.current === bridge;
     } catch (error) {
       if (!resolveMounted.current || captured !== currentResolve.current || currentBridge.current !== bridge) return false;
-      const { code } = decodeIpcError(error);
+      const { code, message } = decodeIpcError(error);
       // `conflict`: карточку успели принять, вернуть или заменить — она остаётся, кнопки снова доступны.
-      toast(code === 'conflict' ? S.rooms.decisionChanged : errorText(code, S.rooms.resolveAction));
+      toast(code === 'bad_request' && message.startsWith('autonomous-completion-needs-item:') ? message
+        : code === 'conflict' ? S.rooms.decisionChanged : errorText(code, S.rooms.resolveAction));
       return false;
     }
   };
@@ -473,7 +475,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             />
           )
         }
-        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} now={now} onOpenSession={onOpenSession} onOpenPlan={(id) => openPlanInPanel({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })} />
+        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} now={now} onOpenSession={onOpenSession} onOpenPlan={(id) => openPlanInPanel({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -523,6 +525,14 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               onRemove={() => roomOutbox.remove(draftKey, item.id)}
             />
           ))}
+          {model.plan && halted ? (
+            <>
+              {model.messages.some(message => message.sender.kind === 'system' && message.at >= halted.at && message.text.includes(halted.detail)) ? null : (
+                <p data-halt-notice="" className="max-w-[680px] whitespace-pre-wrap text-xs text-muted-foreground">{S.plans.haltNotice(halted.detail)}</p>
+              )}
+              <HaltCard plan={model.plan} entry={entry} bridge={bridge} />
+            </>
+          ) : null}
           {model.proposal === null ? null : (
             <CompletionOrDecision
               plan={model.plan}

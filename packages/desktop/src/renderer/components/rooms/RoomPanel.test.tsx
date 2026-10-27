@@ -6,6 +6,7 @@
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
 
+import { autonomousRoomPlan } from '../../test-utils/autonomous-plan.js';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -2506,33 +2507,6 @@ it('disables archived completion responses and ignores a response when its work 
  expect(screen.getAllByText('Reopen this workspace to change the plan.').length).toBeGreaterThan(0);
 });
 
-describe('room history menu in the header (P28)', () => {
-  const sharedStatus = { state: 'shared' as const, sharedAt: '2026-10-05T10:00:00.000Z', version: 'v1', diagnostics: [] };
-  const notShared = { state: 'not-shared' as const, sharedAt: null, version: 'missing', diagnostics: [] };
-  it('is part of the room header and does not touch the host until opened', () => {
-    renderPanel(entryOf());
-    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
-    expect(bridge.calls.some(call => call.method.startsWith('rooms.history.'))).toBe(false);
-  });
-  it('Share publishes the snapshot of this room only after the explicit confirmation, with the host version', async () => {
-    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] } });
-    bridge.setHandler('rooms.history.get', () => notShared); bridge.setHandler('rooms.history.share', () => sharedStatus);
-    renderPanel(entryOf());
-    fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Share history…' }));
-    expect(bridge.calls.some(call => call.method === 'rooms.history.share')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot' }));
-    await screen.findByText(/^Shared at /);
-    expect(bridge.calls.find(call => call.method === 'rooms.history.share')?.params).toEqual({ projectPath: PROJECT, workId: WORK_ID, roomId: 'r-01', expectedVersion: 'missing', confirmed: true });
-  });
-  it('an old host leaves the room usable and the history actions unavailable', () => {
-    renderPanel(entryOf());
-    fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    expect(screen.getByText('Update or restart the host to share room history.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
-  });
-});
-
 describe('RoomPanel — файлы, брошенные на вкладку', () => {
   it('подсветка при переносе файлов; бросок — вложения поля ввода; текст без файлов вкладка не берёт', () => {
     renderPanel(entryOf());
@@ -2617,12 +2591,11 @@ describe('RoomPanel — архивная комната (5.2)', () => {
     expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
   });
 
-  it('лента читается и Share истории работает: сообщения на месте, меню History в шапке', () => {
+  it('лента читается: сообщения на месте', () => {
     renderPanel(
       entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z' }), messages: [message('m-1', { from: 's-01', text: 'Hello from the feed' })] }),
     );
     expect(screen.getByText('Hello from the feed')).toBeTruthy();
-    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
   });
 
   it('файлы на вкладку не принимаются: ни подсветки, ни вложений', () => {
@@ -2679,4 +2652,38 @@ describe('кнопка «Browser» в шапке комнаты (этап B2, с
       useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
     }
   });
+});
+
+it('shows a map-derived halt line, badge and card and removes them when the map resumes', () => {
+  const entry = entryOf(); const plan = autonomousRoomPlan();
+  entry.map.plans = [plan]; entry.map.rooms[0]!.mode = 'autonomous';
+  const view = render(<RoomPanel {...props(entry)} />);
+  expect(view.container.querySelector('[data-halt-notice]')?.textContent).toBe('Execution stopped: capture: unexpected failure');
+  expect(view.container.querySelector('[data-plan-halted]')?.getAttribute('title')).toBe('capture: unexpected failure');
+  expect(view.container.querySelector('[data-halt-card]')).toBeTruthy();
+  const resumed = structuredClone(entry); resumed.map.plans![0]!.autonomous!.halted = null;
+  view.rerender(<RoomPanel {...props(resumed)} />);
+  expect(view.container.querySelector('[data-halt-notice]')).toBeNull();
+  expect(view.container.querySelector('[data-halt-card]')).toBeNull();
+  expect(view.container.querySelector('[data-plan-halted]')).toBeNull();
+});
+
+it('uses an existing host halt notice instead of adding a duplicate fallback line', () => {
+  const plan = autonomousRoomPlan();
+  const entry = entryOf({ messages: [message('m-halt', { from: 'system', at: plan.autonomous!.halted!.at, text: 'Execution stopped: ' + plan.autonomous!.halted!.detail })] });
+  entry.map.plans = [plan]; entry.map.rooms[0]!.mode = 'autonomous';
+  const view = render(<RoomPanel {...props(entry)} />);
+  expect(view.container.querySelector('[data-halt-notice]')).toBeNull();
+  expect(view.container.querySelector('[data-halt-card]')).toBeTruthy();
+});
+
+it('shows the host item-selection error from a generic proposal response', async () => {
+  const entry = entryOf();
+  entry.map.rooms[0]!.proposal = { id: 'p-01', rev: 1, from: 's-01', at: 'x', text: 'Complete now' };
+  const message = 'autonomous-completion-needs-item: select an item to return';
+  bridge.setHandler('rooms.resolveProposal', () => { throw encodeIpcError({ code: 'bad_request', message }); });
+  renderPanel(entry);
+  fireEvent.click(screen.getByText('Return for rework'));
+  fireEvent.click(screen.getByText('Send to lead'));
+  await waitFor(() => expect(toast).toHaveBeenCalledWith(message));
 });

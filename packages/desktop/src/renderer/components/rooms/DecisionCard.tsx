@@ -46,6 +46,11 @@ export interface DecisionCardProps {
   entry?: WindowWorkEntry;
   bridge?: ParleyBridge;
   children?: ReactNode;
+  /** Дополнительный выбор пункта при возврате автономного завершения. */
+  returnFields?: ReactNode;
+  canReturn?: boolean;
+  returnReady?: boolean;
+  requireReturnNote?: boolean;
   proposal: ProposalModel;
   /** Время решения в относительной записи («2m»). */
   time: string;
@@ -62,7 +67,7 @@ export interface DecisionCardProps {
   draftKey?: string;
 }
 
-export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason, hostReady = true, draftKey }: DecisionCardProps): JSX.Element {
+export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, returnFields, canReturn = true, returnReady = true, requireReturnNote = false, entry, bridge, unavailableReason, hostReady = true, draftKey }: DecisionCardProps): JSX.Element {
   const [localReturning, setLocalReturning] = useState(false);
   const [localNote, setLocalNote] = useState('');
   const storeKey = draftKey === undefined ? null : decisionDraftKey(draftKey, proposal.id);
@@ -99,7 +104,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
 
   const answer = async (action: 'accept' | 'return'): Promise<void> => {
     // Второй клик в тот же тик, до перерисовки с занятыми кнопками, вызова не даёт.
-    if (inFlight.current || !canResolve) return;
+    if (inFlight.current || !canResolve || (action === 'return' && (!canReturn || !returnReady || (requireReturnNote && !note.trim())))) return;
     inFlight.current = true;
     setResolving(version);
     setPending(action);
@@ -125,12 +130,15 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
         <Badge variant="accent">{proposal.kind === 'completion' ? S.plans.completion : S.rooms.decisionWaiting}</Badge>
         <span className="text-muted-foreground">{time}</span>
       </div>
-      <RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
+      {proposal.text.length > 2000 ? (
+        <details onToggle={onLayout}><summary>{S.plans.fullText}</summary><RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} /></details>
+      ) : <RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />}
       {proposal.plan ? <><h4>{S.plans.proposed}</h4><PlanSummary plan={proposal.plan} {...(entry ? {entry} : {})} {...(bridge ? {bridge} : {})}/></> : null}
       {children}
       {isPlan && !canResolve ? <p>{unavailableReason ?? S.plans.oldHost}</p> : null}
       {!canResolve && !isPlan ? null : returning ? (
         <div className="flex flex-col gap-2">
+          {returnFields}
           <div className="flex items-start gap-2">
             <Textarea
               ref={noteRef}
@@ -150,7 +158,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
             <MicButton targetId={dictationId} size="sm" />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" disabled={busy || !canResolve} onClick={() => {
+            <Button type="button" disabled={busy || !canResolve || !canReturn || !returnReady || (requireReturnNote && !note.trim())} onClick={() => {
               // Запись ещё идёт — текст сперва должен лечь в заметку, ответ уйдёт следующим нажатием.
               if (useDictationStore.getState().finishBeforeSend(dictationId)) return;
               void answer('return');
@@ -171,7 +179,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
               {busy && pending === 'accept' ? spinner : null}
               {S.rooms.accept}
             </Button>
-            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setDraft(true, note)}>
+            <Button type="button" variant="outline" disabled={busy || !canResolve || !canReturn} onClick={() => setDraft(true, note)}>
               {S.rooms.returnForRework}
             </Button>
           </div>

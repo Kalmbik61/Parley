@@ -11,7 +11,7 @@ import { maxNumber } from './map.js';
 import { addSystemMessage, isRoomClosed, liveLead, requireOpenRoom, RoomRuleError } from './rooms.js';
 import { acceptRoomPlan, completeRoomPlan, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
 import { proposedRoomPlan } from './plans.js';
-import { HUMAN, type PlanDraft, type Proposal, type Room, type WorkMap } from './types.js';
+import { ENGINE, HUMAN, type PlanDraft, type Proposal, type Room, type WorkMap } from './types.js';
 
 /** Предел текста решения в знаках (дизайн комнат, 3.1). */
 export const PROPOSAL_TEXT_MAX = 10_000;
@@ -210,12 +210,18 @@ export function resolveProposal(
 }
 
 /** Completion is a separate, revision-bound human decision, never owner self-acceptance. */
-export function proposeCompletion(map: WorkMap, roomId: string, from: string, planId: string, rev: number, summary: string, at = new Date().toISOString()): { proposalId: string; rev: number } {
+export function proposeCompletion(map: WorkMap, roomId: string, from: string, planId: string, rev: number, summary: string, at = new Date().toISOString(), actor = from): { proposalId: string; rev: number } {
   const room = requireOpenRoom(map, roomId); requirePlanLead(map, room, from);
   const plan = map.plans?.find(plan => plan.id === planId && plan.roomId === roomId);
-  if (!plan || plan.rev !== rev || plan.mode !== 'verified' || !['active', 'completing'].includes(plan.status) || !planItemsComplete(plan)) throw new PlanConflictError();
+  if (!plan || plan.rev !== rev || !['verified', 'autonomous'].includes(plan.mode) || !['active', 'completing'].includes(plan.status) || !planItemsComplete(plan)) throw new PlanConflictError();
+  if (plan.mode === 'autonomous' && actor !== ENGINE) throw new RoomRuleError('only the engine can propose autonomous completion');
   if (!summary.trim() || summary.length > PROPOSAL_TEXT_MAX || summary.includes('\0') || Buffer.from(summary, 'utf8').toString('utf8') !== summary) throw new RoomRuleError('invalid completion summary');
   const previous = room.proposal;
+  if (plan.mode === 'autonomous' && previous) {
+    if (previous.kind === 'completion' && previous.planId === planId && previous.planRev === rev)
+      return { proposalId: previous.id, rev: previous.rev };
+    throw new PlanConflictError();
+  }
   const proposal = { id: previous?.id ?? nextProposalId(map), from, text: summary, at, rev: previous ? previous.rev + 1 : 0, kind: 'completion' as const, planId, planRev: rev };
   plan.status = 'completing'; room.proposal = proposal;
   return { proposalId: proposal.id, rev: proposal.rev };

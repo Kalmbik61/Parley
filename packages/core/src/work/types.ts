@@ -62,6 +62,18 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+export interface ArtifactsWorkspace {
+  kind: 'artifacts';
+  path: string;
+}
+
+export interface CloneWorkspace {
+  kind: 'clone';
+  path: string;
+  branch: string;
+  sha: string;
+}
+
 /**
  * Своя рабочая копия git для сессии (спецификация 8.1, 8.2): путь и ветка
  * планируются заранее (`plannedWorktree` в `work/worktree.ts`), а на диске
@@ -133,6 +145,7 @@ export interface WorkSession {
    * `null` (кусок 4.1 плана worktree).
    */
   worktree: WorktreeInfo | null;
+  workspace?: CloneWorkspace | ArtifactsWorkspace | null;
   /**
    * Явный выбор модели и усилия из окна или `spawn_session`: с ним строятся и запуск, и `resume`
    * (`plan` в `launch.ts`), а выбор запуска его перекрывает. Нет поля — выбора нет: умолчание
@@ -170,8 +183,10 @@ export const HUMAN = 'human';
 export const SYSTEM = 'system';
 /** Trusted accepted-plan assignments, reserved by the host/domain before wake. */
 export const PARLEY = 'parley';
+/** Актор движка в log и правилах плана (план автономной комнаты, §2). */
+export const ENGINE = 'engine';
 
-export type RoomMode = 'free' | 'checklist' | 'verified';
+export type RoomMode = 'free' | 'checklist' | 'verified' | 'autonomous';
 export type PlanMode = Exclude<RoomMode, 'free'>;
 export type PlanStatus = 'proposed' | 'active' | 'completing' | 'completed' | 'cancelled';
 export type PlanItemStatus = 'waiting' | 'ready' | 'in_progress' | 'done' | 'blocked' | 'verified' | 'returned';
@@ -184,6 +199,25 @@ export interface PlanDraft {
   /** Required together for an amendment: the currently accepted identity/revision. */
   id?: string; rev?: number; mode: PlanMode; goal: string; items: PlanItemInput[]; backlog?: string[];
 }
+/** Вход предложения: git-факты и начальное состояние добавляет только хост. */
+export interface AutonomousDraft {
+  budget: AutonomousBudget['limits'];
+  checks: { id: string; item: number; argv: string[]; cwd: string; env: Record<string, string>; inputs: string[]; timeoutMs: number }[];
+  coverage: AutonomousPlan['coverage'];
+}
+
+/**
+ * POST /agent/attempts: токен в Authorization: Bearer, актор и работа определяются хостом.
+ * Хост повторно проверяет права, режим и rev; возвращает {ok:true,result} либо
+ * {ok:false,error:{code,message}}. requestKey — sha256 канонического JSON
+ * {roomId, planId: planId ?? null, rev: rev ?? null, text, draft: plan}, вычисленный ядром;
+ * он идемпотентен для предложения этой сессии;
+ * amendment сохраняет состояние исполнения до принятия человеком, без повторной инициализации.
+ */
+export type AttemptChannelRequest =
+  | { action: 'propose-plan'; roomId: string; planId?: string; rev?: number; requestKey: string; text: string; plan: PlanDraft & { autonomous: AutonomousDraft } }
+  | { action: 'submit'; attemptId: string; submissionKey?: string; manifest: Omit<HandoffManifestInput, 'sha'> }
+  | { action: 'verify'; attemptId: string; sha: string; criterion: number; verdict: CheckResult['verdict']; note: string };
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
   evidence: PlanEvidence | null; note: string | null;
@@ -196,7 +230,110 @@ export interface RoomPlan {
   goal: string; items: PlanItem[]; backlog: string[];
   acceptedAt: string | null; completedAt: string | null; cancelledAt: string | null;
   completionSummary: string | null;
+  /** Только при mode === 'autonomous' (план автономной комнаты, §2). */
+  autonomous?: AutonomousPlan;
 }
+/** Модель данных (план автономной комнаты, §2). */
+export interface AutonomousPlan {               // RoomPlan.autonomous, только при mode === 'autonomous'
+  budget: AutonomousBudget;
+  checks: CheckSpec[];                           // заморожены при Go
+  coverage: Record<number, Record<number, Array<string | 'verifier'>>>; // item → criterion index → требуемые checkId и/или вердикт проверяющего
+  criteriaVersion: Record<number, number>;       // пункт → текущая версия критериев, ≥ 1; при Go движок пишет 1 для каждого пункта; растёт только через amendment (§2 п. 2)
+  integration: Integration;
+  attempts: PlanAttempt[];
+  ops: AutonomousOp[];                           // журнал операций с внешним эффектом
+  halted: { reason: 'budget' | 'no_progress' | 'stuck' | 'restart' | 'confinement' | 'human'; at: string; detail: string } | null;
+  seq: { attempt: number; receipt: number; check: number; op: number };
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface PlanAttempt {
+  id: string;                                    // at-0001
+  item: number; n: number;                       // пункт и номер попытки по пункту
+  planRev: number; criteriaVersion: number;      // под какую ревизию и версию критериев сдана
+  worker: string | null;                         // сессия исполнителя (null до записи sessionId)
+  verifier: string | null;                       // сессия проверяющего качественных критериев
+  branch: string; baseSha: string;               // ветка попытки и голова интеграции, от которой она ответвлена
+  sha: string | null;                            // коммит захвата, созданный движком в engine.git; HEAD клона не читается и не доверяется
+  tree: string | null;                           // дерево захвата; tree == tree(baseSha) → попытка без изменений
+  submissionKey: string | null;                  // хэш манифеста без sha, задан исполнителем до действий сервера
+  status: 'starting' | 'running' | 'submitted' | 'checking' | 'accepted' | 'queued' | 'integrated' | 'returned' | 'blocked' | 'aborted' | 'superseded';
+  manifest: HandoffManifest | null; receipt: Receipt | null;
+  checks: string[];                              // CheckResult.id
+  failureSignature: string | null;               // см. п. 6
+  startedAt: string; endedAt: string | null;
+  log: { at: string; by: string; status: PlanAttempt['status']; note: string | null; op: string | null }[];
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export type HandoffManifestInput = Omit<HandoffManifest, 'hash'> & { hash?: string };
+export interface HandoffManifest {
+  version: 1;
+  sha: string | null;                            // null при сдаче; дописывает движок после захвата
+  criteriaVersion: number;
+  dependsOn: string[];                           // id принятых попыток зависимостей, из брифа
+  coverage: 'covered' | 'partial' | 'failed' | 'unstarted';
+  scope: string; facts: string[]; hypotheses: string[]; notFound: string[]; gaps: string[];
+  text: string;                                  // до 4096 знаков
+  artifacts: { path: string; sha256: string; storedAs: string }[]; // путь в дереве захвата, хэш, копия под .parley/…/attempts/<id>/
+  hash: string;                                  // sha256 канонического JSON манифеста без поля hash
+  submittedAt: string;
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface Receipt {
+  id: string; attemptId: string; manifestHash: string; sha: string; criteriaVersion: number;
+  valid: boolean; reason: string | null; at: string;
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface CheckSpec {
+  id: string;                                    // ck-spec-01
+  item: number;
+  argv: string[];                                // без оболочки
+  cwd: string;                                   // относительно checkout
+  env: Record<string, string>;                   // полный allowlist переменных
+  inputs: { path: string; blob: string }[];      // замороженные входы: файлы тестов, конфиги раннера, фикстуры, package.json и lock — blob на baseSha Go
+  timeoutMs: number;
+  frozenAt: string;
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface CheckResult {
+  id: string; specId: string; attemptId: string;
+  sha: string; argvHash: string; envHash: string; inputsOk: boolean;
+  verdict: 'pass' | 'fail' | 'error' | 'not_verified';
+  by: string;                                    // ENGINE или сессия-проверяющий
+  exitCode: number | null; summary: string; outputTail: string | null; // путь к файлу хвоста
+  at: string; durationMs: number;
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface Integration {
+  branch: string; baseSha: string;
+  verifiedHead: string;                          // последняя голова, на которой все проверки интегрированных пунктов прошли
+  candidateHead: string | null;                  // голова после слияния, ещё не проверенная
+  queue: string[];                               // attemptId в порядке приёма
+  suspended: { reason: string; attemptId: string; at: string } | null;
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface AutonomousBudget {
+  limits: { attemptsPerItem: number; repairWaves: number; minutesPerAttempt: number; sessions: number; concurrent: number };
+  spent: { attempts: number; repairWaves: number; sessions: number; verifiers: number; minutes: number; launches: number };
+  reservations: { key: string; kind: 'session' | 'launch'; attemptId: string; at: string }[]; // снимаются по op done/failed
+}
+
+/** Модель данных (план автономной комнаты, §2). */
+export interface AutonomousOp {
+  key: string;                                   // op-0001; идемпотентный ключ эффекта
+  kind: 'create-session' | 'launch' | 'close-session' | 'stop-session' | 'clone' | 'capture' | 'merge' | 'noop-integration' | 'merge-abort' | 'check' | 'copy-artifacts' | 'cleanup' | 'resume';
+  attemptId: string | null;
+  payload: Record<string, unknown>;              // что именно: sessionId, sha, branch, specId…
+  state: 'intended' | 'done' | 'failed';
+  at: string; settledAt: string | null; result: Record<string, unknown> | null;
+}
+
 /**
  * Local durable intent: exact captured Markdown, never rebuilt from a later live revision. Пока `pending`, у намерения
  * есть `content`: файл пишется вне транзакции карты и при отказе повторяется ровно с этого текста. У `written` текста

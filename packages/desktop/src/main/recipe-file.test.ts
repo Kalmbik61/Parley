@@ -152,3 +152,12 @@ describe('Save as recipe: .gitignore каталога состояния', () =>
     expect(await readFile(ignoreFile(), 'utf8')).toBe('*\n!mine\n');
   });
 });
+
+it('reads and writes an autonomous recipe and rejects unknown modes', async () => {
+  const input = request({ mode: 'autonomous' });
+  expect(parseRecipeSaveRequest(input)?.mode).toBe('autonomous');
+  expect(parseRecipeSaveRequest({ ...input, mode: 'unknown' })).toBeNull();
+  expect(await writeProjectRecipe(input)).toMatchObject({ status: 'saved' });
+  const parsed = parseProjectRecipe('payments-change.md', await readFile(path.join(recipesDir(), 'payments-change.md'), 'utf8'));
+  expect(parsed).toMatchObject({ status: 'valid', recipe: { mode: 'autonomous' } });
+});

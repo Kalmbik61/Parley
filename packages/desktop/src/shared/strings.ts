@@ -52,8 +52,8 @@ export const S = {
     roomArchived: 'Reopen this room to change the plan.',
     title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
     revision: (n: number) => 'Revision ' + n,
-    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
-    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.' },
+    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified', autonomous: 'Autonomous' },
+    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.', autonomous: 'The engine runs attempts after Go; the human accepts the result' },
     reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
@@ -61,6 +61,12 @@ export const S = {
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
     markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
+    halted: 'Execution stopped', continue: 'Continue', fullText: 'Show full proposal',
+    haltReason: { budget: 'budget', no_progress: 'no progress', stuck: 'stuck', restart: 'restart', confinement: 'confinement' },
+    haltNotice: (detail: string) => 'Execution stopped: ' + detail,
+    attemptStatus: { starting: 'Starting', running: 'Running', submitted: 'Submitted', checking: 'Checking', accepted: 'Accepted', queued: 'Queued', integrated: 'Integrated', returned: 'Returned', blocked: 'Blocked', aborted: 'Aborted', superseded: 'Superseded' },
+    attempt: (n: number, status: string, check: string) => 'Attempt ' + n + ' · ' + status + (check ? ' · ' + check : ''),
+    itemToReturn: 'Item to return', selectItem: 'Select an item',
     artifactHelp: 'References are plain text, one per line. They are not opened as files.',
     cancelPlan: 'Cancel plan…', cancelWarning: 'Cancel this active plan? Its captured cancellation snapshot will be retained.', confirmCancel: 'Confirm cancellation',
     oldHost: 'Update or restart the host to use plan actions.', changed: 'The plan changed. Review the current revision and try again.', failed: 'The plan action failed. Check the host and try again.', saved: 'The host accepted the action.',
@@ -232,22 +238,6 @@ export const S = {
     openFile: 'Open file', openRoom: 'Open room', openSession: 'Open session',
     openFailed: 'The result could not be opened.', gone: 'The workspace, room or session no longer exists.',
     incomplete: 'Excerpt', shared: 'Shared snapshot', alsoShared: 'Also shared', line: (n: number): string => `line ${n}`,
-  },
-  roomHistory: {
-    menu: 'History', notShared: 'Not shared', sharedAt: (iso: string): string => `Shared at ${new Date(iso).toLocaleString()}`,
-    conflict: 'The shared file was changed or is not owned by Parley. Parley will not overwrite or remove it.',
-    share: 'Share history…', reshare: 'Share again…', unshare: 'Unshare…',
-    shareWarning: 'This publishes a snapshot to the project’s shared Git files. Check for secrets before continuing.',
-    confirmShare: 'Publish snapshot',
-    unshareWarning: 'Remove the shared snapshot from the working copy. Previous Git commits retain it.',
-    confirmUnshare: 'Remove snapshot',
-    loading: 'Reading the history state…', loadFailed: 'The history state could not be read. Try again.', refresh: 'Refresh',
-    unavailable: 'Update or restart the host to share room history.', disconnected: 'Reconnect to the host to share room history.',
-    shareFailed: 'The history could not be shared. Nothing was recorded as shared.',
-    unshareFailed: 'The shared snapshot could not be removed.',
-    changed: 'The shared history changed. Review it and try again.',
-    ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
-      'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
   },
   usage: {
     title: 'Token usage',
@@ -1041,6 +1031,9 @@ export const S = {
     toAll: 'all',
     /** `aria-label` ленты участников и тултип `★` у ведущего. */
     participants: 'Participants',
+    /** Кнопка в конце ленты участников: закрытые спрятаны (`N closed`) или показаны (`Hide closed`). */
+    closedParticipants: (n: number): string => `${n} closed`,
+    hideClosedParticipants: 'Hide closed',
     lead: 'Lead',
     /** Пустая комната. */
     emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
@@ -1883,7 +1876,7 @@ export const S = {
       addPage: 'Add a page',
       closePage: (title: string): string => `Close ${title}`,
       closePanel: 'Close the browser panel',
-      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      /** Узкий вид (уже 560 px): панель закрывает вид собой, кнопка возвращает к нему. */
       backToChat: 'Back to chat',
       backToRoom: 'Back to room',
       resize: 'Resize the browser panel',
@@ -1979,10 +1972,15 @@ export const S = {
       `${CONTEXT_NAMES[kind]} ${label}: ${mdPath}${pngPath === null ? '' : ` (screenshot: ${pngPath})`}`,
   },
 
-  /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
+  /**
+   * Баннер прерванных сессий — `components/InterruptedBanner.tsx`. `interrupted` — начало строки перед чипами сессий,
+   * `interruptedHint` — её подсказка (что значит «прервана»), `dismiss` — «×» (прячет показанные сессии).
+   */
   banners: {
-    interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,
+    interrupted: 'Interrupted mid-turn:',
+    interruptedHint: 'These sessions were working when the host stopped. They are asleep now; resume them to let them finish the turn.',
     resumeAll: 'Resume all',
+    dismiss: 'Dismiss',
   },
 
   /**
@@ -2655,6 +2653,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
   'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
+  'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
 };
 
 /**

@@ -111,6 +111,7 @@ export interface NewSession {
   effort?: EffortLevel | null;
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
+  workspace?: WorkSession['workspace'];
 }
 
 /**
@@ -149,6 +150,7 @@ export function addSession(
     artifacts: [],
     role: init.role ?? (init.agent == null ? null : { source: 'claude', name: init.agent }),
     worktree: null,
+    ...(init.workspace === undefined ? {} : { workspace: init.workspace }),
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
@@ -323,10 +325,134 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
-    (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan));
+    (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
+    (value.workspace === undefined || value.workspace === null ||
+      (isRecord(value.workspace) && isNonemptyString(value.workspace.path) &&
+        (value.workspace.kind === 'artifacts' || value.workspace.kind === 'clone' &&
+          [value.workspace.branch, value.workspace.sha].every(isNonemptyString))));
 
 /** Поле письма — строка: так оно ляжет в колонку таблицы `messages` (спека хранилища 6.2). */
 const isText = (value: unknown): value is string => typeof value === 'string';
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+const isNonemptyString = (value: unknown): value is string => isString(value) && value.length > 0;
+const isNullableString = (value: unknown): boolean => value === null || isString(value);
+const isNullableNonemptyString = (value: unknown): boolean => value === null || isNonemptyString(value);
+const isStringArray = (value: unknown): boolean => Array.isArray(value) && value.every(isString);
+const isSafeCount = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
+const ATTEMPT_STATUSES = [
+  'starting', 'running', 'submitted', 'checking', 'accepted', 'queued', 'integrated',
+  'returned', 'blocked', 'aborted', 'superseded',
+];
+const OP_KINDS = [
+  'create-session', 'launch', 'close-session', 'stop-session', 'clone', 'capture', 'merge',
+  'noop-integration', 'merge-abort', 'check', 'copy-artifacts', 'cleanup', 'resume',
+];
+
+function isHandoffManifest(value: unknown): boolean {
+  return isRecord(value) && value.version === 1 && isNullableNonemptyString(value.sha) &&
+    isSafeCount(value.criteriaVersion) && isStringArray(value.dependsOn) &&
+    isString(value.coverage) && ['covered', 'partial', 'failed', 'unstarted'].includes(value.coverage) &&
+    isString(value.scope) && isStringArray(value.facts) && isStringArray(value.hypotheses) &&
+    isStringArray(value.notFound) && isStringArray(value.gaps) && isString(value.text) && value.text.length <= 4096 &&
+    Array.isArray(value.artifacts) && value.artifacts.every((artifact) =>
+      isRecord(artifact) && isString(artifact.path) && isNonemptyString(artifact.sha256) && isString(artifact.storedAs)) &&
+    isString(value.hash) && isString(value.submittedAt);
+}
+
+function isReceipt(value: unknown): boolean {
+  return isRecord(value) && isString(value.id) && isString(value.attemptId) && isNonemptyString(value.manifestHash) &&
+    isNonemptyString(value.sha) && isSafeCount(value.criteriaVersion) && typeof value.valid === 'boolean' &&
+    isNullableString(value.reason) && isString(value.at);
+}
+
+function isPlanAttempt(value: unknown): boolean {
+  return isRecord(value) && isString(value.id) && isSafeCount(value.item) && isSafeCount(value.n) &&
+    isSafeCount(value.planRev) && isSafeCount(value.criteriaVersion) && isNullableString(value.worker) &&
+    isNullableString(value.verifier) && isNonemptyString(value.branch) && isNonemptyString(value.baseSha) &&
+    isNullableNonemptyString(value.sha) && isNullableNonemptyString(value.tree) && isNullableString(value.submissionKey) &&
+    isString(value.status) && ATTEMPT_STATUSES.includes(value.status) &&
+    (value.manifest === null || isHandoffManifest(value.manifest)) &&
+    (value.receipt === null || isReceipt(value.receipt)) && isStringArray(value.checks) &&
+    isNullableString(value.failureSignature) && isString(value.startedAt) && isNullableString(value.endedAt) &&
+    Array.isArray(value.log) && value.log.every((entry) =>
+      isRecord(entry) && isString(entry.at) && isString(entry.by) && isString(entry.status) &&
+      ATTEMPT_STATUSES.includes(entry.status) && isNullableString(entry.note) && isNullableString(entry.op));
+}
+
+function isCheckSpec(value: unknown): boolean {
+  return isRecord(value) && isString(value.id) && isSafeCount(value.item) && isStringArray(value.argv) &&
+    isString(value.cwd) && isRecord(value.env) && Object.values(value.env).every(isString) &&
+    Array.isArray(value.inputs) && value.inputs.every((input) =>
+      isRecord(input) && isString(input.path) && isString(input.blob)) &&
+    isSafeCount(value.timeoutMs) && isString(value.frozenAt);
+}
+
+function isIntegration(value: unknown): boolean {
+  return isRecord(value) && isNonemptyString(value.branch) && isNonemptyString(value.baseSha) && isNonemptyString(value.verifiedHead) &&
+    isNullableNonemptyString(value.candidateHead) && isStringArray(value.queue) &&
+    (value.suspended === null || (isRecord(value.suspended) && isString(value.suspended.reason) &&
+      isString(value.suspended.attemptId) && isString(value.suspended.at)));
+}
+
+function isAutonomousBudget(value: unknown): boolean {
+  return isRecord(value) && isRecord(value.limits) &&
+    ['attemptsPerItem', 'repairWaves', 'minutesPerAttempt', 'sessions', 'concurrent']
+      .every((key) => isSafeCount((value.limits as Record<string, unknown>)[key])) &&
+    isRecord(value.spent) && ['attempts', 'repairWaves', 'sessions', 'verifiers', 'minutes', 'launches']
+      .every((key) => isSafeCount((value.spent as Record<string, unknown>)[key])) &&
+    Array.isArray(value.reservations) && value.reservations.every((reservation) =>
+      isRecord(reservation) && isString(reservation.key) &&
+      (reservation.kind === 'session' || reservation.kind === 'launch') &&
+      isString(reservation.attemptId) && isString(reservation.at));
+}
+
+function isAutonomousOp(value: unknown): boolean {
+  return isRecord(value) && isString(value.key) && isString(value.kind) && OP_KINDS.includes(value.kind) &&
+    isNullableString(value.attemptId) && isRecord(value.payload) &&
+    isString(value.state) && ['intended', 'done', 'failed'].includes(value.state) &&
+    isString(value.at) && isNullableString(value.settledAt) && (value.result === null || isRecord(value.result));
+}
+
+function isAutonomousPlan(value: unknown): boolean {
+  return isRecord(value) && isAutonomousBudget(value.budget) &&
+    Array.isArray(value.checks) && value.checks.every(isCheckSpec) && isRecord(value.coverage) &&
+    Object.entries(value.coverage).every(([item, criteria]) =>
+      String(Number(item)) === item && isSafeCount(Number(item)) && Number(item) > 0 && isRecord(criteria) &&
+      Object.entries(criteria).every(([index, checks]) =>
+        String(Number(index)) === index && isSafeCount(Number(index)) && isStringArray(checks))) &&
+    isRecord(value.criteriaVersion) && Object.entries(value.criteriaVersion).every(([item, version]) =>
+      String(Number(item)) === item && isSafeCount(Number(item)) && Number(item) > 0 &&
+      isSafeCount(version) && (version as number) >= 1) &&
+    isIntegration(value.integration) && Array.isArray(value.attempts) && value.attempts.every(isPlanAttempt) &&
+    Array.isArray(value.ops) && value.ops.every(isAutonomousOp) &&
+    (value.halted === null || (isRecord(value.halted) && isString(value.halted.reason) &&
+      ['budget', 'no_progress', 'stuck', 'restart', 'confinement', 'human'].includes(value.halted.reason) &&
+      isString(value.halted.at) && isString(value.halted.detail))) &&
+    isRecord(value.seq) && ['attempt', 'receipt', 'check', 'op']
+      .every((key) => isSafeCount((value.seq as Record<string, unknown>)[key]));
+}
+
+/** Только безопасные пустые значения; конфигурацию Go не выдумываем (план автономной комнаты, §2). */
+function validateAutonomousStorage(map: WorkMap): void {
+  for (const plan of map.plans ?? []) {
+    if (plan.mode !== 'autonomous') {
+      if (plan.autonomous !== undefined) throw new Error('invalid autonomous plan');
+      continue;
+    }
+    const value: unknown = plan.autonomous;
+    if (!isRecord(value)) throw new Error('invalid autonomous plan');
+    if (value.attempts === undefined) value.attempts = [];
+    if (value.ops === undefined) value.ops = [];
+    if (isRecord(value.budget) && value.budget.reservations === undefined) value.budget.reservations = [];
+    if (value.halted === undefined) value.halted = null;
+    if (value.seq === undefined) value.seq = {};
+    if (isRecord(value.seq))
+      for (const key of ['attempt', 'receipt', 'check', 'op'])
+        if (value.seq[key] === undefined) value.seq[key] = 0;
+    if (!isAutonomousPlan(value)) throw new Error('invalid autonomous plan');
+  }
+}
 
 /**
  * Что не так с письмом прежней карты: первая найденная причина или `undefined`, если письмо годится. Письма уходят в
@@ -429,6 +555,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
   // Старый вид (записанный экспорт с текстом, отправленный эффект с текстом) переводится при разборе (спека хранилища 6.2).
   compactStoredTexts(map);
   validatePlanStorage(map);
+  validateAutonomousStorage(map);
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);
   validateResources(map);
@@ -528,7 +655,7 @@ function migrateRoom(room: unknown, sessions: WorkSession[]): void {
   room['proposal'] ??= null;
   room['archivedAt'] ??= null;
   room['mode'] ??= 'free';
-  if (!['free', 'checklist', 'verified'].includes(String(room['mode']))) throw new Error('invalid room mode');
+  if (!['free', 'checklist', 'verified', 'autonomous'].includes(String(room['mode']))) throw new Error('invalid room mode');
   room['recipe'] ??= null;
   if (room['recipe'] !== null && !isRecipeSnapshot(room['recipe'])) throw new Error('invalid room recipe');
   if (room['recipeLeadNotified'] !== undefined && typeof room['recipeLeadNotified'] !== 'string') throw new Error('invalid room recipe');

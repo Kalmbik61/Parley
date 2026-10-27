@@ -30,7 +30,7 @@ export function parseProjectRecipe(file: string, text: string): ParsedRecipe {
   if (parsed.status === 'missing') return invalid('missing-frontmatter');
   if (parsed.status === 'invalid') return { status: 'invalid', diagnostic: { code: 'invalid-yaml', ...(parsed.diagnostic.line === undefined ? {} : { line: parsed.diagnostic.line }), ...(parsed.diagnostic.column === undefined ? {} : { column: parsed.diagnostic.column }) } };
   const data = parsed.data;
-  if (!exactKeys(data, ['name', 'description', 'mode', 'agents']) || !label(data.name) || !label(data.description) || typeof data.mode !== 'string' || !['free', 'checklist', 'verified'].includes(data.mode) || !Array.isArray(data.agents) || data.agents.length > 10_000) return invalid('invalid-schema');
+  if (!exactKeys(data, ['name', 'description', 'mode', 'agents']) || !label(data.name) || !label(data.description) || typeof data.mode !== 'string' || !['free', 'checklist', 'verified', 'autonomous'].includes(data.mode) || !Array.isArray(data.agents) || data.agents.length > 10_000) return invalid('invalid-schema');
   const agents: RecipeAgent[] = [];
   for (const value of data.agents) {
     if (!record(value) || !exactKeys(value, ['role', 'provider', 'model', 'effort', 'worktree', 'lead', 'count']) ||
@@ -52,5 +52,5 @@ export function parseProjectRecipe(file: string, text: string): ParsedRecipe {
   if (!closing || closing.index === undefined) return invalid('invalid-yaml');
   const bodyStart = closing.index + closing[0].length + (text[closing.index + closing[0].length] === '\n' ? 1 : 0);
   const playbook = text.slice(bodyStart);
-  return { status: 'valid', recipe: { id, source: 'project', name: data.name, description: data.description, mode: data.mode as 'free' | 'checklist' | 'verified', agents, playbook } };
+  return { status: 'valid', recipe: { id, source: 'project', name: data.name, description: data.description, mode: data.mode as 'free' | 'checklist' | 'verified' | 'autonomous', agents, playbook } };
 }

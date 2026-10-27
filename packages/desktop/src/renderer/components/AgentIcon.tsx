@@ -1,6 +1,6 @@
 /**
- * Значок провайдера агента (спека 4.6; решение 6 спеки окна 2026-09-29): у claude и codex — брендовые
- * SVG из `assets/providers/` (Codex в тёмной теме — `codex-light.svg`), у прочих провайдеров — буква
+ * Значок провайдера агента (спека 4.6; решение 6 спеки окна 2026-09-29): у claude, codex и Kimi — брендовые
+ * SVG из `assets/providers/` (в тёмной теме — `codex-light.svg` и `kimi-light.svg`), у прочих провайдеров — буква
  * на подложке `--muted`, как прежде. Файлы значков — решение пользователя для личной неподписанной
  * сборки; чьи это знаки и откуда файлы, сказано в NOTICE.
  *
@@ -17,6 +17,8 @@ import { isCustomProviderId } from '@parley/protocol';
 import claudeUrl from '../assets/providers/claude.svg';
 import codexLightUrl from '../assets/providers/codex-light.svg';
 import codexUrl from '../assets/providers/codex.svg';
+import kimiLightUrl from '../assets/providers/kimi-light.svg';
+import kimiUrl from '../assets/providers/kimi.svg';
 import parleyUrl from '../assets/providers/parley.svg';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
@@ -38,23 +40,29 @@ function providerLetter(provider: string): string {
 /**
  * Семейство CLI аккаунта подписки (спека подписок 5.9): значок аккаунта — значок его CLI, а не Parley. Берётся из строки
  * `providers.list` (`family` отдаёт хост); у записи с адресом, хоть она и запускается через `claude`, значка CLI нет.
+ * Kimi узнаётся по пресету endpoint-записи, а не по пользовательскому имени или id.
  * Протокол пока знает только `family: 'claude'`; Codex — по виду аккаунта до этапа 3.
  */
-function accountFamily(row: ProviderInfo | undefined): 'claude' | 'codex' | null {
+function providerBrand(row: ProviderInfo | undefined): 'claude' | 'codex' | 'kimi' | null {
   const kind = kindOf(row?.custom);
   if (kind === 'claude-account') return row?.family ?? 'claude';
-  return kind === 'codex-account' ? 'codex' : null;
+  if (kind === 'codex-account') return 'codex';
+  if (kind === 'endpoint' && row?.custom && 'preset' in row.custom && row.custom.preset === 'kimi') return 'kimi';
+  return null;
 }
 
 /** Адрес брендового значка; `null` — у провайдера его нет, рисуется буква. */
-function brandIcon(provider: string, dark: boolean, family: 'claude' | 'codex' | null): string | null {
+function brandIcon(provider: string, dark: boolean, brand: 'claude' | 'codex' | 'kimi' | null): string | null {
   // Аккаунт подписки — значок семейства (спека подписок 5.9), стоит до правила своих провайдеров.
-  if (family === 'claude') return claudeUrl;
-  if (family === 'codex') return dark ? codexLightUrl : codexUrl;
-  // Свои провайдеры (спека 3.7): пока значок Parley, вендорские — следующая работа. По id, а не по стору:
+  if (brand === 'claude') return claudeUrl;
+  if (brand === 'codex') return dark ? codexLightUrl : codexUrl;
+  if (brand === 'kimi') return dark ? kimiLightUrl : kimiUrl;
+  // Свои провайдеры без известного бренда — значок Parley. По id, а не по стору:
   // удалённый провайдер в старой комнате остаётся со значком.
   if (isCustomProviderId(provider)) return parleyUrl;
   switch (provider.toLowerCase()) {
+    case 'kimi':
+      return dark ? kimiLightUrl : kimiUrl;
     case 'claude':
       return claudeUrl;
     case 'codex':
@@ -73,9 +81,9 @@ export interface AgentIconProps {
 
 export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.Element {
   const dark = useUiStore((state) => state.dark);
-  // Селектор отдаёт строку или `null`: значок перерисовывается только при смене семейства.
-  const family = useProvidersStore((state) => accountFamily(state.providers.find((row) => row.id === provider)));
-  const src = brandIcon(provider, dark, family);
+  // Селектор отдаёт строку или `null`: значок перерисовывается только при смене бренда.
+  const brand = useProvidersStore((state) => providerBrand(state.providers.find((row) => row.id === provider)));
+  const src = brandIcon(provider, dark, brand);
   if (src !== null) {
     return (
       <img

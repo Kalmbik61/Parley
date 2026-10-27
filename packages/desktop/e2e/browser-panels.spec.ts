@@ -14,7 +14,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * - у Chat сессии и у комнаты кнопка «Browser» открывает панель справа от вида; страница грузится, адресная строка новой
  *   страницы в фокусе; Select кладёт чип хозяину панели (в поле Chat сессии, в поле комнаты); меню «To» в панели нет;
  * - панель переживает перезагрузку окна: открыта, страница та же;
- * - вид уже 720 px (окно 800×500) — панель встаёт поверх вида целиком, «Back to chat» и «Back to room» возвращают; окно
+ * - вид уже 560 px (окно 800×500) — панель встаёт поверх вида целиком, «Back to chat» и «Back to room» возвращают; окно
  *   стало шире — та же панель встаёт рядом; длинные названия сессии, комнаты и адреса не ломают полоску; закрытая панель
  *   остаётся нормального размера (страница не схлопывается);
  * - Console | Network, размеры и Annotate в панели работают, как во вкладке: панель DevTools и редактор метки остаются внутри
@@ -416,7 +416,7 @@ test.describe('браузер чата и браузер комнаты (эта�
     expect(await roomPanel.getByTestId('browser-panel-strip').evaluate((node) => node.scrollWidth <= node.clientWidth + 1), 'полоска комнаты шире панели').toBe(true);
     await screenshot(window, 'room-narrow', screenDpr);
 
-    // Окно стало шире 720 px вида: панель встаёт рядом с видом, кнопка «Back» исчезает.
+    // Окно стало шире 560 px вида: панель встаёт рядом с видом, кнопка «Back» исчезает.
     await setSize(electronApp, { width: 1400, height: 900 });
     await expect(roomPanel.getByRole('button', { name: 'Back to room' })).toHaveCount(0);
     await expect.poll(async () => {

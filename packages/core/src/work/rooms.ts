@@ -56,7 +56,7 @@ export interface NewRoom {
 /** Заводит комнату в карте. */
 export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString()): Room {
   const lead = init.lead ?? null;
-  if (init.mode !== undefined && !['free', 'checklist', 'verified'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
+  if (init.mode !== undefined && !['free', 'checklist', 'verified', 'autonomous'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
   // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
   if (lead !== null && (lead === HUMAN || !init.members.includes(lead))) {
     throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);

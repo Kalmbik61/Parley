@@ -16,8 +16,6 @@ export interface RoomHeaderProps {
   modeControl?: ReactNode;
   /** Чип рецепта комнаты (`RoomRecipeChip`) рядом с режимом. */
   recipeChip?: ReactNode;
-  /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
-  historyMenu?: ReactNode;
   /** Кнопка «Browser» панели браузера комнаты (спека браузера 4.11) — справа в строке названия. */
   browserToggle?: ReactNode;
   /** Значок расхода токенов комнаты (`RoomUsageChip`) рядом с режимом. */
@@ -37,7 +35,7 @@ export interface RoomHeaderProps {
   now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -62,7 +60,6 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
       {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? modeControl : (
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}{contextChip}</div>
       )}
-      {historyMenu}
       <ParticipantStrip
         participants={participants}
         onOpenSession={onOpenSession}

@@ -345,6 +345,229 @@ describe('transitionSession', () => {
 });
 
 describe('parseMap', () => {
+  const planMap = (mode: 'verified' | 'autonomous') => ({
+    ...emptyMap(),
+    rooms: [{
+      id: 'r-01', title: 'Комната', creator: HUMAN, ownerId: null, members: [],
+      lead: null, mode, proposal: null, recipe: null, archivedAt: null,
+      createdAt: '2026-10-24T00:00:00.000Z',
+    }],
+    plans: [{
+      id: 'pl-01', roomId: 'r-01', mode, status: 'active', rev: 1,
+      goal: 'Прочитать карту', backlog: [],
+      items: [{
+        id: 1, title: 'Типы', owner: 's-01', scope: 'Ядро', after: [],
+        criteria: ['Карта читается'], verifier: HUMAN, status: 'ready',
+        evidence: null, note: null, log: [],
+      }],
+      acceptedAt: '2026-10-24T00:00:00.000Z', completedAt: null, cancelledAt: null,
+      completionSummary: null,
+    }],
+  });
+  const autonomousMap = () => {
+    const map = planMap('autonomous');
+    const at = '2026-10-24T00:00:00.000Z';
+    return { ...map, plans: [{ ...map.plans[0]!, autonomous: {
+      budget: {
+        limits: { attemptsPerItem: 3, repairWaves: 2, minutesPerAttempt: 10, sessions: 5, concurrent: 1 },
+        spent: { attempts: 1, repairWaves: 0, sessions: 1, verifiers: 0, minutes: 0, launches: 1 },
+        reservations: [{ key: 'op-0001', kind: 'session', attemptId: 'at-0001', at }],
+      },
+      checks: [{
+        id: 'ck-spec-01', item: 1, argv: ['pnpm', 'test'], cwd: '.', env: { CI: '1' },
+        inputs: [{ path: 'package.json', blob: 'base-blob' }], timeoutMs: 1000, frozenAt: at,
+      }],
+      coverage: { 1: { 0: ['ck-spec-01', 'verifier'] } },
+      criteriaVersion: { 1: 1 },
+      integration: {
+        branch: 'integration', baseSha: 'base', verifiedHead: 'base', candidateHead: 'capture',
+        queue: ['at-0001'], suspended: { reason: 'Проверка', attemptId: 'at-0001', at },
+      },
+      attempts: [{
+        id: 'at-0001', item: 1, n: 1, planRev: 1, criteriaVersion: 1,
+        worker: 's-01', verifier: null, branch: 'attempt', baseSha: 'base', sha: 'capture',
+        tree: 'tree', submissionKey: 'submission', status: 'submitted',
+        manifest: {
+          version: 1, sha: 'capture', criteriaVersion: 1, dependsOn: [], coverage: 'covered',
+          scope: 'Ядро', facts: ['Карта читается'], hypotheses: [], notFound: [], gaps: [],
+          text: 'Готово', artifacts: [{ path: 'result.txt', sha256: 'hash', storedAs: 'attempts/result.txt' }],
+          hash: 'manifest-hash', submittedAt: at,
+        },
+        receipt: {
+          id: 'rc-0001', attemptId: 'at-0001', manifestHash: 'manifest-hash', sha: 'capture',
+          criteriaVersion: 1, valid: true, reason: null, at,
+        },
+        checks: ['ck-0001'], failureSignature: null, startedAt: at, endedAt: null,
+        log: [{ at, by: 'engine', status: 'submitted', note: null, op: 'op-0001' }],
+      }],
+      ops: [{
+        key: 'op-0001', kind: 'create-session', attemptId: 'at-0001', payload: { sessionId: 's-01' },
+        state: 'intended', at, settledAt: null, result: null,
+      }],
+      halted: { reason: 'restart', at, detail: 'Хост перезапущен' },
+      seq: { attempt: 1, receipt: 1, check: 1, op: 1 },
+    } }] };
+  };
+
+  it('старый план verified читается без изменений и без поля autonomous', () => {
+    const map = planMap('verified');
+    const parsed = parseMap(JSON.stringify(map), 'map.json');
+    expect(parsed).toEqual(map);
+    expect(parsed.plans?.[0]).not.toHaveProperty('autonomous');
+  });
+
+  it('читает автономный план с попытками, операциями и резервами без потерь', () => {
+    const map = autonomousMap();
+    const parsed = parseMap(JSON.stringify(map), 'map.json');
+    expect(parsed).toEqual(map);
+    expect(parsed.plans?.[0]?.autonomous?.coverage[1]?.[0]).toEqual(['ck-spec-01', 'verifier']);
+    expect(parsed.plans?.[0]?.autonomous?.criteriaVersion[1]).toBe(1);
+  });
+
+  it('допускает пустую карту текущих версий критериев', () => {
+    const map = autonomousMap();
+    Object.assign(map.plans[0]!.autonomous, { criteriaVersion: {} });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+  });
+
+  it.each([
+    { '01': { '0': ['ck-spec-01'] } },
+    { '1': { '00': ['ck-spec-01'] } },
+    { '1': { '0': ['ck-spec-01'] }, '01': { '0': ['verifier'] } },
+    { '1': { '0': ['ck-spec-01'], '00': ['verifier'] } },
+    { '0': { '0': ['ck-spec-01'] } },
+  ])('отклоняет неканонические ключи coverage без нормализации: %j', (coverage) => {
+    const map = autonomousMap();
+    map.plans[0]!.autonomous.coverage = coverage as typeof map.plans[0]['autonomous']['coverage'];
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
+  it('отклоняет автономный план без поля autonomous', () => {
+    expect(() => parseMap(JSON.stringify(planMap('autonomous')), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
+  it('отклоняет поле autonomous у плана verified', () => {
+    const map = autonomousMap();
+    map.plans[0]!.mode = 'verified';
+    map.rooms[0]!.mode = 'verified';
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
+  it('подставляет только безопасные пустые поля автономного плана', () => {
+    const map = autonomousMap();
+    const autonomous = map.plans[0]!.autonomous;
+    const { attempts, ops, halted, seq, budget, ...required } = autonomous;
+    const { reservations, ...requiredBudget } = budget;
+    map.plans[0]!.autonomous = { ...required, budget: requiredBudget } as typeof autonomous;
+    const parsed = parseMap(JSON.stringify(map), 'map.json').plans?.[0]?.autonomous;
+    expect(parsed).toEqual({
+      ...required, budget: { ...requiredBudget, reservations: [] },
+      attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
+    });
+    expect(parseMap(JSON.stringify(parseMap(JSON.stringify(map), 'map.json')), 'map.json').plans?.[0]?.autonomous).toEqual(parsed);
+  });
+
+  it('сохраняет null в необязательных записях автономного плана', () => {
+    const map = autonomousMap();
+    const autonomous = map.plans[0]!.autonomous;
+    Object.assign(autonomous.attempts[0]!, {
+      worker: null, sha: null, tree: null, submissionKey: null, manifest: null, receipt: null,
+    });
+    Object.assign(autonomous.integration, { candidateHead: null, suspended: null });
+    Object.assign(autonomous.ops[0]!, { attemptId: null, settledAt: '2026-10-24T00:01:00.000Z', result: {} });
+    Object.assign(autonomous, { halted: null });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+  });
+
+  it('сохраняет null вместо SHA в манифесте до захвата', () => {
+    const map = autonomousMap();
+    Object.assign(map.plans[0]!.autonomous.attempts[0]!.manifest, { sha: null });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+  });
+
+  it('отклоняет попытку с неизвестным статусом', () => {
+    const map = autonomousMap();
+    map.plans[0]!.autonomous.attempts[0]!.status = 'unknown';
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
+  it.each(['kind', 'state'] as const)('отклоняет операцию с неизвестным %s', (field) => {
+    const map = autonomousMap();
+    map.plans[0]!.autonomous.ops[0]![field] = 'unknown';
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
+  it.each([
+    ['budget.limits', undefined],
+    ['budget.spent', undefined],
+    ['checks', undefined],
+    ['coverage', undefined],
+    ['criteriaVersion', undefined],
+    ['criteriaVersion', null],
+    ['criteriaVersion', []],
+    ['criteriaVersion.01', 1],
+    ['criteriaVersion.0', 1],
+    ['criteriaVersion.9007199254740992', 1],
+    ['criteriaVersion.1', 0],
+    ['criteriaVersion.1', 1.5],
+    ['criteriaVersion.1', Number.MAX_SAFE_INTEGER + 1],
+    ['criteriaVersion.1', '1'],
+    ['integration', undefined],
+    ['budget', null],
+    ['budget.limits.sessions', 1.5],
+    ['budget.spent.minutes', Number.MAX_SAFE_INTEGER + 1],
+    ['budget.reservations', null],
+    ['budget.reservations.0.kind', 'unknown'],
+    ['budget.reservations.0.attemptId', 1],
+    ['checks', null],
+    ['checks.0.argv', ['pnpm', 1]],
+    ['checks.0.env.CI', true],
+    ['checks.0.inputs.0.blob', null],
+    ['checks.0.timeoutMs', 0.5],
+    ['coverage.1.0', [1]],
+    ['coverage.unknown', {}],
+    ['integration.verifiedHead', 1],
+    ['integration.branch', ''],
+    ['integration.baseSha', ''],
+    ['integration.verifiedHead', ''],
+    ['integration.candidateHead', ''],
+    ['integration.queue', [null]],
+    ['integration.suspended.at', false],
+    ['attempts', null],
+    ['attempts.0', null],
+    ['attempts.0.planRev', Number.MAX_SAFE_INTEGER + 1],
+    ['attempts.0.worker', 1],
+    ['attempts.0.sha', 1],
+    ['attempts.0.branch', ''],
+    ['attempts.0.baseSha', ''],
+    ['attempts.0.sha', ''],
+    ['attempts.0.tree', ''],
+    ['attempts.0.receipt.sha', ''],
+    ['attempts.0.receipt.manifestHash', ''],
+    ['attempts.0.manifest.sha', ''],
+    ['attempts.0.manifest.artifacts.0.sha256', ''],
+    ['attempts.0.manifest.version', 2],
+    ['attempts.0.manifest.coverage', 'unknown'],
+    ['attempts.0.manifest.artifacts.0.sha256', 1],
+    ['attempts.0.receipt.valid', 'yes'],
+    ['attempts.0.checks', [1]],
+    ['attempts.0.log.0.status', 'unknown'],
+    ['ops', null],
+    ['ops.0', null],
+    ['ops.0.payload', []],
+    ['ops.0.result', 1],
+    ['halted.reason', 'unknown'],
+    ['seq.attempt', -1],
+    ['seq.op', 0.5],
+  ])('отклоняет битое поле автономного плана %s', (path, value) => {
+    const map = autonomousMap();
+    const keys = (path as string).split('.');
+    let record = map.plans[0]!.autonomous as unknown as Record<string, unknown>;
+    for (const key of keys.slice(0, -1)) record = record[key] as Record<string, unknown>;
+    record[keys.at(-1)!] = value;
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
+  });
+
   it('читает карту нужной формы', () => {
     const map = emptyMap();
     expect(parseMap(JSON.stringify(map), 'map.json')).toEqual({ ...map, plans: [] });
@@ -1117,4 +1340,27 @@ describe('room ownership migration', () => {
     expect(() => addSession(map, { provider: 'claude', label: '', task: '', parent: 's-01' })).toThrow(/parent/);
     expect(map).toEqual(before);
   });
+});
+
+
+describe('clone workspace', () => {
+  it('preserves valid clone metadata and accepts old maps', () => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'codex', label: 'worker', task: 'work' });
+    expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toBeUndefined();
+    Object.assign(session, { workspace: { kind: 'clone', path: '/tmp/clone', branch: 'attempts/at-0001', sha: 'abc' } });
+    expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toEqual(session.workspace);
+  });
+  it.each([{ kind: 'worktree', path: '/tmp/c', branch: 'a', sha: 'abc' }, { kind: 'clone', path: '', branch: 'a', sha: 'abc' }, { kind: 'clone', path: '/tmp/c', branch: 'a' }])('rejects malformed clone metadata %j', workspace => {
+    const map = emptyMap();
+    Object.assign(addSession(map, { provider: 'codex', label: 'worker', task: 'work' }), { workspace });
+    expect(() => parseMap(JSON.stringify(map))).toThrow();
+  });
+});
+
+
+it('parses engine artifact workspaces without clone branch metadata', () => {
+  const map = emptyMap();
+  Object.assign(addSession(map, { provider: 'codex', label: 'Review', task: 'Review' }), { workspace: { kind: 'artifacts', path: '/engine/review/op-01' } });
+  expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toEqual({ kind: 'artifacts', path: '/engine/review/op-01' });
 });

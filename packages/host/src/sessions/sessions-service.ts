@@ -20,11 +20,13 @@ import {
   prepareSessionRole,
   roleId,
   type SessionRole,
+  type WorkSession,
   type RoleCatalog,
   baseBranchOf,
   createNewSession,
   createPendingSession,
   createWorktree,
+  checkProjectConnectivity,
   ensureParleyMd,
   deleteSession,
   DirtyWorktreeError,
@@ -74,6 +76,7 @@ import {
   settleAttempt,
   startSession,
   SYSTEM,
+  ENGINE,
   transitionSession,
   trustKey,
   updateMap,
@@ -114,10 +117,13 @@ export interface CreateSessionInput {
   parent: string | null;
   /** Authenticated caller requesting an ordinary workspace peer. */
   requestedBy?: string;
+  /** Только для движка: create_session канала агента этот флаг не передаёт. */
+  deferLaunch?: boolean;
   role?: SessionRole | null;
   agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
   worktree?: boolean;
+  workspace?: WorkSession['workspace'];
   /**
    * Модель и усилие из диалога запуска (дизайн комнат, 3.2; спека нормалайзера, 5.3). Пару проверяет
    * `resolveModelChoice`: вне каталога провайдера — `bad_request`, пустое значение — «по умолчанию», без флага.
@@ -163,6 +169,8 @@ export interface LaunchChoice {
 }
 
 export interface SessionsService {
+  /** Проверка после удаления worktree, включая сессии без живого процесса. */
+  checkWorktreeGit(ref: SessionRef): Promise<void>;
   create(input: CreateSessionInput): Promise<CreatedSession>;
   /**
    * `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. `held` — запуск Codex
@@ -300,6 +308,30 @@ export function createSessionsService(
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
+  const gitWriteGrants = new Map<string, boolean>();
+
+  function needsGitCheck(session: WorkSession | undefined, issuedGrant: boolean | undefined): boolean {
+    // После перезапуска хоста прежний grant неизвестен: текущая роль его не отменяет.
+    return issuedGrant ?? Boolean(session?.provider === 'codex' && !session.workspace && session.worktree?.createdAt);
+  }
+
+  async function checkGit(ref: SessionRef): Promise<void> {
+    try {
+      await checkProjectConnectivity(ref.projectPath);
+    } catch (error) {
+      host.log.warn('Git connectivity check failed', { ref, error: String(error) });
+      host.broadcast('host.notice', {
+        kind: 'git-connectivity-failed', ref,
+        text: 'Git repository connectivity check failed; inspect the host log before continuing.',
+        at: new Date().toISOString(),
+      });
+    }
+  }
+
+  async function checkWorktreeGit(ref: SessionRef): Promise<void> {
+    const map = await readMap(ref.projectPath, ref.workId);
+    if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), gitWriteGrants.get(refKey(ref)))) await checkGit(ref);
+  }
 
   function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
     const diagnostics = plan.diagnostics ?? [];
@@ -442,16 +474,25 @@ export function createSessionsService(
   // Итог `done`/`failed` — другая ось, выход процесса его не трогает.
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
+    const issuedGitGrant = gitWriteGrants.get(key);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
-      .then(() =>
-        finishExited(ref.projectPath, ref.workId, ref.sessionId, {
-          exitCode: exit.exitCode,
-          signal: exit.signal ?? undefined,
-        }),
-      )
+      .then(async () => {
+        try {
+          await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
+            exitCode: exit.exitCode,
+            signal: exit.signal ?? undefined,
+          });
+        } finally {
+          if (issuedGitGrant === true) await checkGit(ref);
+          else if (issuedGitGrant === undefined) {
+            const map = await readMap(ref.projectPath, ref.workId);
+            if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), undefined)) await checkGit(ref);
+          }
+        }
+      })
       .catch((error: unknown) => {
         host.log.error('переход сессии в sleeping не записался', { ref, error: String(error) });
       })
@@ -700,7 +741,7 @@ export function createSessionsService(
         return { hookUrl: url, codexHookCommand: codexCommand };
       });
       const roleCatalog = feed.roleCatalog
-        ? await timer.step('roles', () => feed.roleCatalog!(session.worktree?.path ?? ref.projectPath))
+        ? await timer.step('roles', () => feed.roleCatalog!(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath))
         : undefined;
       // Канал агента к браузеру (спека браузера 3.7): свой токен на каждый запуск, у всех провайдеров. Адрес и токен
       // уходят только в конфиг MCP-сервера, в окружение процесса — нет.
@@ -714,7 +755,7 @@ export function createSessionsService(
       const trust = trusted
         ? {
             project: await trustKey(ref.projectPath),
-            cwd: await trustKey(session.worktree?.path ?? ref.projectPath),
+            cwd: await trustKey(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath),
           }
         : undefined;
       const codexApprovals = session.provider === 'codex'
@@ -802,6 +843,7 @@ export function createSessionsService(
         }
       }
       const env = providerLaunchEnv(entry, process.env, plan.env, secret);
+      if (session.workspace && plan.env.TMPDIR !== undefined) env.TMPDIR = plan.env.TMPDIR;
       // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
@@ -818,10 +860,13 @@ export function createSessionsService(
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
+      const previousGitGrant = gitWriteGrants.get(key);
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
         handle = await timer.step('spawn', async () => {
           validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
+            plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           const spawned = pty.start(ref, {
             command,
             args: plan.args,
@@ -833,6 +878,8 @@ export function createSessionsService(
           return spawned;
         });
       } catch (error) {
+        if (previousGitGrant === undefined) gitWriteGrants.delete(key);
+        else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
           ? new SpawnBudgetError('spawn-budget-too-large') : error;
@@ -1005,6 +1052,8 @@ export function createSessionsService(
     logged: { sessionId?: string },
   ): Promise<CreatedSession> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
+    if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
+    if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
     const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
     if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
@@ -1071,21 +1120,24 @@ export function createSessionsService(
         task,
         parent,
         contextFrom: [],
+        ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const caller = map.sessions.find(s => s.id === input.requestedBy);
-        if (!caller || caller.lifecycle === 'closed') throw new HostError('bad_request', 'The caller session is no longer available.');
+        if (input.requestedBy !== ENGINE && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', 'The caller session is no longer available.');
         if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
         const limits = limitsFromConfig(agentConfig);
-        const room = roomOfSession(map, caller.id);
+        const room = input.requestedBy === ENGINE
+          ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${plan.id}/${op.attemptId}/${op.payload.role}/${op.key}`))?.roomId ?? null
+          : roomOfSession(map, caller!.id);
         const used = map.resources?.spawned ?? 0;
         const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
         if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
         if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
-        if (!awaitsConsent) {
-          const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
+        if (!awaitsConsent && !input.deferLaunch) {
+          const attempt = reserveAttempt(map, { kind: 'launch', actor: input.requestedBy!, session: sessionId, owner: generation, limits });
           admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
         } else {
           // Резерв слота возьмёт `launch()` после решения человека; счётчики созданных сессий растут уже сейчас.
@@ -1097,6 +1149,7 @@ export function createSessionsService(
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
+      if (input.deferLaunch) return ref;
       const created = await timer.step('launch', () => createInteractive(ref, 'launch', choice));
       // Согласие пропало между проверкой и запуском (отозвано): резерв, взятый при создании, возвращается.
       const reserved = admitted as { ref: SessionRef; attemptId: string } | undefined;
@@ -1116,8 +1169,7 @@ export function createSessionsService(
   }
 
   async function stop(ref: SessionRef): Promise<void> {
-    if (pty.get(ref) === undefined) return;
-    await pty.stop(ref);
+    if (pty.get(ref) !== undefined) await pty.stop(ref);
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё
     // пишется, дожидаемся её, чтобы вызывающая сторона не читала гонку.
     await finalizing.get(refKey(ref));
@@ -1222,7 +1274,9 @@ export function createSessionsService(
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
     // самого удаления записи.
     const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
-    const worktree = map?.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
+    const session = map?.sessions.find((candidate) => candidate.id === ref.sessionId);
+    const worktree = session?.worktree;
+    const check = needsGitCheck(session, gitWriteGrants.get(refKey(ref)));
     if (worktree !== null && worktree !== undefined && worktree.createdAt !== null) {
       try {
         await discardWorktree(ref.projectPath, worktree, { force });
@@ -1235,6 +1289,8 @@ export function createSessionsService(
       }
     }
     await deleteSession(ref.projectPath, ref.workId, ref.sessionId);
+    if (check) await checkGit(ref);
+    gitWriteGrants.delete(refKey(ref));
   }
 
   /**
@@ -1277,6 +1333,7 @@ export function createSessionsService(
   }
 
   return {
+    checkWorktreeGit,
     create,
     launch,
     stop,

@@ -48,8 +48,8 @@ export interface AgentRow {
 export type AgentResult = { status: 'started'; sessionId: string } | { status: 'failed'; message: string };
 
 /** Режим комнаты. */
-export type Mode = 'free' | 'checklist' | 'verified';
-export const MODES: readonly Mode[] = ['free', 'checklist', 'verified'];
+export type Mode = 'free' | 'checklist' | 'verified' | 'autonomous';
+export const MODES: readonly Mode[] = ['free', 'checklist', 'verified', 'autonomous'];
 
 export const blankRow = (key: number, provider: string | null = null): AgentRow => ({ key, provider, model: null, effort: null, role: null, roleMissing: null, worktree: null, providerTouched: false, modelTouched: false, effortTouched: false });
 

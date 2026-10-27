@@ -5,20 +5,29 @@
  * работ — ручные, чтобы считать живые ожидания.
  */
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, request, type Server } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { promisify } from 'node:util';
 import {
   AGENT_TOOLS_PATH,
   AGENT_TOOLS_REQUEST_BYTES,
   DEFAULT_CONFIG,
+  addRoom,
   addSession,
   buildRoleCatalog,
   createRemoteToolRunner,
   createWork,
+  ENGINE,
+  HUMAN,
   readStoredMap,
+  resolveProposal,
   updateMap,
   workPaths,
   type ProviderRow,
@@ -27,6 +36,7 @@ import {
 import type { SessionRef } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserEndpoint } from './browser-endpoint.js';
+import { createAttemptsEndpoint } from './attempts-endpoint.js';
 import { hostToolContext } from './tool-context.js';
 import { CALL_REPLAY_LIMIT, CALL_REPLAY_TTL_MS, createToolsEndpoint } from './tools-endpoint.js';
 
@@ -553,9 +563,113 @@ describe('маршрут /agent/tools и настоящий удалённый �
   });
 });
 
+describe('host-local attempts', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('checks current registration in the existing token registry, including revocation and scope', () => {
+    const registry = createBrowserEndpoint({ log: { info() {}, warn() {}, error() {} }, clients: () => [], roomsOf: () => [] });
+    const ref: SessionRef = { projectPath: project, workId, sessionId: 's-01' };
+    expect(registry.isRegistered(ref)).toBe(false);
+    registry.register(ref);
+    expect(registry.isRegistered({ ...ref })).toBe(true);
+    for (const other of [{ ...ref, sessionId: 's-02' }, { ...ref, workId: 'w-9999' }, { ...ref, projectPath: '/elsewhere' }]) {
+      expect(registry.isRegistered(other)).toBe(false);
+    }
+    registry.register(ref);
+    expect(registry.isRegistered(ref)).toBe(true);
+    registry.unregister(ref);
+    expect(registry.isRegistered(ref)).toBe(false);
+  });
+
+  it('runs forwarded proposal, hashless submit and status through the host context without an HTTP loop', async () => {
+    const git = async (...args: string[]) => (await promisify(execFile)('git', ['-c', 'core.fsmonitor=false', '-C', project, ...args])).stdout.trim();
+    await git('init', '-b', 'main');
+    await writeFile(path.join(project, 'test.js'), 'console.log("pass");\n');
+    await git('add', 'test.js');
+    await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial attempts fixture');
+    await updateMap(project, workId, map => { addRoom(map, { creator: HUMAN, title: 'Autonomous', mode: 'autonomous', lead: 's-01', members: ['s-01', 's-02'] }); });
+    const log = { info() {}, warn() {}, error() {} };
+    const registry = createBrowserEndpoint({ log, clients: () => [], roomsOf: () => [] });
+    const ref = (sessionId: string): SessionRef => ({ projectPath: project, workId, sessionId });
+    const tokens = { 's-01': registry.register(ref('s-01')), 's-02': registry.register(ref('s-02')) };
+    const submit = vi.fn(async () => ({ ok: true as const, result: { receipt: { id: 'rc-internal' } } }));
+    const attemptsEndpoint = createAttemptsEndpoint({ authenticate: req => registry.authenticate(req), engine: { submit, verify: async () => ({ ok: true, result: { recorded: true } }) } });
+    const perform = vi.spyOn(attemptsEndpoint, 'perform');
+    const endpoint = createToolsEndpoint({
+      log, authenticate: req => registry.authenticate(req),
+      contextFor: (target, launch) => hostToolContext(target, launch, {
+        providerRows: async () => [], onWorksChange: () => () => {},
+        attempts: (scope, request) => attemptsEndpoint.perform(scope, request, () => registry.isRegistered(scope)),
+      }),
+    });
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const call = (name: string, args: Record<string, unknown>, session: keyof typeof tokens = 's-01') => new Promise<unknown>((resolve, reject) => {
+      const data = Buffer.from(JSON.stringify({ op: 'call', name, args, callId: randomUUID(), launch: {} }));
+      const req = Object.assign(Readable.from([data]), { method: 'POST', headers: { authorization: `Bearer ${tokens[session]}`, 'content-length': String(data.length) } });
+      const res = Object.assign(new EventEmitter(), {
+        writableEnded: false, destroyed: false,
+        writeHead(status: number) { if (status !== 200) reject(new Error(`HTTP ${status}`)); },
+        end(text: string) {
+          this.writableEnded = true;
+          const body = JSON.parse(text) as { ok: boolean; result?: { isError?: boolean; content: { text: string }[] } };
+          if (!body.ok || body.result?.isError) reject(new Error(text));
+          else resolve(JSON.parse(body.result!.content[0]!.text));
+        },
+      });
+      req.on('error', reject);
+      endpoint.handle(req as IncomingMessage, res as unknown as ServerResponse);
+    });
+    const plan = {
+      mode: 'autonomous', goal: 'Host-owned handoff',
+      items: [{ id: 1, title: 'Change', owner: ENGINE, verifier: ENGINE, scope: 'src', criteria: ['Works'] }],
+      autonomous: {
+        budget: { attemptsPerItem: 3, repairWaves: 4, minutesPerAttempt: 30, sessions: 10, concurrent: 2 },
+        checks: [{ id: 'test', item: 1, argv: ['node', 'test.js'], cwd: '.', env: {}, inputs: ['test.js'], timeoutMs: 1000 }],
+        coverage: { 1: { 0: ['test'] } },
+      },
+    };
+    const proposed = await call('propose_decision', { room: 'r-01', text: 'Implement', plan });
+    expect(proposed).toEqual({ proposalId: 'p-01', rev: 0 });
+    expect(perform.mock.calls[0]![0]).toEqual(ref('s-01'));
+    expect(perform.mock.calls[0]![1]).toMatchObject({ action: 'propose-plan', roomId: 'r-01' });
+    await updateMap(project, workId, (map, letters) => {
+      const proposal = map.rooms[0]!.proposal!;
+      resolveProposal(map, letters, 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev });
+      const accepted = map.plans![0]!;
+      accepted.autonomous!.attempts.push({
+        id: 'at-0001', item: 1, n: 1, planRev: accepted.rev, criteriaVersion: 1, worker: 's-02', verifier: null,
+        branch: 'attempt', baseSha: accepted.autonomous!.integration.baseSha, sha: null, tree: null, submissionKey: null,
+        status: 'running', manifest: null, receipt: null, checks: [], failureSignature: null, startedAt: new Date().toISOString(), endedAt: null, log: [],
+      });
+    });
+    const manifest = { version: 1, criteriaVersion: 1, dependsOn: [], coverage: 'covered', scope: 'src', facts: ['Works'], hypotheses: [], notFound: [], gaps: [], text: 'Done', artifacts: [], submittedAt: new Date().toISOString() };
+    const received = await call('attempt_submit', { attemptId: 'at-0001', manifest }, 's-02');
+    expect(received).toMatchObject({ receipt: { id: 'rc-internal' }, submissionKey: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(perform.mock.calls[1]![0]).toEqual(ref('s-02'));
+    expect(submit).toHaveBeenCalledWith(ref('s-02'), expect.any(String), expect.any(Number), expect.objectContaining({ action: 'submit', manifest: expect.objectContaining({ hash: expect.any(String) }) }));
+    expect(await call('attempt_status', {})).toMatchObject({ attempts: [{ id: 'at-0001' }] });
+    expect(perform).toHaveBeenCalledTimes(2); // Status remains a host-owned map read.
+    expect(fetch).not.toHaveBeenCalled();
+    registry.unregister(ref('s-02'));
+    expect(await attemptsEndpoint.perform(ref('s-02'), { action: 'submit', attemptId: 'at-0001', manifest }, () => registry.isRegistered(ref('s-02')))).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('hostToolContext', () => {
   const scope = (): SessionRef => ({ projectPath: project, workId, sessionId: 's-01' });
   const noRows = async (): Promise<ProviderRow[]> => [];
+
+  it('binds an optional attempts channel to the trusted session and forwards its signal', async () => {
+    const attempts = vi.fn(async () => ({ ok: true, result: {} }));
+    const context = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {}, attempts });
+    const signal = new AbortController().signal;
+    const request = { action: 'verify' as const, attemptId: 'at-0001', sha: 'a'.repeat(40), criterion: 0, verdict: 'pass' as const, note: 'Checked' };
+    await expect(context.attempts!(request, signal)).resolves.toEqual({ ok: true, result: {} });
+    expect(attempts).toHaveBeenCalledWith(scope(), request, signal);
+    expect(context).not.toHaveProperty('agent');
+    expect(await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {} })).not.toHaveProperty('attempts');
+  });
 
   it('builds the context of the host-side executor from the token scope, with no agent channel', async () => {
     const onWorksChange = vi.fn(() => () => {});

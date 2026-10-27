@@ -260,6 +260,43 @@ describe('бриф: роль в комнате', () => {
     return map;
   }
 
+  it('автономному ведущему: предложить критерии, проверки и бюджет, читать передачи, не писать код', () => {
+    const map = mapWithRoom();
+    map.rooms[0]!.mode = 'autonomous';
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('you are the autonomous lead');
+    expect(brief).toContain('criteria');
+    expect(brief).toContain('check specifications');
+    expect(brief).toContain('budget');
+    expect(brief).toContain('propose_decision');
+    expect(brief).not.toContain('requestKey');
+    expect(brief).toContain('manifests and cards');
+    expect(brief).toContain('Do not write code');
+    expect(brief).not.toContain('Accepted — hand out the parts');
+  });
+
+  it('автономным исполнителю и проверяющему: назначение движка и attempt_* вместо plan_*', () => {
+    const map = mapWithRoom();
+    map.rooms[0]!.mode = 'autonomous';
+    map.sessions.find((session) => session.id === 's-03')!.role = { source: 'builtin', name: 'executor' };
+    let brief = buildBrief(map, 's-03');
+    expect(brief).toContain('autonomous worker');
+    expect(brief).toContain('attempt_submit');
+    expect(brief).toContain('without sha');
+    expect(brief).toContain('The host computes manifest.hash and submissionKey');
+    expect(brief).toContain('retry with the same manifest');
+    expect(brief).toContain('Read attempt_status before retrying a lost response');
+    expect(brief).toContain('returns the assigned submissionKey');
+    expect(brief).toContain('plan_*');
+    map.sessions.find((session) => session.id === 's-03')!.role = { source: 'builtin', name: 'verifier' };
+    brief = buildBrief(map, 's-03');
+    expect(brief).toContain('autonomous verifier');
+    expect(brief).toContain('attempt_verify');
+    expect(brief).toContain('exact SHA');
+    expect(brief).toContain('engine creates and closes');
+    expect(brief).not.toContain('until the lead names your part');
+  });
+
   it('ведущему: собрать позиции, propose_decision, до принятия не начинать, части — упоминаниями', () => {
     const brief = buildBrief(mapWithRoom(), 's-02');
 
@@ -814,4 +851,24 @@ describe('brief agent message visibility', () => {
     expect(brief).toContain('DIRECT_OWNER_DECISION');
     expect(brief).toContain('OWNED_ROOM_DECISION');
   });
+});
+
+
+it('describes the engine clone without worktree instructions', () => {
+  const map = mapWithSessions();
+  Object.assign(map.sessions[1]!, { workspace: { kind: 'clone', path: '/tmp/clone', branch: 'attempts/at-0001', sha: 'abc123' } });
+  const brief = buildBrief(map, 's-02');
+  expect(brief).toContain('Clone: isolated clone of the integration branch at abc123');
+  expect(brief).toContain('do not commit');
+  expect(brief).not.toContain('Worktree:');
+});
+
+
+it('describes an artifact-only reviewer workspace', () => {
+  const map = mapWithSessions();
+  map.sessions[1]!.workspace = { kind: 'artifacts', path: '/engine/review/op-01' };
+  const brief = buildBrief(map, 's-02');
+  expect(brief).toContain('Artifacts: engine-owned review evidence');
+  expect(brief).toContain('do not read source code or execute commands');
+  expect(brief).not.toContain('Worktree:'); expect(brief).not.toContain('Clone:');
 });

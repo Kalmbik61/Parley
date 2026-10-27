@@ -1,0 +1,8 @@
+; Check candidates may write only to their disposable checkout, private temp and devices.
+(version 1)
+(allow default)
+(deny file-write* (with send-signal SIGKILL))
+(allow file-write*
+  (subpath __CHECKOUT__)
+  (subpath __TMP__)
+  (subpath "/dev"))

@@ -688,7 +688,8 @@ describe('App — связь вернулась (слияние lane-r3 и main-
     refs = [{ projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' }];
     act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
 
-    expect(await screen.findByText('Interrupted mid-turn: S03')).toBeTruthy();
+    expect(await screen.findByText('Interrupted mid-turn:')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'S03' })).toBeTruthy();
     expect(screen.getByTestId('titlebar')).toBe(titlebar);
   });
 });

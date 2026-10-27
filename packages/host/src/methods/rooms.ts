@@ -13,13 +13,14 @@ import {
   renameHumanRoom,
   reopenHumanRoom,
   resolveRoomProposal,
+  resumeAutonomousPlan,
   sendHumanLetter,
   setHumanRoomLead,
   setHumanRoomOwner,
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode,
+import { ENGINE, HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode, requireOpenRoom, lateDefect,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
@@ -98,8 +99,13 @@ export const roomsResolveProposal: Handler<'rooms.resolveProposal'> = async (par
   messageId: await resolveRoomProposal(params),
 });
 
+export const plansResumeAutonomous: Handler<'plans.resumeAutonomous'> = async params => {
+  await resumeAutonomousPlan(params);
+  return { ok: true };
+};
+
 class NoChange extends Error {}
-export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMethodName]: Handler<M> } {
+export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<import('../rooms/autonomous-engine.js').AutonomousEngine, 'cancel'>): { [M in PlanMethodName]: Handler<M> } {
   async function mutate<M extends PlanMethodName>(name: M, params: PlanMethodParams<M>): Promise<PlanActionResult> {
     const { projectPath, workId } = params;
     if (!workExists(projectPath, workId)) throw new HostError('not_found', 'Workspace is unavailable.');
@@ -107,6 +113,14 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
     if (name !== 'plans.retryEffects') {
       const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
       try {
+        if (name === 'plans.cancel') {
+          const input = params as PlanMethodParams<'plans.cancel'>;
+          const plan = (await readMap(projectPath, workId)).plans?.find(plan => plan.id === input.planId);
+          if (plan?.mode === 'autonomous') {
+            if (!engine) throw new HostError('internal', 'Autonomous engine is unavailable.');
+            await engine.cancel(input);
+          }
+        }
         await updateMap(projectPath, workId, (map, letters) => {
           if (map.work.status !== 'active') throw new RoomRuleError('workspace is closed');
           reconcileRoomPlans(map);
@@ -131,10 +145,33 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
             }
             case 'plans.verify': {
               const input = params as PlanMethodParams<'plans.verify'>;
+              const index = map.plans?.findIndex(plan => plan.id === input.planId) ?? -1;
+              const plan = map.plans?.[index];
+              if (plan?.mode === 'autonomous' && input.verdict === 'returned') {
+                if (plan.rev !== input.rev || !['active', 'completing', 'completed'].includes(plan.status)) throw new PlanConflictError();
+                const room = requireOpenRoom(map, plan.roomId);
+                const attempt = plan.autonomous?.attempts.findLast(row => row.item === input.item && row.status === 'integrated');
+                if (!attempt || !input.note.trim()) throw new RoomRuleError('verified attempt and return reason required');
+                const reopened = structuredClone(plan);
+                if (reopened.status === 'completed') {
+                  reopened.status = 'active'; reopened.completedAt = null; reopened.completionSummary = null;
+                }
+                const result = lateDefect(reopened, room, { actor: ENGINE, rev: input.rev, now: new Date().toISOString(), attemptId: attempt.id, reason: input.note });
+                if (plan.status === 'completed') {
+                  if (plan.rev === Number.MAX_SAFE_INTEGER) throw new PlanConflictError();
+                  result.plan.rev++;
+                  result.plan.items.find(item => item.id === input.item)!.log.push({ at: new Date().toISOString(), by: HUMAN, status: 'returned', note: `reopened by human (late defect): rev ${plan.rev} → ${result.plan.rev}; item ${input.item}; ${input.note}` });
+                }
+                map.plans![index] = result.plan;
+                map.rooms[map.rooms.indexOf(room)] = result.room;
+                break;
+              }
               verifyPlanItem(map,letters,input.planId,input.rev,input.item,HUMAN,input.verdict,input.note); break;
             }
             case 'plans.cancel': {
               const input = params as PlanMethodParams<'plans.cancel'>;
+              const plan = map.plans?.find(plan => plan.id === input.planId);
+              if (plan?.mode === 'autonomous' && plan.rev === input.rev && plan.status === 'cancelled') break;
               cancelRoomPlan(map,letters,input.planId,input.rev,HUMAN); break;
             }
           }
@@ -143,7 +180,7 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
       } catch (error) {
         if (!(error instanceof NoChange)) {
           if (error instanceof PlanConflictError) throw new HostError('conflict', 'Plan revision or item changed.');
-          if (error instanceof RoomRuleError) throw new HostError('bad_request', 'Plan action is not allowed.');
+          if (error instanceof RoomRuleError) throw new HostError('bad_request', error.message.startsWith('autonomous-plan-needs-engine-cancel:') ? 'Cancel the autonomous plan first.' : 'Plan action is not allowed.');
           throw new HostError('internal', 'Plan action could not be saved.');
         }
       }

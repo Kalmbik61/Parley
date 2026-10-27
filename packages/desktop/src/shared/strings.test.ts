@@ -21,6 +21,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
   'map-migration-failed',
+  'git-connectivity-failed',
   'hooks-missing',
   'launch-failed',
   'pointer-timeout',
@@ -400,13 +401,10 @@ it('describes closed-work plan controls without labeling pending delivery retry 
  expect(S.plans.retry).toBe('Retry pending deliveries');
 });
 
-it('decisions and room history labels are English, Share warns about Git and secrets, Unshare does not promise history removal', () => {
+it('decisions labels are English', () => {
   const walk = (value: unknown): string[] => typeof value === 'string' ? [value] : typeof value === 'function' ? [String((value as (n: never) => string)(1 as never))]
     : value && typeof value === 'object' ? Object.values(value).flatMap(walk) : [];
-  for (const label of [...walk(S.decisions), ...walk(S.roomHistory)]) { expect(label).not.toMatch(CYRILLIC); expect(label.length).toBeGreaterThan(0); }
-  expect(S.roomHistory.shareWarning).toContain('shared Git files'); expect(S.roomHistory.shareWarning).toContain('secrets');
-  expect(S.roomHistory.unshareWarning).toContain('Previous Git commits retain it');
-  expect(S.roomHistory.sharedAt('2026-10-05T10:00:00.000Z')).toMatch(/^Shared at /);
+  for (const label of walk(S.decisions)) { expect(label).not.toMatch(CYRILLIC); expect(label.length).toBeGreaterThan(0); }
   expect(S.decisions.open).toBe('Open accepted revision');
 });
 
@@ -438,4 +436,12 @@ describe('аккаунты подписки: минимальная версия
   it('текст «нужен Claude Code» называет ту же версию, что ACCOUNT_MIN_VERSION_CLAUDE ядра', () => {
     expect(S.accounts.needsCli('Claude Code 2')).toBe(`Claude Code 2 requires Claude Code ${ACCOUNT_MIN_VERSION_CLAUDE} or newer`);
   });
+});
+
+it('provides autonomous labels and counts verified progress', () => {
+  expect(S.plans.modes.autonomous).toBe('Autonomous');
+  expect(S.plans.modeHelp.autonomous).toBe('The engine runs attempts after Go; the human accepts the result');
+  expect(S.plans.progress('autonomous', 1, 2, 0)).toBe('1/2 verified');
+  expect(S.plans.halted).toBe('Execution stopped');
+  expect(S.plans.continue).toBe('Continue');
 });

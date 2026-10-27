@@ -182,6 +182,7 @@ export type NoticeKind =
   // Карта работы не переехала из прежнего `map.json` в базу (карта не разобралась или не сошлась со своими строками):
   // работа остаётся в файле, и хост пробует снова на следующем старте. `text` — `<путь прежнего файла>\n<причина>` (спека хранилища 6.6).
   | 'map-migration-failed'
+  | 'git-connectivity-failed'
   | 'hooks-missing'
   | 'launch-failed'
   | 'parley-md-created'
