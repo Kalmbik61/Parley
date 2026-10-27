@@ -1188,6 +1188,16 @@ export const S = {
     notifySound: "Sound when you're needed",
     notifyFinishedSound: 'Sound when an agent finishes',
     notifyIsland: 'Island with requests at the top of the screen',
+    /** Блок «Island» во вкладке Notifications (#9 §5): палитра с примером, громкость, звуки интерфейса, движение. */
+    island: {
+      heading: 'Island',
+      palette: 'Island sound palette',
+      palettes: { soft: 'Soft', crystal: 'Crystal', warm: 'Warm' },
+      volume: 'Island volume',
+      volumeValue: (percent: number): string => `${percent}%`,
+      interfaceSounds: 'Interface sounds',
+      reduceMotion: 'Reduce motion',
+    },
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**

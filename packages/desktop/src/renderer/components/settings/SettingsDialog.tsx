@@ -3,8 +3,8 @@
  * 1.4 плана «облик Orca», спека 4.10 — четыре секции вместо плоского списка:
  * «Вид» (`ui.json.appearance`, спека 4.7), «Терминал» и «Агенты» (прежние
  * поля `config.json` через `settings.set`, как раньше), «Уведомления»
- * (`ui.json.notifications` и переключатель острова `ui.json.island.enabled`, а под ними — переключатель
- * проверки новой версии `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
+ * (`ui.json.notifications` и переключатель острова `ui.json.island.enabled`, блок «Island» — звук и движение острова
+ * `ui.json.island.sound`/`motion`, #9 §5, — а под ними — переключатель проверки новой версии `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
  * окна задаёт «Вид» (спека 4.9).
  *
  * Заблокированное переменной окружения поле неактивно и подписано «задано
@@ -30,8 +30,9 @@ import { RESOURCE_LIMIT_BOUNDS, RESOURCE_LIMIT_KEYS } from '@parley/core/resourc
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
-import type { Appearance, UiFile } from '../../../shared/ui-types.js';
+import type { Appearance, IslandSoundPalette, IslandSoundUi, UiFile } from '../../../shared/ui-types.js';
 import type { AssistantShortcutStatus } from '../../../shared/island.js';
+import { playCue } from '../../island/sound/synth.js';
 import { useUiStore, type SettingsSection } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
@@ -99,6 +100,40 @@ function FieldRow({
       {error !== undefined ? <span className="text-xs text-destructive">{error}</span> : null}
     </label>
   );
+}
+
+const ISLAND_PALETTES: readonly IslandSoundPalette[] = ['soft', 'crystal', 'warm'];
+
+/**
+ * Пример палитры острова (#9 §5, S5). Settings живёт в главном окне, а графа острова тут нет: пример играет синтез
+ * острова (`island/sound/synth.ts`) в свой контекст окна — один на окно, как у `attention/chime.ts`, — через усиление
+ * громкости острова (v²). Звучит `done`, как в прототипе. Сбой Web Audio — одно предупреждение в консоль на окно.
+ */
+let preview: { context: AudioContext; output: GainNode } | null = null;
+let previewWarned = false;
+function warnPreview(error: unknown): void {
+  if (previewWarned) return;
+  previewWarned = true;
+  console.warn('[parley] palette preview failed', error);
+}
+
+function playPalettePreview(palette: IslandSoundPalette, volume: number): void {
+  // 0 % — то же, что выключено: узлов не создаём (S4).
+  if (volume === 0) return;
+  try {
+    if (preview === null) {
+      const context = new AudioContext();
+      const output = context.createGain();
+      output.connect(context.destination);
+      preview = { context, output };
+    }
+    const { context, output } = preview;
+    if (context.state === 'suspended') void context.resume().catch(warnPreview);
+    output.gain.value = volume ** 2;
+    playCue(context, output, 'done', palette);
+  } catch (error: unknown) {
+    warnPreview(error);
+  }
 }
 
 /** Строка-переключатель секции «Уведомления»: подпись слева, `ui/switch` справа. */
@@ -195,6 +230,17 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
   const toggleNotification = (key: keyof UiFile['notifications'], value: boolean): void => {
     patchUi({ notifications: { ...ui.notifications, [key]: value } });
+  };
+
+  // `sound` main сливает целиком (`mergeUiPatch` — один уровень вглубь `island`), поэтому патч несёт весь объект звука.
+  // Его пишет только рендерер, копия в зеркале не устаревает — не то что `displayId` и `anchor`.
+  const patchIslandSound = (patch: Partial<IslandSoundUi>): void => {
+    patchUi({ island: { sound: { ...ui.island.sound, ...patch } } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
+  };
+
+  const chooseIslandPalette = (palette: IslandSoundPalette): void => {
+    patchIslandSound({ palette });
+    playPalettePreview(palette, ui.island.sound.volume);
   };
 
   // Куки, хранилища и кеш раздела встроенного браузера (кусок 9.1); сообщение main — только в консоль.
@@ -517,6 +563,57 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   }}>{S.assistant.settings.islandShortcutOff}</Button> : null}
                   {!islandShortcutStatus.ok ? <p role="status" className="text-xs text-destructive">{islandShortcutStatus.accelerator === ui.assistant.hotkey ? S.assistant.settings.shortcutConflictAssistant : S.assistant.settings.shortcutTaken}</p> : null}
                 </div>
+                {/* Звук и движение острова (#9 §5). Звук запросов и Done острова включают два переключателя звука выше. */}
+                <section aria-label={S.settings.island.heading} className="flex flex-col gap-2 rounded-md border p-3">
+                  <h3 className="m-0 text-sm font-medium">{S.settings.island.heading}</h3>
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span>{S.settings.island.palette}</span>
+                    <ToggleGroup
+                      type="single"
+                      aria-label={S.settings.island.palette}
+                      value={ui.island.sound.palette}
+                      onValueChange={(value) => {
+                        if (value !== '') chooseIslandPalette(value as IslandSoundPalette);
+                      }}
+                    >
+                      {ISLAND_PALETTES.map((palette) => (
+                        <ToggleGroupItem key={palette} value={palette}>
+                          {S.settings.island.palettes[palette]}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span>{S.settings.island.volume}</span>
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        aria-label={S.settings.island.volume}
+                        value={Math.round(ui.island.sound.volume * 100)}
+                        onChange={(event) => patchIslandSound({ volume: Number(event.target.value) / 100 })}
+                        className="w-32"
+                      />
+                      <span className="w-10 text-right tabular-nums text-muted-foreground">
+                        {S.settings.island.volumeValue(Math.round(ui.island.sound.volume * 100))}
+                      </span>
+                    </span>
+                  </div>
+                  <NotificationRow
+                    label={S.settings.island.interfaceSounds}
+                    checked={ui.island.sound.ui}
+                    onCheckedChange={(checked) => patchIslandSound({ ui: checked })}
+                  />
+                  <NotificationRow
+                    label={S.settings.island.reduceMotion}
+                    checked={ui.island.motion === 'reduce'}
+                    onCheckedChange={(checked) =>
+                      patchUi({ island: { motion: checked ? 'reduce' : 'system' } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>)
+                    }
+                  />
+                </section>
               </>
             ) : null}
             {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}

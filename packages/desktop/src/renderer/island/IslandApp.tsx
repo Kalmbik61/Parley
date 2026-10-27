@@ -74,7 +74,8 @@ export const RETRACT_MORPH_MS = 250;
 const INITIAL_CONFIG: IslandConfig = {
   islandEnabled: true,
   assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
-  sound: false,
+  islandSound: { needs: false, finished: false, palette: 'soft', volume: 0.6, ui: false },
+  motion: 'system',
   topInset: 0,
   anchor: 'center',
 };
@@ -362,8 +363,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
     if (onPresentation !== undefined) {
       for (const outcome of outcomes) onPresentation(outcome);
-    } else if (config.sound && outcomes.some((outcome) => outcome.soundEligible)) bridge.island.beep();
-  }, [bridge, config.sound, onPresentation]);
+    } else if (config.islandSound.needs && outcomes.some((outcome) => outcome.soundEligible)) bridge.island.beep();
+  }, [bridge, config.islandSound.needs, onPresentation]);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     releaseKeyboard();

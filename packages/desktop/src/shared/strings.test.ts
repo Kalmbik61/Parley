@@ -165,6 +165,20 @@ describe('S.update и S.settings.checkForUpdates', () => {
   });
 });
 
+describe('S.settings.island — блок «Island» (#9 §5)', () => {
+  it('подписи настроек и три палитры', () => {
+    expect(S.settings.island.palette).toBe('Island sound palette');
+    expect(S.settings.island.volume).toBe('Island volume');
+    expect(S.settings.island.interfaceSounds).toBe('Interface sounds');
+    expect(S.settings.island.reduceMotion).toBe('Reduce motion');
+    expect(Object.keys(S.settings.island.palettes)).toEqual(['soft', 'crystal', 'warm']);
+  });
+
+  it('ни одного кириллического знака', () => {
+    expect(CYRILLIC.test(JSON.stringify(S.settings.island))).toBe(false);
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');

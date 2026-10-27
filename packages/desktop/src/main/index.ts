@@ -578,7 +578,14 @@ if (!gotLock) {
           hotkey: current.assistant.hotkey,
           voice: { enabled: current.voice.enabled, model: current.voice.model },
         },
-        sound: current.notifications.sound,
+        islandSound: {
+          needs: current.notifications.sound,
+          finished: current.notifications.finishedSound,
+          palette: current.island.sound.palette,
+          volume: current.island.sound.volume,
+          ui: current.island.sound.ui,
+        },
+        motion: current.island.motion,
         topInset: island.topInset(),
         anchor: island.anchor(),
       };
