@@ -1,9 +1,10 @@
 /**
  * Путь к файлу в тексте чата, комнаты и почты — ссылка по ⌘ (macOS) или Ctrl (Windows, Linux), как ⌘-клик в
  * терминале (`terminal/TerminalSurface.tsx`). Кандидатов в тексте находит `remarkFilePaths` (`room-remark.ts`) регуляркой
- * терминала, а ссылкой кандидат становится, только пока модификатор зажат и только если main нашёл путь в корне работы
- * (`files.locate` через кэш `createStatCache`, как в `terminal/links.ts`): произвольный путь с диска окно не откроет.
- * Без модификатора — обычный текст. Клик с модификатором: файл — вкладка редактора на строке и колонке, каталог —
+ * терминала, а ссылкой кандидат становится, только пока модификатор зажат и указатель над ним (как ссылка xterm) и только
+ * если main нашёл путь в корне работы (`files.locate` через кэш `createStatCache`, как в `terminal/links.ts`): произвольный
+ * путь с диска окно не откроет. Спрашивается только путь под указателем: ⌘C в поле ввода не гонит `files.locate` по всей
+ * ленте и не подчёркивает её. Без модификатора — обычный текст. Клик с модификатором: файл — вкладка редактора на строке и колонке, каталог —
  * приложение по умолчанию (`terminal/LinkMenu.tsx`).
  *
  * Работу и папку для относительных путей даёт `FilePathLinksContext`: его ставят вид «Chat» (папка сессии), комната и
@@ -102,7 +103,9 @@ export interface FilePathTextProps {
 
 export function FilePathText({ path, line, col, children }: FilePathTextProps): JSX.Element {
   const env = useContext(FilePathLinksContext);
-  const active = useLinkModifierHeld();
+  const held = useLinkModifierHeld();
+  const [hovered, setHovered] = useState(false);
+  const active = held && hovered;
   const bridge = env?.bridge ?? null;
   const workKey = env?.workKey ?? null;
   const absPath =
@@ -140,10 +143,18 @@ export function FilePathText({ path, line, col, children }: FilePathTextProps): 
         }
       : null;
 
-  if (link === null || bridge === null) return <span>{children}</span>;
+  const hover = { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) };
+  if (link === null || bridge === null)
+    return (
+      <span data-file-path="" {...hover}>
+        {children}
+      </span>
+    );
   return (
     <span
+      data-file-path=""
       data-file-link=""
+      {...hover}
       title={link.absPath}
       onClick={(event) => {
         if (!hasLinkModifier(event)) return;

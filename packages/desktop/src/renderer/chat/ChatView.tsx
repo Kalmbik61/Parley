@@ -290,10 +290,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const submit = (typed: string, paths: readonly string[]): void => {
     const { setDraft, setAttachments } = useChatUiStore.getState();
     const composed = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
-    const text = quote === null ? composed : withQuote(quote, composed);
+    // Слэш-команду CLI узнаёт только в начале строки: цитата перед ней сломала бы её — команда уходит как есть, плашка ждёт.
+    const quoting = quote !== null && !typed.trimStart().startsWith('/');
+    const text = quoting ? withQuote(quote, composed) : composed;
     setDraft(sessionKey, '');
     if (paths.length > 0) setAttachments(sessionKey, []);
-    if (quote !== null) setReplyTo(null);
+    if (quoting) setReplyTo(null);
     chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
   };
 

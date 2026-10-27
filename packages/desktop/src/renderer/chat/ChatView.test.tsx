@@ -1648,10 +1648,16 @@ describe('ChatView — очередь отправки', () => {
     expect(screen.queryByTestId('reply-plate')).toBeNull();
 
     reply();
+    // Слэш-команда уходит без цитаты, плашка остаётся до следующего сообщения.
+    type('/compact');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['/compact']);
+    expect(screen.getByTestId('reply-plate').textContent).toBe(quote);
     type('уточни');
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
-    expect(sentTexts()).toEqual([withQuote(quote, 'уточни')]);
+    expect(sentTexts()).toEqual(['/compact', withQuote(quote, 'уточни')]);
     expect(screen.queryByTestId('reply-plate')).toBeNull();
 
     setFeed([prompt('p1', 'вопрос'), text('t1', answer), turn('u1'), prompt('p2', withQuote(quote, 'уточни'))], 2);
