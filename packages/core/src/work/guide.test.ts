@@ -96,6 +96,25 @@ describe('темы гида', () => {
     expect(text).toContain('wait via `"inbox"`');
   });
 
+  it('тема letters: заметка всем без упоминания приходит пачкой после 30 с тишины, остальное будит сразу', () => {
+    const text = (guideTopic('letters') ?? '').replace(/\s+/g, ' ');
+
+    // Что будит сразу: человек, адресное, question/decision, упоминание (обе записи).
+    expect(text).toContain(
+      'At once: a letter from the human, a letter addressed with `to`, a `question`, a `decision`, and any letter that mentions the colleague (`@s02`; `@s-02` works too).',
+    );
+    // Что идёт пачкой: простая заметка всем ждёт 30 с тишины (потолок 120 с) и приходит одним указателем.
+    expect(text).toContain('a plain broadcast `note` without a mention waits until the room has been quiet for 30 seconds');
+    expect(text).toContain('at most 120 seconds after the oldest');
+    expect(text).toContain('arrives in one pointer together with the rest');
+    // wait_for("inbox") по тому же правилу и на своём таймауте отдаёт накопленные заметки вместо running.
+    expect(text).toContain('`wait_for("inbox")` follows the same rule: at its timeout it returns the pending notes instead of `running`');
+    // Практический вывод: срочное — адресовать или упомянуть.
+    expect(text).toContain(
+      'if a colleague must act on your room message now, address it (`to`) or mention them (`@sNN`); a plain broadcast note is read in the next batch.',
+    );
+  });
+
   it('тема lead: ждать позиции одним wait_for("inbox", 1500), не писать «plan accepted, handing out»', () => {
     const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
 
