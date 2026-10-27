@@ -80,6 +80,16 @@ interface WorkState {
 interface Location { projectPath: string; workId: string; planId: string }
 class NoEngineChange extends Error {}
 
+type AutonomousState = NonNullable<RoomPlan['autonomous']>;
+/** Halt detail with the current summary of attempts and ops; `change()` rewrites it for a halted plan on every edit. */
+function haltedDetail(a: AutonomousState): string {
+  const halted = a.halted!;
+  const attempts = a.attempts.map(row => `item ${row.item}/${row.id}: ${row.status}`).join(', ') || 'no attempts';
+  const done = a.ops.filter(op => op.state === 'done').map(op => op.key).join(', ') || 'none';
+  const pending = a.ops.filter(op => op.state === 'intended').map(op => `${op.key} ${op.kind}`).join(', ') || 'none';
+  return halted.detail.split('\nReason:')[0] + `\nReason: ${halted.reason}; ${attempts}.\nDone: ${done}; verifiedHead=${a.integration.verifiedHead}.\nWaiting: ${pending}; explicit human resume required.`;
+}
+
 /** Runs inside the caller's single updateMap transaction, before any effects. */
 export function resolveAutonomousProposal(
   map: WorkMap, letters: LetterTx, roomId: string, proposalId: string, action: 'accept' | 'return',
@@ -165,18 +175,15 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     let changed!: RoomPlan;
     try { await io.updateMap(loc.projectPath, loc.workId, (map, letters) => {
       const before = JSON.stringify(map);
+      // Letters live outside the map JSON: count them too, or a letter-only edit would be rolled back as a no-op.
+      const lettersBefore = letters.count({});
       const index = map.plans?.findIndex(row => row.id === loc.planId) ?? -1;
       if (index < 0 || !active(map.plans![index]!)) throw new Error('plan-unavailable');
       changed = edit(map.plans![index]!, map, letters);
       const a = changed.autonomous!;
-      if (a.halted) {
-        const attempts = a.attempts.map(row => `item ${row.item}/${row.id}: ${row.status}`).join(', ') || 'no attempts';
-        const done = a.ops.filter(op => op.state === 'done').map(op => op.key).join(', ') || 'none';
-        const pending = a.ops.filter(op => op.state === 'intended').map(op => `${op.key} ${op.kind}`).join(', ') || 'none';
-        a.halted.detail = a.halted.detail.split('\nReason:')[0] + `\nReason: ${a.halted.reason}; ${attempts}.\nDone: ${done}; verifiedHead=${a.integration.verifiedHead}.\nWaiting: ${pending}; explicit human resume required.`;
-      }
+      if (a.halted) a.halted.detail = haltedDetail(a);
       map.plans![index] = changed;
-      if (JSON.stringify(map) === before) throw new NoEngineChange();
+      if (JSON.stringify(map) === before && letters.count({}) === lettersBefore) throw new NoEngineChange();
     }); } catch (error) { if (!(error instanceof NoEngineChange)) throw error; }
     return changed;
   }
@@ -510,9 +517,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     let descendantOfBase = false;
     try { await bare(loc, ['merge-base', '--is-ancestor', attempt.baseSha, sha]); descendantOfBase = true; } catch { /* Receipt records the failed observation. */ }
     plan = await change(loc, (current, map, letters) => {
+      // The snapshot read before the transaction may be stale: decide on the plan this transaction sees.
+      const had = attemptOf(current, attemptId).receipt;
       const result = receipt(current, { ...context(current, at()), attemptId, submissionKey: attempt.submissionKey!, sha, tree, baseTree: String(captured.result!.baseTree), descendantOfBase, inputsOk, artifactsCopied: copied.result!.artifactsCopied === true, artifactHashesOk: copied.result!.artifactHashesOk === true, artifacts: copied.result!.artifacts as HandoffManifest['artifacts'], captureOp: captured.key, copyOp: copied.key });
       const received = attemptOf(result.plan, attemptId);
-      if (received.receipt && !attempt.receipt && received.worker) parleyNote(map, letters, result.plan.roomId, received.worker, `Receipt ${received.receipt.id} recorded (${received.receipt.valid ? 'valid' : received.receipt.reason}).`, at());
+      if (received.receipt && !had && received.worker) parleyNote(map, letters, result.plan.roomId, received.worker, `Receipt ${received.receipt.id} recorded (${received.receipt.valid ? 'valid' : received.receipt.reason}).`, at());
       return result.plan;
     });
     await drainSessions(loc);
@@ -990,7 +999,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const loc = { projectPath, workId, planId: original.id };
       await drainSessions(loc);
       let plan = await load(loc);
-      if (plan.autonomous!.halted) { await change(loc, current => current); continue; }
+      if (plan.autonomous!.halted) {
+        // The identity edit only refreshes the halt summary; once it is current, `change()` would throw NoEngineChange.
+        if (haltedDetail(plan.autonomous!) !== plan.autonomous!.halted.detail) await change(loc, current => current);
+        continue;
+      }
       for (const op of plan.autonomous!.ops.filter(op => op.kind === 'resume' && op.state === 'intended'))
         await settled(loc, op, 'done', { requestedBy: HUMAN });
       plan = await load(loc);

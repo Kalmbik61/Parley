@@ -406,6 +406,18 @@ describe('autonomous engine', () => {
     expect(f.map().messages.some(row => row.to.includes('s-01') && row.text.includes('at-0001'))).toBe(true);
   });
 
+  it('refreshes the halt summary once, then scans a halted plan without opening a transaction', async () => {
+    const f = await fixture();
+    f.read().autonomous!.halted = { reason: 'human', at: now.toISOString(), detail: 'Awaiting a human decision' };
+    const updateMap = f.io.updateMap, calls = vi.fn();
+    f.io.updateMap = async (...args) => { calls(); return updateMap(...args); };
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(f.read().autonomous!.halted!.detail).toMatch(/^Awaiting a human decision\nReason: human; no attempts\./);
+    await f.engine.flush(f.projectPath, 'w-01'); await f.engine.flush(f.projectPath, 'w-01');
+    expect(calls).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks a repair after two identical failure signatures without a third attempt', async () => {
     const f = await fixture();
     const runner = f.io.runner;

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import {
-  addRoom, addSession, archiveRoom, createParleyServer, createWork, mapLetterTx, ENGINE, HUMAN, readMap, replaceStoredMap, summarizePlanEffects, updateMap, workPaths,
+  addRoom, addSession, archiveRoom, createParleyServer, createWork, mapLetterTx, ENGINE, HUMAN, readLetters, readMap, replaceStoredMap, summarizePlanEffects, updateMap, workPaths,
   type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap,
 } from '@parley/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -437,6 +437,9 @@ describe('autonomous room cycle with stub agents and real Git', () => {
       expect(f.events).toEqual(events); expect(f.runs).toEqual(runs);
     }
     expect(a.seq.receipt).toBe(1); expect(a.ops.filter(op => op.kind === 'capture')).toHaveLength(1);
+    // The receipt note goes to the worker through the letter tables, once, however many submissions raced.
+    const notes = readLetters(f.projectPath, f.workId, { roomId: 'r-01', kind: 'note', limit: 100 }).filter(letter => letter.text.startsWith('Receipt '));
+    expect(notes).toMatchObject([{ to: [received.worker], text: `Receipt ${received.receipt!.id} recorded (valid).` }]);
     expect(f.events.filter(event => event === `stop:${received.worker}`)).toHaveLength(1);
     expect(await f.bare('rev-parse', `refs/attempts/pl-01/${received.id}`)).toBe(received.receipt!.sha);
     expect(await f.bare('show', `${received.sha}:item-1.txt`)).toBe('implementation 1');
