@@ -55,7 +55,8 @@ import { PlanView } from './PlanView.js';
 import { Swarm } from './swarm/Swarm.js';
 import { ProgressView } from './ProgressView.js';
 import type { ProgressState } from './progress.js';
-import { swarmSpecFor } from './swarm/spec.js';
+import { HOST_IDLE } from './assistant/store.js';
+import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
 export { CARD_ARM_MS };
@@ -133,6 +134,20 @@ function MiniSwarm({ assistant }: { assistant: IslandAssistantProps }): JSX.Elem
   const { host, input } = assistant.view;
   const spec = useMemo(() => swarmSpecFor(host, input, true), [host.phase, input]);
   return <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} />;
+}
+
+/** Облик «места»: сфера с янтарным кольцом подтверждения и без вращения (`rot = 0`), как `confirm` макета. */
+const SEAT_SPEC = swarmSpecFor({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idle', true);
+
+/**
+ * «Место» в шапке карточки (#9 §4.2, T7): рой 30 px держит кольцо, пока карточка открыта, а на её показ отвечает
+ * реакцией вида запроса (разрешение и план — подскок, вопрос — кивок, терминал без карточки — как разрешение). В
+ * покое 0 к/с (§5): кадры идут только на реакцию. Монтируется заново с каждой показанной карточкой (ключ `Card`),
+ * поэтому реакция одна на показ.
+ */
+function SeatSwarm({ kind }: { kind: 'permission' | 'question' | 'plan' }): JSX.Element {
+  const [pulse] = useState<SwarmPulse>(() => ({ reaction: REACTION_FOR[kind], at: performance.now() }));
+  return <Swarm spec={SEAT_SPEC} souls={150} width={30} height={30} d={18} cy={15} k={0.15} minPx={1.5} seed={5} fps={0} pulse={pulse} className="-ml-1 shrink-0" />;
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
@@ -390,6 +405,7 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
       style={item.card?.kind === 'question' || item.card?.kind === 'plan' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
     >
       <div className="flex shrink-0 items-center gap-2">
+        <SeatSwarm kind={item.card?.kind ?? 'permission'} />
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
           {label === undefined ? null : <span className="text-[13px] text-muted-foreground"> · {label.project}</span>}

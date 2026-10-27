@@ -24,6 +24,7 @@ import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { SWIPE_UP_PX } from './drag.js';
 import { HOST_IDLE } from './assistant/store.js';
+import * as engineModule from './swarm/engine.js';
 import { CARD_ARM_MS, IslandView, type IslandAssistantProps, type IslandViewProps } from './IslandView.js';
 
 /**
@@ -212,12 +213,16 @@ beforeEach(() => {
   useIslandReplies.setState({ texts: {} });
   resizeCallbacks = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  // Рой «места» в карточке — canvas; jsdom не реализует getContext и пишет «Not implemented» — глушим, возвращая
+  // null, как в проде без контекста.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('вид острова', () => {
@@ -728,6 +733,118 @@ describe('плавный размер формы', () => {
     const first = screen.getByTestId('island-card');
     rerender(<IslandView {...props} index={1} />);
     expect(screen.getByTestId('island-card')).not.toBe(first);
+  });
+});
+
+describe('«место» роя в шапке карточки (#9 T7, О3)', () => {
+  type EngineSpies = { setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> };
+
+  /** Движки роёв вида и шпионы их `setSpec` и `react`: шпион ставится при создании, до первого эффекта. */
+  function spyEngines(): EngineSpies[] {
+    const real = engineModule.createSwarm;
+    const engines: EngineSpies[] = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      engines.push({ setSpec: vi.spyOn(engine, 'setSpec') as unknown as EngineSpies['setSpec'], react: vi.spyOn(engine, 'react') as unknown as EngineSpies['react'] });
+      return engine;
+    });
+    return engines;
+  }
+
+  /**
+   * Подставной цикл кадров, как в тесте `Swarm`: контекст считает кадры (`clearRect`), rAF копит колбэки,
+   * `tick(from, to)` гоняет их каждые 16 мс, часы `performance.now` ставит `setClock`.
+   */
+  function fakeFrames(): { draws: () => number; tick: (from: number, to: number) => void; setClock: (ms: number) => void } {
+    const ctx = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
+      createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    return {
+      draws: () => ctx.clearRect.mock.calls.length,
+      tick: (from, to) => {
+        for (let t = from; t < to; t += 16) {
+          clock = t;
+          const run = frames;
+          frames = [];
+          for (const cb of run) cb(t);
+        }
+      },
+      setClock: (ms) => {
+        clock = ms;
+      },
+    };
+  }
+
+  it('рой 30 px — первый в шапке карточки: сфера с янтарным кольцом, без вращения', () => {
+    const engines = spyEngines();
+    view({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
+    const header = screen.getByTestId('island-card').firstElementChild as HTMLElement;
+    const seat = within(header).getByTestId('swarm') as HTMLCanvasElement;
+    expect(header.firstElementChild).toBe(seat);
+    expect(header.textContent).toContain('S02 api · Backend');
+    expect(seat.style.width).toBe('30px');
+    expect(seat.style.height).toBe('30px');
+    expect(seat.getAttribute('data-shape')).toBe('sphere');
+    expect(seat.getAttribute('class')).toContain('shrink-0');
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'sphere', fx: 'ring', pal: 'amber', rot: 0 }), expect.any(Number), false);
+  });
+
+  it('без карточки места нет: у пилюли и списка роя нет', () => {
+    view({ listOpen: true });
+    expect(screen.queryByTestId('swarm')).toBeNull();
+  });
+
+  it('показ карточки — реакция по виду запроса: разрешение и план — подскок, вопрос — кивок, терминал — как разрешение', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    const cases: Array<[IslandRequest, string]> = [
+      [permissionItem(), 'hop'],
+      [planItem(), 'hop'],
+      [questionItem(['Postgres']), 'nod'],
+      [permissionItem({ card: null, inWindow: false }), 'hop'],
+    ];
+    for (const [item, reaction] of cases) {
+      const engines = spyEngines();
+      view({ items: [item] });
+      expect(engines, reaction).toHaveLength(1);
+      expect(engines[0]!.react).toHaveBeenCalledTimes(1);
+      expect(engines[0]!.react).toHaveBeenCalledWith(reaction, 5000, 5000, false);
+      cleanup();
+      vi.mocked(engineModule.createSwarm).mockRestore();
+    }
+  });
+
+  it('P1: в покое 0 кадров; реакция рисует только свою длительность, та же карточка её не повторяет, другая — повторяет', () => {
+    const { draws, tick, setClock } = fakeFrames();
+    setClock(1000);
+    const props = viewProps({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
+    const { rerender } = render(<IslandView {...props} />);
+    tick(1000, 3000);
+    const shown = draws();
+    expect(shown).toBeGreaterThan(1); // кадр спеки и вспышка реакции малого роя
+    expect(shown).toBeLessThanOrEqual(14); // вспышка 300 мс при 30 к/с, не постоянный цикл
+    tick(3000, 8000);
+    expect(draws()).toBe(shown); // карточка открыта, кольцо стоит: 0 к/с
+    arm();
+    rerender(<IslandView {...props} items={[{ ...props.items[0]!, deciding: true }, props.items[1]!]} />);
+    tick(8000, 10000);
+    expect(draws()).toBe(shown); // решение уходит — та же карточка, реакции заново нет
+    setClock(10000);
+    rerender(<IslandView {...props} index={1} />);
+    tick(10000, 12000);
+    expect(draws()).toBeGreaterThan(shown); // другая карточка — снова реакция
+    const next = draws();
+    tick(12000, 16000);
+    expect(draws()).toBe(next);
   });
 });
 
