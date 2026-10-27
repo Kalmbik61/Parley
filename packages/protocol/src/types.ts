@@ -336,8 +336,6 @@ export interface HealthSample {
   /** То же для `rooms.mail`. */
   mailEvents: number;
   mailBytes: number;
-  /** Полные проходы обновления works-service, вызванные записью только писем. Цель — ноль. */
-  lettersOnlyRefreshes: number;
 }
 
 /** Живая сессия в ответе `host.diagnostics`: без текстов и вывода, только адрес, процесс и состояние. */

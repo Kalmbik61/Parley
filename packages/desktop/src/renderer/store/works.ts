@@ -29,7 +29,7 @@ import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type WorksSnapshot } from '@pa
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostFeatures } from '../lib/capabilities.js';
-import { heldRanges, keepHeld, withFreshMessages, withMail, withMessages } from '../lib/window-merge.js';
+import { heldRanges, keepHeld, withMail, withMessages } from '../lib/window-merge.js';
 import { followRoom, heldPolicy, repairWork, rereadRoom, stopOpenRetries } from './room-pages.js';
 
 export { WINDOW_ROOM_KEEP, keepHeld } from '../lib/window-merge.js';
@@ -55,11 +55,6 @@ export interface WorksState {
   init: (bridge: Pick<ParleyBridge, 'call' | 'on' | 'onStatus'>) => () => void;
   /** Письма, пришедшие страницей (`context.messages`), встают в карту работы по номеру. */
   addMessages: (projectPath: string, workId: string, messages: readonly Message[]) => void;
-  /**
-   * Письма, пришедшие страницей при починке разрыва или дочитывании (`repairWork`, `followRoom`): свежая копия письма
-   * заменяет держимую, отметки прочтения только прибавляются (`addMessages` оставляет держимую копию как есть).
-   */
-  addMail: (projectPath: string, workId: string, messages: readonly Message[]) => void;
   /**
    * Слушатель событий `rooms.mail`: зовётся после того, как событие применено к стору, — в том числе событие, которое
    * ждало снимка, и повтор, обогнанный снимком. Событие, выброшенное целиком (комнаты нет в снимке), слушателей не будит.
@@ -110,12 +105,6 @@ export const useWorksStore = create<WorksState>((set, get) => ({
     set((state) => ({
       entries: state.entries.map((entry) =>
         entry.projectPath === projectPath && entry.map.work.id === workId ? withMessages(entry, messages) : entry,
-      ),
-    })),
-  addMail: (projectPath, workId, messages) =>
-    set((state) => ({
-      entries: state.entries.map((entry) =>
-        entry.projectPath === projectPath && entry.map.work.id === workId ? withFreshMessages(entry, messages) : entry,
       ),
     })),
   onMail: (listener) => {

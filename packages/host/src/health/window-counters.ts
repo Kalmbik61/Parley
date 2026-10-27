@@ -1,6 +1,6 @@
 import type { HealthSample } from '@parley/protocol';
 
-/** Одиннадцать счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
+/** Десять счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
 export type WindowTally = Pick<
   HealthSample,
   | 'refreshCount'
@@ -13,7 +13,6 @@ export type WindowTally = Pick<
   | 'worksChangedBytes'
   | 'mailEvents'
   | 'mailBytes'
-  | 'lettersOnlyRefreshes'
 >;
 
 /**
@@ -33,8 +32,6 @@ export interface WindowCounters {
   worksChanged(bytes: number): void;
   /** Одна рассылка `rooms.mail` окнам: `bytes` — длина кадра. */
   mail(bytes: number): void;
-  /** Полный проход обновления, вызванный записью только писем: цель — ноль. */
-  lettersOnlyRefresh(): void;
   read(): WindowTally;
   reset(): void;
 }
@@ -50,7 +47,6 @@ const empty = (): WindowTally => ({
   worksChangedBytes: 0,
   mailEvents: 0,
   mailBytes: 0,
-  lettersOnlyRefreshes: 0,
 });
 
 export function createWindowCounters(): WindowCounters {
@@ -77,9 +73,6 @@ export function createWindowCounters(): WindowCounters {
     mail(bytes) {
       tally.mailEvents += 1;
       tally.mailBytes += bytes;
-    },
-    lettersOnlyRefresh() {
-      tally.lettersOnlyRefreshes += 1;
     },
     read: () => ({ ...tally }),
     reset() {

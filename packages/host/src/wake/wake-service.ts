@@ -1038,6 +1038,10 @@ export function createWakeService(
     }
   }
 
+  /** Сессии уведомлений `onMail`, ждущие пересчёта в конце хода (`flushMail`); ключ — `refKey`. */
+  const mailDirty = new Map<string, SessionRef>();
+  let mailFlushQueued = false;
+
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
   function recomputeAll(): void {
     for (const entry of works.snapshot().entries) {
@@ -1057,7 +1061,32 @@ export function createWakeService(
     const entry = works.entry(notice.projectPath, notice.workId);
     if (entry === undefined) return;
     for (const sessionId of mailSessions(notice, entry.map)) {
-      recompute({ projectPath: notice.projectPath, workId: notice.workId, sessionId });
+      const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
+      mailDirty.set(refKey(ref), ref);
+    }
+    if (mailDirty.size === 0 || mailFlushQueued) return;
+    mailFlushQueued = true;
+    queueMicrotask(flushMail);
+  }
+
+  /**
+   * Каждая запись письма зовёт `onMail` отдельно, и пересчёт на каждое уведомление давал на пачку из 60 писем в комнату из
+   * трёх 120 пересчётов вместо трёх у `onChange` мастера с его debounce. Сессии уведомлений собираются в `mailDirty`, и в
+   * конце текущего синхронного хода (микрозадача, не таймер: пересчёт письма не ждёт окна, а письма одной пачки, записанные
+   * подряд без `await`, делят один проход) каждая пересчитывается один раз. Адресаты берутся по карте на момент уведомления,
+   * сам пересчёт видит уже свежее состояние. Упавший пересчёт — предупреждение, а не необработанное исключение микрозадачи:
+   * подписчика `onMail` защищает `try` службы работ, а здесь его уже нет.
+   */
+  function flushMail(): void {
+    mailFlushQueued = false;
+    const refs = [...mailDirty.values()];
+    mailDirty.clear();
+    for (const ref of refs) {
+      try {
+        recompute(ref);
+      } catch (error) {
+        host.log.warn('будильник: пересчёт после письма упал', { ref, error: String(error) });
+      }
     }
   }
 
@@ -1166,6 +1195,7 @@ export function createWakeService(
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();
       unsubscribeExit?.();
+      mailDirty.clear();
       for (const state of attempts.values()) {
         clearTimers(state);
         dropLimit(state);

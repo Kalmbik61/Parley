@@ -262,7 +262,7 @@ describe('письма хоста: запись только писем', () => 
     expect(events('rooms.mail')).toHaveLength(1);
     expect(events('rooms.mail')[0]?.to).toEqual([modern.id]);
     expect(events('works.changed')).toEqual([]);
-    expect(counters.read()).toMatchObject({ refreshCount: 0, mapBytesParsed: 0, lettersOnlyRefreshes: 0, mailEvents: 1, worksChangedEvents: 0 });
+    expect(counters.read()).toMatchObject({ refreshCount: 0, mapBytesParsed: 0, mailEvents: 1, worksChangedEvents: 0 });
     expect(changed).not.toHaveBeenCalled();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ projectPath: project, workId: id, foreign: false });

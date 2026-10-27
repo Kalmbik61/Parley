@@ -443,13 +443,19 @@ describe('снимок без писем: открытие комнаты, Mail 
 
     it('письма комнаты встали сами (событие), работа ушла или комната закрыта — повтор ничего не читает', async () => {
       vi.useFakeTimers();
+      let dispose = (): void => {};
       try {
         const bridge = createFakeBridge();
         const read = failing(bridge, ['fail']);
-        const current = v2([]);
-        useWorksStore.setState({ entries: [current] });
+        // Окно подключено к хосту с признаком: событие `rooms.mail` встаёт в карту тем же путём, что в работе.
+        bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+        bridge.setHandler('works.list', () => ({ entries: [{ ...v2([]), version: 5 }], branches: {}, revision: 1 }));
+        dispose = useWorksStore.getState().init(bridge);
+        await vi.advanceTimersByTimeAsync(0);
+        const current = useWorksStore.getState().entries[0]!;
         await expect(openRoom(bridge, current, 'r-01')).rejects.toBeDefined();
-        useWorksStore.getState().addMail('/tmp/proj', 'w-01', [unread('m-09')]);
+        bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [makeMailRoom('r-01', { prevTop: 8, top: 9, total: 9, letters: [unread('m-09')] })] }));
+        expect(ids()).toEqual(['m-09']);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(read.calls()).toBe(1);
 
@@ -465,6 +471,7 @@ describe('снимок без писем: открытие комнаты, Mail 
         await vi.advanceTimersByTimeAsync(60_000);
         expect(read.calls()).toBe(3);
       } finally {
+        dispose();
         stopOpenRetries();
         vi.useRealTimers();
       }

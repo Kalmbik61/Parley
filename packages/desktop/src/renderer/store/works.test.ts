@@ -703,12 +703,25 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     expect(ids()).toEqual(['m-08']);
   });
 
-  it('addMail: свежая копия страницы встаёт в карту работы, чужая работа не затронута', async () => {
-    const { dispose } = await start(work([letter('m-08', { readBy: {} })], 8, 5));
-    useWorksStore.getState().addMail('/tmp/proj', 'w-01', [letter('m-08', { readBy: { human: 'T' } }), letter('m-09')]);
-    expect(useWorksStore.getState().entries[0]!.map.messages.map((message) => message.readBy)).toEqual([{ human: 'T' }, {}]);
-    useWorksStore.getState().addMail('/tmp/other', 'w-01', [letter('m-99')]);
+  it('страница починки разрыва встаёт в карту свежими копиями: отметка прочтения прибавляется, другая работа не затронута', async () => {
+    const mine = work([letter('m-08', { readBy: {} })], 8, 5);
+    const other: WindowWorkEntry = { ...mine, map: { ...mine.map, work: { ...mine.map.work, id: 'w-02' } } };
+    const bridge = createFakeBridge();
+    bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+    bridge.setHandler('works.list', () => snapshot(1, mine, other));
+    const dispose = useWorksStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useWorksStore.getState().entries).toHaveLength(2));
+    // Хост отдаёт страницу с отметкой человека на m-08 и новым m-09; событие начинается после держимой версии — разрыв.
+    bridge.setHandler('context.messages', () => page([letter('m-08', { readBy: { human: 'T' } }), letter('m-09')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 6, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+
+    const readBys = (index: number): Array<Message['readBy']> =>
+      useWorksStore.getState().entries[index]!.map.messages.map((message) => message.readBy);
+    await vi.waitFor(() => expect(readBys(0)).toEqual([{ human: 'T' }, {}]));
+    expect(pageCalls(bridge)).toEqual([undefined]);
     expect(ids()).toEqual(['m-08', 'm-09']);
+    expect(useWorksStore.getState().entries[1]!.map.messages.map((message) => message.id)).toEqual(['m-08']);
+    expect(readBys(1)).toEqual([{}]);
     dispose();
   });
 });

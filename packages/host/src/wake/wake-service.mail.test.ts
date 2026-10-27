@@ -69,8 +69,11 @@ async function rig(workId: string) {
   const wake = createWakeService(host, works, activity, pty, { launch: vi.fn<SessionsService['launch']>(async () => {}) }, { windowCounters });
   wake.start();
   recompute.mockClear();
-  return { recompute, mail: (notice: MailNotice) => onMail(notice), change: () => onChange() };
+  return { wake, recompute, mail: (notice: MailNotice) => onMail(notice), change: () => onChange() };
 }
+
+/** Один ход цикла событий: всё, что будильник отложил на «конец хода», к его концу выполнено. */
+const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 const AT = '2026-10-27T10:00:00.000Z';
 const letter = (id: string, from: string, to: string[], roomId: string | null = null): Message =>
@@ -89,6 +92,7 @@ describe('будильник и onMail', () => {
     const { workId, roomId } = await prepare();
     const { recompute, mail } = await rig(workId);
     mail(noticeOf(workId, { added: [letter('m-01', 's-01', [], roomId)] }));
+    await tick();
     expect(recompute).toHaveBeenCalledTimes(2);
   });
 
@@ -96,9 +100,11 @@ describe('будильник и onMail', () => {
     const { workId } = await prepare();
     const { recompute, mail } = await rig(workId);
     mail(noticeOf(workId, { added: [letter('m-01', 's-01', ['s-02'])] }));
+    await tick();
     expect(recompute).toHaveBeenCalledTimes(1);
     recompute.mockClear();
     mail(noticeOf(workId, { added: [letter('m-02', 's-01', [HUMAN])] }));
+    await tick();
     expect(recompute).not.toHaveBeenCalled();
   });
 
@@ -106,6 +112,7 @@ describe('будильник и onMail', () => {
     const { workId } = await prepare();
     const { recompute, mail } = await rig(workId);
     mail(noticeOf(workId, { reads: [{ id: 'm-01', reader: 's-02', at: AT }] }));
+    await tick();
     expect(recompute).toHaveBeenCalledTimes(1);
   });
 
@@ -113,6 +120,44 @@ describe('будильник и onMail', () => {
     const { workId, roomId } = await prepare();
     const { recompute, mail } = await rig(workId);
     mail({ ...noticeOf(workId, { added: [letter('m-01', 's-01', [], roomId)] }), workId: 'w-other' });
+    await tick();
+    expect(recompute).not.toHaveBeenCalled();
+  });
+
+  it('пачка из 60 писем подряд пересчитывает каждого адресата один раз', async () => {
+    const { workId, roomId } = await prepare();
+    const { recompute, mail } = await rig(workId);
+    // Письма от s-01 в комнату из трёх: адресаты — s-02 и s-03. Раньше каждое уведомление пересчитывало обоих заново (120).
+    for (let at = 1; at <= 60; at += 1) mail(noticeOf(workId, { added: [letter(`m-${at}`, 's-01', [], roomId)] }));
+    expect(recompute).not.toHaveBeenCalled();
+    await tick();
+    expect(recompute).toHaveBeenCalledTimes(2);
+  });
+
+  it('разные адресаты пачки пересчитываются каждый по разу, а письма в разные ходы — без окна ожидания', async () => {
+    const { workId, roomId } = await prepare();
+    const { recompute, mail } = await rig(workId);
+    mail(noticeOf(workId, { added: [letter('m-01', 's-01', ['s-02'])] }));
+    mail(noticeOf(workId, { added: [letter('m-02', 's-01', ['s-03'])] }));
+    mail(noticeOf(workId, { added: [letter('m-03', 's-02', ['s-03'])] }));
+    mail(noticeOf(workId, { reads: [{ id: 'm-01', reader: 's-02', at: AT }] }));
+    await tick();
+    expect(recompute).toHaveBeenCalledTimes(2);
+
+    // Следующее письмо — в следующем ходу: пересчёт сразу, а не по таймеру, как у отложенной на окно пачки.
+    mail(noticeOf(workId, { added: [letter('m-04', 's-01', [], roomId)] }));
+    await tick();
+    expect(recompute).toHaveBeenCalledTimes(4);
+  });
+
+  it('stop сбрасывает отложенное: уведомление до остановки не пересчитывает ничего после нового запуска', async () => {
+    const { workId, roomId } = await prepare();
+    const { wake, recompute, mail } = await rig(workId);
+    mail(noticeOf(workId, { added: [letter('m-01', 's-01', [], roomId)] }));
+    wake.stop();
+    wake.start();
+    recompute.mockClear();
+    await tick();
     expect(recompute).not.toHaveBeenCalled();
   });
 

@@ -419,6 +419,29 @@ describe('createActivityService', () => {
     expect(worksChanged()).toBe(before);
   }, 20_000);
 
+  // Тот же рисунок, что у будильника: каждое уведомление `onMail` пересчитывало адресата и перечитывало его журнал заново.
+  it('5в: пачка из 60 писем подряд пересчитывает сессию и читает её журнал по разу, а не по разу на письмо', async () => {
+    const { ref, workId } = await activeSession();
+    const counters = createWindowCounters();
+    const w = await works();
+    const a = activity(w, { windowCounters: counters });
+    await a.start();
+    await settle();
+    const base = counters.read().recomputes;
+
+    // Записи подряд без `await`: уведомления `onMail` приходят в одном синхронном ходу.
+    for (let at = 1; at <= 60; at += 1) {
+      core.writeLetters(project, workId, (letters) => {
+        letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: `письмо ${at}`, kind: 'note' });
+      });
+    }
+    await waitFor(() => a.get(ref)?.metrics?.unread === 60);
+    await settle(100);
+
+    // Один пересчёт сразу и один после чтения журнала; раньше — по два на каждое из 60 писем.
+    expect(counters.read().recomputes - base).toBeLessThanOrEqual(4);
+  }, 20_000);
+
   it('6: автозаголовок применяется один раз, переименованную вручную не трогает', async () => {
     const { ref, workId } = await activeSession({ label: NEW_LABEL, providerSessionId: 's-title' });
     await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });

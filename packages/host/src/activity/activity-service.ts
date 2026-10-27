@@ -506,6 +506,9 @@ export function createActivityService(
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
   let unsubscribeMail: (() => void) | undefined;
+  /** Адресаты уведомлений `onMail`, ждущие конца хода (`flushMail`); ключ — `refKey`, журнал — того же наблюдателя работы. */
+  const mailDirty = new Map<string, { ref: SessionRef; journal: EventsLog }>();
+  let mailFlushQueued = false;
   let unsubscribeLog: (() => void) | undefined;
   /**
    * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
@@ -1434,8 +1437,32 @@ export function createActivityService(
     const { watch } = ensureWorkWatch(entry);
     for (const sessionId of mailSessions(notice, entry.map)) {
       const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
-      if (journals.has(refKey(ref))) recompute(ref);
-      void readJournal(notice.projectPath, notice.workId, watch.journal, sessionId);
+      mailDirty.set(refKey(ref), { ref, journal: watch.journal });
+    }
+    if (mailDirty.size === 0 || mailFlushQueued) return;
+    mailFlushQueued = true;
+    queueMicrotask(flushMail);
+  }
+
+  /**
+   * Запись каждого письма зовёт `onMail` отдельно, а на адресата приходилось по пересчёту и перечитыванию его журнала
+   * (файл на диске) с пересчётом после чтения: пачка из 60 писем одной сессии — 120 пересчётов и 60 чтений. Адресаты
+   * уведомлений собираются в `mailDirty` и в конце текущего синхронного хода (микрозадача, не таймер) обрабатываются по
+   * разу, как у будильника. Сбой чтения журнала `readJournal` глотает сам; пересчёт, упавший в микрозадаче, не должен
+   * стать необработанным исключением хоста — его раньше ловил `try` подписчика службы работ.
+   */
+  function flushMail(): void {
+    mailFlushQueued = false;
+    const batch = [...mailDirty.values()];
+    mailDirty.clear();
+    if (stopped) return;
+    for (const { ref, journal } of batch) {
+      try {
+        if (journals.has(refKey(ref))) recompute(ref);
+        void readJournal(ref.projectPath, ref.workId, journal, ref.sessionId);
+      } catch (error) {
+        host.log.warn('активность: пересчёт после письма упал', { ref, error: String(error) });
+      }
     }
   }
 
@@ -1644,6 +1671,7 @@ export function createActivityService(
     async stop() {
       if (stopped) return;
       stopped = true;
+      mailDirty.clear();
       unsubscribeWorks?.();
       unsubscribeMail?.();
       unsubscribeLog?.();

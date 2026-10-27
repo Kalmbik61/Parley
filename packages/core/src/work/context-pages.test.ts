@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LETTER_PAGE_MAX_ITEMS,
   PAGE_MAX_BYTES,
@@ -29,7 +29,7 @@ import {
   textPage,
   viewBytes,
 } from './context-pages.js';
-import { closeWorkDb } from './db.js';
+import { closeWorkDb, workDb } from './db.js';
 import { mapLetterReader, storeLetterReader, writeLetters, type LetterQuery } from './letter-store.js';
 import { unreadForHuman } from './letters.js';
 import { addMessage, addSession } from './map.js';
@@ -1017,6 +1017,33 @@ describe('снимок без писем (rooms.mail 6.8)', () => {
         rooms: { '': { total: 5000, top: 9999, unread: 5000 }, 'r-01': { total: 5000, top: 10_000, unread: 5000 } },
         unread: { letters: 10_000 },
       });
+    });
+
+    it('письма человека комнаты берутся по индексу messages_sender: без обхода комнаты и без сортировки (спека rooms.mail 6.8)', async () => {
+      await createWork(project, { title: 'решение' });
+      const map = await updateMap(project, 'w-0001', (stored) => {
+        addSession(stored, { provider: 'claude', label: 'план', task: 'Спланировать' });
+        addRoom(stored, { title: 'Обсуждение', creator: HUMAN, members: ['s-01'], lead: 's-01' });
+      });
+      writeLetters(project, 'w-0001', (letters) => {
+        letters.add({ roomId: 'r-01', from: HUMAN, to: ['s-01'], kind: 'note', text: 'Decision accepted.' });
+        for (let at = 0; at < 200; at += 1) letters.add({ roomId: 'r-01', from: 's-01', to: [], kind: 'note', text: `письмо ${at}` });
+      });
+      const db = workDb();
+      const prepared = vi.spyOn(db, 'prepare');
+
+      const snapshot = mailWorkMap(map, storeLetterReader(project, 'w-0001'), {});
+
+      const queries = prepared.mock.calls.map(([text]) => text).filter((text) => /m\.sender = \?/.test(text));
+      prepared.mockRestore();
+      expect(queries.length).toBeGreaterThan(0);
+      expect((snapshot.compact as MapCompactMail).rooms['r-01']?.decision).toBe('accepted');
+      for (const text of queries) {
+        const binds = Array.from({ length: (text.match(/\?/g) ?? []).length }, () => 1);
+        const plan = (db.prepare(`EXPLAIN QUERY PLAN ${text}`).all(...binds) as Array<{ detail: string }>).map((row) => row.detail);
+        expect(plan.join('\n')).toContain('USING INDEX messages_sender');
+        expect(plan.join('\n')).not.toMatch(/SCAN|TEMP B-TREE/);
+      }
     });
   });
 });

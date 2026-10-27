@@ -54,7 +54,9 @@ CREATE INDEX entries_order ON entries(project_path, work_id, kind, ord);
  * отбирают живые правила (`recipientsOf`, `cancelledPlanLetter`, `isHumanUnread`) на маленьком наборе кандидатов.
  * Индекс `message_unread_seq` — для внешнего ключа на `messages(…, seq)`: первичный ключ кандидатов начинается с читателя, и
  * без индекса каскад каждого удалённого письма обходил бы всех кандидатов работы (замер: удаление комнаты из 20 000
- * писем при 32 000 кандидатов — 48 с без индекса, 0,6 с с ним).
+ * писем при 32 000 кандидатов — 48 с без индекса, 0,6 с с ним). Индекс `messages_sender` — для писем одного отправителя в канале
+ * по номеру (ответ человека на решение комнаты, `lastHumanDecision`): без него страница таких писем обходила канал целиком
+ * (замер: 84 из 91 мс сборки снимка без писем при 100 000 письмах, спека rooms.mail 6.8).
  */
 const SCHEMA_LETTERS = `
 CREATE TABLE messages (
@@ -68,6 +70,7 @@ CREATE TABLE messages (
 CREATE UNIQUE INDEX messages_id ON messages(project_path, work_id, id);
 CREATE INDEX messages_channel ON messages(project_path, work_id, room_id, seq);
 CREATE INDEX messages_at ON messages(project_path, work_id, at);
+CREATE INDEX messages_sender ON messages(project_path, work_id, room_id, sender, seq);
 CREATE TABLE message_reads (
   project_path TEXT NOT NULL, work_id TEXT NOT NULL, seq INTEGER NOT NULL,
   reader TEXT NOT NULL, at TEXT NOT NULL,
@@ -80,6 +83,12 @@ CREATE TABLE message_unread (
   FOREIGN KEY (project_path, work_id, seq) REFERENCES messages(project_path, work_id, seq) ON DELETE CASCADE);
 CREATE INDEX message_unread_seq ON message_unread(project_path, work_id, seq);
 `;
+
+/**
+ * Индекс отправителя для баз версии 2, открытых до него: схема 2 не выпущена (живут только дома разработки), поэтому версию
+ * не поднимаем, а при открытии дописываем индекс. `IF NOT EXISTS` — у новой базы и у той, что уже получила его, ничего не делает.
+ */
+const MESSAGES_SENDER_INDEX = 'CREATE INDEX IF NOT EXISTS messages_sender ON messages(project_path, work_id, room_id, sender, seq)';
 
 /** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) `upgradeLettersSchema` поднимает до неё. */
 const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
@@ -154,6 +163,8 @@ function prepare(db: DatabaseSync): void {
     } else if (version < WORK_DB_SCHEMA_VERSION) {
       db.exec(SCHEMA_V2);
       db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
+    } else if (version === WORK_DB_SCHEMA_VERSION) {
+      db.exec(MESSAGES_SENDER_INDEX);
     }
     db.exec('COMMIT');
   } catch (error) {
