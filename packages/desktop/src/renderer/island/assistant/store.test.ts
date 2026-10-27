@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAssistantStore, HOST_IDLE, type AssistantDeps } from './store.js';
 
-const CONFIG = { enabled: true, provider: null, model: null, language: 'ru' as const, hotkey: 'Alt+Space', voice: { enabled: true, model: 'small' as const } };
+const CONFIG = {
+  enabled: true, provider: null, model: null, language: 'ru' as const, hotkey: 'Alt+Space', voice: { enabled: true, model: 'small' as const },
+  speech: { enabled: false, voice: 'qwen3-0.6b/serena' as const, gender: 'female' as const, available: false },
+};
 function setup(over: Partial<AssistantDeps> = {}) {
   const store = createAssistantStore();
   let owned = false;

@@ -15,7 +15,7 @@ import type {
   Result,
   TrustRecord,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { AppNote, AssistantVoiceProgress, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -53,6 +53,8 @@ import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
+import type { TtsEngineState } from '../../shared/island.js';
+import { TTS_VOICES } from '../../shared/tts-types.js';
 
 type Handler = (params: never) => unknown;
 
@@ -144,6 +146,12 @@ export interface FakeBridge extends ParleyBridge {
   /** Вызовы `app.assistantShortcutSuspend` (поле записи сочетания): значение аргумента на каждый вызов. */
   readonly assistantShortcutSuspended: boolean[];
   readonly islandShortcutSuspended: boolean[];
+  /** Вызовы нейроголоса помощника (`app.assistantVoiceDownload` → `download` и т. д.) по порядку. */
+  readonly assistantVoiceCalls: string[];
+  /** Состояние движка голоса: что отдаёт `app.assistantVoiceState` и событие `onAssistantVoiceState`; по умолчанию `not-downloaded`. */
+  setAssistantVoiceState(state: TtsEngineState): void;
+  /** Прогресс скачивания весов голоса: событие слушателям `app.onAssistantVoiceProgress`. */
+  emitAssistantVoiceProgress(progress: AssistantVoiceProgress): void;
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -316,6 +324,10 @@ export function createFakeBridge(): FakeBridge {
   const assistantOpenCalls: string[] = [];
   const assistantShortcutSuspended: boolean[] = [];
   const islandShortcutSuspended: boolean[] = [];
+  const assistantVoiceCalls: string[] = [];
+  let assistantVoiceState: TtsEngineState = { state: 'not-downloaded' };
+  const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
+  const assistantVoiceProgressListeners = new Set<(progress: AssistantVoiceProgress) => void>();
   let saveDiagnosticsAnswer: DiagnosticsSaveResult | Error = { file: '/Users/test/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true };
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
@@ -611,6 +623,14 @@ export function createFakeBridge(): FakeBridge {
     emitVoiceProgress: (progress) => {
       for (const listener of voiceProgressListeners) listener(progress);
     },
+    assistantVoiceCalls,
+    setAssistantVoiceState: (state) => {
+      assistantVoiceState = state;
+      for (const listener of assistantVoiceStateListeners) listener(state);
+    },
+    emitAssistantVoiceProgress: (progress) => {
+      for (const listener of assistantVoiceProgressListeners) listener(progress);
+    },
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
@@ -904,6 +924,29 @@ export function createFakeBridge(): FakeBridge {
       },
       islandShortcut: async () => ({ accelerator: 'Control+Alt+I', ok: true }),
       islandShortcutSuspend: (on) => { islandShortcutSuspended.push(on); },
+      assistantVoices: async () => {
+        assistantVoiceCalls.push('voices');
+        return TTS_VOICES.map((voice) => ({ ...voice, downloaded: assistantVoiceState.state !== 'not-downloaded' }));
+      },
+      assistantVoiceDownload: async () => {
+        assistantVoiceCalls.push('download');
+        return { ok: true };
+      },
+      assistantVoiceCancel: async () => {
+        assistantVoiceCalls.push('cancel');
+      },
+      assistantVoiceRemove: async () => {
+        assistantVoiceCalls.push('remove');
+      },
+      assistantVoiceState: async () => assistantVoiceState,
+      onAssistantVoiceState: (listener) => {
+        assistantVoiceStateListeners.add(listener);
+        return () => assistantVoiceStateListeners.delete(listener);
+      },
+      onAssistantVoiceProgress: (listener) => {
+        assistantVoiceProgressListeners.add(listener);
+        return () => assistantVoiceProgressListeners.delete(listener);
+      },
       loadNotes: async (workKey, sessionId) => {
         loadNotesCalls.push({ workKey, sessionId });
         const answer = notesAnswers.get(notesKey(workKey, sessionId)) ?? { file: { version: 1, notes: [] }, corruptedTo: null };

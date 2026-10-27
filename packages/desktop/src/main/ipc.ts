@@ -27,6 +27,7 @@ import { projectIslandWorks } from './island/works-projection.js';
 import { projectIslandActivity } from './island/activity-projection.js';
 import type { IslandActivityEntry } from '../shared/island.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
+import type { TtsService } from './assistant/tts.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
 import { parseContextInput } from './browser/context-files.js';
@@ -257,6 +258,11 @@ export interface RegisterIpcOptions {
   suspendAssistantShortcut?: (on: boolean) => void;
   islandShortcut?: () => AssistantShortcutStatus;
   suspendIslandShortcut?: (on: boolean) => void;
+  /**
+   * Нейроголос помощника (план 3b, B15) для настроек: каталог, скачивание весов только по кнопке (E5), отмена и
+   * удаление (D5), состояние движка.
+   */
+  tts: Pick<TtsService, 'voices' | 'download' | 'cancelDownload' | 'remove' | 'state'>;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -402,6 +408,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     setDirtyBuffers,
     answerClose,
     browser,
+    tts,
   } = options;
 
   const progressSent = new WeakMap<object, number>();
@@ -480,6 +487,20 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:assistant-shortcut-suspend', (_event, on: unknown) => options.suspendAssistantShortcut?.(on === true));
   ipcMain.handle('app:island-shortcut', withIpcError(() => options.islandShortcut?.() ?? { accelerator: null, ok: true }));
   ipcMain.on('app:island-shortcut-suspend', (_event, on: unknown) => options.suspendIslandShortcut?.(on === true));
+
+  ipcMain.handle('app:assistant-voices', withIpcError(() => tts.voices()));
+  ipcMain.handle(
+    'app:assistant-voice-download',
+    withIpcError((event) => {
+      const sender = (event as { sender: Pick<WebContents, 'isDestroyed' | 'send'> }).sender;
+      return tts.download((progress) => {
+        if (!sender.isDestroyed()) sender.send('app:assistant-voice-progress', progress);
+      });
+    }),
+  );
+  ipcMain.handle('app:assistant-voice-cancel', withIpcError(() => tts.cancelDownload()));
+  ipcMain.handle('app:assistant-voice-remove', withIpcError(() => tts.remove()));
+  ipcMain.handle('app:assistant-voice-state', withIpcError(() => tts.state()));
 
   ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;

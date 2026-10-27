@@ -4,14 +4,40 @@
  * числа, область под мышь — `null` или четыре конечных числа (размеры не отрицательны, значения не больше
  * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений, «просмотрено» — от 1 до `ISLAND_MARK_SEEN_LIMIT` ссылок на сессии
  * (`sessionRef` протокола).
+ *
+ * Нейроголос (план 3b, B15): остров просит порт (`island:tts-connect`), main создаёт `MessageChannelMain` и отдаёт
+ * `port2` только окну острова. Куски, срыв по длине и состояние движка идут по этому одному порту по порядку — срыв
+ * не обгонит кусок и не отстанет от него. Синтез, прогрев и значок динамика — `invoke`; чужое окно получает
+ * `forbidden`, негодный запрос — `bad_request`.
  */
 
 import type { IpcMain } from 'electron';
 import { sessionRef, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
-import { ISLAND_MARK_SEEN_LIMIT, type IslandConfig, type IslandHitRect, type IslandPoint, type SessionVisibilitySnapshot } from '../../shared/island.js';
+import {
+  ISLAND_MARK_SEEN_LIMIT,
+  ISLAND_TTS_TEXT_LIMIT,
+  type IslandConfig,
+  type IslandHitRect,
+  type IslandPoint,
+  type IslandSpeakRequest,
+  type IslandTtsMessage,
+  type SessionVisibilitySnapshot,
+} from '../../shared/island.js';
+import { isAssistantVoiceId } from '../../shared/tts-types.js';
+import type { UiFile } from '../../shared/ui-types.js';
+import { isVoiceLanguage } from '../../shared/voice-types.js';
+import type { TtsService } from '../assistant/tts.js';
+import { HostError } from '../host-connection.js';
 import { isFocusTarget, withIpcError } from '../ipc.js';
+import type { UiStore } from '../ui-store.js';
 import type { IslandController, IslandWindowLike } from './window.js';
+
+/** Сторона main порта голоса (`MessagePortMain`): только отправка. */
+export interface TtsPort {
+  postMessage(message: IslandTtsMessage): void;
+  close(): void;
+}
 
 export interface IslandIpcOptions {
   ipcMain: Pick<IpcMain, 'on' | 'handle'>;
@@ -28,6 +54,14 @@ export interface IslandIpcOptions {
   markSeen(refs: SessionRef[]): void;
   /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
   onFailed(): void;
+  /** Нейроголос (B10). */
+  tts: Pick<TtsService, 'speak' | 'cancel' | 'cancelAll' | 'warmup' | 'state' | 'onState'>;
+  /** Новый канал порта голоса: `new MessageChannelMain()`. */
+  ttsChannel(): { port1: TtsPort; port2: unknown };
+  /** Значок динамика пишет `assistant.speak` в ui.json. */
+  uiStore: Pick<UiStore, 'save'>;
+  /** Тот же путь, что после сохранения из Settings: конфиг острова и зеркало хосту. */
+  onUiSaved(): void;
 }
 
 function isPoint(value: unknown): value is IslandPoint {
@@ -59,9 +93,37 @@ function parseSeenRefs(value: unknown): SessionRef[] | null {
   return refs;
 }
 
+/** Предел id предложения: id задаёт остров, в main он только ключ. */
+const UTTERANCE_ID_MAX = 200;
+
+function isUtteranceId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= UTTERANCE_ID_MAX;
+}
+
+/** Запрос `island:tts-speak` или `null`: текст не пустой и до `ISLAND_TTS_TEXT_LIMIT`, голос каталога, язык Whisper. */
+function parseSpeakRequest(value: unknown): IslandSpeakRequest | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { utteranceId, text, voice, language } = value as Record<string, unknown>;
+  if (!isUtteranceId(utteranceId) || !isAssistantVoiceId(voice)) return null;
+  if (typeof text !== 'string' || text.trim() === '' || text.length > ISLAND_TTS_TEXT_LIMIT) return null;
+  if (!isVoiceLanguage(language) || language === 'auto') return null;
+  return { utteranceId, text, voice, language };
+}
+
+/** Окно, которому main передаёт порт (`WebContents.postMessage`). */
+interface PortTarget {
+  postMessage(channel: string, message: unknown, transfer: unknown[]): void;
+}
+
 export function registerIslandIpc(options: IslandIpcOptions): void {
-  const { ipcMain, controller } = options;
+  const { ipcMain, controller, tts } = options;
   const fromIsland = (event: unknown): boolean => controller.isIsland((event as { sender?: unknown }).sender);
+  const islandOnly = (event: unknown, channel: string): void => {
+    if (!fromIsland(event)) throw new HostError('forbidden', `${channel} is for the island window only`);
+  };
+  /** Порт голоса живой страницы острова; `null` — остров его ещё не просил. */
+  let port: TtsPort | null = null;
+  tts.onState((state) => port?.postMessage({ type: 'state', state }));
 
   ipcMain.handle('island:session-visibility', withIpcError((event) => {
     if (!fromIsland(event)) throw new Error('island:session-visibility is for the island window only');
@@ -109,4 +171,51 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   ipcMain.on('island:failed', (event) => {
     if (fromIsland(event)) options.onFailed();
   });
+
+  ipcMain.on('island:tts-connect', (event) => {
+    if (!fromIsland(event)) return;
+    // Новый порт — новая страница острова: речь прежней ей уже не нужна.
+    if (port !== null) {
+      port.close();
+      tts.cancelAll();
+    }
+    const channel = options.ttsChannel();
+    port = channel.port1;
+    (event as { sender: PortTarget }).sender.postMessage('island:tts-port', null, [channel.port2]);
+    port.postMessage({ type: 'state', state: tts.state() });
+  });
+  ipcMain.handle(
+    'island:tts-speak',
+    withIpcError((event, value) => {
+      islandOnly(event, 'island:tts-speak');
+      const request = parseSpeakRequest(value);
+      if (request === null) throw new HostError('bad_request', 'invalid island:tts-speak request');
+      // Куски, срыв и повтор — в порт, который был при запросе, по порядку.
+      const target = port;
+      return tts.speak(request, (chunk) => target?.postMessage({ type: 'chunk', chunk }), {
+        onDiscard: (utteranceId, fromSeq) => target?.postMessage({ type: 'discard', utteranceId, fromSeq }),
+      });
+    }),
+  );
+  ipcMain.on('island:tts-cancel', (event, utteranceId: unknown) => {
+    if (!fromIsland(event)) return;
+    if (utteranceId === null) tts.cancelAll();
+    else if (isUtteranceId(utteranceId)) tts.cancel(utteranceId);
+  });
+  ipcMain.handle(
+    'island:tts-warmup',
+    withIpcError((event) => {
+      islandOnly(event, 'island:tts-warmup');
+      return tts.warmup();
+    }),
+  );
+  ipcMain.handle(
+    'island:assistant-speak',
+    withIpcError(async (event, on: unknown) => {
+      islandOnly(event, 'island:assistant-speak');
+      if (typeof on !== 'boolean') throw new HostError('bad_request', 'island:assistant-speak expects a boolean');
+      await options.uiStore.save({ assistant: { speak: on } } as Partial<Omit<UiFile, 'version'>>);
+      options.onUiSaved();
+    }),
+  );
 }

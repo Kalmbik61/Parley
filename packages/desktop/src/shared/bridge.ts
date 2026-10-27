@@ -8,8 +8,9 @@ import type {
   SessionRef,
 } from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
-import type { AssistantShortcutStatus, SessionVisibilityReport } from './island.js';
-import type { VoiceApi } from './voice-types.js';
+import type { AssistantShortcutStatus, SessionVisibilityReport, TtsEngineState } from './island.js';
+import type { AssistantVoice, TtsModelId } from './tts-types.js';
+import type { DownloadProgress, DownloadResult, VoiceApi } from './voice-types.js';
 import type {
   DiffFile,
   DirEntry,
@@ -30,6 +31,9 @@ import type { WorkLayout } from './layout-types.js';
 import type { NotesFile } from './notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
 import type { Appearance, UiFile } from './ui-types.js';
+
+/** Прогресс скачивания весов нейроголоса (`app:assistant-voice-progress`). */
+export type AssistantVoiceProgress = Omit<DownloadProgress, 'id'> & { id: TtsModelId };
 
 /** Результат `app.saveDiagnostics`: путь готового архива и ответил ли хост на запрос снимка (спека диагностики 2026-10-16, A6). */
 export interface DiagnosticsSaveResult {
@@ -142,6 +146,18 @@ export interface ParleyBridge {
     assistantShortcutSuspend(on: boolean): void;
     islandShortcut(): Promise<AssistantShortcutStatus>;
     islandShortcutSuspend(on: boolean): void;
+    /** Каталог нейроголосов помощника (план 3b, B15) с отметкой «скачан». */
+    assistantVoices(): Promise<AssistantVoice[]>;
+    /** Качает веса голоса — только по кнопке (E5); прогресс — `onAssistantVoiceProgress`. */
+    assistantVoiceDownload(): Promise<DownloadResult>;
+    /** Отмена идущего скачивания весов (D5). */
+    assistantVoiceCancel(): Promise<void>;
+    /** Удаление весов (D5): дальше ответы текстом, само ничего не качается. */
+    assistantVoiceRemove(): Promise<void>;
+    /** Состояние движка: `warming` — «Preparing voice…» (Р7). */
+    assistantVoiceState(): Promise<TtsEngineState>;
+    onAssistantVoiceState(listener: (state: TtsEngineState) => void): () => void;
+    onAssistantVoiceProgress(listener: (progress: AssistantVoiceProgress) => void): () => void;
     /**
      * Заметки к диффу сессии (кусок 8.4a, спека 11.4), `main/notes-store.ts`. Битый файл — пустые
      * заметки, а corruptedTo — имя, под которым его сохранили рядом: путь `notes/` лежит вне корней

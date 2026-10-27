@@ -102,6 +102,39 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
   });
 
+  it('нейроголос помощника (план 3b, B15): каталог, скачивание, отмена, удаление и состояние — свои каналы app:assistant-voice*', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    void bridge.app.assistantVoices();
+    void bridge.app.assistantVoiceDownload();
+    void bridge.app.assistantVoiceCancel();
+    void bridge.app.assistantVoiceRemove();
+    void bridge.app.assistantVoiceState();
+    expect(vi.mocked(ipcRenderer.invoke).mock.calls.slice(-5)).toEqual([
+      ['app:assistant-voices'],
+      ['app:assistant-voice-download'],
+      ['app:assistant-voice-cancel'],
+      ['app:assistant-voice-remove'],
+      ['app:assistant-voice-state'],
+    ]);
+  });
+
+  it('нейроголос: прогресс скачивания и состояние движка приходят подписчикам, отписка снимает их', async () => {
+    const bridge = await loadPreload();
+    const progress = vi.fn();
+    const state = vi.fn();
+    const offProgress = bridge.app.onAssistantVoiceProgress(progress);
+    const offState = bridge.app.onAssistantVoiceState(state);
+    emit('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 1, totalBytes: 2 });
+    emit('app:assistant-voice-state', { state: 'warming' });
+    offProgress();
+    offState();
+    emit('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 2, totalBytes: 2 });
+    emit('app:assistant-voice-state', { state: 'ready' });
+    expect(progress.mock.calls).toEqual([[{ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 1, totalBytes: 2 }]]);
+    expect(state.mock.calls).toEqual([[{ state: 'warming' }]]);
+  });
+
   it('app.imageThumbnail: путь и необязательная сторона миниатюры уходят в канал app:image-thumbnail, ответ main возвращается как есть', async () => {
     const bridge = await loadPreload();
     const { ipcRenderer } = await import('electron');

@@ -7,6 +7,7 @@
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { sessionRef, type EventData, type EventName, type SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
+import type { AssistantVoiceId, VoiceGender } from './tts-types.js';
 import type { IslandAnchor, IslandMotion, IslandSoundUi } from './ui-types.js';
 import type { VoiceApi, VoiceModelId } from './voice-types.js';
 
@@ -35,6 +36,89 @@ export interface IslandAssistantConfig {
   hotkey: string;
   /** Голосовой ввод из настроек Voice: без модели помощник слушать не может. */
   voice: { enabled: boolean; model: VoiceModelId | null };
+  /**
+   * Нейроголос (план 3b, B15). Main присылает его всегда; необязательное поле — только ради начального конфига
+   * `IslandApp.tsx` до B22: без поля голоса нет.
+   */
+  speech?: IslandSpeechConfig;
+}
+
+/** Речь помощника на острове (план 3b, B15). */
+export interface IslandSpeechConfig {
+  /** «Speak answers» (`assistant.speak`). */
+  enabled: boolean;
+  /** Голос каталога; на чистой установке — `DEFAULT_VOICE` (G4). */
+  voice: AssistantVoiceId;
+  /** Род голоса: шаблонные фразы помощника (G2). */
+  gender: VoiceGender;
+  /** Голос может звучать (`ttsAvailable`); нет — ответы текстом, само ничего не качается (G3, Р8). */
+  available: boolean;
+}
+
+/** Состояние нейроголоса в main (`TtsService.state()`, B10): его видят остров (порт) и настройки. */
+export type TtsEngineState =
+  | { state: 'unavailable'; reason: string }
+  | { state: 'not-downloaded' }
+  | { state: 'warming' }
+  | { state: 'ready' }
+  | { state: 'speaking' };
+
+/** Голос может звучать: веса скачаны и движок не отказал (`warming` — `speak` дождётся `ready`). */
+export function ttsAvailable(state: TtsEngineState): boolean {
+  return state.state === 'ready' || state.state === 'speaking' || state.state === 'warming';
+}
+
+/** Предел текста одного предложения в `island:tts-speak`: длиннее — `bad_request`. */
+export const ISLAND_TTS_TEXT_LIMIT = 2000;
+
+/** Предложение на синтез (`island:tts-speak`). */
+export interface IslandSpeakRequest {
+  utteranceId: string;
+  text: string;
+  voice: AssistantVoiceId;
+  language: AssistantLanguage;
+}
+
+/** Кусок `island:tts-chunk` (#9 §6.3): моно f32 с родной частотой движка; `final` — пустой последний кусок предложения. */
+export interface IslandTtsChunk {
+  utteranceId: string;
+  seq: number;
+  sampleRate: number;
+  channels: 1;
+  format: 'f32';
+  pcm: Float32Array;
+  final: boolean;
+}
+
+/**
+ * Сообщения порта голоса — по порядку на одном `MessagePort`: куски, срыв по длине (выбросить куски `utteranceId` с
+ * `seq >= fromSeq`, повтор идёт старшими `seq`) и состояние движка.
+ */
+export type IslandTtsMessage =
+  | { type: 'chunk'; chunk: IslandTtsChunk }
+  | { type: 'discard'; utteranceId: string; fromSeq: number }
+  | { type: 'state'; state: TtsEngineState };
+
+/**
+ * `data` сообщения окна, с которым preload острова передаёт порт голоса в главный мир (`event.ports[0]`):
+ * `contextBridge` порт не пропускает.
+ */
+export const ISLAND_TTS_PORT = 'parley:island-tts-port';
+
+/** Нейроголос острова (план 3b, B15). */
+export interface IslandSpeechApi {
+  /**
+   * Просит у main новый порт голоса; он придёт сообщением окна с `data === ISLAND_TTS_PORT`. Звать после подписки на
+   * `message`; новый порт закрывает прежний, а речь прежнего порта отменяется.
+   */
+  connect(): void;
+  /** Ставит предложение в очередь; ответ — когда оно кончилось (или сразу, если голоса нет). Куски — в порт. */
+  speak(request: IslandSpeakRequest): Promise<TtsEngineState>;
+  /** Отмена предложения; без id — всей очереди (E3). */
+  cancel(utteranceId?: string): void;
+  warmup(): Promise<TtsEngineState>;
+  /** Значок динамика: пишет `assistant.speak` в ui.json — тот же флаг, что «Speak answers» в Settings. */
+  setSpeak(on: boolean): Promise<void>;
 }
 
 export interface AssistantOpenRequest {
@@ -94,6 +178,7 @@ export interface IslandApi {
   onKeyboardBlur(listener: () => void): () => void;
   /** Голос для помощника — те же каналы `voice:*`, что у окна. */
   voice: Pick<VoiceApi, 'transcribe' | 'micStatus' | 'requestMic'>;
+  speech: IslandSpeechApi;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
   dragEnd(point: IslandPoint): void;

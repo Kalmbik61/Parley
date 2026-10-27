@@ -3,12 +3,26 @@
  * диалоги, браузер и голос, а подписка `app.onFocusTarget` общего моста забрала бы у главного окна отложенную цель
  * клика по уведомлению (`app:take-focus-target`). Белый список методов хоста держит ещё и main (`host:call` по
  * отправителю) — на случай ошибки здесь.
+ *
+ * Порт нейроголоса (план 3b, B15) `contextBridge` не пропускает: preload передаёт его в главный мир сообщением окна
+ * (`window.postMessage(ISLAND_TTS_PORT, '*', ports)`).
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
-import type { AssistantOpenRequest, IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint, SessionVisibilitySnapshot } from '../shared/island.js';
+import {
+  ISLAND_TTS_PORT,
+  type AssistantOpenRequest,
+  type IslandApi,
+  type IslandBridge,
+  type IslandConfig,
+  type IslandHitRect,
+  type IslandPoint,
+  type IslandSpeakRequest,
+  type SessionVisibilitySnapshot,
+  type TtsEngineState,
+} from '../shared/island.js';
 import type { MicStatus, TranscribeResult } from '../shared/voice-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
@@ -46,6 +60,11 @@ ipcRenderer.on('island:keyboard-blur', () => {
 });
 ipcRenderer.on('island:session-visibility', (_event, snapshot: SessionVisibilitySnapshot) => {
   for (const listener of visibilityListeners) listener(snapshot);
+});
+ipcRenderer.on('island:tts-port', (event) => {
+  // Типов DOM у preload нет: окно — через `globalThis`.
+  const page = (globalThis as unknown as { window: { postMessage(message: unknown, targetOrigin: string, transfer: unknown[]): void } }).window;
+  page.postMessage(ISLAND_TTS_PORT, '*', event.ports);
 });
 
 const bridge = {
@@ -112,6 +131,13 @@ const bridge = {
       transcribe: (request) => ipcRenderer.invoke('voice:transcribe', request) as Promise<TranscribeResult>,
       micStatus: () => ipcRenderer.invoke('voice:mic-status') as Promise<MicStatus>,
       requestMic: () => ipcRenderer.invoke('voice:request-mic') as Promise<boolean>,
+    },
+    speech: {
+      connect: () => ipcRenderer.send('island:tts-connect'),
+      speak: (request: IslandSpeakRequest) => ipcRenderer.invoke('island:tts-speak', request) as Promise<TtsEngineState>,
+      cancel: (utteranceId?: string) => ipcRenderer.send('island:tts-cancel', utteranceId ?? null),
+      warmup: () => ipcRenderer.invoke('island:tts-warmup') as Promise<TtsEngineState>,
+      setSpeak: (on: boolean) => ipcRenderer.invoke('island:assistant-speak', on) as Promise<void>,
     },
     dragStart: (point: IslandPoint) => ipcRenderer.send('island:drag-start', point),
     dragMove: (point: IslandPoint) => ipcRenderer.send('island:drag-move', point),
