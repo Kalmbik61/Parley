@@ -1064,13 +1064,16 @@ describe('RoomMarkdown — меню ссылки (правый клик)', () =>
   it('меню у курсора: браузер Parley, системный браузер (onOpenExternal) и Copy link; окно не открывает своё меню', async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    const { onOpenExternal } = renderText('[доки](https://example.com/d)');
+    const { container, onOpenExternal } = renderText('[доки](https://example.com/d)');
     const link = screen.getByRole('link', { name: 'доки' });
     const open = async (): Promise<void> => {
       const event = createEvent.contextMenu(link);
       fireEvent(link, event);
       expect(event.defaultPrevented).toBe(true);
       await screen.findByTestId('room-link-menu');
+      // Якорь меню — в body, не в строке ленты: строка виртуального списка сдвинута transform, и fixed считался бы от неё.
+      expect(container.querySelector('span[aria-hidden][style*="fixed"]')).toBeNull();
+      expect(document.body.querySelector('span[aria-hidden][style*="fixed"]')).not.toBeNull();
     };
     await open();
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([

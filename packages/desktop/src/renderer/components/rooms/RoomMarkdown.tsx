@@ -60,6 +60,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import { Check, Copy } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
@@ -177,37 +178,41 @@ function ExternalLink({
       >
         {children}
       </a>
-      {menu === null ? null : (
-        <DropdownMenu
-          open
-          modal={false}
-          onOpenChange={(open) => (open ? undefined : setMenu(null))}
-        >
-          <DropdownMenuTrigger asChild>
-            <span
-              aria-hidden
-              style={{ position: 'fixed', left: menu.x, top: menu.y, width: 0, height: 0 }}
-            />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" data-testid="room-link-menu">
-            <DropdownMenuItem onSelect={() => openInBrowserTab(url)}>
-              {S.links.openInBrowser}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openExternal(url)}>
-              {S.links.openInSystemBrowser}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                navigator.clipboard
-                  .writeText(url)
-                  .catch((error: unknown) => console.warn('[parley] clipboard', error));
-              }}
+      {/* Порталом в body: строка виртуальной ленты сдвинута `transform`, и `position: fixed` якоря считался бы от неё. */}
+      {menu === null
+        ? null
+        : createPortal(
+            <DropdownMenu
+              open
+              modal={false}
+              onOpenChange={(open) => (open ? undefined : setMenu(null))}
             >
-              {S.links.copyLink}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+              <DropdownMenuTrigger asChild>
+                <span
+                  aria-hidden
+                  style={{ position: 'fixed', left: menu.x, top: menu.y, width: 0, height: 0 }}
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" data-testid="room-link-menu">
+                <DropdownMenuItem onSelect={() => openInBrowserTab(url)}>
+                  {S.links.openInBrowser}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openExternal(url)}>
+                  {S.links.openInSystemBrowser}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    navigator.clipboard
+                      .writeText(url)
+                      .catch((error: unknown) => console.warn('[parley] clipboard', error));
+                  }}
+                >
+                  {S.links.copyLink}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>,
+            document.body,
+          )}
     </InsideLink.Provider>
   );
 }
