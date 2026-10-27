@@ -26,7 +26,7 @@ export function projectIslandActivity(entry: IslandActivityEntry): IslandActivit
   const activity = entry.activity;
   const projected: IslandActivityEntry = { ref: { projectPath: entry.ref.projectPath, workId: entry.ref.workId, sessionId: entry.ref.sessionId }, activity: {
     activity: activity.activity, subagents: count(activity.subagents), tasks: [], waitingFor: null,
-    heldByBackground: activity.heldByBackground === true, turnEndedAt: activity.turnEndedAt, lastEventAt: activity.lastEventAt,
+    heldByBackground: activity.heldByBackground === true, turnEndedAt: activity.turnEndedAt, turnBoundaryAt: activity.turnBoundaryAt ?? null, lastEventAt: activity.lastEventAt,
     source: activity.source, hooksMissing: activity.hooksMissing,
     need: activity.need == null ? null : { kind: activity.need.kind, since: activity.need.since, detail: null,
       resetsAt: activity.need.resetsAt, window: activity.need.window, account: activity.need.account },
