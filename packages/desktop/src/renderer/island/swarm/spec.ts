@@ -1,15 +1,19 @@
 /**
  * Облик роя душ по состоянию помощника (спека 2026-10-14, раздел 9; эталон — одобренный макет island-mockup.html,
- * таблица `SPEC` и `specFor`). Чистые данные и функции без React и canvas: палитры, пятна облака, длительности
- * переходов и выбор облика по фазе хоста и фазе ввода. Лицо и эмоции (этап 3) сюда не входят.
+ * таблицы `SPEC`, `EMO`, `DUR` и `specFor`). Чистые данные и функции без React и canvas: палитры, пятна облака,
+ * силуэты лица по эмоциям, длительности переходов и выбор облика по фазе хоста и фазе ввода.
  */
 
 import type { AssistantState } from '@parley/protocol';
 import type { InputPhase } from '../assistant/store.js';
 
 export type SwarmPalette = 'amber' | 'coral' | 'gray';
-export type SwarmShape = 'dot' | 'cloud' | 'sphere';
+export type SwarmShape = 'dot' | 'cloud' | 'sphere' | 'face';
 export type SwarmFx = 'listen' | 'ring' | 'flow' | 'arc' | null;
+/** Эмоция лица — та же, что метка ответа хоста. */
+export type SwarmEmotion = AssistantState['mood'];
+/** Фаза ввода для облика: речь (`speaking`) и пауза после неё (`settling`) живут в острове. */
+export type SwarmInput = InputPhase | 'speaking' | 'settling';
 
 export interface SwarmSpec {
   shape: SwarmShape;
@@ -25,6 +29,8 @@ export interface SwarmSpec {
   dim: number;
   /** Сбой картинки на входе в состояние (280 мс). */
   glitch: boolean;
+  /** Эмоция лица; только у формы `face`, иначе `null`. */
+  emo: SwarmEmotion | null;
 }
 
 /**
@@ -48,15 +54,69 @@ export const BLOBS: ReadonlyArray<readonly [number, number, number, number, numb
   [0, 0, 0.5, 0.26, 0.8],
 ];
 
-/** Длительность перехода облако ↔ сфера, с; точка считается облаком, одинаковая форма — 0,7 с (в движке). */
-export const DUR: Record<'cloudsphere' | 'spherecloud', number> = { cloudsphere: 1.8, spherecloud: 1.5 };
+/**
+ * Длительность перехода между формами, с; точка считается облаком. Одинаковая форма — 0,7 с, смена эмоции внутри
+ * лица — 0,6 с (в движке).
+ */
+export const DUR: Record<'cloudsphere' | 'spherecloud' | 'sphereface' | 'facesphere' | 'cloudface' | 'facecloud', number> = {
+  cloudsphere: 1.8,
+  spherecloud: 1.5,
+  sphereface: 0.8,
+  facesphere: 0.8,
+  cloudface: 1.4,
+  facecloud: 1.2,
+};
 
-const BASE: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false };
+/**
+ * Силуэт лица в долях `d`. Глаз: `a`, `b` — полуоси, `ey` — высота над центром; `cut` — линия века [база, наклон];
+ * `dome` — плоский низ; `x` — глаз крестиком длины `len`. Рот: `mw` — ширина, `H0`..`H1` — высота от закрытого до
+ * открытого, `pw` — сужение к краям, `curl` — изгиб, `mo` — овал, `wave` — волна. `nb` — без моргания, `dim` — яркость.
+ */
+export interface FaceSpec {
+  a?: number;
+  b?: number;
+  ey: number;
+  mw: number;
+  H0: number;
+  H1: number;
+  pw?: number;
+  curl?: number;
+  cut?: readonly [number, number];
+  dome?: boolean;
+  mo?: boolean;
+  x?: boolean;
+  len?: number;
+  wave?: boolean;
+  nb?: boolean;
+  dim?: number;
+}
 
-/** Облик по состоянию хоста и фазе ввода (таблица `SPEC` макета); в мини-виде облако рисуется точкой. */
-export function swarmSpecFor(host: AssistantState, input: InputPhase, mini: boolean): SwarmSpec {
+/** Таблица эмоций лица — дословно из макета. */
+export const EMO: Record<SwarmEmotion, FaceSpec> = {
+  calm: { a: 0.095, b: 0.13, ey: 0.28, mw: 0.78, curl: 0.07, H0: 0.1, H1: 0.24, pw: 0.6 },
+  joy: { a: 0.115, b: 0.1, dome: true, ey: 0.28, mw: 1.04, curl: 0.18, H0: 0.14, H1: 0.3, pw: 0.55 },
+  sad: { a: 0.095, b: 0.12, cut: [-0.12, 0.8], ey: 0.27, mw: 0.72, curl: -0.13, H0: 0.08, H1: 0.15, pw: 0.7, dim: 0.78 },
+  surprise: { a: 0.11, b: 0.16, ey: 0.31, mo: true, mw: 0.4, H0: 0.3, H1: 0.4, nb: true },
+  anger: { a: 0.105, b: 0.085, cut: [-0.1, -0.95], ey: 0.27, mw: 0.6, curl: -0.06, H0: 0.15, H1: 0.26, pw: 0.3 },
+  error: { x: true, len: 0.1, ey: 0.28, mw: 0.86, curl: 0, wave: true, H0: 0.05, H1: 0.05, pw: 0.1, nb: true },
+};
+
+const BASE: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false, emo: null };
+
+/**
+ * Облик по состоянию хоста и фазе ввода (таблица `SPEC` и `specFor` макета). Приоритет: слушание, затем `offline`
+ * хоста, затем речь, затем фаза хоста. Речь — лицо с эмоцией хоста; в мини-виде лица нет — сфера с палитрой лица.
+ * В мини-виде облако рисуется точкой.
+ */
+export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: boolean): SwarmSpec {
   let spec: SwarmSpec;
   if (input === 'listening' || input === 'transcribing') spec = { ...BASE, fx: 'listen' };
+  else if (host.phase !== 'offline' && input === 'speaking') {
+    const emo = host.mood;
+    const pal = emo === 'anger' || emo === 'error' ? 'coral' : 'amber';
+    spec = { ...BASE, shape: 'face', emo, pal, dim: EMO[emo].dim ?? 1 };
+    if (mini) spec = { ...spec, shape: 'sphere', emo: null };
+  } else if (host.phase !== 'offline' && input === 'settling') spec = { ...BASE, shape: 'sphere', rot: 0.3 };
   else {
     switch (host.phase) {
       case 'thinking':
