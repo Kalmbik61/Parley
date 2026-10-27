@@ -14,8 +14,11 @@ export const NOTCH_PROBE_DELAY_MS = 250;
 /** Выше 64 pt выреза не бывает: такое число — мусор, а не вырез. */
 const NOTCH_HEIGHT_MAX = 64;
 
-/** Селекторы проверяются: на старой macOS их нет, такой экран — без выреза, а не ошибка. */
-export const NOTCH_SCRIPT = `ObjC.import('AppKit');
+/**
+ * Селекторы проверяются: на старой macOS их нет, такой экран — без выреза, а не ошибка. Имя фреймворка — в двойных
+ * кавычках: `import('…')` в одинарных проверка зависимостей окна (`package-deps.test.ts`) приняла бы за пакет.
+ */
+export const NOTCH_SCRIPT = `ObjC.import("AppKit");
 const screens = $.NSScreen.screens;
 const out = [];
 for (let i = 0; i < screens.count; i++) {
