@@ -159,15 +159,19 @@ function mentionPattern(recipientId: string): RegExp {
   return new RegExp(`(^|[^\\w@])(?:${alternatives})(?!\\w)`, 'i');
 }
 
-const isUrgentWithoutMention = (message: Message): boolean =>
-  message.from === HUMAN || message.to.length > 0 || message.kind !== 'note';
-
 /**
- * Письмо будит получателя сразу, без окна тишины: от человека, адресное (`to` не пусто), не заметка (`question`,
- * `decision`) или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`).
+ * Срочность письма для одного получателя: от человека, адресное (`to` не пусто), не заметка (`question`, `decision`)
+ * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Выражение упоминания строится один раз —
+ * предикат годится на любое число писем.
  */
+function urgencyOf(recipientId: string): (message: Message) => boolean {
+  const mention = mentionPattern(recipientId);
+  return (message) => message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text);
+}
+
+/** Письмо будит получателя сразу, без окна тишины (`urgencyOf`). */
 export function wakesAtOnce(message: Message, recipientId: string): boolean {
-  return isUrgentWithoutMention(message) || mentionPattern(recipientId).test(message.text);
+  return urgencyOf(recipientId)(message);
 }
 
 /**
@@ -184,9 +188,7 @@ export function settleDelayMs(
   settleMaxMs = SETTLE_MAX_MS,
 ): number {
   if (letters.length === 0) return 0;
-  // Выражение упоминания строим один раз на пачку, а не на каждое письмо.
-  const mention = mentionPattern(recipientId);
-  if (letters.some((message) => isUrgentWithoutMention(message) || mention.test(message.text))) return 0;
+  if (letters.some(urgencyOf(recipientId))) return 0;
   const times = letters.map((message) => Date.parse(message.at));
   if (times.some((time) => Number.isNaN(time))) return 0;
   const newest = Math.max(...times);

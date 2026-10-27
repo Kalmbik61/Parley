@@ -113,6 +113,11 @@ describe('темы гида', () => {
     expect(text).toContain(
       'if a colleague must act on your room message now, address it (`to`) or mention them (`@sNN`); a plain broadcast note is read in the next batch.',
     );
+    // Правило окна — для оконных сессий; у сессий `parley-core` с `channelPush` каждое письмо объявляется сразу.
+    expect(text).toContain('When an idle colleague in a window session is woken.');
+    expect(text).toContain('Sessions started by the `parley-core` CLI with `channelPush` have no batch: every letter is announced to them at once.');
+    // Голый ярлык без `@` упоминанием не считается.
+    expect(text).toContain('A bare label like `S02` without the `@` is not a mention: write `@s02`.');
   });
 
   it('тема lead: ждать позиции одним wait_for("inbox", 1500), не писать «plan accepted, handing out»', () => {

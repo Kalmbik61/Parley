@@ -149,11 +149,11 @@
 
 **Interfaces:** produces `SETTLE_MS = 30_000`, `SETTLE_MAX_MS = 120_000`; `wakesAtOnce(message: Message, recipientId: string): boolean`; `settleDelayMs(letters: readonly Message[], recipientId: string, now: number, settleMs?: number, settleMaxMs?: number): number` — 0, если доставлять сейчас, иначе сколько ждать; в `DeliveryInput` — `now: number` и необязательные `settleMs`/`settleMaxMs`; новый отказ `{ kind: 'none'; reason: 'settling'; retryInMs: number }`; `MailWait` += `'settling'`.
 
-- [ ] `wakesAtOnce`: `from === HUMAN`; `to.length > 0`; `kind !== 'note'`; упоминание получателя в тексте — `sessionMention(recipientId)` по правилу `plainHumanMention` (`attention.ts:118`: не часть слова, `@s02` не находится в `@s020`).
-- [ ] `settleDelayMs` по переданным письмам (`deliveryAction` передаёт ещё не указанные, `wait_for` — все непрочитанные; `at` — ISO, `Date.parse`): есть срочное — 0; иначе `min(newest.at + settleMs, oldest.at + settleMaxMs) − now`, не меньше 0.
-- [ ] `deliveryAction`: проверка тишины — только там, где сейчас получился бы `type-pointer` или `resume`; все прежние причины и их порядок не меняются. Текст указателя считает все непрочитанные, как сейчас.
-- [ ] `MailWait` и подпись окна: `settling: 'batched, waits for a quiet room'`.
-- [ ] Тесты: три срочных случая и упоминание (включая `@s020` для `s-02` — не срочно); одна заметка всем — `settling` с `retryInMs` 30 000, через 30 с — `type-pointer` на пачку; заметки каждые 20 с — указатель не позже 120 с от первой; срочное среди несрочных — сразу указатель на все; спящая с одной заметкой — сначала `settling`, потом `resume`; занятая — по-прежнему `busy`.
+- [x] `wakesAtOnce`: `from === HUMAN`; `to.length > 0`; `kind !== 'note'`; упоминание получателя в тексте — `sessionMention(recipientId)` по правилу `plainHumanMention` (`attention.ts:118`: не часть слова, `@s02` не находится в `@s020`).
+- [x] `settleDelayMs` по переданным письмам (`deliveryAction` передаёт ещё не указанные, `wait_for` — все непрочитанные; `at` — ISO, `Date.parse`): есть срочное — 0; иначе `min(newest.at + settleMs, oldest.at + settleMaxMs) − now`, не меньше 0.
+- [x] `deliveryAction`: проверка тишины — только там, где сейчас получился бы `type-pointer` или `resume`; все прежние причины и их порядок не меняются. Текст указателя считает все непрочитанные, как сейчас.
+- [x] `MailWait` и подпись окна: `settling: 'batched, waits for a quiet room'`.
+- [x] Тесты: три срочных случая и упоминание (включая `@s020` для `s-02` — не срочно); одна заметка всем — `settling` с `retryInMs` 30 000, через 30 с — `type-pointer` на пачку; заметки каждые 20 с — указатель не позже 120 с от первой; срочное среди несрочных — сразу указатель на все; спящая с одной заметкой — сначала `settling`, потом `resume`; занятая — по-прежнему `busy`.
 
 **Проверка:** `LC_ALL=C npx vitest run src/work/delivery.test.ts` в core; `pnpm --filter @parley/protocol build`; `pnpm --filter @parley/desktop exec tsc -p tsconfig.web.json --noEmit`.
 
@@ -163,9 +163,9 @@
 
 **Interfaces:** consumes задачу 6; `WakeServiceOptions.settleMs?`/`settleMaxMs?` — для тестов, как `enterDelayMs`.
 
-- [ ] `recompute` передаёт `now: Date.now()` в обе ветки `deliveryAction`. На `settling` — один таймер на сессию (`settleTimer` в `AttemptState`, `unref`): новый срок заменяет старый; по сроку — `recompute(ref)`. Снимается в `clearTimers` (а значит при выходе процесса и `stop`).
-- [ ] `waitingOf`: `settling` → `'settling'`; ветка без PTY (спящая) публикует `'settling'` тоже.
-- [ ] Тесты (fake timers): три участника и заметка всем — указатель каждому через 30 с, один на пачку; `question` — сразу; письмо человека — сразу всем; новая заметка в окне сдвигает срок; `stop` снимает таймер; «перезапуск» — новый будильник над картой с заметкой старше 30 с печатает указатель на первом пересчёте; мок-комната из трёх агентов и пяти заметок — 3 указателя, а не 15.
+- [x] `recompute` передаёт `now: Date.now()` в обе ветки `deliveryAction`. На `settling` — один таймер на сессию (`settleTimer` в `AttemptState`, `unref`): новый срок заменяет старый; по сроку — `recompute(ref)`. Снимается в `clearTimers` (а значит при выходе процесса и `stop`).
+- [x] `waitingOf`: `settling` → `'settling'`; ветка без PTY (спящая) публикует `'settling'` тоже.
+- [x] Тесты (fake timers): три участника и заметка всем — указатель каждому через 30 с, один на пачку; `question` — сразу; письмо человека — сразу всем; новая заметка в окне сдвигает срок; `stop` снимает таймер; «перезапуск» — новый будильник над картой с заметкой старше 30 с печатает указатель на первом пересчёте; мок-комната из трёх агентов и пяти заметок — 3 указателя, а не 15.
 
 **Проверка:** `cd packages/host && LC_ALL=C npx vitest run src/wake`.
 
@@ -177,16 +177,18 @@
 
 **Interfaces:** consumes `takeInbox` (задача 1) и `settleDelayMs`, `SETTLE_MS`, `SETTLE_MAX_MS` (задача 6).
 
-- [ ] Проба отвечает «есть срочное или пачка устоялась» по `settleDelayMs(unread, sessionId, now)`; пока нет — `waitForMap` ждёт не дольше `min(остаток таймаута, задержка)` и проба повторяется по сроку (проба зависит от времени, а `waitForMap` зовёт её только на смене карты — поэтому цикл ожиданий снаружи). Конец таймаута при лежащих письмах — отдать их (решение 7). Отметка — как в задаче 1, только отданных.
-- [ ] Тесты (короткие `settleMs` через контекст): заметка всем — возврат не раньше окна; `question` — сразу; срочное во время окна — вместе с ранней заметкой; таймаут вызова меньше окна — письмо отдаётся по таймауту, а не `running`.
+- [x] Проба отвечает «есть срочное или пачка устоялась» по `settleDelayMs(unread, sessionId, now)`; пока нет — `waitForMap` ждёт не дольше `min(остаток таймаута, задержка)` и проба повторяется по сроку (проба зависит от времени, а `waitForMap` зовёт её только на смене карты — поэтому цикл ожиданий снаружи). Конец таймаута при лежащих письмах — отдать их (решение 7). Отметка — как в задаче 1, только отданных.
+- [x] Тесты (короткие `settleMs` через контекст): заметка всем — возврат не раньше окна; `question` — сразу; срочное во время окна — вместе с ранней заметкой; таймаут вызова меньше окна — письмо отдаётся по таймауту, а не `running`.
 
 **Проверка:** `LC_ALL=C npx vitest run src/mcp/server.test.ts -t wait_for` в core.
 
 ### Task 9: Проверка куска 3
 
-- [ ] Гид, тема `letters`: заметка всем без упоминания будит пачкой после 30 с тишины; вопрос, адресное, упоминание и письмо человека — сразу. Вставка не меняется.
-- [ ] `uptime`; тесты core `src/work src/mcp`, host `src/wake`, сборка protocol, typecheck окна, eslint изменённых файлов.
-- [ ] Финальное ревью ветки; ссылка compare `feat/fewer-turns...feat/wake-settle` (после слияния куска 2 — от `master`) и текст PR.
+- [x] Гид, тема `letters`: заметка всем без упоминания будит пачкой после 30 с тишины; вопрос, адресное, упоминание и письмо человека — сразу. Вставка не меняется.
+- [x] `uptime`; тесты core `src/work src/mcp`, host `src/wake`, сборка protocol, typecheck окна, eslint изменённых файлов.
+- [x] Финальное ревью ветки; ссылка compare `feat/fewer-turns...feat/wake-settle` (после слияния куска 2 — от `master`) и текст PR.
+
+**Итоги куска 3 (2026-10-27).** Ветка `feat/wake-settle` (от `feat/fewer-turns`). Сверх плана, по ревью: письмо с `at` дальше окна тишины в будущее доставляется сразу, срок ожидания не выше `SETTLE_MAX_MS`; упоминание `@s-02` будит, как `@s02`; запас к сроку — 50 мс у будильника, 20 мс у `wait_for`. Принято как есть: позиции участников ведущему — рассылки и приходят ему пачкой через ~30 с после последней; Codex внутри `wait_for` под нагрузкой может получить лишний указатель в очередь на уже прочитанное (как и раньше со срочными письмами) — один пустой ход.
 
 ---
 

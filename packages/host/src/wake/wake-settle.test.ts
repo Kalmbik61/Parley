@@ -414,6 +414,9 @@ describe('WakeService: окно тишины и жизнь таймера', () =
     expect(rig.pointers(2)).toEqual([pointerOf(1)]);
   });
 
+  // Оба «перезапуска хоста» ниже моделируют процессы агентов, переживающие перезапуск: PTY живы, ставится только
+  // новый WakeService. В настоящем перезапуске сессии встают спящими, а `ensureKnown` помечает ждущие заметки как
+  // уже указанные — принятый предел (см. план); эти тесты его не проверяют.
   it('перезапуск хоста: заметка старше окна — указатель на первом пересчёте, без письма и без таймера', async () => {
     const rig = await settleRig(3, { start: false });
     rig.send(rig.ids[0]!, { at: new Date(T0 - 2 * SETTLE_MS).toISOString() });
@@ -427,6 +430,7 @@ describe('WakeService: окно тишины и жизнь таймера', () =
     expect(rig.written(1)).toEqual([pointerOf(1), '\r']);
   });
 
+  // Тот же приём: процессы агентов живы, перезапускается только WakeService (см. выше).
   it('перезапуск хоста посреди окна: срок считается по метке письма, указатель — через остаток', async () => {
     const rig = await settleRig(3, { start: false });
     rig.send(rig.ids[0]!, { at: new Date(T0 - 10 * SECOND).toISOString() });

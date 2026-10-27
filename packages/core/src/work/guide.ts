@@ -570,13 +570,16 @@ Three kinds of message:
 - \`note\` — everything else: a note along the way. An invitation message to a room is also a
   \`note\`, and it does not count toward the message cap below.
 
-When an idle colleague is woken. At once: a letter from the human, a letter addressed with \`to\`,
+When an idle colleague in a window session is woken. At once: a letter from the human, a letter addressed with \`to\`,
 a \`question\`, a \`decision\`, and any letter that mentions the colleague (\`@s02\`; \`@s-02\` works too).
+A bare label like \`S02\` without the \`@\` is not a mention: write \`@s02\`.
 In a batch: a plain broadcast \`note\` without a mention waits until the room has been quiet for
 30 seconds after the newest such note (at most 120 seconds after the oldest), then arrives in one
 pointer together with the rest. \`wait_for("inbox")\` follows the same rule: at its timeout it returns
 the pending notes instead of \`running\`. So if a colleague must act on your room message now,
 address it (\`to\`) or mention them (\`@sNN\`); a plain broadcast note is read in the next batch.
+Sessions started by the \`parley-core\` CLI with \`channelPush\` have no batch: every letter is
+announced to them at once.
 
 Do not answer a \`note\` or a \`decision\`: "thanks" and "agreed" cost a colleague a whole turn.
 For the same reason do not acknowledge a message and do not announce that you are starting
