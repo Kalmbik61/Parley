@@ -24,7 +24,7 @@ describe('feed.progress handler', () => {
   ])('validates the complete service result before transport and fails closed without raw data', async (bad) => {
     const handlers = createFeedHandlers({ feed: { progress: vi.fn().mockResolvedValue(bad) } as unknown as FeedService });
     const result = await handlers.feedProgress({ ref: REF }, request);
-    expect(result).toMatchObject({ availability: 'unavailable', current: null, recent: [], truncated: false });
+    expect(result).toMatchObject({ revision: 7, availability: 'unavailable', current: null, recent: [], truncated: false });
     expect(progressResult.safeParse(result).success).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(FEED_PROGRESS_MAX_BYTES);
     expect(JSON.stringify(result)).not.toContain('SECRET');
@@ -34,5 +34,10 @@ describe('feed.progress handler', () => {
     const conflict = { code: 'conflict', data: { reason: 'island-progress-rate-limit', retryAfterMs: 250 } };
     const handlers = createFeedHandlers({ feed: { progress: vi.fn().mockRejectedValue(conflict) } as unknown as FeedService });
     await expect(handlers.feedProgress({ ref: REF }, request)).rejects.toBe(conflict);
+  });
+
+  it.each([null, undefined, { ...empty, revision: -1 }, { ...empty, revision: Number.NaN }])('uses revision zero when the service has no valid feed revision', async (bad) => {
+    const handlers = createFeedHandlers({ feed: { progress: vi.fn().mockResolvedValue(bad) } as unknown as FeedService });
+    expect(await handlers.feedProgress({ ref: REF }, request)).toEqual({ revision: 0, availability: 'unavailable', current: null, recent: [], truncated: false });
   });
 });

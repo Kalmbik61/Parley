@@ -25,10 +25,13 @@ export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
   return {
     feedSnapshot: (params) => deps.feed.snapshot(params.ref, params.agentId, params.scope),
     feedProgress: async (params, request) => {
-      const result = progressResult.safeParse(await deps.feed.progress(params.ref, request.client));
+      const candidate = await deps.feed.progress(params.ref, request.client);
+      const result = progressResult.safeParse(candidate);
+      const revision = candidate?.revision;
       // Последняя граница перед generic server: не отправлять невалидный payload/ошибки schema клиенту.
       return result.success ? result.data : {
-        revision: 0, availability: 'unavailable', current: null, recent: [], truncated: false,
+        revision: Number.isSafeInteger(revision) && revision >= 0 ? revision : 0,
+        availability: 'unavailable', current: null, recent: [], truncated: false,
       };
     },
     feedSubscribe: async (params, request) => {

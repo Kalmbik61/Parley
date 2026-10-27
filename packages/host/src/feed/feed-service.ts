@@ -743,12 +743,10 @@ export function createFeedService(
     if (feed.seeding !== undefined) return feed.seeding;
     const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
-    const stamp = sourceOf(feed.ref);
-    const generation = feed.sourceGeneration;
     feed.seeding = (async () => {
       try {
         const records = await readTranscript(file);
-        if (records === null || feed.live || !readCurrent(feed, stamp, generation)) return;
+        if (records === null || feed.live || !feedCurrent(feed)) return;
         const seeded = closeBrokenTurn(feedFromTranscript(stashClaude(records), { limit: maxItems }));
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
@@ -780,13 +778,11 @@ export function createFeedService(
     if (feed.seeding !== undefined) return feed.seeding;
     const file = deps.activity.logFile(feed.ref);
     if (file === null) return Promise.resolve();
-    const stamp = sourceOf(feed.ref);
-    const generation = feed.sourceGeneration;
     feed.seeding = (async () => {
       try {
         const tail = createRolloutTail(file);
         const records = await tail.read();
-        if (!readCurrent(feed, stamp, generation)) return;
+        if (!feedCurrent(feed)) return;
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
@@ -818,7 +814,7 @@ export function createFeedService(
         feed.seeded = true;
         feed.seeding = undefined;
       }
-      if (readCurrent(feed, stamp, generation)) await serialCodex(feed, () => syncCodexAgents(feed));
+      if (feedCurrent(feed)) await serialCodex(feed, () => syncCodexAgents(feed));
     })();
     return feed.seeding;
   }
@@ -993,11 +989,6 @@ export function createFeedService(
 
   function feedCurrent(feed: SessionFeed): boolean {
     return !stopped && feeds.get(refKey(feed.ref)) === feed;
-  }
-
-  function readCurrent(feed: SessionFeed, stamp: SourceStamp | null, generation: number): boolean {
-    return feedCurrent(feed) && feed.sourceGeneration === generation &&
-      (stamp === null || sameSource(stamp, sourceOf(feed.ref)));
   }
 
   function progressCurrent(feed: SessionFeed): boolean {

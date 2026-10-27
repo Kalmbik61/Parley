@@ -348,6 +348,58 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
+  it('keeps the raw Claude cold seed after a process starts during the read', async () => {
+    const stamp = provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const chat = service.snapshot(REF);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stamp.startedAtProcess = 'SECRET-resumed';
+    fakes.emitStart(REF);
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(ofKind((await chat).items, 'tool').length).toBeGreaterThan(0);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the raw Codex cold seed and later polling after Resume during its read', async () => {
+    const stamp = provenance();
+    stamp.provider = 'codex';
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = codexSource.createRolloutTail;
+    const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+      const tail = original(...args);
+      return { ...tail, read: async () => {
+        const records = await tail.read();
+        entered.resolve(undefined);
+        await release.promise;
+        return records;
+      } };
+    });
+    try {
+      const root = await tempRoot();
+      const file = path.join(root, 'rollout.jsonl');
+      const row = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+        type: 'item_completed', item: { type: 'CommandExecution', id: `cmd-${ordinal}`, command: ['SECRET'], status: 'completed', exit_code: 0 },
+      } });
+      await writeFile(file, `${row(1)}\n`);
+      fakes.setLogFile(file);
+      start();
+      const chat = service.snapshot(REF);
+      await entered.promise;
+      stamp.startedAtProcess = 'SECRET-resumed';
+      fakes.emitStart(REF);
+      release.resolve(undefined);
+      expect(ofKind((await chat).items, 'tool')).toHaveLength(1);
+      expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+      writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    } finally { release.resolve(undefined); create.mockRestore(); }
+  });
+
   it.each(['binding', 'process', 'remove-readd', 'dropClient', 'stop'] as const)('suppresses late delivery after %s and does not restore stale rows', async (change) => {
     const stamp = provenance();
     const held = deferred<RawRecord[]>();
@@ -369,7 +421,7 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
     if (change === 'binding' || change === 'process') {
       fakes.setLogFile(null);
-      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(0);
+      expect(ofKind((await service.snapshot(REF)).items, 'tool').length).toBeGreaterThan(0);
     }
     if (change === 'remove-readd') {
       const result = await service.progress(REF, fakeClient());
