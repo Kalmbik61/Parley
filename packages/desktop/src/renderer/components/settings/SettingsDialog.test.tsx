@@ -415,6 +415,17 @@ describe('SettingsDialog — переключатель «Island»', () => {
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { pendingHotkey: 'Control+Alt+K' } }));
     expect(bridge.islandShortcutSuspended).toEqual([true, false]);
   });
+
+  it('when the shortcut is off, offers one correctly labeled way to turn it on', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ island: { pendingHotkey: null } });
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn shortcut on' }));
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { pendingHotkey: 'Control+Alt+I' } }));
+    expect(screen.getAllByRole('button', { name: 'Turn shortcut off' })).toHaveLength(1);
+  });
 });
 
 describe('SettingsDialog — тест 10 куска 9.1: секция Browser', () => {

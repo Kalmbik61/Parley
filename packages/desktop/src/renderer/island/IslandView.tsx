@@ -96,6 +96,7 @@ export interface IslandViewProps {
   api: IslandApi;
   requestKeyboard: boolean;
   navigationKey?: string | null;
+  navigationEmpty?: boolean;
   onTakeRequestKeyboard(): void;
   /** Ссылка на внешнюю форму: `IslandApp` по ней замеряет область, которую остров ловит мышью. */
   shapeRef: Ref<HTMLDivElement>;
@@ -525,6 +526,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
                 {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
               </>
             )}
+            {!assistantBig && props.navigationEmpty ? <p data-testid="island-no-pending" role="status" className="px-3 pb-2 text-xs text-muted-foreground">{S.island.noPending}</p> : null}
             {!assistantBig && (consent !== null || items.length > 0) && (model.proposals ?? 0) > 0 ? (
               <div className="flex max-w-[400px] flex-col gap-1 px-3 pb-3">
                 {model.groups.flatMap((group) => group.rows).filter((row): row is RoomRow => row.kind === 'room' && row.proposal !== undefined)

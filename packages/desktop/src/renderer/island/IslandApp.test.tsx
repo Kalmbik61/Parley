@@ -183,14 +183,29 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
+  it('shows a brief empty-queue message and immediately returns keyboard focus', async () => {
+    const { bridge, fake, island } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    const callsBefore = fake.calls.length;
+    act(() => pendingNavigationHandler?.());
+    expect(await screen.findByTestId('island-no-pending')).toBeTruthy();
+    expect(island.keyboard).toHaveBeenCalledWith(false);
+    expect(fake.calls).toHaveLength(callsBefore);
+  });
+
   it('global queue activation opens a feed target, while navigation keys never decide', async () => {
     const { bridge, blocked, fake } = setup();
     render(<IslandApp bridge={bridge} />);
     blocked('s-01');
-    await waitFor(() => expect(fake.calls.some((call) => call.method === 'feed.snapshot')).toBe(true));
+    blocked('s-02');
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === 'feed.snapshot').length).toBeGreaterThanOrEqual(2));
     act(() => pendingNavigationHandler?.());
     await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/));
     fireEvent.keyDown(window, { key: 'ArrowDown' });
+    const selected = screen.getByTestId('island').getAttribute('data-navigation-key');
+    act(() => pendingNavigationHandler?.());
+    expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toBe(selected);
     fireEvent.keyDown(window, { key: 'ArrowUp' });
     fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
     expect(bridge.island.open).toHaveBeenCalled();
@@ -1391,6 +1406,23 @@ describe('QuestionForm — настоящая проводка острова', 
     expect(other().value).toBe('  Custom answer  ');
   });
 
+  it('Escape in the Other answer field releases request keyboard without submitting', async () => {
+    const { fake, island } = await mount();
+    fill();
+    act(() => other().focus());
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    fireEvent.keyDown(other(), { key: 'Escape' });
+    expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    expect(fake.calls.some((call) => call.method === 'feed.decide')).toBe(false);
+  });
+
+  it('mouse focus starts keyboard navigation from the currently shown feed item', async () => {
+    await mount();
+    fill();
+    act(() => other().focus());
+    expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/);
+  });
+
   it.each(['collapse', 'assistant', 'consent'])('%s preserves choices/Other/page while rearming on reopen', async (mode) => {
     const state = await mount(); fill(); act(() => other().focus());
     if (mode === 'collapse') { tuck(state.hover); expand(); }
@@ -2029,6 +2061,37 @@ describe('согласия на папку', () => {
     expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true], [false]]);
     expect(fake.calls.filter((call) => call.method === 'consents.decide')).toHaveLength(0);
   });
+
+  it('Ctrl+Enter on a focused consent button is prevented and makes no host call, even without requester ids', async () => {
+    vi.useFakeTimers();
+    const consent: ConsentCard = { ...CONSENT, requestedBy: { source: 'launch' } };
+    const { bridge, fake } = setup({}, ENTRIES, [consent]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    act(() => pendingNavigationHandler?.());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const trust = screen.getByTestId('island-consent-trust');
+    trust.focus();
+    const callsBefore = fake.calls.length;
+    expect(fireEvent.keyDown(trust, { key: 'Enter', ctrlKey: true })).toBe(false);
+    expect(fake.calls).toHaveLength(callsBefore);
+    expect(fake.calls.some((call) => call.method === 'consents.decide')).toBe(false);
+  });
+
+  it('keyboard navigation can reveal and refresh a feed item behind consent', async () => {
+    const { bridge, fake, blocked } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    await screen.findByTestId('island-consent-trust');
+    blocked('s-01');
+    await waitFor(() => expect(fake.calls.some((call) => call.method === 'feed.snapshot')).toBe(true));
+    const snapshotsBeforeNavigation = fake.calls.filter((call) => call.method === 'feed.snapshot').length;
+    act(() => pendingNavigationHandler?.());
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/));
+    await waitFor(() => expect(screen.getByTestId('island-card')).toBeTruthy());
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === 'feed.snapshot').length).toBeGreaterThan(snapshotsBeforeNavigation));
+  });
+
 
   it('начальный consents.list: карточка видна, остров выдвинут', async () => {
     const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);

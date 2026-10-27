@@ -2179,6 +2179,7 @@ export const S = {
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
     idle: 'No agents running',
+    noPending: 'No pending requests',
     /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */
     consentTitle: 'Trust folder for agents?',
     consentTrust: 'Trust',
@@ -2503,7 +2504,9 @@ export const S = {
       shortcutTaken: 'This shortcut is taken by another app — choose another.',
       shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
       islandShortcut: 'Open pending items',
+      islandShortcutEnable: 'Turn shortcut on',
       islandShortcutOff: 'Turn shortcut off',
+      shortcutConflictAssistant: 'This shortcut is assigned to the assistant.',
       glmSlow: 'GLM answers in about 13 seconds.',
     },
   },

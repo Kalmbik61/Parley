@@ -133,6 +133,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const setAppearance = useUiStore((state) => state.setAppearance);
   const patchUi = useUiStore((state) => state.patchUi);
   const hostStatus = useHostStore((state) => state.status);
+  const refreshIslandShortcut = (): void => {
+    void bridge.app.islandShortcut?.().then(setIslandShortcutStatus).catch(() => {});
+  };
 
   useEffect(() => {
     if (open) setSection(settingsSection);
@@ -497,22 +500,22 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   <span className="text-sm font-medium">{S.assistant.settings.islandShortcut}</span>
                   {ui.island.pendingHotkey === null ? (
                     <Button type="button" variant="outline" onClick={() => patchUi({ island: { pendingHotkey: 'Control+Alt+I' } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>)}>
-                      {S.assistant.settings.islandShortcutOff}
+                      {S.assistant.settings.islandShortcutEnable}
                     </Button>
                   ) : <ShortcutField
                     value={ui.island.pendingHotkey}
                     label={S.assistant.settings.islandShortcut}
                     onChange={(pendingHotkey) => {
                       patchUi({ island: { pendingHotkey } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
-                      void bridge.app.islandShortcut?.().then(setIslandShortcutStatus);
+                      refreshIslandShortcut();
                     }}
                     onRecording={(recording) => bridge.app.islandShortcutSuspend?.(recording)}
                   />}
-                  <Button type="button" variant="ghost" className="self-start" onClick={() => {
+                  {ui.island.pendingHotkey !== null ? <Button type="button" variant="ghost" className="self-start" onClick={() => {
                     patchUi({ island: { pendingHotkey: null } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
-                    void bridge.app.islandShortcut?.().then(setIslandShortcutStatus);
-                  }}>{S.assistant.settings.islandShortcutOff}</Button>
-                  {!islandShortcutStatus.ok ? <p role="status" className="text-xs text-destructive">{S.assistant.settings.shortcutTaken}</p> : null}
+                    refreshIslandShortcut();
+                  }}>{S.assistant.settings.islandShortcutOff}</Button> : null}
+                  {!islandShortcutStatus.ok ? <p role="status" className="text-xs text-destructive">{islandShortcutStatus.accelerator === ui.assistant.hotkey ? S.assistant.settings.shortcutConflictAssistant : S.assistant.settings.shortcutTaken}</p> : null}
                 </div>
               </>
             ) : null}

@@ -62,7 +62,7 @@ import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
-import { movePendingSelection, pendingKeyCommand, pendingNavigation, reconcilePendingNavigation, roomNavigationKey, type PendingNavigationState } from './navigation.js';
+import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 
 /** Через сколько покоя (ничего не идёт, очереди нет, курсор не над формой, форму не тащат) остров убирается сам. */
 export const IDLE_RETRACT_MS = 4000;
@@ -118,6 +118,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
   const [listOpen, setListOpen] = useState(false);
+  const [navigationEmpty, setNavigationEmpty] = useState(false);
+  const navigationEmptyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [progressSelected, setProgressSelected] = useState<SessionRef | null>(null);
   const [progressConnection, setProgressConnection] = useState<{ generation: number; methods: readonly string[] | null }>({ generation: 0, methods: null });
   const [progressDocumentVisible, setProgressDocumentVisible] = useState(!document.hidden);
@@ -250,9 +252,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
 
   const withCard = useMemo(() => new Set(items.filter((item) => item.inWindow).map((item) => refKey(item.ref))), [items]);
   const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
-  const roomNavItems = useMemo(() => model.groups.flatMap((group) => group.rows)
-    .flatMap((row) => row.kind === 'room' && !row.done ? [{ key: roomNavigationKey(row.key), kind: 'room' as const,
-      target: { kind: 'room' as const, projectPath: row.projectPath, workId: row.workId, roomId: row.roomId } }] : []), [model]);
+  const roomRows = useMemo(() => model.groups.flatMap((group) => group.rows)
+    .filter((row): row is Extract<IslandRow, { kind: 'room' }> => row.kind === 'room'), [model]);
+  const roomNavItems = useMemo(() => pendingRoomNavigation(roomRows), [roomRows]);
   const navQueue = useMemo(() => pendingNavigation(consents, items, roomNavItems), [consents, items, roomNavItems]);
   const navQueueRef = useRef<PendingNavigationState>(navQueue);
   navQueueRef.current = navQueue;
@@ -266,11 +268,27 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     previousNavQueueRef.current = navQueue;
   }, [navQueue.items]);
   useEffect(() => bridge.island.onNavigatePending(() => {
+    if (ownerRef.current === 'request' && navQueueRef.current.items.length > 0) return;
+    const first = navQueueRef.current.selectedKey;
+    if (first === null) {
+      setRetracted(false);
+      setNavigationEmpty(true);
+      if (navigationEmptyTimer.current !== null) clearTimeout(navigationEmptyTimer.current);
+      navigationEmptyTimer.current = setTimeout(() => setNavigationEmpty(false), 1800);
+      bridge.island.keyboard(false);
+      return;
+    }
+    setNavigationEmpty(false);
+    if (navigationEmptyTimer.current !== null) clearTimeout(navigationEmptyTimer.current);
     setRetracted(false);
     setListOpen(true);
     setOwner('request');
-    setNavSelectedKey(navQueueRef.current.selectedKey);
+    navKeyRef.current = first;
+    setNavSelectedKey(first);
   }), [bridge, setOwner]);
+  useEffect(() => () => {
+    if (navigationEmptyTimer.current !== null) clearTimeout(navigationEmptyTimer.current);
+  }, []);
   const doneRows = useMemo(
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
@@ -464,8 +482,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           return;
         }
         if (command === 'open') {
+          event.preventDefault();
           const selected = navQueueRef.current.items.find((item) => item.key === navKeyRef.current);
-          if (selected?.target !== undefined) { event.preventDefault(); bridge.island.open(selected.target); }
+          if (selected?.target !== undefined) bridge.island.open(selected.target);
           return;
         }
       }
@@ -500,7 +519,10 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   useEffect(() => {
     if (progressSelected !== null && !progressRowPresent) setProgressSelected(null);
   }, [progressSelected, progressRowPresent]);
-  const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && consents.length === 0;
+  const selectedNavigation = navQueue.items.find((item) => item.key === navSelectedKey);
+  const consentShown = consents.length > 0 && (navSelectedKey === null || selectedNavigation?.kind === 'consent');
+  const showingFeedCard = !consentShown && items.length > 0 && (navSelectedKey === null || selectedNavigation?.kind === 'feed');
+  const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && showingFeedCard;
   const requestAvailable = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) &&
     (consents.length > 0 || selectedKey !== null || roomNavItems.length > 0);
   useEffect(() => {
@@ -509,6 +531,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   }, [keyboardOwner, requestAvailable, connected, config.assistant.enabled, assistant.open, assistant.collapsed, releaseKeyboard]);
   const takeRequestKeyboard = (): void => {
     if (!requestAvailable || ownerRef.current === 'request') return;
+    const currentFeed = items.find((item) => item.key === selectedKey);
+    const visibleConsent = consentShown ? consents[0] : undefined;
+    const current = visibleConsent === undefined ? currentFeed === undefined ? navQueueRef.current.selectedKey : `feed:${currentFeed.key}` : `consent:${visibleConsent.id}`;
+    navKeyRef.current = current;
+    setNavSelectedKey(current);
     setOwner('request');
     if (requestVisible) useIslandRequests.getState().revalidate();
   };
@@ -608,6 +635,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         api={bridge.island}
         requestKeyboard={keyboardOwner === 'request'}
         navigationKey={navSelectedKey}
+        navigationEmpty={navigationEmpty}
         onTakeRequestKeyboard={takeRequestKeyboard}
         shapeRef={shapeRef}
         onDragStart={() => setDragging(true)}
