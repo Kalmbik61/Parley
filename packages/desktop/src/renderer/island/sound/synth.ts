@@ -70,8 +70,11 @@ export const CUE_RECIPES: Record<CueSound, CueRecipe> = {
   unmute: { level: -28, notes: [[24, 0, 50, 0]] },
 };
 
-/** Бюджет синтеза (#9 §7): не больше стольких осцилляторов на сигнал. */
-export const MAX_CUE_OSCILLATORS = 6;
+/**
+ * Бюджет синтеза (#9 §7): не больше стольких осцилляторов на сигнал. Тембр палитр рецептов прототипа влезает целиком
+ * (done в crystal и warm — 15).
+ */
+export const MAX_CUE_OSCILLATORS = 16;
 /** Работа и итог под речью звучат на 10 дБ тише (§6.4). */
 const QUIET_DB = -10;
 /** Сигнал начинается чуть позже `currentTime`: расписание в прошлом Web Audio сдвинул бы. */

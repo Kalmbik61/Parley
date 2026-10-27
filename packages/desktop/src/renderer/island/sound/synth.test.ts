@@ -157,6 +157,15 @@ describe('playCue', () => {
       }
     }
   });
+  it('crystal и warm звучат полным тембром и в длинных сигналах: три слоя на каждую ноту', () => {
+    for (const kind of ['permission', 'plan', 'done'] as const) {
+      for (const palette of ['crystal', 'warm'] as const) {
+        const { context } = play(kind, palette);
+        const notes = CUE_RECIPES[kind].notes?.length ?? 0;
+        expect(context.of(FakeOscillator).length, `${kind} / ${palette}`).toBe(notes * 3);
+      }
+    }
+  });
 
   it('каждый источник запущен и остановлен по огибающей, и каждый узел доходит до выхода', () => {
     for (const kind of KINDS) {
@@ -236,9 +245,11 @@ describe('playCue', () => {
     expect(new Set(NAMES.map(attack)).size).toBe(3);
   });
 
-  it('много нот — меньше слоёв: Done в «Тёплой» — пять треугольников, без пилы', () => {
+  it('Done в «Тёплой» — на каждую ноту треугольник и две пилы', () => {
     const { context } = play('done', 'warm');
-    expect(context.of(FakeOscillator).map((node) => node.type)).toEqual(Array(5).fill('triangle'));
+    expect(context.of(FakeOscillator).map((node) => node.type)).toEqual(
+      Array.from({ length: 5 }, () => ['triangle', 'sawtooth', 'sawtooth']).flat(),
+    );
   });
 
   it('вопрос: последняя нота поднимается на 2 полутона во второй половине', () => {
