@@ -43,6 +43,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { clearInterval, clearTimeout, setInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
@@ -146,6 +147,60 @@ let turn = 0;
 let turnOpen = false;
 let items = 0;
 const children = new Map();
+
+// STUB_MCP <tool> [json args]: Codex's real MCP server with root thread metadata. The
+// thread/session proof is required before feed.progress will expose Codex rollout rows.
+let mcpReady = null;
+let mcpQueue = Promise.resolve();
+
+function startMcp() {
+  const override = process.argv.slice(2).find((arg) => arg.startsWith('mcp_servers.parley='));
+  if (override === undefined) throw new Error('missing mcp_servers.parley Codex override');
+  const command = /^mcp_servers\.parley=\{command=("(?:\\.|[^"\\])*")/.exec(override)?.[1];
+  const argsRaw = /,args=(\[(?:"(?:\\.|[^"\\])*"(?:,\s*"(?:\\.|[^"\\])*")*)?\])/.exec(override)?.[1];
+  const envRaw = /,env=\{(.*?)\},default_tools_approval_mode/s.exec(override)?.[1];
+  if (command === undefined || argsRaw === undefined || envRaw === undefined) throw new Error('invalid mcp_servers.parley Codex override');
+  const env = Object.fromEntries([...envRaw.matchAll(/([A-Za-z0-9_]+)=("(?:\\.|[^"\\])*")/g)].map(([, key, value]) => [key, JSON.parse(value)]));
+  const child = spawn(JSON.parse(command), JSON.parse(argsRaw), { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'inherit'] });
+  process.on('exit', () => child.kill());
+  const pending = new Map();
+  let nextId = 1;
+  const send = (message) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+  readline.createInterface({ input: child.stdout }).on('line', (raw) => {
+    let message;
+    try { message = JSON.parse(raw); } catch { return; }
+    const wait = pending.get(message.id);
+    if (wait === undefined) return;
+    pending.delete(message.id);
+    if (message.error !== undefined) wait.reject(new Error(message.error.message));
+    else wait.resolve(message.result);
+  });
+  child.on('exit', () => {
+    for (const wait of pending.values()) wait.reject(new Error('parley-mcp exited'));
+    pending.clear();
+    mcpReady = null;
+  });
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    send({ id, method, params });
+  });
+  return request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'stub-codex-agent', version: '0.0.0' } }).then(() => {
+    send({ method: 'notifications/initialized' });
+    return request;
+  });
+}
+
+async function callMcp(inputLine) {
+  const split = inputLine.indexOf(' ');
+  const name = split === -1 ? inputLine : inputLine.slice(0, split);
+  const args = split === -1 ? {} : JSON.parse(inputLine.slice(split + 1));
+  mcpReady ??= startMcp();
+  const request = await mcpReady;
+  const result = await request('tools/call', { name, arguments: args, _meta: { threadId: THREAD, sessionId: THREAD } });
+  const text = (result.content ?? []).map((part) => part.text ?? '').join(' ').replace(/\s+/g, ' ').trim();
+  line(`mcp: ${name} -> ${text}`);
+}
 
 /** Ход начинается с первой записи; уже идущий не дублируется. */
 function ensureTurn() {
@@ -254,6 +309,11 @@ function permissionCommand(text) {
 }
 
 function submit(text, key) {
+  if (text.startsWith('STUB_MCP ')) {
+    line(`${key}: ${text}`);
+    mcpQueue = mcpQueue.then(() => callMcp(text.slice('STUB_MCP '.length))).catch((error) => line(`mcp error: ${error.message}`));
+    return undefined;
+  }
   if (key === 'tab') {
     line(`tab: ${text}`);
     // Ход идёт (обычный ввод его открыл), и окно отправило строку в очередь Tab: команды журнала заглушка исполняет сразу.
