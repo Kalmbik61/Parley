@@ -1,12 +1,14 @@
 /**
  * Движок роя душ на Canvas 2D: порт класса `Swarm` из одобренного макета island-mockup.html (спека 2026-10-14,
- * раздел 9) без лица и эмоций. Без React; рисует через переданный контекст (`null` — только шаг, для тестов и jsdom).
- * Душа — точка со спрайтом «ядро + мягкое свечение»; формы: точка, облако пятен, сфера Фибоначчи с короной-кольцом;
- * эффекты: слушание (сжатие по громкости и волна), кольцо подтверждения, поток ответа, дуга инструмента.
+ * раздел 9). Без React; рисует через переданный контекст (`null` — только шаг, для тестов и jsdom).
+ * Душа — точка со спрайтом «ядро + мягкое свечение»; формы: точка, облако пятен, сфера Фибоначчи с короной-кольцом,
+ * лицо (два глаза и рот из тех же душ, эмоции — таблица `EMO`); эффекты: слушание (сжатие по громкости и волна),
+ * кольцо подтверждения, поток ответа, дуга инструмента. Отличия лица от макета: моргание — на втором потоке
+ * генератора, а не на `Math.random`, и рот идёт по переданной громкости `mouth`, а не по синтетической кривой.
  * Все души живут в долях `d` (радиус сферы 0.5), экран — `cx + x * d`, `cy + y * d`.
  */
 
-import { BLOBS, DUR, PAL, type SwarmPalette, type SwarmSpec } from './spec.js';
+import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmSpec } from './spec.js';
 
 export interface SwarmOptions {
   width: number;
@@ -20,12 +22,17 @@ export interface SwarmOptions {
 
 export interface SwarmEngine {
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void;
-  /** Шаг и отрисовка одного кадра; `ctx` null — только шаг (тесты, jsdom). `mic` — громкость 0..1 для fx listen. */
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number): void;
+  /**
+   * Шаг и отрисовка одного кадра; `ctx` null — только шаг (тесты, jsdom). `mic` — громкость 0..1 для fx listen,
+   * `mouth` — открытие рта лица 0..1.
+   */
+  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, mouth?: number): void;
   /** Нужен ли кадр: идёт переход, сменилась палитра или спека. */
   needsFrame(): boolean;
-  /** Для тестов: положения душ в долях d (x, y, z) после последнего кадра. */
-  readonly souls: ReadonlyArray<{ readonly x: number; readonly y: number; readonly z: number; readonly corona: boolean }>;
+  /** Для тестов: положения душ в долях d (x, y, z) после последнего кадра; роль в лице: 0, 1 — глаза, 2 — рот. */
+  readonly souls: ReadonlyArray<{ readonly x: number; readonly y: number; readonly z: number; readonly corona: boolean; readonly role: 0 | 1 | 2 }>;
+  /** Для тестов: длительность перехода и задержка рта, с; вспышка 0..1; целевая палитра. */
+  readonly debug: { readonly dur: number; readonly extra: number; readonly flash: number; readonly pal: SwarmPalette };
 }
 
 const TAU = Math.PI * 2;
@@ -92,6 +99,8 @@ interface Soul {
   uz: number;
   /** Номер пятна облака. */
   b: number;
+  /** Роль в лице: 0 — левый глаз, 1 — правый, 2 — рот. */
+  role: 0 | 1 | 2;
 }
 
 interface Target {
@@ -147,7 +156,7 @@ function sprites(): Sprites | null {
   return spriteCache;
 }
 
-const shapeClass = (shape: SwarmSpec['shape']): 'cloud' | 'sphere' => (shape === 'sphere' ? 'sphere' : 'cloud');
+const shapeClass = (shape: SwarmSpec['shape']): 'cloud' | 'sphere' | 'face' => (shape === 'dot' ? 'cloud' : shape);
 
 class SwarmImpl implements SwarmEngine {
   readonly souls: Soul[] = [];
@@ -159,12 +168,23 @@ class SwarmImpl implements SwarmEngine {
   private readonly k: number;
   private readonly minPx: number;
   private readonly bd: Array<{ ax: number; ay: number; per: number; ph: number }>;
+  /** Второй поток генератора — для моргания; облик роя по seed от него не зависит. */
+  private readonly R2: () => number;
   private sp: SwarmSpec | null = null;
   private key: string | null = null;
   private dirty = true;
   private trans = false;
   private tr0 = -1e9;
   private dur = 1;
+  /** Задержка рта при входе в лицо, с. */
+  private extra = 0;
+  private toFace = false;
+  /** Вспышка яркости на входе в `surprise`, спад за 0,6 с. */
+  private flash = 0;
+  /** Моргание: время следующего, начало текущего, двойное ли. */
+  private nb = 0;
+  private b0 = 0;
+  private dbl = false;
   private palTo: SwarmPalette = 'amber';
   private palFrom: SwarmPalette = 'amber';
   private palT = 1;
@@ -187,6 +207,7 @@ class SwarmImpl implements SwarmEngine {
     this.k = o.k ?? 0.058;
     this.minPx = o.minPx ?? 2.4;
     const R = rng(o.seed ?? 7);
+    this.R2 = rng((o.seed ?? 7) ^ 0x9e3779b9);
     const tot = BLOBS.reduce((a, b) => a + b[4], 0);
     const core: Soul[] = [];
     this.bd = BLOBS.map(() => ({ ax: 0.04 + 0.07 * R(), ay: 0.03 + 0.04 * R(), per: 8 + 12 * R(), ph: TAU * R() }));
@@ -211,7 +232,7 @@ class SwarmImpl implements SwarmEngine {
         fph: R(),
         rc: 0.54 + 0.14 * R(),
         wc: (R() < 0.5 ? -1 : 1) * (0.5 + R()),
-        ra: 0, ux: 0, uy: 0, uz: 0, b: 0,
+        ra: 0, ux: 0, uy: 0, uz: 0, b: 0, role: 0,
       };
       let q = R() * tot;
       let b = 0;
@@ -220,7 +241,8 @@ class SwarmImpl implements SwarmEngine {
         b++;
       }
       s.b = b;
-      R(); // роль души в макете нужна только лицу; вызов оставлен, чтобы рой совпадал с макетом по seed
+      const r = R();
+      s.role = r < 0.24 ? 0 : r < 0.48 ? 1 : 2;
       if (s.corona) {
         const l = Math.hypot(s.gx, s.gy, s.gz) || 1;
         s.ux = s.gx / l;
@@ -245,13 +267,19 @@ class SwarmImpl implements SwarmEngine {
     });
   }
 
+  get debug(): { dur: number; extra: number; flash: number; pal: SwarmPalette } {
+    return { dur: this.dur, extra: this.extra, flash: this.flash, pal: this.palTo };
+  }
+
   needsFrame(): boolean {
     return this.sp !== null && (this.dirty || this.trans || this.palT < 1);
   }
 
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void {
-    const key = `${spec.shape}|${spec.fx ?? ''}`;
+    const key = `${spec.shape}|${spec.fx ?? ''}|${spec.emo ?? ''}`;
     const old = this.sp;
+    // В макете первое моргание — через 1,2 с после создания роя; у движка нет часов до первой спеки.
+    if (old === null) this.nb = now + 1200;
     if (spec.pal !== this.palTo) {
       this.palFrom = this.palTo;
       this.palTo = spec.pal;
@@ -268,8 +296,11 @@ class SwarmImpl implements SwarmEngine {
         const a = shapeClass(old.shape);
         const b = shapeClass(spec.shape);
         this.tr0 = now;
-        this.dur = a === b ? 0.7 : a === 'cloud' ? DUR.cloudsphere : DUR.spherecloud;
+        this.dur = a === b ? (old.emo !== spec.emo ? 0.6 : 0.7) : DUR[`${a}${b}` as keyof typeof DUR];
+        this.extra = b === 'face' && a !== 'face' ? 0.2 : 0;
+        this.toFace = this.extra > 0;
       } else this.tr0 = -1e9;
+      if (spec.emo === 'surprise' && !reducedMotion) this.flash = 1;
     }
     // Сбой — на входе в состояние, даже если форма та же (thinking → error: сфера остаётся сферой).
     if (spec.glitch && !(old !== null && old.glitch)) this.gl = now + 280;
@@ -277,8 +308,8 @@ class SwarmImpl implements SwarmEngine {
     this.dirty = true;
   }
 
-  /** Живая цель души `s` в долях d (начало — центр); пишет в `this.o`. */
-  private tg(s: Soul, t: number): void {
+  /** Живая цель души `s` в долях d (начало — центр); пишет в `this.o`. `amp` — открытие рта, `bl` — открытость глаз. */
+  private tg(s: Soul, t: number, amp: number, bl: number): void {
     const E = this.sp!;
     const o = this.o;
     const T = this.T;
@@ -307,7 +338,7 @@ class SwarmImpl implements SwarmEngine {
         o.y += (o.y / (r + 0.01)) * 0.05 * w;
         o.m = 1 + 0.9 * w;
       }
-    } else {
+    } else if (E.shape === 'sphere') {
       if (s.corona && E.fx === 'ring') {
         o.x = Math.cos(s.ra) * 0.64;
         o.y = Math.sin(s.ra) * 0.64;
@@ -346,10 +377,84 @@ class SwarmImpl implements SwarmEngine {
           o.y *= 1 + 0.07 * b;
         }
       }
-    }
+    } else this.face(s, EMO[E.emo ?? 'calm'], amp, bl, t);
   }
 
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number): void {
+  /** Лицо из тех же душ: два глаза (роли 0, 1) и рот (роль 2); корона — пыль вокруг силуэта. */
+  private face(s: Soul, F: FaceSpec, amp: number, bl: number, t: number): void {
+    const o = this.o;
+    const sx = s.role === 0 ? -1 : 1;
+    o.z = 0.35;
+    if (s.role < 2) {
+      const ex = 0.41 * sx;
+      const ey = -F.ey;
+      if (F.x === true) {
+        const q = (s.ru * 2 - 1) * F.len!;
+        const k = s.rv < 0.5 ? 1 : -1;
+        o.x = ex + q;
+        o.y = ey + k * q + (((s.rv * 4) % 1) - 0.5) * 0.028;
+      } else {
+        const r = Math.sqrt(s.ru);
+        const th = TAU * s.rv;
+        const X = r * Math.cos(th);
+        let Y = r * Math.sin(th);
+        if (F.dome === true) Y = -Math.abs(Y);
+        if (F.cut !== undefined) {
+          // Косое веко.
+          const ym = clamp(F.cut[0] + F.cut[1] * sx * X, -1, 0.8);
+          Y = ym + ((Y + 1) / 2) * (1 - ym);
+        }
+        o.x = ex + F.a! * X;
+        o.y = ey + F.b! * Y * bl;
+      }
+    } else {
+      const H = lerp(F.H0, F.H1, amp);
+      const w = F.mw;
+      if (F.mo === true) {
+        const r = Math.sqrt(s.ru);
+        const th = TAU * s.rv;
+        const c = Math.cos(th);
+        const n = Math.sin(th);
+        o.x = ((Math.sign(c) * Math.pow(Math.abs(c), 0.8) * r * w) / 2) * (0.92 + 0.16 * amp);
+        o.y = 0.25 + (Math.sign(n) * Math.pow(Math.abs(n), 0.8) * r * H) / 2;
+      } else {
+        const q = s.ru * 2 - 1;
+        o.x = (q * w) / 2;
+        let yc = 0.25 - (F.curl ?? 0) * q * q;
+        if (F.wave === true) yc += 0.035 * Math.sin(q * 3.4 * Math.PI);
+        o.y = yc + (s.rv - 0.4) * H * Math.pow(Math.max(0, 1 - q * q), F.pw!);
+      }
+    }
+    if (s.corona) {
+      o.x += s.gx * 0.045 + 0.012 * Math.sin((t / 1000) * 0.8 + s.tw);
+      o.y += s.gy * 0.045;
+      o.m = 0.7;
+    }
+    // Лицо на 20 % крупнее сферы, чтобы черты читались.
+    o.x *= 1.2;
+    o.y *= 1.2;
+    o.sm = 1.15;
+  }
+
+  /** Открытость глаз 1..0,06: моргание раз в 2,4–4,4 с по 220 мс, в 20 % двойное; `nb` и reduced motion — без него. */
+  private blink(now: number, F: FaceSpec, rm: boolean): number {
+    if (F.nb === true || rm) return 1;
+    if (now > this.nb) {
+      this.b0 = now;
+      this.dbl = this.R2() < 0.2;
+      this.nb = now + 2400 + this.R2() * 2000;
+    }
+    const u = (now - this.b0) / 220;
+    let k = 0;
+    if (u >= 0 && u < 1) k = Math.sin(Math.PI * u);
+    else if (this.dbl) {
+      const u2 = (now - this.b0 - 330) / 180;
+      if (u2 >= 0 && u2 < 1) k = Math.sin(Math.PI * u2);
+    }
+    return 1 - 0.94 * k;
+  }
+
+  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, mouth = 0): void {
     const E = this.sp;
     if (E === null) return;
     const rm = reducedMotion;
@@ -368,10 +473,14 @@ class SwarmImpl implements SwarmEngine {
       if (E.fx === 'listen') this.mic += (mic - this.mic) * 0.3;
     }
     if (this.palT < 1) this.palT = clamp(this.palT + dt / 0.3);
+    this.flash = Math.max(0, this.flash - dt / 0.6);
+    const F = EMO[E.emo ?? 'calm'];
+    const amp = rm ? 0.3 : E.shape === 'face' ? mouth : 0;
+    const bl = E.shape === 'face' ? this.blink(now, F, rm) : 1;
     const el = rm ? 1e9 : (now - this.tr0) / 1000;
     const dur = this.dur;
     const glitch = now < this.gl && !rm;
-    this.trans = el < dur;
+    this.trans = el < dur + this.extra;
     this.cr = Math.cos(this.rot);
     this.sr = Math.sin(this.rot);
     const spr = ctx === null ? null : sprites();
@@ -383,13 +492,14 @@ class SwarmImpl implements SwarmEngine {
     const sb = spr === null ? null : spr[this.palFrom];
     const pt = this.palT;
     const o = this.o;
-    const dim = E.dim;
+    const dim = E.dim * (1 + 0.8 * this.flash);
     for (const s of this.souls) {
-      this.tg(s, t);
+      this.tg(s, t, amp, bl);
       let x = o.x;
       let y = o.y;
       let z = o.z;
-      const p = clamp((el - s.rd * 0.33 * dur) / (0.67 * dur)); // у каждой души своя задержка
+      // У каждой души своя задержка; при входе в лицо рот приходит на 0,2 с позже.
+      const p = clamp((el - s.rd * 0.33 * dur - (this.toFace && s.role === 2 ? 0.2 : 0)) / (0.67 * dur));
       if (p < 1) {
         // Плавное движение с лёгкой спиралью.
         const e = ease(p);
