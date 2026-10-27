@@ -1202,15 +1202,112 @@ describe('createAttentionNotifier.onMail — письма событием rooms
     expect(h.notes).toEqual([]);
   });
 
-  it('снимок версии 2 писем по onWorks не уведомляет: письма, что окно держит, пришли страницами; решение — по-прежнему со снимка', () => {
-    const h = started();
-    const held = snapshot();
-    h.entries = [{ ...held, map: { ...held.map, messages: [direct('m-1'), mention('m-2')] } }];
+  /** Карта работы версии 2 с письмами, которые окно держит: события, страницы починки и открытия комнаты. */
+  const holding = (messages: Message[], tops: Record<string, number> = {}, rooms?: Room[]): WindowWorkEntry => {
+    const base = snapshot(tops, rooms);
+    return { ...base, map: { ...base.map, messages } };
+  };
+
+  it('снимок версии 2: держимые письма не новее базы (top) по onWorks молчат; решение — по-прежнему со снимка', () => {
+    const h = started({ '': 5, 'r-01': 7 });
+    h.entries = [holding([direct('m-1'), direct('m-5'), mention('m-2'), mention('m-7')], { '': 5, 'r-01': 7 })];
     h.notifier.onWorks(h.entries);
     expect(h.notes).toEqual([]);
+    const held = h.entries[0] as WindowWorkEntry;
     h.entries = [{ ...held, map: { ...held.map, rooms: [room('r-01', 'Mobile APP', proposal('p-1'))] } }];
     h.notifier.onWorks(h.entries);
     expect(h.notes.map((note) => note.tag)).toEqual(['proposal:/tmp/p w-01:r-01']);
+  });
+
+  it('письмо, дочитанное починкой и новее последнего применённого события, уведомляет один раз; запоздавшее событие о нём молчит', () => {
+    const h = started({ '': 9 });
+    // Событие m-12 применено: база 12. События о m-13 и m-14 потерялись, разрыв починили страницами.
+    h.notifier.onMail(event([batch(null, [direct('m-12', { text: 'twelve' })])], 5));
+    expect(h.notes.map((note) => note.body)).toEqual(['twelve']);
+    h.entries = [holding([direct('m-10'), direct('m-11'), direct('m-12'), direct('m-13', { text: 'thirteen' }), direct('m-14', { text: 'fourteen' })], { '': 9 })];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.body)).toEqual(['twelve', 'fourteen']);
+    expect(h.notes[1]).toMatchObject({ tag: 'mail:/tmp/p w-01', silent: true });
+    expect(h.chimes).toBe(2);
+    // Те же страницы ещё раз и событие о том же письме позже (оно дошло после починки) — без второго уведомления.
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(event([batch(null, [direct('m-13'), direct('m-14')])], 7));
+    expect(h.notes).toHaveLength(2);
+  });
+
+  it('событие с reread (потолок кадра): письма пришли страницами — одно уведомление на работу и по одному на комнату, как у снимка', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Backend', null)];
+    const h = started({}, rooms);
+    // Кадр не вместил письма: в событии комнаты и Mail с признаком «дочитай», писем нет.
+    h.notifier.onMail(event([batch(null, [], { reread: true, top: 50 }), batch('r-01', [], { reread: true, top: 75 }), batch('r-02', [], { reread: true, top: 100 })]));
+    expect(h.notes).toEqual([]);
+    const letters = Array.from({ length: 50 }, (_, index) => direct(`m-${index + 1}`, { text: `letter ${index + 1}` }));
+    const first = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 51}`, { text: `a ${index + 51}, @human` }));
+    const second = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 76}`, { roomId: 'r-02', from: 's-01', text: `b ${index + 76}, @human` }));
+    h.entries = [holding([...letters, ...first, ...second], {}, rooms)];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01', mentionTag('r-01'), mentionTag('r-02')]);
+    expect(h.notes.map((note) => note.body)).toEqual(['letter 50', 'a 75, @you', 'b 100, @you']);
+    // Тот же снимок ещё раз (следующая страница или чужое изменение работы) — тишина.
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(3);
+  });
+
+  it('держимые письма по onWorks: те же правила окна — не от человека, прочитанные, не человеку, без @human, архивная комната молчат', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Old', null, { archivedAt: '2026-01-02T00:00:00.000Z' })];
+    const h = started({}, rooms);
+    h.entries = [
+      holding(
+        [
+          direct('m-1', { from: 'human' }),
+          direct('m-2', { readBy: { human: 'T' } }),
+          direct('m-3', { to: ['s-02'] }),
+          mention('m-4', { from: 'human' }),
+          mention('m-5', { text: 'no mention here' }),
+          mention('m-6', { text: 'ping @humans' }),
+          mention('m-7', { from: 'system' }),
+          mention('m-8', { readBy: { human: 'T' } }),
+          mention('m-9', { roomId: 'r-02' }),
+        ],
+        {},
+        rooms,
+      ),
+    ];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    // Письма молчали, но база за ними ушла: страница, что принесёт их снова, не уведомляет.
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('первый снимок уведомителя с держимыми письмами — база, даже если они новее top; письмо после него уведомляет', () => {
+    const h = harness([holding([direct('m-3', { text: 'before' })], { '': 1 })]);
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.entries = [holding([direct('m-3'), direct('m-4', { text: 'after' })], { '': 1 })];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.body)).toEqual(['after']);
+  });
+
+  it('prefs().mail: false — страница письма не уведомляет и тоже запоминается: включение настройки его не повторяет', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, mail: false };
+    h.entries = [holding([direct('m-1')])];
+    h.notifier.onWorks(h.entries);
+    h.prefs = { ...h.prefs, mail: true };
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.entries = [holding([direct('m-1'), direct('m-2')])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('вкладка комнаты видна — письмо со страницы не уведомляет', () => {
+    const h = started();
+    h.visible.add(JSON.stringify({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' }));
+    h.entries = [holding([mention('m-1')])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
   });
 });
 
