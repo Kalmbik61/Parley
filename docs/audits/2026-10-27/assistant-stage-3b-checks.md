@@ -488,3 +488,27 @@ L1/N11: `git grep -P -i -c -f rea-lab/island-scrub-names.txt -- .` на ветк
     правдоподобие и уши вровень с вырезом); весь экран (N7); закрытая крышка, внешний монитор, «Больше места» (N8);
     клики мимо формы доходят до строки меню (N6); точки слева и справа — сегодняшняя полоса и отступ (Н-3, F3).
     Убранный остров открывается кликом или потягиванием язычка, не наведением.
+
+## Документы этапа в ветке (решение s-21, m-1499)
+
+Коммит `ac64a9c0`: документы, на которые ссылаются README, спека помощника, TODOS и этот журнал, скопированы байт в байт
+из рабочего дерева `master` (там они не отслеживались). Само дерево `master` не тронуто. План — принятая версия, без
+правок: отклонения записаны здесь.
+
+| sha256 | Файл |
+|---|---|
+| `49e88643d98f8ece74de58e942850b09a0db07c885f0ae0a6175b6f9dcb7cce1` | `docs/plans/2026-10-27-assistant-stage-3b-plan.md` |
+| `8ba205d886a9d868b244e2198c65fc43e219115df0bf4d3367816dd6b4eb9512` | `docs/specs/2026-10-26-island-motion-sound-design.md` |
+| `3ebd027254ebf0a85312ea0cdce14cbc44cef13cdcaf8e392b16a3cdc447d7d8` | `docs/research/2026-10-26-neural-tts-research.md` |
+| `7dbfeae450cc45407d9628cfc378c890581d3a38d1090c077d3e02a0db40d653` | `docs/audits/2026-10-26/island-motion-sound-research.md` |
+| `ee8978b495c762d03ba4dc35c035dade6416314b71ce0ddfbab6eab5b4c9d649` | `docs/specs/2026-10-26-island-agent-features-design.md` |
+| `544f6207e06bbab84081560f2d8fd3ace4720a5931465c1e78e985a6c981d62d` | `docs/plans/2026-10-26-island-agent-features-plan.md` |
+| `b4717d6b87516061f3b3ff0f719adc790791fe25d63db20d2729d264b812e9d3` | `packages/desktop/prototype/island-motion-sound/index.html` |
+
+Голосовые образцы прототипа (`voice-*.wav`) в репозиторий не взяты: файлов звуков в нём нет (L1). Страница прототипа
+без них не проигрывает пример голоса — для истории решений этого достаточно. Путь `packages/desktop/prototype/**`
+пропускают lint и vitest.
+
+Проверки на этом коммите: имена референсных приложений — 0 совпадений; `pnpm lint` — 54 ошибки базы;
+typecheck desktop (node и web) зелёный; стражи `english-ui`, `english-text`, `notice`, `release-*`, `csp`, `tokens`
+зелёные.
