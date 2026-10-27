@@ -1,7 +1,7 @@
-/** Вырез острова (#9 §12, B26 F-B26-1): сдвиг к центру выреза с точностью до половины точки и ширина выдвинутого вида. */
+/** Вырез острова (#9 §12, B26 F-B26-3): сдвиг к центру выреза с точностью до половины точки, ширины капсулы и выдвинутого вида. */
 
 import { describe, expect, it } from 'vitest';
-import { droppedMinWidth, notchShift, type Notch } from './notch.js';
+import { capsuleWidth, droppedMinWidth, notchShift, type Notch } from './notch.js';
 
 /** Вырез MacBook Pro 14″ (замер спеки §12.2): 185 × 32 pt, центр в кадре окна 480 pt — на половине точки. */
 const NOTCH: Notch = { width: 185, height: 32, centerX: 239.5 };
@@ -21,5 +21,9 @@ describe('вырез острова', () => {
 
   it('выдвинутый вид не уже выреза и полей h + 4 по бокам', () => {
     expect(droppedMinWidth(NOTCH)).toBe(185 + 2 * 36);
+  });
+
+  it('капсула — вырез и по 80 pt с каждой стороны', () => {
+    expect(capsuleWidth(NOTCH)).toBe(345);
   });
 });

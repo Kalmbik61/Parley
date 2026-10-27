@@ -2188,6 +2188,13 @@ export const S = {
     failed: "Couldn't send — try again",
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
+    /** Капсула острова в вырезе (B26 F-B26-3): подписи для чтения с экрана и счётчик Done справа. */
+    capsule: {
+      assistant: 'Assistant',
+      agents: 'Parley agents',
+      working: (count: number): string => `${count} working`,
+      done: (count: number): string => `✓ ${count} Done`,
+    },
     idle: 'No agents running',
     noPending: 'No pending requests',
     /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */

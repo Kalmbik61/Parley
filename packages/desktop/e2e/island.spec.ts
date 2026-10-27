@@ -22,8 +22,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * главное окно берётся по адресу страницы, остров — по `island.html`.
  *
  * Остров в вырезе (#9 §12, план 3b B25, T17): `PARLEY_NOTCH=185x32` даёт подменный вырез посередине каждого дисплея —
- * N3 (голый вырез в покое, при работе и после Done — B26 F-B26-1), N5 (выдвижение и возврат). Наведение решает main по настоящему
- * курсору; тест шлёт острову то же событие main (`island:hover`). Без переменной — полоса (N2): на Mac с вырезом
+ * N3 (голый вырез в покое), N4a (капсула при работе и Done — B26 F-B26-3), N5 (выдвижение кликом и возврат). Наведение
+ * решает main по настоящему курсору; тест шлёт острову то же событие main (`island:hover`). Без переменной — полоса (N2): на Mac с вырезом
  * датчик `osascript` нашёл бы настоящий вырез, поэтому остров ставится на дисплей без выреза (`island.displayId` в
  * `ui.json` дома теста), а если такого дисплея нет — проверка пропускается. N8 (смена дисплеев) в E2E нет: Playwright
  * дисплеи не меняет, её держат юниты B27/B28 и ручная проверка.
@@ -386,39 +386,54 @@ test.describe('остров одобрений', () => {
     expect(notes.filter((note) => note.body.includes('Run: echo island-only'))).toEqual([]);
   });
 
-  test('вырез PARLEY_NOTCH=185x32: голый вырез в покое, при работе агента и после Done; выдвижение только наведением (N3, N5, B26 F-B26-1)', async () => {
+  test('вырез PARLEY_NOTCH=185x32: голый вырез в покое, капсула при работе агента и после Done; наведение не выдвигает, клик выдвигает (N3, N4a, N5, B26 F-B26-3)', async () => {
     const { app, window, ref, hooks } = await open({ PARLEY_ISLAND: '', PARLEY_NOTCH: '185x32' });
     await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
     const island = islandPage(app)!;
     const shape = island.getByTestId('island');
     const center = await notchCenterX(app);
-    /** Форма — ровно прямоугольник выреза у верхнего края, по центру выреза (±0,5 pt), и так и стоит. */
-    const expectBare = async (): Promise<void> => {
-      await expect(shape.getByTestId('island-notch')).toBeVisible();
+    /** Форма у верхнего края высотой выреза, по центру выреза (±0,5 pt), заданной ширины, и так и стоит через секунду. */
+    const expectRest = async (width: number): Promise<void> => {
       await expect(async () => {
         await settled(shape);
         const box = await boxOf(shape);
-        expect(box).toMatchObject({ y: 0, width: 185, height: 32 });
+        expect(box).toMatchObject({ y: 0, width, height: 32 });
         expect(Math.abs(box.x + box.width / 2 - center)).toBeLessThanOrEqual(0.5);
       }).toPass({ timeout: 10_000 });
-      // Фон не раздвигает форму и чуть позже: ушей и статусов сбоку нет (решение человека, B26 F-B26-1).
       await window.waitForTimeout(1000);
-      expect(await boxOf(shape)).toMatchObject({ y: 0, width: 185, height: 32 });
+      expect(await boxOf(shape)).toMatchObject({ y: 0, width, height: 32 });
+      await expect(shape.getByTestId('island-pill')).toHaveCount(0);
+    };
+    /** Голый вырез: ровно прямоугольник выреза, без роя. */
+    const expectBare = async (): Promise<void> => {
+      await expect(shape.getByTestId('island-notch')).toBeVisible();
+      await expectRest(185);
       await expect(shape.getByTestId('swarm')).toHaveCount(0);
+    };
+    /** Капсула фона: одна форма — вырез и по 80 pt с каждой стороны (B26 F-B26-3). */
+    const expectCapsule = async (): Promise<void> => {
+      await expect(shape.getByTestId('island-capsule')).toBeVisible();
+      await expectRest(185 + 2 * 80);
     };
 
     // N3: убранный остров без Done — ровно прямоугольник выреза.
     await expectBare();
 
-    // Агент работает — форма остаётся вырезом: хост уже знает о работе (точка в окне Parley), а остров не растёт.
+    // N4a: агент работает — капсула: слева мини-рой агентов, справа число работающих.
     await hooks.fire('UserPromptSubmit', { prompt: 'Run ls', permission_mode: 'default' });
     await expect(window.locator(`[data-session-id="${ref.sessionId}"] [data-state="working"]`)).toHaveCount(1, { timeout: 15_000 });
-    await expectBare();
+    await expectCapsule();
+    await expect(shape.getByTestId('island-capsule-left').getByTestId('swarm')).toHaveCount(1);
+    await expect(shape.getByTestId('island-capsule-right')).toHaveText('1');
 
-    // N5: наведение выдвигает форму вниз кривой роста (§4.4): пилюля ниже выреза, ширина не меньше выреза с полями.
+    // Наведение в вырезе форму не выдвигает: капсула остаётся.
     await hoverIsland(app, true);
+    await expectCapsule();
+
+    // N5: клик по капсуле выдвигает форму вниз кривой роста (§4.4): пилюля ниже выреза, ширина не меньше выреза с полями.
+    await shape.getByTestId('island-capsule').click();
     await expect(shape.getByTestId('island-pill')).toBeVisible();
-    await expect(shape.getByTestId('island-notch')).toHaveCount(0);
+    await expect(shape.getByTestId('island-capsule')).toHaveCount(0);
     await expect(shape).toHaveClass(/island-morph-grow/);
     expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.46s');
     await expect.poll(async () => (await boxOf(shape)).height).toBeGreaterThan(32);
@@ -430,16 +445,24 @@ test.describe('остров одобрений', () => {
     expect(dropped.width).toBeGreaterThanOrEqual(185 + 2 * (32 + 4));
     expect(Math.abs(dropped.x + dropped.width / 2 - center)).toBeLessThanOrEqual(0.5);
 
-    // Уход курсора возвращает голый вырез кривой сжатия.
+    // Уход курсора возвращает капсулу кривой сжатия.
     await hoverIsland(app, false);
     await expect(shape).toHaveClass(/island-morph-shrink/);
     expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.3s');
-    await expectBare();
+    await expectCapsule();
 
-    // Done — тоже фон: агент закончил, а форма остаётся вырезом, без «✅ N» сбоку.
+    // Done: агент закончил. Непросмотренный Done — капсула «✓ 1 Done»; просмотренный в окне Parley — голый вырез.
     await hooks.fire('Stop', { stop_hook_active: false });
     await expect(window.locator(`[data-session-id="${ref.sessionId}"] [data-state="working"]`)).toHaveCount(0, { timeout: 15_000 });
-    await expectBare();
+    // Окно Parley, где эта сессия открыта, вскоре отмечает её просмотренной: ждём, пока состояние устоится.
+    const unseen = window.locator(`[data-session-id="${ref.sessionId}"] [data-state="unseen"]`);
+    const stillUnseen = await expect(unseen).toHaveCount(0, { timeout: 5000 }).then(() => false, () => true);
+    if (stillUnseen) {
+      await expectCapsule();
+      await expect(shape.getByTestId('island-capsule-right')).toHaveText('✓ 1 Done');
+    } else {
+      await expectBare();
+    }
     await expect(shape).not.toContainText('✅');
   });
 

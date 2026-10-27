@@ -1671,29 +1671,82 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       expect(shape().className).not.toContain('ring-1');
       expect(parseFloat(shape().style.marginTop)).toBe(0);
       expect(screen.queryByTestId('island-pill')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
       expect(screen.queryByTestId('swarm')).toBeNull();
     }
+    /**
+     * Капсула фона (B26 F-B26-3): одна форма высотой выреза — поле 80 pt, вырез, поле 80 pt; без отступа сверху, без
+     * тени, скругление снизу 14 px; пилюли нет. Возвращает левое и правое поле.
+     */
+    function expectCapsule(): { left: HTMLElement; right: HTMLElement } {
+      const capsule = screen.getByTestId('island-capsule');
+      expect(capsule.style.height).toBe('32px');
+      expect([...capsule.children].map((child) => (child as HTMLElement).style.width)).toEqual(['80px', '185px', '80px']);
+      expect(content().children).toHaveLength(1);
+      expect(content().style.paddingTop).toBe('0px');
+      expect(content().style.minWidth).toBe('');
+      expect(shape().className).toContain('rounded-b-[14px]');
+      expect(shape().className).toContain('shadow-none');
+      expect(shape().className).not.toContain('shadow-lg');
+      expect(screen.queryByTestId('island-notch')).toBeNull();
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+      return { left: screen.getByTestId('island-capsule-left'), right: screen.getByTestId('island-capsule-right') };
+    }
+    const capsuleSwarm = (): Element | null => screen.getByTestId('island-capsule-left').querySelector('[data-testid="swarm"]');
 
-    it('нечего выдвигать — голый вырез, ровно по его размеру (B26 F-B26-1)', () => {
+    it('нечего показывать — голый вырез, ровно по его размеру (B26 F-B26-3)', () => {
       view({ config: notched, model: IDLE_MODEL });
+      expectBare();
+      cleanup();
+      // Помощник закрыт и спокоен — тоже голый вырез.
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps() })} />);
       expectBare();
     });
 
-    it('фон не раздвигает форму: агенты работают, Done, ошибка помощника, помощник свёрнут после разговора — голый вырез (B26 F-B26-1)', () => {
+    it('агенты работают — капсула: слева мини-рой агентов, справа точка и число работающих', () => {
       view({ config: notched, model: { ...IDLE_MODEL, working: 3, active: true } });
-      expectBare();
+      const { left, right } = expectCapsule();
+      expect(left.getAttribute('aria-label')).toBe('Parley agents');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('dot');
+      expect(right.textContent).toBe('3');
+      expect(right.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('3 working');
+    });
+
+    it('непросмотренный Done — капсула «✓ N Done» справа; он важнее числа работающих; без работы слева пусто', () => {
+      view({ config: notched, model: DONE_MODEL, doneCount: 2 });
+      let { left, right } = expectCapsule();
+      expect(right.textContent).toBe('✓ 2 Done');
+      expect(left.children).toHaveLength(0);
       cleanup();
-      view({ config: notched, model: DONE_MODEL, doneCount: 1 });
-      expectBare();
+      view({ config: notched, model: { ...DONE_MODEL, working: 1, active: true }, doneCount: 1 });
+      ({ left, right } = expectCapsule());
+      expect(right.textContent).toBe('✓ 1 Done');
+      expect(capsuleSwarm()).not.toBeNull();
       cleanup();
-      view({ config: notched, model: { ...MODEL, proposals: 1 } });
+      // Done просмотрен (`doneCount` 0) и ничего не идёт — снова голый вырез.
+      view({ config: notched, model: DONE_MODEL, doneCount: 0 });
       expectBare();
+    });
+
+    it('помощник свёрнут, говорит или в ошибке — капсула с ним слева: мини-сфера, лицо по голосу, сфера ошибки', () => {
+      const voice = vi.fn(() => null);
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·', view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'thinking' } } }) })} />);
+      let { left, right } = expectCapsule();
+      expect(left.getAttribute('aria-label')).toBe('Assistant');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('sphere');
+      expect(right.children).toHaveLength(0);
       cleanup();
-      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true, collapsed: true, busy: false, mini: null }) })} />);
-      expectBare();
+      // Говорит, свёрнутым или закрытым: лицо с эмоцией предложения (рот идёт по голосу), не сфера мини-облика.
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps({ open: false, busy: true, view: { ...assistantProps().view, input: 'speaking', sentenceMood: 'joy', voice } }) })} />);
+      expectCapsule();
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('face');
+      expect(capsuleSwarm()?.getAttribute('data-emo')).toBe('joy');
       cleanup();
-      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·', view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
-      expectBare();
+      render(<IslandView {...viewProps({ config: notched, model: { ...IDLE_MODEL, working: 2, active: true }, assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
+      ({ left, right } = expectCapsule());
+      expect(left.getAttribute('aria-label')).toBe('Assistant');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('sphere');
+      expect(right.textContent).toBe('2');
     });
 
     it('центр формы — центр выреза с точностью до половины точки; вогнутые плечи 6 px у верхнего края', () => {
@@ -1711,38 +1764,54 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       expect(css).toMatch(/\.island-shoulder-right \{ right: -6px; background: radial-gradient\(circle at 100% 100%, transparent 6px, #000 6\.5px\); \}/);
     });
 
-    it('без выреза обёртка не участвует в раскладке: ни сдвига, ни плеч', () => {
+    it('без выреза обёртка не участвует в раскладке: ни сдвига, ни плеч, ни капсулы', () => {
       view();
       const frame = screen.getByTestId('island-frame');
       expect(frame.className).toBe('contents');
       expect(frame.style.left).toBe('');
       expect(frame.querySelector('.island-shoulder')).toBeNull();
-      expect(screen.queryByTestId('island-ears')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
     });
 
-    it('убран, и с непросмотренными Done тоже, — голый вырез', () => {
+    it('убран без фона — голый вырез; убран с непросмотренными Done — капсула «✓ N Done»', () => {
       view({ config: notched, model: IDLE_MODEL, retracted: true });
       expectBare();
       cleanup();
-      view({ config: notched, model: IDLE_MODEL, retracted: true, doneCount: 2 });
-      expectBare();
+      view({ config: notched, model: DONE_MODEL, retracted: true, doneCount: 2 });
+      expect(expectCapsule().right.textContent).toBe('✓ 2 Done');
       expect(screen.queryByText('✅ 2')).toBeNull();
     });
 
-    it('убранный остров наведение не выдвигает: голый вырез остаётся', () => {
+    it('наведение форму не выдвигает: ни выдвинутого, ни убранного острова (B26 F-B26-3)', () => {
+      view({ config: notched, model: IDLE_MODEL, hovered: true });
+      expectBare();
+      cleanup();
+      view({ config: notched, model: { ...IDLE_MODEL, working: 1, active: true }, hovered: true });
+      expectCapsule();
+      cleanup();
       view({ config: notched, model: IDLE_MODEL, retracted: true, hovered: true, listOpen: true });
-      expect(screen.getByTestId('island-notch')).toBeTruthy();
-      expect(screen.queryByTestId('island-pill')).toBeNull();
+      expectBare();
+    });
+
+    it('клик по вырезу и по капсуле открывает остров (onOpen)', () => {
+      const onOpen = vi.fn();
+      view({ config: notched, model: IDLE_MODEL, onOpen });
+      fireEvent.click(screen.getByTestId('island-notch'));
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      cleanup();
+      view({ config: notched, model: { ...IDLE_MODEL, working: 1, active: true }, onOpen });
+      fireEvent.click(screen.getByTestId('island-capsule-right'));
+      expect(onOpen).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('выдвижение (N5)', () => {
-    it('наведение выдвигает форму: пилюля под вырезом, не уже выреза с полями, скругление 22 px и тень; уход курсора — снова вырез', () => {
+    it('открытый список выдвигает форму: пилюля под вырезом, не уже выреза с полями, скругление 22 px и тень; закрыли — снова капсула', () => {
       const props = viewProps({ config: notched });
       const { rerender } = render(<IslandView {...props} />);
-      expect(screen.getByTestId('island-notch')).toBeTruthy();
+      expect(screen.getByTestId('island-capsule')).toBeTruthy();
       rerender(<IslandView {...props} hovered listOpen />);
-      expect(screen.queryByTestId('island-notch')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
       expect(screen.getByTestId('island-pill')).toBeTruthy();
       expect(screen.getByTestId('island-list')).toBeTruthy();
       expect(content().style.paddingTop).toBe('32px');
@@ -1751,11 +1820,11 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       expect(shape().className).toContain('rounded-b-[22px]');
       expect(shape().className).toContain('shadow-lg');
       rerender(<IslandView {...props} hovered={false} listOpen={false} />);
-      expect(screen.getByTestId('island-notch')).toBeTruthy();
+      expect(screen.getByTestId('island-capsule')).toBeTruthy();
       expect(content().style.minWidth).toBe('');
     });
 
-    it('запрос, согласие и помощник выдвигают форму без наведения', () => {
+    it('запрос, согласие, предложение комнаты и помощник выдвигают форму без клика', () => {
       view({ config: notched, items: [permissionItem()] });
       expect(screen.getByTestId('island-card')).toBeTruthy();
       expect(content().style.paddingTop).toBe('32px');
@@ -1763,18 +1832,29 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       view({ config: notched, consent: { card: { id: 'c-01', kind: 'folder-trust', folder: '/tmp/proj', projectPath: '/tmp/proj', requestedBy: { source: 'launch' }, at: '', state: 'pending' } as ConsentCard, deciding: false, note: null, onDecide: vi.fn() } });
       expect(screen.getByTestId('island-consent-request')).toBeTruthy();
       cleanup();
+      view({ config: notched, model: { ...MODEL, proposals: 1 } });
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      cleanup();
       render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true }) })} />);
       expect(screen.getByTestId('assistant-view')).toBeTruthy();
       expect(screen.queryByTestId('island-notch')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
     });
 
-    it('вырез → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
-      const props = viewProps({ config: notched });
+    it('вырез → капсула → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
       const { rerender } = render(<IslandView {...props} />);
       resize(185, 32);
-      rerender(<IslandView {...props} hovered listOpen />);
+      rerender(<IslandView {...props} model={MODEL} />);
+      resize(345, 32);
+      expect(morph()).toBe('island-morph-grow');
+      rerender(<IslandView {...props} model={MODEL} listOpen />);
       resize(400, 220);
       expect(morph()).toBe('island-morph-grow');
+      rerender(<IslandView {...props} model={MODEL} />);
+      resize(345, 32);
+      expect(morph()).toBe('island-morph-shrink');
       rerender(<IslandView {...props} />);
       resize(185, 32);
       expect(morph()).toBe('island-morph-shrink');

@@ -52,10 +52,11 @@
  * динамика — «Speak answers» и `toggleSpeak`. Реакции роёв (#9 §4.1–§4.3) — одноразовые `pulse`: мини-рой отвечает на
  * начало работы, исходы показа, наведение и фазы помощника, большой рой — только на фазы помощника.
  *
- * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` наведение выдвигает форму из выреза вниз, уход курсора
- * возвращает голый вырез (`IslandView` по `hovered`). Область под мышь — по форме: вырез или выдвинутый вид у
- * выдвинутого острова, у убранного — зона нажатия по вырезу. Новый вырез (другой дисплей, новый замер) сдвигает форму,
- * поэтому область замеряется заново.
+ * Остров в вырезе (#9 §12, план 3b B28; B26 F-B26-3): с `config.notch` наведение остров не открывает. Открывают клик по
+ * вырезу или капсуле и язычок (`openFromNotch`: свёрнутый помощник раскрывается, иначе открывается список) и хоткеи;
+ * уход курсора закрывает открытое так же, как наведение в полосе. Область под мышь — по форме: вырез, капсула или
+ * выдвинутый вид у выдвинутого острова, у убранного — зона нажатия по вырезу или капсуле. Новый вырез (другой дисплей,
+ * новый замер) сдвигает форму, поэтому область замеряется заново.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -76,6 +77,7 @@ import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
+import { capsuleContent } from './NotchCapsule.js';
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
@@ -191,6 +193,8 @@ function hideAssistant(): boolean {
 export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; onPresentation?: (outcome: IslandPresentationOutcome) => void }): JSX.Element {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
+  const configRef = useRef(config);
+  configRef.current = config;
   /** Пришли ли настройки от main: до них «Speak answers» неизвестно, и его смена — не включение. */
   const configLoaded = useRef(false);
   const [speaker] = useState(createSpeaker);
@@ -329,14 +333,16 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       port?.close();
     };
   }, [bridge]);
-  // Наведение решает main по настоящему курсору: над областью острова список открыт, вне её — закрыт.
+  // Наведение решает main по настоящему курсору: над областью острова список открыт, вне её — закрыт. В вырезе
+  // наведение не открывает (B26 F-B26-3): открывает клик (`openFromNotch`), а уход курсора закрывает так же.
   useEffect(
     () =>
       bridge.island.onHover((over) => {
+        const notch = configRef.current.notch != null;
         setHovered(over);
-        setListOpen(over);
+        if (!over || !notch) setListOpen(over);
         const store = useAssistantStore.getState();
-        if (over && store.open && store.collapsed) store.expand(true);
+        if (over && !notch && store.open && store.collapsed) store.expand(true);
         if (!over && store.byHover) store.collapse();
         // Курсор ушёл — показ кончился: просмотренные сессии больше не держат свои строки Done.
         if (!over) setHeld(releaseHeld);
@@ -395,8 +401,6 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   /** Непросмотренные Done: их число показывает убранный остров (`✅ N`). */
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
-  const configRef = useRef(config);
-  configRef.current = config;
   const assistant = useAssistantStore();
   useEffect(() => {
     if (keyboardOwner === 'request' && !assistant.open) requestAnimationFrame(() => shapeRef.current?.focus());
@@ -508,6 +512,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       }),
     [],
   );
+  /** Клик по вырезу или капсуле и язычок в вырезе: свёрнутый помощник раскрывается до ухода курсора, иначе — список. */
+  const openFromNotch = useCallback((): void => {
+    const store = useAssistantStore.getState();
+    if (store.open && store.collapsed) store.expand(true);
+    else setListOpen(true);
+  }, []);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     releaseKeyboard();
@@ -800,6 +810,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
         assistant={assistantProps}
+        miniPulse={miniPulse}
+        onOpen={openFromNotch}
         consent={
           (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined)) === undefined
             ? null
@@ -812,10 +824,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           topInset={config.topInset}
           doneCount={unseenDone}
           notch={config.notch ?? null}
+          capsule={config.notch != null && capsuleContent(model, unseenDone, assistantProps) !== null}
           tabRef={tabRef}
           onExpand={() => {
             cues.open();
             setRetracted(false);
+            if (config.notch != null) openFromNotch();
           }}
         />
       ) : null}

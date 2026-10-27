@@ -10,13 +10,13 @@
  * выдвигают остров. Потяжка — не перетаскивание окна: форма стоит на месте, пока зона не выдвинет её.
  *
  * В вырезе (#9 §12.1, §12.3, план 3b B28) зона стоит у верхнего края по центру выреза (`notchShift`) и повторяет
- * убранную форму — ровно прямоугольник выреза, и с непросмотренными Done тоже (B26 F-B26-1): под ним пунктов меню нет,
- * перехват безвреден.
+ * убранную форму (B26 F-B26-3): ровно прямоугольник выреза, а пока есть фон (`capsule`: непросмотренный Done, работа,
+ * свёрнутый помощник) — капсулу `capsuleWidth` той же высоты.
  */
 
 import { useRef, type Ref } from 'react';
 import { S } from '../../shared/strings.js';
-import { notchShift, type Notch } from './notch.js';
+import { capsuleWidth, notchShift, type Notch } from './notch.js';
 
 /** Насколько вниз надо потянуть язычок, чтобы остров выдвинулся без клика. */
 export const PULL_EXPAND_PX = 8;
@@ -26,6 +26,7 @@ export function IslandTab({
   topInset,
   doneCount,
   notch,
+  capsule = false,
   tabRef,
   onExpand,
 }: {
@@ -35,6 +36,8 @@ export function IslandTab({
   doneCount: number;
   /** Вырез дисплея (`IslandConfig.notch`); `null` — выреза нет, зона под чёлкой. */
   notch: Notch | null;
+  /** В вырезе убранная форма — капсула фона (`NotchCapsule`): зона по её ширине. */
+  capsule?: boolean;
   /** Ссылка на кнопку: по ней `IslandApp` замеряет область, которую язычок ловит мышью. */
   tabRef: Ref<HTMLButtonElement>;
   onExpand(): void;
@@ -72,8 +75,8 @@ export function IslandTab({
         }}
       >
         {notch !== null ? (
-          // Та же форма, что у убранного острова в вырезе: невидимая, она задаёт размер зоны.
-          <span aria-hidden className="block" style={{ width: notch.width, height: notch.height }} />
+          // Та же форма, что у убранного острова в вырезе (вырез или капсула): невидимая, она задаёт размер зоны.
+          <span aria-hidden className="block" style={{ width: capsule ? capsuleWidth(notch) : notch.width, height: notch.height }} />
         ) : peek ? (
           // Тот же текст и отступы, что у формы `✅ N` в `IslandView`: невидимый, он задаёт размер зоны.
           <span aria-hidden className="whitespace-nowrap px-3 py-1 text-sm opacity-0">

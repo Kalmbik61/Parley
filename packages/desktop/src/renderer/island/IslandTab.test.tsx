@@ -13,11 +13,11 @@ import type { Notch } from './notch.js';
 
 const NOTCH: Notch = { width: 185, height: 32, centerX: 240.5 };
 
-function tab(patch: { doneCount?: number; notch?: Notch | null; topInset?: number } = {}) {
+function tab(patch: { doneCount?: number; notch?: Notch | null; topInset?: number; capsule?: boolean } = {}) {
   const onExpand = vi.fn();
   render(
     <IslandTab anchorClass="justify-center" topInset={patch.topInset ?? 38} doneCount={patch.doneCount ?? 0} notch={patch.notch ?? null}
-      tabRef={createRef<HTMLButtonElement>()} onExpand={onExpand} />,
+      capsule={patch.capsule ?? false} tabRef={createRef<HTMLButtonElement>()} onExpand={onExpand} />,
   );
   const button = screen.getByTestId('island-tab');
   return { onExpand, button, wrapper: button.parentElement as HTMLElement };
@@ -72,12 +72,12 @@ describe('язычок в вырезе (N6)', () => {
     expect(button.getAttribute('aria-label')).toBe(S.island.showIsland);
   });
 
-  it('с непросмотренными Done — тот же прямоугольник выреза, подпись «агенты закончили» (B26 F-B26-1)', () => {
-    const { button } = tab({ notch: NOTCH, doneCount: 2 });
+  it('с непросмотренными Done — зона по капсуле (вырез и по 80 pt), подпись «агенты закончили» (B26 F-B26-3)', () => {
+    const { button } = tab({ notch: NOTCH, doneCount: 2, capsule: true });
     expect(button.getAttribute('aria-label')).toBe(S.island.doneTab);
     const box = button.firstElementChild as HTMLElement;
     expect(box.getAttribute('aria-hidden')).toBe('true');
-    expect(box.style.width).toBe('185px');
+    expect(box.style.width).toBe('345px');
     expect(box.style.height).toBe('32px');
     expect(button.textContent).toBe('');
   });

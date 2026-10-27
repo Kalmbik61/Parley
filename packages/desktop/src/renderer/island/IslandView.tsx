@@ -31,11 +31,13 @@
  * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
  *
  * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` форма стоит у верхнего края по центру выреза (сдвиг до
- * половины точки — у обёртки, там же вогнутые плечи). В покое — и убранная, и после разговора с помощником, и пока
- * агенты работают или пришёл Done — форма ровно по вырезу, без ушей и боковых статусов (B26 F-B26-1, решение человека).
- * Наведение, запрос, согласие, помощник и переход к ждущему выдвигают форму вниз: содержимое — ниже выреза, ширина —
- * не меньше выреза с полями. Скругление снизу — 10 px у голого выреза, 22 px у выдвинутых видов. Смена выреза (другой
- * дисплей, новый замер) меняет форму мгновенно: два кадра у формы нет класса перехода (§12.4).
+ * половины точки — у обёртки, там же вогнутые плечи). Три облика (B26 F-B26-3, решение человека): нечего показывать —
+ * ровно вырез; есть фон (агенты работают, непросмотренный Done, помощник свёрнут или говорит, его ошибка) — капсула
+ * высотой выреза (`NotchCapsule`), и у убранного острова тоже; открыт список (клик, язычок, хоткей перехода), раскрыт
+ * помощник, запрос, согласие, предложение комнаты или переход к ждущему — форма выдвигается вниз: содержимое ниже выреза, ширина не меньше
+ * выреза с полями. Наведение в вырезе форму не выдвигает. Клик по вырезу или капсуле — `onOpen`. Скругление снизу —
+ * 10 px у голого выреза, 14 px у капсулы, 22 px у выдвинутых видов. Смена выреза (другой дисплей, новый замер) меняет
+ * форму мгновенно: два кадра у формы нет класса перехода (§12.4).
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
@@ -65,6 +67,7 @@ import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
 import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
 import { droppedMinWidth, notchShift } from './notch.js';
+import { capsuleContent, NotchCapsule } from './NotchCapsule.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
 export { CARD_ARM_MS };
@@ -123,6 +126,10 @@ export interface IslandViewProps {
   onDecide(key: string, decision: FeedDecision): void;
   /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
   assistant: IslandAssistantProps | null;
+  /** Реакция мини-роя для капсулы в вырезе: события агентов есть и при выключенном помощнике. */
+  miniPulse?: SwarmPulse | null;
+  /** Клик по вырезу или капсуле (B26 F-B26-3): открыть остров; наведение в вырезе его не открывает. */
+  onOpen?(): void;
   /** Карточка согласия (держит запуск Codex): показывается раньше карточек ленты; `null` — ждущих нет. */
   consent: IslandConsentProps | null;
   progress?: { selected: SessionRef | null; state: ProgressState; onSelect(ref: SessionRef): void; onClose(): void };
@@ -552,11 +559,14 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   // 2 px ниже края. `✅ N`: сразу под чёлкой. У убранных обводка вместо тени.
   const peek = retracted && doneCount > 0;
   const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
-  // В вырезе: выдвинутый вид или голый вырез. Убранный остров наведение не выдвигает — его выдвигает язычок.
-  const dropped = !retracted && (hovered || listOpen || assistantBig || consent !== null || items.length > 0 || props.navigationKey != null || props.navigationEmpty === true);
-  const notchView = notch === null ? null : dropped ? 'dropped' : 'bare';
+  // В вырезе: выдвинутый вид, капсула фона или голый вырез. Наведение форму не выдвигает: открывают клик, язычок и
+  // хоткеи (`listOpen`, помощник), а запросы к человеку — сами, и предложение комнаты тоже (B26 F-B26-3).
+  const dropped = !retracted && (listOpen || assistantBig || consent !== null || items.length > 0 || (model.proposals ?? 0) > 0 ||
+    props.navigationKey != null || props.navigationEmpty === true);
+  const capsule = notch === null || dropped ? null : capsuleContent(model, doneCount, assistant);
+  const notchView = notch === null ? null : dropped ? 'dropped' : capsule !== null ? 'capsule' : 'bare';
   const look =
-    notchView !== null ? (notchView === 'dropped' ? 'rounded-b-[22px] shadow-lg' : 'rounded-b-[10px] shadow-none')
+    notchView !== null ? (notchView === 'dropped' ? 'rounded-b-[22px] shadow-lg' : notchView === 'capsule' ? 'rounded-b-[14px] shadow-none' : 'rounded-b-[10px] shadow-none')
       : !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
   const marginTop = notchView !== null || !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
   const paddingTop = notch !== null ? (notchView === 'dropped' ? notch.height : 0) : retracted ? 0 : config.topInset;
@@ -587,7 +597,9 @@ export function IslandView(props: IslandViewProps): JSX.Element {
       >
         <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop, minWidth }}>
           {notch !== null && notchView === 'bare' ? (
-            <div data-testid="island-notch" style={{ width: notch.width, height: notch.height }} />
+            <div data-testid="island-notch" className="cursor-pointer" style={{ width: notch.width, height: notch.height }} onClick={props.onOpen} />
+          ) : notch !== null && capsule !== null ? (
+            <NotchCapsule notch={notch} content={capsule} assistant={assistant} pulse={props.miniPulse ?? null} reducedMotion={config.motion === 'reduce'} onOpen={() => props.onOpen?.()} />
           ) : retracted ? (
             // Содержимое убранной формы меняется сразу, а форма доезжает до него переходом.
             peek ? (
