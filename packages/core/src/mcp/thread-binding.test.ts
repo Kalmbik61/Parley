@@ -187,6 +187,30 @@ describe('authoritative Codex thread proof', () => {
     } finally { release(); update.mockRestore(); }
   });
 
+  it('does not authorize a replayed launch UUID for a different process after repeated starts', async () => {
+    await started();
+    const provingClient = await connect('s-01', revision);
+    await call(provingClient, { threadId: THREAD, sessionId: THREAD });
+    const before = (await session()).codexThreadBinding;
+    const oldClient = await connect('s-01', revision);
+    const nextProcess = { ...process, pid: 43, startedAtProcess: 'exact-process-B' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await startSession(project, workId, 's-01', null, nextProcess, revision);
+    }
+    await call(oldClient, { threadId: THREAD, sessionId: THREAD });
+    expect(await session()).toMatchObject({
+      pid: nextProcess.pid, startedAtProcess: nextProcess.startedAtProcess, codexThreadBinding: before,
+    });
+    await startSession(project, workId, 's-01', null, nextProcess, nextRevision);
+    await call(oldClient, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding).toEqual({
+      launchRevision: nextRevision, pid: nextProcess.pid, startedAtProcess: nextProcess.startedAtProcess, threadId: null,
+    });
+    const newClient = await connect('s-01', nextRevision);
+    await call(newClient, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
   it('allows a delayed proof after stop for the same retained complete process tuple', async () => {
     await started();
     const client = await connect('s-01', revision);

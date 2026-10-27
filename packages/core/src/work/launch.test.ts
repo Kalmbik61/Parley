@@ -1385,9 +1385,25 @@ describe('private Codex launch proof lifecycle', () => {
   it.each([
     { revision, process: { ...process, pid: 43 } },
     { revision, process: { ...process, startedAtProcess: 'process-B' } },
+  ])('retains the original record across repeated same-UUID process changes: %j', async (input) => {
+    const { workId, sessionId } = await proven();
+    const before = (await sessionOf(workId, sessionId)).codexThreadBinding;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await startSession(project, workId, sessionId, null, input.process, input.revision);
+      expect(await sessionOf(workId, sessionId)).toMatchObject({
+        pid: input.process.pid, startedAtProcess: input.process.startedAtProcess, codexThreadBinding: before,
+      });
+    }
+    await startSession(project, workId, sessionId, null, input.process, nextRevision);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual({
+      launchRevision: nextRevision, pid: input.process.pid, startedAtProcess: input.process.startedAtProcess, threadId: null,
+    });
+  });
+
+  it.each([
     { revision: undefined, process: { ...process, pid: 43 } },
     { revision: undefined, process: { ...process, startedAtProcess: 'process-B' } },
-  ])('drops evidence on a different process with unchanged/missing launch UUID: %j', async (input) => {
+  ])('drops evidence on a different process without a launch UUID: %j', async (input) => {
     const { workId, sessionId } = await proven();
     await startSession(project, workId, sessionId, null, input.process, input.revision);
     expect(await sessionOf(workId, sessionId)).not.toHaveProperty('codexThreadBinding');

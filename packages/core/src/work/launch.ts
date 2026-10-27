@@ -823,9 +823,11 @@ export async function startSession(
           launchRevision: nativeContextRevision, pid: started?.pid,
           startedAtProcess: started?.startedAtProcess, threadId: null,
         };
-        if (!isCodexThreadBinding(candidate) || (previous?.launchRevision === nativeContextRevision && !sameProcess)) {
+        if (!isCodexThreadBinding(candidate)) {
           delete session.codexThreadBinding;
         } else if (previous?.launchRevision !== nativeContextRevision) session.codexThreadBinding = candidate;
+        // Тот же UUID не создаёт authority для другого процесса даже при повторе:
+        // прежний record сохраняется, а consumer отвергает несовпадающий tuple.
       }
     }
     if (started === undefined) return;
