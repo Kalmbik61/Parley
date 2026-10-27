@@ -48,6 +48,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
+import { mailSessions } from '../mail-sessions.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -56,7 +57,7 @@ import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from './limit-return.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
@@ -290,6 +291,7 @@ export function createWakeService(
   let isPaused = false;
   let started = false;
   let unsubscribeWorks: (() => void) | undefined;
+  let unsubscribeMail: (() => void) | undefined;
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   let unsubscribeHostDraft: (() => void) | undefined;
@@ -1045,6 +1047,20 @@ export function createWakeService(
     }
   }
 
+  /**
+   * Запись писем (спека rooms.mail 6.7): без записи карты `onChange` молчит, и письмо будит только свои адресатов, а отметка
+   * прочтения снимает «письма ждут» только у читателя. Смешанная запись зовёт и это, и `onChange`: пересчёт идемпотентен.
+   * Карта — из снимка работ: адресаты комнаты берутся по ней, и комната, заведённая записью, ещё не попавшей в снимок, до
+   * её `onChange` адресатов не имеет.
+   */
+  function recomputeAddressees(notice: MailNotice): void {
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry === undefined) return;
+    for (const sessionId of mailSessions(notice, entry.map)) {
+      recompute({ projectPath: notice.projectPath, workId: notice.workId, sessionId });
+    }
+  }
+
   return {
     enterDelayMs,
 
@@ -1076,6 +1092,7 @@ export function createWakeService(
         deliverRecipes();
         recomputeAll();
       });
+      unsubscribeMail = works.onMail(recomputeAddressees);
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
@@ -1144,6 +1161,7 @@ export function createWakeService(
       if (!started) return;
       started = false;
       unsubscribeWorks?.();
+      unsubscribeMail?.();
       unsubscribeActivity?.();
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();

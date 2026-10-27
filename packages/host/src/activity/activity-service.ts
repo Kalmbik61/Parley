@@ -72,8 +72,9 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
+import { mailSessions } from '../mail-sessions.js';
 import { createSettler } from '../watch-settle.js';
-import type { WorksService, WorksView } from '../works/works-service.js';
+import type { MailNotice, WorksService, WorksView } from '../works/works-service.js';
 import { contextView, type CompactionTrack } from '../compaction/context-view.js';
 import { createLogIndex, type LogChange, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
@@ -504,6 +505,7 @@ export function createActivityService(
 
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
+  let unsubscribeMail: (() => void) | undefined;
   let unsubscribeLog: (() => void) | undefined;
   /**
    * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
@@ -1418,6 +1420,25 @@ export function createActivityService(
     pruneRemoved(snapshot);
   }
 
+  /**
+   * Запись писем без записи карты (спека rooms.mail 6.7): `unread` в метриках меняется только у адресатов новых писем и
+   * читателей, и `onChange` её уже не приносит. Как `handleWorksChange` для всех сессий, здесь для названных: журнал
+   * перечитывается (чтение инкрементальное, без новых байт — один stat), и наблюдатель за каталогом журналов, появившимся
+   * после старта, заводится. Без этого указатель будильника ждал бы потерянного хука адресата до дочитывания по таймеру
+   * (`catchUp`), а хуки его ответа остались бы без наблюдателя до следующей записи карты.
+   */
+  function handleMail(notice: MailNotice): void {
+    if (stopped) return;
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry === undefined) return;
+    const { watch } = ensureWorkWatch(entry);
+    for (const sessionId of mailSessions(notice, entry.map)) {
+      const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
+      if (journals.has(refKey(ref))) recompute(ref);
+      void readJournal(notice.projectPath, notice.workId, watch.journal, sessionId);
+    }
+  }
+
   /** `change` — какая запись индекса изменилась: пересчитываются только задетые ею сессии; без него (первый список) — все. */
   function handleLogChange(change?: LogChange): void {
     if (stopped) return;
@@ -1444,6 +1465,7 @@ export function createActivityService(
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
+      unsubscribeMail = works.onMail(handleMail);
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
@@ -1623,6 +1645,7 @@ export function createActivityService(
       if (stopped) return;
       stopped = true;
       unsubscribeWorks?.();
+      unsubscribeMail?.();
       unsubscribeLog?.();
       catchUp.cancel();
       for (const timer of silenceTimers.values()) clearTimeout(timer);

@@ -110,7 +110,7 @@ const auditLines = (): any[] =>
 const emit = (change: Partial<Change>): void => consentListener?.({ upsert: [], removed: [], ...change });
 
 function make(): TelegramService {
-  const works = { snapshot: () => ({ entries: [], branches: {} }) as unknown as WorksSnapshot, onChange: () => () => undefined };
+  const works = { snapshot: () => ({ entries: [], branches: {} }) as unknown as WorksSnapshot, onChange: () => () => undefined, onMail: () => () => undefined };
   const activity = { get: () => undefined, onChange: () => () => undefined };
   const assistant = {
     ask: vi.fn(async () => undefined),

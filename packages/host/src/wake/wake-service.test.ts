@@ -1526,6 +1526,7 @@ describe('возврат после сброса лимита', () => {
       entry: () => entry,
       snapshot: () => ({ entries: [entry] }),
       onChange: () => () => {},
+      onMail: () => () => {},
     } as unknown as WorksService;
     const activity = {
       get: () => live,

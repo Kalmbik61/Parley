@@ -1,22 +1,23 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { WorkNotFoundError } from '@parley/core';
-import type { WorkEntry } from '@parley/core';
-import type { WorksService } from '../works/works-service.js';
+import type { Message, WorkEntry } from '@parley/core';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { createHistoryService } from './history-service.js';
 import type { HistoryServiceIO } from './history-service.js';
 const entry = (): WorkEntry => ({projectPath:'/project',map:{schemaVersion:2,work:{id:'w-01',title:'Human work',goal:'',status:'active',createdAt:'2026-10-04',updatedAt:'2026-10-04'},sessions:[],rooms:[{id:'r-01',title:'Human room',creator:'human',members:[],lead:null,mode:'free',createdAt:'2026-10-04',proposal:null}],messages:[]}});
 function fixture(value = entry()) {
- let entries = [value]; let listener = ():void=>{};
- const works: Pick<WorksService,'snapshot'|'entry'|'onChange'> = {
-  snapshot:()=>({entries,branches:{}}), entry:()=>entries[0],
+ let entries = [value]; let listener = ():void=>{}; let mailListener: (notice:MailNotice)=>void = ()=>{};
+ const works: Pick<WorksService,'snapshot'|'entry'|'onChange'|'onMail'> = {
+  snapshot:()=>({entries,branches:{}}), entry:(p,w)=>entries.find(e=>e.projectPath===p&&e.map.work.id===w),
   onChange: fn=>{listener=()=>fn(works.snapshot(),works.snapshot());return ()=>{listener=()=>{};};},
+  onMail: fn=>{mailListener=fn;return ()=>{mailListener=()=>{};};},
  };
  const io: HistoryServiceIO = {
   rebuild:vi.fn(async ()=>({sharedAt:null,diagnostics:[]})),
   remove:vi.fn(async (_p,_w,ids)=>({removed:ids.length,failed:[]})), deleted:vi.fn(async()=>true), tops:vi.fn(()=>({})),
  };
  const failure=vi.fn();const service=createHistoryService(works,{io,debounceMs:100,onFailure:failure});
- return {service,io,failure,changed:()=>listener(),gone:()=>{entries=[];listener();},back:()=>{entries=[value];listener();}};
+ return {service,io,failure,changed:()=>listener(),mailed:(notice:MailNotice)=>mailListener(notice),gone:()=>{entries=[];listener();},back:()=>{entries=[value];listener();}};
 }
 afterEach(()=>vi.useRealTimers());
 const AT_TEXT = '2026-10-04T01:00:00.000Z';
@@ -105,4 +106,25 @@ it('fingerprint of a work deleted while still in the snapshot is "no letters", n
   vi.mocked(broken.io.tops).mockImplementation(() => { throw new Error('database is locked'); });
   broken.service.start(); await vi.advanceTimersByTimeAsync(100);
   expect(broken.failure).toHaveBeenCalledOnce(); expect(broken.io.rebuild).not.toHaveBeenCalled(); broken.service.stop();
+});
+/** Спека rooms.mail 6.7: запись одних писем не зовёт `onChange`; отпечаток комнат ловит новое письмо по `onMail`. */
+const mailNotice = (journal: Partial<MailNotice['journal']>, workId = 'w-01'): MailNotice => ({
+  projectPath: '/project', workId, version: 2, prevVersion: 1, foreign: false,
+  journal: { added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [], ...journal },
+});
+const roomLetter = { id: 'm-01', roomId: 'r-01', from: 's-01', to: [], at: '2026-10-27T10:00:00.000Z', text: 'hi', kind: 'note', readBy: {} } as Message;
+it('a letter without a map change rebuilds the room history; read marks and other works are not scanned', async () => {
+  vi.useFakeTimers(); const f = fixture(); f.service.start();
+  await vi.advanceTimersByTimeAsync(100); expect(f.io.rebuild).toHaveBeenCalledTimes(1);
+  const scans = vi.mocked(f.io.tops).mock.calls.length;
+
+  f.mailed(mailNotice({ reads: [{ id: 'm-01', reader: 's-01', at: roomLetter.at }] }));
+  f.mailed(mailNotice({ added: [roomLetter] }, 'w-02'));
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(vi.mocked(f.io.tops).mock.calls.length).toBe(scans); expect(f.io.rebuild).toHaveBeenCalledTimes(1);
+
+  vi.mocked(f.io.tops).mockReturnValue({ 'r-01': 1 });
+  f.mailed(mailNotice({ added: [roomLetter] }));
+  await vi.advanceTimersByTimeAsync(100); expect(f.io.rebuild).toHaveBeenCalledTimes(2);
+  f.service.stop();
 });

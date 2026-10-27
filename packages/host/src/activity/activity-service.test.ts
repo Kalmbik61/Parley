@@ -392,6 +392,33 @@ describe('createActivityService', () => {
     }
   }, 20_000);
 
+  // Спека rooms.mail 6.7: запись одних писем не зовёт `works.onChange`, и число непрочитанного адресата и читателя
+  // обновляется по `onMail`.
+  it('5б: новое письмо и отметка прочтения обновляют unread сессии без works.changed', async () => {
+    const { ref, workId } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.unread).toBe(0);
+    const worksChanged = (): number => broadcasts.filter((item) => item.event === 'works.changed').length;
+    const before = worksChanged();
+
+    // `onMail` зовётся при коммите, до возврата `updateMap`: число уже новое, ждать индекс логов или опрос незачем (они
+    // пересчитали бы сессию и без письма, и тест не отличил бы их от `onMail`).
+    let letterId = '';
+    await updateMap(project, workId, (_map, letters) => {
+      letterId = letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' }).id;
+    });
+    expect(a.get(ref)?.metrics?.unread).toBe(1);
+
+    await updateMap(project, workId, (_map, letters) => {
+      letters.markRead(ref.sessionId, [letterId], new Date().toISOString());
+    });
+    expect(a.get(ref)?.metrics?.unread).toBe(0);
+    expect(worksChanged()).toBe(before);
+  }, 20_000);
+
   it('6: автозаголовок применяется один раз, переименованную вручную не трогает', async () => {
     const { ref, workId } = await activeSession({ label: NEW_LABEL, providerSessionId: 's-title' });
     await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
