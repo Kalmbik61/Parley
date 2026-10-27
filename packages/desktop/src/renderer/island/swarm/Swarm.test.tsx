@@ -147,6 +147,21 @@ describe('Swarm', () => {
     expect(flash).toBeLessThanOrEqual(12); // 300 мс при 30 к/с
   });
 
+  it('reducedMotion (настройка Parley «Reduce motion») — как системная: без цикла в покое, pulse — только вспышка', () => {
+    const { draws, tick, setClock } = fakeLoop(false);
+    setClock(1000);
+    const { rerender } = render(<Swarm spec={THINKING} souls={20} width={28} height={28} d={17} cy={14} fps={30} reducedMotion />);
+    tick(1000, 3000);
+    const still = draws();
+    expect(still).toBeLessThanOrEqual(2);
+    setClock(3000);
+    rerender(<Swarm spec={THINKING} souls={20} width={28} height={28} d={17} cy={14} fps={30} reducedMotion pulse={{ reaction: 'hop', at: 3000 }} />);
+    tick(3000, 6000);
+    const flash = draws() - still;
+    expect(flash).toBeGreaterThan(5);
+    expect(flash).toBeLessThanOrEqual(12);
+  });
+
   it('размонтирование не оставляет цикла кадров', () => {
     const cancel = vi.spyOn(window, 'cancelAnimationFrame');
     const ctx = {

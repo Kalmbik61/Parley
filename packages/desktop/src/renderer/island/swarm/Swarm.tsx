@@ -29,6 +29,8 @@ export interface SwarmProps {
   voice?: () => VoiceFrame | null;
   /** Одноразовая реакция: новое `at` запускает её, тот же `at` повторно ничего не делает. */
   pulse?: SwarmPulse | null;
+  /** Настройка Parley «Reduce motion» (`motion: 'reduce'`): действует как системная, вдобавок к ней. */
+  reducedMotion?: boolean;
   className?: string;
 }
 
@@ -41,8 +43,9 @@ export function Swarm(props: SwarmProps): JSX.Element {
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const mqlRef = useRef<MediaQueryList | null>(null);
   // Цикл кадров читает свежие `fps`, `mic` и `voice` отсюда, не пересоздаваясь.
-  const live = useRef({ fps: props.fps, mic: props.mic ?? 0, voice: props.voice });
-  live.current = { fps: props.fps, mic: props.mic ?? 0, voice: props.voice };
+  const live = useRef({ fps: props.fps, mic: props.mic ?? 0, voice: props.voice, forced: props.reducedMotion === true });
+  live.current = { fps: props.fps, mic: props.mic ?? 0, voice: props.voice, forced: props.reducedMotion === true };
+  const isReduced = (): boolean => live.current.forced || mqlRef.current?.matches === true;
   if (engineRef.current === null) {
     engineRef.current = createSwarm(souls, {
       width,
@@ -70,7 +73,7 @@ export function Swarm(props: SwarmProps): JSX.Element {
     const loop = (now: number): void => {
       raf = requestAnimationFrame(loop);
       const { fps, mic, voice } = live.current;
-      const reduced = mqlRef.current?.matches === true;
+      const reduced = isReduced();
       const interval = 1000 / (fps || 30) - 2;
       if (((fps > 0 && !reduced) || engine.needsFrame()) && now - last >= interval) {
         last = now;
@@ -84,17 +87,17 @@ export function Swarm(props: SwarmProps): JSX.Element {
   useEffect(() => {
     const engine = engineRef.current;
     if (engine === null) return;
-    const reduced = mqlRef.current?.matches === true;
+    const reduced = isReduced();
     const now = performance.now();
     engine.setSpec(spec, now, reduced);
     if (reduced) engine.frame(now, ctxRef.current, true, live.current.mic);
-  }, [spec]);
+  }, [spec, props.reducedMotion]);
 
   const pulse = props.pulse ?? null;
   useEffect(() => {
     const engine = engineRef.current;
     if (engine === null || pulse === null) return;
-    engine.react(pulse.reaction, pulse.at, performance.now(), mqlRef.current?.matches === true);
+    engine.react(pulse.reaction, pulse.at, performance.now(), isReduced());
     // Реакцию задаёт пара «вид, время»: новый объект с тем же `at` — та же реакция.
   }, [pulse?.reaction, pulse?.at]);
 
