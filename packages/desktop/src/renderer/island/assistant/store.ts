@@ -51,6 +51,8 @@ export const SENT_DELAY_MS = 900;
  * Голос не зазвучал за это время после конца ответа (движок греется или завис) — ответ остаётся текстом без лица.
  * Тёплый перезапуск worker (около 1,5 с) укладывается, холодная компиляция шейдеров (около 15 с) — нет.
  */
+/** Сколько ждать кусок `final` после ответа `speak`, прежде чем считать предложение кончившимся. */
+export const SPEAK_FINAL_GRACE_MS = 1000;
 export const SPEECH_START_TIMEOUT_MS = 10_000;
 /** Окно анализатора шины голоса (`sound/graph.ts`): fftSize 2048, спектр — половина. */
 const FFT_SIZE = 2048;
@@ -244,7 +246,12 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       current.sentences.set(utteranceId, { ...sentence, done: false });
       speech.speaker.expect(utteranceId);
       const ended = (): void => sentenceEnded(current, utteranceId);
-      speech.api.speak({ utteranceId, text: sentence.text, voice: settings.voice, language: deps!.config().language }).then(ended, ended);
+      // Конец предложения — кусок `final` с порта. Ответ `speak` идёт другой трубой IPC и может обогнать последние
+      // куски, поэтому он кончает предложение только после паузы — на случай, если `final` так и не пришёл
+      // (критик m-1481). Отказ кончает сразу.
+      speech.api
+        .speak({ utteranceId, text: sentence.text, voice: settings.voice, language: deps!.config().language })
+        .then(() => void setTimeout(ended, SPEAK_FINAL_GRACE_MS), ended);
     };
     /** Предложение кончилось: последний кусок, ответ `speak` или отказ — смотря что раньше. */
     const sentenceEnded = (current: Talk, utteranceId: string): void => {

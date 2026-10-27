@@ -3,7 +3,7 @@ import type { AssistantLanguage } from '@parley/core/assistant';
 import type { AssistantState } from '@parley/protocol';
 import type { IslandSpeakRequest, IslandSpeechConfig, TtsEngineState } from '../../../shared/island.js';
 import type { Speaker } from './speaker.js';
-import { assistantBusy, createAssistantStore, HOST_IDLE, SENT_DELAY_MS, SETTLE_MS, SPEECH_START_TIMEOUT_MS, type AssistantDeps } from './store.js';
+import { assistantBusy, createAssistantStore, HOST_IDLE, SENT_DELAY_MS, SETTLE_MS, SPEAK_FINAL_GRACE_MS, SPEECH_START_TIMEOUT_MS, type AssistantDeps } from './store.js';
 import type { VoiceAnalysis, VoiceFrame } from './voice-features.js';
 
 const CONFIG = {
@@ -503,6 +503,7 @@ describe('стор помощника: речь (план 3b B22)', () => {
   });
 
   it('предложение, все попытки которого выброшены, всё равно кончается — по ответу speak, без onIdle', async () => {
+    vi.useFakeTimers();
     const t = speechSetup();
     const [first, second] = spokenTurn(t);
     t.chunk(first, 0);
@@ -512,6 +513,28 @@ describe('стор помощника: речь (план 3b B22)', () => {
     t.idle();
     expect(t.store.getState().input).toBe('speaking');
     await t.resolve(second);
+    // Ответ `speak` кончает предложение только после паузы на `final` (критик m-1481).
+    expect(t.store.getState().input).toBe('speaking');
+    vi.advanceTimersByTime(SPEAK_FINAL_GRACE_MS);
+    expect(t.store.getState().input).toBe('settling');
+  });
+
+  it('ответ speak обогнал последние куски по IPC: они всё равно играют, потом Done (критик m-1481, F4)', async () => {
+    vi.useFakeTimers();
+    const t = speechSetup();
+    const [first, second] = spokenTurn(t);
+    t.chunk(first, 0);
+    t.start(first);
+    t.chunk(first, 1, true);
+    await t.resolve(first);
+    t.idle();
+    await t.resolve(second);
+    expect(t.store.getState().input).toBe('speaking');
+    t.chunk(second, 0);
+    t.chunk(second, 1, true);
+    expect(t.enqueued()).toEqual([[first, 0], [second, 0]]);
+    t.start(second);
+    t.idle();
     expect(t.store.getState().input).toBe('settling');
   });
 
