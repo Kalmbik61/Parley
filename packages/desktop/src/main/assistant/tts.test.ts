@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ttsAvailable } from '../../shared/island.js';
 import { TTS_VOICES, type TtsModelId } from '../../shared/tts-types.js';
 import type { ModelStore } from '../voice/models.js';
 import {
@@ -559,14 +560,25 @@ function realService(launches: Launch[], models = fakeModels()) {
 }
 
 describe('createTtsService: unavailable клиента B05 липкий — новый клиент только после временного сбоя или скачивания (m-1448)', () => {
-  it.each<Launch>(['spawn-error', 'exit'])('временный сбой (%s): следующий прогрев создаёт новый клиент и доходит до ready', async (launch) => {
+  it.each<Launch>(['spawn-error', 'exit'])('временный сбой (%s): голос остаётся доступным, следующий запуск — новый клиент и ready', async (launch) => {
     const { tts, createWorker, spawns } = realService([launch, 'ready']);
     await tts.warmup();
-    expect(tts.state()).toMatchObject({ state: 'unavailable' });
+    expect(tts.state()).toEqual({ state: 'ready' });
+    expect(ttsAvailable(tts.state())).toBe(true);
     await tts.warmup();
     expect(tts.state()).toEqual({ state: 'ready' });
     expect(createWorker).toHaveBeenCalledTimes(2);
     expect(spawns()).toBe(2);
+    tts.stop();
+  });
+
+  it('временный сбой при прогреве: следующий speak сам запускает новый клиент (критик m-1463, F2)', async () => {
+    const { tts, createWorker } = realService(['exit', 'ready']);
+    await tts.warmup();
+    expect(ttsAvailable(tts.state())).toBe(true);
+    void tts.speak(request(), () => undefined);
+    await flush();
+    expect(createWorker).toHaveBeenCalledTimes(2);
     tts.stop();
   });
 

@@ -214,8 +214,10 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
     if (worker === target && status.state === 'unavailable') {
       failure = status.reason;
       if (TRANSIENT.test(status.reason) && transientRetries < MAX_TRANSIENT_RETRIES) {
+        // Повтор ещё есть: голос считается доступным, следующий `speak` запустит новый клиент (критик m-1463).
         transientRetries += 1;
         worker = null;
+        failure = null;
       }
     }
     notify();
