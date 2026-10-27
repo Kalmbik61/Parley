@@ -49,7 +49,6 @@ export interface IslandIpcOptions {
   /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
   keyboard(on: boolean): void;
   openTarget(target: FocusTarget): void;
-  beep(): void;
   /** Clear на острове: сессии просмотрены — хосту уходит `activity.seen` по каждой (список уже проверен). */
   markSeen(refs: SessionRef[]): void;
   /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
@@ -160,9 +159,6 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   });
   ipcMain.on('island:open', (event, target: unknown) => {
     if (fromIsland(event) && isFocusTarget(target)) options.openTarget(target);
-  });
-  ipcMain.on('island:beep', (event) => {
-    if (fromIsland(event)) options.beep();
   });
   ipcMain.on('island:mark-seen', (event, refs: unknown) => {
     if (!fromIsland(event)) return;

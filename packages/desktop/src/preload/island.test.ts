@@ -73,7 +73,7 @@ describe('preload острова', () => {
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
-        'beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
+        'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
         'onHover', 'onNavigatePending', 'onVisibility', 'visibility', 'open', 'setHitRect', 'setVisible', 'speech', 'voice',
       ].sort(),
     );
@@ -115,13 +115,11 @@ describe('preload острова', () => {
     bridge.island.setHitRect(null);
     bridge.island.setVisible(true);
     bridge.island.dragEnd({ screenX: 1, screenY: 2 });
-    bridge.island.beep();
     expect(send.mock.calls).toEqual([
       ['island:hit-rect', { x: 100, y: 0, width: 280, height: 40 }],
       ['island:hit-rect', null],
       ['island:visible', true],
       ['island:drag-end', { screenX: 1, screenY: 2 }],
-      ['island:beep'],
     ]);
     void bridge.island.config();
     expect(invoke).toHaveBeenCalledWith('island:config');

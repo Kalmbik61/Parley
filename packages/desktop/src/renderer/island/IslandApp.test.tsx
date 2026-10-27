@@ -14,6 +14,8 @@
  * Карточки согласия на папку: начальный `consents.list` и событие `consents.changed` показывают карточку раньше запросов
  * ленты, она выдвигает остров и звучит один раз, не даёт острову убраться в покое, Trust уходит в `consents.decide`.
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
+ * Звук (#9 T4): исходы показа идут в `useIslandCues`, граф окна подменён (`played()` — что он сыграл), политика
+ * сигналов настоящая и считает остывание по `Date.now`; `island:beep` нет.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -33,6 +35,31 @@ import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
+import { CUE_COOLDOWN_MS, CUE_GAP_MS } from './sound/cues.js';
+import { islandSound } from './sound/graph.js';
+
+vi.mock('./sound/graph.js', () => ({
+  islandSound: { graph: vi.fn(() => null), play: vi.fn(), setVolume: vi.fn(), setPalette: vi.fn(), duckVoice: vi.fn() },
+}));
+
+/** Что сыграл граф острова: виды сигналов по порядку. */
+const played = (): string[] => vi.mocked(islandSound.play).mock.calls.map(([kind]) => kind);
+/** Подмена `Date.now` для `skipCooldown`; снимается после теста. */
+let clock: { mockRestore(): void } | null = null;
+/**
+ * На настоящих таймерах: часы политики сигналов уходят вперёд за остывание вида (#9 §3.5), следующий сигнал того же
+ * вида звучит, а не сливается с прошлым.
+ */
+function skipCooldown(): void {
+  const now = Date.now.bind(Date);
+  clock?.mockRestore();
+  const shift = CUE_COOLDOWN_MS.done!;
+  clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + shift);
+}
+/** На поддельных таймерах: время остывания вида проходит. */
+async function waitCooldown(): Promise<void> {
+  await act(async () => { await vi.advanceTimersByTimeAsync(CUE_COOLDOWN_MS.done!); });
+}
 
 const PROJECT = '/tmp/proj';
 const ref = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-1', sessionId });
@@ -84,7 +111,7 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
     onConfig: vi.fn(() => () => undefined),
     visibility: vi.fn(async () => ({ version: 0, refs: [] })),
     onVisibility: vi.fn(() => () => undefined),
-    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(),
     onAssistantOpen: vi.fn(() => () => undefined),
     onNavigatePending: vi.fn((listener: () => void) => { pendingNavigationHandler = listener; return () => { pendingNavigationHandler = null; }; }),
@@ -172,6 +199,7 @@ const expand = (): void => {
 };
 
 beforeEach(() => {
+  vi.mocked(islandSound.play).mockClear();
   resizeCallbacks = [];
   observed = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
@@ -185,6 +213,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clock?.mockRestore();
+  clock = null;
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -277,7 +307,7 @@ describe('проводка острова', () => {
     };
     await update();
     expect(isRetracted()).toBe(false);
-    expect(island.beep).toHaveBeenCalledOnce();
+    expect(played()).toEqual(['question']);
     hover(true);
     expect(screen.getByText('Lead: S02 b')).toBeTruthy();
     expect(document.body.textContent).not.toContain('SECRET');
@@ -285,12 +315,14 @@ describe('проводка острова', () => {
     expect(island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
     tuck(hover); await update();
     expect(isRetracted()).toBe(true);
-    expect(island.beep).toHaveBeenCalledOnce();
+    expect(played()).toEqual(['question']);
+    await waitCooldown();
     await update([proposalWork(2)]);
     expect(isRetracted()).toBe(false);
-    expect(island.beep).toHaveBeenCalledTimes(2);
+    expect(played()).toEqual(['question', 'question']);
+    await waitCooldown();
     await update([proposalWork(2), proposalWork(2, '/other/proj')]);
-    expect(island.beep).toHaveBeenCalledTimes(3);
+    expect(played()).toEqual(['question', 'question', 'question']);
     await update(ENTRIES);
     expect(screen.queryByRole('button', { name: 'Open room' })).toBeNull();
     expect(fake.calls.filter((call) => /resolveProposal|resumeAutonomous|feed.decide/.test(call.method))).toEqual([]);
@@ -364,19 +396,20 @@ describe('проводка острова', () => {
     blocked('s-03');
     expect(await screen.findByTitle('Codex needs your attention in the terminal')).toBeTruthy();
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     expect(screen.queryByTestId('island-allow')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
     expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-03') });
     blocked('s-03');
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     working('s-03');
     await waitFor(() => expect(screen.queryByTestId('island-card')).toBeNull());
     tuck(hover);
+    skipCooldown();
     blocked('s-03');
     await screen.findByTitle('Codex needs your attention in the terminal');
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(2);
+    expect(played()).toEqual(['permission', 'permission']);
   });
 
   it('новый запрос выбирается в карточке: прежний на экране не остаётся', async () => {
@@ -914,6 +947,19 @@ describe('движение формы', () => {
 });
 
 describe('язычок убранного острова', () => {
+  it.each([[true, ['open', 'hover', 'close']], [false, []]])('«Interface sounds» %s: язычок — open, наведение — hover, стрелка ⌃ — close', async (ui, expected) => {
+    vi.useFakeTimers();
+    const { bridge, hover } = setup({ islandSound: { ...SOUND_OFF, ui } });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(isRetracted()).toBe(true);
+    expand();
+    await act(async () => { await vi.advanceTimersByTimeAsync(CUE_GAP_MS); });
+    tuck(hover);
+    expect(isRetracted()).toBe(true);
+    expect(played()).toEqual(expected);
+  });
+
   it('в покое при открытии остров убран: форма сжата в брусок, прозрачная зона «Show the island» поверх неё', () => {
     const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
@@ -1534,7 +1580,8 @@ describe('QuestionForm — настоящая проводка острова', 
     const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
     const selected = useIslandRequests.getState().selectedKey;
     const input = other();
-    vi.mocked(state.island.beep).mockClear(); vi.mocked(state.island.keyboard).mockClear();
+    await waitCooldown();
+    vi.mocked(islandSound.play).mockClear(); vi.mocked(state.island.keyboard).mockClear();
     act(() => state.fake.emit('works.changed', { entries: [proposalWork()], branches: {} })); await settle();
     expect(useIslandRequests.getState().selectedKey).toBe(selected);
     expect(useIslandRequests.getState().items).toHaveLength(1);
@@ -1543,7 +1590,7 @@ describe('QuestionForm — настоящая проводка острова', 
     expect(other().value).toBe('  Custom answer  ');
     expect(document.activeElement).toBe(input);
     expect(state.island.keyboard).not.toHaveBeenCalled();
-    expect(state.island.beep).toHaveBeenCalledOnce();
+    expect(played()).toEqual(['question']);
     expect(document.body.textContent).not.toContain('SECRET');
     fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
     expect(state.island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
@@ -1554,7 +1601,8 @@ describe('QuestionForm — настоящая проводка острова', 
   it.each(['blur', 'retract', 'blur and retract'])('new pending after %s preserves selected question, draft and page; still expands and sounds', async (mode) => {
     const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
     const selected = useIslandRequests.getState().selectedKey;
-    vi.mocked(state.island.beep).mockClear();
+    await waitCooldown();
+    vi.mocked(islandSound.play).mockClear();
     if (mode.includes('blur')) state.assistantBlur();
     if (mode.includes('retract')) tuck(state.hover);
     expect(document.activeElement).not.toBe(screen.queryByRole('textbox'));
@@ -1566,7 +1614,7 @@ describe('QuestionForm — настоящая проводка острова', 
     expect(screen.getByText(/^[12] of 2$/)).toBeTruthy();
     expect(screen.getByText('Question 3 of 3')).toBeTruthy();
     expect(other().value).toBe('  Custom answer  ');
-    expect(state.island.beep).toHaveBeenCalledOnce();
+    expect(played()).toEqual(['permission']);
     expect(state.island.keyboard).not.toHaveBeenCalled();
   });
 
@@ -1574,14 +1622,15 @@ describe('QuestionForm — настоящая проводка острова', 
     const state = await mount('window', { islandSound: SOUND_ON });
     const selected = useIslandRequests.getState().selectedKey;
     tuck(state.hover);
-    vi.mocked(state.island.keyboard).mockClear(); vi.mocked(state.island.beep).mockClear();
+    await waitCooldown();
+    vi.mocked(state.island.keyboard).mockClear(); vi.mocked(islandSound.play).mockClear();
     state.blocked('s-02'); await settle();
     expect(useIslandRequests.getState().selectedKey).toBe(selected);
     expect(screen.getByText('Question 1 of 3')).toBeTruthy();
     expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
     expect(useIslandRequests.getState().items).toHaveLength(2);
     expect(state.island.keyboard).not.toHaveBeenCalled();
-    expect(state.island.beep).toHaveBeenCalledOnce();
+    expect(played()).toEqual(['permission']);
     await state.update(null);
     expect(useIslandRequests.getState().selectedKey).not.toBe(selected);
     expect(screen.getByTestId('island-allow')).toBeTruthy();
@@ -1690,7 +1739,7 @@ describe('Done на острове', () => {
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab').textContent).toContain('1');
     expect(island.markSeen).not.toHaveBeenCalled();
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
     act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 2, refs: [] }));
     expect(isRetracted()).toBe(true);
     act(() => seedDone(FRESHER, entries));
@@ -1770,15 +1819,38 @@ describe('Done на острове', () => {
     hover(false);
   });
 
-  it('выдвигает без звука, даже если Sound включён', async () => {
-    const { island, bridge } = setup({ islandSound: SOUND_ON });
+  it('выдвигает без звука, если включён только «Sound when you’re needed»', async () => {
+    const { bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => {
       await Promise.resolve();
     });
     act(() => seedDone(FRESH));
     expect(isRetracted()).toBe(false);
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
+  });
+
+  it('S2: с «Sound when an agent finishes» выдвинутый Done звучит done один раз', async () => {
+    const { bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+    expect(played()).toEqual(['done']);
+    act(() => seedDone(FRESH));
+    expect(played()).toEqual(['done']);
+  });
+
+  it('S2: тихий Done (сессия видна в окне) молчит и с «Sound when an agent finishes», остров не выдвигает', async () => {
+    const { bridge, island } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(true);
+    expect(played()).toEqual([]);
   });
 
   it('Done застали готовым (конец хода до подключения) — остров не выдвигается, убранный выглядывает «✅ 1», в список строка попадает', () => {
@@ -2199,35 +2271,36 @@ describe('согласия на папку', () => {
   });
 
   it('новая карточка выдвигает убранный остров и звучит один раз; повтор той же и решённая — без звука', async () => {
-    const { island, fake, bridge } = setup({ islandSound: SOUND_ON });
+    const { fake, bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     expect(isRetracted()).toBe(true);
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     act(() => fake.emit('consents.changed', { upsert: [{ ...CONSENT, folder: '/tmp/proj' }], removed: [] }));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
+    skipCooldown();
     act(() => fake.emit('consents.changed', { upsert: [SECOND], removed: [] }));
-    await waitFor(() => expect(island.beep).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(played()).toEqual(['permission', 'permission']));
   });
 
   it('без Sound карточка выдвигает остров молча', async () => {
-    const { island, fake, bridge } = setup({ islandSound: SOUND_OFF });
+    const { fake, bridge } = setup({ islandSound: SOUND_OFF });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
   });
 
-  it('beep читает islandSound.needs: «Sound when an agent finishes» без «Sound when you’re needed» карточку не озвучивает', async () => {
-    const { island, fake, bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+  it('звук карточки читает islandSound.needs: «Sound when an agent finishes» без «Sound when you’re needed» карточку не озвучивает', async () => {
+    const { fake, bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
   });
 
   it('согласие раньше запроса ленты: запрос ждёт, пока карточку не закроют', async () => {
