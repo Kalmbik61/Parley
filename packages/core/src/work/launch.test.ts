@@ -1338,6 +1338,87 @@ describe('переходы статусов', () => {
   });
 });
 
+describe('private Codex launch proof lifecycle', () => {
+  const revision = '12345678-1234-1234-1234-123456789abc';
+  const nextRevision = '22345678-1234-1234-1234-123456789abc';
+  const threadId = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
+  const process = { pid: 42, startedAtProcess: 'exact-process-A', launchedBy: 'host' as const };
+
+  async function proven() {
+    const ids = await pending('codex');
+    await startSession(project, ids.workId, ids.sessionId, threadId, process, revision);
+    await updateMap(project, ids.workId, (map) => {
+      Object.assign(map.sessions[0]!, { codexThreadBinding: { launchRevision: revision, pid: process.pid, startedAtProcess: process.startedAtProcess, threadId } });
+    });
+    return ids;
+  }
+
+  it('creates unverified identity from the real launch env while the skill navigator is disabled', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.env.PARLEY_SKILL_NAVIGATOR).toBe('0');
+    const launchRevision = plan.env.PARLEY_NATIVE_CONTEXT_REVISION;
+    expect(launchRevision).toMatch(/^[a-f0-9-]{36}$/);
+    await startSession(project, workId, sessionId, null, process, launchRevision);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual({
+      launchRevision, pid: 42, startedAtProcess: process.startedAtProcess, threadId: null,
+    });
+  });
+
+  it('preserves exact same-launch retries and same-process repairs without inventing trust', async () => {
+    const { workId, sessionId } = await proven();
+    const before = (await sessionOf(workId, sessionId)).codexThreadBinding;
+    await startSession(project, workId, sessionId, null, process, revision);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual(before);
+    await startSession(project, workId, sessionId, null, process);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual(before);
+  });
+
+  it('resets proof for a new launch UUID even when thread and process values match', async () => {
+    const { workId, sessionId } = await proven();
+    await startSession(project, workId, sessionId, null, process, nextRevision);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual({
+      launchRevision: nextRevision, pid: 42, startedAtProcess: process.startedAtProcess, threadId: null,
+    });
+  });
+
+  it.each([
+    { revision, process: { ...process, pid: 43 } },
+    { revision, process: { ...process, startedAtProcess: 'process-B' } },
+    { revision: undefined, process: { ...process, pid: 43 } },
+    { revision: undefined, process: { ...process, startedAtProcess: 'process-B' } },
+  ])('drops evidence on a different process with unchanged/missing launch UUID: %j', async (input) => {
+    const { workId, sessionId } = await proven();
+    await startSession(project, workId, sessionId, null, input.process, input.revision);
+    expect(await sessionOf(workId, sessionId)).not.toHaveProperty('codexThreadBinding');
+  });
+
+  it('does not retain old proof when a launch supplies an invalid UUID or incomplete process', async () => {
+    const { workId, sessionId } = await proven();
+    await startSession(project, workId, sessionId, null, process, 'invalid');
+    expect(await sessionOf(workId, sessionId)).not.toHaveProperty('codexThreadBinding');
+    const second = await proven();
+    await startSession(project, second.workId, second.sessionId, null, { ...process, startedAtProcess: null });
+    expect(await sessionOf(second.workId, second.sessionId)).not.toHaveProperty('codexThreadBinding');
+  });
+
+  it.each([
+    { revision: undefined, process }, { revision: 'invalid', process },
+    { revision, process: { ...process, startedAtProcess: null } },
+    { revision, process: { ...process, pid: 0 } },
+  ])('does not create evidence without a valid launch UUID and complete process', async (input) => {
+    const { workId, sessionId } = await pending('codex');
+    await startSession(project, workId, sessionId, null, input.process, input.revision);
+    expect(await sessionOf(workId, sessionId)).not.toHaveProperty('codexThreadBinding');
+  });
+
+  it('does not create Codex proof for Claude', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await startSession(project, workId, sessionId, null, process, revision);
+    expect(await sessionOf(workId, sessionId)).not.toHaveProperty('codexThreadBinding');
+  });
+});
+
 describe('привязка к логу провайдера без внешнего id', () => {
   /** Rollout-лог Codex: тот же формат, что читает адаптер core. */
   const writeRollout = async (id: string, cwd: string, at: string): Promise<void> => {
@@ -1351,6 +1432,18 @@ describe('привязка к логу провайдера без внешне�
       .join('');
     await writeFile(path.join(dir, `rollout-2026-09-02T10-00-00-${id}.jsonl`), lines);
   };
+
+  it('fallback Codex link demotes proof while preserving launch/process identity', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const proof = { launchRevision: '12345678-1234-1234-1234-123456789abc', pid: 42,
+      startedAtProcess: 'exact-process', threadId: '019ce3d5-584a-7be2-922e-b8185a8d7c19' };
+    await startSession(project, workId, sessionId, null);
+    await updateMap(project, workId, (map) => { Object.assign(map.sessions[0]!, { codexThreadBinding: proof }); });
+    const session = await sessionOf(workId, sessionId);
+    await writeRollout(proof.threadId, project, session.startedAt!);
+    expect(await linkSession(project, workId, session, { codexRoot: logs })).toBe(proof.threadId);
+    expect((await sessionOf(workId, sessionId)).codexThreadBinding).toEqual({ ...proof, threadId: null });
+  });
 
   it('codex-сессия получает providerSessionId по cwd и времени запуска', async () => {
     const { workId, sessionId } = await pending('codex');

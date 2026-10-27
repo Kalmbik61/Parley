@@ -89,6 +89,15 @@ export interface WorktreeInfo {
   createdAt: string | null;
 }
 
+/** Приватное evidence запуска Codex: не входит в agent/public works/island projections. */
+export interface CodexThreadBinding {
+  launchRevision: string;
+  pid: number;
+  startedAtProcess: string;
+  /** null — launch/fallback ещё не подтверждён root MCP вызовом. */
+  threadId: string | null;
+}
+
 export interface WorkSession {
   id: string;
   /** Explicit personal steps, published by this session; separate from accepted room assignments. */
@@ -127,6 +136,7 @@ export interface WorkSession {
   launchedBy: LaunchedBy | null;
   /** Id сессии у провайдера: для Claude — uuid jsonl-файла. */
   providerSessionId: string | null;
+  codexThreadBinding?: CodexThreadBinding;
   metrics: SessionMetrics | null;
   summary: string | null;
   summarySource: SummarySource | null;

@@ -10,10 +10,12 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addSession } from '../work/map.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { addSession, transitionSession } from '../work/map.js';
+import { startSession } from '../work/launch.js';
+import * as workStore from '../work/store.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import { createParleyServer } from './tools.js';
+import { createParleyServer, createToolRunner } from './tools.js';
 
 const THREAD = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
 const OTHER_THREAD = '019ce3d5-9999-7be2-922e-b8185a8d7c00';
@@ -24,7 +26,7 @@ let project = '';
 let workId = '';
 const opened: Array<{ client: Client; server: Server }> = [];
 
-async function connect(sessionId: string | null): Promise<Client> {
+async function connect(sessionId: string | null, nativeContextRevision?: string): Promise<Client> {
   const server = createParleyServer({
     projectPath: project,
     workId,
@@ -32,6 +34,7 @@ async function connect(sessionId: string | null): Promise<Client> {
     sessionId,
     pollMs: 40,
     channel: false,
+    ...(nativeContextRevision === undefined ? {} : { nativeContextRevision }),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'codex-test', version: '0.0.0' });
@@ -67,6 +70,141 @@ afterEach(async () => {
   }
   delete process.env['PARLEY_HOME'];
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe('authoritative Codex thread proof', () => {
+  const revision = '12345678-1234-1234-1234-123456789abc';
+  const nextRevision = '22345678-1234-1234-1234-123456789abc';
+  const process = { pid: 42, startedAtProcess: 'exact-process-A', launchedBy: 'host' as const };
+  const session = async () => (await readMap(project, workId)).sessions[0]!;
+  const started = () => startSession(project, workId, 's-01', null, process, revision);
+
+  it('writes raw binding and proof atomically using the captured launch/process', async () => {
+    await started();
+    const client = await connect('s-01', revision);
+    const update = vi.spyOn(workStore, 'updateMap');
+    try {
+      await call(client, { threadId: THREAD, sessionId: THREAD });
+      expect(update).toHaveBeenCalledOnce();
+      expect(await session()).toMatchObject({ providerSessionId: THREAD, codexThreadBinding: {
+        launchRevision: revision, pid: 42, startedAtProcess: process.startedAtProcess, threadId: THREAD,
+      } });
+    } finally { update.mockRestore(); }
+  });
+
+  it('enforces the same independent root proof through the shared remote ToolRunner adapter', async () => {
+    await started();
+    const runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir,
+      sessionId: 's-01', pollMs: 40, channel: false, skillNavigator: false, nativeContextRevision: revision });
+    await runner.call('get_map', {}, { threadId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+    expect((await session()).codexThreadBinding?.threadId).toBeNull();
+    await runner.call('get_map', {}, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('does not skip same-thread fallback proof and preserves once semantics after proof succeeds', async () => {
+    await started();
+    await updateMap(project, workId, (map) => { map.sessions[0]!.providerSessionId = THREAD; });
+    const client = await connect('s-01', revision);
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+    const before = (await stat(workPaths(project, workId).map)).mtimeMs;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await call(client, { threadId: OTHER_THREAD, sessionId: OTHER_THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+    expect((await stat(workPaths(project, workId).map)).mtimeMs).toBe(before);
+  });
+
+  it('keeps raw and proof latches independent when the first call has threadId only', async () => {
+    await started();
+    const client = await connect('s-01', revision);
+    await call(client, { threadId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+    expect((await session()).codexThreadBinding?.threadId).toBeNull();
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it.each([undefined, 'invalid', OTHER_THREAD])('requires a valid root marker equal to the current thread: %s', async (root) => {
+    await started();
+    const client = await connect('s-01', revision);
+    await call(client, { threadId: THREAD, ...(root === undefined ? {} : { sessionId: root }) });
+    expect((await session()).codexThreadBinding?.threadId).toBeNull();
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('normalizes both root UUIDs to canonical lowercase before equality', async () => {
+    await started();
+    const client = await connect('s-01', revision);
+    await call(client, { threadId: THREAD.toUpperCase(), sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('retries an early qualifying root on a later call without replacing the captured root', async () => {
+    const client = await connect('s-01', revision);
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding).toBeUndefined();
+    await started();
+    await call(client, { threadId: OTHER_THREAD, sessionId: OTHER_THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('rejects an old pending MCP writer after a newer launch, even on the same thread', async () => {
+    const oldClient = await connect('s-01', revision);
+    await call(oldClient, { threadId: THREAD, sessionId: THREAD });
+    await startSession(project, workId, 's-01', null, process, nextRevision);
+    await call(oldClient, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding).toMatchObject({ launchRevision: nextRevision, threadId: null });
+    const newClient = await connect('s-01', nextRevision);
+    await call(newClient, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('checks launch identity inside the map lock after an older writer was delayed', async () => {
+    await started();
+    await updateMap(project, workId, (map) => { map.sessions[0]!.providerSessionId = THREAD; });
+    const client = await connect('s-01', revision);
+    let entered!: () => void;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const original = workStore.updateMap;
+    let first = true;
+    const update = vi.spyOn(workStore, 'updateMap').mockImplementation(async (...args) => {
+      if (first) { first = false; entered(); await gate; }
+      return original(...args);
+    });
+    try {
+      const pending = call(client, { threadId: THREAD, sessionId: THREAD });
+      await waiting;
+      await startSession(project, workId, 's-01', null, process, nextRevision);
+      release();
+      await pending;
+      expect((await session()).codexThreadBinding).toMatchObject({ launchRevision: nextRevision, threadId: null });
+    } finally { release(); update.mockRestore(); }
+  });
+
+  it('allows a delayed proof after stop for the same retained complete process tuple', async () => {
+    await started();
+    const client = await connect('s-01', revision);
+    await updateMap(project, workId, (map) => { transitionSession(map, 's-01', 'sleeping'); });
+    await call(client, { threadId: THREAD, sessionId: THREAD });
+    expect((await session()).codexThreadBinding?.threadId).toBe(THREAD);
+  });
+
+  it('rejects a mismatched process tuple and missing/invalid launch UUID without breaking raw binding', async () => {
+    await started();
+    await updateMap(project, workId, (map) => { map.sessions[0]!.pid = 43; });
+    for (const launch of [revision, undefined, 'invalid']) {
+      const client = await connect('s-01', launch);
+      await call(client, { threadId: THREAD, sessionId: THREAD });
+      expect(await providerSessionId('s-01')).toBe(THREAD);
+      expect((await session()).codexThreadBinding?.threadId).toBeNull();
+    }
+  });
 });
 
 describe('_meta.threadId → providerSessionId', () => {

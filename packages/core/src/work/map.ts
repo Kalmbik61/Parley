@@ -6,6 +6,7 @@ import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import type {
+  CodexThreadBinding,
   HistoryEntry,
   Message,
   MessageKind,
@@ -295,6 +296,22 @@ export function setResult(
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const BINDING_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Строгая форма private evidence; malformed optional field не ломает чтение самой сессии. */
+export function isCodexThreadBinding(value: unknown): value is CodexThreadBinding {
+  return isRecord(value) && Object.keys(value).length === 4 &&
+    Object.keys(value).every((key) => ['launchRevision', 'pid', 'startedAtProcess', 'threadId'].includes(key)) &&
+    typeof value.launchRevision === 'string' && BINDING_UUID.test(value.launchRevision) &&
+    typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0 &&
+    typeof value.startedAtProcess === 'string' && value.startedAtProcess.length >= 1 && value.startedAtProcess.length <= 64 &&
+    !Array.from(value.startedAtProcess).some((char) => {
+      const code = char.charCodeAt(0);
+      return code < 32 || (code >= 127 && code <= 159);
+    }) &&
+    (value.threadId === null || (typeof value.threadId === 'string' && BINDING_UUID.test(value.threadId)));
+}
 
 /**
  * Статус `idle` удалён из жизненного цикла 2026-09-05 (дизайн TUI v2, раздел 9):
@@ -614,6 +631,7 @@ function migrateSession(session: Record<string, unknown>): void {
   session['pid'] ??= null;
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
+  if (session['provider'] !== 'codex' || !isCodexThreadBinding(session['codexThreadBinding'])) delete session['codexThreadBinding'];
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
   if (!Object.hasOwn(session, 'role')) {
     session['role'] = typeof session['agent'] === 'string' && session['agent'] !== ''

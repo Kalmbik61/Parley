@@ -36,6 +36,20 @@ import {
   writeSharedFile,
 } from './store.js';
 
+it('preserves private Codex launch/thread proof through cache and unrelated map writes', async () => {
+  const map = await createWork(project, { title: 'Proof roundtrip', goal: '' });
+  const proof = { launchRevision: '12345678-1234-1234-1234-123456789abc', pid: 42,
+    startedAtProcess: 'exact process stamp', threadId: '019ce3d5-584a-7be2-922e-b8185a8d7c19' };
+  await updateMap(project, map.work.id, (current) => {
+    Object.assign(addSession(current, { provider: 'codex', label: '', task: '' }), { codexThreadBinding: proof });
+  });
+  expect((await readMap(project, map.work.id)).sessions[0]?.codexThreadBinding).toEqual(proof);
+  await updateMap(project, map.work.id, (current) => { current.work.title = 'Unrelated writer'; });
+  expect((await readMap(project, map.work.id)).sessions[0]?.codexThreadBinding).toEqual(proof);
+  const stored = parseMap(await readFile(workPaths(project, map.work.id).map, 'utf8'), 'map.json');
+  expect(stored.sessions[0]?.codexThreadBinding).toEqual(proof);
+});
+
 describe('shared storage primitives', () => {
   it('compares content and modification identity, and removes unique temporary files on conflict', async () => {
     const file = path.join(project, 'shared.md'); await writeFile(file, 'Before');
