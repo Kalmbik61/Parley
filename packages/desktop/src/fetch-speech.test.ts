@@ -146,4 +146,8 @@ describe('fetch-speech (план 3b, B03, E7)', () => {
     expect(license).toContain('END OF TERMS AND CONDITIONS');
     expect(license).toContain('Copyright 2026 Alibaba Cloud');
   });
+
+  it('build/speech скрыт от git', () => {
+    expect(readFileSync(path.join(repoRoot, '.gitignore'), 'utf8')).toMatch(/^packages\/desktop\/build\/speech\/$/m);
+  });
 });
