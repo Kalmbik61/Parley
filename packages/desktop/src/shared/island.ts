@@ -99,11 +99,7 @@ export type IslandTtsMessage =
   | { type: 'discard'; utteranceId: string; fromSeq: number }
   | { type: 'state'; state: TtsEngineState };
 
-/**
- * `data` сообщения окна, с которым preload острова передаёт порт голоса в главный мир (`event.ports[0]`):
- * `contextBridge` порт не пропускает.
- */
-export const ISLAND_TTS_PORT = 'parley:island-tts-port';
+export { ISLAND_TTS_PORT } from './island-port.js';
 
 /** Нейроголос острова (план 3b, B15). */
 export interface IslandSpeechApi {

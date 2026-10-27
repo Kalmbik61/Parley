@@ -3,6 +3,8 @@
  * подписчикам, свои каналы — `island:*`. Электрон подменён так же, как в `index.test.ts`.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostStatus } from '../shared/bridge.js';
 import { ISLAND_TTS_PORT, type IslandBridge, type IslandConfig } from '../shared/island.js';
@@ -247,5 +249,19 @@ describe('preload острова', () => {
     emit('island:hover', false);
     expect(hoversOfFirst).toEqual([true]);
     expect(hoversOfSecond).toEqual([true, false]);
+  });
+});
+
+describe('preload острова в песочнице', () => {
+  /** Модули, из которых файл берёт значения (не `import type`). */
+  function valueImports(file: string): string[] {
+    const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8');
+    return [...source.matchAll(/^import\s+(?!type\s)[^'"]*from\s+'([^']+)'/gm)].map((match) => match[1]!);
+  }
+
+  it('значения — только из electron и модулей без импортов: песочница не может require пакеты npm (B25, BUG-1)', () => {
+    const imports = valueImports('./island.ts');
+    expect(imports.filter((specifier) => specifier !== 'electron')).toEqual(['../shared/island-port.js']);
+    expect(valueImports('../shared/island-port.ts')).toEqual([]);
   });
 });

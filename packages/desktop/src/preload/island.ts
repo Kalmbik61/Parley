@@ -11,17 +11,17 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
-import {
-  ISLAND_TTS_PORT,
-  type AssistantOpenRequest,
-  type IslandApi,
-  type IslandBridge,
-  type IslandConfig,
-  type IslandHitRect,
-  type IslandPoint,
-  type IslandSpeakRequest,
-  type SessionVisibilitySnapshot,
-  type TtsEngineState,
+import { ISLAND_TTS_PORT } from '../shared/island-port.js';
+import type {
+  AssistantOpenRequest,
+  IslandApi,
+  IslandBridge,
+  IslandConfig,
+  IslandHitRect,
+  IslandPoint,
+  IslandSpeakRequest,
+  SessionVisibilitySnapshot,
+  TtsEngineState,
 } from '../shared/island.js';
 import type { MicStatus, TranscribeResult } from '../shared/voice-types.js';
 
