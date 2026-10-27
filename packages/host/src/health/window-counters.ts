@@ -1,14 +1,24 @@
 import type { HealthSample } from '@parley/protocol';
 
-/** Шесть счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
+/** Одиннадцать счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
 export type WindowTally = Pick<
   HealthSample,
-  'refreshCount' | 'refreshMs' | 'mapBytesParsed' | 'ptyBytes' | 'ptyChunks' | 'recomputes'
+  | 'refreshCount'
+  | 'refreshMs'
+  | 'mapBytesParsed'
+  | 'ptyBytes'
+  | 'ptyChunks'
+  | 'recomputes'
+  | 'worksChangedEvents'
+  | 'worksChangedBytes'
+  | 'mailEvents'
+  | 'mailBytes'
+  | 'lettersOnlyRefreshes'
 >;
 
 /**
  * Счётчики окна для baseline «до/после» каскада карты. Создаётся в `host.ts` и передаётся тем сервисам, что
- * считают; читает и обнуляет их `health-service`. Своего состояния, кроме шести чисел, нет.
+ * считают; читает и обнуляет их `health-service`. Своего состояния, кроме этих чисел, нет.
  */
 export interface WindowCounters {
   /** Один проход `refresh` works-service (в том числе упавший): считается в его `finally`, `ms` — его длительность. */
@@ -19,6 +29,12 @@ export interface WindowCounters {
   pty(bytes: number): void;
   /** Один пересчёт одной сессии (будильник или активность). */
   recompute(): void;
+  /** Одна рассылка `works.changed` окнам: `bytes` — длина кадра, один раз на рассылку, не по клиентам (спека rooms.mail 6.12). */
+  worksChanged(bytes: number): void;
+  /** Одна рассылка `rooms.mail` окнам: `bytes` — длина кадра. */
+  mail(bytes: number): void;
+  /** Полный проход обновления, вызванный записью только писем: цель — ноль. */
+  lettersOnlyRefresh(): void;
   read(): WindowTally;
   reset(): void;
 }
@@ -30,6 +46,11 @@ const empty = (): WindowTally => ({
   ptyBytes: 0,
   ptyChunks: 0,
   recomputes: 0,
+  worksChangedEvents: 0,
+  worksChangedBytes: 0,
+  mailEvents: 0,
+  mailBytes: 0,
+  lettersOnlyRefreshes: 0,
 });
 
 export function createWindowCounters(): WindowCounters {
@@ -48,6 +69,17 @@ export function createWindowCounters(): WindowCounters {
     },
     recompute() {
       tally.recomputes += 1;
+    },
+    worksChanged(bytes) {
+      tally.worksChangedEvents += 1;
+      tally.worksChangedBytes += bytes;
+    },
+    mail(bytes) {
+      tally.mailEvents += 1;
+      tally.mailBytes += bytes;
+    },
+    lettersOnlyRefresh() {
+      tally.lettersOnlyRefreshes += 1;
     },
     read: () => ({ ...tally }),
     reset() {

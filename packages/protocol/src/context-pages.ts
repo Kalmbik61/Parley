@@ -10,6 +10,11 @@ import type { Message, PageInfo, TextPage } from '@parley/core';
  * сокращены, итоги и счётчики — в `map.compact`). Клиент без неё получает прежний полный снимок, пока тот влезает в кадр.
  */
 export const COMPACT_WORKS_FEATURE = 'compact-works';
+/**
+ * Возможность клиента в `hello.features`: письма работы он получает событием `rooms.mail` (письма целиком, абсолютные
+ * счётчики, отметки прочтения), а не вместе со снимком работ (спека rooms.mail 6.10). Клиент без неё получает письма в `works.changed`, как прежде.
+ */
+export const ROOMS_MAIL_FEATURE = 'rooms-mail';
 /** Предел инструкции сжатия, знаков (UTF-16): общий для хоста и окна (спека 2026-10-15, 5.3). */
 export const COMPACT_MAX_INSTRUCTIONS = 350;
 
