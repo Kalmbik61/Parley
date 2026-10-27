@@ -123,6 +123,8 @@ export interface IslandViewProps {
   onDecide(key: string, decision: FeedDecision): void;
   /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
   assistant: IslandAssistantProps | null;
+  /** Реакции мини-роя (#9 §4.1): события агентов и наведение — и без помощника; рой уха в вырезе берёт их отсюда. */
+  miniPulse?: SwarmPulse | null;
   /** Карточка согласия (держит запуск Codex): показывается раньше карточек ленты; `null` — ждущих нет. */
   consent: IslandConsentProps | null;
   progress?: { selected: SessionRef | null; state: ProgressState; onSelect(ref: SessionRef): void; onClose(): void };
@@ -594,7 +596,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
             <NotchEars
               notch={notch}
               status={earStatus(model, doneCount, assistant?.view.host.phase === 'error')}
-              swarm={{ assistant, reducedMotion: config.motion === 'reduce' }}
+              swarm={{ assistant, reducedMotion: config.motion === 'reduce', pulse: props.miniPulse ?? null }}
               onEar={setEar}
             />
           ) : retracted ? (

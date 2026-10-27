@@ -17,7 +17,7 @@ import { HOST_IDLE } from './assistant/store.js';
 import type { IslandAssistantProps } from './IslandView.js';
 import type { IslandModel } from './model.js';
 import { Swarm } from './swarm/Swarm.js';
-import { swarmSpecFor } from './swarm/spec.js';
+import { swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
 
 /** Вырез дисплея острова (`IslandConfig.notch`): ширина, высота и центр от левого края кадра окна, pt. */
 export type Notch = NonNullable<IslandConfig['notch']>;
@@ -54,13 +54,13 @@ function statusLabel(status: EarStatus): string {
   return status.kind === 'error' ? S.island.ears.error : S.island.ears[status.kind](status.count);
 }
 
-function EarSwarm({ assistant, reducedMotion }: { assistant: IslandAssistantProps | null; reducedMotion: boolean }): JSX.Element {
+function EarSwarm({ assistant, reducedMotion, pulse }: { assistant: IslandAssistantProps | null; reducedMotion: boolean; pulse: SwarmPulse | null }): JSX.Element {
   const host = assistant?.view.host ?? HOST_IDLE;
   const input = assistant?.view.input ?? 'idle';
   const sentenceMood = assistant?.view.sentenceMood ?? undefined;
   const spec = useMemo(() => swarmSpecFor(host, input, true, sentenceMood), [host.phase, host.mood, input, sentenceMood]);
   return (
-    <Swarm spec={spec} souls={120} width={24} height={24} d={15} cy={12} k={0.15} minPx={1.4} seed={5} fps={assistant?.busy === true ? 30 : 0} pulse={assistant?.pulse ?? null} reducedMotion={reducedMotion} />
+    <Swarm spec={spec} souls={120} width={24} height={24} d={15} cy={12} k={0.15} minPx={1.4} seed={5} fps={assistant?.busy === true ? 30 : 0} pulse={pulse} reducedMotion={reducedMotion} />
   );
 }
 
@@ -72,8 +72,11 @@ export function NotchEars({
 }: {
   notch: Notch;
   status: EarStatus | null;
-  /** Рой левого уха; `null` — без роя (невидимые уши зоны нажатия только задают размер). */
-  swarm: { assistant: IslandAssistantProps | null; reducedMotion: boolean } | null;
+  /**
+   * Рой левого уха; `null` — без роя (невидимые уши зоны нажатия только задают размер). `pulse` — реакции мини-роя:
+   * события агентов и наведение есть и при выключенном помощнике (критик m-1489).
+   */
+  swarm: { assistant: IslandAssistantProps | null; reducedMotion: boolean; pulse: SwarmPulse | null } | null;
   /** Ширина уха после замера статуса: по ней выдвинутый вид держит ширину не меньше ушей. */
   onEar?(ear: number): void;
 }): JSX.Element {
@@ -95,7 +98,7 @@ export function NotchEars({
         style={{ width: ear }}
         {...(swarm === null ? {} : { role: 'img', 'aria-label': S.island.ears.swarm })}
       >
-        {swarm === null ? null : <EarSwarm assistant={swarm.assistant} reducedMotion={swarm.reducedMotion} />}
+        {swarm === null ? null : <EarSwarm assistant={swarm.assistant} reducedMotion={swarm.reducedMotion} pulse={swarm.pulse} />}
       </div>
       <div data-testid="island-notch-gap" style={{ width: notch.width }} />
       <div

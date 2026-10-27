@@ -801,6 +801,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
         assistant={assistantProps}
+        miniPulse={miniPulse}
         consent={
           (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined)) === undefined
             ? null

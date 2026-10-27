@@ -1732,6 +1732,23 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
   });
 
   describe('уши (N4)', () => {
+    it('рой уха получает реакции мини-роя и при выключенном помощнике (критик m-1489, F5)', () => {
+      const react = vi.fn();
+      const real = engineModule.createSwarm;
+      const spy = vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+        const engine = real(...args);
+        vi.spyOn(engine, 'react').mockImplementation(react);
+        return engine;
+      });
+      try {
+        const { rerender } = render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: null })} />);
+        rerender(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: null, miniPulse: { reaction: 'hop', at: 5000 } })} />);
+        expect(react).toHaveBeenCalledWith('hop', 5000, expect.any(Number), false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('правое ухо — статус по приоритету: ждёт тебя (сессии и комнаты), ошибка помощника важнее', () => {
       view({ config: notched, model: { ...MODEL, proposals: 1 } });
       expect(screen.getByTestId('island-ear-right').textContent).toBe('2');

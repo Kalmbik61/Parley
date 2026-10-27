@@ -16,6 +16,7 @@ import type { IslandAssistantProps } from './IslandView.js';
 import type { IslandModel } from './model.js';
 import { earStatus, earWidth, NotchEars, notchShift, type EarStatus, type Notch } from './NotchEars.js';
 import * as engineModule from './swarm/engine.js';
+import type { SwarmPulse } from './swarm/spec.js';
 
 const ISLAND_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'island.css'), 'utf8');
 
@@ -36,7 +37,7 @@ function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssist
   };
 }
 
-function ears(status: EarStatus | null, swarm: { assistant: IslandAssistantProps | null; reducedMotion: boolean } | null = { assistant: null, reducedMotion: false }, onEar = vi.fn()) {
+function ears(status: EarStatus | null, swarm: { assistant: IslandAssistantProps | null; reducedMotion: boolean; pulse: SwarmPulse | null } | null = { assistant: null, reducedMotion: false, pulse: null }, onEar = vi.fn()) {
   render(<NotchEars notch={NOTCH} status={status} swarm={swarm} onEar={onEar} />);
   return { onEar, left: screen.getByTestId('island-ear-left'), right: screen.getByTestId('island-ear-right'), gap: screen.getByTestId('island-notch-gap') };
 }
@@ -186,20 +187,20 @@ describe('мини-рой в левом ухе (N4)', () => {
     ears(null);
     expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('dot');
     cleanup();
-    ears(null, { assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'thinking' } } }), reducedMotion: false });
+    ears(null, { assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'thinking' } } }), reducedMotion: false, pulse: null });
     expect(screen.getByTestId('swarm').getAttribute('data-shape')).not.toBe('dot');
   });
 
   it('P1: в покое 0 кадров; реакция — короткая вспышка, затем снова 0', () => {
     const { draws, tick, setClock } = fakeFrames();
     setClock(1000);
-    const { rerender } = render(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps(), reducedMotion: false }} />);
+    const { rerender } = render(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps(), reducedMotion: false, pulse: null }} />);
     tick(1000, 3000);
     const rest = draws();
     tick(3000, 6000);
     expect(draws()).toBe(rest);
     setClock(6000);
-    rerender(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps({ pulse: { reaction: 'hop', at: 6000 } }), reducedMotion: false }} />);
+    rerender(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps(), reducedMotion: false, pulse: { reaction: 'hop', at: 6000 } }} />);
     tick(6000, 9000);
     const flashed = draws();
     expect(flashed).toBeGreaterThan(rest);
@@ -208,10 +209,23 @@ describe('мини-рой в левом ухе (N4)', () => {
     expect(draws()).toBe(flashed);
   });
 
+  it('реакции без помощника: событие агента даёт вспышку и при выключенном помощнике (критик m-1489, F5)', () => {
+    const react = vi.fn();
+    const real = engineModule.createSwarm;
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      vi.spyOn(engine, 'react').mockImplementation(react);
+      return engine;
+    });
+    const { rerender } = render(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: null, reducedMotion: false, pulse: null }} />);
+    rerender(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: null, reducedMotion: false, pulse: { reaction: 'hop', at: 6000 } }} />);
+    expect(react).toHaveBeenCalledWith('hop', 6000, expect.any(Number), false);
+  });
+
   it('помощник занят — рой живёт 30 к/с', () => {
     const { draws, tick, setClock } = fakeFrames();
     setClock(1000);
-    render(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps({ busy: true }), reducedMotion: false }} />);
+    render(<NotchEars notch={NOTCH} status={null} swarm={{ assistant: assistantProps({ busy: true }), reducedMotion: false, pulse: null }} />);
     tick(1000, 2000);
     const first = draws();
     tick(2000, 3000);
@@ -235,7 +249,7 @@ describe('уменьшенное движение (N10, §12.5)', () => {
       engines.push(vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>);
       return engine;
     });
-    ears(null, { assistant: null, reducedMotion: true });
+    ears(null, { assistant: null, reducedMotion: true, pulse: null });
     expect(engines).toHaveLength(1);
     expect(engines[0]).toHaveBeenCalledWith(expect.objectContaining({ shape: 'dot' }), expect.any(Number), true);
   });
