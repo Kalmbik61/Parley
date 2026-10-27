@@ -157,14 +157,16 @@ rooms, the engine creates and closes room sessions as part of the accepted plan.
     text: `## Tools
 
 \`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
-plan revisions, unread counts and message cursors, plus the list of registry providers with a
-mark telling whether the command is in PATH. Call it first: session and room ids come from
-here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
+plan revisions, unread counts and message cursors. Call it first: session and room ids come
+from here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
 with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02", field: "task" |
 "summary" | "history" | "artifacts"}\`; \`{room: "r-01"}\` (the room in full, with its whole
 decision); \`{field: "messages", room: "r-01", kind?: "decision"}\` — the messages, newest first,
 \`cursor\` goes on to older ones; \`{field: "message", id: "m-12"}\` — one long message;
-\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project.
+\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project;
+\`{field: "providers"}\` — the provider catalog for \`create_session\` (ids, a mark telling whether
+the command is in PATH, models with their efforts, limits). It is not part of the map: ask for it
+only before creating a session.
 
 \`backlog_list(filter?, text?)\` — read this project's backlog; filter is open (default),
 taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.
@@ -186,7 +188,7 @@ to the project root; the contents are not copied into the map, only the path and
 \`create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)\` creates
 and launches a normal peer session (\`parent: null\`) in your current workspace only.
 It requires an active host agent channel (desktop sessions). Choose a provider id from
-\`get_map\`; provider, label and task are required. Workspace and room creation budgets
+\`get_map {field: "providers"}\`; provider, label and task are required. Workspace and room creation budgets
 and launch limits apply. No room membership or ownership is inherited: the room lead may
 invite the new session with \`add_to_room\`. Native provider subagents remain available
 within the assigned task and permissions, separately from these Parley sessions.
@@ -207,14 +209,14 @@ branch (the window's Changes panel). Only in a project with git; Parley itself c
 worktree before the launch, from the project base rather than your session's ancestry. The rules for working in it are in topic \`worktrees\`.
 
 \`model\` and \`effort\` are optional too: the model and the effort the new session starts
-with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map\`: a
+with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map {field: "providers"}\`: a
 value not in the list is an error, and the session is not created. A provider with
 \`models: null\` has no list — the value goes into the command as is if the provider accepts
 a model as a flag, otherwise it is dropped. \`effort\` is the \`id\` of one of the \`efforts\`
-of the chosen model in \`get_map\`; with the default model, one of the levels shared by its
+of the chosen model in that catalog; with the default model, one of the levels shared by its
 provider's models. A model with \`efforts: null\` (Haiku) has no levels: omit \`effort\` for
 it. A level that does not fit is an error that names the allowed levels, and the session is
-not created. A provider with \`effort: false\` in \`get_map\` does not accept it, and the
+not created. A provider with \`effort: false\` in the catalog does not accept it, and the
 value is dropped. Without them the session runs on the default model and effort. The choice
 is kept in the session's record: a session that a message wakes from sleep resumes with the
 same model and effort.

@@ -104,7 +104,7 @@ const MEMORY_HINT = ' Memory: remember one lasting project fact or lesson (the h
 export function stableGuidance({ skillNavigator = false, skillList, toolProfile }: Pick<GuidanceOptions, 'skillNavigator' | 'skillList' | 'toolProfile'> = {}): string {
   const lines = [
     'You are inside Parley; coordination goes through the tools of the parley MCP server.',
-    'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions, unread counts and providers; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
+    'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
     'report — done or failed: the result is handed in, the session stays reachable and does not close itself; progress — a summary along the way.',
     'create_session — launch a new peer in the current workspace via the host agent channel. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate.',
     'wait_for — wait for a session (target is its id) or a message (target: "inbox"); for a new task given to a session that has handed in its report, wait via "inbox", not by id.',

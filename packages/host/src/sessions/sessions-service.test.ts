@@ -656,6 +656,29 @@ describe('create(): модель и усилие из диалога (дизай
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, work.work.id)).sessions).toEqual([]);
   });
+
+  it('неизвестный провайдер — bad_request называет его и каталог get_map {field: "providers"}; записей и процесса нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const message = 'unknown provider gone; see get_map {field: "providers"}';
+
+    // Создание: агент назвал провайдера по старой привычке.
+    await expect(
+      service.create({ projectPath: project, workId: work.work.id, provider: 'gone', label: '', task: 'сделай штуку', parent: null }),
+    ).rejects.toMatchObject({ name: 'HostError', code: 'bad_request', message });
+    // Запуск уже записанной сессии, чьего провайдера в реестре больше нет.
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'gone', label: '', task: '' });
+    await expect(service.launch({ projectPath: project, workId: work.work.id, sessionId }, 'launch')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'bad_request',
+      message,
+    });
+
+    expect(existsSync(argsFile)).toBe(false);
+    expect((await readMap(project, work.work.id)).sessions.map((session) => session.id)).toEqual([sessionId]);
+  });
 });
 
 describe('create(): карта после старта', () => {

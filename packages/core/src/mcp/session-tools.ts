@@ -3,19 +3,19 @@ import type { AgentChannel } from '../work/mcp-config.js';
 
 export const CREATE_SESSION_TOOL: Tool = {
   name: 'create_session',
-  description: 'Creates and starts an independent session in this same workspace, using any available provider from get_map. It is a peer, with no parent and no room membership. Give it a task; a room lead can later invite it with add_to_room. Workspace creation and launch limits apply. An account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits — see providers[].limits in get_map.',
+  description: 'Creates and starts an independent session in this same workspace. Take the provider, its models, effort levels and limits from get_map {field: "providers"}; an account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits. It is a peer, with no parent and no room membership. Give it a task; a room lead can later invite it with add_to_room. Workspace creation and launch limits apply.',
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema: {
     type: 'object',
     properties: {
-      provider: { type: 'string', minLength: 1, description: 'Provider id from get_map.' },
+      provider: { type: 'string', minLength: 1, description: 'Provider id from get_map {field: "providers"}.' },
       label: { type: 'string', minLength: 1, description: 'Short session name.' },
       task: { type: 'string', minLength: 1, description: 'The task for the new session.' },
       role: { type: 'string', description: 'Source-qualified role id from list_roles. A native role must match the provider; Claude roles also fit GLM.' },
       agent: { type: 'string', description: 'Legacy native Claude role name. Do not combine with role.' },
       worktree: { type: 'boolean', description: 'Create an isolated git worktree from the project base. Requires a git project.' },
-      model: { type: ['string', 'null'], description: 'Model id from the selected provider in get_map. Omit for the role/provider default; null clears the role default.' },
-      effort: { type: ['string', 'null'], description: 'Reasoning effort from the selected model in get_map. Omit for the role/provider default; null clears the role default.' },
+      model: { type: ['string', 'null'], description: 'Model id from the selected provider in get_map {field: "providers"}. Omit for the role/provider default; null clears the role default.' },
+      effort: { type: ['string', 'null'], description: 'Reasoning effort from the selected model in get_map {field: "providers"}. Omit for the role/provider default; null clears the role default.' },
     },
     required: ['provider', 'label', 'task'],
     additionalProperties: false,

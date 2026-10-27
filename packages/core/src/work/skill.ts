@@ -60,7 +60,7 @@ ${topicLines()}
 ## Gate rules
 
 - Do not invent tools and parameters from memory: call \`read_guide\` first (the section you need) — it has what exists in this version of Parley.
-- Start with \`get_map\`: session, room and provider ids come from the map.
+- Start with \`get_map\`: session and room ids come from the map; provider ids come from \`get_map {field: "providers"}\`.
 - Only a room's lead brings the human a decision — with \`propose_decision\`; do not start the work before acceptance, and do not assign it to the participants.
 - A participant Parley reports as stuck (waiting for the human or for its usage limit) is not silent: do not hand its part to others on your own — \`read_guide\` topic \`stuck\`.
 - \`create_session\` creates and launches a peer in your current workspace through the host agent channel; it inherits no room membership or ownership. The room lead may then invite it with \`add_to_room\`. \`create_room\` requires explicit nonempty working members and an explicit lead among them. Ownership is separate from membership; outside membership an owner reads and addresses only the live lead, without broadcasts.

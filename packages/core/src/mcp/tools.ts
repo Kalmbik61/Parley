@@ -313,7 +313,7 @@ async function limitsOf(context: McpContext): Promise<ResourceLimits> {
  */
 type Annotations = NonNullable<Tool['annotations']>;
 
-/** Чтения — карта, лента комнаты, гид, ожидание: на диск ничего не пишут, отметок прочтения не ставят. */
+/** Чтения — карта, лента комнаты, гид: на диск ничего не пишут, отметок прочтения не ставят. */
 const READS: Annotations = { readOnlyHint: true };
 
 /**
@@ -379,7 +379,7 @@ export const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors. The provider catalog (availability, models with their effort levels, limits) comes with field "providers" — you need it only before create_session. Long texts, history, summaries, artifacts and messages are not in the map: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
     inputSchema: {
       type: 'object',
       properties: {
@@ -387,8 +387,8 @@ export const TOOLS: Tool[] = [
         room: { type: 'string', description: 'Room id (r-NN): that room in full, or with field messages its message pages. Without field only participants read a room.' },
         field: {
           type: 'string',
-          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive'],
-          description: 'goal/title — the workspace texts; task/summary/history/artifacts/contextFrom — one field of session; messages — message pages of room (without room — your direct messages), newest first; message — the text of the message id; summaries — summaries of all sessions; archive — other workspaces of this project.',
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers'],
+          description: 'goal/title — the workspace texts; task/summary/history/artifacts/contextFrom — one field of session; messages — message pages of room (without room — your direct messages), newest first; message — the text of the message id; summaries — summaries of all sessions; archive — other workspaces of this project; providers — the provider catalog for create_session.',
         },
         id: { type: 'string', description: 'Message id (m-NN) for field message.' },
         kind: { type: 'string', enum: [...MESSAGE_KINDS], description: 'Only messages of this kind (field messages); decision lists the decisions of a room.' },
@@ -426,9 +426,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'wait_for',
-    annotations: READS,
+    annotations: WRITES,
     description:
-      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"). On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. {"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
+      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"): the messages are returned and marked read, so check_inbox is not needed after it. On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. {"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -596,21 +596,31 @@ const HOST_UNREACHABLE_NOTE = 'host unreachable: sign-in state and limits unknow
 
 async function getMap(context: McpContext, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const map = await readMap(context.projectPath, context.workId);
-  if (Object.keys(args).length > 0) return mapPage(context, map, args);
-  // Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
-  // входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
-  // карта оставалась компактной; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
-  // Откуда строки (спека хранилища 6.9): `providerRows` — исполнитель в самом хосте, ходить к себе по HTTP незачем; иначе
-  // канал агента — запрос к хосту; иначе локальный реестр с пометкой ниже. Заданный `providerRows` — единственный
-  // источник: его `null` ведёт к тому же локальному ответу с пометкой.
+  if (Object.keys(args).length > 0) return mapPage(context, map, args, signal);
+  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
+  // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)) };
+}
+
+/**
+ * Каталог провайдеров для `get_map {field: "providers"}`.
+ * Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
+ * входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
+ * ответ оставался компактным; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
+ * Откуда строки (спека хранилища 6.9): `providerRows` — исполнитель в самом хосте, ходить к себе по HTTP незачем; иначе
+ * канал агента — запрос к хосту; иначе локальный реестр с пометкой `note`. Заданный `providerRows` — единственный
+ * источник: его `null` ведёт к тому же локальному ответу с пометкой.
+ */
+async function providerCatalog(context: McpContext, signal?: AbortSignal): Promise<{ providers: unknown[]; note?: string }> {
   const rowsSignal = signal ?? new AbortController().signal;
   const hostRows = context.providerRows !== undefined ? await context.providerRows(rowsSignal)
     : context.agent === undefined ? null : await fetchProviderRows(context.agent, rowsSignal);
   if (hostRows !== null) {
-    const providers = hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
-      id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
-    }));
-    return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers };
+    return {
+      providers: hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
+        id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
+      })),
+    };
   }
   const registry = await loadProviders();
   const providers = await Promise.all(
@@ -626,8 +636,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
       };
     }),
   );
-  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
-  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers, note: HOST_UNREACHABLE_NOTE };
+  return { providers, note: HOST_UNREACHABLE_NOTE };
 }
 
 const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
@@ -638,7 +647,7 @@ const optionalString = (args: Record<string, unknown>, name: string): string | u
 };
 
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
-async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
+async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
   const field = optionalString(args, 'field');
   const sessionId = optionalString(args, 'session');
@@ -664,6 +673,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       throw new Error('give session, room or field; without parameters get_map returns the compact map');
     }
     if (field === 'goal' || field === 'title') return { field, ...textPage(map.work[field], cursorRaw, maxBytes) };
+    if (field === 'providers') return providerCatalog(context, signal);
     if (field === 'archive') {
       const index = await readWorksIndex();
       const others = index.works.filter((work) => work.projectPath === context.projectPath && work.id !== context.workId);
@@ -806,6 +816,23 @@ async function noteWait(
   }
 }
 
+/** Пауза, которую прерывает отмена вызова клиентом: ждать больше некого, и вызывающий проверит `signal` сам. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve();
+      return;
+    }
+    const done = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
 async function waitFor(
   context: McpContext,
   sessionId: string,
@@ -813,20 +840,14 @@ async function waitFor(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const target = stringArg(args, 'target');
-  const waitId = randomUUID();
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
 
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
-    probe = async () => {
-      const map = await read();
-      // Только читает, как и раньше: прочитанным письма отмечает один `check_inbox`.
-      const messages = unreadLetters(context.projectPath, context.workId, sessionId);
-      return messages.length === 0
-        ? null
-        : { state: 'message', messages: messages.map((message) => inboxView(message, map, sessionId)) };
-    };
+    // Проба только читает: письма отдаёт и отмечает прочитанными `takeInbox` после ожидания, когда вызов точно не отменён
+    // (отмена посреди пробы иначе отметила бы письма, которых агент не увидит).
+    probe = async () => (unreadLetters(context.projectPath, context.workId, sessionId).length === 0 ? null : true);
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
     // ошибкой сразу — ожидания не возникает (спецификация, раздел 8). Сессию,
@@ -865,43 +886,67 @@ async function waitFor(
     };
   }
 
-  // Реальное ожидание начинается, когда первая проба вернула `null`; ответ без ожидания —
-  // итог уже есть, письмо уже пришло, неизвестный id — следов в журнале не оставляет. Конец
-  // ждёт записи начала: строки идут по порядку, что бы ни случилось с ожиданием.
-  const wait = { begun: null as Promise<void> | null };
-  const probeAndNote = async (): Promise<unknown | null> => {
-    const result = await probe();
-    if (result === null && wait.begun === null) {
-      wait.begun = noteWait(context, sessionId, {
-        hook_event_name: 'ParleyWaitStart',
-        parley_wait_target: target,
-        parley_wait_id: waitId,
-      });
+  // Одно ожидание: свой id и своя пара ParleyWaitStart/End. Реальное ожидание начинается, когда первая проба вернула
+  // `null`; ответ без ожидания — итог уже есть, письмо уже пришло, неизвестный id — следов в журнале не оставляет. Конец
+  // ждёт записи начала: строки идут по порядку, что бы ни случилось с ожиданием. Конец пишется до возврата из этой
+  // функции, то есть до того, как вызывающий заберёт письма (см. ниже).
+  const waitOnce = async (ms: number): Promise<unknown | null> => {
+    const waitId = randomUUID();
+    const wait = { begun: null as Promise<void> | null };
+    const probeAndNote = async (): Promise<unknown | null> => {
+      const result = await probe();
+      if (result === null && wait.begun === null) {
+        wait.begun = noteWait(context, sessionId, {
+          hook_event_name: 'ParleyWaitStart',
+          parley_wait_target: target,
+          parley_wait_id: waitId,
+        });
+      }
+      return result;
+    };
+    try {
+      // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он будит ожидание сразу, а опрос по версии
+      // работы остаётся запасным и единственным поводом там, где сигнала нет (сессия без канала, запасной путь при 404).
+      return await waitForMap(
+        () => workVersionKey(context.projectPath, context.workId),
+        probeAndNote,
+        ms,
+        context.pollMs ?? POLL_MS,
+        signal,
+        context.mapChanges,
+      );
+    } finally {
+      // Любой исход, в том числе отмена вызова клиентом: она прерывает ожидание, и конец пишется сразу.
+      if (wait.begun !== null) {
+        await wait.begun;
+        await noteWait(context, sessionId, {
+          hook_event_name: 'ParleyWaitEnd',
+          parley_wait_id: waitId,
+        });
+      }
     }
-    return result;
   };
 
-  try {
-    // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он будит ожидание сразу, а опрос по версии
-    // работы остаётся запасным и единственным поводом там, где сигнала нет (сессия без канала, запасной путь при 404).
-    const found = await waitForMap(
-      () => workVersionKey(context.projectPath, context.workId),
-      probeAndNote,
-      timeoutMs,
-      context.pollMs ?? POLL_MS,
-      signal,
-      context.mapChanges,
-    );
-    return found ?? { state: 'running' };
-  } finally {
-    // Любой исход, в том числе отмена вызова клиентом: она прерывает ожидание, и конец пишется сразу.
-    if (wait.begun !== null) {
-      await wait.begun;
-      await noteWait(context, sessionId, {
-        hook_event_name: 'ParleyWaitEnd',
-        parley_wait_id: waitId,
-      });
-    }
+  const endsAt = Date.now() + timeoutMs;
+  // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
+  const cancelled = (): boolean => signal?.aborted === true;
+  for (;;) {
+    const found = await waitOnce(Math.max(endsAt - Date.now(), 0));
+    if (found === null) return { state: 'running' };
+    if (target !== 'inbox') return found;
+    // Письма забираются только теперь, когда ожидание целиком закончено, в том числе запись конца в журнал: пока она шла,
+    // клиент мог отменить вызов, а письма, помеченные до этого, пропали бы вместе с отброшенным ответом. От проверки отмены
+    // до `return` ни одного `await`: отмена приходит отдельным событием, а не микрозадачей, и между пометкой и ответом
+    // вклиниться не может. Отменённый вызов ничего не отмечает: письмо остаётся для следующего `check_inbox`.
+    if (cancelled()) return { state: 'running' };
+    const messages = takeInbox(context, sessionId);
+    if (messages.length > 0) return { state: 'message', messages };
+    // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
+    // новым ожиданием — на случай, если проба и `takeInbox` разойдутся: без неё цикл крутился бы в микрозадачах до таймаута.
+    const remaining = endsAt - Date.now();
+    if (remaining <= 0) return { state: 'running' };
+    await abortableDelay(Math.min(context.pollMs ?? POLL_MS, remaining), signal);
+    if (cancelled()) return { state: 'running' };
   }
 }
 
@@ -1020,17 +1065,24 @@ async function sendMessage(
   return warnings.length === 0 ? { messageId: created } : { messageId: created, warning: warnings.join('; ') };
 }
 
-async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  let views: ReturnType<typeof inboxView>[] = [];
+/**
+ * Забирает непрочитанное: письма в ответ и пометка прочитанными — по одному снимку, одной записью. Общая для `check_inbox` и
+ * `wait_for("inbox")`: письмо не бывает отмечено, не будучи отданным хотя бы одному из вызовов. Пустой ящик ничего не пишет:
+ * ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
+ */
+function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof inboxView>[] {
   const at = new Date().toISOString();
-  // Пустой ящик ничего не пишет: ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
-  writeLetters(context.projectPath, context.workId, (letters, current) => {
+  return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
     const inbox = letters.unreadFor(sessionId);
-    views = inbox.map((message) => inboxView(message, current, sessionId));
+    const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
+    return views;
   });
-  return { messages: views };
+}
+
+async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
+  return { messages: takeInbox(context, sessionId) };
 }
 
 async function createRoom(

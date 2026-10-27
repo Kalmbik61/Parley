@@ -156,7 +156,8 @@ async function boot(options: { now?: () => number } = {}) {
   };
 }
 
-const getMapCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'get_map', args: {}, callId });
+// Каталог провайдеров (`field: "providers"`) — единственный ответ `get_map`, что ходит в `providerRows`: по нему и считается исполнение.
+const getMapCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'get_map', args: { field: 'providers' }, callId });
 const sendCall = (text: string, callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'send_message', args: { to: 's-02', text }, callId });
 const waitCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'wait_for', args: { target: 'inbox', timeoutSec: 600 }, callId });
 const textOf = (envelope: Envelope): string => ((envelope.result as { content: { text: string }[] }).content[0] as { text: string }).text;

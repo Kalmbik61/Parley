@@ -290,17 +290,20 @@ describe('подробный гид', () => {
   it('создание сессии: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
-    expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map`/);
+    expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map \{field: "providers"\}`/);
+    // Каталог провайдеров — не часть карты, а отдельное поле get_map.
+    expect(tools).toContain('Choose a provider id from `get_map {field: "providers"}`');
+    expect(tools).toMatch(/`\{field: "providers"\}` — the provider catalog for `create_session`/);
     expect(tools).toMatch(/a value not in the list is an error, and the session is not created/);
     expect(tools).toMatch(/`models: null` has no list/);
     // Нормалайзер модели и effort (5.6): гид говорит то же, что описание `effort` у create_session.
-    expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in `get_map`/);
+    expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in that catalog/);
     expect(tools).toMatch(/with the default model, one of the levels shared by its provider's models/);
     expect(tools).toMatch(/A model with `efforts: null` \(Haiku\) has no levels: omit `effort` for it/);
     expect(tools).toMatch(
       /A level that does not fit is an error that names the allowed levels, and the session is not created/,
     );
-    expect(tools).toMatch(/`effort: false` in `get_map` does not accept it, and the value is dropped/);
+    expect(tools).toMatch(/`effort: false` in the catalog does not accept it, and the value is dropped/);
     // Прежнего закрытого списка из трёх уровней в гиде нет.
     expect(GUIDE).not.toMatch(/`low`, `medium` or `high`/);
   });
@@ -688,6 +691,12 @@ describe('бюджет вставки в байтах (P34)', () => {
     expect(stable).toContain("only after the human's explicit consent");
     expect(stable).toContain('Call report before finishing');
     expect(stable).toContain('window blocks in your terminal are the human\'s words');
+  });
+
+  it('строка get_map не несёт каталог провайдеров: он приходит по field "providers" и описан в create_session', () => {
+    const stable = stableGuidance();
+    expect(stable).toContain('get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts;');
+    expect(stable).not.toContain('unread counts and providers');
   });
 
   it('стабильная часть и вся вставка укладываются в байтовые потолки, а диагностика это видит', () => {

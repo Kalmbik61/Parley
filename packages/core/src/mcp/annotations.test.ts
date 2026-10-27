@@ -26,7 +26,7 @@ interface Hints {
   openWorldHint?: boolean;
 }
 
-/** Чтения: карта, лента, гид, ожидание — ничего не меняют. */
+/** Чтения: карта, лента, гид — ничего не меняют. */
 const READ: Hints = { readOnlyHint: true };
 /** Записи в карту, комнаты и письма: сессий, комнат и писем не удаляют, наружу карты не выходят. */
 const WRITE: Hints = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
@@ -43,7 +43,7 @@ const TABLE: Record<string, Hints> = {
   list_roles: READ,
   read_room: READ,
   read_guide: READ,
-  wait_for: READ,
+  wait_for: WRITE,
   check_inbox: WRITE,
   report: WRITE,
   publish_agent_plan: WRITE,
@@ -194,7 +194,6 @@ describe('аннотации инструментов parley: таблица', (
       'read_guide',
       'read_room',
       'search_history',
-      'wait_for',
     ]);
   });
 
@@ -217,27 +216,21 @@ describe('аннотации инструментов parley: правда по 
     await callOk(client, 'read_guide');
     await callOk(client, 'read_guide', { topic: 'letters' });
     await callOk(client, 'read_room', { room: 'r-01' });
-    // Письмо уже лежит непрочитанным — `wait_for` возвращает его сразу.
-    const inbox = await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 });
-    expect(inbox.text).toContain('Что делаем?');
-    // Сессия ещё работает — ожидание по таймауту, без записей.
-    expect(JSON.parse((await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0 })).text)).toEqual({
-      state: 'running',
-    });
 
     expect(await snapshotAll()).toEqual(before);
   });
 
-  it('read_room и wait_for("inbox") прочитанным не отмечают: письма ждут check_inbox', async () => {
+  it('read_room прочитанным не отмечает, wait_for("inbox") — отмечает отданное', async () => {
     const client = await connect();
+    const textsOf = (result: { text: string }): string[] =>
+      (JSON.parse(result.text) as { messages: { text: string }[] }).messages.map((message) => message.text);
 
     await callOk(client, 'read_room', { room: 'r-01' });
-    await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 });
-    const inbox = JSON.parse((await callOk(client, 'check_inbox')).text) as {
-      messages: { text: string }[];
-    };
+    // Письма всё ещё лежат непрочитанными: wait_for отдаёт их сразу и отмечает.
+    const waited = await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+    expect(textsOf(waited)).toEqual(['Что делаем?', 'Готов']);
 
-    expect(inbox.messages.map((message) => message.text)).toEqual(['Что делаем?', 'Готов']);
+    expect(textsOf(await callOk(client, 'check_inbox'))).toEqual([]);
   });
 
   it('check_inbox пишет: помечает письма прочитанными — это не чтение', async () => {
@@ -259,6 +252,8 @@ describe('аннотации инструментов parley: правда по 
     { name: 'add_to_room', args: { room: 'r-01', session: 's-03' } },
     { name: 'propose_decision', args: { room: 'r-01', text: 'делаем так' } },
     { name: 'check_inbox', args: {} },
+    // Письма лежат непрочитанными: wait_for отдаёт их сразу и отмечает прочитанными.
+    { name: 'wait_for', args: { target: 'inbox', timeoutSec: 5 } },
   ];
 
   it.each(WRITES)('$name пишет в карту, но не уничтожает ни сессий, ни комнат, ни писем', async ({ name, args }) => {
