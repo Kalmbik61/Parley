@@ -1,7 +1,7 @@
 import { envValue } from '@parley/core';
 
 /**
- * Тестовые переключатели окна (`PARLEY_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL/VOICE`) подменяют
+ * Тестовые переключатели окна (`PARLEY_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL/VOICE/TTS`) подменяют
  * системные действия журналом main; `PARLEY_ISLAND=off` убирает остров одобрений; `PARLEY_LOGIN_SHELL=skip`
  * не даёт окну звать оболочку человека за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
  * уведомления, ссылки, Finder и загрузки (ревью M5) — поэтому они слушаются только в неупакованном
@@ -20,6 +20,8 @@ export interface TestSwitches {
   readonly loginShell: boolean;
   /** Голосовой ввод на подменных службах (`main/voice/services.ts#createFakeVoiceServices`): E2E без движка и сети. */
   readonly voice: boolean;
+  /** Нейроголос помощника на подмене (`main/assistant/tts.ts#createFakeTtsService`): E2E без движка и весов. */
+  readonly tts: boolean;
   /** Острова нет (`PARLEY_ISLAND=off`): E2E берут первое окно и считают окна — остров им мешал бы (спека 2026-10-12, 5.1). */
   readonly islandOff: boolean;
   /**
@@ -40,6 +42,7 @@ export function testSwitches(env: Readonly<Record<string, string | undefined>>, 
     shell: allowed && envValue(env, 'SHELL') === 'log',
     loginShell: allowed && envValue(env, 'LOGIN_SHELL') === 'skip',
     voice: allowed && envValue(env, 'VOICE') === 'fake',
+    tts: allowed && envValue(env, 'TTS') === 'fake',
     islandOff: allowed && envValue(env, 'ISLAND') === 'off',
     appData: allowed ? envValue(env, 'APP_DATA') : undefined,
   };
