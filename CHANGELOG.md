@@ -4,6 +4,32 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+The assistant speaks in a neural voice and its swarm becomes a face while it talks. The island gets its own sounds, smoother motion and, on a MacBook with a notch, a shape that continues the notch.
+
+### Added
+
+- **The assistant speaks.** With "Speak answers" on (Settings → Assistant), answers are spoken by Qwen3-TTS 0.6B CustomVoice, run on your Mac by speech.cpp; nothing goes to the network.
+  - Five voices: Serena (the default), Ryan, Aiden, Vivian and Ono Anna. Settings lists them with gender, languages and licence. The assistant speaks of itself in the gender of the voice; when you switch to a voice of another gender mid-conversation, its next answer follows.
+  - The weights (one 1214 MB file for all five voices) are downloaded only when you press Download in Settings → Assistant, checked against their sha256, and can be cancelled or deleted, like the Whisper models. After a download, "Preparing voice…" shows until the voice is ready.
+  - Speech streams sentence by sentence: the first sentence plays as soon as the answer is complete, without waiting for the whole answer to be synthesized. Esc, the speaker button on the island and a new question stop the voice at once. The model leaves memory after 15 minutes without speech and comes back by itself on the next answer.
+  - The voice needs Apple Silicon and an answer language of Russian or English. On an Intel Mac, in another language, or when the voice is not downloaded, the answer is text only; a missing voice is named once on the island ("Voice "…" isn't downloaded — open Settings").
+- **A face while it talks.** The assistant's swarm becomes a face: the mouth follows the real voice (open vowels, "i", "u" and closed lips), the face reacts to the intonation (eyes up on a question, a pulse on stressed words), and the mood can change from sentence to sentence. Reduce motion keeps a still face.
+- **Island sounds.** The island plays short cues synthesized on the fly, with no sound files: requests, questions and plans, Done, an assistant error, listening, speaking and a sent decision. Settings → Notifications → Island picks the palette (Soft by default, Crystal or Warm; picking one plays a sample) and the volume. "Interface sounds" (hover, open and close, an agent starting) are off by default. Requests follow "Sound when you're needed" and Done follows "Sound when an agent finishes"; thinking and tool steps are always silent. Many agents finishing at once give one sound, not a burst, and while the assistant speaks, interface cues stay quiet and the voice dips under a request.
+- **Swarm reactions and island motion.** The swarms react to events with one short movement: a hop for a permission or a plan, a nod for a question, a spin with sparks for Done, a shake for an error, a glint for an assistant tool step. Small swarms flash instead of moving. The island grows with a slight overshoot and shrinks without one. "Reduce motion" in Settings → Notifications → Island, like the macOS setting, stills the swarm and the island's shape changes; the sounds stay.
+- **The island in the notch.** On a MacBook with a notch the tucked island is a black shape that continues the notch: the left ear holds a small swarm, the right one the main status ("2 waiting for you", "3 working", "✅ N" or an error). A request, a card, the assistant or the pointer over the open island drop it down below the notch. Displays without a notch, and an island moved to the left or right edge, keep the strip; moving to another display changes the shape at once.
+
+### Changed
+
+- The island's request sound is the island's own cue instead of the system beep, and Done on the island sounds only with "Sound when an agent finishes".
+- The assistant marks the mood of every sentence, not only the first one; the marks never reach the island, the history or Telegram.
+
+### Known issues
+
+- The first spoken answer after installing or updating Parley can come as text: the voice engine compiles its shaders for about 15 seconds on its first start. Later answers speak.
+- Telegram replies stay text only, and Ukrainian, Kazakh and Belarusian answers have no voice yet.
+
 ## 0.21.0
 
 A second Claude Code account of yours as a provider, participants that say why they wait for you and come back after a usage limit, folder trust and three approval modes for Codex.
