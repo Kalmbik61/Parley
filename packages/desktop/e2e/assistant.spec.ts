@@ -562,6 +562,12 @@ test.describe('помощник на острове', () => {
     const face = pill.getByTestId('assistant-dot').getByTestId('swarm');
     await expect(face).toHaveAttribute('data-shape', 'face');
     expect(await face.boundingBox()).toMatchObject({ width: 28, height: 28 });
+    // Вокруг лица нет кольца: и при фокусе с клавиатуры у кнопки нет обводки.
+    const dot = await pill.getByTestId('assistant-dot').evaluate((element) => {
+      (element as HTMLElement).focus({ focusVisible: true } as FocusOptions);
+      return { focused: element.matches(':focus-visible'), outline: getComputedStyle(element).outlineStyle };
+    });
+    expect(dot).toEqual({ focused: true, outline: 'none' });
     await pill.screenshot({ path: test.info().outputPath('speaking-pill.png'), animations: 'allow' });
 
     // Речь кончилась — в пилюле снова мини-сфера.

@@ -1514,6 +1514,8 @@ describe('помощник на острове', () => {
     expect(mini.getAttribute('data-emo')).toBe('joy');
     expect(mini.style.width).toBe('28px');
     expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
+    // Без кольца вокруг лица: у кнопки нет обводки фокуса.
+    expect(screen.getByTestId('assistant-dot').className).toContain('outline-none');
     run();
     expect(voice).toHaveBeenCalled();
     // Эмоция идёт по предложению.

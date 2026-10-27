@@ -182,7 +182,8 @@ function Pill(props: IslandViewProps): JSX.Element {
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
       {props.assistant === null ? null : (
-        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="grid size-[26px] -ml-1 cursor-pointer place-items-center overflow-visible rounded-full hover:bg-white/10" onClick={props.assistant.onOpen}>
+        // Без обводки фокуса: кольцо вокруг мини-роя читалось бы частью лица (решение человека). Подсветка — только наведением.
+        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="grid size-[26px] -ml-1 cursor-pointer place-items-center overflow-visible rounded-full outline-none hover:bg-white/10" onClick={props.assistant.onOpen}>
           <MiniSwarm assistant={props.assistant} reducedMotion={props.config.motion === 'reduce'} />
         </button>
       )}
