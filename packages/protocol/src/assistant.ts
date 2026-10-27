@@ -105,9 +105,12 @@ export interface AssistantState {
   detail: AssistantDetail | null;
   /** Последний вопрос человека. */
   question: string | null;
-  /** Ответ, растёт по ходу. */
+  /** Ответ, растёт по ходу; метки `[[mood]]` хост срезает все. */
   answer: string;
+  /** Эмоция первой фразы ответа. */
   mood: AssistantMood;
+  /** Эмоции по предложениям (#9 §6.7 L3): `at` — позиция в `answer`, с которой начинается предложение. Старый хост не шлёт. */
+  moods?: Array<{ at: number; mood: AssistantMood }>;
   proposal: AssistantProposal | null;
   /** Исход последней карточки — для «Sent ✓»; `done` — действие выполнено (комната создана, решение принято); новый ход сбрасывает. */
   outcome: 'sent' | 'done' | 'cancelled' | null;
@@ -149,6 +152,8 @@ export const assistantMethodSchemas = {
     language: z.string().regex(/^[a-z]{2,3}$/),
     /** Абсолютный путь к файлу модели Whisper; `null` — голос не распознаётся. */
     voiceModel: z.string().min(1).nullable(),
+    /** Род, в котором помощник говорит о себе, — по выбранному голосу (#9 §6.8). Без поля — `female`. */
+    voiceGender: z.enum(['female', 'male', 'neutral']).optional(),
   }),
 } as const;
 
