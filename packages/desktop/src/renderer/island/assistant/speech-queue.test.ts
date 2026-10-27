@@ -30,6 +30,34 @@ describe('createSentenceFeed: предложения', () => {
     expect(feed.wasReset()).toBe(false);
   });
 
+  it('блок кода, открывшийся позже, не звучит и не съедает фразу после себя — по кускам и целиком одинаково (B26 F-B26-5)', () => {
+    const full = 'Run this command. ```bash\nrm -rf build. npm test.\n``` Then check the logs. All good.';
+    const streamed = createSentenceFeed('en');
+    const out: FeedSentence[] = [];
+    for (let at = 1; at <= full.length; at += 1) out.push(...streamed.push(1, full.slice(0, at), false));
+    // Первое предложение готово, как только начался код: дальше идёт не его текст.
+    expect(texts(out.slice(0, 1))).toEqual(['Run this command.']);
+    out.push(...streamed.push(1, full, true));
+    expect(texts(out)).toEqual(['Run this command.', 'Then check the logs.', 'All good.']);
+    expect(texts(createSentenceFeed('en').push(1, full, true))).toEqual(['Run this command.', 'Then check the logs.', 'All good.']);
+    // Незакрытый блок до конца ответа тоже молчит.
+    expect(texts(createSentenceFeed('en').push(1, 'Here it is. ```ts\nconst a = 1. const b = 2.', true))).toEqual(['Here it is.']);
+  });
+
+  it('метка эмоции сразу за концом предложения делает его готовым без следующего слова (B26 F-B26-5, E1)', () => {
+    const feed = createSentenceFeed('en');
+    const marks = [{ at: 0, mood: 'calm' as const }];
+    expect(feed.push(1, 'The room is working. ', false, marks)).toEqual([]);
+    // Пришла метка следующего предложения: первое готово сразу.
+    expect(texts(feed.push(1, 'The room is working. ', false, [...marks, { at: 21, mood: 'joy' as const }]))).toEqual(['The room is working.']);
+    expect(feed.push(1, 'The room is working. Two', false, [...marks, { at: 21, mood: 'joy' as const }])).toEqual([]);
+    expect(texts(feed.push(1, 'The room is working. Two agents are busy.', true, [...marks, { at: 21, mood: 'joy' as const }]))).toEqual(['Two agents are busy.']);
+    // Метка посреди фразы, без завершающего знака, предложение не режет.
+    const mid = createSentenceFeed('en');
+    expect(mid.push(1, 'The tests ', false, [...marks, { at: 10, mood: 'sad' as const }])).toEqual([]);
+    expect(texts(mid.push(1, 'The tests failed.', true, [...marks, { at: 10, mood: 'sad' as const }]))).toEqual(['The tests failed.']);
+  });
+
   it('новый ход сбрасывает очередь: [] и флаг, флаг снимается чтением', () => {
     const feed = createSentenceFeed('en');
     expect(texts(feed.push(1, 'First answer. More', false))).toEqual(['First answer.']);

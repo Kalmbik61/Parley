@@ -431,25 +431,55 @@ describe('стор помощника: речь (план 3b B22)', () => {
     vi.useRealTimers();
   });
 
-  it('предложения уходят в tts-speak по мере ответа, expect — раньше speak; куски копятся и играют после конца ответа по порядку', () => {
+  it('первое предложение играет, пока ответ ещё идёт (B26 F-B26-5): куски сразу в проигрыватель, по порядку; полпредложения не звучит', () => {
     const t = speechSetup();
     t.host({ phase: 'thinking', question: 'q' });
+    // Предложение без продолжения ещё не готово: половину предложения не синтезируем.
+    t.host({ phase: 'answering', answer: 'The room is wor' });
+    expect(t.api.speak).not.toHaveBeenCalled();
     t.host({ phase: 'answering', answer: 'The room is working. Two agents' });
     expect(t.texts()).toEqual(['The room is working.']);
     const first = t.ids()[0]!;
     expect(t.api.speak).toHaveBeenCalledWith({ utteranceId: first, text: 'The room is working.', voice: 'qwen3-0.6b/serena', language: 'en' });
     expect(t.speaker.expect).toHaveBeenCalledWith(first);
     expect(t.speaker.expect.mock.invocationCallOrder[0]).toBeLessThan(t.api.speak.mock.invocationCallOrder[0]!);
+    // Ответ ещё идёт, а куски первого предложения уже играют, и лицо говорит.
     t.chunk(first, 0);
     t.chunk(first, 1);
-    expect(t.speaker.enqueue).not.toHaveBeenCalled();
+    expect(t.enqueued()).toEqual([[first, 0], [first, 1]]);
+    t.start(first);
+    expect(t.store.getState()).toMatchObject({ input: 'speaking', sentence: { utteranceId: first, text: 'The room is working.' } });
+    // Первое предложение доиграло раньше, чем пришло второе: речь хода не кончается, Done нет.
+    t.chunk(first, 2, true);
+    t.idle();
+    expect(t.store.getState().input).toBe('speaking');
     t.host({ phase: 'answering', answer: 'The room is working. Two agents are busy.' });
     t.host({ phase: 'idle', answer: 'The room is working. Two agents are busy.' });
     expect(t.texts()).toEqual(['The room is working.', 'Two agents are busy.']);
-    expect(t.enqueued()).toEqual([[first, 0], [first, 1]]);
     const second = t.ids()[1]!;
     t.chunk(second, 0);
     expect(t.enqueued()).toEqual([[first, 0], [first, 1], [second, 0]]);
+    t.start(second);
+    t.chunk(second, 1, true);
+    t.idle();
+    expect(t.store.getState().input).toBe('settling');
+  });
+
+  it('ошибка хода или новый ход посреди ответа глушат речь и отменяют синтез хода (B26 F-B26-5)', () => {
+    for (const next of [{ phase: 'error' as const }, { phase: 'thinking' as const, turn: 2, question: 'q2' }]) {
+      const t = speechSetup();
+      t.host({ phase: 'thinking', question: 'q' });
+      t.host({ phase: 'answering', answer: 'The room is working. Two' });
+      const first = t.ids()[0]!;
+      t.chunk(first, 0);
+      t.start(first);
+      t.host({ answer: 'The room is working. Two', ...next });
+      expect(t.speaker.stop).toHaveBeenCalled();
+      expect(t.api.cancel).toHaveBeenCalledWith();
+      expect(t.store.getState()).toMatchObject({ input: 'idle', sentence: null });
+      t.chunk(first, 1);
+      expect(t.enqueued()).toEqual([[first, 0]]);
+    }
   });
 
   it('лицо: onStart ставит speaking и предложение; эмоция меняется на старте второго предложения (F3)', () => {
@@ -487,7 +517,7 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.store.getState().input).toBe('idle');
   });
 
-  it('срыв по длине: до игры выброшенные куски не звучат, во время игры — speaker.discard', () => {
+  it('срыв по длине: выброшенные куски глушит проигрыватель (speaker.discard), повтор встаёт за оставленными', () => {
     const t = speechSetup();
     t.host({ phase: 'thinking', question: 'q' });
     t.host({ phase: 'answering', answer: 'The room is working. Two' });
@@ -495,11 +525,12 @@ describe('стор помощника: речь (план 3b B22)', () => {
     t.chunk(first, 0);
     t.chunk(first, 1);
     t.store.getState().speechMessage({ type: 'discard', utteranceId: first, fromSeq: 1 });
+    expect(t.speaker.discard).toHaveBeenCalledWith(first, 1);
     t.chunk(first, 2);
     t.host({ phase: 'idle', answer: 'The room is working. Two agents are busy.' });
-    expect(t.enqueued()).toEqual([[first, 0], [first, 2]]);
+    expect(t.enqueued()).toEqual([[first, 0], [first, 1], [first, 2]]);
     t.store.getState().speechMessage({ type: 'discard', utteranceId: first, fromSeq: 2 });
-    expect(t.speaker.discard).toHaveBeenCalledWith(first, 2);
+    expect(t.speaker.discard).toHaveBeenLastCalledWith(first, 2);
   });
 
   it('предложение, все попытки которого выброшены, всё равно кончается — по ответу speak, без onIdle', async () => {
@@ -554,21 +585,23 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.store.getState().input).toBe('idle');
   });
 
-  it('сброс очереди (ответ начат заново после инструмента): speaker.stop и отмена в main; старые куски не играют', () => {
+  it('ответ начат заново после инструмента: отданное целое предложение доигрывает, новый ответ встаёт за ним (B26 F-B26-5)', () => {
     const t = speechSetup();
     t.host({ phase: 'thinking', question: 'q' });
     t.host({ phase: 'answering', answer: 'Let me check. The' });
     const old = t.ids()[0]!;
     t.chunk(old, 0);
+    t.start(old);
     t.host({ phase: 'tool', answer: '' });
-    expect(t.speaker.stop).toHaveBeenCalledTimes(1);
-    expect(t.api.cancel).toHaveBeenCalledWith();
+    expect(t.speaker.stop).not.toHaveBeenCalled();
+    expect(t.api.cancel).not.toHaveBeenCalled();
+    expect(t.store.getState().input).toBe('speaking');
     t.host({ phase: 'answering', answer: 'Two agents are busy.' });
     t.host({ phase: 'idle', answer: 'Two agents are busy.' });
     expect(t.texts()).toEqual(['Let me check.', 'Two agents are busy.']);
     t.chunk(old, 1);
     t.chunk(t.ids()[1]!, 0);
-    expect(t.enqueued()).toEqual([[t.ids()[1]!, 0]]);
+    expect(t.enqueued()).toEqual([[old, 0], [old, 1], [t.ids()[1]!, 0]]);
   });
 
   it('значок динамика: выключение посреди речи глушит сразу и пишет флаг; включение пишет флаг', () => {
@@ -622,7 +655,7 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.api.warmup).not.toHaveBeenCalled();
   });
 
-  it('ход с карточкой не озвучивается; «Sent» — через 900 мс после исхода sent, по роду голоса; cancelled молчит', () => {
+  it('ответ перед карточкой звучит, как любой ответ (B26 F-B26-4); Send его обрывает; «Sent» — через 900 мс, по роду голоса', async () => {
     vi.useFakeTimers();
     const t = speechSetup({ language: 'ru' });
     const proposal = { id: 'p1', target: 'Auth', where: 'w', kind: 'note' as const, text: 't', wake: false };
@@ -630,25 +663,54 @@ describe('стор помощника: речь (план 3b B22)', () => {
     t.host({ phase: 'answering', answer: 'Подготовил письмо. Отправить' });
     const early = t.ids()[0]!;
     t.host({ phase: 'awaiting-confirm', answer: 'Подготовил письмо. Отправить?', proposal });
-    expect(t.api.cancel).toHaveBeenCalledWith();
+    expect(t.api.cancel).not.toHaveBeenCalled();
+    expect(t.texts()).toEqual(['Подготовил письмо.', 'Отправить?']);
+    const ask = t.ids()[1]!;
     t.chunk(early, 0);
+    expect(t.enqueued()).toEqual([[early, 0]]);
+    t.start(early);
+    expect(t.store.getState()).toMatchObject({ input: 'speaking', sentence: { text: 'Подготовил письмо.' } });
+    // Send посреди речи: речь обрывается в тот же такт, опоздавшие куски не играют.
+    vi.mocked(t.deps.call).mockResolvedValueOnce({ error: null } as never);
+    await t.store.getState().decide('send');
+    expect(t.speaker.stop).toHaveBeenCalled();
+    expect(t.api.cancel).toHaveBeenCalledWith();
+    expect(t.store.getState()).toMatchObject({ input: 'idle', sentence: null });
+    t.chunk(ask, 0);
+    expect(t.enqueued()).toEqual([[early, 0]]);
     t.host({ phase: 'idle', answer: 'Подготовил письмо. Отправить?', proposal, outcome: 'sent' });
-    expect(t.texts()).toEqual(['Подготовил письмо.']);
     vi.advanceTimersByTime(SENT_DELAY_MS - 1);
-    expect(t.texts()).toHaveLength(1);
+    expect(t.texts()).toHaveLength(2);
     vi.advanceTimersByTime(1);
-    expect(t.texts()).toEqual(['Подготовил письмо.', 'Отправила.']);
-    const sent = t.ids()[1]!;
+    expect(t.texts()).toEqual(['Подготовил письмо.', 'Отправить?', 'Отправила.']);
+    const sent = t.ids()[2]!;
     t.chunk(sent, 0);
-    expect(t.enqueued()).toEqual([[sent, 0]]);
     t.start(sent);
     expect(t.store.getState().input).toBe('speaking');
+  });
 
-    const quiet = speechSetup();
-    quiet.host({ phase: 'awaiting-confirm', proposal });
-    quiet.host({ phase: 'idle', proposal, outcome: 'cancelled' });
-    vi.advanceTimersByTime(SENT_DELAY_MS * 2);
-    expect(quiet.api.speak).not.toHaveBeenCalled();
+  it('ответ перед карточкой: Cancel и «нет» тоже обрывают речь; отмена молчит', async () => {
+    vi.useFakeTimers();
+    const proposal = { id: 'p1', target: 'Auth', where: 'w', kind: 'note' as const, text: 't', wake: false };
+    for (const decide of [
+      (t: ReturnType<typeof speechSetup>) => t.store.getState().decide('cancel'),
+      (t: ReturnType<typeof speechSetup>) => t.store.getState().submit('нет'),
+    ]) {
+      const t = speechSetup({ language: 'ru' });
+      t.host({ phase: 'thinking', question: 'q' });
+      t.host({ phase: 'awaiting-confirm', answer: 'Подготовил письмо. Отправить?', proposal });
+      const [first] = t.ids();
+      t.chunk(first!, 0);
+      t.start(first!);
+      vi.mocked(t.deps.call).mockResolvedValueOnce({ error: null } as never);
+      await decide(t);
+      expect(t.deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p1', decision: 'cancel' });
+      expect(t.speaker.stop).toHaveBeenCalled();
+      expect(t.store.getState()).toMatchObject({ input: 'idle', sentence: null });
+      t.host({ phase: 'idle', answer: 'Подготовил письмо. Отправить?', proposal, outcome: 'cancelled' });
+      vi.advanceTimersByTime(SENT_DELAY_MS * 2);
+      expect(t.texts()).toEqual(['Подготовил письмо.', 'Отправить?']);
+    }
   });
 
   it('хоткей и микрофон во время речи не пишут и не обрывают — остров только раскрывается (Review Focus 2)', () => {

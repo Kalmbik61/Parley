@@ -75,6 +75,10 @@ if (process.argv[2] === '--version') {
     // Метка эмоции в каждом предложении (#9 §6.7 L3): лицо меняет эмоцию между предложениями.
     answer = '[[joy]] The room is working well today. [[sad]] One test failed in the last run. [[surprise]] Did you expect that result?';
     wordDelay = 40;
+  } else if (/^stream long/i.test(ask)) {
+    // Ответ идёт словами секунды три: первое предложение звучит раньше, чем пришло последнее (B26 F-B26-5).
+    answer = Array.from({ length: 10 }, (_, i) => `[[calm]] Streamed sentence ${i + 1} is here.`).join(' ');
+    wordDelay = 60;
   } else if (/^speak long/i.test(ask)) {
     // Долгая речь: 24 предложения с метками — лицо говорит несколько секунд (V1–V3, хоткей и Esc во время речи).
     answer = Array.from({ length: 24 }, (_, i) => `[[${i % 2 === 0 ? 'calm' : 'joy'}]] Sentence number ${i + 1} is spoken now.`).join(' ');

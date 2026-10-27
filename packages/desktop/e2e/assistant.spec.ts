@@ -420,7 +420,7 @@ test.describe('помощник на острове', () => {
     const firstFace = log.findIndex((entry) => entry.shape === 'face');
     const lastFace = log.findLastIndex((entry) => entry.shape === 'face');
     expect(firstFace, JSON.stringify(log)).toBeGreaterThan(0);
-    // Пока ответ идёт («Answering») — сфера, лицо — только после конца ответа.
+    // Пока первое предложение не готово («Answering») — сфера; лицо — когда оно зазвучало.
     expect(log.slice(0, firstFace).some((entry) => entry.shape === 'sphere' && entry.status === 'Answering'), JSON.stringify(log)).toBe(true);
     // Лицо говорит («Speaking»), эмоция меняется на границах предложений (L3): метки joy, sad, surprise.
     const faces = log.slice(firstFace, lastFace + 1);
@@ -450,6 +450,54 @@ test.describe('помощник на острове', () => {
     // Следующий ход несёт строку о смене рода, разговор тот же.
     await ask(island, 'voice check');
     await expect(island.getByTestId('assistant-answer')).toContainText(`Voice note: ${MALE_NOTE}.`, { timeout: 30_000 });
+  });
+
+  test('речь: первое предложение звучит, пока ответ ещё идёт (B26 F-B26-5)', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    await call(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const island = await openAssistant(window);
+    await ask(island, 'stream long');
+    await expect(island.getByTestId('assistant-status')).toHaveText('Speaking', { timeout: 30_000 });
+    // Лицо уже говорит, а последнее предложение ответа ещё не пришло.
+    expect(await island.getByTestId('assistant-answer').innerText()).not.toContain('Streamed sentence 10 is here.');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Streamed sentence 10 is here.', { timeout: 30_000 });
+  });
+
+  test('речь: ответ перед карточкой звучит лицом, Send обрывает речь сразу (B26 F-B26-4)', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const { ref } = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'planner',
+      task: '',
+      parent: null,
+    });
+    await call(window, 'rooms.create', { projectPath: project, workId, title: ROOM_TITLE, members: [ref.sessionId], lead: ref.sessionId, quiet: true });
+    type WorksList = { entries: Array<{ map: { work: { id: string }; rooms: unknown[] } }> };
+    await expect
+      .poll(
+        async () => (await call<WorksList>(window, 'works.list', {})).entries.find((entry) => entry.map.work.id === workId)?.map.rooms.length ?? 0,
+        { message: 'комната в снимке работ хоста', timeout: 30_000 },
+      )
+      .toBe(1);
+
+    const island = await openAssistant(window);
+    await recordFace(island);
+    // Длинный ответ перед карточкой: лицо говорит, пока карточка ждёт решения.
+    await ask(island, 'long tell the room to skip Safari tests');
+    await expect(island.getByTestId('assistant-card')).toContainText(LETTER, { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-status')).toHaveText('Speaking', { timeout: 30_000 });
+    expect((await faceLog(island)).some((entry) => entry.shape === 'face' && entry.status === 'Speaking')).toBe(true);
+
+    // Send посреди речи: речь обрывается раньше, чем через 900 мс зазвучит «Sent».
+    await island.waitForTimeout(600);
+    await island.getByTestId('assistant-send').click();
+    await expect(island.getByTestId('assistant-status')).not.toHaveText('Speaking', { timeout: 800 });
+    await expect(island.getByTestId('assistant-sent')).toBeVisible();
   });
 
   test('речь: хоткей во время лица только раскрывает — без записи, лицо остаётся; Esc во время речи закрывает, при новом открытии лица нет', async () => {

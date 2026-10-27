@@ -10,9 +10,13 @@
  * вопрос, остаётся выше в `history`: очередь уходит сама, и иначе только что дописанный ответ пропал бы, не дочитанный.
  *
  * Речь (план 3b B22; план 3 Task 7; #9 §6) — по сценариям макета `finish`, `speak`, `decide`, `hotkey`, `esc`, `tuck`:
- * - предложения ответа уходят на синтез (`island:tts-speak`) по мере прихода, а их куски копятся и играют после конца
- *   ответа, по порядку; затем «Done» 1 с (`settling`) и `idle`. Ход с карточкой не озвучивается, исход `sent` —
- *   фразой «Sent» через 900 мс; ошибка и отмена молчат;
+ * - предложения ответа уходят на синтез (`island:tts-speak`) по мере прихода, и их куски играют сразу, пока ответ ещё
+ *   идёт (B26 F-B26-5): предложение за предложением, по порядку, без наложения; предложение — наименьшая единица, его
+ *   режет лента только целым. Ответ начат заново после инструмента — уже отданные предложения доигрывают, новый ответ
+ *   встаёт за ними. После конца ответа и речи — «Done» 1 с (`settling`) и `idle`. Ошибка или обрыв хода посреди
+ *   ответа глушат речь. Ответ перед карточкой подтверждения звучит так же
+ *   (B26 F-B26-4); Send, Cancel и «да»/«нет» его глушат, исход `sent` — фразой «Sent» через 900 мс; ошибка и отмена
+ *   молчат;
  * - лицо: `sentence` — звучащее предложение (эмоция L3, «?» для L2) по `speaker.onStart`; `voiceFrame()` — кадр голоса;
  * - Esc, сброс очереди и выключение динамика глушат речь в тот же такт и отменяют всю очередь в main (E3);
  * - хоткей и микрофон во время речи её не обрывают и не пишут — остров только раскрывается; ⌃ сворачивает в мини;
@@ -22,7 +26,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { matchConfirm } from '@parley/core/assistant';
 import type { AssistantState } from '@parley/protocol';
-import { ttsAvailable, type IslandAssistantConfig, type IslandBridge, type IslandSpeechApi, type IslandSpeechConfig, type IslandTtsChunk, type IslandTtsMessage, type TtsEngineState } from '../../../shared/island.js';
+import { ttsAvailable, type IslandAssistantConfig, type IslandBridge, type IslandSpeechApi, type IslandSpeechConfig, type IslandTtsMessage, type TtsEngineState } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
 import { TTS_VOICES } from '../../../shared/tts-types.js';
 import type { Listening } from './listen.js';
@@ -155,14 +159,13 @@ export interface AssistantStoreState {
   voiceFrame(): VoiceFrame | null;
 }
 
-/** Речь одного хода: предложения по `utteranceId` в порядке синтеза и куски, ждущие конца ответа. */
+/** Речь одного хода: предложения по `utteranceId` в порядке синтеза. */
 interface Talk {
   turn: number;
   feed: SentenceFeed;
   sentences: Map<string, FeedSentence & { done: boolean }>;
-  buffer: IslandTtsChunk[];
-  /** Ответ кончился: куски идут в проигрыватель. */
-  playing: boolean;
+  /** Ответ кончился, все его предложения отданы на синтез: когда они доиграют, речь хода кончена. */
+  ended: boolean;
   /** Хоть одно предложение зазвучало. */
   started: boolean;
 }
@@ -231,9 +234,10 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       silence();
       pump();
     };
-    const newTalk = (turn: number, playing: boolean): Talk => {
+    const newTalk = (turn: number): Talk => {
       silence();
-      talk = { turn, feed: createSentenceFeed(deps!.config().language), sentences: new Map(), buffer: [], playing, started: false };
+      frameAt = null;
+      talk = { turn, feed: createSentenceFeed(deps!.config().language), sentences: new Map(), ended: false, started: false };
       return talk;
     };
     /** Предложение на синтез: проигрыватель ждёт его заранее, чтобы `stop()` заглушил и куски, ещё не дошедшие. */
@@ -260,12 +264,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       sentence.done = true;
       finish();
     };
-    /** Ответ кончился: накопленные куски — в проигрыватель по порядку, дальше куски идут сразу. */
-    const play = (current: Talk): void => {
-      current.playing = true;
-      frameAt = null;
-      for (const chunk of current.buffer) deps?.speech?.speaker.enqueue(chunk);
-      current.buffer = [];
+    /** Ответ кончился: новых предложений не будет; ни одно так и не зазвучало за `SPEECH_START_TIMEOUT_MS` — молчим. */
+    const end = (current: Talk): void => {
+      current.ended = true;
       startTimer = clearTimer(startTimer);
       if (current.sentences.size > 0) startTimer = setTimeout(() => {
         startTimer = null;
@@ -279,7 +280,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
      */
     const finish = (): void => {
       const current = talk;
-      if (current === null || !current.playing || deps?.speech?.speaker.speaking() === true) return;
+      if (current === null || !current.ended || deps?.speech?.speaker.speaking() === true) return;
       for (const sentence of current.sentences.values()) if (!sentence.done) return;
       talk = null;
       startTimer = clearTimer(startTimer);
@@ -299,16 +300,13 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       startTimer = clearTimer(startTimer);
       set({ input: 'speaking', sentence: { utteranceId, emo: sentence.emo, text: sentence.text } });
     };
-    /** Ответ растёт: готовые предложения — на синтез; ответ начат заново (инструмент) — сброс очереди. */
+    /**
+     * Ответ растёт: готовые предложения — на синтез и сразу в проигрыватель. Ответ начат заново (инструмент) — лента
+     * режет его с начала, а уже отданные целые предложения доигрывают: человек их видел, и обрывать на полуслове
+     * нельзя.
+     */
     const stream = (current: Talk, host: AssistantState): void => {
-      const sentences = current.feed.push(host.turn, host.answer, false, host.moods);
-      if (current.feed.wasReset()) {
-        deps?.speech?.speaker.stop();
-        deps?.speech?.api.cancel();
-        current.sentences.clear();
-        current.buffer = [];
-      }
-      for (const sentence of sentences) say(current, sentence);
+      for (const sentence of current.feed.push(host.turn, host.answer, false, host.moods)) say(current, sentence);
     };
     /** «Sent» после исхода карточки (`decide` макета): отмена и ошибки молчат. */
     const sayLater = (): void => {
@@ -318,9 +316,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         const settings = speechSettings();
         if (settings === undefined || !canSpeak() || !get().open) return;
         const { host } = get();
-        const current = newTalk(host.turn, true);
+        const current = newTalk(host.turn);
         say(current, { text: spokenPhrase('sent', deps!.config().language, settings.gender), emo: host.mood });
-        play(current);
+        end(current);
       }, SENT_DELAY_MS);
     };
     /** Речь по состоянию хода (сценарии `finish` и `decide` макета). */
@@ -330,13 +328,14 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       if (TURN_PHASES.has(host.phase)) {
         const entering = host.turn !== previous.turn || !TURN_PHASES.has(previous.phase);
         if (talk === null && entering) startTalk(host.turn);
-        if (talk !== null && !talk.playing) stream(talk, host);
-      } else if (talk !== null && !talk.playing) {
-        // Дописанный ответ говорит лицо; ход с карточкой, ошибка и нет связи — молча.
+        if (talk !== null && !talk.ended) stream(talk, host);
+      } else if (talk !== null && !talk.ended) {
+        // Ответ дописан: последнее предложение — на синтез, и перед карточкой подтверждения тоже (B26 F-B26-4).
+        // Ошибка и нет связи посреди ответа глушат речь.
         const current = talk;
-        if (host.phase === 'idle') {
+        if (host.phase === 'idle' || host.phase === 'awaiting-confirm') {
           for (const sentence of current.feed.push(host.turn, host.answer, true, host.moods)) say(current, sentence);
-          play(current);
+          end(current);
         } else silence();
       }
       if (host.outcome === 'sent' && previous.outcome !== 'sent' && canSpeak() && get().open) sayLater();
@@ -347,7 +346,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       const settings = speechSettings();
       if (settings?.enabled !== true) return;
       if (canSpeak()) {
-        newTalk(turn, false);
+        newTalk(turn);
         return;
       }
       if (engine?.state === 'not-downloaded' && !hinted) {
@@ -534,6 +533,8 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       decide: async (decision) => {
         const proposal = get().host.proposal;
         if (proposal === null || deps === null || get().deciding !== null) return;
+        // Решение по карточке обрывает её озвучку, как Esc (B26 F-B26-4).
+        silence();
         set({ deciding: decision, cardError: null });
         try {
           const result = await deps.call('assistant.decide', { proposalId: proposal.id, decision });
@@ -557,16 +558,12 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         const utteranceId = message.type === 'chunk' ? message.chunk.utteranceId : message.utteranceId;
         if (current === null || !current.sentences.has(utteranceId)) return;
         if (message.type === 'discard') {
-          if (current.playing) deps?.speech?.speaker.discard(utteranceId, message.fromSeq);
-          else current.buffer = current.buffer.filter((chunk) => chunk.utteranceId !== utteranceId || chunk.seq < message.fromSeq);
+          deps?.speech?.speaker.discard(utteranceId, message.fromSeq);
           finish();
           return;
         }
         const { chunk } = message;
-        if (chunk.pcm.length > 0) {
-          if (current.playing) deps?.speech?.speaker.enqueue(chunk);
-          else current.buffer.push(chunk);
-        }
+        if (chunk.pcm.length > 0) deps?.speech?.speaker.enqueue(chunk);
         if (chunk.final) sentenceEnded(current, utteranceId);
       },
       speechConfig: (config) => {

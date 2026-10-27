@@ -2,8 +2,9 @@ import { speakable, type AssistantLanguage, type AssistantMood, type MoodMark } 
 
 /**
  * Очередь предложений речи помощника (план 3, Task 6; план 3b B16; #9 §6.7 L3). Режет растущий ответ хоста на
- * предложения (`Intl.Segmenter`) и отдаёт готовые на синтез; когда их играть, решает стор (после конца ответа, как
- * `finish` макета). Предложение готово, когда за ним уже есть текст или ответ закончен (`settled`); оно проходит
+ * предложения (`Intl.Segmenter`) и отдаёт готовые на синтез; играет их стор сразу, пока ответ ещё идёт (B26 F-B26-5).
+ * Предложение готово, когда за ним уже есть текст, ответ закончен (`settled`) или сразу за его концом (`.`, `!`, `?`,
+ * `…`) пришла метка эмоции: промпт ставит её в начало каждого предложения, и ждать следующего слова не нужно; оно проходит
  * `speakable` и отбрасывается, если короче 2 знаков.
  *
  * Эмоция предложения — последняя отметка `moods` не дальше его начала, из тех, что ещё не достались прошлым
@@ -31,6 +32,15 @@ export interface SentenceFeed {
 }
 
 const MIN_SENTENCE_LENGTH = 2;
+
+/**
+ * Блоки кода (` ``` ` … ` ``` `, незакрытый — до конца ответа) заменяются переводами строк той же длины: сегментатор
+ * режет по ним, а не по точкам внутри кода, и озвучивать в них нечего. Длина та же — индексы отметок эмоций не едут.
+ */
+/** Конец предложения: завершающий знак, за ним кавычки или скобки и пробелы. */
+const TERMINAL = /[.!?…]["'»”)\]]*\s*$/u;
+
+const maskCode = (answer: string): string => answer.replace(/```[\s\S]*?(?:```|$)/g, (block) => '\n'.repeat(block.length));
 /** Оценка длительности речи по тексту — та же, что у стража длины синтеза (план 3b, B05): 0,1 с на знак. */
 const CHARS_PER_SECOND = 10;
 /** Предложение короче этого эмоцию не меняет (#9 §6.7 L3). */
@@ -72,18 +82,20 @@ export function createSentenceFeed(language: AssistantLanguage): SentenceFeed {
         return [];
       }
       turn = nextTurn;
-      const segments = [...segmenter.segment(answer.slice(given.length))];
+      const segments = [...segmenter.segment(maskCode(answer).slice(given.length))];
+      const last = segments[segments.length - 1];
+      // Метка эмоции сразу за законченным предложением — оно готово, не дожидаясь следующего слова (E1).
+      const closed = settled || (last !== undefined && moods.some((mark) => mark.at >= answer.length) && TERMINAL.test(last.segment));
       const ready: FeedSentence[] = [];
       segments.forEach((segment, index) => {
-        if (index === segments.length - 1 && !settled) return;
+        if (index === segments.length - 1 && !closed) return;
         const start = given.length + segment.index + (segment.segment.length - segment.segment.trimStart().length);
         const text = speakable(segment.segment);
         if (text.length < MIN_SENTENCE_LENGTH) return;
         emo = moodFor(start, text, moods);
         ready.push({ text, emo });
       });
-      const last = segments[segments.length - 1];
-      if (last !== undefined) given = settled ? answer : answer.slice(0, given.length + last.index);
+      if (last !== undefined) given = closed ? answer : answer.slice(0, given.length + last.index);
       return ready;
     },
     reset() {
