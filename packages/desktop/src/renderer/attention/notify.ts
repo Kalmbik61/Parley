@@ -84,6 +84,8 @@ export interface NotifyDeps {
    * уведомление macOS. Codex получает переход к терминалу и без карточки.
    */
   islandOn(): boolean;
+  /** Звучит ли остров вообще: громкость его звуков выше 0 («0 — выкл», #9 §5). */
+  islandAudible(): boolean;
   /**
    * Свой сигнал «нужно действие» (спека застрявших 7.2): играет окно, не чаще раза в 2 с (`chime.ts`). Решает ли звук
    * звучать — `prefs().sound` — проверяет уведомитель.
@@ -387,8 +389,9 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       if (level === 'unseen') {
         const { entry, session } = found;
         // Done активной работы показывает остров и при `finishedSound` играет свой `done` (#9 §3.6): один звук на
-        // переход, баннер беззвучный. Признак тот же, что у «нужен ты».
-        const islandShows = deps.islandOn() && entry.map.work.status === 'active';
+        // переход, баннер беззвучный. Признак тот же, что у «нужен ты». С громкостью острова 0 он не сыграет — звенит
+        // баннер (критик m-1477).
+        const islandShows = deps.islandOn() && deps.islandAudible() && entry.map.work.status === 'active';
         send(
           {
             title: S.notifications.sessionTitle(
@@ -523,7 +526,7 @@ export function isWindowActive(): boolean {
  */
 export function wireAttentionNotifications(
   bridge: ParleyBridge,
-  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'chime' | 'providerName'>,
+  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'islandAudible' | 'chime' | 'providerName'>,
 ): () => void {
   const notifier = createAttentionNotifier({
     ...deps,
@@ -536,6 +539,7 @@ export function wireAttentionNotifications(
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
     islandOn: () => useUiStore.getState().ui.island.enabled && bridge.app.islandActive(),
+    islandAudible: () => useUiStore.getState().ui.island.sound.volume > 0,
     // Ленты нет на старом хосте — вопроса не узнать, уведомление уйдёт с задачей сессии.
     pendingAsk: (ref) =>
       hostMethods(useHostStore.getState().status).has('feed.snapshot')

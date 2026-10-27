@@ -84,6 +84,8 @@ interface Harness {
   active: boolean;
   /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
   island: boolean;
+  /** Громкость звуков острова выше 0. */
+  audible: boolean;
   windowNotes: WindowNote[];
   hidden: string[];
   /** Сколько раз окно позвонило своим сигналом «нужно действие» (спека застрявших 7.2). */
@@ -102,6 +104,7 @@ function harness(entries: WorkEntry[]): Harness {
     entries,
     active: false,
     island: false,
+    audible: true,
     windowNotes: [],
     hidden: [],
     chimes: 0,
@@ -121,6 +124,7 @@ function harness(entries: WorkEntry[]): Harness {
     hideInWindow: (tag) => h.hidden.push(tag),
     pendingAsk: h.pendingAsk,
     islandOn: () => h.island,
+    islandAudible: () => h.audible,
     chime: () => {
       h.chimes += 1;
     },
@@ -1623,6 +1627,15 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     off.notifier.onActivity(ref2, live('unseen'));
     expect(off.notes[0]?.silent).toBe(false);
     expect(island.chimes + inactive.chimes + off.chimes).toBe(0);
+
+    // Громкость острова 0: остров Done не сыграет, баннер звенит сам (критик m-1477).
+    const muted = harness([redesign()]);
+    muted.island = true;
+    muted.audible = false;
+    muted.prefs = { ...muted.prefs, finishedSound: true };
+    muted.notifier.onActivity(ref2, live('working'));
+    muted.notifier.onActivity(ref2, live('unseen'));
+    expect(muted.notes[0]?.silent).toBe(false);
   });
 
   it('finished при видимой цели — ни баннера, ни звука', () => {
