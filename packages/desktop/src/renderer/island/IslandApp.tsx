@@ -66,6 +66,7 @@ import { DEFAULT_VOICE } from '../../shared/tts-types.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
 import { useActivityStore } from '../store/activity.js';
+import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { browserRecorderDeps } from '../voice/browser-recorder.js';
 import { startRecording } from '../voice/recorder.js';
@@ -301,7 +302,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     connectedAt.current = Date.now();
     useIslandRequests.getState().bind(bridge.call);
     useIslandReplies.getState().bind(bridge.call);
-    const disposers = [useWorksStore.getState().init(bridge), useActivityStore.getState().init(bridge)];
+    // Стор провайдеров — для значков `AgentIcon`: вендор своего провайдера узнаётся по его строке.
+    const disposers = [useWorksStore.getState().init(bridge), useActivityStore.getState().init(bridge), useProvidersStore.getState().init(bridge)];
     return () => {
       useIslandRequests.getState().bind(null);
       useIslandReplies.getState().bind(null);

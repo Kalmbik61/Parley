@@ -73,11 +73,11 @@ export interface ProvidersState {
    * Первый запрос и подписки на changed/limitsChanged; возвращает отписку — ответ,
    * пришедший позже неё, и события после неё в стор не попадают.
    */
-  init: (bridge: ParleyBridge) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'call' | 'on'>) => () => void;
 }
 
 export const useProvidersStore = create<ProvidersState>((set) => {
-  let activeBridge: ParleyBridge | null = null;
+  let activeBridge: Pick<ParleyBridge, 'call' | 'on'> | null = null;
   let connection = 0;
   let request = 0;
   let refreshPromise: Promise<void> | null = null;

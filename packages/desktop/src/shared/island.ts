@@ -232,10 +232,12 @@ export interface IslandPresentationOutcome {
 /**
  * Методы хоста, которые main пропускает от острова (`host:call` по отправителю). `context.messages` — чтение страниц писем:
  * остров держит тот же стор работ, и при разрыве версии он перечитывает держимое так же, как главное окно
- * (спека rooms.mail 6.5); без него каждое такое чтение отказывало бы и сыпало предупреждения в консоль.
+ * (спека rooms.mail 6.5); без него каждое такое чтение отказывало бы и сыпало предупреждения в консоль. `providers.list` —
+ * строки провайдеров для значков: без них `AgentIcon` не знает пресет своего провайдера и рисует значок Parley.
  */
 export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'works.list',
+  'providers.list',
   'context.messages',
   'feed.snapshot',
   'feed.progress',
@@ -252,7 +254,8 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
 /**
  * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ, письма работ
  * (`rooms.mail`: запись одних писем `works.changed` уже не шлёт, и без него числа острова застыли бы до следующего
- * структурного снимка), активность сессий, состояние помощника и карточки согласия на папку. Остальное (`pty.output`
+ * структурного снимка), активность сессий, состояние помощника, карточки согласия на папку и смена списка провайдеров
+ * (значки). Остальное (`pty.output`
  * всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода терминалов шёл бы в его renderer
  * впустую. Тип `EventName` ловит опечатку при сборке.
  */
@@ -262,6 +265,7 @@ export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
   'activity.changed',
   'assistant.changed',
   'consents.changed',
+  'providers.changed',
 ]);
 
 /** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */
