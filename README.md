@@ -44,17 +44,23 @@ official CLIs: Parley itself adds no API keys and no extra bill.
 2. **Give the task once.** Write it in the room's input field and it goes to everyone. Type
    `@` to address only some of the members.
 3. **Agents discuss.** Every member answers in the room with its position. All members see
-   the whole feed and write to each other through Parley's tools; a sleeping agent wakes up
-   when a message comes for it.
+   the whole feed and write to each other through Parley's tools. An idle agent wakes up at
+   once for an urgent letter: one from you, one addressed to it, a question, a decision or an
+   `@s02` mention. Broadcast notes wait for a quiet moment in the room and arrive together.
 4. **The lead brings a decision.** It collects the positions and proposes one decision. The
    decision waits for you as a card: **Accept**, or **Return for rework** with a note.
 5. **The work is handed out.** Once you accept, the lead gives out the parts with mentions such
    as `@s02` and the agents start. Follow them in the feed, open any agent's terminal with a
    click, and review the result in "Changes" (diff, commit, merge).
 
-A room has three modes: **Free** — the decision is plain text; **Checklist** — the decision is
+A room has four modes: **Free** — the decision is plain text; **Checklist** — the decision is
 a plan with owners, and Parley wakes them in turn; **Verified** — every item also has
-acceptance criteria and an independent verifier, and you accept the summary. Recipes fill in a
+acceptance criteria and an independent verifier, and you accept the summary; **Autonomous** —
+after your Go, the host runs the plan on its own: every item is a worker attempt in an isolated
+clone, checked on a clean checkout, judged by a verifier and merged into an integration branch,
+and you accept the result at the end. If the engine stops (a spent budget, no progress, a stuck
+attempt), the room says why and Continue resumes it. Autonomous rooms have passed their tests
+with stub agents; a full run with real agents has not been done yet. Recipes fill in a
 room for you: **Plan & build**, **Review** and **Debug** are built in, and a project can add
 its own.
 
@@ -194,6 +200,12 @@ Once a day Parley checks GitHub for a new release and shows a toast when one is 
 off in Settings → Notifications); it does not update itself. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
 app in Applications and run the `xattr` command again: macOS treats every unsigned build as a
 new app. Your data lives outside the app and stays.
+
+Since 0.22.0 your works live in one database, `~/.parley/parley.db`; the first start moves them
+there and renames each `map.json` to `map.v2.json` and `works-index.json` to
+`works-index.v2.json`. Parley 0.21 and older cannot read the
+database: to go back, quit Parley and rename the files back. Works changed after the update stay
+only in the database.
 
 ## Requirements
 
