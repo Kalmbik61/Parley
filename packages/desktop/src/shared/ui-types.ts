@@ -6,6 +6,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
+import { DEFAULT_VOICE, isAssistantVoiceId, TTS_VOICES, type AssistantVoiceId, type TtsVoice } from './tts-types.js';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
 export type Appearance = 'system' | 'dark' | 'light';
@@ -72,6 +73,10 @@ export interface AssistantUi {
   hotkey: string;
   /** Код языка Whisper (`uk`, `de`, …), не `auto`; `null` — язык системы. */
   language: AssistantLanguage | null;
+  /** «Speak answers» (план 3b, B15): помощник говорит ответы нейроголосом; выключено по умолчанию. */
+  speak: boolean;
+  /** Голос каталога (`shared/tts-types.ts`); `null` — `DEFAULT_VOICE`. */
+  voice: AssistantVoiceId | null;
 }
 
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
@@ -145,7 +150,7 @@ export const DEFAULT_UI: UiFile = {
     sound: { palette: 'soft', volume: 0.6, ui: false },
     motion: 'system',
   },
-  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null },
+  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, voice: null },
 };
 
 /**
@@ -326,7 +331,15 @@ function normalizeAssistant(value: unknown): AssistantUi {
     model: text(source.model),
     hotkey: text(source.hotkey) ?? fallback.hotkey,
     language: isVoiceLanguage(source.language) && source.language !== 'auto' ? source.language : null,
+    speak: typeof source.speak === 'boolean' ? source.speak : fallback.speak,
+    voice: isAssistantVoiceId(source.voice) ? source.voice : null,
   };
+}
+
+/** Голос помощника из настроек: выбранный или `DEFAULT_VOICE` (G4). Род голоса — для зеркала хосту и острова. */
+export function assistantVoice(assistant: AssistantUi): TtsVoice {
+  const id = assistant.voice ?? DEFAULT_VOICE;
+  return TTS_VOICES.find((voice) => voice.id === id) ?? TTS_VOICES[0]!;
 }
 
 /**

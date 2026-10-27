@@ -75,10 +75,12 @@ class ResizeObserverStub {
 /** Звук острова (#9 §5): по умолчанию в тестах молчит; `SOUND_ON` — включено «Sound when you're needed». */
 const SOUND_OFF: IslandConfig['islandSound'] = { needs: false, finished: false, palette: 'soft', volume: 0.6, ui: false };
 const SOUND_ON: IslandConfig['islandSound'] = { ...SOUND_OFF, needs: true };
+/** Нейроголос (план 3b, B15): в тестах выключен и не скачан. */
+const SPEECH_OFF = { enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false } as const;
 
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
-    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, islandSound: SOUND_OFF, motion: 'system', topInset: 0, anchor: 'center', ...config })),
+    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF }, islandSound: SOUND_OFF, motion: 'system', topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
     visibility: vi.fn(async () => ({ version: 0, refs: [] })),
     onVisibility: vi.fn(() => () => undefined),
@@ -88,6 +90,7 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
     onNavigatePending: vi.fn((listener: () => void) => { pendingNavigationHandler = listener; return () => { pendingNavigationHandler = null; }; }),
     onKeyboardBlur: vi.fn(() => () => undefined),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
+    speech: { connect: vi.fn(), speak: vi.fn(async () => ({ state: 'not-downloaded' as const })), cancel: vi.fn(), warmup: vi.fn(async () => ({ state: 'not-downloaded' as const })), setSpeak: vi.fn(async () => undefined) },
   };
 }
 let pendingNavigationHandler: (() => void) | null = null;
@@ -141,7 +144,7 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: 
 }
 
 /** Помощник включён в настройках острова. */
-const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null } };
+const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF };
 
 /** Работа идёт к моменту открытия острова: сторы заполнены заранее, обмена с хостом ждать не надо. */
 function seedWorking(): void {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
+import { DEFAULT_VOICE } from './tts-types.js';
+import { assistantVoice, DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
 
 describe('normalizeUi', () => {
   it('пустой объект → DEFAULT_UI', () => {
@@ -253,7 +254,7 @@ describe('normalizeUi: звук и движение острова (#9 §5)', ()
 
 describe('normalizeUi: помощник', () => {
   it('нет ключа — умолчание: выключен, Alt+Space, провайдер, модель и язык не выбраны', () => {
-    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null });
+    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, voice: null });
   });
 
   it('мусор — умолчание, годные поля остаются', () => {
@@ -267,6 +268,8 @@ describe('normalizeUi: помощник', () => {
       model: 'm',
       hotkey: 'Control+Alt+J',
       language: 'ru',
+      speak: false,
+      voice: null,
     });
   });
 
@@ -274,6 +277,19 @@ describe('normalizeUi: помощник', () => {
     expect(normalizeUi({ assistant: { language: 'uk' } }).assistant.language).toBe('uk');
     expect(normalizeUi({ assistant: { language: 'auto' } }).assistant.language).toBeNull();
     expect(normalizeUi({ assistant: { language: 'english' } }).assistant.language).toBeNull();
+  });
+
+  it('речь (план 3b, B15): speak выключен по умолчанию, голос — id каталога или null; старый ui.json без полей — умолчания', () => {
+    expect(normalizeUi({ assistant: { enabled: true } }).assistant).toMatchObject({ speak: false, voice: null });
+    expect(normalizeUi({ assistant: { speak: true, voice: 'qwen3-0.6b/ryan' } }).assistant).toMatchObject({ speak: true, voice: 'qwen3-0.6b/ryan' });
+    expect(normalizeUi({ assistant: { speak: 'yes', voice: 'Milena' } }).assistant).toMatchObject({ speak: false, voice: null });
+    expect(normalizeUi({ assistant: { speak: 1, voice: 5 } }).assistant).toMatchObject({ speak: false, voice: null });
+  });
+
+  it('G4: на чистой установке голос помощника — serena; выбранный — свой', () => {
+    expect(assistantVoice(normalizeUi({}).assistant)).toMatchObject({ id: DEFAULT_VOICE, name: 'Serena', gender: 'female' });
+    expect(DEFAULT_VOICE).toBe('qwen3-0.6b/serena');
+    expect(assistantVoice({ ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/ryan' })).toMatchObject({ id: 'qwen3-0.6b/ryan', gender: 'male' });
   });
 });
 

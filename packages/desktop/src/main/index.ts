@@ -8,6 +8,7 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
+  MessageChannelMain,
   nativeImage,
   nativeTheme,
   net,
@@ -26,9 +27,10 @@ import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
-import { ISLAND_EVENTS, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
+import { ISLAND_EVENTS, ttsAvailable, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
-import type { UiFile } from '../shared/ui-types.js';
+import { TTS_MODELS } from '../shared/tts-types.js';
+import { assistantVoice, type UiFile } from '../shared/ui-types.js';
 import { createAgentDownloads } from './browser/agent-downloads.js';
 import { createAgentScripts } from './browser/agent-evaluate.js';
 import { createAgentStorage } from './browser/agent-storage.js';
@@ -57,6 +59,8 @@ import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ip
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createAssistantShortcut } from './assistant/shortcut.js';
+import { createSpeechWorker, resolveSpeech, spawnSpeech } from './assistant/speech-worker.js';
+import { createFakeTtsService, createTtsService } from './assistant/tts.js';
 import { createIslandShortcut } from './island/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
 import type { IslandPlacement } from './island/placement.js';
@@ -83,7 +87,7 @@ import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assi
 import { isFileSync, resolveEngine } from './voice/engine.js';
 import { registerVoiceIpc } from './voice/ipc.js';
 import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
-import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
+import { createModelStore, freeBytes, ttsModelsDir, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
 import { killRunningEngines, removeStaleRecordings } from './voice/transcribe.js';
 import { createMainWindow, guardNavigation, guardWindowClose, titlebarDoubleClickAction, trackLoadedWindow } from './window.js';
@@ -547,6 +551,32 @@ if (!gotLock) {
     }
     const assistantLanguage = (current: UiFile): AssistantLanguage =>
       current.assistant.language ?? systemAssistantLanguage(app.getLocale());
+    // Нейроголос помощника (план 3b, B10/B15): веса в ~/.parley/desktop/voice/tts, `speech` — Resources/speech или
+    // build/speech (dev), только Apple Silicon. PARLEY_TTS=fake (E2E) — подмена без движка и весов.
+    const ttsModels = createModelStore({ dir: ttsModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes, catalog: TTS_MODELS });
+    const tts = switches.tts
+      ? createFakeTtsService()
+      : createTtsService({
+          supported: process.platform === 'darwin' && process.arch === 'arm64',
+          models: ttsModels,
+          createWorker: () =>
+            createSpeechWorker({
+              bin: () =>
+                resolveSpeech({
+                  isPackaged: app.isPackaged,
+                  resourcesPath: process.resourcesPath,
+                  devDir: path.resolve(dirname, '../../build/speech/darwin-arm64'),
+                  isFile: isFileSync,
+                }),
+              // Один файл весов на все голоса (Р6).
+              model: () => ttsModels.path('qwen3-tts-0.6b-q8_0'),
+              spawn: spawnSpeech,
+              log: (message) => console.warn('[parley] speech', message),
+            }),
+          log: (message) => console.warn('[parley] tts', message),
+        });
+    // Выход приложения: отмена речи и `SIGKILL` worker.
+    app.on('before-quit', () => tts.stop());
     // Настройки помощника — хосту для ответов из Telegram: при каждом подключении и сохранении ui.json.
     const mirrorModels = createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes });
     let hostMethods: readonly string[] | null = null;
@@ -577,6 +607,12 @@ if (!gotLock) {
           language: assistantLanguage(current),
           hotkey: current.assistant.hotkey,
           voice: { enabled: current.voice.enabled, model: current.voice.model },
+          speech: {
+            enabled: current.assistant.speak,
+            voice: assistantVoice(current.assistant).id,
+            gender: assistantVoice(current.assistant).gender,
+            available: ttsAvailable(tts.state()),
+          },
         },
         islandSound: {
           needs: current.notifications.sound,
@@ -596,6 +632,12 @@ if (!gotLock) {
         if (window !== null) window.webContents.send('island:config', config);
       });
     };
+    // Голос скачали, удалили или движок отказал: доступность речи — острову, состояние — настройкам главного окна.
+    tts.onState((state) => {
+      pushIslandConfig();
+      const window = mainWindow;
+      if (window !== null && !window.isDestroyed()) window.webContents.send('app:assistant-voice-state', state);
+    });
     /**
      * Настройка решает, есть ли окно; `PARLEY_ISLAND=off` (E2E) — острова нет в любом случае. Место отсюда не читается:
      * его пишет только main (`savePlacement`), и чтение файла, обогнавшее незавершённую запись, откатило бы место назад.
@@ -652,6 +694,10 @@ if (!gotLock) {
         window.hide();
         console.warn('[parley] island render failed');
       },
+      tts,
+      ttsChannel: () => new MessageChannelMain(),
+      uiStore,
+      onUiSaved: () => handleUiSaved(),
     });
 
     // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
@@ -800,25 +846,28 @@ if (!gotLock) {
       hostStatus = status;
     });
 
+    // Сохранение ui.json из Settings и значком динамика острова (`island:assistant-speak`).
+    function handleUiSaved(): void {
+      void updates.settingsChanged();
+      // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
+      void uiStore.load().then((current) => {
+        ops.accessChanged(current.browser.agentsAllowed);
+        void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
+        // Сбой острова не должен ломать сохранение настроек.
+        try {
+          syncIsland(current);
+        } catch (error) {
+          console.warn('[parley] island sync failed', error);
+        }
+      });
+    }
     registerIpc({
       ipcMain,
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
-      onUiSaved: () => {
-        void updates.settingsChanged();
-        // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
-        void uiStore.load().then((current) => {
-          ops.accessChanged(current.browser.agentsAllowed);
-          void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
-          // Сбой острова не должен ломать сохранение настроек.
-          try {
-            syncIsland(current);
-          } catch (error) {
-            console.warn('[parley] island sync failed', error);
-          }
-        });
-      },
+      onUiSaved: () => handleUiSaved(),
+      tts,
       isIslandSender: (sender) => island.isIsland(sender),
       reportSessionVisibility: (event, report) => visibility.report(event, report),
       openAssistant: () => openAssistant({ listen: false }),

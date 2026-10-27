@@ -12,7 +12,7 @@ describe('assistantSettingsOf', () => {
       voice,
       () => 'en',
     );
-    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null });
+    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null, voiceGender: 'female' });
   });
 
   it('голос включён, модель скачана: путь к модели', () => {
@@ -27,6 +27,22 @@ describe('assistantSettingsOf', () => {
 
   it('помощник выключен: enabled false', () => {
     expect(assistantSettingsOf(ui({}), voice, () => 'en').enabled).toBe(false);
+  });
+
+  it('род голоса (Р3): без выбора — serena, female; ryan и aiden — male', () => {
+    expect(assistantSettingsOf(ui({}), voice, () => 'en').voiceGender).toBe('female');
+    expect(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/aiden' } }), voice, () => 'en').voiceGender).toBe('male');
+  });
+});
+
+describe('G1: зеркало после смены голоса', () => {
+  it('смена assistant.voice на ryan шлёт assistant.configure с voiceGender: male', async () => {
+    const call = vi.fn().mockResolvedValue(undefined);
+    const mirror = createAssistantMirror({ call, methods: () => ['assistant.configure'], log: vi.fn() });
+    await mirror.push(assistantSettingsOf(ui({}), voice, () => 'ru'));
+    await mirror.push(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/ryan' } }), voice, () => 'ru'));
+    expect(call.mock.calls.map(([, settings]) => (settings as { voiceGender?: string }).voiceGender)).toEqual(['female', 'male']);
+    expect(call).toHaveBeenLastCalledWith('assistant.configure', expect.objectContaining({ voiceGender: 'male' }));
   });
 });
 

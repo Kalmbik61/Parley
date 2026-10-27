@@ -18,6 +18,8 @@ import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
 import { forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
+import { TTS_VOICES } from '../shared/tts-types.js';
+import type { TtsService, TtsState } from './assistant/tts.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -43,6 +45,20 @@ class FakeIpcMain {
     if (!handler) throw new Error(`нет обработчика для ${channel}`);
     return handler(event, ...args);
   }
+}
+
+/** Подменная служба нейроголоса (план 3b, B15): веса не скачаны, скачивание отдаёт один шаг прогресса. */
+function fakeTts() {
+  return {
+    voices: vi.fn(async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: false }))),
+    download: vi.fn<TtsService['download']>(async (onProgress) => {
+      onProgress({ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 5, totalBytes: 10 });
+      return { ok: true };
+    }),
+    cancelDownload: vi.fn(),
+    remove: vi.fn(async () => undefined),
+    state: vi.fn((): TtsState => ({ state: 'not-downloaded' })),
+  };
 }
 
 /** Сессия раздела браузера и чужая — мост сверяет гостя по `contents.session` (кусок 9.1). */
@@ -129,6 +145,7 @@ function setup(
     suspendIslandShortcut?: (on: boolean) => void;
   } = {},
 ): {
+  tts: ReturnType<typeof fakeTts>;
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -197,6 +214,7 @@ function setup(
   const imageThumbnail = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
   const setDirtyBuffers = vi.fn();
   const answerClose = vi.fn();
+  const tts = fakeTts();
   const roots: RootsRegistry =
     overrides.roots ??
     ({
@@ -241,6 +259,7 @@ function setup(
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
+    tts,
     browser: {
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
@@ -254,6 +273,7 @@ function setup(
   });
 
   return {
+    tts,
     ipcMain,
     connection,
     layoutStore,
@@ -623,6 +643,38 @@ describe('registerIpc', () => {
       });
     }
     expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('нейроголос помощника для настроек (план 3b, B15)', () => {
+  it('app:assistant-voices отдаёт каталог службы; G3: нескачанный голос — downloaded: false, ничего не качается само', async () => {
+    const { ipcMain, tts } = setup();
+    const voices = (await ipcMain.invoke('app:assistant-voices')) as { id: string; downloaded: boolean }[];
+    expect(voices.map((voice) => voice.id)).toEqual(TTS_VOICES.map((voice) => voice.id));
+    expect(voices.every((voice) => !voice.downloaded)).toBe(true);
+    expect(await ipcMain.invoke('app:assistant-voice-state')).toEqual({ state: 'not-downloaded' });
+    expect(tts.download).not.toHaveBeenCalled();
+  });
+
+  it('app:assistant-voice-download качает по запросу и шлёт прогресс отправителю; закрытому окну — нет', async () => {
+    const { ipcMain, tts } = setup();
+    const sender = { isDestroyed: vi.fn(() => false), send: vi.fn() };
+    await expect(ipcMain.invokeWithEvent('app:assistant-voice-download', { sender })).resolves.toEqual({ ok: true });
+    expect(tts.download).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 5, totalBytes: 10 });
+    const gone = { isDestroyed: vi.fn(() => true), send: vi.fn() };
+    await ipcMain.invokeWithEvent('app:assistant-voice-download', { sender: gone });
+    expect(gone.send).not.toHaveBeenCalled();
+  });
+
+  it('D5: app:assistant-voice-cancel → cancelDownload, app:assistant-voice-remove → remove', async () => {
+    const { ipcMain, tts } = setup();
+    await ipcMain.invoke('app:assistant-voice-cancel');
+    expect(tts.cancelDownload).toHaveBeenCalledTimes(1);
+    expect(tts.remove).not.toHaveBeenCalled();
+    await ipcMain.invoke('app:assistant-voice-remove');
+    expect(tts.remove).toHaveBeenCalledTimes(1);
+    expect(tts.download).not.toHaveBeenCalled();
   });
 });
 
