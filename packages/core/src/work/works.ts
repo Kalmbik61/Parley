@@ -36,6 +36,12 @@ export interface WorkEntry {
 export interface WindowWorkEntry {
   projectPath: string;
   map: WindowWorkMap;
+  /**
+   * Версия строки работы в базе, под которой собран этот снимок (`WorkEntry.version`; спека rooms.mail 6.3, 6.5). Окно по
+   * ней сверяет события с `prevVersion`: разрыв значит, что оно что-то пропустило, и держимые письма надо перечитать. Нет
+   * у снимка, собранного без версии (запись успела вклиниться между чтением версии и карты) и у хоста до `rooms-mail`.
+   */
+  version?: number;
 }
 
 /**
@@ -163,6 +169,9 @@ const sameVersions = (left: ReadonlyMap<string, number>, right: ReadonlyMap<stri
  * MCP агента без канала) видны по `PRAGMA data_version`: его опрос раз в `pollMs` ничего не читает, а когда число
  * сменилось, версии работ сверяются с прошлым снимком — лишнее чтение идёт только при настоящем отличии.
  *
+ * Запись этого процесса, менявшая только письма (`structural === false`), чтения не просит: списку работ письма не нужны.
+ * Её версию наблюдатель запоминает, и опрос чужих записей на ней не срабатывает.
+ *
  * Чтений внахлёст не бывает: пока одно идёт, события лишь помечают список «грязным».
  */
 export function watchWorks(
@@ -221,8 +230,18 @@ export function watchWorks(
 
   const unsubscribe = onMapWritten((event) => {
     const key = versionKey(event.projectPath, event.workId);
-    if (event.removed === true) versions.delete(key);
-    else versions.set(key, event.version);
+    if (event.removed === true) {
+      versions.delete(key);
+      schedule();
+      return;
+    }
+    // Версия до записи не та, что известна наблюдателю: между ними легла чужая запись, которую опрос ещё не разобрал.
+    // Запомнить новую версию и промолчать значило бы спрятать её от опроса — будим, как для любой записи.
+    const unseen = event.prevVersion !== undefined && versions.get(key) !== event.prevVersion;
+    versions.set(key, event.version);
+    // Запись только писем списка работ не меняет (спека rooms.mail 6.7): письма идут окнам событием хоста. Версию
+    // запомнили выше — опрос `data_version` такую запись изменением не сочтёт.
+    if (event.structural === false && !unseen) return;
     schedule();
   });
 

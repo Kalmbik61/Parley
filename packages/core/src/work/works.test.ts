@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
+import { writeLetters, type NewLetter } from './letter-store.js';
 import { addSession } from './map.js';
+import { addRoom } from './rooms.js';
 import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths, workVersion } from './store.js';
 import type { Room } from './types.js';
 import { readWorks, watchWorks, type WorkEntry } from './works.js';
@@ -286,6 +288,99 @@ describe('watchWorks', () => {
         timeout: 2000,
         interval: 10,
       });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  /** Работа с комнатой r-01 (создатель s-01, участник s-02): письма пишутся в неё. */
+  const seedRoom = async (): Promise<string> => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, created.work.id, (map) => {
+      addRoom(map, { title: 'бэкенд', creator: 's-01', members: ['s-02'] }, '2026-10-24T00:00:00.000Z');
+    });
+    return created.work.id;
+  };
+
+  const roomLetter = (text: string): NewLetter => ({ from: 's-01', to: [], roomId: 'r-01', text, kind: 'note' });
+
+  it('запись только писем не будит наблюдателя (спека rooms.mail 6.7)', async () => {
+    const workId = await seedRoom();
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 5, pollMs: 20 });
+
+    try {
+      writeLetters(project, workId, (letters) => {
+        letters.add(roomLetter('первое'));
+      });
+      writeLetters(project, workId, (letters) => {
+        letters.add(roomLetter('второе'));
+      });
+      await sleep(100);
+
+      // Наблюдатель стартового чтения не делает: его первый вызов — это уже ответ на запись.
+      expect(seen).toEqual([]);
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('смешанная запись, письма вместе с комнатой, будит наблюдателя', async () => {
+    const workId = await seedRoom();
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 5, pollMs: 20 });
+
+    try {
+      await updateMap(project, workId, (map, letters) => {
+        addRoom(map, { title: 'фронт', creator: 's-01', members: ['s-02'] }, '2026-10-24T00:00:00.000Z');
+        letters.add(roomLetter('в новой комнате'));
+      });
+
+      await vi.waitFor(() => expect(seen.at(-1)?.[0]?.map.rooms).toHaveLength(2), { timeout: 2000, interval: 10 });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('запись только писем из другого соединения будит наблюдателя опросом', async () => {
+    const workId = await seedRoom();
+    writeLetters(project, workId, (letters) => {
+      letters.add(roomLetter('будет помечено'));
+    });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 5, pollMs: 20 });
+
+    try {
+      // Так выглядит для наблюдателя `writeLetters` другого процесса: строки писем и версия работы в одной транзакции.
+      const foreign = foreignConnection();
+      try {
+        foreign.exec('BEGIN IMMEDIATE');
+        foreign.prepare('UPDATE messages SET deleted = 1 WHERE project_path = ? AND work_id = ?').run(project, workId);
+        foreign.prepare('UPDATE works SET version = version + 1 WHERE project_path = ? AND id = ?').run(project, workId);
+        foreign.exec('COMMIT');
+      } finally {
+        foreign.close();
+      }
+
+      await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 2000, interval: 10 });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('запись только писем после чужой, которую опрос ещё не разобрал, будит наблюдателя', async () => {
+    const workId = await seedRoom();
+    const seen: WorkEntry[][] = [];
+    // Опрос выключен: будить может только событие своей записи, и оно обязано заметить, что версия до неё не та, что известна наблюдателю.
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 5, pollMs: NO_POLL });
+
+    try {
+      foreignGoal(project, workId, 'чужая цель');
+      writeLetters(project, workId, (letters) => {
+        letters.add(roomLetter('после чужой записи'));
+      });
+
+      await vi.waitFor(() => expect(seen.at(-1)?.[0]?.map.work.goal).toBe('чужая цель'), { timeout: 2000, interval: 10 });
     } finally {
       watcher.close();
     }
