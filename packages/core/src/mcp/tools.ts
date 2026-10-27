@@ -45,6 +45,7 @@ import {
   seqOf,
   textPage,
 } from '../work/context-pages.js';
+import { settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
@@ -99,6 +100,12 @@ export const MAX_TIMEOUT_SEC = 30 * 60;
 
 /** Как часто сверять версию работы в базе: карта перечитывается, только когда версия сменилась (спека хранилища 6.9). */
 const POLL_MS = 2000;
+
+/**
+ * Запас к сроку окна тишины в `wait_for("inbox")`: таймер Node может сработать на миллисекунду раньше часов, и цикл вошёл бы
+ * в новое ожидание с остатком в 1–2 мс. Ожидание всё равно не уходит за таймаут вызова.
+ */
+const SETTLE_SLACK_MS = 20;
 
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
@@ -834,12 +841,27 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  /** Сколько ещё ждать тишины по этим письмам, мс; 0 — доставлять сейчас (окно и потолок — из контекста, для тестов). */
+  const settleDelay = (unread: readonly Message[]): number =>
+    settleDelayMs(unread, sessionId, Date.now(), context.settleMs, context.settleMaxMs);
+  /** Ответ пробы «письма есть, но не устоялись»: цикл ниже пересчитывает срок и ждёт не дольше него. */
+  const PENDING = Symbol('pending');
+  /** Ожидание начато без писем: появившиеся несрочные письма оно обязано отдать циклу (см. пробу), а не ждать мимо их срока. */
+  let wakeOnPending = false;
 
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
     // Проба только читает: письма отдаёт и отмечает прочитанными `takeInbox` после ожидания, когда вызов точно не отменён
-    // (отмена посреди пробы иначе отметила бы письма, которых агент не увидит).
-    probe = async () => (unreadLetters(context.projectPath, context.workId, sessionId).length === 0 ? null : true);
+    // (отмена посреди пробы иначе отметила бы письма, которых агент не увидит). «Готово» — есть срочное письмо или пачка
+    // устоялась (`settleDelayMs`, то же правило, что у будильника хоста); несрочные ещё в окне тишины — не готово.
+    probe = async () => {
+      const unread = unreadLetters(context.projectPath, context.workId, sessionId);
+      if (unread.length === 0) return null;
+      if (settleDelay(unread) === 0) return true;
+      // Письма пришли, пока ожидание шло без них: оно не знает их срока, поэтому отдаёт управление циклу ниже, и тот ограничит
+      // ожидание окном. Ожидание, уже ограниченное окном, этого не делает — иначе цикл не вышел бы из пробы.
+      return wakeOnPending ? PENDING : null;
+    };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
     // ошибкой сразу — ожидания не возникает (спецификация, раздел 8). Сессию,
@@ -923,9 +945,22 @@ async function waitFor(
   // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
   const cancelled = (): boolean => signal?.aborted === true;
   for (;;) {
-    const found = await waitOnce(Math.max(endsAt - Date.now(), 0));
-    if (found === null) return { state: 'running' };
-    if (target !== 'inbox') return found;
+    const timeLeftMs = Math.max(endsAt - Date.now(), 0);
+    // Письма лежат, но пачка не устоялась: проба из-за этого не сработает до смены карты, а срок идёт по часам. Поэтому ждём
+    // не дольше срока и пересчитываем (не раньше, чем кончится таймаут вызова).
+    const unsettledMs = target === 'inbox' ? settleDelay(unreadLetters(context.projectPath, context.workId, sessionId)) : 0;
+    wakeOnPending = unsettledMs === 0;
+    const found = await waitOnce(unsettledMs > 0 ? Math.min(timeLeftMs, unsettledMs + SETTLE_SLACK_MS) : timeLeftMs);
+    if (target !== 'inbox') return found === null ? { state: 'running' } : found;
+    if (found === PENDING) continue;
+    if (found === null) {
+      if (cancelled()) return { state: 'running' };
+      // Короткое ожидание до срока кончилось, а таймаут вызова — нет: письма могли устояться или прибавиться.
+      if (endsAt - Date.now() > 0) continue;
+      // Таймаут вызова при лежащих неустоявшихся письмах: отдаём их, а не `running` — письмо уже лежит, а держать его дольше
+      // вызова незачем. Ничего не лежит — `running`.
+      if (unreadLetters(context.projectPath, context.workId, sessionId).length === 0) return { state: 'running' };
+    }
     // Письма забираются только теперь, когда ожидание целиком закончено, в том числе запись конца в журнал: пока она шла,
     // клиент мог отменить вызов, а письма, помеченные до этого, пропали бы вместе с отброшенным ответом. От проверки отмены
     // до `return` ни одного `await`: отмена приходит отдельным событием, а не микрозадачей, и между пометкой и ответом

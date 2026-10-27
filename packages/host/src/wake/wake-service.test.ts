@@ -1200,12 +1200,16 @@ async function trio(): Promise<{ workId: string; ids: [string, string, string] }
  * карте до старта (приглашения в комнату), будильник считает указанными —
  * будят только новые.
  */
-async function trioRig(workId: string, ids: readonly string[]): Promise<Map<string, () => string>> {
+async function trioRig(
+  workId: string,
+  ids: readonly string[],
+  wakeOptions: WakeServiceOptions = {},
+): Promise<Map<string, () => string>> {
   const host = fakeHost();
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
   const pty = createPtyManager(host);
-  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs: 30 });
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs: 30, ...wakeOptions });
 
   await works.start();
   await activity.start();
@@ -1259,18 +1263,11 @@ describe('WakeService: комнаты (3.5)', () => {
     await updateMap(project, workId, (map) => {
       addRoom(map, { title: 'Ревью «схемы»', creator: a, members: [b, c] });
     });
-    const streams = await trioRig(workId, ids);
+    // Заметка всем несрочная: ждёт окна тишины; его таймер будит каждого участника (короткое окно вместо 30 с).
+    const streams = await trioRig(workId, ids, { settleMs: 300 });
 
     await updateMap(project, workId, (map, letters) => {
-      // Заметка всем несрочная: ждёт окна тишины (30 с). Письмо старше окна — указатель сразу.
-      letters.add({
-        kind: 'note',
-        from: a,
-        to: [],
-        roomId: 'r-01',
-        text: 'всем',
-        at: new Date(Date.now() - 60_000).toISOString(),
-      });
+      letters.add({ kind: 'note', from: a, to: [], roomId: 'r-01', text: 'всем' });
     });
 
     const expected = `echo: ${inRoom(1, 'r-01', 'Ревью «схемы»')}`;

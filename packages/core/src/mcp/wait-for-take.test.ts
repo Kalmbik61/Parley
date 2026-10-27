@@ -4,8 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addSession } from '../work/map.js';
+import { addRoom } from '../work/rooms.js';
 import { createWork, readStoredMap, updateMap, workPaths } from '../work/store.js';
-import { writeLetters } from '../work/letter-store.js';
+import { unreadLetters, writeLetters, type NewLetter } from '../work/letter-store.js';
+import { HUMAN } from '../work/types.js';
+import type { McpContext } from './context.js';
 import { createToolRunner, type ToolRunner } from './tools.js';
 
 /**
@@ -15,6 +18,11 @@ import { createToolRunner, type ToolRunner } from './tools.js';
  * окно, где вызов уже нашёл письмо, но ещё не закончился. Остальные вызовы `appendFile` проходят насквозь.
  */
 const journal = vi.hoisted(() => ({ beforeLine: null as ((line: string) => Promise<void> | void) | null }));
+/** Вызовы `unreadLetters` считает тест «без вращения»: цикл ожидания не должен читать ящик в горячем цикле. */
+vi.mock('../work/letter-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../work/letter-store.js')>();
+  return { ...actual, unreadLetters: vi.fn(actual.unreadLetters) };
+});
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -252,5 +260,199 @@ describe('wait_for("inbox"): брошенный вызов — ход сесси
 
     expect(answer['state']).toBe('done');
     expect(asked).toEqual([]);
+  });
+});
+
+describe('wait_for("inbox"): окно тишины — несрочные письма отдаются пачкой, срочные сразу', () => {
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  /** Исполнитель `s-01` с коротким окном и потолком вместо боевых 30 с и 120 с. */
+  const runnerSettle = (settleMs: number, settleMaxMs: number, extra: Partial<McpContext> = {}): ToolRunner =>
+    createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, pollMs: 40, settleMs, settleMaxMs, ...extra });
+  /** Письмо в комнате от `s-02`: по умолчанию заметка всем без упоминания — несрочная. */
+  const roomLetter = async (text: string, extra: Partial<NewLetter> = {}): Promise<void> => {
+    await updateMap(project, workId, (_map, letters) => { letters.add({ roomId: 'r-01', kind: 'note', from: 's-02', to: [], text, ...extra }); });
+  };
+  const waitInbox = (timeoutSec: number, signal?: AbortSignal): Promise<Awaited<ReturnType<ToolRunner['call']>>> =>
+    runner.call('wait_for', { target: 'inbox', timeoutSec }, undefined, signal);
+  /** Ждёт начала ожидания (`ParleyWaitStart` в журнале): письмо тогда придёт уже во время него. */
+  const waitStarted = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      journal.beforeLine = (line) => {
+        if (line.includes('ParleyWaitStart')) resolve();
+      };
+    });
+
+  beforeEach(async () => {
+    await updateMap(project, workId, (map) => { addRoom(map, { title: 'комната', creator: 's-02', members: ['s-01', 's-02'] }); });
+  });
+
+  it('заметка всем без упоминания лежала до вызова: ответ не раньше конца окна, с заметкой, без вращения цикла', async () => {
+    runner = runnerSettle(600, 2000);
+    const startedAt = Date.now();
+    await roomLetter('заметка');
+    vi.mocked(unreadLetters).mockClear();
+
+    const answer = body(await waitInbox(20));
+    const reads = vi.mocked(unreadLetters).mock.calls.length;
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual(['заметка']);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(600);
+    expect(unreadTexts()).toEqual([]);
+    // Одно ожидание до срока и забор: без охраны пробы (`wakeOnPending`) цикл читал бы ящик без пауз до конца окна.
+    expect(reads).toBeLessThanOrEqual(15);
+    expect((await journalLines()).length).toBeLessThanOrEqual(8);
+  });
+
+  it('заметка пришла во время ожидания: ответ не раньше конца её окна, Start и End парами, без вращения цикла', async () => {
+    runner = runnerSettle(600, 2000);
+    const hasStarted = waitStarted();
+    const waiting = waitInbox(20);
+    await hasStarted;
+    vi.mocked(unreadLetters).mockClear();
+    const startedAt = Date.now();
+    await roomLetter('заметка');
+
+    const answer = body(await waiting);
+    const reads = vi.mocked(unreadLetters).mock.calls.length;
+
+    expect(textsOf(answer)).toEqual(['заметка']);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(600);
+    // Ожидание без писем отдало управление циклу, а тот ждал окно новым ожиданием: каждое — своя пара.
+    const lines = await journalLines();
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+    expect(lines.length).toBeLessThanOrEqual(8);
+    expect(lines.length % 2).toBe(0);
+    for (let index = 0; index < lines.length; index += 2) {
+      expect(lines[index]?.['hook_event_name']).toBe('ParleyWaitStart');
+      expect(lines[index + 1]?.['hook_event_name']).toBe('ParleyWaitEnd');
+      expect(lines[index + 1]?.['parley_wait_id']).toBe(lines[index]?.['parley_wait_id']);
+    }
+    // Ожидание, уже ограниченное окном, на неустоявшиеся письма не возвращает управление (иначе цикл вращался бы до конца окна
+    // без единой строки в журнале — потому журнал этого не ловит, а число чтений ящика ловит).
+    expect(reads).toBeLessThanOrEqual(15);
+  });
+
+  const urgent: [string, Partial<NewLetter>][] = [
+    ['вопрос', { kind: 'question' }],
+    ['адресное письмо', { to: ['s-01'] }],
+    ['письмо человека', { from: HUMAN }],
+    ['упоминание @s01', { text: '@s01 глянь' }],
+  ];
+  it.each(urgent)('%s будит сразу, не дожидаясь окна', async (_name, extra) => {
+    runner = runnerSettle(30_000, 120_000);
+    const startedAt = Date.now();
+    await roomLetter('срочное', extra);
+
+    const answer = body(await waitInbox(20));
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual([extra.text ?? 'срочное']);
+    expect(Date.now() - startedAt).toBeLessThan(4000);
+  });
+
+  it('срочное письмо во время окна уходит вместе с ранней заметкой', async () => {
+    runner = runnerSettle(3000, 10_000);
+    const startedAt = Date.now();
+    await roomLetter('ранняя заметка');
+    const waiting = waitInbox(20);
+    await delay(100);
+    await roomLetter('вопрос', { kind: 'question' });
+
+    const answer = body(await waiting);
+
+    expect(textsOf(answer)).toEqual(['ранняя заметка', 'вопрос']);
+    // Окно — 3 с: ответ намного раньше него, значит ушёл по срочному письму, а не по тишине.
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+  });
+
+  it('заметки чаще окна: ответ на потолке от самой старой, а не после тишины', async () => {
+    runner = runnerSettle(600, 2000);
+    const startedAt = Date.now();
+    let sending = true;
+    const sender = (async () => {
+      for (let number = 1; sending; number += 1) {
+        await roomLetter(`заметка ${number}`);
+        await delay(100);
+      }
+    })();
+
+    let answer: Record<string, unknown>;
+    try {
+      answer = body(await waitInbox(20));
+    } finally {
+      sending = false;
+      await sender;
+    }
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)[0]).toBe('заметка 1');
+    expect(textsOf(answer).length).toBeGreaterThanOrEqual(3);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2000);
+  }, 15_000);
+
+  it('таймаут вызова короче окна: лежавшая заметка отдаётся по таймауту, а не running', async () => {
+    runner = runnerSettle(5000, 20_000);
+    await roomLetter('заметка');
+    const startedAt = Date.now();
+
+    const answer = body(await waitInbox(0.4));
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual(['заметка']);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(350);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('таймаут вызова короче окна: пришедшая во время ожидания заметка тоже отдаётся по таймауту', async () => {
+    runner = runnerSettle(5000, 20_000);
+    const hasStarted = waitStarted();
+    const startedAt = Date.now();
+    const waiting = waitInbox(0.5);
+    await hasStarted;
+    await roomLetter('заметка');
+
+    const answer = body(await waiting);
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual(['заметка']);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(450);
+  });
+
+  it('таймаут вызова при пустом ящике по-прежнему running', async () => {
+    runner = runnerSettle(200, 600);
+
+    expect(body(await waitInbox(0.3))).toEqual({ state: 'running' });
+  });
+
+  it('отмена посреди окна ничего не помечает: заметка остаётся, check_inbox её отдаёт', async () => {
+    runner = runnerSettle(5000, 20_000);
+    await roomLetter('заметка');
+    const controller = new AbortController();
+    const hasStarted = waitStarted();
+    const waiting = waitInbox(20, controller.signal);
+    await hasStarted;
+
+    controller.abort();
+
+    expect(body(await waiting)).toEqual({ state: 'running' });
+    expect(unreadTexts()).toEqual(['заметка']);
+    expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['заметка']);
+  });
+
+  it('брошенный вызов: после окна страж не даёт забрать заметку', async () => {
+    runner = runnerSettle(100, 600, { turnBoundarySince: () => true });
+    await roomLetter('заметка');
+
+    expect(body(await waitInbox(20))).toEqual({ state: 'running' });
+    expect(unreadTexts()).toEqual(['заметка']);
+  });
+
+  it('брошенный вызов: по таймауту короче окна страж тоже не даёт забрать заметку', async () => {
+    runner = runnerSettle(5000, 20_000, { turnBoundarySince: () => true });
+    await roomLetter('заметка');
+
+    expect(body(await waitInbox(0.4))).toEqual({ state: 'running' });
+    expect(unreadTexts()).toEqual(['заметка']);
   });
 });
