@@ -213,8 +213,11 @@ export {
   pageBySeq,
   parseCursor,
   seqOf,
+  shrinkText,
   textPage,
   viewBytes,
+  WINDOW_TEXT_MAX,
+  WINDOW_UNREAD_MAX,
 } from './work/context-pages.js';
 export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';

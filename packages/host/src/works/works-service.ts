@@ -9,6 +9,11 @@
  * здесь не роняет сервис, а уходит уведомлением `host.notice` и повторяется на следующем изменении. Работу, которая есть
  * в базе, но не загружается (`normalizeMap` её не принимает), `readWorks` из core молча пропускает — сервис проверяет
  * это отдельно и жалуется один раз на работу, ничего в неё не дописывая.
+ *
+ * Письма идут мимо списка работ (спека rooms.mail 6.7): запись только писем (`structural === false` в событии хранилища) не
+ * запускает `refreshPass` и не зовёт `onChange`. Окно с признаком `rooms-mail` получает её событием `rooms.mail` (пачка по
+ * работе, `mail.ts`), окно без признака — `works.changed` по одной перечитанной работе, подписчики хоста — `onMail`. Смешанная
+ * запись (карта и письма) идёт прежним полным проходом, а её письма — после публикации снимка, который её включает.
  */
 
 import {
@@ -18,6 +23,7 @@ import {
   letterCount,
   mapLetterReader,
   MapLockTimeoutError,
+  onMapWritten,
   processStartedAt,
   readLetters,
   readMap,
@@ -26,18 +32,32 @@ import {
   reconcileMap,
   removeHostLease,
   storeLetterReader,
+  viewMap,
   watchWorks,
   withLetterSnapshot,
   WorkNotFoundError,
   workVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, WindowWorkEntry, WindowWorkMap, WorkEntry, WorksWatcher } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protocol';
-import type { WorksSnapshot } from '@parley/protocol';
+import type { HostLease, MapWrittenEvent, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
+import type { RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
+import {
+  MAIL_BATCH_MS,
+  MAIL_SLOW_CLIENT_BYTES,
+  buildMailEvent,
+  fitMailEvent,
+  gluedMailEvent,
+  joinBatch,
+  journalIsEmpty,
+  startBatch,
+} from './mail.js';
+import type { MailBatch, MailNotice } from './mail.js';
+
+export type { MailNotice } from './mail.js';
 
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
@@ -73,6 +93,12 @@ export interface WorksService {
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
   onChange(listener: (snapshot: WorksView, previous: WorksView) => void): () => void;
+  /**
+   * Каждая запись с письмами (непустой журнал, спека rooms.mail 6.2, 6.7): запись только писем — сразу, после коммита;
+   * смешанная — после публикации снимка, который её включает. `onChange` запись только писем не зовёт: подписчик, которому
+   * нужны письма, слушает это.
+   */
+  onMail(listener: (notice: MailNotice) => void): () => void;
   stop(): Promise<void>;
 }
 
@@ -107,6 +133,9 @@ interface WindowPart {
 }
 
 const isCompactClient = (client: Client): boolean => client.features.has(COMPACT_WORKS_FEATURE);
+/** Окно с `rooms-mail` получает письма событием; без признака — `works.changed` с хвостами писем, как прежде (спека 6.10). */
+const isMailClient = (client: Client): boolean => client.features.has(ROOMS_MAIL_FEATURE);
+const lacksMail = (client: Client): boolean => !isMailClient(client);
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
@@ -195,7 +224,8 @@ export function createWorksService(
       if (!(error instanceof WorkNotFoundError)) throw error;
       map = compactWorkMap(work.map, options, mapLetterReader({ ...work.map, messages: [] }));
     }
-    const entry = { projectPath: work.projectPath, map };
+    // Версия работы едет в записи снимка (спека rooms.mail 6.3): по ней окно сверяет события писем с `prevVersion`.
+    const entry = { projectPath: work.projectPath, map, ...(version === undefined ? {} : { version }) };
     const part = { entry, bytes: jsonBytes(entry) };
     if (version !== undefined) {
       if (slot?.version === version) slot.parts.set(variant, part);
@@ -268,7 +298,11 @@ export function createWorksService(
       } catch (error) {
         if (!(error instanceof WorkNotFoundError)) throw error;
       }
-      return { projectPath: work.projectPath, map: { ...work.map, messages } };
+      return {
+        projectPath: work.projectPath,
+        map: { ...work.map, messages },
+        ...(work.version === undefined ? {} : { version: work.version }),
+      };
     });
   };
 
@@ -282,29 +316,50 @@ export function createWorksService(
     return legacyCache.snapshot;
   };
 
+  /** Рассылка снимка окнам: кадр кодируется один раз на рассылку, а не на клиента, и считается в счётчиках окна (спека rooms.mail 6.12). */
+  function broadcastWorks(snapshot: WorksSnapshot, to: (client: Client) => boolean): void {
+    const line = host.clients().some(to) ? encodeLine({ event: 'works.changed', data: snapshot }) : undefined;
+    host.broadcast('works.changed', snapshot, to, line);
+    if (line !== undefined) options.windowCounters?.worksChanged(Buffer.byteLength(line));
+  }
+
   /**
    * Рассылка снимка: окно с `compact-works` получает компактный, прежнее окно — полный, пока тот влезает в кадр. Не
    * влезает — ни одного кадра сверх предела (декодер окна на таком разорвал бы соединение, и оно переподключалось бы
    * по кругу): прежнее окно остаётся с последним снимком, а хост один раз на клиента пишет об этом в журнал.
    * Уведомления `host.notice` прежнему окну не шлются: вида, которого оно не знает, его строка статуса не разберёт.
+   *
+   * `only` — кому слать: запись только писем перечитывает одну работу и шлёт снимок окнам без `rooms-mail` (спека
+   * rooms.mail 6.10); снимки при этом не собираются, пока такого окна нет. Без `only` — полная рассылка, и вслед за снимком
+   * уходят письма смешанных записей, которые он включает (`releaseMail`).
    */
-  function publish(): void {
+  function publish(only?: (client: Client) => boolean): void {
+    if (only !== undefined && !host.clients().some(only)) return;
+    const wanted = only ?? ((): boolean => true);
+    const toCompact = (client: Client): boolean => isCompactClient(client) && wanted(client);
+    const toLegacy = (client: Client): boolean => !isCompactClient(client) && wanted(client);
+
     const compact = windowSnapshot();
     if (compact !== null) {
-      host.broadcast('works.changed', compact, isCompactClient);
+      broadcastWorks(compact, toCompact);
       oversizeNotified = false;
     } else if (!oversizeNotified) {
       oversizeNotified = true;
       notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
     }
 
-    const legacyClients = host.clients().filter((client) => !isCompactClient(client));
+    publishLegacy(toLegacy);
+    if (only === undefined) releaseMail();
+  }
+
+  function publishLegacy(to: (client: Client) => boolean): void {
+    const legacyClients = host.clients().filter(to);
     const stillConnected = new Set(legacyClients.map((client) => client.id));
     for (const id of upgradeNotified) if (!stillConnected.has(id)) upgradeNotified.delete(id);
     if (legacyClients.length === 0) return;
     const legacy = legacySnapshot();
     if (legacy !== null) {
-      host.broadcast('works.changed', legacy, (client) => !isCompactClient(client));
+      broadcastWorks(legacy, to);
       return;
     }
     for (const client of legacyClients) {
@@ -434,7 +489,162 @@ export function createWorksService(
     options.windowCounters?.mapsParsed(works.reduce((sum, work) => sum + (work.bytes ?? 0), 0));
   }
 
-  /** Единственный источник перемен — `watchWorks` на всю базу; заводится на `start`. */
+  /** Пачки писем по работам, ждущие рассылки (спека rooms.mail 6.6): одна пачка на работу, живёт `MAIL_BATCH_MS`. */
+  const batches = new Map<string, MailBatch>();
+  /**
+   * Работа → версия последней записи этого процесса, менявшей карту, которую запись сервиса ещё не прочла: полный проход
+   * впереди (её запросил `watchWorks`). Пока он не прошёл, запись сервиса не трогаем — иначе `refreshPass` взял бы
+   * `previous` уже с этой записью, и подписчики `onChange` не увидели бы разницу.
+   */
+  const mapAhead = new Map<string, number>();
+  const mailListeners = new Set<(mail: MailNotice) => void>();
+  let unsubscribeWritten: (() => void) | undefined;
+
+  function notify(mail: MailNotice): void {
+    for (const listener of [...mailListeners]) {
+      try {
+        listener(mail);
+      } catch (error) {
+        host.log.warn('письма: подписчик onMail упал', { workId: mail.workId, error: String(error) });
+      }
+    }
+  }
+
+  /**
+   * Запись работы в сервисе после записи только писем: версия и `updatedAt` свежие, кэш снимка этой работы пересоберётся по
+   * новой версии, номер рассылки растёт (спека rooms.mail 6.10). Ни веток, ни живости, ни аренд: от письма они не меняются,
+   * и полный проход не нужен. `true` — запись заменена.
+   */
+  function refreshEntry(projectPath: string, workId: string): boolean {
+    const key = workKey(projectPath, workId);
+    const current = entries.get(key);
+    // Работы нет в списке сервиса (её создание или первое чтение ещё впереди): обновит полный проход.
+    if (current === undefined) return false;
+    const ahead = mapAhead.get(key);
+    if (ahead !== undefined) {
+      // Карту менял структурный коммит, которого в записи сервиса ещё нет: письма уйдут вместе с полным проходом.
+      if (current.version === undefined || current.version < ahead) return false;
+      mapAhead.delete(key);
+    }
+    let fresh: WorkEntry;
+    try {
+      const before = workVersion(projectPath, workId);
+      if (before === undefined) return false;
+      const map = viewMap(projectPath, workId, (view) => structuredClone(view) as WorkMap);
+      // Версия — до карты и после неё, как в `reconcileLiveness`: совпали — номер точен.
+      const exact = workVersion(projectPath, workId) === before;
+      fresh = { projectPath, map, ...(exact ? { version: before } : {}) };
+    } catch (error) {
+      if (!(error instanceof WorkNotFoundError)) host.log.warn('письма: запись работы не перечиталась', { workId, error: String(error) });
+      return false;
+    }
+    // Запись сервиса уже не старше: полный проход прочёл работу после письма и разослал её всем окнам.
+    if (current.version !== undefined && fresh.version !== undefined && fresh.version <= current.version) return false;
+    entries.set(key, fresh);
+    // Следующий полный проход берёт список `latest`: без этого он вернул бы запись к версии, прочитанной до письма.
+    const at = latest.findIndex((work) => work.projectPath === projectPath && work.map.work.id === workId);
+    if (at >= 0) latest = latest.with(at, fresh);
+    revision += 1;
+    windowCache = null;
+    legacyCache = null;
+    return true;
+  }
+
+  /** Одно событие окнам с признаком: кадр кодируется один раз, медленным клиентам уходит склеенный вариант (спека 6.6). */
+  function sendMail(batch: MailBatch): void {
+    const targets = host.clients().filter(isMailClient);
+    if (targets.length === 0) return;
+    const event = fitMailEvent(buildMailEvent(batch));
+    const slow = new Set(targets.filter((client) => client.writableLength() > MAIL_SLOW_CLIENT_BYTES).map((client) => client.id));
+    const fast = new Set(targets.filter((client) => !slow.has(client.id)).map((client) => client.id));
+    const send = (data: RoomsMailEvent, to: ReadonlySet<string>): void => {
+      const line = encodeLine({ event: 'rooms.mail', data });
+      host.broadcast('rooms.mail', data, (client) => to.has(client.id), line);
+      options.windowCounters?.mail(Buffer.byteLength(line));
+    };
+    if (fast.size > 0) send(event, fast);
+    if (slow.size > 0) send(gluedMailEvent(event), slow);
+  }
+
+  /**
+   * Рассылает пачку работы. Письма уходят окнам с признаком; после записи только писем работа ещё перечитывается и
+   * `works.changed` идёт окнам без признака (спека 6.10) — `onChange` и полный проход при этом не нужны. У смешанной записи
+   * карта и снимок ушли полным проходом: подписчики узнают о ней здесь, вслед за снимком.
+   */
+  function flushMail(key: string): void {
+    const batch = batches.get(key);
+    if (batch === undefined) return;
+    batches.delete(key);
+    if (batch.timer !== undefined) clearTimeout(batch.timer);
+    try {
+      for (const mail of batch.notices) notify(mail);
+      const refreshed = batch.structuralVersion === 0 && refreshEntry(batch.projectPath, batch.workId);
+      try {
+        sendMail(batch);
+      } catch (error) {
+        // Работу сняли, пока пачка ждала: письма слать некому.
+        if (!(error instanceof WorkNotFoundError)) throw error;
+      }
+      if (refreshed) publish(lacksMail);
+    } catch (error) {
+      // Событие не ушло: следующее покажет окну разрыв по версии (`prevVersion`), и оно дочитает письма (спека 6.5).
+      host.log.warn('письма: событие не ушло', { workId: batch.workId, error: String(error) });
+    }
+  }
+
+  /** Снимок со структурой ушёл: письма смешанных записей, которые он включает, идут вслед за ним (спека 6.5). */
+  function releaseMail(): void {
+    for (const [key, batch] of batches) {
+      if (batch.structuralVersion === 0) continue;
+      // Работы ещё нет в списке или в нём версия старее записи — снимка с её структурой пока не было, а проход впереди.
+      // Версии у записи нет (чтение вклинилось между записями) — ждать нечего: окно держит событие само (спека 6.5).
+      const entry = entries.get(key);
+      if (entry === undefined || (entry.version !== undefined && entry.version < batch.structuralVersion)) continue;
+      flushMail(key);
+    }
+  }
+
+  /** Запись этого процесса с письмами в журнале (спека 6.2); остальные записи окну писем не дают. */
+  function onWritten(event: MapWrittenEvent): void {
+    if (stopped) return;
+    const key = workKey(event.projectPath, event.workId);
+    if (event.removed === true) {
+      const gone = batches.get(key);
+      if (gone?.timer !== undefined) clearTimeout(gone.timer);
+      batches.delete(key);
+      mapAhead.delete(key);
+      return;
+    }
+    // Запись без признака `structural` (создание работы, замена карты) считается структурной, как у `watchWorks`.
+    const structural = event.structural !== false;
+    if (structural) mapAhead.set(key, event.version);
+    const { journal } = event;
+    if (journal === undefined || journalIsEmpty(journal)) return;
+    const mail: MailNotice = {
+      projectPath: event.projectPath,
+      workId: event.workId,
+      version: event.version,
+      prevVersion: event.prevVersion ?? event.version - 1,
+      journal,
+      foreign: false,
+    };
+    let batch = batches.get(key);
+    if (batch === undefined) batches.set(key, (batch = startBatch(event.projectPath, event.workId, mail.prevVersion)));
+    joinBatch(batch, { version: event.version, journal, structural });
+    // Запись только писем — подписчикам сразу; смешанная ждёт снимка, в котором есть её структура.
+    if (structural) batch.notices.push(mail);
+    else notify(mail);
+    if (batch.timer === undefined) {
+      const waiting = batch;
+      waiting.timer = setTimeout(() => {
+        waiting.timer = undefined;
+        // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не таймер.
+        if (waiting.structuralVersion === 0) flushMail(key);
+      }, MAIL_BATCH_MS);
+    }
+  }
+
+  /** Источник перемен списка — `watchWorks` на всю базу, источник писем — `onMapWritten`; заводятся на `start`. */
   function ensureWatcher(): void {
     if (stopped || watcher !== undefined) return;
     watcher = watchWorks(
@@ -453,6 +663,7 @@ export function createWorksService(
           host.log.warn('наблюдение за работами: событие пропущено', { error: String(error) }),
       },
     );
+    unsubscribeWritten = onMapWritten(onWritten);
   }
 
   function scheduleRefresh(): void {
@@ -561,12 +772,20 @@ export function createWorksService(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onMail(listener) {
+      mailListeners.add(listener);
+      return () => mailListeners.delete(listener);
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
       watcher?.close();
       watcher = undefined;
+      unsubscribeWritten?.();
+      unsubscribeWritten = undefined;
+      for (const batch of batches.values()) if (batch.timer !== undefined) clearTimeout(batch.timer);
+      batches.clear();
 
       const pid = process.pid;
       await Promise.all(
