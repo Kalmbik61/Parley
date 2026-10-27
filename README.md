@@ -82,12 +82,13 @@ or any credential file.
 ## The island and the assistant
 
 The island is a black panel at the top of the screen: which agents work, who needs you, what just
-finished, and cards for requests. On a MacBook with a notch the island at rest is exactly the size
-of the notch, whatever runs behind it: working agents, Done or a finished conversation with the
-assistant do not widen it. It drops down below the notch only when you open it (a click, the
-hotkey, pulling the tab or the pointer over it) or when something needs you: a request, a card or
-the assistant. Displays without a notch, and an island moved to the left or right edge, keep the
-strip.
+finished, and cards for requests. On a MacBook with a notch the island is exactly the size of the
+notch when there is nothing to show. While agents work, a Done is unseen or the assistant is folded
+away or speaking, it becomes one capsule around the notch: the swarm or the assistant's face on the
+left, the Done or working count on the right. It drops down below the notch only when you open it
+(a click, the hotkey or pulling the tab; the pointer alone does not open it) or when something needs
+you: a request, a card or the assistant. Displays without a notch, and an island moved to the left
+or right edge, keep the strip.
 
 **Sounds and motion.** The island plays its own short cues, synthesized on the fly (there are no
 sound files). Settings → Notifications → Island: the palette (Soft by default, Crystal or Warm;
