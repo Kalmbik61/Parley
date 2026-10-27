@@ -51,11 +51,11 @@ describe('swarmSpecFor', () => {
     expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'joy', pal: 'amber', dim: 1 });
   });
 
-  it('speaking: anger и error — коралл; dim из таблицы EMO (sad 0.78)', () => {
-    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'anger' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'anger', pal: 'coral' });
+  it('speaking: коралл — только error, anger — янтарь; dim из таблицы EMO (sad 0.92, B26 F-B26-2)', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'anger' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'anger', pal: 'amber' });
     expect(swarmSpecFor({ ...HOST_IDLE, mood: 'error' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'error', pal: 'coral' });
     expect(swarmSpecFor({ ...HOST_IDLE, mood: 'sad' }, 'speaking', false)).toMatchObject({ shape: 'face', pal: 'amber', dim: EMO.sad.dim });
-    expect(EMO.sad.dim).toBe(0.78);
+    expect(EMO.sad.dim).toBe(0.92);
   });
 
   it('settling — сфера rot 0.3 без эмоции', () => {
@@ -64,7 +64,7 @@ describe('swarmSpecFor', () => {
 
   it('мини при речи — сфера без эмоции, палитра лица сохраняется', () => {
     expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'amber' });
-    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'anger' }, 'speaking', true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'error' }, 'speaking', true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
   });
 
   it('offline хоста важнее речи', () => {
@@ -77,9 +77,10 @@ describe('swarmSpecFor: эмоция предложения (L3, F3)', () => {
     expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'sad')).toMatchObject({ shape: 'face', emo: 'sad', pal: 'amber', dim: EMO.sad.dim });
   });
 
-  it('палитра — по эмоции предложения: anger — коралл и в мини-виде', () => {
-    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'anger')).toMatchObject({ emo: 'anger', pal: 'coral' });
-    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', true, 'anger')).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+  it('палитра — по эмоции предложения: error — коралл и в мини-виде, anger — янтарь', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'error')).toMatchObject({ emo: 'error', pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', true, 'error')).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'anger')).toMatchObject({ emo: 'anger', pal: 'amber' });
   });
 
   it('без sentenceMood — эмоция хода', () => {

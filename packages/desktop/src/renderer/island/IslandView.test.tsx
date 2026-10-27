@@ -1479,7 +1479,7 @@ describe('помощник на острове', () => {
 
   it('мини при речи: сфера без эмоции, палитра лица звучащего предложения, подпись «Speaking·»', () => {
     const engines = spyEngines();
-    const speaking = (sentenceMood: 'anger' | null): IslandAssistantProps => {
+    const speaking = (sentenceMood: 'error' | null): IslandAssistantProps => {
       const base = assistantProps({ open: true, collapsed: true, busy: true, mini: S.assistant.miniSpeaking });
       return { ...base, view: { ...base.view, input: 'speaking', host: { ...HOST_IDLE, mood: 'joy' }, sentenceMood } };
     };
@@ -1489,7 +1489,7 @@ describe('помощник на острове', () => {
     expect(mini.getAttribute('data-emo')).toBeNull();
     expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
     expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'amber' }), expect.any(Number), false);
-    rerender(<IslandView {...viewProps({ assistant: speaking('anger') })} />);
+    rerender(<IslandView {...viewProps({ assistant: speaking('error') })} />);
     expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'coral' }), expect.any(Number), false);
   });
 

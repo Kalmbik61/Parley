@@ -91,13 +91,16 @@ export interface FaceSpec {
   dim?: number;
 }
 
-/** Таблица эмоций лица — дословно из макета. */
+/**
+ * Таблица эмоций лица — из макета; sad и anger смягчены (B26 F-B26-2, s-28 m-1505, #9 §6.7 L3 «Мера эмоций»): веко
+ * прикрывает глаз меньше и наклонено слабее, рот sad — пологая дуга, anger — почти прямая, sad почти не тускнеет.
+ */
 export const EMO: Record<SwarmEmotion, FaceSpec> = {
   calm: { a: 0.095, b: 0.13, ey: 0.28, mw: 0.78, curl: 0.07, H0: 0.1, H1: 0.24, pw: 0.6 },
   joy: { a: 0.115, b: 0.1, dome: true, ey: 0.28, mw: 1.04, curl: 0.18, H0: 0.14, H1: 0.3, pw: 0.55 },
-  sad: { a: 0.095, b: 0.12, cut: [-0.12, 0.8], ey: 0.27, mw: 0.72, curl: -0.13, H0: 0.08, H1: 0.15, pw: 0.7, dim: 0.78 },
+  sad: { a: 0.095, b: 0.125, cut: [-0.3, 0.5], ey: 0.275, mw: 0.75, curl: -0.06, H0: 0.09, H1: 0.19, pw: 0.65, dim: 0.92 },
   surprise: { a: 0.11, b: 0.16, ey: 0.31, mo: true, mw: 0.4, H0: 0.3, H1: 0.4, nb: true },
-  anger: { a: 0.105, b: 0.085, cut: [-0.1, -0.95], ey: 0.27, mw: 0.6, curl: -0.06, H0: 0.15, H1: 0.26, pw: 0.3 },
+  anger: { a: 0.1, b: 0.1, cut: [-0.25, -0.5], ey: 0.275, mw: 0.68, curl: -0.03, H0: 0.12, H1: 0.24, pw: 0.45 },
   error: { x: true, len: 0.1, ey: 0.28, mw: 0.86, curl: 0, wave: true, H0: 0.05, H1: 0.05, pw: 0.1, nb: true },
 };
 
@@ -147,7 +150,8 @@ export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: bool
   if (input === 'listening' || input === 'transcribing') spec = { ...BASE, fx: 'listen' };
   else if (host.phase !== 'offline' && input === 'speaking') {
     const emo = sentenceMood ?? host.mood;
-    const pal = emo === 'anger' || emo === 'error' ? 'coral' : 'amber';
+    // Коралл — только сбой самого помощника (как сфера фазы error); рассказ о чужом сбое — янтарь (B26 F-B26-2).
+    const pal = emo === 'error' ? 'coral' : 'amber';
     spec = { ...BASE, shape: 'face', emo, pal, dim: EMO[emo].dim ?? 1 };
     if (mini) spec = { ...spec, shape: 'sphere', emo: null };
   } else if (host.phase !== 'offline' && input === 'settling') spec = { ...BASE, shape: 'sphere', rot: 0.3 };
