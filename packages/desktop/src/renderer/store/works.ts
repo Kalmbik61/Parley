@@ -14,8 +14,10 @@
  * из снимка и из последнего применённого события — и сверяет с ней версии события. Версия события не больше версии окна —
  * это повтор или обогнавший событие снимок: письма сливаются, а числа не трогаются, но `reread` комнат и отставание их верха
  * дочитываются и у такого события (его комнаты урезаны потолком кадра, а снимок писем не несёт). Открытая комната (или Mail),
- * что до события ничего не держала, при `reread` читает последнюю страницу, как при открытии: склеенное или урезанное событие
- * кладёт в неё одни письма человеку, и дыра между ними иначе не закрылась бы. Снимок старее версии окна
+ * что до события ничего не держала, при `reread` дочитывается и на пути разрыва: склеенное или урезанное событие кладёт в неё
+ * одни письма человеку, и дыра между ними иначе не закрылась бы. Читается она вниз от вершины до наименьшего из этих писем
+ * (`rereadRoom`: пачка урезанной комнаты — больше страницы), а если событие письма не положило — последней страницей, как при
+ * открытии. Снимок старее версии окна
  * структуру берёт, а числа и кандидатов в упоминания оставляет от события. `prevVersion` не больше версии окна —
  * событие применяется: спека говорит «не равной», но смысл тот же — окно что-то упустило, только если событие начинается
  * после того, что оно держит, а пачка смешанной записи хоста держит `prevVersion` первой записи, пока в неё вливаются
@@ -223,23 +225,24 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       // Версия сошлась, но верх держимой комнаты ниже `prevTop` (письма между ними потерялись) или комната помечена `reread`.
       // Это и у устаревшего события: событие смешанной записи приходит после снимка своей версии, и урезанные потолком
       // кадра или склеенные для медленного окна комнаты несут `reread` без писем — дочитать их, кроме как здесь, некому.
-      // Открытая комната без держимых писем (`opening`): событие положит в неё только письма человека, и страница открытия,
-      // которую панель больше не читает, — единственное, что закроет дыру между ними.
+      // Открытая комната без держимых писем (`opening`): событие положит в неё только письма человека, а чтение страницы открытия
+      // панель больше не повторяет, — дыру между ними закрывает только эта комната. Нужна и на пути разрыва: починка читает карту
+      // до события, а в ней открытой пустой комнаты нет.
       const policy = heldPolicy(event.projectPath, event.workId);
       const ranges = heldRanges(before);
       const lagging: Array<string | null> = [];
       const rereading: Array<string | null> = [];
       const opening: Array<string | null> = [];
-      if (!gap) {
-        for (const room of event.rooms) {
-          const range = ranges.get(room.roomId);
-          if (range === undefined) {
-            if (room.reread === true && policy.isOpen(room.roomId)) opening.push(room.roomId);
-            continue;
-          }
-          if (room.reread === true) rereading.push(room.roomId);
-          else if (range.max < room.prevTop) lagging.push(room.roomId);
+      for (const room of event.rooms) {
+        const range = ranges.get(room.roomId);
+        if (range === undefined) {
+          if (room.reread === true && policy.isOpen(room.roomId)) opening.push(room.roomId);
+          continue;
         }
+        // Держимое при разрыве перечитывает `repairWork`.
+        if (gap) continue;
+        if (room.reread === true) rereading.push(room.roomId);
+        else if (range.max < room.prevTop) lagging.push(room.roomId);
       }
 
       set((state) => ({
@@ -253,13 +256,16 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       if (gap) {
         repairOf(key).again = true;
         pump(key, before);
-        return;
       }
       if (lagging.length === 0 && rereading.length === 0 && opening.length === 0) return;
+      // Открытая пустая комната теперь держит письма человека из события: читается вниз до наименьшего из них, и пачка больше
+      // страницы закрывается целиком (в пределах `MAIL_PAGES_MAX`). Не держит ничего (событие писем ей не положило) — страница открытия.
+      const current = find(key);
+      const after = current === undefined ? undefined : heldRanges(current);
       Promise.all([
         ...lagging.map((roomId) => followRoom(bridge, before, roomId)),
         ...rereading.map((roomId) => rereadRoom(bridge, before, roomId)),
-        ...opening.map((roomId) => openRoom(bridge, before, roomId)),
+        ...opening.map((roomId) => (current !== undefined && after?.has(roomId) === true ? rereadRoom(bridge, current, roomId) : openRoom(bridge, before, roomId))),
       ]).catch((error: unknown) => failed(key, error));
     };
 

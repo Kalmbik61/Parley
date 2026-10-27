@@ -224,7 +224,7 @@ describe('fitMailEvent: письма человеку (итоговое ревь
   });
 
   it('прямое письмо от агента едет, даже когда Mail не влез целиком; письмо от человека в Mail — нет', () => {
-    // Письма человека агентам в Mail — не письма человеку: прямое письмо от не-человека одно, остальные тяжёлые.
+    // Письма человека агентам в Mail — не письма человеку: письмо не от человека и к человеку одно, остальные тяжёлые.
     const fromHuman = (n: number, bytes: number): Message => ({ ...letter(n, bytes), roomId: null, from: HUMAN, to: ['s-01'] });
     const mine = directFromAgent(601, 100);
     const filler = Array.from({ length: 80 }, (_, at) => fromHuman(at + 1, 4000));

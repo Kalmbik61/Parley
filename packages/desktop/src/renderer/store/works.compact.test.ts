@@ -259,6 +259,122 @@ describe('useWorksStore: снимок без писем (спека rooms.mail 6
       expect(reads(bridge)).toEqual([]);
       dispose();
     });
+
+    // Урезанная комната несёт больше ~250 КиБ писем, то есть не меньше четырёх страниц: одной страницы открытия не хватает, и между
+    // письмами человеку (`m-2`, `m-30`) и страницей остаётся дыра. Окно читает вниз до наименьшего письма, что событие положило.
+    describe('пачка больше страницы', () => {
+      const fat = (seq: number, roomId: string): Message => letter(seq, { roomId, readBy: {}, text: 'x'.repeat(8 * 1024) });
+      const batch = Array.from({ length: 30 }, (_, at) => fat(at + 1, 'r-01'));
+      const cut = (version: number, prevVersion: number) =>
+        makeMailEvent({
+          version,
+          prevVersion,
+          rooms: [makeMailRoom('r-01', { prevTop: 0, top: 30, total: 30, reread: true, letters: [toHuman(2), toHuman(30)] })],
+          unread: { letters: 2, rooms: { 'r-01': 2 } },
+        });
+      const heldFrom = (first: number, last: number): string[] => Array.from({ length: last - first + 1 }, (_, at) => `m-${first + at}`);
+      /**
+       * Страницы хоста, от новых писем к старым: `cuts` — сколько писем в каждой (хост режет страницу по байтам, поэтому они не равны),
+       * курсор `before:N` ведёт к следующей. Страница, которой нет в `cuts`, — ошибка: окно читает глубже, чем нужно.
+       */
+      const paged = (all: Message[], cuts: number[]) => {
+        const newestFirst = [...all].reverse();
+        const pages = new Map<string | undefined, ReturnType<typeof answer>['page'] & { messages: Message[] }>();
+        let from = 0;
+        let cursor: string | undefined;
+        for (const size of cuts) {
+          const slice = newestFirst.slice(from, from + size);
+          from += size;
+          const next = from < newestFirst.length ? `before:${slice[slice.length - 1]!.id.slice('m-'.length)}` : null;
+          pages.set(cursor, { messages: [...slice].reverse(), total: all.length, returned: slice.length, complete: next === null, next, bytes: 1, cut: 0 });
+          cursor = next ?? undefined;
+        }
+        return (params: { cursor?: string }) => {
+          const found = pages.get(params.cursor);
+          if (found === undefined) throw new Error(`unexpected page ${params.cursor ?? '(first)'}`);
+          const { messages, ...page } = found;
+          return { messages, page };
+        };
+      };
+      const cursors = (bridge: ReturnType<typeof createFakeBridge>, roomId = 'r-01'): Array<string | undefined> =>
+        reads(bridge)
+          .filter((read) => read.roomId === roomId)
+          .map((read) => read.cursor);
+      // Страницы по 8, 8, 8 и 5 писем: последняя доходит ровно до `m-2`, письма ниже её не читаются.
+      const serve = () => paged(batch, [8, 8, 8, 5]);
+
+      it('открытая пустая комната: пачка больше страницы после урезанного события дочитывается целиком', async () => {
+        const { bridge, dispose } = await start(bare(30));
+        useRoomPagesStore.setState({ opened: { [room]: true } });
+        bridge.setHandler('context.messages', serve());
+
+        bridge.emit('rooms.mail', cut(6, 5));
+        expect(heldIds()).toEqual(['m-2', 'm-30']);
+        await vi.waitFor(() => expect(heldIds()).toEqual(heldFrom(2, 30)));
+        expect(cursors(bridge)).toEqual([undefined, 'before:23', 'before:15', 'before:7']);
+        dispose();
+      });
+
+      it('то же у устаревшего события: снимок версии события вышел раньше', async () => {
+        const { bridge, dispose } = await start(bare(30, [], 6));
+        useRoomPagesStore.setState({ opened: { [room]: true } });
+        bridge.setHandler('context.messages', serve());
+
+        bridge.emit('rooms.mail', cut(6, 5));
+        await vi.waitFor(() => expect(heldIds()).toEqual(heldFrom(2, 30)));
+        expect(cursors(bridge)).toEqual([undefined, 'before:23', 'before:15', 'before:7']);
+        dispose();
+      });
+
+      it('то же на пути разрыва: prevVersion выше версии окна', async () => {
+        const { bridge, dispose } = await start(bare(30));
+        useRoomPagesStore.setState({ opened: { [room]: true } });
+        bridge.setHandler('context.messages', serve());
+
+        bridge.emit('rooms.mail', cut(9, 8));
+        await vi.waitFor(() => expect(heldIds()).toEqual(heldFrom(2, 30)));
+        expect(cursors(bridge)).toEqual([undefined, 'before:23', 'before:15', 'before:7']);
+        dispose();
+      });
+
+      it('то же на пути разрыва: версия окна неизвестна', async () => {
+        const unversioned = bare(30);
+        delete unversioned.version;
+        const { bridge, dispose } = await start(unversioned);
+        useRoomPagesStore.setState({ opened: { [room]: true } });
+        bridge.setHandler('context.messages', serve());
+
+        bridge.emit('rooms.mail', cut(6, 5));
+        await vi.waitFor(() => expect(heldIds()).toEqual(heldFrom(2, 30)));
+        expect(cursors(bridge)).toEqual([undefined, 'before:23', 'before:15', 'before:7']);
+        dispose();
+      });
+
+      it('на пути разрыва держимая комната перечитывается тоже: починка и чтение открытой комнаты идут вместе', async () => {
+        const other = '/tmp/proj\u0000w-01\u0000r-02';
+        const sibling = [fat(31, 'r-02'), fat(32, 'r-02')];
+        const two = (held: Message[]): WindowWorkEntry => ({
+          ...withCompactMail(
+            makeWork('w-01', { rooms: [makeRoom('r-01', 'К'), makeRoom('r-02', 'Л')] }),
+            makeCompactMail({ rooms: { 'r-01': makeRoomNumbers({ total: 30, top: 30 }), 'r-02': makeRoomNumbers({ total: 2, top: 32 }) } }),
+            held,
+          ),
+          version: 5,
+        });
+        // Снимок без писем (иначе первый снимок подключения сам починил бы держимое); письма r-02 окно получило позже.
+        const { bridge, dispose } = await start(two([]));
+        useWorksStore.setState({ entries: [two(sibling)] });
+        useRoomPagesStore.setState({ opened: { [room]: true, [other]: true } });
+        const first = serve();
+        bridge.setHandler('context.messages', (params) => (params.roomId === 'r-02' ? answer(sibling) : first(params)));
+
+        bridge.emit('rooms.mail', cut(9, 8));
+        await vi.waitFor(() => expect(heldIds()).toEqual([...heldFrom(2, 30), 'm-31', 'm-32']));
+        expect(cursors(bridge, 'r-02')).toEqual([undefined]);
+        expect(cursors(bridge, 'r-01')).toEqual([undefined, 'before:23', 'before:15', 'before:7']);
+        dispose();
+      });
+    });
   });
 
   it('держится не больше 300 писем на комнату; подгруженная раньше история остаётся', async () => {
