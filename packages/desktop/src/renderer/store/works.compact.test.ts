@@ -191,6 +191,76 @@ describe('useWorksStore: снимок без писем (спека rooms.mail 6
     dispose();
   });
 
+  // Склеенное или урезанное событие несёт письма человеку и `reread`: открытая комната, что до него ничего не держала, получила бы
+  // от `withMail` только эти письма и осталась бы с дырой между ними — страницу открытия она больше не читает (дыра после итогового ревью).
+  describe('склеенное событие и открытая пустая комната', () => {
+    const room = '/tmp/proj\u0000w-01\u0000r-01';
+    const mail = '/tmp/proj\u0000w-01\u0000';
+    const toHuman = (seq: number, patch: Partial<Message> = {}): Message => letter(seq, { to: ['human'], readBy: {}, ...patch });
+    const direct = (seq: number): Message => toHuman(seq, { roomId: null });
+    const everything = (roomId: string | null): Message[] => [1, 2, 3, 4, 5, 6].map((seq) => letter(seq, { roomId, readBy: {} }));
+    const answer = (messages: Message[]) => ({ messages, page: { total: messages.length, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
+    const reads = (bridge: ReturnType<typeof createFakeBridge>): Array<{ roomId: string | null; cursor?: string }> =>
+      bridge.calls.filter((call) => call.method === 'context.messages').map((call) => call.params as { roomId: string | null; cursor?: string });
+    const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const glued = (roomId: string | null, version = 6) =>
+      makeMailEvent({
+        version,
+        prevVersion: 5,
+        rooms: [makeMailRoom(roomId, { prevTop: 0, top: 6, total: 6, reread: true, letters: roomId === null ? [direct(3), direct(6)] : [toHuman(3), toHuman(6)] })],
+        unread: { letters: 2, rooms: { [roomId ?? '']: 2 } },
+      });
+
+    it('открытая пустая комната после склеенного события дочитывает последнюю страницу', async () => {
+      const { bridge, dispose } = await start(bare(6));
+      useRoomPagesStore.setState({ opened: { [room]: true } });
+      bridge.setHandler('context.messages', () => answer(everything('r-01')));
+
+      bridge.emit('rooms.mail', glued('r-01'));
+      // Событие положило только письма человеку; страница, что придёт следом, закрывает дыру между ними.
+      expect(heldIds()).toEqual(['m-3', 'm-6']);
+      await vi.waitFor(() => expect(heldIds()).toEqual(['m-1', 'm-2', 'm-3', 'm-4', 'm-5', 'm-6']));
+      expect(reads(bridge)).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01' }]);
+      dispose();
+    });
+
+    it('то же у устаревшего события: снимок версии события вышел раньше', async () => {
+      const { bridge, dispose } = await start(bare(6, [], 6));
+      useRoomPagesStore.setState({ opened: { [room]: true } });
+      bridge.setHandler('context.messages', () => answer(everything('r-01')));
+
+      bridge.emit('rooms.mail', glued('r-01', 6));
+      await vi.waitFor(() => expect(heldIds()).toEqual(['m-1', 'm-2', 'm-3', 'm-4', 'm-5', 'm-6']));
+      expect(reads(bridge)).toHaveLength(1);
+      dispose();
+    });
+
+    it('открытый Mail без писем после склеенного события дочитывает последнюю страницу', async () => {
+      const { bridge, dispose } = await start(bare(6));
+      useRoomPagesStore.setState({ opened: { [mail]: true } });
+      bridge.setHandler('context.messages', () => answer(everything(null)));
+
+      bridge.emit('rooms.mail', glued(null));
+      expect(heldIds()).toEqual(['m-3', 'm-6']);
+      await vi.waitFor(() => expect(heldIds()).toEqual(['m-1', 'm-2', 'm-3', 'm-4', 'm-5', 'm-6']));
+      expect(reads(bridge)).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: null }]);
+      dispose();
+    });
+
+    it('неоткрытая комната со склеенным событием страниц не читает', async () => {
+      const { bridge, dispose } = await start(bare(6));
+      bridge.setHandler('context.messages', () => answer(everything('r-01')));
+
+      bridge.emit('rooms.mail', glued('r-01'));
+      bridge.emit('rooms.mail', { ...glued(null, 7), prevVersion: 6 });
+      await settle();
+
+      expect(heldIds()).toEqual([]);
+      expect(reads(bridge)).toEqual([]);
+      dispose();
+    });
+  });
+
   it('держится не больше 300 писем на комнату; подгруженная раньше история остаётся', async () => {
     const many = Array.from({ length: 450 }, (_, index) => letter(index + 1));
     const { bridge, dispose } = await start(bare(450));

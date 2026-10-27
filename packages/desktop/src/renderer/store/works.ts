@@ -13,7 +13,9 @@
  * `rooms-mail`: без него события нет, и окно живёт по `works.changed`, как прежде. Окно помнит версию каждой работы —
  * из снимка и из последнего применённого события — и сверяет с ней версии события. Версия события не больше версии окна —
  * это повтор или обогнавший событие снимок: письма сливаются, а числа не трогаются, но `reread` комнат и отставание их верха
- * дочитываются и у такого события (его комнаты урезаны потолком кадра, а снимок писем не несёт). Снимок старее версии окна
+ * дочитываются и у такого события (его комнаты урезаны потолком кадра, а снимок писем не несёт). Открытая комната (или Mail),
+ * что до события ничего не держала, при `reread` читает последнюю страницу, как при открытии: склеенное или урезанное событие
+ * кладёт в неё одни письма человеку, и дыра между ними иначе не закрылась бы. Снимок старее версии окна
  * структуру берёт, а числа и кандидатов в упоминания оставляет от события. `prevVersion` не больше версии окна —
  * событие применяется: спека говорит «не равной», но смысл тот же — окно что-то упустило, только если событие начинается
  * после того, что оно держит, а пачка смешанной записи хоста держит `prevVersion` первой записи, пока в неё вливаются
@@ -32,7 +34,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostFeatures } from '../lib/capabilities.js';
 import { heldRanges, keepHeld, withMail, withMessages } from '../lib/window-merge.js';
-import { followRoom, heldPolicy, repairWork, rereadRoom, stopOpenRetries } from './room-pages.js';
+import { followRoom, heldPolicy, openRoom, repairWork, rereadRoom, stopOpenRetries } from './room-pages.js';
 
 export { WINDOW_ROOM_KEEP, keepHeld } from '../lib/window-merge.js';
 
@@ -221,19 +223,25 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       // Версия сошлась, но верх держимой комнаты ниже `prevTop` (письма между ними потерялись) или комната помечена `reread`.
       // Это и у устаревшего события: событие смешанной записи приходит после снимка своей версии, и урезанные потолком
       // кадра или склеенные для медленного окна комнаты несут `reread` без писем — дочитать их, кроме как здесь, некому.
+      // Открытая комната без держимых писем (`opening`): событие положит в неё только письма человека, и страница открытия,
+      // которую панель больше не читает, — единственное, что закроет дыру между ними.
+      const policy = heldPolicy(event.projectPath, event.workId);
       const ranges = heldRanges(before);
       const lagging: Array<string | null> = [];
       const rereading: Array<string | null> = [];
+      const opening: Array<string | null> = [];
       if (!gap) {
         for (const room of event.rooms) {
           const range = ranges.get(room.roomId);
-          if (range === undefined) continue;
+          if (range === undefined) {
+            if (room.reread === true && policy.isOpen(room.roomId)) opening.push(room.roomId);
+            continue;
+          }
           if (room.reread === true) rereading.push(room.roomId);
           else if (range.max < room.prevTop) lagging.push(room.roomId);
         }
       }
 
-      const policy = heldPolicy(event.projectPath, event.workId);
       set((state) => ({
         entries: state.entries.map((entry) =>
           entry.projectPath === event.projectPath && entry.map.work.id === event.workId ? withMail(entry, event, stale, policy.isOpen, policy.floor) : entry,
@@ -247,10 +255,12 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         pump(key, before);
         return;
       }
-      if (lagging.length === 0 && rereading.length === 0) return;
-      Promise.all([...lagging.map((roomId) => followRoom(bridge, before, roomId)), ...rereading.map((roomId) => rereadRoom(bridge, before, roomId))]).catch(
-        (error: unknown) => failed(key, error),
-      );
+      if (lagging.length === 0 && rereading.length === 0 && opening.length === 0) return;
+      Promise.all([
+        ...lagging.map((roomId) => followRoom(bridge, before, roomId)),
+        ...rereading.map((roomId) => rereadRoom(bridge, before, roomId)),
+        ...opening.map((roomId) => openRoom(bridge, before, roomId)),
+      ]).catch((error: unknown) => failed(key, error));
     };
 
     const enqueue = (key: string, event: RoomsMailEvent): void => {

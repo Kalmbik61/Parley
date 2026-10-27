@@ -285,11 +285,12 @@ const frameBytes = (data: RoomsMailEvent): number => jsonBytes({ event: 'rooms.m
 /** Что добавляет к комнате признак `reread`, которого в ней не было: `,"reread":true`. */
 const REREAD_BYTES = Buffer.byteLength(',"reread":true');
 /**
- * Письмо человеку: прямое (комната `null`) от не-человека или с человеком среди адресатов. Окно уведомляет о нём по самому
- * событию, а письмо, которое событие не несёт, неоткрытая комната не дочитает никогда, — поэтому урезанная и склеенная
- * комната их оставляет: таких писем немного, и они малы (спека rooms.mail 6.6, итоговое ревью I3).
+ * Письмо человеку: не от человека и с человеком среди адресатов. Для прямого письма (Mail) так же спрашивает окно
+ * (`isHumanUnread`): прямое письмо одного агента другому — не письмо человеку и не едет. Окно уведомляет о письме человеку
+ * по самому событию, а письмо, которое событие не несёт, неоткрытая комната не дочитает никогда, — поэтому урезанная и
+ * склеенная комната их оставляет: таких писем немного, и они малы (спека rooms.mail 6.6, итоговое ревью I3).
  */
-const isToHuman = (message: Message): boolean => (message.roomId === null && message.from !== HUMAN) || message.to.includes(HUMAN);
+const isToHuman = (message: Message): boolean => message.from !== HUMAN && message.to.includes(HUMAN);
 /** Что письма добавляют к кадру в `letters`, который был пуст: сами письма и запятые между ними. */
 const lettersBytes = (letters: readonly Message[]): number => (letters.length === 0 ? 0 : jsonBytes(letters) - jsonBytes([]));
 

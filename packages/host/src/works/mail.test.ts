@@ -306,6 +306,16 @@ describe('gluedMailEvent: склеенное событие для медлен�
     expect(frame(glued)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
   });
 
+  it('склеенное событие не держит прямые письма между агентами', () => {
+    const toHuman: Message = { ...letter(5, 80), roomId: null, to: [HUMAN] };
+    const betweenAgents: Message = { ...letter(6, 80), roomId: null, from: 's-02', to: ['s-01'] };
+    const event = eventOf([{ ...room('r-01'), roomId: null, letters: [betweenAgents, toHuman] }]);
+
+    const glued = gluedMailEvent(event);
+
+    expect(glued.rooms[0]).toMatchObject({ roomId: null, letters: [toHuman], reread: true });
+  });
+
   it('письма человеку, что сами не влезли в кадр, не едут: остаётся reread, как у прочих писем', () => {
     const mine = Array.from({ length: 10 }, (_, at) => ({ ...letter(at + 1, 30_000), to: [HUMAN] }));
     const event = eventOf([room('r-01', { letters: mine }), room('r-02', { letters: [] })]);
