@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -16,6 +16,13 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * остров включается пустым `PARLEY_ISLAND` (конфиг Playwright гасит его для всех спеков), главное окно берётся по
  * адресу страницы, остров — по `island.html`. Работа и комната — шаги `room-actions.spec.ts`; названия длинные
  * (правило визуальных проверок), окно 800×500.
+ *
+ * Речь и лицо (план 3b B25; план 3, Task 10; #9 §6): `PARLEY_TTS=fake` — голос на подмене без движка и весов (каждое
+ * предложение — два куска тишины по 0,2 с), `PARLEY_VOICE=fake` — голосовой ввод на подмене. Стаб ставит метку эмоции в
+ * каждое предложение. Облик роя и подпись под ним пишет в журнал страницы `MutationObserver`: смены `data-shape` и
+ * `data-emo` короче опроса Playwright. Хоткей помощника — то же событие main, что шлёт глобальное сочетание
+ * (`island:assistant-open` с `listen: true`): настоящее сочетание ОС тест нажать не может. G3 (голос не скачан) идёт
+ * без `PARLEY_TTS`: настоящая служба голоса с пустым домом теста, веса никто не качает.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +69,64 @@ async function resizeMain(app: ElectronApplication, width: number, height: numbe
         ?.setBounds({ x: 0, y: 0, ...size }),
     { width, height },
   );
+}
+
+/** Голос и голосовой ввод на подменах (план 3b B25). */
+const SPEECH_ENV = { PARLEY_TTS: 'fake', PARLEY_VOICE: 'fake' };
+/** Строка, которой хост предваряет ход после смены рода голоса (#9 §6.8, Р3). */
+const MALE_NOTE = '[system: voice changed — speak as male]';
+
+/** Запись журнала облика: форма роя помощника, эмоция лица и подпись под роем. */
+interface FaceEntry {
+  shape: string;
+  emo: string | null;
+  status: string;
+}
+
+/**
+ * Журнал облика роя помощника: `MutationObserver` на canvas роя и на подписи пишет каждую смену формы, эмоции и
+ * подписи в `globalThis.__e2eFace`. Смена эмоции между предложениями длится доли секунды — опрос её пропустил бы.
+ */
+async function recordFace(island: Page): Promise<void> {
+  await island.evaluate(() => {
+    const view = document.querySelector('[data-testid="assistant-view"]');
+    const canvas = view?.querySelector<HTMLElement>('[data-testid="swarm"]');
+    const status = view?.querySelector('[data-testid="assistant-status"]');
+    if (canvas === null || canvas === undefined || status === null || status === undefined) throw new Error('нет роя или подписи помощника');
+    const log: FaceEntry[] = [];
+    (globalThis as { __e2eFace?: FaceEntry[] }).__e2eFace = log;
+    const push = (): void => {
+      const entry = { shape: canvas.dataset.shape ?? '', emo: canvas.dataset.emo ?? null, status: status.textContent ?? '' };
+      const last = log.at(-1);
+      if (last?.shape !== entry.shape || last.emo !== entry.emo || last.status !== entry.status) log.push(entry);
+    };
+    push();
+    new MutationObserver(push).observe(canvas, { attributes: true, attributeFilter: ['data-shape', 'data-emo'] });
+    new MutationObserver(push).observe(status, { childList: true, subtree: true, characterData: true });
+  });
+}
+
+async function faceLog(island: Page): Promise<FaceEntry[]> {
+  return island.evaluate(() => (globalThis as { __e2eFace?: FaceEntry[] }).__e2eFace ?? []);
+}
+
+/** Подряд идущие повторы — одним значением. */
+function runs<T>(values: readonly T[]): T[] {
+  return values.filter((value, index) => index === 0 || values[index - 1] !== value);
+}
+
+/** Хоткей помощника: main шлёт острову то же событие, что и на глобальное сочетание (`openAssistant({ listen: true })`). */
+async function pressAssistantHotkey(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()
+      .find((window) => window.webContents.getURL().endsWith('/island.html'))
+      ?.webContents.send('island:assistant-open', { listen: true }),
+  );
+}
+
+async function ask(island: Page, text: string): Promise<void> {
+  await island.getByTestId('assistant-input').fill(text);
+  await island.getByTestId('assistant-input').press('Enter');
 }
 
 test.describe('помощник на острове', () => {
@@ -236,8 +301,11 @@ test.describe('помощник на острове', () => {
     await expect(island.getByTestId('assistant-view')).toHaveCount(0);
   });
 
-  /** Запуск приложения со стабом и включённым помощником: общий вход обоих тестов ниже. */
-  async function launchWithAssistant(): Promise<Page> {
+  /**
+   * Запуск приложения со стабом и включённым помощником: общий вход тестов ниже. `env` — добавочные переменные окна
+   * (подмены голоса), `assistant` — добавочные настройки помощника (речь, язык).
+   */
+  async function launchWithAssistant(env: Record<string, string> = {}, assistant: Record<string, unknown> = {}): Promise<Page> {
     app = await electron.launch({
       args: [mainEntry],
       env: {
@@ -248,12 +316,16 @@ test.describe('помощник на острове', () => {
         PARLEY_SKIP_VERSION_PROBE: '',
         PARLEY_TERMINAL_RENDERER: 'dom',
         PARLEY_ISLAND: '',
+        ...env,
       },
     });
     const window = await mainWindowOf(app);
     await resizeMain(app, 800, 500);
     await expect(window.getByTestId('landing')).toBeVisible();
-    await window.evaluate(() => (globalThis as unknown as Parley).parley.app.saveUi({ assistant: { enabled: true, provider: 'claude' } }));
+    await window.evaluate(
+      (extra) => (globalThis as unknown as Parley).parley.app.saveUi({ assistant: { enabled: true, provider: 'claude', ...extra } }),
+      assistant,
+    );
     return window;
   }
 
@@ -318,5 +390,172 @@ test.describe('помощник на острове', () => {
     // Через 2 с хост запускает ход по напоминанию: остров открывается сам.
     await expect(island.getByTestId('assistant-view')).toBeVisible({ timeout: 10_000 });
     await expect(island.getByTestId('assistant-answer')).toContainText('Reminder: the room is fine.', { timeout: 10_000 });
+  });
+
+  test('речь: ответ сферой → лицо с эмоцией каждого предложения → «Done» → покой; меток «[[» нет; смена голоса на мужской доходит до агента (G1)', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    // Длинные имена работы и комнаты (правило визуальных проверок): лицо и подписи не должны их задеть.
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const { ref } = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'planner',
+      task: '',
+      parent: null,
+    });
+    await call(window, 'rooms.create', { projectPath: project, workId, title: ROOM_TITLE, members: [ref.sessionId], lead: ref.sessionId, quiet: true });
+
+    const island = await openAssistant(window);
+    // Значок динамика показывает «Speak answers».
+    await expect(island.getByTestId('assistant-speak')).toHaveAttribute('aria-pressed', 'true');
+    await recordFace(island);
+    await ask(island, 'moods how is it going?');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Did you expect that result?', { timeout: 30_000 });
+    // Речь кончилась: «Done» 1 с, затем покой (облако).
+    await expect.poll(async () => (await faceLog(island)).at(-1)?.shape, { message: 'рой вернулся в покой', timeout: 30_000 }).toBe('cloud');
+
+    const log = await faceLog(island);
+    const firstFace = log.findIndex((entry) => entry.shape === 'face');
+    const lastFace = log.findLastIndex((entry) => entry.shape === 'face');
+    expect(firstFace, JSON.stringify(log)).toBeGreaterThan(0);
+    // Пока первое предложение не готово («Answering») — сфера; лицо — когда оно зазвучало.
+    expect(log.slice(0, firstFace).some((entry) => entry.shape === 'sphere' && entry.status === 'Answering'), JSON.stringify(log)).toBe(true);
+    // Лицо говорит («Speaking»), эмоция меняется на границах предложений (L3): метки joy, sad, surprise.
+    const faces = log.slice(firstFace, lastFace + 1);
+    expect(faces.every((entry) => entry.shape === 'face' && entry.status === 'Speaking'), JSON.stringify(log)).toBe(true);
+    expect(runs(faces.map((entry) => entry.emo))).toEqual(['joy', 'sad', 'surprise']);
+    // После лица — сфера с подписью «Done», затем облако.
+    const after = log.slice(lastFace + 1);
+    const settled = after.findIndex((entry) => entry.shape === 'sphere' && entry.status === 'Done');
+    expect(settled, JSON.stringify(log)).toBeGreaterThanOrEqual(0);
+    expect(after.slice(settled).some((entry) => entry.shape === 'cloud'), JSON.stringify(log)).toBe(true);
+    // Метки эмоций до острова не доходят: ни в ответе, ни в истории.
+    expect(await island.locator('body').innerText()).not.toContain('[[');
+
+    // G1: разговор идёт голосом по умолчанию (женский), строки о смене голоса нет.
+    await ask(island, 'voice check');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Voice note: none.', { timeout: 30_000 });
+    // Settings → Assistant → мужской голос посреди разговора.
+    await window.keyboard.press('Meta+J');
+    await expect(window.locator('[data-palette] [cmdk-input]')).toBeFocused();
+    await window.keyboard.type('Settings');
+    await window.keyboard.press('Enter');
+    const settings = window.getByRole('dialog');
+    await settings.getByRole('tab', { name: 'Assistant' }).click();
+    await settings.getByRole('radio', { name: 'Ryan' }).check();
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('dialog')).toBeHidden();
+    // Следующий ход несёт строку о смене рода, разговор тот же.
+    await ask(island, 'voice check');
+    await expect(island.getByTestId('assistant-answer')).toContainText(`Voice note: ${MALE_NOTE}.`, { timeout: 30_000 });
+  });
+
+  test('речь: первое предложение звучит, пока ответ ещё идёт (B26 F-B26-5)', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    await call(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const island = await openAssistant(window);
+    await ask(island, 'stream long');
+    await expect(island.getByTestId('assistant-status')).toHaveText('Speaking', { timeout: 30_000 });
+    // Лицо уже говорит, а последнее предложение ответа ещё не пришло.
+    expect(await island.getByTestId('assistant-answer').innerText()).not.toContain('Streamed sentence 10 is here.');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Streamed sentence 10 is here.', { timeout: 30_000 });
+  });
+
+  test('речь: ответ перед карточкой звучит лицом, Send обрывает речь сразу (B26 F-B26-4)', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const { ref } = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'planner',
+      task: '',
+      parent: null,
+    });
+    await call(window, 'rooms.create', { projectPath: project, workId, title: ROOM_TITLE, members: [ref.sessionId], lead: ref.sessionId, quiet: true });
+    type WorksList = { entries: Array<{ map: { work: { id: string }; rooms: unknown[] } }> };
+    await expect
+      .poll(
+        async () => (await call<WorksList>(window, 'works.list', {})).entries.find((entry) => entry.map.work.id === workId)?.map.rooms.length ?? 0,
+        { message: 'комната в снимке работ хоста', timeout: 30_000 },
+      )
+      .toBe(1);
+
+    const island = await openAssistant(window);
+    await recordFace(island);
+    // Длинный ответ перед карточкой: лицо говорит, пока карточка ждёт решения.
+    await ask(island, 'long tell the room to skip Safari tests');
+    await expect(island.getByTestId('assistant-card')).toContainText(LETTER, { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-status')).toHaveText('Speaking', { timeout: 30_000 });
+    expect((await faceLog(island)).some((entry) => entry.shape === 'face' && entry.status === 'Speaking')).toBe(true);
+
+    // Send посреди речи: речь обрывается раньше, чем через 900 мс зазвучит «Sent».
+    await island.waitForTimeout(600);
+    await island.getByTestId('assistant-send').click();
+    await expect(island.getByTestId('assistant-status')).not.toHaveText('Speaking', { timeout: 800 });
+    await expect(island.getByTestId('assistant-sent')).toBeVisible();
+  });
+
+  test('речь: хоткей во время лица только раскрывает — без записи, лицо остаётся; Esc во время речи закрывает, при новом открытии лица нет', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    await call(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const island = await openAssistant(window);
+    const swarm = island.getByTestId('assistant-view').getByTestId('swarm');
+
+    // База: вне речи хоткей начинает запись — голосовой ввод выключен, и остров говорит об этом строкой.
+    await pressAssistantHotkey(app!);
+    await expect(island.getByText('Voice is off — Settings → Voice')).toBeVisible();
+
+    // Долгая речь (24 предложения): хоткей во время лица записи не начинает и лицо не обрывает.
+    await ask(island, 'speak long');
+    await expect(swarm).toHaveAttribute('data-shape', 'face', { timeout: 30_000 });
+    await pressAssistantHotkey(app!);
+    await island.waitForTimeout(500);
+    await expect(swarm).toHaveAttribute('data-shape', 'face');
+    await expect(island.getByTestId('assistant-status')).toHaveText('Speaking');
+    await expect(island.getByText('Voice is off — Settings → Voice')).toHaveCount(0);
+    await expect(island.getByTestId('assistant-mic-elapsed')).toHaveCount(0);
+
+    // Esc во время речи закрывает режим и глушит речь: при новом открытии лица нет и оно не возвращается.
+    await island.keyboard.press('Escape');
+    await expect(island.getByTestId('assistant-view')).toHaveCount(0);
+    const again = await openAssistant(window);
+    const fresh = again.getByTestId('assistant-view').getByTestId('swarm');
+    await expect(fresh).not.toHaveAttribute('data-shape', 'face');
+    await again.waitForTimeout(1500);
+    await expect(fresh).not.toHaveAttribute('data-shape', 'face');
+    await expect(again.getByTestId('assistant-status')).not.toHaveText('Speaking');
+  });
+
+  test('голос не скачан (G3): ответ текстом без лица и строка-подсказка один раз; Parley ничего не качает', async () => {
+    // Без `PARLEY_TTS=fake` — настоящая служба голоса: на Apple Silicon с пустым домом веса «не скачаны». На x64 голос
+    // недоступен вовсе (Р8), и подсказки о скачивании там нет.
+    test.skip(process.platform !== 'darwin' || process.arch !== 'arm64', 'нейроголос есть только на Apple Silicon');
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant({ PARLEY_VOICE: 'fake' }, { speak: true, language: 'en' });
+    const island = await openAssistant(window);
+    await recordFace(island);
+    const hint = island.getByText('Voice "Serena" isn\'t downloaded — open Settings');
+
+    await ask(island, 'moods how is it going?');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Did you expect that result?', { timeout: 30_000 });
+    await expect(hint).toBeVisible();
+    await island.waitForTimeout(1000);
+    expect((await faceLog(island)).filter((entry) => entry.shape === 'face')).toEqual([]);
+
+    // Второй ответ — снова текстом, строка не повторяется.
+    await ask(island, 'voice check');
+    await expect(island.getByTestId('assistant-answer')).toContainText('Voice note: none.', { timeout: 30_000 });
+    await island.waitForTimeout(1000);
+    await expect(hint).toHaveCount(0);
+    expect((await faceLog(island)).filter((entry) => entry.shape === 'face')).toEqual([]);
+    // Весов в доме теста нет: скачивание — только по кнопке в Settings.
+    const weights = await readdir(path.join(home, 'desktop', 'voice', 'tts')).catch(() => [] as string[]);
+    expect(weights.filter((name) => name.endsWith('.gguf'))).toEqual([]);
   });
 });

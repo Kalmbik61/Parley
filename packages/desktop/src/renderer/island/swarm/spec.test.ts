@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AssistantState } from '@parley/protocol';
 import { HOST_IDLE } from '../assistant/store.js';
-import { haloFor, swarmSpecFor } from './spec.js';
+import { createSwarm } from './engine.js';
+import { EMO, haloFor, swarmSpecFor } from './spec.js';
 
 const host = (phase: AssistantState['phase']): AssistantState => ({ ...HOST_IDLE, phase });
 
@@ -33,7 +34,7 @@ describe('swarmSpecFor', () => {
   });
 
   it('idle — янтарное облако с умолчаниями', () => {
-    expect(swarmSpecFor(host('idle'), 'idle', false)).toEqual({ shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false });
+    expect(swarmSpecFor(host('idle'), 'idle', false)).toEqual({ shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false, emo: null });
   });
 
   it('ввод важнее фазы: listening и transcribing — облако listen', () => {
@@ -44,6 +45,66 @@ describe('swarmSpecFor', () => {
   it('мини: облако — точка, сфера остаётся сферой', () => {
     expect(swarmSpecFor(host('idle'), 'idle', true).shape).toBe('dot');
     expect(swarmSpecFor(host('thinking'), 'idle', true).shape).toBe('sphere');
+  });
+
+  it('speaking — лицо с эмоцией хоста, янтарь', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'joy', pal: 'amber', dim: 1 });
+  });
+
+  it('speaking: коралл — только error, anger — янтарь; dim из таблицы EMO (sad 0.92, B26 F-B26-2)', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'anger' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'anger', pal: 'amber' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'error' }, 'speaking', false)).toMatchObject({ shape: 'face', emo: 'error', pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'sad' }, 'speaking', false)).toMatchObject({ shape: 'face', pal: 'amber', dim: EMO.sad.dim });
+    expect(EMO.sad.dim).toBe(0.92);
+  });
+
+  it('settling — сфера rot 0.3 без эмоции', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'settling', false)).toMatchObject({ shape: 'sphere', fx: null, pal: 'amber', rot: 0.3, emo: null });
+  });
+
+  it('мини при речи — сфера без эмоции, палитра лица сохраняется', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'amber' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'error' }, 'speaking', true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+  });
+
+  it('offline хоста важнее речи', () => {
+    expect(swarmSpecFor({ ...host('offline'), mood: 'joy' }, 'speaking', false)).toMatchObject({ shape: 'cloud', pal: 'gray', emo: null });
+  });
+});
+
+describe('swarmSpecFor: эмоция предложения (L3, F3)', () => {
+  it('sentenceMood важнее эмоции хода: sad при host.mood joy', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'sad')).toMatchObject({ shape: 'face', emo: 'sad', pal: 'amber', dim: EMO.sad.dim });
+  });
+
+  it('палитра — по эмоции предложения: error — коралл и в мини-виде, anger — янтарь', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'error')).toMatchObject({ emo: 'error', pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', true, 'error')).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'anger')).toMatchObject({ emo: 'anger', pal: 'amber' });
+  });
+
+  it('без sentenceMood — эмоция хода', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, undefined)).toMatchObject({ emo: 'joy' });
+  });
+
+  it('sentenceMood вне речи облик не меняет', () => {
+    expect(swarmSpecFor(host('answering'), 'idle', false, 'sad')).toEqual(swarmSpecFor(host('answering'), 'idle', false));
+  });
+
+  it('смена эмоции предложения в лице — переход 0,6 с; при reduced motion — без перехода', () => {
+    const joy = swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'joy');
+    const sad = swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'sad');
+    const engine = createSwarm(120, { width: 200, height: 200, d: 100, cy: 100, seed: 7 });
+    engine.setSpec(joy, 0, false);
+    engine.setSpec(sad, 5000, false);
+    expect(engine.debug.dur).toBe(0.6);
+    engine.frame(5016, null, false, 0);
+    expect(engine.needsFrame()).toBe(true);
+    const still = createSwarm(120, { width: 200, height: 200, d: 100, cy: 100, seed: 7 });
+    still.setSpec(joy, 0, true);
+    still.setSpec(sad, 5000, true);
+    still.frame(5016, null, true, 0);
+    expect(still.needsFrame()).toBe(false);
   });
 });
 

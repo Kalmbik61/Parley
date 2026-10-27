@@ -95,6 +95,16 @@ afterEach(() => {
 });
 
 describe('App — корневая обёртка окна (раунд исправлений 1, находка B№3)', () => {
+  it('wires session visibility for the connected page and clears it on cleanup', async () => {
+    const report = vi.spyOn(bridge.app, 'reportSessionVisibility');
+    const { unmount } = render(<App />);
+    await act(async () => {});
+    act(() => useUiStore.setState({ documentVisible: true, visibleSessionRefs: { [refKey({ projectPath: '/p', workId: 'w-1', sessionId: 's-01' })]: true } }));
+    expect(report).toHaveBeenLastCalledWith(expect.objectContaining({ documentVisible: true, refs: [{ projectPath: '/p', workId: 'w-1', sessionId: 's-01' }] }));
+    const previousSeq = report.mock.calls.at(-1)![0].seq;
+    unmount();
+    expect(report).toHaveBeenLastCalledWith({ seq: previousSeq + 1, refs: [], documentVisible: false });
+  });
   it('text-foreground рядом с bg-background, без произвольного var(--…) старой палитры', () => {
     const { container } = render(<App />);
     const root = container.querySelector('.bg-background');
@@ -426,6 +436,17 @@ describe('App — переход по цели уведомления (тест�
     const layout = useLayoutStore.getState().layouts[key];
     return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
   };
+
+  it('terminal focus target switches an existing Chat tab without any host mutation', async () => {
+    useWorksStore.setState({ entries: [work('w-02', '2026-01-02', [session('s-02', 'executor')])], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' });
+    useLayoutStore.setState({ layouts: { [key]: layout }, hydrated: { [key]: true }, activeWorkKey: key });
+    render(<App />); await flush();
+    const before = bridge.calls.length;
+    act(() => bridge.emitFocusTarget({ ...target, view: 'terminal' })); await flush();
+    expect(groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs)).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'terminal' }]);
+    expect(bridge.calls.slice(before).filter((call) => ['feed.decide', 'sessions.interrupt', 'pty.send'].includes(call.method))).toEqual([]);
+  });
 
   it('тест 4: цель удалённой сессии — тост «Workspace or session no longer exists», ничего не открыто', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });

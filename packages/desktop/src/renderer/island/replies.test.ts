@@ -3,6 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedItem } from '@parley/core';
 import { REPLY_RETRY_MS, lastReply, useIslandReplies } from './replies.js';
+import { refKey } from '@parley/protocol';
+import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { islandModel } from './model.js';
 
 const AT = '2026-10-13T10:00:00.000Z';
 const prompt = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'prompt', text: body, images: 0 });
@@ -58,6 +61,32 @@ describe('стор ответов острова', () => {
     useIslandReplies.getState().bind(null);
     useIslandReplies.getState().prune(new Set());
     vi.useRealTimers();
+  });
+
+  it('Codex Done без Chat: два worktree не смешивают ответы, пустой ответ приходит после штатного обновления source', async () => {
+    const entries = ['/tmp/codex-a', '/tmp/codex-b'].map((projectPath) => makeWork('w-1', {
+      projectPath, sessions: [makeSession('s-01', 'codex', { provider: 'codex' })],
+    }));
+    const refs = entries.map((entry) => ({ projectPath: entry.projectPath, workId: 'w-1', sessionId: 's-01' }));
+    const none = new Set<string>();
+    const model = islandModel(entries, activityMap(refs.map((ref) => makeActivity(ref, 'unseen', { turnEndedAt: AT }))), none, none, none);
+    const rows = model.groups.flatMap((group) => group.rows).filter((row) => row.kind === 'session' && row.state === 'done');
+    expect(rows).toHaveLength(2);
+    let updated = false;
+    const call = vi.fn(async (_method: string, params: { ref: typeof REF }) => snapshot(
+      params.ref.projectPath === refs[0]!.projectPath ? [text('a', 'First worktree')] : updated ? [text('b', 'Second worktree')] : [],
+    ));
+    useIslandReplies.getState().bind(call as never);
+    for (const row of rows) if (row.kind === 'session' && row.state === 'done') useIslandReplies.getState().fetch(row.ref, row.doneKey);
+    await flush();
+    const firstKey = `${refKey(refs[0]!)}\u0000${AT}`;
+    const secondKey = `${refKey(refs[1]!)}\u0000${AT}`;
+    expect(useIslandReplies.getState().texts).toEqual({ [firstKey]: 'First worktree', [secondKey]: null });
+    updated = true;
+    await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS);
+    expect(useIslandReplies.getState().texts).toEqual({ [firstKey]: 'First worktree', [secondKey]: 'Second worktree' });
+    expect(call.mock.calls.map(([method]) => method)).toEqual(['feed.snapshot', 'feed.snapshot', 'feed.snapshot']);
+    for (const ref of refs) expect(call).toHaveBeenCalledWith('feed.snapshot', { ref, scope: 'attention' });
   });
 
   it('снимок на ключ один: повторный fetch с тем же ключом ничего не зовёт; другой ключ — свой снимок', async () => {

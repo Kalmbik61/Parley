@@ -52,12 +52,12 @@ export interface PublishedPanel {
 
 export interface PanelRuntimeState {
   /** Виды хозяев на экране (`PanelHost` смонтирован): узкий вид закрывает панель собой целиком. */
-  hosts: Record<string, { narrow: boolean }>;
+  hosts: Record<string, { narrow: boolean; measured: boolean }>;
   usedAt: Record<string, number>;
   published: Record<string /* workKey */, PublishedPanel[]>;
   /** Ключи живых панелей; пока состав тот же, ссылка прежняя. */
   live: ReadonlySet<string>;
-  mountHost(key: string, narrow: boolean): void;
+  mountHost(key: string, narrow: boolean, measured?: boolean): void;
   unmountHost(key: string): void;
   /** Панелью пользуются (клик, показ): она последняя в очереди на выгрузку. */
   touch(key: string): void;
@@ -81,8 +81,8 @@ export const usePanelRuntime: UseBoundStore<StoreApi<PanelRuntimeState>> = creat
   published: {},
   live: new Set(),
 
-  mountHost: (key, narrow) =>
-    set((state) => (state.hosts[key]?.narrow === narrow ? state : { hosts: { ...state.hosts, [key]: { narrow } } })),
+  mountHost: (key, narrow, measured = false) =>
+    set((state) => (state.hosts[key]?.narrow === narrow && state.hosts[key]?.measured === measured ? state : { hosts: { ...state.hosts, [key]: { narrow, measured } } })),
 
   unmountHost: (key) =>
     set((state) => {

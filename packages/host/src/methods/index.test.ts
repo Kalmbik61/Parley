@@ -6,6 +6,7 @@ import { buildRoleCatalog } from '@parley/core';
 import type { RequestInfo } from '../context.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
+import type { FeedService } from '../feed/feed-service.js';
 import { createHostHandlers, WORKS_GATED_METHODS, WORKS_GATED_NOTIFICATIONS } from './index.js';
 import type { MethodDeps } from './index.js';
 
@@ -162,6 +163,20 @@ const request = { client: {} } as unknown as RequestInfo;
 const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 
 describe('методы на старте хоста ждут первого чтения работ (lane-r4, п. 4)', () => {
+  it('registers feed.progress with the real startup gate and forwards the client only after readiness', async () => {
+    let ready!: () => void;
+    const { deps } = fakeDeps(new Promise<void>((resolve) => { ready = resolve; }));
+    const result = { revision: 0, availability: 'available', current: null, recent: [], truncated: false };
+    const progress = vi.fn().mockResolvedValue(result);
+    const { methods } = createHostHandlers({ ...deps, feed: { progress } as unknown as FeedService });
+    const pending = methods['feed.progress']!({ ref } as never, request);
+    await Promise.resolve();
+    expect(progress).not.toHaveBeenCalled();
+    ready();
+    expect(await pending).toEqual(result);
+    expect(progress).toHaveBeenCalledWith(ref, request.client);
+  });
+
   it('перечень: plans.*, rooms.resolveProposal/setMode, works.list, sessions.*, pty.*, feed.* и activity.seen', () => {
     expect([...WORKS_GATED_METHODS].sort()).toEqual(
       [
@@ -191,6 +206,7 @@ describe('методы на старте хоста ждут первого чт
         'pty.send',
         // Лента вида «Chat» сверяет сессию со снимком работ.
         'feed.snapshot',
+        'feed.progress',
         'feed.subscribe',
         'feed.unsubscribe',
         'feed.decide',

@@ -16,12 +16,14 @@ let failStarts = 0;
 let failWith: () => Error = () => new Error('сбой записи');
 /** Задерживает запись старта до шага теста: так выход процесса гарантированно приходит посреди записи. */
 let startGate: Promise<void> | null = null;
+const startAttempts: unknown[][] = [];
 
 vi.mock('@parley/core', async (importOriginal) => {
   const core = await importOriginal<typeof import('@parley/core')>();
   return {
     ...core,
     startSession: async (...args: Parameters<typeof core.startSession>) => {
+      startAttempts.push([...args]);
       if (startGate !== null) await startGate;
       if (failStarts > 0) {
         failStarts -= 1;
@@ -82,6 +84,7 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-start-write-'));
   failStarts = 0;
   startGate = null;
+  startAttempts.length = 0;
   for (const [key, value] of Object.entries({ PARLEY_CLAUDE_BIN: STUB, PARLEY_SKILL_NAVIGATOR: '0' })) {
     savedEnv[key] = process.env[key];
     process.env[key] = value;
@@ -115,6 +118,7 @@ async function sleepingSession() {
 describe('launch(): запись старта в карту не удалась после pty.start', () => {
   it('база занята один раз — запись повторяется: процесс жив, в карте active', async () => {
     const { service, ref, lifecycle } = await sleepingSession();
+    startAttempts.length = 0;
     failWith = () => new MapLockTimeoutError(path.join(parleyHome(), 'parley.db'), 3000);
     failStarts = 1;
 
@@ -122,6 +126,11 @@ describe('launch(): запись старта в карту не удалась 
 
     expect(service.live(ref)).toBe(true);
     expect((await lifecycle())?.lifecycle).toBe('active');
+    // Skill navigator выключен в fixture; UUID запуска всё равно передаётся и стабилен на retry.
+    expect(startAttempts).toHaveLength(2);
+    expect(startAttempts[0]?.[5]).toMatch(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/);
+    expect(startAttempts[1]?.[5]).toBe(startAttempts[0]?.[5]);
+    expect(startAttempts[1]?.[4]).toEqual(startAttempts[0]?.[4]);
     await service.stop(ref);
   });
 

@@ -1,5 +1,5 @@
 /**
- * Модель острова: счётчики пилюли, группы «в работе» по работам, комнаты по участникам, Codex только при запросе действия, подписи
+ * Модель острова: счётчики пилюли, группы «в работе» по работам, комнаты по участникам, полная активность Codex, подписи
  * сессий; Done (ход окончен, не смотрели): строка с ключом конца хода, Clear, порядок после работы, комната `done`;
  * удержанные ключи: посмотренная (`idle`) сессия с концом хода и ключом в `held` остаётся строкой Done; `seen` у строки
  * Done: ложно для `unseen`, истинно для удержанной `idle`.
@@ -34,7 +34,83 @@ function work() {
 }
 
 describe('модель острова', () => {
-  it('работает и ждёт — в пилюле; Codex только при запросе действия; «finished» — Done, а не работа', () => {
+  const tasks = (count: number) => Array.from({ length: count }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), agentType: 'worker', description: `Task ${index}`, background: true }));
+  const metrics = (items = tasks(1), subagents = 1) => ({ tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents, model: null, tasks: items });
+
+  it('Done is orthogonal to children; Clear retains one background parent without phantom work', () => {
+    const entry = work();
+    const live = makeActivity(ref('s-05'), 'unseen', { turnEndedAt: ENDED, metrics: metrics() });
+    const model = islandModel([entry], activityMap([live]), NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, done: 1, subagents: 1 });
+    expect(model.groups[0]?.rows.filter((row) => row.kind === 'session')).toHaveLength(1);
+    expect(model.groups[0]?.rows[0]).toMatchObject({ state: 'done', doneKey: doneKey('s-05'), tasks: { items: tasks(1), reported: 1, total: 1 } });
+    const cleared = new Set([doneKey('s-05')]);
+    expect(islandModel([entry], activityMap([live]), NONE, cleared, NONE).groups[0]?.rows[0]).toMatchObject({ state: 'subagents' });
+    expect(islandModel([entry], activityMap([live]), NONE, cleared, NONE)).toMatchObject({ working: 0, done: 0, active: true });
+    const ended = { ...live, metrics: metrics([], 0) };
+    expect(islandModel([entry], activityMap([ended]), NONE, cleared, NONE).groups).toEqual([]);
+    const next = makeActivity(ref('s-05'), 'unseen', { turnEndedAt: '2026-10-14T10:00:00.000Z', metrics: metrics([], 0) });
+    expect(islandModel([entry], activityMap([next]), NONE, cleared, NONE).done).toBe(1);
+    expect(islandModel([], activityMap([live]), NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('held background without an end marker stays idle parent with no invented Done or working count', () => {
+    const live = makeActivity(ref('s-01'), 'working', { heldByBackground: true, metrics: metrics(), turnEndedAt: null });
+    const model = islandModel([work()], activityMap([live]), NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, waiting: 0, done: 0, subagents: 1, active: true });
+    expect(model.groups[0]?.rows[0]).toMatchObject({ state: 'subagents' });
+    const stopped = makeActivity(ref('s-01'), 'idle', { metrics: metrics([], 0) });
+    expect(islandModel([work()], activityMap([stopped]), NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('task source total, delivered items and reported count remain independent', () => {
+    for (const [items, total, reported] of [[tasks(8), 12, 5], [tasks(3), 3, 12], [[], 0, 12]] as const) {
+      const live = { ...makeActivity(ref('s-01'), 'idle', { metrics: metrics([...items], reported) }), islandTasksTotal: total };
+      const row = islandModel([work()], activityMap([live]), NONE, NONE, NONE).groups[0]?.rows[0];
+      expect(row).toMatchObject({ state: 'subagents', tasks: { items, total, reported } });
+    }
+    const absent = makeActivity(ref('s-01'), 'idle', { metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 12, model: null } });
+    expect(islandModel([work()], activityMap([absent]), NONE, NONE, NONE).groups[0]?.rows[0]).toMatchObject({ tasks: { items: [], total: null, reported: 12 } });
+  });
+
+  it.each([undefined, 'decision', 'completion'] as const)('pending room %s survives busy0/done0 with current live lead and opaque revision identity', (kind) => {
+    const entry = work(); const room = entry.map.rooms[0]!;
+    room.proposal = { id: 'p-1', from: 's-01', text: 'SECRET-proposal', rev: 1, at: ENDED, ...(kind === undefined ? {} : { kind }) };
+    room.lead = 's-02';
+    const model = islandModel([entry], {}, NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 0, done: 0, proposals: 1, active: true });
+    const row = model.groups[0]?.rows[0];
+    expect(row).toMatchObject({ kind: 'room', busy: 0, done: false, proposal: { kind: kind ?? 'decision', lead: 's-02' } });
+    expect(JSON.stringify(row)).not.toContain('SECRET');
+    const key = row?.kind === 'room' ? row.proposal?.key : null;
+    room.proposal.rev = 2; entry.map.sessions.find((s) => s.id === 's-02')!.lifecycle = 'closed';
+    const revised = islandModel([entry], {}, NONE, NONE, NONE).groups[0]?.rows[0];
+    expect(revised).toMatchObject({ proposal: { lead: 's-03' } });
+    expect(revised?.kind === 'room' ? revised.proposal?.key : null).not.toBe(key);
+    room.proposal = null;
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('proposals respect active work/archive boundaries and full refs; halted alone adds nothing', () => {
+    const entry = work(); const room = entry.map.rooms[0]!;
+    room.proposal = { id: 'p-1', from: 's-01', text: 'SECRET', rev: 0, at: ENDED };
+    const other = { ...entry, projectPath: '/other/proj' };
+    const models = islandModel([entry, other], {}, NONE, NONE, NONE);
+    expect(models.groups).toHaveLength(2);
+    const keys = models.groups.flatMap((g) => g.rows).map((r) => r.kind === 'room' ? r.proposal?.key : null);
+    expect(new Set(keys).size).toBe(2);
+    for (const status of ['suspended', 'closed', 'done', 'archived']) {
+      Object.assign(entry.map.work, { status });
+      expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+    }
+    entry.map.work.status = 'active'; room.archivedAt = ENDED;
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+    room.archivedAt = null; room.proposal = null;
+    Object.assign(room, { halted: 'stuck' });
+    expect(islandModel([entry], {}, NONE, NONE, NONE).groups).toEqual([]);
+  });
+
+  it('работает и ждёт — в пилюле для всех провайдеров; «finished» — Done, а не работа', () => {
     const byRef = activityMap([
       makeActivity(ref('s-01'), 'working'),
       makeActivity(ref('s-02'), 'blocked'),
@@ -153,9 +229,58 @@ describe('модель острова', () => {
     });
   });
 
-  it('Codex в Done не попадает', () => {
+  it('Codex Done виден даже без текста ответа и имеет тот же ключ конца хода', () => {
     const byRef = activityMap([makeActivity(ref('s-04'), 'unseen', { turnEndedAt: ENDED })]);
-    expect(islandModel([work()], byRef, new Set(), NONE, NONE)).toMatchObject({ done: 0, groups: [] });
+    const model = islandModel([work()], byRef, new Set(), NONE, NONE);
+    expect(model).toMatchObject({ working: 0, waiting: 0, done: 1, active: false, providers: [] });
+    expect(model.groups[0]?.rows).toEqual([
+      { kind: 'session', key: refKey(ref('s-04')), ref: ref('s-04'), label: 'S04 codex', provider: 'codex', state: 'done', inTerminal: false, doneKey: doneKey('s-04'), turnEndedAt: ENDED, seen: false },
+    ]);
+  });
+
+  it('Codex в двух worktree: working/needs-you/Done, комнаты и счётчики без двойного учёта', () => {
+    const paths = ['/tmp/worktree-a', '/tmp/worktree-b'];
+    const entries = paths.map((projectPath) => makeWork('w-1', {
+      projectPath,
+      sessions: [makeSession('s-01', 'one', { provider: 'codex' }), makeSession('s-02', 'two', { provider: 'codex' })],
+      rooms: [{ ...makeRoom('r-1', 'Codex room'), members: ['s-01', 's-02'] }],
+    }));
+    const a = { projectPath: paths[0]!, workId: 'w-1', sessionId: 's-01' };
+    const b = { ...a, sessionId: 's-02' };
+    const c = { ...a, projectPath: paths[1]! };
+    const d = { ...c, sessionId: 's-02' };
+    const model = islandModel(entries, activityMap([
+      makeActivity(a, 'working'), makeActivity(b, 'blocked'), makeActivity(c, 'unseen', { turnEndedAt: ENDED }), makeActivity(d, 'working'),
+    ]), NONE, NONE, NONE);
+    expect(model).toMatchObject({ working: 2, waiting: 1, done: 1, active: true, providers: ['codex'] });
+    expect(model.groups).toHaveLength(2);
+    const rows = model.groups.flatMap((group) => group.rows);
+    expect(rows.filter((row) => row.kind === 'session')).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length);
+    expect(rows.find((row) => row.kind === 'session' && row.key === refKey(b))).toMatchObject({ state: 'needs-you', inTerminal: true });
+    expect(model.groups[0]?.rows.find((row) => row.kind === 'room')).toMatchObject({ busy: 2, done: false });
+    expect(model.groups[1]?.rows.find((row) => row.kind === 'room')).toMatchObject({ busy: 1, done: false });
+  });
+
+  it('Clear Codex Done не задевает тот же sessionId другого worktree; новый конец хода возвращается', () => {
+    const entries = ['/tmp/worktree-a', '/tmp/worktree-b'].map((projectPath) => makeWork('w-1', {
+      projectPath, sessions: [makeSession('s-01', 'one', { provider: 'codex' })],
+      rooms: [{ ...makeRoom('r-1', 'Codex room'), members: ['s-01'] }],
+    }));
+    const a = { projectPath: entries[0]!.projectPath, workId: 'w-1', sessionId: 's-01' };
+    const b = { ...a, projectPath: entries[1]!.projectPath };
+    const clearedKey = `${refKey(a)}\u0000${ENDED}`;
+    const byRef = activityMap([makeActivity(a, 'unseen', { turnEndedAt: ENDED }), makeActivity(b, 'unseen', { turnEndedAt: ENDED })]);
+    expect(islandModel(entries, byRef, NONE, NONE, NONE)).toMatchObject({ done: 2, working: 0, waiting: 0 });
+    const cleared = new Set([clearedKey]);
+    const remaining = islandModel(entries, byRef, NONE, cleared, NONE);
+    expect(remaining.done).toBe(1);
+    expect(remaining.groups.map((group) => group.rows.find((row) => row.kind === 'session')?.key)).toEqual([refKey(b)]);
+    const next = islandModel(entries, activityMap([
+      makeActivity(a, 'unseen', { turnEndedAt: '2026-10-13T11:00:00.000Z' }), makeActivity(b, 'unseen', { turnEndedAt: ENDED }),
+    ]), NONE, cleared, NONE);
+    expect(next.done).toBe(2);
+    expect(next.groups.flatMap((group) => group.rows).filter((row) => row.kind === 'room')).toHaveLength(2);
   });
 
   it('группа, где есть только Done, видна', () => {

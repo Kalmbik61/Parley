@@ -4,6 +4,7 @@ import type { FocusTarget, ParleyBridge } from '../shared/bridge.js';
 import { getHostClient } from './host-client.js';
 import { sessionAttention } from './attention/derive.js';
 import { createSeenTracker, visibleSessions } from './attention/seen.js';
+import { wireSessionVisibility } from './attention/session-visibility.js';
 import { attentionTotals, badgeCount } from './attention/store.js';
 import { applyFocusTarget, buildFocusTargetDeps } from './attention/focus-target.js';
 import { openSessionCard } from './chat/open-agent.js';
@@ -216,6 +217,7 @@ export function App(): JSX.Element {
       // Бейдж и «просмотрено» (кусок 4.2) — рядом, оба по вниманию.
       wireBadge(bridge),
       wireSeenTracker(bridge),
+      wireSessionVisibility(bridge),
       // Уведомления macOS и переход по ним (кусок 4.3). Пометка trust-wait в строке сессии —
       // `sidebar/SessionRow.tsx` по стору уведомлений хоста.
       wireAttentionNotifications(bridge, {

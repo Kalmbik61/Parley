@@ -3,9 +3,11 @@
  * подписчикам, свои каналы — `island:*`. Электрон подменён так же, как в `index.test.ts`.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostStatus } from '../shared/bridge.js';
-import type { IslandBridge, IslandConfig } from '../shared/island.js';
+import { ISLAND_TTS_PORT, type IslandBridge, type IslandConfig } from '../shared/island.js';
 
 type Handler = (event: unknown, ...args: unknown[]) => void;
 
@@ -48,6 +50,20 @@ async function loadPreload(): Promise<IslandBridge> {
 
 const emit = (channel: string, ...args: unknown[]): void => handlers.get(channel)?.({}, ...args);
 
+/** Настройки острова (план 3b, B12/B15): звук и движение вместо прежнего `sound`. */
+const config = (patch: Partial<IslandConfig> = {}): IslandConfig => ({
+  islandEnabled: true,
+  assistant: {
+    enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null },
+    speech: { enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false },
+  },
+  islandSound: { needs: true, finished: false, palette: 'soft', volume: 0.6, ui: false },
+  motion: 'system',
+  topInset: 38,
+  anchor: 'center',
+  ...patch,
+});
+
 describe('preload острова', () => {
   beforeEach(() => {
     send.mockClear();
@@ -59,10 +75,11 @@ describe('preload острова', () => {
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
-        'beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onAssistantBlur', 'onAssistantOpen', 'onConfig',
-        'onHover', 'open', 'setHitRect', 'setVisible', 'voice',
+        'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
+        'onHover', 'onNavigatePending', 'onVisibility', 'visibility', 'open', 'setHitRect', 'setVisible', 'speech', 'voice',
       ].sort(),
     );
+    expect(Object.keys(bridge.island.speech).sort()).toEqual(['cancel', 'connect', 'setSpeak', 'speak', 'warmup']);
   });
 
   it('события хоста раскладываются по подписчикам, статус отдаётся и опоздавшему', async () => {
@@ -89,8 +106,8 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     const configs: IslandConfig[] = [];
     bridge.island.onConfig((config) => configs.push(config));
-    emit('island:config', { sound: false, topInset: 38, anchor: 'right' });
-    expect(configs).toEqual([{ sound: false, topInset: 38, anchor: 'right' }]);
+    emit('island:config', config({ anchor: 'right', motion: 'reduce' }));
+    expect(configs).toEqual([config({ anchor: 'right', motion: 'reduce' })]);
   });
 
   it('наведение от main приходит событием island:hover', async () => {
@@ -108,13 +125,11 @@ describe('preload острова', () => {
     bridge.island.setHitRect(null);
     bridge.island.setVisible(true);
     bridge.island.dragEnd({ screenX: 1, screenY: 2 });
-    bridge.island.beep();
     expect(send.mock.calls).toEqual([
       ['island:hit-rect', { x: 100, y: 0, width: 280, height: 40 }],
       ['island:hit-rect', null],
       ['island:visible', true],
       ['island:drag-end', { screenX: 1, screenY: 2 }],
-      ['island:beep'],
     ]);
     void bridge.island.config();
     expect(invoke).toHaveBeenCalledWith('island:config');
@@ -142,10 +157,68 @@ describe('preload острова', () => {
     expect(invoke).toHaveBeenLastCalledWith('host:activity-snapshot');
   });
 
-  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно шесть каналов', async () => {
+  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно эти каналы', async () => {
     await loadPreload();
     expect(exposedKey).toBe('parley');
-    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-blur', 'island:assistant-open', 'island:config', 'island:hover']);
+    expect([...subscribed].sort()).toEqual([
+      'host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur', 'island:navigate-pending',
+      'island:session-visibility', 'island:tts-port',
+    ]);
+  });
+
+  it('нейроголос: каналы island:tts-* и island:assistant-speak; отмена без id — null (вся очередь)', async () => {
+    const bridge = await loadPreload();
+    bridge.island.speech.connect();
+    bridge.island.speech.cancel('u-1');
+    bridge.island.speech.cancel();
+    expect(send.mock.calls).toEqual([['island:tts-connect'], ['island:tts-cancel', 'u-1'], ['island:tts-cancel', null]]);
+    const request = { utteranceId: 'u-1', text: 'Hello.', voice: 'qwen3-0.6b/serena', language: 'en' } as const;
+    void bridge.island.speech.speak(request);
+    expect(invoke).toHaveBeenLastCalledWith('island:tts-speak', request);
+    void bridge.island.speech.warmup();
+    expect(invoke).toHaveBeenLastCalledWith('island:tts-warmup');
+    void bridge.island.speech.setSpeak(true);
+    expect(invoke).toHaveBeenLastCalledWith('island:assistant-speak', true);
+  });
+
+  it('порт голоса от main уходит в главный мир сообщением окна с передачей порта', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('window', { postMessage });
+    try {
+      await loadPreload();
+      const port = { name: 'port2' };
+      handlers.get('island:tts-port')!({ ports: [port] });
+      expect(postMessage).toHaveBeenCalledWith(ISLAND_TTS_PORT, '*', [port]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('session visibility has an island-only snapshot getter and removable event listener', async () => {
+    const bridge = await loadPreload();
+    const snapshot = { version: 3, refs: [{ projectPath: '/p', workId: 'w-1', sessionId: 's-01' }] };
+    invoke.mockResolvedValueOnce(snapshot);
+    const listener = vi.fn();
+    const off = bridge.island.onVisibility(listener);
+    expect(await bridge.island.visibility()).toEqual(snapshot);
+    expect(invoke).toHaveBeenLastCalledWith('island:session-visibility');
+    emit('island:session-visibility', snapshot);
+    expect(listener).toHaveBeenCalledWith(snapshot);
+    off();
+    emit('island:session-visibility', { version: 4, refs: [] });
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it('generic keyboard blur приходит request/assistant слушателям и снимается dispose', async () => {
+    const bridge = await loadPreload();
+    expect(bridge.island).toHaveProperty('onKeyboardBlur', expect.any(Function));
+    const listener = vi.fn();
+    const off = bridge.island.onKeyboardBlur(listener);
+    emit('island:keyboard-blur');
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+    emit('island:keyboard-blur');
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it('отписка работает: после неё слушатель событий хоста, статуса, настроек и наведения молчит, соседний — нет', async () => {
@@ -170,10 +243,10 @@ describe('preload острова', () => {
 
     const configs: IslandConfig[] = [];
     const offConfig = bridge.island.onConfig((config) => configs.push(config));
-    emit('island:config', { sound: true, topInset: 0, anchor: 'center' });
+    emit('island:config', config({ topInset: 0 }));
     offConfig();
-    emit('island:config', { sound: false, topInset: 38, anchor: 'left' });
-    expect(configs).toEqual([{ sound: true, topInset: 0, anchor: 'center' }]);
+    emit('island:config', config({ anchor: 'left' }));
+    expect(configs).toEqual([config({ topInset: 0 })]);
 
     const hoversOfFirst: boolean[] = [];
     const hoversOfSecond: boolean[] = [];
@@ -184,5 +257,19 @@ describe('preload острова', () => {
     emit('island:hover', false);
     expect(hoversOfFirst).toEqual([true]);
     expect(hoversOfSecond).toEqual([true, false]);
+  });
+});
+
+describe('preload острова в песочнице', () => {
+  /** Модули, из которых файл берёт значения (не `import type`). */
+  function valueImports(file: string): string[] {
+    const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8');
+    return [...source.matchAll(/^import\s+(?!type\s)[^'"]*from\s+'([^']+)'/gm)].map((match) => match[1]!);
+  }
+
+  it('значения — только из electron и модулей без импортов: песочница не может require пакеты npm (B25, BUG-1)', () => {
+    const imports = valueImports('./island.ts');
+    expect(imports.filter((specifier) => specifier !== 'electron')).toEqual(['../shared/island-port.js']);
+    expect(valueImports('../shared/island-port.ts')).toEqual([]);
   });
 });

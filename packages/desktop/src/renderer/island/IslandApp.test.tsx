@@ -14,28 +14,117 @@
  * Карточки согласия на папку: начальный `consents.list` и событие `consents.changed` показывают карточку раньше запросов
  * ленты, она выдвигает остров и звучит один раз, не даёт острову убраться в покое, Trust уходит в `consents.decide`.
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
+ * Звук (#9 T4): исходы показа идут в `useIslandCues`, граф окна подменён (`played()` — что он сыграл), политика
+ * сигналов настоящая и считает остывание по `Date.now`; `island:beep` нет.
+ * Речь помощника (план 3b B22): проигрыватель подменён (`speakerOf()`), порт голоса — подставной объект с `onmessage`,
+ * его приносит сообщение окна (`sendPort`).
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedCard } from '@parley/core';
-import { refKey, type ConsentCard } from '@parley/protocol';
-import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
+import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
+import { encodeIpcError } from '../../shared/ipc-error.js';
+import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
+import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandPresentationOutcome, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
+import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
+import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import { createVoiceAnalysis } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
+import { CUE_COOLDOWN_MS, CUE_GAP_MS } from './sound/cues.js';
+import { islandSound } from './sound/graph.js';
+import * as engineModule from './swarm/engine.js';
+
+vi.mock('./sound/graph.js', () => ({
+  islandSound: { graph: vi.fn(() => null), play: vi.fn(), setVolume: vi.fn(), setPalette: vi.fn(), duckVoice: vi.fn() },
+}));
+vi.mock('./assistant/speaker.js', () => ({
+  createSpeaker: vi.fn(() => {
+    const starts: Array<(utteranceId: string) => void> = [];
+    return {
+      starts,
+      enqueue: vi.fn(),
+      expect: vi.fn(),
+      stop: vi.fn(),
+      discard: vi.fn(),
+      mouth: vi.fn(() => 0),
+      speaking: vi.fn(() => false),
+      onIdle: vi.fn(() => () => undefined),
+      onStart: vi.fn((cb: (utteranceId: string) => void) => {
+        starts.push(cb);
+        return () => undefined;
+      }),
+      read: vi.fn(() => false),
+    };
+  }),
+}));
+vi.mock('./assistant/voice-features.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./assistant/voice-features.js')>();
+  return { ...actual, createVoiceAnalysis: vi.fn(actual.createVoiceAnalysis) };
+});
+
+/** Подменённый проигрыватель речи последнего смонтированного острова. */
+interface FakeSpeaker {
+  starts: Array<(utteranceId: string) => void>;
+  enqueue: ReturnType<typeof vi.fn>;
+  expect: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  discard: ReturnType<typeof vi.fn>;
+  speaking: ReturnType<typeof vi.fn>;
+  read: ReturnType<typeof vi.fn>;
+}
+const speakerOf = (): FakeSpeaker => vi.mocked(createSpeaker).mock.results.at(-1)!.value as unknown as FakeSpeaker;
+
+/** Подставной порт голоса: остров ставит ему `onmessage`. */
+function voicePort(): { onmessage: ((event: { data: IslandTtsMessage }) => void) | null; start: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } {
+  return { onmessage: null, start: vi.fn(), close: vi.fn() };
+}
+/** Сообщение окна, которым preload передаёт порт голоса; поля можно испортить. */
+function sendPort(ports: unknown[], init: { source?: unknown; data?: unknown } = {}): void {
+  const event = new Event('message');
+  Object.defineProperties(event, {
+    source: { value: 'source' in init ? init.source : window },
+    data: { value: 'data' in init ? init.data : ISLAND_TTS_PORT },
+    ports: { value: ports },
+  });
+  window.dispatchEvent(event);
+}
+
+/** Что сыграл граф острова: виды сигналов по порядку. */
+const played = (): string[] => vi.mocked(islandSound.play).mock.calls.map(([kind]) => kind);
+/** Подмена `Date.now` для `skipCooldown`; снимается после теста. */
+let clock: { mockRestore(): void } | null = null;
+/**
+ * На настоящих таймерах: часы политики сигналов уходят вперёд за остывание вида (#9 §3.5), следующий сигнал того же
+ * вида звучит, а не сливается с прошлым.
+ */
+function skipCooldown(): void {
+  const now = Date.now.bind(Date);
+  clock?.mockRestore();
+  const shift = CUE_COOLDOWN_MS.done!;
+  clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + shift);
+}
+/** На поддельных таймерах: время остывания вида проходит. */
+async function waitCooldown(): Promise<void> {
+  await act(async () => { await vi.advanceTimersByTimeAsync(CUE_COOLDOWN_MS.done!); });
+}
 
 const PROJECT = '/tmp/proj';
 const ref = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-1', sessionId });
 const ENTRIES = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')] })];
+
+const proposalWork = (rev = 1, projectPath = PROJECT) => makeWork('w-1', { projectPath, sessions: ENTRIES[0]!.map.sessions,
+  rooms: [{ ...makeRoom('r-1', 'Room one'), members: ['s-01', 's-02'], lead: 's-02',
+    proposal: { id: 'p-1', from: 's-01', text: 'SECRET-proposal', at: '2026-10-27T00:00:00.000Z', rev } }],
+});
 
 function permission(cardId: string, command: string): FeedCard {
   return {
@@ -66,17 +155,28 @@ class ResizeObserverStub {
   }
 }
 
+/** Звук острова (#9 §5): по умолчанию в тестах молчит; `SOUND_ON` — включено «Sound when you're needed». */
+const SOUND_OFF: IslandConfig['islandSound'] = { needs: false, finished: false, palette: 'soft', volume: 0.6, ui: false };
+const SOUND_ON: IslandConfig['islandSound'] = { ...SOUND_OFF, needs: true };
+/** Нейроголос (план 3b, B15): в тестах выключен и не скачан. */
+const SPEECH_OFF = { enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false } as const;
+
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
-    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, sound: false, topInset: 0, anchor: 'center', ...config })),
+    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF }, islandSound: SOUND_OFF, motion: 'system', topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
-    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    visibility: vi.fn(async () => ({ version: 0, refs: [] })),
+    onVisibility: vi.fn(() => () => undefined),
+    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(),
     onAssistantOpen: vi.fn(() => () => undefined),
-    onAssistantBlur: vi.fn(() => () => undefined),
+    onNavigatePending: vi.fn((listener: () => void) => { pendingNavigationHandler = listener; return () => { pendingNavigationHandler = null; }; }),
+    onKeyboardBlur: vi.fn(() => () => undefined),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
+    speech: { connect: vi.fn(), speak: vi.fn(async () => ({ state: 'not-downloaded' as const })), cancel: vi.fn(), warmup: vi.fn(async () => ({ state: 'not-downloaded' as const })), setSpeak: vi.fn(async () => undefined) },
   };
 }
+let pendingNavigationHandler: (() => void) | null = null;
 
 /** Мост острова поверх подставного моста окна: хост «подключён», `works.list` и `feed.snapshot` отвечают из таблиц выше. */
 function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: ConsentCard[] = []) {
@@ -120,14 +220,16 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: 
   };
   const assistantBlur = (): void => {
     act(() => {
-      vi.mocked(island.onAssistantBlur).mock.calls.at(-1)![0]();
+      vi.mocked(island.onKeyboardBlur).mock.calls.at(-1)![0]();
     });
   };
   return { fake, island, bridge, blocked, working, disconnect, reconnect, hover, assistantOpen, assistantBlur };
 }
 
 /** Помощник включён в настройках острова. */
-const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null } };
+const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF };
+/** Помощник говорит ответы: «Speak answers» включено, голос скачан. */
+const ASSISTANT_SPEAKS = { ...ASSISTANT_ON, speech: { ...SPEECH_OFF, enabled: true, available: true } };
 
 /** Работа идёт к моменту открытия острова: сторы заполнены заранее, обмена с хостом ждать не надо. */
 function seedWorking(): void {
@@ -155,6 +257,7 @@ const expand = (): void => {
 };
 
 beforeEach(() => {
+  vi.mocked(islandSound.play).mockClear();
   resizeCallbacks = [];
   observed = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
@@ -168,32 +271,203 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clock?.mockRestore();
+  clock = null;
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe('проводка острова', () => {
+  it('shows a brief empty-queue message and immediately returns keyboard focus', async () => {
+    const { bridge, fake, island } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    const callsBefore = fake.calls.length;
+    act(() => pendingNavigationHandler?.());
+    expect(await screen.findByTestId('island-no-pending')).toBeTruthy();
+    expect(island.keyboard).toHaveBeenCalledWith(false);
+    expect(fake.calls).toHaveLength(callsBefore);
+  });
+
+  it('global queue activation opens a feed target, while navigation keys never decide', async () => {
+    const { bridge, blocked, fake } = setup();
+    render(<IslandApp bridge={bridge} />);
+    blocked('s-01');
+    blocked('s-02');
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === 'feed.snapshot').length).toBeGreaterThanOrEqual(2));
+    act(() => pendingNavigationHandler?.());
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/));
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    const selected = screen.getByTestId('island').getAttribute('data-navigation-key');
+    act(() => pendingNavigationHandler?.());
+    expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toBe(selected);
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
+    expect(bridge.island.open).toHaveBeenCalled();
+    expect(fake.calls.some((call) => call.method === 'feed.decide')).toBe(false);
+  });
+
+  it.each(['close', 'collapse', 'hidden', 'disconnect', 'assistant', 'pending', 'room'] as const)('progress polls only the selected detail and stops on %s', async (pause) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover, disconnect, blocked } = setup({ assistant: ASSISTANT_ON });
+    fake.setHostMethods(['feed.progress']);
+    fake.setActivitySnapshot(['s-01', 's-02'].map((id) => makeActivity(ref(id), 'working')));
+    const result: ProgressResult = { revision: 1, availability: 'available', current: null, recent: [], truncated: false };
+    const read = vi.fn<() => ProgressResult | Promise<ProgressResult>>().mockReturnValue(result);
+    fake.setHandler('feed.progress', read);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    hover(true);
+    expect(read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[0]!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(read).toHaveBeenCalledOnce();
+    expect(fake.calls.filter((call) => call.method === 'feed.progress')[0]?.params).toEqual({ ref: ref('s-01') });
+    let resolveLate!: (value: ProgressResult) => void;
+    read.mockReturnValueOnce(new Promise<ProgressResult>((resolve) => { resolveLate = resolve; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(read).toHaveBeenCalledTimes(2);
+    let hidden: ReturnType<typeof vi.spyOn> | undefined;
+    if (pause === 'close') fireEvent.click(screen.getByRole('button', { name: 'Close history' }));
+    else if (pause === 'collapse') tuck(hover);
+    else if (pause === 'hidden') {
+      hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+    } else if (pause === 'disconnect') disconnect();
+    else if (pause === 'assistant') act(() => useAssistantStore.setState({ open: true }));
+    else if (pause === 'pending') blocked('s-01');
+    else act(() => fake.emit('works.changed', { entries: [proposalWork()], branches: {} }));
+    resolveLate({ ...result, revision: 99, recent: [{ id: 'late', at: '2026-10-26T10:00:00.000Z', category: 'execute', status: 'done' }] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const count = read.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(read).toHaveBeenCalledTimes(count);
+    expect(screen.queryByText('Run command')).toBeNull();
+    if (pause === 'room') {
+      expect(screen.getByText('Update delayed')).toBeTruthy();
+      act(() => fake.emit('works.changed', { entries: ENTRIES, branches: {} }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(read).toHaveBeenCalledTimes(count + 1);
+      expect(fake.calls.filter((call) => call.method === 'feed.progress').at(-1)?.params).toEqual({ ref: ref('s-01') });
+    }
+    hidden?.mockRestore();
+  });
+
+  it('room proposals reveal once per full revision identity and only open the current room', async () => {
+    vi.useFakeTimers();
+    const { fake, bridge, island, hover } = setup({ islandSound: SOUND_ON });
+    render(<IslandApp bridge={bridge} />);
+    const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+    await settle();
+    expect(isRetracted()).toBe(true);
+    const update = async (entries = [proposalWork()]) => {
+      act(() => fake.emit('works.changed', { entries, branches: {} })); await settle();
+    };
+    await update();
+    expect(isRetracted()).toBe(false);
+    expect(played()).toEqual(['question']);
+    hover(true);
+    expect(screen.getByText('Lead: S02 b')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('SECRET');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
+    tuck(hover); await update();
+    expect(isRetracted()).toBe(true);
+    expect(played()).toEqual(['question']);
+    await waitCooldown();
+    await update([proposalWork(2)]);
+    expect(isRetracted()).toBe(false);
+    expect(played()).toEqual(['question', 'question']);
+    await waitCooldown();
+    await update([proposalWork(2), proposalWork(2, '/other/proj')]);
+    expect(played()).toEqual(['question', 'question', 'question']);
+    await update(ENTRIES);
+    expect(screen.queryByRole('button', { name: 'Open room' })).toBeNull();
+    expect(fake.calls.filter((call) => /resolveProposal|resumeAutonomous|feed.decide/.test(call.method))).toEqual([]);
+  });
+
+  it('parent removal and disconnect clear child rows; an empty reconnect cannot restore stale children', async () => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover, disconnect, reconnect } = setup();
+    const child = makeActivity(ref('s-01'), 'idle', { heldByBackground: true, metrics: { tokensIn: null, tokensOut: null,
+      durationMs: null, unread: 0, model: null, subagents: 1, tasks: [{ id: 'a'.repeat(64), agentType: 'worker', description: 'child one', background: true }] } });
+    fake.setActivitySnapshot([child]);
+    render(<IslandApp bridge={bridge} />);
+    const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+    await settle(); hover(true);
+    expect(screen.getByText('child one')).toBeTruthy();
+    expect(screen.queryByTestId('island-done')).toBeNull();
+    act(() => fake.emit('works.changed', { entries: [makeWork('w-1', { projectPath: PROJECT })], branches: {} }));
+    await settle();
+    expect(screen.queryByText('child one')).toBeNull();
+    act(() => fake.emit('works.changed', { entries: ENTRIES, branches: {} })); await settle();
+    disconnect(); await settle();
+    expect(useActivityStore.getState().byRef).toEqual({});
+    fake.setActivitySnapshot([]); reconnect(); await settle(); hover(true);
+    expect(screen.queryByText('child one')).toBeNull();
+    expect(useActivityStore.getState().byRef).toEqual({});
+  });
+
+  it.each([null, []])('progress old host %j shows unavailable with no periodic calls', async (methods) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover } = setup();
+    fake.setHostMethods(methods); fake.setActivitySnapshot([makeActivity(ref('s-01'), 'working')]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); hover(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show recent actions' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText('Recent actions unavailable')).toBeTruthy();
+    expect(fake.calls.filter((call) => call.method === 'feed.progress')).toHaveLength(0);
+  });
+
+  it.each(['selection', 'process'] as const)('progress drops the old %s response before showing a new detail', async (change) => {
+    vi.useFakeTimers();
+    const { fake, bridge, hover } = setup();
+    fake.setHostMethods(['feed.progress']); fake.setActivitySnapshot(['s-01', 's-02'].map((id) => makeActivity(ref(id), 'working')));
+    let resolveOld!: (value: ProgressResult) => void;
+    const first = new Promise<ProgressResult>((resolve) => { resolveOld = resolve; });
+    const read = vi.fn<() => ProgressResult | Promise<ProgressResult>>().mockResolvedValue({ revision: 1, availability: 'available', current: null,
+      recent: [{ id: 'fresh', at: '2026-10-26T10:00:00.000Z', category: 'read', status: 'done' }], truncated: false }).mockReturnValueOnce(first);
+    fake.setHandler('feed.progress', read);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); }); hover(true);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[0]!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    if (change === 'selection') fireEvent.click(screen.getAllByRole('button', { name: 'Show recent actions' })[1]!);
+    else act(() => fake.emit('works.changed', { entries: ENTRIES.map((entry) => ({ ...entry, map: { ...entry.map,
+      sessions: entry.map.sessions.map((session) => session.id === 's-01' ? { ...session, pid: 77, startedAtProcess: 'process-new' } : session),
+    } })), branches: {} }));
+    expect(read).toHaveBeenCalledOnce();
+    resolveOld({ revision: 99, availability: 'available', current: null,
+      recent: [{ id: 'old', at: '2026-10-26T10:00:00.000Z', category: 'execute', status: 'done' }], truncated: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.queryByText('Run command')).toBeNull(); expect(screen.getByText('Loading recent actions…')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.getByText('Read files')).toBeTruthy(); expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('Codex без карточки: действие в терминале выдвигает Island, открывает сессию и уходит после ответа', async () => {
     const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-03', 'codex', { provider: 'codex' })] })];
-    const { island, bridge, blocked, working, hover } = setup({ sound: true }, entries);
+    const { island, bridge, blocked, working, hover } = setup({ islandSound: SOUND_ON }, entries);
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     blocked('s-03');
     expect(await screen.findByTitle('Codex needs your attention in the terminal')).toBeTruthy();
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     expect(screen.queryByTestId('island-allow')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
     expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-03') });
     blocked('s-03');
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     working('s-03');
     await waitFor(() => expect(screen.queryByTestId('island-card')).toBeNull());
     tuck(hover);
+    skipCooldown();
     blocked('s-03');
     await screen.findByTitle('Codex needs your attention in the terminal');
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(2);
+    expect(played()).toEqual(['permission', 'permission']);
   });
 
   it('новый запрос выбирается в карточке: прежний на экране не остаётся', async () => {
@@ -204,7 +478,7 @@ describe('проводка острова', () => {
     blocked('s-02');
     expect(await screen.findByTitle('Run: ls')).toBeTruthy();
     expect(screen.getByText('2 of 2')).toBeTruthy();
-    expect(useIslandRequests.getState().index).toBe(1);
+    expect(useIslandRequests.getState().selectedKey).toBe(useIslandRequests.getState().items[1]!.key);
   });
 
   it('новый запрос выдвигает убранный остров: язычок уходит, форма на месте', async () => {
@@ -252,7 +526,8 @@ describe('проводка острова', () => {
   });
 
   it('после переподключения всё ещё ждущая карточка — новая: выдвигает убранный стрелкой остров', async () => {
-    const { island, bridge, blocked, disconnect, reconnect, hover } = setup();
+    const { fake, island, bridge, blocked, disconnect, reconnect, hover } = setup();
+    fake.setActivitySnapshot([makeActivity(ref('s-01'), 'blocked')]);
     render(<IslandApp bridge={bridge} />);
     blocked('s-01');
     await screen.findByTitle('Run: rm -rf build');
@@ -454,6 +729,16 @@ describe('проводка острова', () => {
       expect(island.keyboard).toHaveBeenCalledWith(true);
     });
 
+    it('an empty pending shortcut keeps keyboard ownership with the open assistant', async () => {
+      const { island, assistantOpen } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      island.keyboard.mockClear();
+      act(() => pendingNavigationHandler?.());
+      expect(island.keyboard).not.toHaveBeenCalledWith(false);
+      expect(screen.getByTestId('assistant-view')).toBeTruthy();
+    });
+
     it('Esc закрывает вид и отдаёт клавиатуру', async () => {
       const { island, assistantOpen } = await renderAssistant();
       assistantOpen({ listen: false });
@@ -556,6 +841,155 @@ describe('проводка острова', () => {
   });
 });
 
+describe('речь помощника (план 3b B22)', () => {
+  /** Остров с говорящим помощником; порт голоса приходит в ответ на `connect`, движок готов, режим открыт. */
+  async function renderSpeaking(config: Partial<IslandConfig> = {}) {
+    const ctx = setup({ assistant: ASSISTANT_SPEAKS, ...config });
+    const port = voicePort();
+    vi.mocked(ctx.island.speech.connect).mockImplementation(() => sendPort([port]));
+    vi.mocked(ctx.island.speech.speak).mockImplementation(() => new Promise<TtsEngineState>(() => {}));
+    render(<IslandApp bridge={ctx.bridge} />);
+    await waitFor(() => expect(ctx.island.onAssistantOpen).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    act(() => port.onmessage!({ data: { type: 'state', state: { state: 'ready' } } }));
+    ctx.assistantOpen({ listen: false });
+    await screen.findByTestId('assistant-view');
+    return { ...ctx, port };
+  }
+  /** Ход 1 с ответом из одного предложения: ответ дописан, предложение ушло на синтез. */
+  function answer(island: IslandApi): IslandSpeakRequest {
+    for (const state of [{ phase: 'thinking' }, { phase: 'answering', answer: 'Two agents are busy.' }, { phase: 'idle', answer: 'Two agents are busy.' }] as const) {
+      act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, turn: 1, ...state }));
+    }
+    return vi.mocked(island.speech.speak).mock.calls.at(-1)![0];
+  }
+
+  it('порт голоса: принят только от своего окна, с меткой и одним портом; connect — после подписки на message', async () => {
+    const ctx = setup({ assistant: ASSISTANT_SPEAKS });
+    const port = voicePort();
+    const foreign = voicePort();
+    vi.mocked(ctx.island.speech.connect).mockImplementation(() => {
+      sendPort([foreign], { source: null });
+      sendPort([foreign], { data: 'other' });
+      sendPort([foreign, voicePort()]);
+      sendPort([port]);
+    });
+    render(<IslandApp bridge={ctx.bridge} />);
+    await waitFor(() => expect(ctx.island.speech.connect).toHaveBeenCalledTimes(1));
+    expect(port.onmessage).toEqual(expect.any(Function));
+    expect(foreign.onmessage).toBeNull();
+  });
+
+  it('кусок из порта — в проигрыватель после конца ответа, срыв — discard; expect раньше tts-speak; прогрев при открытии', async () => {
+    const { island, port } = await renderSpeaking();
+    expect(island.speech.warmup).toHaveBeenCalledTimes(1);
+    const request = answer(island);
+    expect(request).toMatchObject({ text: 'Two agents are busy.', voice: 'qwen3-0.6b/serena', language: 'en' });
+    const speaker = speakerOf();
+    expect(speaker.expect).toHaveBeenCalledWith(request.utteranceId);
+    act(() => port.onmessage!({ data: { type: 'chunk', chunk: { utteranceId: request.utteranceId, seq: 0, sampleRate: 24000, channels: 1, format: 'f32', pcm: new Float32Array(4), final: false } } }));
+    expect(speaker.enqueue).toHaveBeenCalledWith(expect.objectContaining({ utteranceId: request.utteranceId, seq: 0 }));
+    act(() => port.onmessage!({ data: { type: 'discard', utteranceId: request.utteranceId, fromSeq: 1 } }));
+    expect(speaker.discard).toHaveBeenCalledWith(request.utteranceId, 1);
+  });
+
+  it('Esc во время речи: проигрыватель глушится, в main уходит отмена всей очереди (E3)', async () => {
+    const { island } = await renderSpeaking();
+    const request = answer(island);
+    act(() => { for (const cb of speakerOf().starts) cb(request.utteranceId); });
+    expect(useAssistantStore.getState().input).toBe('speaking');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(speakerOf().stop).toHaveBeenCalled();
+    expect(island.speech.cancel).toHaveBeenCalledWith();
+    expect(useAssistantStore.getState().input).toBe('idle');
+  });
+
+  it('лицо: анализ голоса с частотой графа острова и reduced motion — системным или настройкой Parley', async () => {
+    vi.mocked(islandSound.graph).mockReturnValueOnce({ context: { sampleRate: 44100 } } as never);
+    await renderSpeaking({ motion: 'reduce' });
+    speakerOf().read.mockReturnValue(true);
+    act(() => { useAssistantStore.getState().voiceFrame(); });
+    const options = vi.mocked(createVoiceAnalysis).mock.calls.at(-1)![0]!;
+    expect(options.sampleRate).toBe(44100);
+    expect(options.reducedMotion!()).toBe(true);
+    cleanup();
+
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })));
+    await renderSpeaking({ motion: 'system' });
+    speakerOf().read.mockReturnValue(true);
+    act(() => { useAssistantStore.getState().voiceFrame(); });
+    const system = vi.mocked(createVoiceAnalysis).mock.calls.at(-1)![0]!;
+    expect(system.reducedMotion!()).toBe(false);
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    expect(system.reducedMotion!()).toBe(true);
+  });
+
+  it('под речью разрешение звучит и опускает голос (V2)', async () => {
+    vi.mocked(islandSound.duckVoice).mockClear();
+    const { bridge, blocked } = setup({ islandSound: SOUND_ON });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    speakerOf().speaking.mockReturnValue(true);
+    blocked('s-01');
+    await waitFor(() => expect(played()).toEqual(['permission']));
+    expect(islandSound.duckVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('кадр голоса: лицо читает голос из стора в кадре роя (подставной rAF), а не при рендере (Р10)', async () => {
+    const ctx2d = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
+      createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx2d as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const { island } = await renderSpeaking();
+      const request = answer(island);
+      act(() => { for (const cb of speakerOf().starts) cb(request.utteranceId); });
+      expect(useAssistantStore.getState().input).toBe('speaking');
+      expect(speakerOf().read).not.toHaveBeenCalled();
+      act(() => {
+        for (let t = 100; t < 200; t += 16) {
+          const run = frames;
+          frames = [];
+          for (const cb of run) cb(t);
+        }
+      });
+      expect(speakerOf().read).toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('data-emo лица идёт за эмоцией звучащего предложения (L3), а без него — за меткой хода', async () => {
+    await renderSpeaking();
+    const face = (): HTMLElement => within(screen.getByTestId('assistant-view')).getByTestId('swarm');
+    act(() => useAssistantStore.setState({ host: { ...HOST_IDLE, mood: 'joy', turn: 1 }, input: 'speaking', sentence: { utteranceId: 'u-1', emo: 'calm', text: 'Two agents are busy.' } }));
+    expect(face().getAttribute('data-shape')).toBe('face');
+    expect(face().getAttribute('data-emo')).toBe('calm');
+    act(() => useAssistantStore.setState({ sentence: { utteranceId: 'u-2', emo: 'sad', text: 'One has failed.' } }));
+    expect(face().getAttribute('data-emo')).toBe('sad');
+    act(() => useAssistantStore.setState({ sentence: null }));
+    expect(face().getAttribute('data-emo')).toBe('joy');
+  });
+
+  it('значок динамика: aria-pressed по «Speak answers», клик переключает его через main', async () => {
+    const { island } = await renderSpeaking();
+    const button = screen.getByTestId('assistant-speak');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(button);
+    expect(island.speech.setSpeak).toHaveBeenCalledWith(false);
+  });
+
+  it('до прихода настроек речь выключена и голоса нет', () => {
+    expect(INITIAL_CONFIG.assistant.speech).toEqual({ enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false });
+  });
+});
+
 describe('область под мышь', () => {
   const SHAPE = { x: 100, y: 0, width: 280, height: 40 };
   const TAB = { x: 208, y: 0, width: 64, height: 16 };
@@ -644,6 +1078,20 @@ describe('область под мышь', () => {
     expect(lastRect(island)).toEqual(SHAPE);
   });
 
+  it('M2: рост с перелётом — область во время перехода крупнее, после transitionend уходит итоговая', () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    // Пружинная кривая роста на миг раздувает форму на ≈ 4 % больше итоговой.
+    const overshoot = { x: 94, y: 0, width: 291, height: 42 };
+    rects.shape = overshoot;
+    resized();
+    expect(lastRect(island)).toEqual(overshoot);
+    rects.shape = SHAPE;
+    fireEvent.transitionEnd(screen.getByTestId('island'));
+    expect(lastRect(island)).toEqual(SHAPE);
+  });
+
   it('точка острова сменилась — область замеряется заново', async () => {
     const { island, bridge } = setup({ anchor: 'right' });
     render(<IslandApp bridge={bridge} />);
@@ -661,7 +1109,64 @@ describe('область под мышь', () => {
   });
 });
 
+describe('движение формы', () => {
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  it('RETRACT_MORPH_MS — длина сжатия формы, 300 мс', () => {
+    expect(RETRACT_MORPH_MS).toBe(300);
+  });
+
+  it('M2: стрелка ⌃ сжимает форму кривой сжатия, язычок выдвигает кривой роста', () => {
+    const { bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    expect(morph()).toBe('island-morph-grow');
+    tuck(hover);
+    expect(morph()).toBe('island-morph-shrink');
+    expand();
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M3: настройка «Reduce motion» из island:config — форма без перехода', async () => {
+    const { bridge } = setup({ motion: 'reduce' });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-motion')).toBe('reduce'));
+    expect(morph()).toBeUndefined();
+    expand();
+    expect(morph()).toBeUndefined();
+  });
+
+  it('M3: «Reduce motion» включили на лету — переход снимается; вернули «system» — переход снова есть', async () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onConfig).toHaveBeenCalled());
+    const push = (config: IslandConfig): void => {
+      act(() => {
+        vi.mocked(island.onConfig).mock.calls.at(-1)![0](config);
+      });
+    };
+    const base = await island.config();
+    push({ ...base, motion: 'reduce' });
+    expect(morph()).toBeUndefined();
+    push({ ...base, motion: 'system' });
+    expect(morph()).toBe('island-morph-grow');
+  });
+});
+
 describe('язычок убранного острова', () => {
+  it.each([[true, ['open', 'hover', 'close']], [false, []]])('«Interface sounds» %s: язычок — open, наведение — hover, стрелка ⌃ — close', async (ui, expected) => {
+    vi.useFakeTimers();
+    const { bridge, hover } = setup({ islandSound: { ...SOUND_OFF, ui } });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(isRetracted()).toBe(true);
+    expand();
+    await act(async () => { await vi.advanceTimersByTimeAsync(CUE_GAP_MS); });
+    tuck(hover);
+    expect(isRetracted()).toBe(true);
+    expect(played()).toEqual(expected);
+  });
+
   it('в покое при открытии остров убран: форма сжата в брусок, прозрачная зона «Show the island» поверх неё', () => {
     const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
@@ -866,6 +1371,534 @@ describe('убирание острова в покое', () => {
   });
 });
 
+describe('единый keyboard owner T1c', () => {
+  beforeEach(() => vi.useFakeTimers());
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const takeRequest = (): void => { fireEvent(screen.getByTestId('island-card'), pointer('pointerdown')); };
+
+  it.each(['island-allow', 'island-deny'])('мышь pointerdown/focus/click по %s не берёт OS keyboard при оставшихся pending', async (id) => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    blocked('s-02');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId(id);
+    const label = document.createElement('span');
+    label.textContent = 'nested button target';
+    button.append(label);
+    fireEvent(label, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(label, { detail: 1 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('мышь pointerdown/focus/click по Open in Parley не берёт OS keyboard', async () => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.snapshot', () => ({ items: [{
+      id: 'plan', cardId: 'plan', at: '2026-10-26T10:00:00.000Z', kind: 'plan', state: 'pending', toolUseId: null,
+      toolName: 'ExitPlanMode', toolInput: {}, plan: 'A plan', planFilePath: null,
+    }], revision: 1, mode: null, decisions: 'window' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    const button = screen.getByRole('button', { name: 'Open in Parley' });
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01'), cardId: 'plan' });
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '])('failed mouse decide не получает повторный ответ от %j без keyboard owner', async (key) => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.decide', () => ({ applied: false, state: 'pending' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId('island-allow') as HTMLButtonElement;
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    const nativeDefault = fireEvent.keyDown(button, { key });
+    fireEvent.keyUp(button, { key });
+    if (nativeDefault && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('snapshot сам не берёт клавиатуру; явное взаимодействие берёт один раз, Escape отдаёт без решения', async () => {
+    const { fake, bridge, island, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    expect(island.keyboard).not.toHaveBeenCalled();
+    takeRequest();
+    takeRequest();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    expect(document.activeElement).not.toBe(screen.getByTestId('island-card'));
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it.each(['blur', 'collapse', 'disconnect', 'unmount'])('request owner отдаёт клавиатуру по %s', async (reason) => {
+    const { bridge, island, blocked, hover, disconnect, assistantBlur } = setup();
+    const mounted = render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    takeRequest();
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    if (reason === 'blur') assistantBlur();
+    if (reason === 'collapse') tuck(hover);
+    if (reason === 'disconnect') disconnect();
+    if (reason === 'unmount') mounted.unmount();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('assistant/request передают одного owner без повторного OS focus и чужого release', async () => {
+    const { bridge, island, blocked, assistantOpen } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    takeRequest();
+    assistantOpen({ listen: false });
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    act(() => useAssistantStore.getState().close());
+    takeRequest();
+    vi.mocked(island.keyboard).mockClear();
+    // Запоздалый release помощника не принадлежит уже активному request owner.
+    act(() => useAssistantStore.getState().collapse());
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('WATCH: deciding → same-id fingerprint change → после 500ms Enter не отправляет новое решение без фокуса', async () => {
+    const { bridge, fake, island, blocked } = setup();
+    let finish!: (value: { applied: boolean; state: 'allowed' }) => void;
+    fake.setHandler('feed.decide', () => new Promise((resolve) => { finish = resolve; }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    takeRequest();
+    act(() => screen.getByTestId('island-allow').focus());
+    fireEvent.click(screen.getByTestId('island-allow'));
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    fake.setHandler('feed.snapshot', () => ({ items: [permission('c-1', 'new command')], revision: 2, mode: null, decisions: 'window' }));
+    fireEvent.focus(window);
+    await flush();
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const active = document.activeElement!;
+    fireEvent.keyDown(active, { key: 'Enter' });
+    if (active instanceof HTMLButtonElement && !active.disabled) fireEvent.click(active);
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    await act(async () => { finish({ applied: true, state: 'allowed' }); });
+  });
+});
+
+describe('перепроверка выбранного запроса T1a', () => {
+  beforeEach(() => vi.useFakeTimers());
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+  it('новый pending не уводит уже сфокусированную карточку', async () => {
+    const { bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => screen.getByTestId('island-allow').focus());
+    blocked('s-02');
+    await flush();
+    expect(screen.queryByTitle('Run: rm -rf build')).not.toBeNull();
+    expect(screen.getByText('1 of 2')).toBeTruthy();
+  });
+
+  it('раз в 1000ms замечает ответ извне, хотя та же сессия всё ещё ждёт другую карточку', async () => {
+    const { fake, bridge, blocked } = setup();
+    let cards = [permission('c-1', 'first'), permission('c-2', 'second')];
+    fake.setHandler('feed.snapshot', () => ({ items: cards, revision: 1, mode: null, decisions: 'window' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    expect(screen.queryByTitle('Run: first')).not.toBeNull();
+    cards = [cards[1]!];
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(screen.queryByTitle('Run: first')).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.queryByTitle('Run: first')).toBeNull();
+    expect(screen.queryByTitle('Run: second')).not.toBeNull();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it('возврат фокуса сразу перепроверяет payload same cardId', async () => {
+    const { fake, bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    fake.setHandler('feed.snapshot', () => ({ items: [permission('c-1', 'changed')], revision: 2, mode: null, decisions: 'window' }));
+    fireEvent.focus(window);
+    await flush();
+    expect(screen.queryByTitle('Run: changed')).not.toBeNull();
+  });
+
+  it('collapse останавливает polling, повторное открытие сразу обновляет и disconnect снимает timer/focus', async () => {
+    const { fake, bridge, blocked, hover, disconnect } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    tuck(hover);
+    const snapshots = () => fake.calls.filter((call) => call.method === 'feed.snapshot').length;
+    const collapsed = snapshots();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    fireEvent.focus(window);
+    await flush();
+    expect(snapshots()).toBe(collapsed);
+    expand();
+    await flush();
+    expect(snapshots()).toBe(collapsed + 1);
+    disconnect();
+    const disconnected = snapshots();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    fireEvent.focus(window);
+    await flush();
+    expect(snapshots()).toBe(disconnected);
+  });
+
+  it('focus и timer делят один in-flight snapshot на ref; network error сохраняет карточку', async () => {
+    const { fake, bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    let reject!: (error: Error) => void;
+    const snapshot = vi.fn(() => new Promise<never>((_resolve, fail) => { reject = fail; }));
+    fake.setHandler('feed.snapshot', snapshot);
+    fireEvent.focus(window);
+    fireEvent.focus(window);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    await act(async () => { reject(new Error('disconnected')); });
+    expect(screen.queryByTitle('Run: rm -rf build')).not.toBeNull();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it('snapshot выбранной карточки, завершившийся после collapse, не запускает фоновые retries', async () => {
+    const { fake, bridge, blocked, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    let resolve!: (result: { items: FeedCard[]; revision: number; mode: null; decisions: 'window' }) => void;
+    const snapshot = vi.fn(() => new Promise<{ items: FeedCard[]; revision: number; mode: null; decisions: 'window' }>((done) => { resolve = done; }));
+    fake.setHandler('feed.snapshot', snapshot);
+    fireEvent.focus(window);
+    tuck(hover);
+    await act(async () => { resolve({ items: [], revision: 2, mode: null, decisions: 'window' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(snapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlanView — настоящая проводка острова', () => {
+  const plan = (): FeedPlanCard => ({ kind: 'plan', id: 'p-1', cardId: 'p-1', state: 'pending', at: '', toolUseId: null, toolName: 'ExitPlanMode', toolInput: {}, plan: 'First step\nLast step', planFilePath: '/unread/plan.md' });
+  const settle = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+  async function mount(decisions: 'window' | 'terminal' = 'window') {
+    const state = setup(); let current = plan();
+    state.fake.setHandler('feed.snapshot', () => ({ items: [current], revision: 1, mode: null, decisions }));
+    render(<IslandApp bridge={state.bridge} />); await settle(); state.blocked('s-01'); await settle();
+    return { ...state, update: async (next: FeedPlanCard) => { current = next; act(() => useIslandRequests.getState().revalidate()); await settle(); } };
+  }
+  beforeEach(() => vi.useFakeTimers());
+
+  it.each([['Approve, auto-accept edits', 'auto-accept'], ['Approve, approve each edit', 'manual']])('%s has exact %s payload, duplicate guard, retry and elsewhere state', async (label, choice) => {
+    const state = await mount();
+    let resolve!: (value: { applied: false; state: 'pending' }) => void;
+    state.fake.setHandler('feed.decide', () => new Promise((done) => { resolve = done; }));
+    const button = screen.getByRole('button', { name: label }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent(button, pointer('pointerdown')); act(() => button.focus());
+    fireEvent.click(button, { detail: 1 }); fireEvent.click(button, { detail: 1 });
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([{ method: 'feed.decide', params: { ref: ref('s-01'), cardId: 'p-1', decision: { kind: 'plan', choice } } }]);
+    await act(async () => resolve({ applied: false, state: 'pending' }));
+    expect(button.disabled).toBe(false);
+    expect(screen.getByText("Couldn't send — try again")).toBeTruthy();
+    const allowed = fireEvent.keyDown(button, { key: 'Enter' }); fireEvent.keyUp(button, { key: 'Enter' });
+    if (allowed && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    state.fake.setHandler('feed.decide', () => ({ applied: false, state: 'answered' } as never));
+    fireEvent.click(button); await settle();
+    expect(screen.getByText('Answered elsewhere')).toBeTruthy(); expect(button.disabled).toBe(true);
+  });
+
+  it('terminal-only plan remains readable; Change plan is only navigation with no host mutation', async () => {
+    const state = await mount('terminal');
+    expect(screen.getByRole('region', { name: 'Plan' }).textContent).toBe(plan().plan);
+    expect(screen.queryByRole('button', { name: 'Approve, auto-accept edits' })).toBeNull();
+    const before = state.fake.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Change plan in terminal' }));
+    expect(state.island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01'), view: 'terminal' });
+    expect(state.fake.calls.slice(before)).toEqual([]);
+    expect(state.fake.notified).toEqual([]);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('same cardId/new plan text resets owned focus and arms again on a real snapshot', async () => {
+    const state = await mount(); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => screen.getByRole('region', { name: 'Plan' }).focus()); await settle();
+    act(() => screen.getByRole('button', { name: 'Approve, auto-accept edits' }).focus());
+    await state.update({ ...plan(), plan: 'Revised plan text' });
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    const button = screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
+  });
+});
+
+describe('QuestionForm — настоящая проводка острова', () => {
+  const card = (): FeedQuestionCard => ({
+    id: 'q-1', cardId: 'q-1', at: '2026-10-12T10:00:00.000Z', kind: 'question', state: 'pending',
+    toolUseId: null, toolName: 'AskUserQuestion', toolInput: {}, notified: false,
+    questions: [
+      { question: 'Which DB?', header: null, multiSelect: false, options: [{ label: 'Postgres', description: null }, { label: 'SQLite', description: null }] },
+      { question: 'Which checks?', header: null, multiSelect: true, options: [{ label: 'Lint', description: null }, { label: 'Test', description: null }] },
+      { question: 'Anything else?', header: null, multiSelect: false, options: [] },
+    ],
+  });
+  const settle = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+  const next = (): void => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); };
+  const other = (): HTMLInputElement => screen.getByRole('textbox', { name: 'Your answer' });
+  const submit = (): HTMLButtonElement => screen.getByRole('button', { name: 'Submit' });
+  const fill = (): void => {
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' })); next();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Lint' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Test' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Other' }));
+    fireEvent.change(other(), { target: { value: '  Extra check  ' } }); next();
+    fireEvent.click(screen.getByRole('radio', { name: 'Other' }));
+    fireEvent.change(other(), { target: { value: '  Custom answer  ' } });
+  };
+  async function mount(decisions: 'window' | 'terminal' = 'window', config: Partial<IslandConfig> = {}) {
+    const state = setup({ assistant: ASSISTANT_ON, ...config });
+    let current: FeedQuestionCard | null = card();
+    state.fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: target.sessionId === 's-01' ? current === null ? [] : [current] : CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions }));
+    const root = render(<IslandApp bridge={state.bridge} />);
+    await settle(); state.blocked('s-01'); await settle();
+    return { ...state, root, update: async (value: FeedQuestionCard | null) => { current = value; act(() => useIslandRequests.getState().revalidate()); await settle(); } };
+  }
+  beforeEach(() => vi.useFakeTimers());
+
+  it('single/multi/Other serialize exactly once; typing, IME and navigation do not decide', async () => {
+    const { fake, island } = await mount();
+    fake.setHandler('feed.decide', () => ({ applied: false, state: 'pending' }));
+    fill();
+    act(() => other().focus());
+    fireEvent.compositionStart(other());
+    fireEvent.keyDown(other(), { key: 'Enter', isComposing: true });
+    fireEvent.compositionEnd(other());
+    fireEvent.keyDown(other(), { key: 'Enter' });
+    fireEvent.keyUp(other(), { key: 'Enter' });
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
+    expect(island.keyboard).toHaveBeenCalledWith(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); await settle();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([{ method: 'feed.decide', params: {
+      ref: ref('s-01'), cardId: 'q-1', decision: { kind: 'question', answers: { 'Which DB?': 'Postgres', 'Which checks?': 'Lint, Test, Extra check', 'Anything else?': 'Custom answer' } },
+    } }]);
+    expect(other().value).toBe('  Custom answer  ');
+  });
+
+  it('Escape in the Other answer field releases request keyboard without submitting', async () => {
+    const { fake, island } = await mount();
+    fill();
+    act(() => other().focus());
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    fireEvent.keyDown(other(), { key: 'Escape' });
+    expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    expect(fake.calls.some((call) => call.method === 'feed.decide')).toBe(false);
+  });
+
+  it('mouse focus starts keyboard navigation from the currently shown feed item', async () => {
+    await mount();
+    fill();
+    act(() => other().focus());
+    expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/);
+  });
+
+  it.each(['collapse', 'assistant', 'consent'])('%s preserves choices/Other/page while rearming on reopen', async (mode) => {
+    const state = await mount(); fill(); act(() => other().focus());
+    if (mode === 'collapse') { tuck(state.hover); expand(); }
+    if (mode === 'assistant') { state.assistantOpen({ listen: false }); state.assistantBlur(); }
+    if (mode === 'consent') {
+      act(() => useConsentsStore.getState().replace([{ id: 'retain', kind: 'folder-trust', folder: PROJECT, projectPath: PROJECT, requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01' }, at: '', state: 'pending' }]));
+      act(() => useConsentsStore.getState().replace([]));
+    }
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other().value).toBe('  Custom answer  ');
+    expect(submit().disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+    expect(submit().disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(submit().disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect((screen.getByRole('checkbox', { name: 'Lint' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Test' }) as HTMLInputElement).checked).toBe(true);
+    expect(other().value).toBe('  Extra check  ');
+  });
+
+  it('new pending preserves the active draft; A -> B -> A really clears it', async () => {
+    const { blocked } = await mount(); fill(); act(() => other().focus());
+    blocked('s-02'); await settle();
+    expect(other().value).toBe('  Custom answer  ');
+    fireEvent.click(screen.getByRole('button', { name: 'Next request' }));
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous request' }));
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('new room proposal preserves the question draft, page, selection and keyboard owner', async () => {
+    const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
+    const selected = useIslandRequests.getState().selectedKey;
+    const input = other();
+    await waitCooldown();
+    vi.mocked(islandSound.play).mockClear(); vi.mocked(state.island.keyboard).mockClear();
+    act(() => state.fake.emit('works.changed', { entries: [proposalWork()], branches: {} })); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other()).toBe(input);
+    expect(other().value).toBe('  Custom answer  ');
+    expect(document.activeElement).toBe(input);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(played()).toEqual(['question']);
+    expect(document.body.textContent).not.toContain('SECRET');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(state.island.open).toHaveBeenCalledWith({ kind: 'room', projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' });
+    expect(state.fake.calls.filter((call) => /resolveProposal|resumeAutonomous|feed.decide/.test(call.method))).toEqual([]);
+    expect(other().value).toBe('  Custom answer  ');
+  });
+
+  it.each(['blur', 'retract', 'blur and retract'])('new pending after %s preserves selected question, draft and page; still expands and sounds', async (mode) => {
+    const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
+    const selected = useIslandRequests.getState().selectedKey;
+    await waitCooldown();
+    vi.mocked(islandSound.play).mockClear();
+    if (mode.includes('blur')) state.assistantBlur();
+    if (mode.includes('retract')) tuck(state.hover);
+    expect(document.activeElement).not.toBe(screen.queryByRole('textbox'));
+    vi.mocked(state.island.keyboard).mockClear();
+    state.blocked('s-02'); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(useIslandRequests.getState().items).toHaveLength(2);
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByText(/^[12] of 2$/)).toBeTruthy();
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other().value).toBe('  Custom answer  ');
+    expect(played()).toEqual(['permission']);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('an empty selected pending question also stays selected; removing it selects the remaining request', async () => {
+    const state = await mount('window', { islandSound: SOUND_ON });
+    const selected = useIslandRequests.getState().selectedKey;
+    tuck(state.hover);
+    await waitCooldown();
+    vi.mocked(state.island.keyboard).mockClear(); vi.mocked(islandSound.play).mockClear();
+    state.blocked('s-02'); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+    expect(useIslandRequests.getState().items).toHaveLength(2);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(played()).toEqual(['permission']);
+    await state.update(null);
+    expect(useIslandRequests.getState().selectedKey).not.toBe(selected);
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
+  });
+
+  it.each(['card', 'questions', 'ref', 'resolved', 'disconnect'])('%s change resets the retained draft and page', async (mode) => {
+    const state = await mount(); fill();
+    if (mode === 'card') await state.update({ ...card(), id: 'q-2', cardId: 'q-2' });
+    if (mode === 'questions') await state.update({ ...card(), questions: card().questions.map((question, at) => at === 0 ? { ...question, header: 'Changed' } : question) });
+    if (mode === 'ref') {
+      const changed = { ...ref('s-01'), projectPath: '/other' };
+      act(() => {
+        useWorksStore.setState({ entries: ENTRIES.map((entry) => ({ ...entry, projectPath: changed.projectPath })) });
+        useActivityStore.setState({ byRef: { [refKey(changed)]: makeActivity(changed, 'blocked') } });
+      });
+      await settle();
+    }
+    if (mode === 'resolved') { await state.update(null); await state.update(card()); state.blocked('s-01'); await settle(); }
+    if (mode === 'disconnect') {
+      state.fake.setActivitySnapshot([makeActivity(ref('s-01'), 'blocked')]);
+      state.disconnect(); state.reconnect(); await settle();
+    }
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('terminal-only shows question text and a terminal target without a local decision', async () => {
+    const { island, fake } = await mount('terminal');
+    expect(screen.getByText('Which DB?')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+    fireEvent.click(screen.getByTestId('island-open'));
+    expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01') });
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
+  });
+
+  it('failed decide retains draft and the store blocks duplicate send', async () => {
+    const { fake } = await mount(); fill();
+    let resolve!: (result: { applied: false; state: 'pending' }) => void;
+    fake.setHandler('feed.decide', () => new Promise((done) => { resolve = done; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); fireEvent.click(submit());
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    await act(async () => resolve({ applied: false, state: 'pending' }));
+    expect(other().value).toBe('  Custom answer  ');
+    expect(submit().disabled).toBe(false);
+  });
+
+  it.each(['elsewhere', 'not_found'])('%s clears the form without reopening a settled question', async (mode) => {
+    const { fake } = await mount(); fill();
+    fake.setHandler('feed.decide', () => {
+      if (mode === 'not_found') throw encodeIpcError({ code: 'not_found', message: 'gone' });
+      return { applied: false, state: 'answered' } as never;
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); await settle();
+    expect(screen.getByText('Answered elsewhere')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+});
+
 describe('Done на острове', () => {
   /** Момент подключения; конец хода не раньше него — свежий, раньше — остров застал его уже готовым. */
   const CONNECTED_AT = new Date('2026-10-13T10:00:00.000Z');
@@ -874,8 +1907,8 @@ describe('Done на острове', () => {
   const STALE = '2026-10-13T09:59:00.000Z';
 
   /** Сессия s-01 закончила ход в `endedAt`: ждёт, пока на неё посмотрят в Parley. */
-  function seedDone(endedAt: string): void {
-    useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+  function seedDone(endedAt: string, entries = ENTRIES): void {
+    useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
     useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: endedAt }) }, loaded: true });
   }
   /** Сессию s-01 посмотрели в Parley: хост перевёл её в idle, конец хода остался прежним. */
@@ -903,15 +1936,128 @@ describe('Done на острове', () => {
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
   });
 
-  it('выдвигает без звука, даже если Sound включён', async () => {
-    const { island, bridge } = setup({ sound: true });
+  it.each(['claude', 'codex'])('exact visible %s Done stays quiet, keeps badge, sends no seen and is consumed before blur', async (provider) => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider })] })];
+    const { bridge, island, blocked, hover } = setup({ islandSound: SOUND_ON }, entries);
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH, entries));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-tab').textContent).toContain('1');
+    expect(island.markSeen).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 2, refs: [] }));
+    expect(isRetracted()).toBe(true);
+    act(() => seedDone(FRESHER, entries));
+    expect(isRetracted()).toBe(false);
+    tuck(hover);
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 3, refs: [ref('s-01')] }));
+    blocked('s-01');
+    await act(async () => {});
+    expect(isRetracted()).toBe(false);
+  });
+
+  it('quiet Codex Done never suppresses consent or its terminal-request presentation', async () => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider: 'codex' })] })];
+    const { bridge, island, blocked, fake, hover } = setup({}, entries);
+    fake.setHandler('feed.snapshot', () => ({ items: [], revision: 1, mode: null, decisions: 'terminal' }));
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    const onPresentation = vi.fn();
+    render(<IslandApp bridge={bridge} onPresentation={onPresentation} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH, entries));
+    expect(isRetracted()).toBe(true);
+    act(() => useConsentsStore.getState().replace([{
+      id: 'quiet-consent', kind: 'folder-trust', folder: PROJECT, projectPath: PROJECT,
+      requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01 a' }, at: FRESH, state: 'pending',
+    }]));
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'consent', expand: true, soundEligible: true }));
+    act(() => useConsentsStore.getState().replace([]));
+    tuck(hover);
+    blocked('s-01');
+    await act(async () => {});
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'terminal-request', expand: true, soundEligible: true }));
+    expect(island.markSeen).not.toHaveBeenCalled();
+  });
+
+  it('a same-id ref in another worktree never suppresses Done', async () => {
+    const { bridge, island } = setup();
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [{ ...ref('s-01'), projectPath: '/another-worktree' }] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+  });
+
+  it.each([{ version: 1, refs: [] }, { version: NaN, refs: [] }, null])('event before getter wins over %j; stale versions cannot overwrite it and malformed events fall back', async (getterReply) => {
+    const { bridge, island } = setup();
+    let resolve!: (value: { version: number; refs: ReturnType<typeof ref>[] }) => void;
+    vi.mocked(island.visibility).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<IslandApp bridge={bridge} />);
+    expect(vi.mocked(island.onVisibility).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(island.visibility).mock.invocationCallOrder[0]!);
+    const publish = vi.mocked(island.onVisibility).mock.calls[0]![0];
+    act(() => publish({ version: 9, refs: [ref('s-01')] }));
+    await act(async () => resolve(getterReply as never));
+    act(() => publish({ version: 8, refs: [] }));
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(true);
+    act(() => publish({ version: NaN, refs: [ref('s-01')] }));
+    act(() => seedDone(FRESHER));
+    expect(isRetracted()).toBe(false);
+  });
+
+  it('quiet Done neither closes an open island nor rearms its existing hold timer; outcome preserves r-05 seam', async () => {
+    const { bridge, island, hover } = setup();
+    const onPresentation = vi.fn();
+    render(<IslandApp bridge={bridge} onPresentation={onPresentation} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'done', fresh: true, expand: true, soundEligible: false }));
+    advance(DONE_HOLD_MS / 2);
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 1, refs: [ref('s-01')] }));
+    act(() => seedDone(FRESHER));
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'done', fresh: true, expand: false, soundEligible: false }));
+    advance(DONE_HOLD_MS / 2);
+    expect(isRetracted()).toBe(true);
+    hover(false);
+  });
+
+  it('выдвигает без звука, если включён только «Sound when you’re needed»', async () => {
+    const { bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => {
       await Promise.resolve();
     });
     act(() => seedDone(FRESH));
     expect(isRetracted()).toBe(false);
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
+  });
+
+  it('S2: с «Sound when an agent finishes» выдвинутый Done звучит done один раз', async () => {
+    const { bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+    expect(played()).toEqual(['done']);
+    act(() => seedDone(FRESH));
+    expect(played()).toEqual(['done']);
+  });
+
+  it('S2: тихий Done (сессия видна в окне) молчит и с «Sound when an agent finishes», остров не выдвигает', async () => {
+    const { bridge, island } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(true);
+    expect(played()).toEqual([]);
   });
 
   it('Done застали готовым (конец хода до подключения) — остров не выдвигается, убранный выглядывает «✅ 1», в список строка попадает', () => {
@@ -1238,6 +2384,69 @@ describe('согласия на папку', () => {
   };
   const SECOND: ConsentCard = { ...CONSENT, id: 'c-02', folder: '/tmp/other', projectPath: '/tmp/other' };
 
+  it.each(['island-consent-trust', 'island-consent-deny'])('consent mouse pointerdown/focus/click по %s не берёт OS keyboard', async (id) => {
+    vi.useFakeTimers();
+    const { bridge, fake, island } = setup({}, ENTRIES, [CONSENT]);
+    fake.setHandler('consents.decide', () => ({ applied: true, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId(id);
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fake.calls.filter((call) => call.method === 'consents.decide')).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['Escape', 'blur', 'collapse', 'disconnect'])('consent явный request owner и release по %s без решения', async (reason) => {
+    vi.useFakeTimers();
+    const { bridge, fake, island, hover, disconnect, assistantBlur } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(island.keyboard).not.toHaveBeenCalled();
+    fireEvent(screen.getByTestId('island-card'), pointer('pointerdown'));
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    if (reason === 'Escape') fireEvent.keyDown(window, { key: 'Escape' });
+    if (reason === 'blur') assistantBlur();
+    if (reason === 'collapse') tuck(hover);
+    if (reason === 'disconnect') disconnect();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true], [false]]);
+    expect(fake.calls.filter((call) => call.method === 'consents.decide')).toHaveLength(0);
+  });
+
+  it('Ctrl+Enter on a focused consent button is prevented and makes no host call, even without requester ids', async () => {
+    vi.useFakeTimers();
+    const consent: ConsentCard = { ...CONSENT, requestedBy: { source: 'launch' } };
+    const { bridge, fake } = setup({}, ENTRIES, [consent]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    act(() => pendingNavigationHandler?.());
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const trust = screen.getByTestId('island-consent-trust');
+    trust.focus();
+    const callsBefore = fake.calls.length;
+    expect(fireEvent.keyDown(trust, { key: 'Enter', ctrlKey: true })).toBe(false);
+    expect(fake.calls).toHaveLength(callsBefore);
+    expect(fake.calls.some((call) => call.method === 'consents.decide')).toBe(false);
+  });
+
+  it('keyboard navigation can reveal and refresh a feed item behind consent', async () => {
+    const { bridge, fake, blocked } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    await screen.findByTestId('island-consent-trust');
+    blocked('s-01');
+    await waitFor(() => expect(fake.calls.some((call) => call.method === 'feed.snapshot')).toBe(true));
+    const snapshotsBeforeNavigation = fake.calls.filter((call) => call.method === 'feed.snapshot').length;
+    act(() => pendingNavigationHandler?.());
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/));
+    await waitFor(() => expect(screen.getByTestId('island-card')).toBeTruthy());
+    await waitFor(() => expect(fake.calls.filter((call) => call.method === 'feed.snapshot').length).toBeGreaterThan(snapshotsBeforeNavigation));
+  });
+
+
   it('начальный consents.list: карточка видна, остров выдвинут', async () => {
     const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);
     render(<IslandApp bridge={bridge} />);
@@ -1269,26 +2478,36 @@ describe('согласия на папку', () => {
   });
 
   it('новая карточка выдвигает убранный остров и звучит один раз; повтор той же и решённая — без звука', async () => {
-    const { island, fake, bridge } = setup({ sound: true });
+    const { fake, bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     expect(isRetracted()).toBe(true);
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
     act(() => fake.emit('consents.changed', { upsert: [{ ...CONSENT, folder: '/tmp/proj' }], removed: [] }));
-    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(played()).toEqual(['permission']);
+    skipCooldown();
     act(() => fake.emit('consents.changed', { upsert: [SECOND], removed: [] }));
-    await waitFor(() => expect(island.beep).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(played()).toEqual(['permission', 'permission']));
   });
 
   it('без Sound карточка выдвигает остров молча', async () => {
-    const { island, fake, bridge } = setup({ sound: false });
+    const { fake, bridge } = setup({ islandSound: SOUND_OFF });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
     await waitFor(() => expect(isRetracted()).toBe(false));
-    expect(island.beep).not.toHaveBeenCalled();
+    expect(played()).toEqual([]);
+  });
+
+  it('звук карточки читает islandSound.needs: «Sound when an agent finishes» без «Sound when you’re needed» карточку не озвучивает', async () => {
+    const { fake, bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(played()).toEqual([]);
   });
 
   it('согласие раньше запроса ленты: запрос ждёт, пока карточку не закроют', async () => {
@@ -1357,5 +2576,249 @@ describe('согласия на папку', () => {
       advance(1);
       expect(isRetracted()).toBe(true);
     });
+  });
+});
+
+describe('presentationEvent: реакция мини-роя на исходы present() (критик m-1485)', () => {
+  const outcome = (kind: IslandPresentationOutcome['kind'], fresh: boolean, expand: boolean): IslandPresentationOutcome =>
+    ({ key: `${kind}:1`, kind, fresh, expand, soundEligible: true }) as IslandPresentationOutcome;
+
+  it('свежий выдвигающий исход — его событие; уже виденный — ничего', () => {
+    expect(presentationEvent([outcome('consent', true, true)], true)).toBe('permission');
+    expect(presentationEvent([outcome('room-proposal', true, true)], true)).toBe('question');
+    expect(presentationEvent([outcome('plan', false, false)], false)).toBeNull();
+  });
+
+  it('тихий Done: реакция только у уже выдвинутого острова (#9 §3.7)', () => {
+    expect(presentationEvent([outcome('done', true, false)], true)).toBeNull();
+    expect(presentationEvent([outcome('done', true, false)], false)).toBe('done');
+  });
+
+  it('несколько исходов разом — самый важный по порядку сигналов', () => {
+    expect(presentationEvent([outcome('done', true, true), outcome('consent', true, true)], true)).toBe('permission');
+  });
+});
+
+describe('реакции роёв помощника (#9 §4.1–§4.3, план 3b B24)', () => {
+  /** Шпионы `react` движков всех роёв острова: шпион ставится при создании, до первого эффекта. */
+  function spyReacts(): Array<ReturnType<typeof vi.fn>> {
+    const real = engineModule.createSwarm;
+    const reacts: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      reacts.push(vi.spyOn(engine, 'react') as unknown as ReturnType<typeof vi.fn>);
+      return engine;
+    });
+    return reacts;
+  }
+  const reacted = (reacts: Array<ReturnType<typeof vi.fn>>): string[] => reacts.flatMap((react) => react.mock.calls.map(([reaction]) => reaction as string));
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('мини-рой: начало работы — вдох (остров выдвигается, и мини-рой застаёт реакцию), наведение — наклон', async () => {
+    const reacts = spyReacts();
+    const { bridge, island, working, hover } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onAssistantOpen).toHaveBeenCalled());
+    working('s-01');
+    await waitFor(() => expect(reacted(reacts)).toEqual(['breathe']));
+    hover(true);
+    expect(reacted(reacts)).toEqual(['breathe', 'lean']);
+  });
+
+  it('рой помощника: шаг инструмента — кольцо яркости, ошибка — дрожь; пока вид свёрнут, реагирует мини-рой', async () => {
+    const reacts = spyReacts();
+    const { bridge, island } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onAssistantOpen).toHaveBeenCalled());
+    act(() => vi.mocked(island.onAssistantOpen).mock.calls.at(-1)![0]({ listen: false }));
+    await screen.findByTestId('assistant-view');
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'thinking', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'works.list', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'works.list', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'feed.snapshot', turn: 1 }));
+    expect(reacted(reacts)).toEqual(['glint', 'glint']);
+    act(() => useAssistantStore.getState().collapse());
+    expect(within(screen.getByTestId('assistant-dot')).getByTestId('swarm')).toBeTruthy();
+    for (const react of reacts) react.mockClear();
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'error', error: 'Limit reached', turn: 1 }));
+    expect(reacted(reacts)).toEqual(['shake']);
+  });
+});
+
+describe('остров в вырезе (#9 §12, план 3b B28)', () => {
+  /** Вырез 185 × 32 pt по центру кадра 480 pt; капсула 185 + 2·80 pt, выдвинутый вид не уже 185 + 2·36 pt. */
+  const NOTCH = { width: 185, height: 32, centerX: 240 };
+  let innerWidth = 0;
+  /** Колбэки подставного rAF по номеру. */
+  let queued = new Map<number, FrameRequestCallback>();
+
+  beforeEach(() => {
+    innerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
+    // Кадры подставные: настоящий rAF jsdom после подставных таймеров соседних тестов не срабатывает.
+    queued = new Map();
+    let next = 0;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      queued.set(++next, cb);
+      return next;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      queued.delete(id);
+    });
+    // Прямоугольники по сдвигу к центру выреза: форма — по `left` обёртки, зона нажатия — по своему.
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const element = this as HTMLElement;
+      const id = element.dataset.testid;
+      if (id === 'island') {
+        // Голый вырез — 185 pt, капсула — 345 pt, выдвинутый вид — по наименьшей ширине 257 pt; все по центру кадра.
+        const width = element.querySelector('[data-testid="island-notch"]') !== null ? 185
+          : element.querySelector('[data-testid="island-capsule"]') !== null ? 345 : 257;
+        return { x: 240 - width / 2 + (parseFloat((element.parentElement as HTMLElement).style.left) || 0), y: 0, width, height: 32 } as DOMRect;
+      }
+      if (id === 'island-tab') {
+        const width = parseFloat((element.firstElementChild as HTMLElement | null)?.style.width ?? '') || 185;
+        return { x: 240 - width / 2 + (parseFloat(element.style.left) || 0), y: 0, width, height: 32 } as DOMRect;
+      }
+      return { x: 0, y: 0, width: 0, height: 0 } as DOMRect;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
+  });
+
+  const lastRect = (island: IslandApi): unknown => vi.mocked(island.setHitRect).mock.calls.at(-1)?.[0];
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+  /** Прогоняет два подставных кадра: после смены выреза форма возвращает класс перехода через два rAF. */
+  const frames = (): void => {
+    for (let frame = 0; frame < 2; frame += 1) {
+      act(() => {
+        const run = queued;
+        queued = new Map();
+        for (const cb of run.values()) cb(0);
+      });
+    }
+  };
+  /** Main прислал новые настройки острова (`island:config`). */
+  const push = (island: IslandApi, config: IslandConfig): void => {
+    act(() => {
+      vi.mocked(island.onConfig).mock.calls.at(-1)![0](config);
+    });
+  };
+  const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF };
+
+  it('N6: убранный — голый вырез и зона нажатия ровно по нему; язычок открывает список, уход курсора — снова вырез (B26 F-B26-3)', async () => {
+    const { island, bridge, hover } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.className).not.toContain('w-16');
+    expect((tab.parentElement as HTMLElement).style.top).toBe('0px');
+    expect((tab.firstElementChild as HTMLElement).style.width).toBe('185px');
+    expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
+    hover(true);
+    expand();
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByTestId('island-pill')).toBeTruthy();
+    expect(screen.queryByTestId('island-notch')).toBeNull();
+    expect(lastRect(island)).toEqual({ x: 111.5, y: 0, width: 257, height: 32 });
+    hover(false);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    // Форма сжалась: наблюдатель размера шлёт область заново.
+    act(() => {
+      for (const callback of resizeCallbacks) callback();
+    });
+    expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
+  });
+
+  it('фон — капсула: агенты работают, помощник свёрнут; область мыши — по капсуле (B26 F-B26-3)', async () => {
+    const { island, bridge, working } = setup({ notch: NOTCH, topInset: 32, assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    working('s-01');
+    expect(screen.getByTestId('island-capsule')).toBeTruthy();
+    expect(screen.getByTestId('island-capsule-left').getAttribute('aria-label')).toBe('Parley agents');
+    expect(screen.getByTestId('island-capsule-right').textContent).toBe('1');
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    expect(lastRect(island)).toEqual({ x: 67.5, y: 0, width: 345, height: 32 });
+    act(() => useAssistantStore.setState({ open: true, collapsed: true, host: { ...HOST_IDLE, phase: 'idle', answer: 'Nothing is running.', turn: 1 } }));
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByTestId('island-capsule-left').getAttribute('aria-label')).toBe('Assistant');
+    expect(screen.queryByTestId('assistant-view')).toBeNull();
+  });
+
+  it('N5: наведение не выдвигает форму; клик по вырезу выдвигает (рост), уход курсора возвращает вырез (сжатие)', async () => {
+    const { bridge, hover } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    expand();
+    expect(isRetracted()).toBe(false);
+    hover(false);
+    hover(true);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    fireEvent.click(screen.getByTestId('island-notch'));
+    expect(screen.getByTestId('island-pill')).toBeTruthy();
+    expect(screen.getByTestId('island-content').style.paddingTop).toBe('32px');
+    hover(false);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+  });
+
+  it('свёрнутый помощник: наведение его не раскрывает, клик по капсуле раскрывает, уход курсора снова сворачивает', async () => {
+    const { bridge, hover } = setup({ notch: NOTCH, topInset: 32, assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    act(() => useAssistantStore.setState({ open: true, collapsed: true, host: { ...HOST_IDLE, phase: 'thinking', turn: 1 } }));
+    hover(true);
+    expect(useAssistantStore.getState().collapsed).toBe(true);
+    expect(screen.getByTestId('island-capsule')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('island-capsule-left'));
+    expect(useAssistantStore.getState().collapsed).toBe(false);
+    expect(screen.getByTestId('assistant-view')).toBeTruthy();
+    hover(false);
+    expect(useAssistantStore.getState().collapsed).toBe(true);
+    expect(screen.getByTestId('island-capsule')).toBeTruthy();
+  });
+
+  it('убран с непросмотренным Done — капсула «✓ 1 Done»; зона нажатия — по капсуле, язычок открывает список (B26 F-B26-3)', async () => {
+    useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+    useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: '2026-10-13T09:59:00.000Z' }) }, loaded: true });
+    const { island, bridge } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Agents finished — show the island'));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-capsule-right').textContent).toBe('✓ 1 Done');
+    expect(screen.queryByText('✅ 1')).toBeNull();
+    expect((screen.getByTestId('island-tab').firstElementChild as HTMLElement).style.width).toBe('345px');
+    expect(lastRect(island)).toEqual({ x: 67.5, y: 0, width: 345, height: 32 });
+    expand();
+    expect(screen.getByTestId('island-list')).toBeTruthy();
+  });
+
+  it('N8: новый замер выреза — область мыши уходит заново; вырез → полоса и обратно — без морфа', async () => {
+    const { island, bridge, hover } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    const base = await island.config();
+    push(island, { ...base, notch: { ...NOTCH, centerX: 240.5 } });
+    expect(lastRect(island)).toEqual({ x: 148, y: 0, width: 185, height: 32 });
+    expand();
+    hover(false);
+    frames();
+    expect(morph()).toBeDefined();
+    push(island, { ...base, topInset: 38, notch: null });
+    expect(morph()).toBeUndefined();
+    expect(screen.getByTestId('island-idle')).toBeTruthy();
+    frames();
+    expect(morph()).toBeDefined();
+    push(island, base);
+    expect(morph()).toBeUndefined();
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
   });
 });

@@ -26,6 +26,37 @@ describe('промпт и версии', () => {
     expect(assistantPrompt('en')).toContain('Reply in English');
     expect(assistantPrompt('ru')).toContain('[[calm]]');
   });
+  it('метка эмоции — в начале каждого предложения (L3, вариант F спайка B02)', () => {
+    const prompt = assistantPrompt('ru');
+    expect(prompt).toContain('Begin each sentence with its own mood tag');
+    expect(prompt).toContain('A sentence without a tag is a mistake.');
+    expect(prompt).toContain('Example: [[joy]] One agent finished. [[calm]] Two are still working.');
+    expect(prompt).not.toContain('Start every reply with one mood tag');
+  });
+  it('спокойствие по умолчанию: пустое и тихое — [[calm]], грусть и злость — только для настоящего сбоя, без извинений (B26 F-B26-2)', () => {
+    const prompt = assistantPrompt('ru');
+    expect(prompt).toContain('[[calm]] is the default and fits any plain fact.');
+    expect(prompt).toContain('Nothing running, nobody waiting, no works or rooms, nothing to report, something you cannot do or do not know: that is normal, say it in [[calm]].');
+    expect(prompt).toContain('[[joy]] only for a real success');
+    expect(prompt).toContain('[[sad]], or rarely [[anger]], only for a real failure: an error, a failed or blocked agent;');
+    expect(prompt).toContain('If unsure, use [[calm]].');
+    expect(prompt).toContain('Never apologize, never sound guilty or gloomy about the state of the agents');
+    // Пример больше не начинается с радости приветствия: спокойный тон — по умолчанию.
+    expect(prompt).not.toContain('[[joy]] Hi!');
+  });
+  it('строка рода по голосу для трёх родов (G1), по умолчанию — женский', () => {
+    const female = '- You speak as a female assistant; in languages with grammatical gender use feminine forms for yourself (in Russian: «я проверила», «подготовила», never «я проверил»).';
+    const male = '- You speak as a male assistant; in languages with grammatical gender use masculine forms for yourself (in Russian: «я проверил», «подготовил»).';
+    expect(assistantPrompt('ru', 'female')).toContain(female);
+    expect(assistantPrompt('ru')).toContain(female);
+    expect(assistantPrompt('ru', 'male')).toContain(male);
+    expect(assistantPrompt('ru', 'male')).not.toContain('feminine');
+    const neutral = assistantPrompt('ru', 'neutral');
+    expect(neutral).toContain('- Your voice has no grammatical gender.');
+    expect(neutral).toContain('Do not mention this rule.');
+    expect(neutral).not.toContain('feminine forms for yourself');
+    expect(neutral).not.toContain('masculine');
+  });
   it('промпт называет любой язык Whisper по-английски, незнакомый код не роняет', () => {
     expect(assistantPrompt('uk')).toContain('Reply in Ukrainian');
     expect(assistantPrompt('zh')).toContain('Reply in Chinese');

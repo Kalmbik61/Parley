@@ -84,6 +84,8 @@ interface Harness {
   active: boolean;
   /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
   island: boolean;
+  /** Громкость звуков острова выше 0. */
+  audible: boolean;
   windowNotes: WindowNote[];
   hidden: string[];
   /** Сколько раз окно позвонило своим сигналом «нужно действие» (спека застрявших 7.2). */
@@ -102,6 +104,7 @@ function harness(entries: WindowWorkEntry[]): Harness {
     entries,
     active: false,
     island: false,
+    audible: true,
     windowNotes: [],
     hidden: [],
     chimes: 0,
@@ -121,6 +124,7 @@ function harness(entries: WindowWorkEntry[]): Harness {
     hideInWindow: (tag) => h.hidden.push(tag),
     pendingAsk: h.pendingAsk,
     islandOn: () => h.island,
+    islandAudible: () => h.audible,
     chime: () => {
       h.chimes += 1;
     },
@@ -1895,7 +1899,7 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
   });
 
   // Решение 6: один звук на переход в needs-you. Запрос, который показывает остров, звучит его собственным сигналом
-  // (`IslandApp`, `beep`), поэтому сигнал окна молчит; признак «остров показывает» — тот же, что глушит баннер.
+  // (`useIslandCues`), поэтому сигнал окна молчит; признак «остров показывает» — тот же, что глушит баннер.
   it('(а) остров включён и показывает сессию: ни баннера, ни сигнала окна — звучит сигнал острова', async () => {
     const withCard = harness([redesign()]);
     withCard.island = true;
@@ -2041,6 +2045,42 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     loud.notifier.onActivity(ref2, live('unseen'));
     expect(loud.notes[0]?.silent).toBe(false);
     expect(quiet.chimes + loud.chimes).toBe(0);
+  });
+
+  // #9 §3.6, S2: Done активной работы показывает остров и при `finishedSound` играет свой `done` — баннер этого Done
+  // беззвучный. Остров выключен или работа не активна (остров её Done не показывает) — баннер звучит, как раньше.
+  it('S2: finished, когда Done показывает остров, — баннер без звука; без острова или у неактивной работы — со звуком', () => {
+    const island = harness([redesign()]);
+    island.island = true;
+    island.prefs = { ...island.prefs, finishedSound: true };
+    island.notifier.onActivity(ref2, live('working'));
+    island.notifier.onActivity(ref2, live('unseen'));
+    expect(island.notes).toHaveLength(1);
+    expect(island.notes[0]?.silent).toBe(true);
+
+    const done = redesign();
+    const inactive = harness([{ ...done, map: { ...done.map, work: { ...done.map.work, status: 'done' } } }]);
+    inactive.island = true;
+    inactive.prefs = { ...inactive.prefs, finishedSound: true };
+    inactive.notifier.onActivity(ref2, live('working'));
+    inactive.notifier.onActivity(ref2, live('unseen'));
+    expect(inactive.notes[0]?.silent).toBe(false);
+
+    const off = harness([redesign()]);
+    off.prefs = { ...off.prefs, finishedSound: true };
+    off.notifier.onActivity(ref2, live('working'));
+    off.notifier.onActivity(ref2, live('unseen'));
+    expect(off.notes[0]?.silent).toBe(false);
+    expect(island.chimes + inactive.chimes + off.chimes).toBe(0);
+
+    // Громкость острова 0: остров Done не сыграет, баннер звенит сам (критик m-1477).
+    const muted = harness([redesign()]);
+    muted.island = true;
+    muted.audible = false;
+    muted.prefs = { ...muted.prefs, finishedSound: true };
+    muted.notifier.onActivity(ref2, live('working'));
+    muted.notifier.onActivity(ref2, live('unseen'));
+    expect(muted.notes[0]?.silent).toBe(false);
   });
 
   it('finished при видимой цели — ни баннера, ни звука', () => {

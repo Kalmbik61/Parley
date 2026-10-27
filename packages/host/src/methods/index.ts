@@ -176,6 +176,7 @@ export const WORKS_GATED_METHODS = [
   'pty.detach',
   'pty.send',
   'feed.snapshot',
+  'feed.progress',
   'feed.subscribe',
   'feed.unsubscribe',
   'feed.decide',
@@ -333,6 +334,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   if (deps.feed !== undefined) {
     const feed = createFeedHandlers({ feed: deps.feed });
     methods['feed.snapshot'] = feed.feedSnapshot as AnyHandler;
+    methods['feed.progress'] = feed.feedProgress as AnyHandler;
     methods['feed.subscribe'] = feed.feedSubscribe as AnyHandler;
     methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
     methods['feed.decide'] = feed.feedDecide as AnyHandler;

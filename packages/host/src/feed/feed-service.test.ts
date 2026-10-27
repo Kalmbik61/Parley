@@ -4,7 +4,7 @@
  * Приёмник здесь не нужен: запрос хука — заглушка без HTTP (`hookRequest`).
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import type {
   FeedPlanCard,
   FeedQuestionCard,
   RawRecord,
+  WorkSession,
 } from '@parley/core';
 import {
   FEED_IMAGE_SWEEP_MS,
@@ -25,7 +26,7 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION } from '@parley/protocol';
+import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
 import type { EventData } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
@@ -33,6 +34,8 @@ import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
 import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
+import * as progressModule from './progress.js';
+import * as codexSource from './codex-source.js';
 
 const FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -173,6 +176,868 @@ afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
   tempDirs = [];
+});
+
+describe('feed.progress source, quota and lifecycle', () => {
+  const THREAD = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
+  const OTHER_THREAD = '019ce3d5-9999-7be2-922e-b8185a8d7c00';
+  const LAUNCH = '12345678-1234-1234-1234-123456789abc';
+  const NEXT_LAUNCH = '22345678-1234-1234-1234-123456789abc';
+  function provenance() {
+    const stamp = { provider: 'claude', providerSessionId: SESSION as string | null, startedAtProcess: 'SECRET-process-A' as string | null, pid: 1 as number | null,
+      codexThreadBinding: undefined as WorkSession['codexThreadBinding'] };
+    const entry = fakes.deps.works.entry;
+    vi.spyOn(fakes.deps.works, 'entry').mockImplementation((...args) => {
+      const value = entry(...args);
+      const { codexThreadBinding, ...source } = stamp;
+      return value === undefined ? undefined : { ...value, map: { ...value.map,
+        sessions: value.map.sessions.map((session) => {
+          const next = { ...session, ...source };
+          if (codexThreadBinding === undefined) delete next.codexThreadBinding;
+          else next.codexThreadBinding = codexThreadBinding;
+          return next;
+        }),
+      } };
+    });
+    return stamp;
+  }
+
+  function codexProvenance() {
+    const stamp = provenance();
+    stamp.provider = 'codex';
+    stamp.providerSessionId = THREAD;
+    stamp.codexThreadBinding = { launchRevision: LAUNCH, pid: 1, startedAtProcess: stamp.startedAtProcess!, threadId: THREAD };
+    return stamp;
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  const toolId = (id: string): string => createHash('sha256').update(`tool:${id}`).digest('hex');
+
+  async function cold(readRecords?: FeedServiceOptions['readRecords']) {
+    const root = await tempRoot();
+    const file = path.join(root, 'log.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], ...(readRecords === undefined ? {} : { readRecords }) });
+    return file;
+  }
+
+  async function codexLog() {
+    const root = await tempRoot();
+    const file = path.join(root, 'rollout.jsonl');
+    const row = (ordinal: number, id = `cmd-${ordinal}`) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal,
+      type: 'event_msg', payload: { type: 'item_completed', item: {
+        type: 'CommandExecution', id, command: ['SECRET-command'], status: 'completed', exit_code: 0,
+      } } });
+    await writeFile(file, `${row(1)}\n`);
+    fakes.setLogFile(file);
+    return { file, row };
+  }
+
+  it.each(['missing', 'unverified', 'extra-key', 'invalid-nonce', 'pid', 'process-stamp', 'raw-thread'] as const)(
+    'Codex rejects %s proof while raw Chat still seeds normally', async (invalid) => {
+      const stamp = codexProvenance();
+      if (invalid === 'missing') stamp.codexThreadBinding = undefined;
+      else if (invalid === 'unverified') stamp.codexThreadBinding!.threadId = null;
+      else if (invalid === 'extra-key') Object.assign(stamp.codexThreadBinding!, { extra: 'SECRET-proof' });
+      else if (invalid === 'invalid-nonce') stamp.codexThreadBinding!.launchRevision = 'SECRET-invalid-nonce';
+      else if (invalid === 'pid') stamp.codexThreadBinding!.pid = 2;
+      else if (invalid === 'process-stamp') stamp.codexThreadBinding!.startedAtProcess = 'SECRET-other-process';
+      else stamp.providerSessionId = OTHER_THREAD;
+      await codexLog();
+      start();
+      expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], current: null });
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+      expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    },
+  );
+
+  it('Codex fallback seed stays raw-only; late same-thread proof admits subsequent new IDs only', async () => {
+    const stamp = codexProvenance();
+    const proof = stamp.codexThreadBinding!;
+    stamp.codexThreadBinding = undefined;
+    const { file, row } = await codexLog();
+    start();
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.codexThreadBinding = proof;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] }));
+    writeFileSync(file, `${row(2, 'cmd-1')}\n${row(3)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-3')]));
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2);
+  });
+
+  it('Codex retained same-nonce proof for process A never authorizes repeated starts of process B', async () => {
+    const stamp = codexProvenance();
+    const originalProof = { ...stamp.codexThreadBinding! };
+    const { file, row } = await codexLog();
+    start();
+    expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+    fakes.setProcess({ pid: 2 });
+    stamp.pid = 2;
+    stamp.startedAtProcess = 'SECRET-process-B';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      fakes.emitStart(REF);
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+      writeFileSync(file, `${row(attempt + 2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(attempt + 2));
+      expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    }
+    expect(stamp.codexThreadBinding).toEqual(originalProof);
+  });
+
+  it('Codex nonce change alone invalidates an epoch with identical thread and process values', async () => {
+    const stamp = codexProvenance();
+    const { file, row } = await codexLog();
+    start();
+    expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-1')]);
+    stamp.codexThreadBinding = { ...stamp.codexThreadBinding!, launchRevision: NEXT_LAUNCH };
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-2')]));
+    const json = JSON.stringify(await service.progress(REF, fakeClient()));
+    for (const secret of [THREAD, LAUNCH, NEXT_LAUNCH, stamp.startedAtProcess!, file, 'SECRET-command', 'codexThreadBinding']) expect(json).not.toContain(secret);
+  });
+
+  it.each(['nonce', 'tail-file'] as const)('Codex checks %s after a cold read awaits and keeps raw Chat intact', async (change) => {
+    const stamp = codexProvenance();
+    const { file, row } = await codexLog();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = codexSource.createRolloutTail;
+    let first = true;
+    const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+      const tail = original(...args);
+      return { ...tail, read: async () => {
+        const records = await tail.read();
+        if (first) { first = false; entered.resolve(undefined); await release.promise; }
+        return records;
+      } };
+    });
+    try {
+      start();
+      const pending = service.progress(REF, fakeClient());
+      await entered.promise;
+      if (change === 'nonce') stamp.codexThreadBinding = { ...stamp.codexThreadBinding!, launchRevision: NEXT_LAUNCH };
+      else { const other = path.join(path.dirname(file), 'other.jsonl'); await writeFile(other, ''); fakes.setLogFile(other); }
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+      release.resolve(undefined);
+      expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+      writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+      const progress = await service.progress(REF, fakeClient());
+      if (change === 'nonce') expect(progress.recent.map((line) => line.id)).toEqual([toolId('cmd-2')]);
+      else {
+        expect(progress.availability).toBe('unavailable');
+        fakes.setLogFile(file);
+        fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+        expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+      }
+    } finally { release.resolve(undefined); create.mockRestore(); }
+  });
+
+  it('Codex stopped cold seed accepts a complete proof but exit does not confirm a pending restart', async () => {
+    codexProvenance();
+    await codexLog();
+    fakes.setProcess(null);
+    start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    fakes.setProcess({ pid: 2 });
+    fakes.emitStart(REF);
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+  });
+
+  it.each(['before-exit', 'after-exit'] as const)('Codex first-feed start %s cannot recover retained process A proof after unconfirmed B exits', async (creation) => {
+    codexProvenance();
+    const { file, row } = await codexLog();
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = creation === 'before-exit';
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    if (visible) {
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+      expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    }
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    visible = true;
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+  });
+
+  it('Codex deferred first feed accepts a map-confirmed B stopped cold seed after log indexing', async () => {
+    const stamp = codexProvenance();
+    const previousProof = stamp.codexThreadBinding!;
+    const { file, row } = await codexLog();
+    fakes.setLogFile(null);
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = false;
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    stamp.pid = 2;
+    stamp.startedAtProcess = 'SECRET-process-B';
+    stamp.codexThreadBinding = undefined;
+    visible = true;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    fakes.setLogFile(file);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.codexThreadBinding = previousProof;
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.codexThreadBinding = { launchRevision: NEXT_LAUNCH, pid: 2, startedAtProcess: stamp.startedAtProcess, threadId: THREAD };
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-2')]));
+  });
+
+  it.each(['removal', 'stop'] as const)('Codex pending start without a feed is cleaned up on %s', async (cleanup) => {
+    codexProvenance();
+    await codexLog();
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = false;
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    if (cleanup === 'removal') fakes.setSessions([]);
+    else await service.stop();
+    fakes.setProcess(null);
+    visible = true;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    if (cleanup === 'stop') start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+  });
+
+  it('Codex checks the full nonce again at delivery after the projection runs', async () => {
+    const stamp = codexProvenance();
+    await codexLog();
+    start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    const original = progressModule.projectProgress;
+    const projection = vi.spyOn(progressModule, 'projectProgress').mockImplementationOnce((...args) => {
+      const result = original(...args);
+      stamp.codexThreadBinding = { ...stamp.codexThreadBinding!, launchRevision: NEXT_LAUNCH };
+      return result;
+    });
+    try { expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] }); }
+    finally { projection.mockRestore(); }
+  });
+
+  it.each(['binding', 'file'] as const)('Codex never relabels a retained tail after a foreign %s observed only by progress', async (change) => {
+    const stamp = codexProvenance();
+    const { file, row } = await codexLog();
+    start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    if (change === 'binding') stamp.providerSessionId = OTHER_THREAD;
+    else {
+      const other = path.join(path.dirname(file), 'other.jsonl');
+      await writeFile(other, '');
+      fakes.setLogFile(other);
+    }
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.providerSessionId = THREAD;
+    fakes.setLogFile(file);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+  });
+
+  it('Codex neighbours in the same cwd cannot authorize a fallback to the other session log', async () => {
+    const otherRef = { ...REF, sessionId: 's-02' };
+    fakes.setSessions([{ ref: REF, provider: 'codex' }, { ref: otherRef, provider: 'codex' }]);
+    codexProvenance();
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => {
+      const value = entry(...args);
+      return value === undefined ? undefined : { ...value, map: { ...value.map,
+        sessions: value.map.sessions.map((session) => session.id === otherRef.sessionId
+          ? { ...session, codexThreadBinding: { ...session.codexThreadBinding!, launchRevision: NEXT_LAUNCH, threadId: OTHER_THREAD } } : session),
+      } };
+    });
+    await codexLog();
+    start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    expect(ofKind((await service.snapshot(otherRef)).items, 'tool')).toHaveLength(1);
+    expect(await service.progress(otherRef, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], current: null });
+    expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+  });
+
+  it('validates ref and session before any source lookup or read', async () => {
+    provenance();
+    start();
+    const lookup = vi.spyOn(fakes.deps.activity, 'logFile');
+    await expect(service.progress({ ...REF, projectPath: null as unknown as string }, fakeClient())).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.progress({ ...REF, sessionId: 'missing' }, fakeClient())).rejects.toMatchObject({ code: 'not_found' });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('seeds once, preserves feed revision and Chat subscriptions, and emits no source stamp', async () => {
+    provenance();
+    const read = vi.fn(async (file: string) => (await readJsonlRecords(file)).records);
+    await cold(read);
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    const result = await service.progress(REF, client);
+    const snapshot = await service.snapshot(REF);
+    expect(result.availability).toBe('available');
+    expect(result.recent.length).toBeGreaterThan(0);
+    expect(result.revision).toBe(snapshot.revision);
+    expect(progressResult.safeParse(result).success).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    expect(service.subscriberCount()).toBe(1);
+    expect(await service.progress(REF, client)).toEqual(result);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it.each(['providerSessionId', 'startedAtProcess'] as const)('fails closed with missing %s without reading or relabeling old state', async (field) => {
+    const stamp = provenance();
+    stamp[field] = null;
+    const read = vi.fn(async () => []);
+    await cold(read);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).not.toHaveBeenCalled();
+    send(pre('old-tool', 'Read', { path: 'SECRET' }));
+    stamp[field] = 'newly-known';
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+  });
+
+  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates existing state on %s change without resetting Chat', async (field) => {
+    const stamp = provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    const before = await service.progress(REF, fakeClient());
+    expect(before.availability).toBe('available');
+    const previous = { ...stamp };
+    stamp[field] = field === 'provider' ? 'codex' : 'SECRET-new';
+    fakes.setSessions([{ ref: REF }]);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision });
+    Object.assign(stamp, previous);
+    fakes.setSessions([{ ref: REF }]);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+  });
+
+  it('invalidates a restart event even before the work map publishes a new process stamp', async () => {
+    provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+    fakes.emitStart(REF);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('recovers Claude after markStarted only from matching new hooks, excluding early and updated old IDs', async () => {
+    const stamp = provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('old')]);
+    fakes.setProcess({ pid: 2 });
+    fakes.emitStart(REF);
+    send(pre('early', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.pid = 2;
+    stamp.startedAtProcess = 'SECRET-process-new';
+    fakes.setSessions([{ ref: REF }]);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    send(post('old', 'Read', {}, 'SECRET old response'));
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [], current: null });
+    send(pre('fresh', 'Write', {}));
+    expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('fresh')]);
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(3);
+  });
+
+  it('does not grant Claude rows from a wrong provider session hook', async () => {
+    provenance();
+    start();
+    send({ ...pre('wrong', 'Read', {}), session_id: 'other-binding' });
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    send(pre('right', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('right')]);
+  });
+
+  it('recovers a new Claude session whose first hook precedes markStarted', async () => {
+    const stamp = provenance();
+    stamp.pid = null;
+    stamp.startedAtProcess = null;
+    fakes.setProcess({ pid: 7 });
+    start();
+    send(pre('before-mark-started', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.pid = 7;
+    stamp.startedAtProcess = 'SECRET-started-7';
+    fakes.setSessions([{ ref: REF }]);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    send(pre('after-mark-started', 'Write', {}));
+    expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('after-mark-started')]);
+  });
+
+  it('does not replay history from a trustworthy seed started after lifecycle invalidation', async () => {
+    const stamp = provenance();
+    const root = await tempRoot();
+    const file = path.join(root, 'log.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    start({ roots: () => [root] });
+    service.noteMode(REF, 'plan');
+    fakes.setProcess({ pid: 2 });
+    fakes.emitStart(REF);
+    stamp.pid = 2;
+    stamp.startedAtProcess = 'SECRET-process-2';
+    fakes.setSessions([{ ref: REF }]);
+    fakes.setLogFile(file);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [], current: null });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool').length).toBeGreaterThan(0);
+    send(pre('fresh-after-seed', 'Write', {}));
+    expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('fresh-after-seed')]);
+  });
+
+  it('does not confirm pending onStart merely because the unconfirmed PTY later exits', async () => {
+    provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    fakes.setProcess({ pid: 2 });
+    fakes.emitStart(REF);
+    send(pre('early', 'Read', {}));
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('allows a trustworthy cold seed of a stopped session without an unconfirmed onStart', async () => {
+    provenance();
+    fakes.setProcess(null);
+    await cold();
+    expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+  });
+
+  it('bounds eligibility to retained main-tool IDs through ring trim and new epochs', async () => {
+    const stamp = provenance();
+    start({ maxItems: 3 });
+    const sets: Set<string>[] = [];
+    let first = true;
+    const add = Set.prototype.add;
+    const spy = vi.spyOn(Set.prototype, 'add').mockImplementation(function (this: Set<string>, value: string) {
+      // Снимаем retained epoch sets; batch.removed вправе копить вытеснения до flush.
+      if (((first && value === 'tool:bounded-0') || value === 'tool:bounded-fresh') && !sets.includes(this)) sets.push(this);
+      return add.call(this, value);
+    });
+    try {
+      for (let i = 0; i < 40; i += 1) {
+        send(pre(`bounded-${i}`, 'Read', {}));
+        first = false;
+      }
+      expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([37, 38, 39].map((i) => toolId(`bounded-${i}`)));
+      expect(sets.length).toBeGreaterThan(0);
+      expect(sets.filter((set) => set.size > 3).map((set) => [...set])).toEqual([]);
+      fakes.setProcess({ pid: 2 });
+      fakes.emitStart(REF);
+      stamp.pid = 2;
+      stamp.startedAtProcess = 'SECRET-process-new';
+      send(post('bounded-39', 'Read', {}, 'SECRET'));
+      expect((await service.progress(REF, fakeClient())).recent).toEqual([]);
+      send(pre('bounded-fresh', 'Write', {}));
+      expect((await service.progress(REF, fakeClient())).recent.map((row) => row.id)).toEqual([toolId('bounded-fresh')]);
+      expect(sets.every((set) => set.size <= 3)).toBe(true);
+      fakes.setSessions([]);
+      expect(sets.every((set) => set.size <= 3)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('recovers Codex on normal late thread seed, keeps same-thread binding and rejects a retained foreign tail', async () => {
+    const stamp = codexProvenance();
+    stamp.providerSessionId = null;
+    const root = await tempRoot();
+    const file = path.join(root, 'rollout.jsonl');
+    const other = path.join(root, 'other.jsonl');
+    const row = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+      type: 'item_completed', item: { type: 'CommandExecution', id: `cmd-${ordinal}`, command: ['SECRET'], status: 'completed', exit_code: 0 },
+    } });
+    await writeFile(file, `${row(1)}\n`);
+    await writeFile(other, '');
+    vi.spyOn(fakes.deps.activity, 'logFile').mockImplementation(() => stamp.providerSessionId === null ? null : stamp.providerSessionId === THREAD ? file : other);
+    start();
+    service.onHook(hookRequest({ hook_event_name: 'SessionStart', session_id: SESSION }));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.providerSessionId = THREAD;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-1')]));
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    stamp.providerSessionId = 'different-thread';
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.providerSessionId = THREAD;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    writeFileSync(file, `${row(3)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(3));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+  });
+
+  it('caps retained eligibility at FEED_MAX_ITEMS even with a larger configured raw ring', async () => {
+    provenance();
+    start({ maxItems: FEED_MAX_ITEMS + 2 });
+    const retained: Set<string>[] = [];
+    let first = true;
+    const add = Set.prototype.add;
+    const spy = vi.spyOn(Set.prototype, 'add').mockImplementation(function (this: Set<string>, value: string) {
+      if (first && value === 'tool:cap-0' && !retained.includes(this)) retained.push(this);
+      return add.call(this, value);
+    });
+    try {
+      for (let i = 0; i < FEED_MAX_ITEMS + 2; i += 1) {
+        send(pre(`cap-${i}`, 'Read', {}));
+        first = false;
+      }
+      expect(retained.length).toBeGreaterThan(0);
+      expect(retained.every((set) => set.size <= FEED_MAX_ITEMS)).toBe(true);
+      expect((await service.progress(REF, fakeClient())).recent).toHaveLength(20);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('rejects quota overflow before source lookup or projection and scopes it per client', async () => {
+    provenance();
+    let time = 0;
+    start({ now: () => time });
+    send(pre('tool', 'Read', {}));
+    const client = fakeClient();
+    const lookup = vi.spyOn(fakes.deps.activity, 'logFile');
+    const project = vi.spyOn(progressModule, 'projectProgress');
+    try {
+      for (let i = 0; i < 4; i += 1) await service.progress(REF, client);
+      const reads = lookup.mock.calls.length;
+      const projections = project.mock.calls.length;
+      await expect(service.progress(REF, client)).rejects.toMatchObject({ code: 'conflict', data: { reason: 'island-progress-rate-limit', retryAfterMs: 250 } });
+      expect(lookup).toHaveBeenCalledTimes(reads);
+      expect(project).toHaveBeenCalledTimes(projections);
+      expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+      time = 1000;
+      expect((await service.progress(REF, client)).availability).toBe('available');
+    } finally { project.mockRestore(); }
+  });
+
+  it('shares a cold read with Chat and other clients, rejects concurrent calls from the same client', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await expect(service.progress(REF, client)).rejects.toMatchObject({ code: 'conflict', data: { reason: 'island-progress-rate-limit' } });
+    const second = service.progress(REF, fakeClient());
+    const chat = service.snapshot(REF);
+    held.resolve((await readJsonlRecords(file)).records);
+    const [a, b, snapshot] = await Promise.all([first, second, chat]);
+    expect(a).toEqual(b);
+    expect(a.availability).toBe('available');
+    expect(a.revision).toBe(snapshot.revision);
+    expect(read).toHaveBeenCalledOnce();
+    expect(service.subscriberCount()).toBe(0);
+  });
+
+  it('does not attach newly known provenance to an unknown source read already started by Chat', async () => {
+    const stamp = provenance();
+    stamp.startedAtProcess = null;
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const chat = service.snapshot(REF);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stamp.startedAtProcess = 'SECRET-newly-known-process';
+    const pending = service.progress(REF, fakeClient());
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
+    await chat;
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('returns unavailable after 2s but retains the underlying per-ref read until it settles', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    vi.useFakeTimers();
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await first).toMatchObject({ availability: 'unavailable', recent: [] });
+    const second = service.progress(REF, client);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await second).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+    held.resolve((await readJsonlRecords(file)).records);
+    await vi.waitFor(async () => expect((await service.progress(REF, client)).availability).toBe('available'));
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the raw Claude cold seed after a process starts during the read', async () => {
+    const stamp = provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const chat = service.snapshot(REF);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stamp.startedAtProcess = 'SECRET-resumed';
+    fakes.emitStart(REF);
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(ofKind((await chat).items, 'tool').length).toBeGreaterThan(0);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the raw Codex cold seed and later polling after Resume during its read', async () => {
+    const stamp = codexProvenance();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = codexSource.createRolloutTail;
+    const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+      const tail = original(...args);
+      return { ...tail, read: async () => {
+        const records = await tail.read();
+        entered.resolve(undefined);
+        await release.promise;
+        return records;
+      } };
+    });
+    try {
+      const root = await tempRoot();
+      const file = path.join(root, 'rollout.jsonl');
+      const row = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+        type: 'item_completed', item: { type: 'CommandExecution', id: `cmd-${ordinal}`, command: ['SECRET'], status: 'completed', exit_code: 0 },
+      } });
+      await writeFile(file, `${row(1)}\n`);
+      fakes.setLogFile(file);
+      start();
+      const chat = service.snapshot(REF);
+      await entered.promise;
+      stamp.startedAtProcess = 'SECRET-resumed';
+      stamp.codexThreadBinding = { ...stamp.codexThreadBinding!, launchRevision: NEXT_LAUNCH, startedAtProcess: stamp.startedAtProcess };
+      fakes.emitStart(REF);
+      release.resolve(undefined);
+      expect(ofKind((await chat).items, 'tool')).toHaveLength(1);
+      expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+      writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+      expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-2')]);
+    } finally { release.resolve(undefined); create.mockRestore(); }
+  });
+
+  it.each(['binding', 'process', 'remove-readd', 'dropClient', 'stop'] as const)('suppresses late delivery after %s and does not restore stale rows', async (change) => {
+    const stamp = provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const client = fakeClient();
+    const pending = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    if (change === 'binding') stamp.providerSessionId = 'SECRET-binding-B';
+    if (change === 'process') stamp.startedAtProcess = 'SECRET-process-B';
+    if (change === 'remove-readd') {
+      fakes.setSessions([]);
+      fakes.setSessions([{ ref: REF }]);
+      service.onHook(hookRequest(pre('new-B', 'Write', {})));
+    }
+    if (change === 'dropClient') service.dropClient(client);
+    if (change === 'stop') await service.stop();
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
+    if (change === 'binding' || change === 'process') {
+      fakes.setLogFile(null);
+      expect(ofKind((await service.snapshot(REF)).items, 'tool').length).toBeGreaterThan(0);
+    }
+    if (change === 'remove-readd') {
+      const result = await service.progress(REF, fakeClient());
+      expect(result.availability).toBe('available');
+      expect(result.recent).toHaveLength(1);
+    }
+  });
+
+  it('keeps the old read pinned across removal/readd and dropClient clears pending delivery and quota', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    await cold(read);
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    service.dropClient(client);
+    expect(await first).toMatchObject({ availability: 'unavailable' });
+    fakes.setSessions([]);
+    fakes.setSessions([{ ref: REF }]);
+    const next = service.progress(REF, client);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(read).toHaveBeenCalledOnce();
+    held.resolve([]);
+    expect(await next).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('keeps same-provider sessions and identical work-relative refs in different projects separate', async () => {
+    const refs = [REF, { ...REF, sessionId: 's-02' }, { ...REF, projectPath: '/other/proj' }];
+    fakes.setSessions(refs.map((ref) => ({ ref })));
+    provenance();
+    start();
+    refs.forEach((ref, index) => service.onHook(hookRequest(pre(`tool-${index}`, 'Read', {}), ref)));
+    const results = await Promise.all(refs.map((ref) => service.progress(ref, fakeClient())));
+    expect(results.every((result) => result.availability === 'available' && result.recent.length === 1)).toBe(true);
+    expect(new Set(results.map((result) => result.recent[0]?.id)).size).toBe(3);
+  });
+
+  it('updates closed-Chat Codex progress only through existing log updates, without extra polling or deadlock', async () => {
+    const stamp = codexProvenance();
+    const root = await tempRoot();
+    const file = path.join(root, 'rollout.jsonl');
+    const record = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+      type: 'item_completed', thread_id: 'main', turn_id: 'turn', item: { type: 'CommandExecution', id: `cmd-${ordinal}`, command: ['SECRET'], status: 'completed', exit_code: 0 },
+    } });
+    const started = JSON.stringify({ timestamp: '2026-10-26T11:59:59.000Z', ordinal: 0, type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } });
+    await writeFile(file, `${started}\n${record(1)}\n`);
+    fakes.setLogFile(file);
+    start();
+    const first = await service.progress(REF, fakeClient());
+    expect(first.recent).toHaveLength(1);
+    writeFileSync(file, `${record(2)}\n`, { flag: 'a' });
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    fakes.emitLog();
+    const [snapshot, progress] = await Promise.all([service.snapshot(REF), service.progress(REF, fakeClient())]);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    expect(progressResult.safeParse(progress).success).toBe(true);
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent).toHaveLength(2));
+    service.unsubscribe(REF, client);
+    writeFileSync(file, `${record(3)}\n`, { flag: 'a' });
+    writeFileSync(file, `${JSON.stringify({ timestamp: '2026-10-26T12:00:01.000Z', ordinal: 4, type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn' } })}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent).toHaveLength(3));
+    const done = await service.snapshot(REF);
+    expect(ofKind(done.items, 'turn')).toHaveLength(1);
+    expect(ofKind(done.items, 'turn')[0]?.interrupted).toBeUndefined();
+    expect((await service.progress(REF, fakeClient())).current).toBeNull();
+    expect(service.subscriberCount()).toBe(0);
+    // Raw Chat сохраняет retained tail после restart; progress не переименовывает прежний provenance.
+    stamp.startedAtProcess = 'SECRET-process-restarted';
+    stamp.codexThreadBinding = { ...stamp.codexThreadBinding!, launchRevision: NEXT_LAUNCH, startedAtProcess: stamp.startedAtProcess };
+    fakes.emitStart(REF);
+    writeFileSync(file, `${record(5)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(4));
+    expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-5')]);
+    await service.stop();
+  });
+
+  it.each(['remove-readd', 'stop'] as const)('does not publish a late raw Codex poll after %s', async (change) => {
+    const stamp = codexProvenance();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = codexSource.createRolloutTail;
+    let polling: Promise<unknown> | undefined;
+    const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+      const tail = original(...args);
+      let count = 0;
+      return { ...tail, read: () => {
+        const run = (async () => {
+          const records = await tail.read();
+          if (++count === 2) { entered.resolve(undefined); await release.promise; }
+          return records;
+        })();
+        if (count > 0) polling = run;
+        return run;
+      } };
+    });
+    try {
+      const root = await tempRoot();
+      const file = path.join(root, 'rollout.jsonl');
+      const row = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+        type: 'item_completed', item: { type: 'CommandExecution', id: `A-${ordinal}`, command: ['SECRET-A'], status: 'completed', exit_code: 0 },
+      } });
+      await writeFile(file, `${row(1)}\n`);
+      fakes.setLogFile(file);
+      start();
+      await service.progress(REF, fakeClient());
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await entered.promise;
+      if (change === 'stop') await service.stop();
+      else {
+        fakes.setSessions([]);
+        stamp.provider = 'claude';
+        stamp.providerSessionId = SESSION;
+        fakes.setSessions([{ ref: REF }]);
+        service.onHook(hookRequest(pre('new-B', 'Write', {})));
+        service.subscribe(REF, client);
+        await service.progress(REF, fakeClient());
+      }
+      const before = [...client.sent];
+      release.resolve(undefined);
+      await polling;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.sent).toEqual(before);
+      if (change === 'remove-readd') expect(ofKind((await service.snapshot(REF)).items, 'tool').map((item) => item.toolUseId)).toEqual(['new-B']);
+    } finally { release.resolve(undefined); create.mockRestore(); }
+  });
+
+  it('returns unavailable for missing or failed sources without exposing source errors', async () => {
+    provenance();
+    await cold(async () => { throw new Error('SECRET-source-failure'); });
+    const result = await service.progress(REF, fakeClient());
+    expect(result).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    await service.stop();
+    fakes.setLogFile(null);
+    start();
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('clears caller timers on stop while the underlying read remains pending', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    await cold(read);
+    vi.useFakeTimers();
+    const pending = service.progress(REF, fakeClient());
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await service.stop();
+    expect(await pending).toMatchObject({ availability: 'unavailable' });
+    expect(vi.getTimerCount()).toBe(0);
+    held.resolve([]);
+  });
 });
 
 describe('снимок и дельты', () => {

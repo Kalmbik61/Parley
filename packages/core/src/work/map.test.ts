@@ -39,6 +39,54 @@ const emptyV1 = (): Record<string, unknown> => {
   return map;
 };
 
+describe('private Codex thread binding normalization', () => {
+  const proof = {
+    launchRevision: '12345678-1234-1234-1234-123456789abc', pid: 42,
+    startedAtProcess: '  exact process stamp  ', threadId: '019ce3d5-584a-7be2-922e-b8185a8d7c19' as string | null,
+  };
+  const normalize = (binding: unknown, provider = 'codex') => {
+    const map = emptyMap();
+    const session = addSession(map, { provider, label: '', task: '' });
+    Object.assign(session, { codexThreadBinding: binding });
+    return parseMap(JSON.stringify(map), 'map.json');
+  };
+
+  it('preserves exact valid proof and unverified launch identity without a schema bump', () => {
+    for (const threadId of [null, proof.threadId]) {
+      const map = normalize({ ...proof, threadId });
+      expect(map.schemaVersion).toBe(2);
+      expect(map.sessions[0]?.codexThreadBinding).toEqual({ ...proof, threadId });
+      expect(parseMap(JSON.stringify(map), 'again.json')).toEqual(map);
+    }
+  });
+
+  it.each([
+    null, [], {}, { ...proof, extra: true }, { pid: 42, startedAtProcess: 'x', threadId: null },
+    { ...proof, launchRevision: 'bad' }, { ...proof, launchRevision: proof.launchRevision.toUpperCase() },
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY].map((pid) => ({ ...proof, pid })),
+    ...['', 'x'.repeat(65), 'stamp\n', 'stamp\u0000', 'stamp\u007f', 'stamp\u0085'].map((startedAtProcess) => ({ ...proof, startedAtProcess })),
+    { ...proof, threadId: 'bad' }, { ...proof, threadId: proof.threadId?.toUpperCase() },
+  ])('drops malformed proof without rejecting the session: %j', (binding) => {
+    const session = normalize(binding).sessions[0];
+    expect(session?.provider).toBe('codex');
+    expect(session).not.toHaveProperty('codexThreadBinding');
+  });
+
+  it('does not synthesize legacy trust or retain proof on a non-Codex session', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'codex', label: '', task: '' });
+    expect(parseMap(JSON.stringify(map), 'legacy.json').sessions[0]).not.toHaveProperty('codexThreadBinding');
+    expect(normalize(proof, 'claude').sessions[0]).not.toHaveProperty('codexThreadBinding');
+    expect(normalize(proof, 'glm').sessions[0]).not.toHaveProperty('codexThreadBinding');
+  });
+
+  it('bounds process stamps in UTF-16 code units and accepts the safe positive PID boundary', () => {
+    const boundary = { ...proof, pid: Number.MAX_SAFE_INTEGER, startedAtProcess: '🔒'.repeat(32) };
+    expect(normalize(boundary).sessions[0]?.codexThreadBinding).toEqual(boundary);
+    expect(normalize({ ...boundary, startedAtProcess: '🔒'.repeat(33) }).sessions[0]).not.toHaveProperty('codexThreadBinding');
+  });
+});
+
 describe('addSession', () => {
   it('роль агента берётся из init, без неё — null', () => {
     const map = emptyMap();

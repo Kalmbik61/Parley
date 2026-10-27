@@ -79,6 +79,42 @@ accounts of the same CLI and the lead asks you before starting a replacement. It
 2.1.304 or newer; Parley asks `claude auth status` for the sign-in state and never reads the keychain
 or any credential file.
 
+## The island and the assistant
+
+The island is a black panel at the top of the screen: which agents work, who needs you, what just
+finished, and cards for requests. On a MacBook with a notch the island is exactly the size of the
+notch when there is nothing to show. While agents work, a Done is unseen or the assistant is folded
+away or speaking, it becomes one capsule around the notch: the swarm or the assistant's face on the
+left, the Done or working count on the right. It drops down below the notch only when you open it
+(a click, the hotkey or pulling the tab; the pointer alone does not open it) or when something needs
+you: a request, a card or the assistant. Displays without a notch, and an island moved to the left
+or right edge, keep the strip.
+
+**Sounds and motion.** The island plays its own short cues, synthesized on the fly (there are no
+sound files). Settings → Notifications → Island: the palette (Soft by default, Crystal or Warm;
+picking one plays a sample), the volume, "Interface sounds" (hover, open and close, an agent
+starting; off by default) and "Reduce motion". Requests sound with "Sound when you're needed", Done
+only with "Sound when an agent finishes"; thinking and tool steps are always silent. Reduce motion,
+like the macOS setting, stills the swarm and the island's shape changes; the sounds stay.
+
+**The assistant.** Press ⌥Space or click the small swarm on the island and ask about your agents,
+works and rooms; it prepares cards (a letter, a room, an answer to an agent) and nothing happens
+until you confirm. Settings → Assistant turns it on. With "Speak answers" it talks in a neural
+voice, Qwen3-TTS 0.6B CustomVoice run on your Mac by speech.cpp:
+- five voices: Serena (the default), Ryan, Aiden, Vivian and Ono Anna; the assistant speaks of
+  itself in the gender of the voice;
+- the weights, 1214 MB and one file for all voices, are downloaded only when you press Download in
+  Settings → Assistant, with Cancel and Delete like the Whisper models; "Preparing voice…" shows
+  until the voice is ready;
+- it starts speaking while the answer is still being written, sentence by sentence, and the swarm
+  becomes a face: the mouth follows the voice and the mood changes from sentence to sentence. Esc,
+  Send or Cancel on a card stop the voice at once, and the speaker button on the island turns
+  "Speak answers" off and on;
+- the voice needs Apple Silicon and an answer language of Russian or English. On an Intel Mac or in
+  another language the answers are text only. The first answer after installing or updating Parley
+  may also come as text while the voice engine warms up (about 15 seconds);
+- the model leaves memory after 15 minutes without speech.
+
 ## How it works
 
 ```

@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createParleyMd, sharedProjectPaths } from '@parley/core';
-import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@parley/protocol';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressResult, FEED_PROGRESS_RETRY_AFTER_MAX_MS } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -23,7 +23,11 @@ import { isNotesFile } from '../shared/notes-types.js';
 import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
+import { projectIslandWorks } from './island/works-projection.js';
+import { projectIslandActivity } from './island/activity-projection.js';
+import type { IslandActivityEntry } from '../shared/island.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
+import type { TtsService } from './assistant/tts.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
 import { parseContextInput } from './browser/context-files.js';
@@ -68,6 +72,11 @@ export function withIpcError(
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
+/** Тот же sessionRef, но острову обязателен attention и запрещены agentId/лишние поля. */
+const ISLAND_SNAPSHOT_PARAMS = METHODS['feed.snapshot'].pick({ ref: true, scope: true }).required().strict();
+const ISLAND_PROGRESS_PARAMS = METHODS['feed.progress'].extend({
+  ref: METHODS['feed.progress'].shape.ref.strict().refine((ref) => Object.values(ref).every((part) => part.length > 0)),
+}).strict();
 
 /**
  * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
@@ -136,7 +145,8 @@ export function isFocusTarget(value: unknown): value is FocusTarget {
         typeof ref.projectPath === 'string' &&
         typeof ref.workId === 'string' &&
         typeof ref.sessionId === 'string' &&
-        (value.cardId === undefined || isValidPathArg(value.cardId))
+        (value.cardId === undefined || isValidPathArg(value.cardId)) &&
+        (value.view === undefined || value.view === 'terminal' && value.cardId === undefined)
       );
     }
     case 'mail':
@@ -238,12 +248,21 @@ export interface RegisterIpcOptions {
   isIslandSender?: (sender: unknown) => boolean;
   /** Есть ли живое окно острова — для `notify.ts` главного окна (`app:island-active`). */
   islandActive?: () => boolean;
+  /** Отчёт окна: callback проверяет текущие main webContents/main frame и форму данных. */
+  reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
   /** Палитра открывает помощника на острове (`app:assistant-open`): печать, без голоса. */
   openAssistant?: () => void;
   /** Состояние глобального хоткея помощника для настроек (`app:assistant-shortcut`). */
   assistantShortcut?: () => AssistantShortcutStatus;
   /** Поле записи сочетания в настройках снимает глобальный хоткей на время записи (`app:assistant-shortcut-suspend`). */
   suspendAssistantShortcut?: (on: boolean) => void;
+  islandShortcut?: () => AssistantShortcutStatus;
+  suspendIslandShortcut?: (on: boolean) => void;
+  /**
+   * Нейроголос помощника (план 3b, B15) для настроек: каталог, скачивание весов только по кнопке (E5), отмена и
+   * удаление (D5), состояние движка.
+   */
+  tts: Pick<TtsService, 'voices' | 'download' | 'cancelDownload' | 'remove' | 'state'>;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -389,8 +408,10 @@ export function registerIpc(options: RegisterIpcOptions): void {
     setDirtyBuffers,
     answerClose,
     browser,
+    tts,
   } = options;
 
+  const progressSent = new WeakMap<object, number>();
   ipcMain.handle(
     'host:call',
     withIpcError(async (event, method: unknown, params: unknown) => {
@@ -398,8 +419,47 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new Error(`unknown method: ${String(method)}`);
       }
       // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
-      if (isIslandSender?.((event as { sender?: unknown }).sender) === true && !ISLAND_METHODS.has(method)) {
+      const fromIsland = isIslandSender?.((event as { sender?: unknown }).sender) === true;
+      if (fromIsland && !ISLAND_METHODS.has(method)) {
         throw new Error(`method not allowed for the island: ${method}`);
+      }
+      if (fromIsland && method === 'feed.progress') {
+        const parsed = ISLAND_PROGRESS_PARAMS.safeParse(params);
+        const sender = (event as { sender?: unknown }).sender;
+        if (!parsed.success || typeof sender !== 'object' || sender === null) throw new HostError('bad_request', 'Invalid progress request');
+        const now = Date.now();
+        const previous = progressSent.get(sender);
+        if (previous !== undefined && now - previous < 250) throw new HostError('conflict', 'Progress update delayed', {
+          reason: 'island-progress-rate-limit', retryAfterMs: Math.max(0, Math.min(250, 250 - (now - previous))),
+        });
+        progressSent.set(sender, now);
+        try {
+          const result = progressResult.safeParse(await connection.call('feed.progress', parsed.data));
+          if (!result.success) throw new HostError('failed', 'Progress unavailable');
+          return result.data;
+        } catch (error) {
+          if (error instanceof HostError && error.code === 'conflict' && error.data?.reason === 'island-progress-rate-limit' &&
+              Number.isSafeInteger(error.data.retryAfterMs) && (error.data.retryAfterMs as number) >= 0 && (error.data.retryAfterMs as number) <= FEED_PROGRESS_RETRY_AFTER_MAX_MS) {
+            throw new HostError('conflict', 'Progress update delayed', { reason: 'island-progress-rate-limit', retryAfterMs: error.data.retryAfterMs });
+          }
+          throw new HostError(error instanceof HostError && error.code === 'unknown_method' ? 'unknown_method' : 'failed', 'Progress unavailable');
+        }
+      }
+      if (fromIsland && method === 'works.list') {
+        return projectIslandWorks(await connection.call('works.list', params) as Result<'works.list'>);
+      }
+      if (fromIsland && method === 'feed.snapshot') {
+        const parsed = ISLAND_SNAPSHOT_PARAMS.safeParse(params);
+        if (!parsed.success) throw new HostError('bad_request', 'invalid island feed.snapshot params');
+        const snapshot = await connection.call('feed.snapshot', parsed.data) as Result<'feed.snapshot'>;
+        // Старый хост может проигнорировать scope: полная лента не должна пересечь границу острова.
+        const lastPrompt = snapshot.items.findLastIndex((item) => item.kind === 'prompt');
+        const lastText = snapshot.items.findLastIndex((item) => item.kind === 'text');
+        const items = snapshot.items.filter((item, index) =>
+          (index === lastText && index > lastPrompt) ||
+          ((item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan') && item.state === 'pending'),
+        );
+        return { ...snapshot, items };
       }
       return connection.call(method, params);
     }),
@@ -407,7 +467,10 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle(
     'host:activity-snapshot',
-    withIpcError(async () => connection.activitySnapshot()),
+    withIpcError(async (event) => {
+      const snapshot = connection.activitySnapshot();
+      return isIslandSender?.((event as { sender?: unknown }).sender) === true ? snapshot.map(projectIslandActivity) : snapshot;
+    }),
   );
 
   // Уведомления хоста, пришедшие до подписки окна (стартовые: карты, не переехавшие в базу).
@@ -420,6 +483,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:island-active', (event) => {
     (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
   });
+  ipcMain.on('app:session-visibility', (event, value: unknown) => options.reportSessionVisibility?.(event, value));
 
   ipcMain.on('app:assistant-open', () => options.openAssistant?.());
   ipcMain.handle(
@@ -427,6 +491,22 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(() => options.assistantShortcut?.() ?? { accelerator: null, ok: true }),
   );
   ipcMain.on('app:assistant-shortcut-suspend', (_event, on: unknown) => options.suspendAssistantShortcut?.(on === true));
+  ipcMain.handle('app:island-shortcut', withIpcError(() => options.islandShortcut?.() ?? { accelerator: null, ok: true }));
+  ipcMain.on('app:island-shortcut-suspend', (_event, on: unknown) => options.suspendIslandShortcut?.(on === true));
+
+  ipcMain.handle('app:assistant-voices', withIpcError(() => tts.voices()));
+  ipcMain.handle(
+    'app:assistant-voice-download',
+    withIpcError((event) => {
+      const sender = (event as { sender: Pick<WebContents, 'isDestroyed' | 'send'> }).sender;
+      return tts.download((progress) => {
+        if (!sender.isDestroyed()) sender.send('app:assistant-voice-progress', progress);
+      });
+    }),
+  );
+  ipcMain.handle('app:assistant-voice-cancel', withIpcError(() => tts.cancelDownload()));
+  ipcMain.handle('app:assistant-voice-remove', withIpcError(() => tts.remove()));
+  ipcMain.handle('app:assistant-voice-state', withIpcError(() => tts.state()));
 
   ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
@@ -989,7 +1069,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
 export function forwardHostToWindow(
   connection: HostConnection,
   window: BrowserWindow,
-  options: { events?: ReadonlySet<string> } = {},
+  options: { events?: ReadonlySet<string>; island?: boolean } = {},
 ): { dispose: () => void } {
   const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
@@ -997,7 +1077,10 @@ export function forwardHostToWindow(
     // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
     if (message.event === 'browser.agentOp') return;
     if (events !== undefined && !events.has(message.event)) return;
-    window.webContents.send('host:event', message);
+    if (options.island && message.event === 'activity.changed') {
+      window.webContents.send('host:event', { ...message, data: projectIslandActivity(message.data as IslandActivityEntry) });
+    } else window.webContents.send('host:event', options.island && message.event === 'works.changed'
+      ? { ...message, data: projectIslandWorks(message.data as Result<'works.list'>) } : message);
   });
   const unsubStatus = connection.onStatus((status) => {
     if (window.isDestroyed()) return;
@@ -1019,7 +1102,7 @@ export function forwardHostToWindow(
 export function forwardHostToPages(
   connection: HostConnection,
   window: BrowserWindow,
-  options: { events?: ReadonlySet<string> } = {},
+  options: { events?: ReadonlySet<string>; island?: boolean } = {},
 ): void {
   let current: { dispose: () => void } | null = null;
   window.webContents.on('did-finish-load', () => {

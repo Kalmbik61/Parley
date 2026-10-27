@@ -20,6 +20,8 @@ import { ChatEnvContext } from '../chat-env.js';
 import { CardItem } from '../items/CardItem.js';
 import { resetFeedStoreForTests, useFeedStore } from '../store.js';
 import { cardKey, resetChatUiStoreForTests, useChatUiStore } from '../ui-store.js';
+import { answerOf as sharedAnswerOf } from '../../lib/question-answer.js';
+import { answerOf as chatAnswerOf } from './QuestionCard.js';
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
 const AT = '2026-10-01T00:00:00.000Z';
@@ -284,6 +286,10 @@ describe('PermissionCard', () => {
 });
 
 describe('QuestionCard', () => {
+  it('uses the shared answer serializer for chat/island parity', () => {
+    expect(chatAnswerOf).toBe(sharedAnswerOf);
+  });
+
   it('два вопроса — по одному: Next, затем Submit шлёт оба ответа; multiSelect — подписи через «, »', async () => {
     render(<Card item={question()} />);
     expect(screen.queryByTestId('card-submit')).toBeNull();

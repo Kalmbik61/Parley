@@ -6,23 +6,17 @@
  * Выбранное и набранное — в `ui-store` по карточке (строки ленты размонтируются при прокрутке).
  */
 
-import type { FeedQuestion, FeedQuestionCard } from '@parley/core';
+import type { FeedQuestionCard } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
+import { answerOf } from '../../lib/question-answer.js';
 import { EMPTY_CARD_DRAFT, useChatUiStore, type CardDraft } from '../ui-store.js';
 import { CardFrame } from './CardFrame.js';
 import { CardNote } from './CardNote.js';
 import { useCardDecision } from './use-card-decision.js';
 
-/** Ответ на вопрос `at` по черновику; пустая строка — ответа ещё нет. */
-export function answerOf(question: FeedQuestion, at: number, draft: CardDraft): string {
-  const labels = draft.picked[at] ?? [];
-  const otherOn = draft.otherOn[at] === true;
-  const other = (draft.otherText[at] ?? '').trim();
-  if (!question.multiSelect) return otherOn ? other : (labels[0] ?? '');
-  return [...labels, ...(otherOn && other !== '' ? [other] : [])].join(', ');
-}
+export { answerOf } from '../../lib/question-answer.js';
 
 function settledStatus(item: FeedQuestionCard): string {
   return item.state === 'pending' ? S.chat.waiting : S.chat.cardState[item.state];

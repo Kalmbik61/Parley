@@ -970,6 +970,176 @@ describe('assistant-service: зеркало настроек, слушатели
   });
 });
 
+describe('assistant-service: эмоции по предложениям (F3)', () => {
+  /** Строка Claude прогоняется через `parse` хода, как у настоящего процесса: так видны и начала блоков. */
+  const line = (turn: FakeTurn | undefined, value: unknown): void => {
+    for (const event of turn?.spec.parse(JSON.stringify(value)) ?? []) turn?.emit(event);
+  };
+  const blockStart = { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } };
+  const delta = (text: string) => ({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+
+  it('в answer нет меток, moods — на позициях предложений, mood — первая метка; метка, разрезанная между дельтами, срезана', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'text', delta: '[[joy]] Готово. [[s' });
+    turns[0]?.emit({ type: 'text', delta: 'ad]] Но S03 упал. [[calm]] Смотрю.' });
+    expect(last()).toMatchObject({ phase: 'answering', mood: 'joy', answer: 'Готово. Но S03 упал. Смотрю.' });
+    expect(last().moods).toEqual([{ at: 0, mood: 'joy' }, { at: 8, mood: 'sad' }, { at: 21, mood: 'calm' }]);
+    expect(states.some((state) => state.answer.includes('[['))).toBe(false);
+  });
+
+  it('первая фраза без метки — mood calm, метки следующих фраз всё равно в moods', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'text', delta: 'Готово. [[sad]] Но S03 упал.' });
+    expect(last()).toMatchObject({ mood: 'calm', answer: 'Готово. Но S03 упал.', moods: [{ at: 8, mood: 'sad' }] });
+  });
+
+  it('инструмент сбрасывает answer и moods; эмоцию решает текст после него', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'text', delta: '[[sad]] Сейчас посмотрю.' });
+    turns[0]?.emit({ type: 'tool', name: 'parley_overview', input: {} });
+    expect(last()).toMatchObject({ phase: 'tool', answer: '', moods: [] });
+    turns[0]?.emit({ type: 'text', delta: '[[joy]] Все работают.' });
+    expect(last()).toMatchObject({ mood: 'joy', answer: 'Все работают.', moods: [{ at: 0, mood: 'joy' }] });
+  });
+
+  it('новый ход начинается с пустых moods', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'text', delta: '[[joy]] Да.' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'а ещё?' });
+    expect(last()).toMatchObject({ phase: 'thinking', answer: '', moods: [] });
+  });
+
+  it('конец хода: недописанная метка уходит текстом', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'text', delta: '[[calm]] Готово. [[jo' });
+    expect(last().answer).toBe('Готово. ');
+    turns[0]?.end({ ok: true });
+    await flush();
+    expect(last()).toMatchObject({ phase: 'idle', answer: 'Готово. [[jo', moods: [{ at: 0, mood: 'calm' }] });
+  });
+
+  it('новый блок текста без пробела на стыке — хост вставляет один пробел, метка на месте', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    line(turns[0], blockStart);
+    line(turns[0], delta('[[calm]] Сейчас посмо'));
+    line(turns[0], delta('трю.'));
+    line(turns[0], blockStart);
+    line(turns[0], delta('[[calm]] В работе'));
+    expect(last().answer).toBe('Сейчас посмотрю. В работе');
+    expect(last().moods).toEqual([{ at: 0, mood: 'calm' }, { at: 'Сейчас посмотрю. '.length, mood: 'calm' }]);
+  });
+
+  it('новый блок уже начинается с пробела — второго пробела нет', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    line(turns[0], blockStart);
+    line(turns[0], delta('[[calm]] Сейчас посмотрю.'));
+    line(turns[0], blockStart);
+    line(turns[0], delta(' [[joy]] В работе'));
+    expect(last().answer).toBe('Сейчас посмотрю. В работе');
+    expect(last().moods).toEqual([{ at: 0, mood: 'calm' }, { at: 'Сейчас посмотрю. '.length, mood: 'joy' }]);
+  });
+
+  it('Codex: каждое сообщение — новый блок, стык получает пробел', async () => {
+    const CODEX = { id: 'codex', label: 'Codex', runner: { command: 'codex', mcpConfig: 'codex-override', assistantArgs: ['exec', '{prompt}'] } } as unknown as ProviderEntry;
+    const service = createAssistantService({ ...deps, providers: async () => ({ codex: CODEX }) });
+    await service.ask(ASK);
+    const message = (text: string) => ({ type: 'item.completed', item: { type: 'agent_message', text } });
+    line(turns[0], message('[[calm]] Сейчас посмотрю.'));
+    line(turns[0], message('[[joy]] В работе.'));
+    expect(last()).toMatchObject({ mood: 'calm', answer: 'Сейчас посмотрю. В работе.', moods: [{ at: 0, mood: 'calm' }, { at: 17, mood: 'joy' }] });
+  });
+});
+
+describe('assistant-service: род голоса (G1)', () => {
+  const MIRROR = { enabled: true, provider: 'claude', model: null, language: 'ru', voiceModel: null };
+  /** Провайдер с системным промптом в аргументах: так виден род, который ушёл модели. */
+  const PROMPTED = {
+    ...CLAUDE,
+    runner: { ...CLAUDE.runner, assistantArgs: ['-p', '{prompt}', '--system-prompt', '{systemPrompt}'], assistantResumeArgs: ['-p', '{prompt}', '--resume', '{providerSessionId}', '--system-prompt', '{systemPrompt}'] },
+  } as unknown as ProviderEntry;
+  const prompted = () => createAssistantService({ ...deps, providers: async () => ({ claude: PROMPTED }) });
+  const systemPrompt = (index: number): string => turns[index]?.spec.args.at(-1) ?? '';
+  async function answered(service: ReturnType<typeof createAssistantService>, index: number): Promise<void> {
+    turns[index]?.emit({ type: 'session', id: 'sid-1' });
+    turns[index]?.end({ ok: true });
+    await flush();
+  }
+
+  it('без voiceGender в зеркале (и без зеркала) — род female', async () => {
+    const service = prompted();
+    await service.ask(ASK);
+    expect(systemPrompt(0)).toContain('You speak as a female assistant');
+    await answered(service, 0);
+    service.configure(MIRROR);
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(systemPrompt(1)).toContain('You speak as a female assistant');
+    expect(turns[1]?.spec.args[1]).toBe('дальше');
+  });
+
+  it('род из зеркала уходит в промпт', async () => {
+    const service = prompted();
+    service.configure({ ...MIRROR, voiceGender: 'neutral' });
+    await service.ask(ASK);
+    expect(systemPrompt(0)).toContain('Your voice has no grammatical gender');
+  });
+
+  it('смена рода в живом разговоре — следующий ход любого происхождения получает строку, разговор тот же', async () => {
+    const service = prompted();
+    service.configure({ ...MIRROR, voiceGender: 'female' });
+    await service.ask(ASK);
+    await answered(service, 0);
+    service.configure({ ...MIRROR, voiceGender: 'male' });
+    await service.ask({ ...ASK, text: 'что нового?' }, 'telegram');
+    expect(turns[1]?.spec.args.slice(0, 4)).toEqual(['-p', '[system: voice changed — speak as male]\nчто нового?', '--resume', 'sid-1']);
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
+    await answered(service, 1);
+    await service.ask({ ...ASK, text: 'а сейчас?' });
+    expect(turns[2]?.spec.args[1]).toBe('а сейчас?');
+  });
+
+  it('вопрос из Telegram при male в зеркале не переключает род и не даёт лишней строки', async () => {
+    const service = prompted();
+    service.configure({ ...MIRROR, voiceGender: 'male' });
+    await service.ask(ASK);
+    await answered(service, 0);
+    service.configure({ ...MIRROR, voiceGender: 'male' });
+    await service.ask({ ...ASK, text: 'что нового?' }, 'telegram');
+    expect(turns[1]?.spec.args[1]).toBe('что нового?');
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
+  });
+
+  it('смена рода без живого разговора — строки нет: новый разговор начнётся с нового рода', async () => {
+    const service = prompted();
+    await service.ask(ASK);
+    await answered(service, 0);
+    service.reset();
+    service.configure({ ...MIRROR, voiceGender: 'male' });
+    await service.ask({ ...ASK, text: 'привет' });
+    expect(turns[1]?.spec.args[1]).toBe('привет');
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
+  });
+
+  it('строка рода и заметка о карточке идут вместе', async () => {
+    const service = prompted();
+    await service.ask(ASK);
+    await service.tool('propose_message', { target: 'Auth', text: 'Пропусти Safari' });
+    await answered(service, 0);
+    await service.decide(last().proposal!.id, 'cancel');
+    service.configure({ ...MIRROR, voiceGender: 'male' });
+    await service.ask({ ...ASK, text: 'ладно' });
+    expect(turns[1]?.spec.args[1]).toBe('[system: voice changed — speak as male]\n[system: proposal p1 was cancelled]\nладно');
+  });
+});
+
 describe('assistant-service: письма комнаты из базы работы', () => {
   // Спека хранилища 6.2: последние письма `parley_detail` берутся из базы, а не из снимка хоста.
   it('parley_detail комнаты показывает последние десять писем из базы, а не из снимка', async () => {

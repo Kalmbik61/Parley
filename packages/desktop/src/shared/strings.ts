@@ -1189,6 +1189,16 @@ export const S = {
     notifySound: "Sound when you're needed",
     notifyFinishedSound: 'Sound when an agent finishes',
     notifyIsland: 'Island with requests at the top of the screen',
+    /** Блок «Island» во вкладке Notifications (#9 §5): палитра с примером, громкость, звуки интерфейса, движение. */
+    island: {
+      heading: 'Island',
+      palette: 'Island sound palette',
+      palettes: { soft: 'Soft', crystal: 'Crystal', warm: 'Warm' },
+      volume: 'Island volume',
+      volumeValue: (percent: number): string => `${percent}%`,
+      interfaceSounds: 'Interface sounds',
+      reduceMotion: 'Reduce motion',
+    },
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
@@ -2135,13 +2145,34 @@ export const S = {
 
   /** Остров одобрений (спека 2026-10-12). */
   island: {
-    pill: (working: number, waiting: number, done: number): string =>
-      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null]
+    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0): string =>
+      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null,
+        subagents === undefined ? null : subagents > 0 ? `${subagents} subagents active` : 'Subagents active',
+        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null]
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
+    subagentsActive: 'Subagents active', subagent: 'Subagent',
+    subagentsReported: (count: number): string => `${count} reported`,
+    tasksMore: (count: number): string => `+${count} more`, tasksEmpty: 'No task details reported', tasksUnknown: 'Task details unavailable',
+    roomWaiting: 'Waiting for you', openRoom: 'Open room', roomLead: (name: string): string => `Lead: ${name}`, noLiveLead: 'Lead unavailable',
+    progress: {
+      title: 'Recent actions', show: 'Show recent actions', close: 'Close history', current: 'Current',
+      loading: 'Loading recent actions…', unavailable: 'Recent actions unavailable', empty: 'No recent actions',
+      delayed: 'Update delayed', truncated: 'Earlier actions omitted',
+      category: { read: 'Read files', edit: 'Edit files', execute: 'Run command', search: 'Search', delegate: 'Delegate', other: 'Other action' },
+      status: { running: 'Running', done: 'Done', failed: 'Failed', rejected: 'Rejected' },
+    },
     codexTerminalAction: 'Codex needs your attention in the terminal',
+    question: {
+      back: 'Back',
+      invalidQuestion: 'Open this question in Parley to answer it.',
+      answerTooLong: (limit: number): string => `Each answer must be at most ${limit} characters.`,
+    },
     roomBusy: (count: number): string => `${count} in work`,
+    planChangeInTerminal: 'Change plan in terminal',
+    planTruncated: 'Truncated',
+    planTerminalOnly: 'Approval is available in the terminal',
     roomDone: 'done',
     clearDone: 'Clear',
     doneTab: 'Agents finished — show the island',
@@ -2158,7 +2189,15 @@ export const S = {
     failed: "Couldn't send — try again",
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
+    /** Капсула острова в вырезе (B26 F-B26-3): подписи для чтения с экрана и счётчик Done справа. */
+    capsule: {
+      assistant: 'Assistant',
+      agents: 'Parley agents',
+      working: (count: number): string => `${count} working`,
+      done: (count: number): string => `✓ ${count} Done`,
+    },
     idle: 'No agents running',
+    noPending: 'No pending requests',
     /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */
     consentTitle: 'Trust folder for agents?',
     consentTrust: 'Trust',
@@ -2419,11 +2458,16 @@ export const S = {
     working: 'Working…',
     answering: 'Answering',
     confirm: 'Waiting for your confirmation',
+    /** Речь помощника и пауза после неё (таблицы `LABEL` и `MINI` макета). */
+    speaking: 'Speaking',
+    spoken: 'Done',
     miniListening: 'Listening·',
     miniThinking: 'Thinking·',
     miniSending: 'Sending·',
     miniWorking: 'Working·',
     miniConfirm: 'Confirm send',
+    miniSpeaking: 'Speaking·',
+    miniSpoken: 'Done·',
     to: 'To',
     send: 'Send',
     wakeAndSend: 'Wake and send',
@@ -2467,6 +2511,8 @@ export const S = {
     micDenied: 'Microphone access is off — System Settings → Privacy & Security',
     noSpeech: "Didn't catch that — try again",
     voiceFailed: "Couldn't recognize speech — type instead",
+    /** Голос помощника не скачан (#9 §6.8, G3): один раз за сессию в режиме помощника. */
+    voiceMissing: (name: string): string => `Voice "${name}" isn't downloaded — open Settings`,
     newConversation: 'New conversation',
     settings: {
       enabled: 'Turn on the assistant',
@@ -2482,7 +2528,22 @@ export const S = {
       shortcutRecording: 'Press the keys…',
       shortcutTaken: 'This shortcut is taken by another app — choose another.',
       shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
+      islandShortcut: 'Open pending items',
+      islandShortcutEnable: 'Turn shortcut on',
+      islandShortcutOff: 'Turn shortcut off',
+      shortcutConflictAssistant: 'This shortcut is assigned to the assistant.',
       glmSlow: 'GLM answers in about 13 seconds.',
+      /** Голос помощника (план 3b, B20; #9 §6.8). Кнопки скачивания — строки Whisper из `S.voice.settings`. */
+      speak: 'Speak answers',
+      voice: 'Voice',
+      voiceGender: { female: 'Female', male: 'Male', neutral: 'Neutral' },
+      voiceDetails: (gender: string, languages: string, licence: string): string => `${gender} · ${languages} · ${licence}`,
+      voiceModel: 'Qwen3-TTS 0.6B CustomVoice',
+      voiceModelHint: 'One download for all voices.',
+      voicePreparing: 'Preparing voice…',
+      voiceUnavailable: 'Voice is unavailable on this Mac. Answers are shown as text.',
+      voiceNoLanguage: 'No voice for this language yet. Answers are shown as text.',
+      voiceCredit: 'Voices: Qwen3-TTS by Qwen Team, Alibaba Cloud (Apache-2.0). Speech runs on this Mac with speech.cpp.',
     },
   },
 

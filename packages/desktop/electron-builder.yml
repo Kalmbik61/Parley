@@ -42,6 +42,9 @@ extraResources:
     to: licenses/Figtree-OFL.txt
   - from: src/renderer/assets/fonts/Caprasimo-OFL.txt
     to: licenses/Caprasimo-OFL.txt
+  # Текст Apache-2.0 Qwen3-TTS — модели голосов помощника (план 3b, B03); источник и коммит названы в NOTICE.
+  - from: src/main/assistant/licenses/Qwen3-TTS-LICENSE.txt
+    to: licenses/Qwen3-TTS-LICENSE.txt
   # Встроенный Node 22: `scripts/fetch-node.mjs` кладёт его в build/node/darwin-<arch>/bin/node, сюда он
   # попадает как Contents/Resources/node/bin/node — окно запускает им хост (`src/main/host-launcher.ts`),
   # и человеку свой node не нужен. Рядом едет LICENSE из архива Node (Contents/Resources/node/LICENSE): бинарь
@@ -54,6 +57,11 @@ extraResources:
   # голосовой ввод в такой сборке скажет «Voice engine not found».
   - from: build/whisper/darwin-${arch}
     to: whisper
+  # Движок нейроголоса помощника (план 3b, B03): `scripts/fetch-speech.mjs` кладёт `bin/speech`, LICENSE
+  # speech.cpp и лицензии сторонних частей в build/speech/darwin-arm64. Для x64 движок не собирается (Intel — только
+  # текст): каталога нет, electron-builder только предупреждает, и помощник отвечает текстом.
+  - from: build/speech/darwin-${arch}
+    to: speech
 mac:
   target:
     - target: dmg

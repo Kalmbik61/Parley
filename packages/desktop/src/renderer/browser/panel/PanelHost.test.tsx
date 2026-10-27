@@ -4,7 +4,11 @@
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { refKey } from '@parley/protocol';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { BrowserOwner, WorkLayout } from '../../../shared/layout-types.js';
+import { wireSessionVisibility } from '../../attention/session-visibility.js';
+import { useUiStore } from '../../store/ui.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
 import { addPanelPage, panelOf, setPanelOpen } from '../../layout/panels.js';
 import { useLayoutStore } from '../../layout/store.js';
@@ -76,6 +80,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
 });
@@ -176,9 +181,9 @@ describe('PanelHost — стор окна', () => {
     setLayout(layoutWithPanel(true));
     const { unmount } = renderHost();
     const key = panelRuntimeKey(KEY, OWNER);
-    expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false });
+    expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false, measured: false });
     setViewWidth(500);
-    expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: true });
+    expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: true, measured: true });
     unmount();
     expect(usePanelRuntime.getState().hosts[key]).toBeUndefined();
   });
@@ -186,6 +191,35 @@ describe('PanelHost — стор окна', () => {
   it('закрытая панель вид не прячет: он зарегистрирован и без панели', () => {
     setLayout(emptyLayout());
     renderHost();
-    expect(usePanelRuntime.getState().hosts[panelRuntimeKey(KEY, OWNER)]).toEqual({ narrow: false });
+    expect(usePanelRuntime.getState().hosts[panelRuntimeKey(KEY, OWNER)]).toEqual({ narrow: false, measured: false });
+  });
+
+  it('width0 -> 600 publishes measurement with unchanged narrow=false; 559/560 retains UI boundary', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 0 } as DOMRect);
+    setLayout(layoutWithPanel(true));
+    renderHost();
+    const ref = { projectPath: '/tmp/p', workId: 'w', sessionId: 's-01' };
+    useUiStore.setState({ visibleSessionRefs: { [refKey(ref)]: true }, documentVisible: true });
+    const reportSessionVisibility = vi.fn();
+    const dispose = wireSessionVisibility({ app: { reportSessionVisibility, onWindowFocus: () => () => {} } } as unknown as ParleyBridge);
+    const key = panelRuntimeKey(KEY, OWNER);
+    try {
+      expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false, measured: false });
+      expect(reportSessionVisibility.mock.calls.at(-1)![0].refs).toEqual([]);
+      setViewWidth(600);
+      expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false, measured: true });
+      expect(reportSessionVisibility.mock.calls.at(-1)![0].refs).toEqual([ref]);
+      expect(area()?.getAttribute('data-panel-mode')).toBe('beside');
+      setViewWidth(559);
+      expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: true, measured: true });
+      expect(reportSessionVisibility.mock.calls.at(-1)![0].refs).toEqual([]);
+      expect(area()?.getAttribute('data-panel-mode')).toBe('covering');
+      setViewWidth(560);
+      expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false, measured: true });
+      expect(reportSessionVisibility.mock.calls.at(-1)![0].refs).toEqual([ref]);
+      expect(area()?.getAttribute('data-panel-mode')).toBe('beside');
+    } finally {
+      dispose();
+    }
   });
 });

@@ -15,7 +15,15 @@ if (process.argv[2] === '--version') {
   const child = spawn(process.execPath, [echo, ...args], { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code ?? 0));
 } else {
-  const prompt = (args[args.indexOf('-p') + 1] ?? '').replace(/^\[system:[^\]]*\]\n/, '');
+  // Строки `[system: …]` перед вопросом (смена голоса, исход карточки) — от Parley: снимаются все, строка о смене
+  // голоса запоминается — «voice check» возвращает её в ответе (G1).
+  let prompt = args[args.indexOf('-p') + 1] ?? '';
+  const notes = [];
+  const systemLine = /^\[system:[^\]]*\]\n/;
+  for (let line = systemLine.exec(prompt); line !== null; line = systemLine.exec(prompt)) {
+    notes.push(line[0].trim());
+    prompt = prompt.slice(line[0].length);
+  }
   const config = JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'));
   const { PARLEY_ASSISTANT_URL: url, PARLEY_ASSISTANT_TOKEN: token } = Object.values(config.mcpServers)[0].env;
   const out = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -32,6 +40,8 @@ if (process.argv[2] === '--version') {
   const session = /\[(session:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   const work = /\[(work:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   let answer = '[[calm]] Nothing is open right now.';
+  /** Пауза между словами ответа, мс: «moods …» идёт словами долго, чтобы фаза ответа была видна. */
+  let wordDelay = 0;
   // «long …» — тот же ход, но к ответу дописаны 40 строк: проверка, что длинный обмен не выходит за кадр острова.
   const long = /^long /i.test(prompt);
   const ask = long ? prompt.slice('long '.length) : prompt;
@@ -61,10 +71,28 @@ if (process.argv[2] === '--version') {
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_message', input: { target: room, text: 'Skip the Safari tests.' } }] } });
     await call('propose_message', { target: room, text: 'Skip the Safari tests.' });
     answer = '[[calm]] I prepared a message for the room.';
+  } else if (/^moods /i.test(ask)) {
+    // Метка эмоции в каждом предложении (#9 §6.7 L3): лицо меняет эмоцию между предложениями.
+    answer = '[[joy]] The room is working well today. [[sad]] One test failed in the last run. [[surprise]] Did you expect that result?';
+    wordDelay = 40;
+  } else if (/^stream long/i.test(ask)) {
+    // Ответ идёт словами секунды три: первое предложение звучит раньше, чем пришло последнее (B26 F-B26-5).
+    answer = Array.from({ length: 10 }, (_, i) => `[[calm]] Streamed sentence ${i + 1} is here.`).join(' ');
+    wordDelay = 60;
+  } else if (/^speak long/i.test(ask)) {
+    // Долгая речь: 24 предложения с метками — лицо говорит несколько секунд (V1–V3, хоткей и Esc во время речи).
+    answer = Array.from({ length: 24 }, (_, i) => `[[${i % 2 === 0 ? 'calm' : 'joy'}]] Sentence number ${i + 1} is spoken now.`).join(' ');
+  } else if (/^voice check/i.test(ask)) {
+    // G1: какая строка о смене голоса пришла с вопросом.
+    const note = notes.find((line) => line.startsWith('[system: voice changed'));
+    answer = `[[calm]] Voice note: ${note ?? 'none'}.`;
   } else if (room !== undefined) {
     answer = '[[joy]] The room is working.';
   }
   if (long) answer += Array.from({ length: 40 }, (_, i) => `\nDetail ${i + 1}.`).join('');
-  for (const word of answer.split(/(?<= )/)) out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: word } } });
+  for (const word of answer.split(/(?<= )/)) {
+    if (wordDelay > 0) await new Promise((resolve) => globalThis.setTimeout(resolve, wordDelay));
+    out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: word } } });
+  }
   out({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: 'stub-assistant-1' });
 }

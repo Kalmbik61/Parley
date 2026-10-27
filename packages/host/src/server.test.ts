@@ -174,6 +174,22 @@ describe('уведомления', () => {
 const protocolMethods = (): string[] => [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
 
 describe('список методов в hello', () => {
+  it('advertises a registered feed.progress handler and validates its strict params', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    const response = await hello(client, token);
+    expect((response.result as { methods: string[] }).methods).toContain('feed.progress');
+    const ref = { projectPath: '/missing-progress-project', workId: 'w-1', sessionId: 's-01' };
+    client.send({ id: 610, method: 'feed.progress', params: { ref } });
+    expect((await client.next()).error).toMatchObject({ code: 'not_found' });
+    for (const extra of [{ agentId: 'SECRET' }, { path: '/SECRET' }, { limit: 99 }]) {
+      client.send({ id: 611, method: 'feed.progress', params: { ref, ...extra } });
+      expect((await client.next()).error).toMatchObject({ code: 'bad_request' });
+    }
+    client.close();
+  });
+
   it('methods — ровно отсортированные ключи METHODS и NOTIFICATIONS, hello среди них', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);

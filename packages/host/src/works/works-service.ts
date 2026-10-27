@@ -348,9 +348,15 @@ export function createWorksService(
       } catch (error) {
         if (!(error instanceof WorkNotFoundError)) throw error;
       }
+      // Привязка треда Codex — внутреннее доказательство запуска: в публичный снимок не идёт (как в `windowMapBase`).
+      const sessions = work.map.sessions.map((session) => {
+        const publicSession = { ...session };
+        delete publicSession.codexThreadBinding;
+        return publicSession;
+      });
       return {
         projectPath: work.projectPath,
-        map: { ...work.map, messages },
+        map: { ...work.map, sessions, messages },
         ...(work.version === undefined ? {} : { version: work.version }),
       };
     });

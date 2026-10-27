@@ -14,5 +14,7 @@ packages/desktop/out-tsc/
 packages/desktop/build/node/
 # Движок голосового ввода (whisper-cli и модель VAD): его кладёт scripts/fetch-whisper.mjs, в git он не нужен.
 packages/desktop/build/whisper/
+# Движок нейроголоса (speech и его лицензии): его кладёт scripts/fetch-speech.mjs, в git он не нужен.
+packages/desktop/build/speech/
 test-results/
 **/.omc/state/

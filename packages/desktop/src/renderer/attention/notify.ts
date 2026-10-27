@@ -15,8 +15,9 @@
  * одного провайдера — одно уведомление на провайдера (7.1).
  *
  * Звук (спека застрявших 7.2): баннер «нужно действие» всегда беззвучный, а звенит окно своим сигналом (`chime.ts`),
- * на переходе сессии в «нужен ты», один раз: если запрос показывает остров, звучит его сигнал (`beep`), а окно молчит.
- * Баннер «finished» звучит системным звуком, только если включён `finishedSound`.
+ * на переходе сессии в «нужен ты», один раз: если запрос показывает остров, звучит его сигнал (`useIslandCues`), а окно
+ * молчит. Баннер «finished» звучит системным звуком, только если включён `finishedSound` и Done этой сессии не показывает
+ * остров: тогда звучит его сигнал `done`, а баннер беззвучный (#9 §3.6).
  *
  * Пока окно острова живо (спека 2026-10-12), запрос с найденной карточкой показывает остров, а не уведомление: двух
  * сигналов об одном и том же не нужно. Codex показывается в острове и без карточки, с переходом к терминалу.
@@ -86,6 +87,8 @@ export interface NotifyDeps {
    * уведомление macOS. Codex получает переход к терминалу и без карточки.
    */
   islandOn(): boolean;
+  /** Звучит ли остров вообще: громкость его звуков выше 0 («0 — выкл», #9 §5). */
+  islandAudible(): boolean;
   /**
    * Свой сигнал «нужно действие» (спека застрявших 7.2): играет окно, не чаще раза в 2 с (`chime.ts`). Решает ли звук
    * звучать — `prefs().sound` — проверяет уведомитель.
@@ -313,12 +316,12 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   /**
    * Уведомление при невидимой цели (7.2). `action` — «нужно действие» (письма и упоминания человека, сбои запуска,
    * `limit-return-blocked`): баннер беззвучный, звенит окно. `finished` — баннер с системным звуком, только если
-   * включён `finishedSound`. Переход в «нужен ты» звонит сам (`notifyNeedsYou`), не здесь: запрос, который показывает
-   * остров, звучит сигналом острова, и окно молчит.
+   * включён `finishedSound` и не `quiet` (Done сыграл остров). Переход в «нужен ты» звонит сам (`notifyNeedsYou`), не
+   * здесь: запрос, который показывает остров, звучит сигналом острова, и окно молчит.
    */
-  const send = (note: Omit<AppNote, 'silent'>, kind: 'action' | 'finished'): void => {
+  const send = (note: Omit<AppNote, 'silent'>, kind: 'action' | 'finished', quiet = false): void => {
     if (deps.isTargetVisible(note.target)) return;
-    banner(note, kind === 'action' || !deps.prefs().finishedSound);
+    banner(note, quiet || kind === 'action' || !deps.prefs().finishedSound);
     if (kind === 'action') ring();
   };
 
@@ -420,7 +423,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     // пропускает. У Codex есть переход к терминалу и без карточки ленты. Один и тот же признак решает и баннер, и звук.
     const islandShows = deps.islandOn() && entry.map.work.status === 'active' && (found !== null || session.provider === 'codex');
     // Звук — на переходе уровня, а не в `send()`, и ровно один на переход (решение 6): запрос, который показывает
-    // остров, звучит его собственным сигналом (`IslandApp`, `beep`), поэтому окно молчит; всё прочее — сигнал окна.
+    // остров, звучит его собственным сигналом (`useIslandCues`), поэтому окно молчит; всё прочее — сигнал окна.
     if (islandShows) return;
     ring();
     if (waiting?.kind === 'limit') {
@@ -547,6 +550,10 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       if (level === 'needs-you' ? !prefs.needsYou : !prefs.finished) return;
       if (level === 'unseen') {
         const { entry, session } = found;
+        // Done активной работы показывает остров и при `finishedSound` играет свой `done` (#9 §3.6): один звук на
+        // переход, баннер беззвучный. Признак тот же, что у «нужен ты». С громкостью острова 0 он не сыграет — звенит
+        // баннер (критик m-1477).
+        const islandShows = deps.islandOn() && deps.islandAudible() && entry.map.work.status === 'active';
         send(
           {
             title: S.notifications.sessionTitle(
@@ -560,6 +567,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
             target: { kind: 'session', ref },
           },
           'finished',
+          islandShows,
         );
         return;
       }
@@ -682,7 +690,7 @@ export function isWindowActive(): boolean {
  */
 export function wireAttentionNotifications(
   bridge: ParleyBridge,
-  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'chime' | 'providerName'>,
+  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'islandAudible' | 'chime' | 'providerName'>,
 ): () => void {
   const notifier = createAttentionNotifier({
     ...deps,
@@ -695,6 +703,7 @@ export function wireAttentionNotifications(
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
     islandOn: () => useUiStore.getState().ui.island.enabled && bridge.app.islandActive(),
+    islandAudible: () => useUiStore.getState().ui.island.sound.volume > 0,
     // Ленты нет на старом хосте — вопроса не узнать, уведомление уйдёт с задачей сессии.
     pendingAsk: (ref) =>
       hostMethods(useHostStore.getState().status).has('feed.snapshot')

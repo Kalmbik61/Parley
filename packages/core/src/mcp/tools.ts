@@ -49,7 +49,7 @@ import { settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
-import { transitionSession } from '../work/map.js';
+import { isCodexThreadBinding, transitionSession } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { rememberProjectMemory } from '../work/memory-suggestions.js';
@@ -1481,36 +1481,77 @@ const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
  * Вызов подагента (`_meta.sessionId` — корневой тред — не совпадает с `threadId`) не привязывает: его тред
  * — не тот, который человек возобновит `codex resume`. Ждём вызова корневого треда.
  *
- * `true` — вопрос закрыт (записано, уже записано, сессия не codex) и дальше спрашивать не нужно; `false` —
- * подходящего id в `_meta` нет или сбой записи, попробует следующий вызов. Ошибки наружу не идут:
- * привязка не должна ронять вызов инструмента.
+ * Raw once latch и proof retry независимы; ошибка proof не меняет прежнюю привязку Chat.
+ * Оба writer-пути сериализованы одним map lock. Ошибки не роняют вызов инструмента.
  */
+interface CodexBindingState {
+  rawBound: boolean;
+  proofBound: boolean;
+  root: string | null;
+  launchRevision: string | null;
+}
+
+function matchingCodexLaunch(session: WorkSession, launchRevision: string) {
+  const record = session.codexThreadBinding;
+  return session.provider === 'codex' && isCodexThreadBinding(record) &&
+    record.launchRevision === launchRevision && record.pid === session.pid &&
+    record.startedAtProcess === session.startedAtProcess ? record : null;
+}
+
 async function bindCodexThread(
   context: McpContext,
   meta: Record<string, unknown> | undefined,
-): Promise<boolean> {
+  state: CodexBindingState,
+): Promise<void> {
   const { sessionId } = context;
+  if (sessionId === null) return;
   const threadId = meta?.['threadId'];
-  if (sessionId === null || typeof threadId !== 'string' || !THREAD_ID.test(threadId)) return false;
-  const thread = threadId.toLowerCase();
   const root = meta?.['sessionId'];
-  if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
+  const thread = typeof threadId === 'string' && THREAD_ID.test(threadId) ? threadId.toLowerCase() : null;
+  const validRoot = typeof root === 'string' && THREAD_ID.test(root) ? root.toLowerCase() : null;
+  // Legacy raw bind допускает missing/malformed root; proof требует два совпавших UUID.
+  const rawThread = !state.rawBound && thread !== null && (validRoot === null || validRoot === thread) ? thread : null;
+  if (state.root === null && thread !== null && validRoot === thread) state.root = thread;
+  const proof = !state.proofBound && state.root !== null && state.launchRevision !== null
+    ? { thread: state.root, launchRevision: state.launchRevision } : null;
+  if (rawThread === null && proof === null) return;
   try {
     // Чтение до записи: пустая запись версию не поднимает, но всё равно занимает блокировку записи (спека хранилища 6.2),
     // а привязка уже стоит почти при каждом вызове — незачем держать замок ради «ничего не менять».
     const known = (await readMap(context.projectPath, context.workId)).sessions.find(
       (candidate) => candidate.id === sessionId,
     );
-    if (known === undefined) return false;
-    if (known.provider !== 'codex' || known.providerSessionId === thread) return true;
+    if (known === undefined) return;
+    if (known.provider !== 'codex') {
+      if (rawThread !== null) state.rawBound = true;
+      state.proofBound = true;
+      return;
+    }
+    const writeRaw = rawThread !== null && known.providerSessionId !== rawThread;
+    if (rawThread !== null && !writeRaw) state.rawBound = true;
+    const record = proof === null ? null : matchingCodexLaunch(known, proof.launchRevision);
+    const canProve = record !== null && (writeRaw ? rawThread : known.providerSessionId) === proof?.thread;
+    if (canProve && record.threadId === proof?.thread && !writeRaw) {
+      state.proofBound = true;
+      return;
+    }
+    if (!writeRaw && !canProve) return;
+    let proven = false;
     await updateMap(context.projectPath, context.workId, (current) => {
       const target = current.sessions.find((candidate) => candidate.id === sessionId);
-      if (target !== undefined && target.provider === 'codex') target.providerSessionId = thread;
+      if (target === undefined || target.provider !== 'codex') return;
+      if (writeRaw) target.providerSessionId = rawThread;
+      // Не доверять readMap до lock: новый launch мог уже сбросить record.
+      const locked = proof === null ? null : matchingCodexLaunch(target, proof.launchRevision);
+      if (proof !== null && locked !== null && target.providerSessionId === proof.thread) {
+        locked.threadId = proof.thread;
+        proven = true;
+      }
     });
-    return true;
+    if (writeRaw) state.rawBound = true;
+    if (proven) state.proofBound = true;
   } catch (error) {
     process.stderr.write(`parley-mcp: could not record the thread binding: ${(error as Error).message}\n`);
-    return false;
   }
 }
 
@@ -1681,7 +1722,9 @@ export function createToolRunner(context: McpContext): ToolRunner {
   // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
   const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
   // Тред Codex привязывается один раз за жизнь исполнителя — с первого вызова, где `_meta.threadId` есть.
-  let threadBound = false;
+  const revision = context.nativeContextRevision;
+  const launchRevision = typeof revision === 'string' && THREAD_ID.test(revision) && revision === revision.toLowerCase() ? revision : null;
+  const threadBinding: CodexBindingState = { rawBound: false, proofBound: launchRevision === null, root: null, launchRevision };
   return {
     async list() {
       return [...TOOLS.filter(declaredInProfile), ...(navigator ? [await navigator.list()] : [])];
@@ -1690,7 +1733,7 @@ export function createToolRunner(context: McpContext): ToolRunner {
       if (name === 'find_skill' && navigator === null)
         return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
-      if (!threadBound) threadBound = await bindCodexThread(context, meta);
+      if (!threadBinding.rawBound || !threadBinding.proofBound) await bindCodexThread(context, meta, threadBinding);
       try {
         const result = name === 'find_skill' ? await navigator!.find(args)
           : await dispatch(context, name, args, signal);

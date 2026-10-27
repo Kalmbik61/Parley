@@ -4,6 +4,40 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+The assistant speaks in a neural voice and its swarm becomes a face while it talks. The island gets its own sounds, smoother motion and, on a MacBook with a notch, a shape that continues the notch. It also does more for your agents: it answers their questions and plans, shows what an agent is doing, its subagents and rooms waiting for you, and a shortcut takes you through everything pending.
+
+### Added
+
+- **The assistant speaks.** With "Speak answers" on (Settings → Assistant), answers are spoken by Qwen3-TTS 0.6B CustomVoice, run on your Mac by speech.cpp: speech is synthesized locally, and no text or audio leaves your Mac for the voice.
+  - Five voices: Serena (the default), Ryan, Aiden, Vivian and Ono Anna. Settings lists them with gender, languages and licence. The assistant speaks of itself in the gender of the voice; when you switch to a voice of another gender mid-conversation, its next answer follows.
+  - The weights (one 1214 MB file for all five voices) are downloaded only when you press Download in Settings → Assistant, checked against their sha256, and can be cancelled or deleted, like the Whisper models. After a download, "Preparing voice…" shows until the voice is ready.
+  - Speech streams sentence by sentence while the answer is still being written: the first sentence plays as soon as it is complete, and the next ones follow in order. Code blocks are not read aloud. The answer before a confirmation card is spoken too. Esc, Send or Cancel on the card, the speaker button on the island and a new question stop the voice at once. The model leaves memory after 15 minutes without speech and comes back by itself on the next answer.
+  - The voice needs Apple Silicon and an answer language of Russian or English. On an Intel Mac, in another language, or when the voice is not downloaded, the answer is text only; a missing voice is named once on the island ("Voice "…" isn't downloaded — open Settings").
+- **A face while it talks.** The assistant's swarm becomes a face: the mouth follows the real voice (open vowels, "i", "u" and closed lips), the face reacts to the intonation (eyes up on a question, a pulse on stressed words), and the mood can change from sentence to sentence. Reduce motion keeps a still face.
+- **Island sounds.** The island plays short cues synthesized on the fly, with no sound files: requests, questions and plans, Done, an assistant error, listening, speaking and a sent decision. Settings → Notifications → Island picks the palette (Soft by default, Crystal or Warm; picking one plays a sample) and the volume. "Interface sounds" (hover, open and close, an agent starting) are off by default. Requests follow "Sound when you're needed" and Done follows "Sound when an agent finishes"; thinking and tool steps are always silent. Many agents finishing at once give one sound, not a burst, and while the assistant speaks, interface cues stay quiet and the voice dips under a request.
+- **Swarm reactions and island motion.** The swarms react to events with one short movement: a hop for a permission or a plan, a nod for a question, a spin with sparks for Done, a shake for an error, a glint for an assistant tool step. Small swarms flash instead of moving. The island grows with a slight overshoot and shrinks without one. "Reduce motion" in Settings → Notifications → Island, like the macOS setting, stills the swarm and the island's shape changes; the sounds stay.
+- **The island in the notch.** On a MacBook with a notch the island is exactly the size of the notch when there is nothing to show. While agents work, a Done is unseen or the assistant is folded away or speaking, it becomes one capsule around the notch, with the swarm or the assistant's face on the left and the Done or working count on the right. It drops down below the notch only when you open it (a click, the hotkey or pulling the tab; the pointer alone does not open it) or when something needs you: a request, a card or the assistant. Displays without a notch, and an island moved to the left or right edge, keep the strip; moving to another display changes the shape at once.
+
+- **Questions answered on the island.** A question card from an agent shows all of its questions, one to four, page by page with Back and Next, with single or multiple choice, option descriptions and Other. Submit sends every answer at once, and a half-typed answer survives when you click elsewhere.
+- **Plans on the island.** A plan card shows the whole plan as plain text in a scrolling area that fits the island. Two buttons approve it, with edits auto-accepted or approved one by one; changing the plan is an explicit hand-off: "Change plan in terminal" opens the session's terminal. When a plan can only be approved in the terminal, the card says so.
+- **What an agent is doing.** Open a session row on the island to see its recent actions: the step running now and up to 20 earlier ones (read files, edit files, run command, search, delegate), each with its status and time. Only the opened row is refreshed, and only while the island is open.
+- **Subagents and rooms waiting for you.** A session row lists its active subagents (up to eight, with "+N more") and stays on the island while they run, even after its own Done is cleared. A room whose lead proposes a decision or a completion shows as "Waiting for you" with the live lead's name and an "Open room" button; you answer in the room itself.
+- **Everything pending from the keyboard.** A global shortcut, Control+Alt+I by default, opens the island on the first pending item: folder consents, then agent requests, then rooms waiting for you. Up and Down move between them, Control+Enter opens the selected one in Parley, Esc gives the keyboard back. Settings → Notifications → Island changes or turns off the shortcut and says when another app holds it.
+
+### Changed
+
+- Codex sessions show on the island like any other: working, waiting for you, Done with the last answer, in the counters and the work and room groups. A Codex request without a card on the island opens its terminal.
+- A Done of a session you are already looking at (its chat or terminal visible in the focused Parley window) no longer pops the island out; it still appears in the list.
+- The island's request sound is the island's own cue instead of the system beep, and Done on the island sounds only with "Sound when an agent finishes".
+- The assistant marks the mood of every sentence, not only the first one; the marks never reach the island, the history or Telegram. Its tone is calm by default: an idle home or something it can't do is a plain fact, sad and angry faces are kept for real failures and are softer than before, and coral is only for the assistant's own errors.
+
+### Known issues
+
+- The first spoken answer after installing or updating Parley can come as text: the voice engine compiles its shaders for about 15 seconds on its first start. Later answers speak.
+- Telegram replies stay text only, and Ukrainian, Kazakh and Belarusian answers have no voice yet.
+
 ## 0.21.0
 
 A second Claude Code account of yours as a provider, participants that say why they wait for you and come back after a usage limit, folder trust and three approval modes for Codex.

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, AssistantVoiceProgress, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -17,7 +17,8 @@ import type {
   PickResult,
   SavedContext,
 } from '../shared/browser-types.js';
-import type { AssistantShortcutStatus } from '../shared/island.js';
+import type { AssistantShortcutStatus, SessionVisibilityReport, TtsEngineState } from '../shared/island.js';
+import type { AssistantVoice } from '../shared/tts-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -65,6 +66,8 @@ const browserAgentResizeListeners = new Set<(e: AgentResize) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
+const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
+const assistantVoiceProgressListeners = new Set<(progress: AssistantVoiceProgress) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 /**
@@ -165,6 +168,14 @@ ipcRenderer.on('voice:progress', (_event, progress: DownloadProgress) => {
   for (const listener of voiceProgressListeners) listener(progress);
 });
 
+ipcRenderer.on('app:assistant-voice-state', (_event, state: TtsEngineState) => {
+  for (const listener of assistantVoiceStateListeners) listener(state);
+});
+
+ipcRenderer.on('app:assistant-voice-progress', (_event, progress: AssistantVoiceProgress) => {
+  for (const listener of assistantVoiceProgressListeners) listener(progress);
+});
+
 /**
  * Единственный выход рендерера наружу. Всё идёт через `ipcRenderer.invoke`/`send`
  * на белый список каналов, который проверяет `ipc.ts` в основном процессе —
@@ -216,6 +227,7 @@ const bridge = {
       }
       return () => focusTargetListeners.delete(listener);
     },
+    reportSessionVisibility: (report: SessionVisibilityReport) => ipcRenderer.send('app:session-visibility', report),
     setBadge: (count: number) => {
       ipcRenderer.send('app:set-badge', count);
     },
@@ -237,6 +249,21 @@ const bridge = {
     openAssistant: () => ipcRenderer.send('app:assistant-open'),
     assistantShortcut: () => ipcRenderer.invoke('app:assistant-shortcut') as Promise<AssistantShortcutStatus>,
     assistantShortcutSuspend: (on: boolean) => ipcRenderer.send('app:assistant-shortcut-suspend', on),
+    islandShortcut: () => ipcRenderer.invoke('app:island-shortcut') as Promise<AssistantShortcutStatus>,
+    islandShortcutSuspend: (on: boolean) => ipcRenderer.send('app:island-shortcut-suspend', on),
+    assistantVoices: () => ipcRenderer.invoke('app:assistant-voices') as Promise<AssistantVoice[]>,
+    assistantVoiceDownload: () => ipcRenderer.invoke('app:assistant-voice-download') as Promise<DownloadResult>,
+    assistantVoiceCancel: () => ipcRenderer.invoke('app:assistant-voice-cancel') as Promise<void>,
+    assistantVoiceRemove: () => ipcRenderer.invoke('app:assistant-voice-remove') as Promise<void>,
+    assistantVoiceState: () => ipcRenderer.invoke('app:assistant-voice-state') as Promise<TtsEngineState>,
+    onAssistantVoiceState: (listener: (state: TtsEngineState) => void) => {
+      assistantVoiceStateListeners.add(listener);
+      return () => assistantVoiceStateListeners.delete(listener);
+    },
+    onAssistantVoiceProgress: (listener: (progress: AssistantVoiceProgress) => void) => {
+      assistantVoiceProgressListeners.add(listener);
+      return () => assistantVoiceProgressListeners.delete(listener);
+    },
     loadNotes: (workKey: string, sessionId: string) =>
       ipcRenderer.invoke('app:load-notes', workKey, sessionId) as Promise<{ file: NotesFile; corruptedTo: string | null }>,
     saveNotes: (workKey: string, sessionId: string, notes: NotesFile) =>

@@ -50,7 +50,7 @@ import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
 import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
-import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
+import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
 import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
@@ -811,6 +811,25 @@ export async function startSession(
     const session =
       current?.lifecycle === 'active' ? current : transitionSession(map, sessionId, 'active');
     if (providerSessionId !== null) session.providerSessionId = providerSessionId;
+    if (session.provider === 'codex') {
+      const previous = session.codexThreadBinding;
+      const sameProcess = previous !== undefined && started !== undefined &&
+        previous.pid === started.pid && previous.startedAtProcess === started.startedAtProcess;
+      if (nativeContextRevision === undefined) {
+        // repairLive не имеет launch UUID и не может создать новую authority.
+        if (!sameProcess) delete session.codexThreadBinding;
+      } else {
+        const candidate = {
+          launchRevision: nativeContextRevision, pid: started?.pid,
+          startedAtProcess: started?.startedAtProcess, threadId: null,
+        };
+        if (!isCodexThreadBinding(candidate)) {
+          delete session.codexThreadBinding;
+        } else if (previous?.launchRevision !== nativeContextRevision) session.codexThreadBinding = candidate;
+        // Тот же UUID не создаёт authority для другого процесса даже при повторе:
+        // прежний record сохраняется, а consumer отвергает несовпадающий tuple.
+      }
+    }
     if (started === undefined) return;
     session.pid = started.pid;
     session.startedAtProcess = started.startedAtProcess;
@@ -861,6 +880,9 @@ export async function linkSession(
       return;
     }
     target.providerSessionId = found;
+    if (target.provider === 'codex' && target.codexThreadBinding !== undefined) {
+      target.codexThreadBinding = { ...target.codexThreadBinding, threadId: null };
+    }
   });
   return lost ? null : found;
 }

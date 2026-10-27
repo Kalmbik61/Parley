@@ -8,10 +8,14 @@
  *
  * Отправленный вопрос виден сразу (`sending`), до хоста: прошлый ответ уходит выше, в приглушённую историю обменов, а
  * сообщения, что ждут конца хода, лежат внизу середины серыми «Queued» с ×.
+ *
+ * Речь (план 3 Task 9; план 3b B24, Р10): пока говорит голос, рой — лицо с эмоцией звучащего предложения, рот берёт
+ * кадр голоса геттером `voice` в цикле кадров роя, без ререндера. Значок динамика рядом с микрофоном (`#spk` макета)
+ * переключает «Speak answers». Реакции фаз помощника (#9 §4.2) и «Reduce motion» Parley уходят в рой пропсами.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Mic, X } from 'lucide-react';
+import { Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import type { AssistantProposal, AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
@@ -20,9 +24,10 @@ import { Button } from '../../ui/button.js';
 import { levelWidth } from '../../voice/level.js';
 import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
-import { haloFor, swarmSpecFor } from '../swarm/spec.js';
+import { haloFor, swarmSpecFor, type SwarmPulse } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
 import { ASK_MAX, type Exchange, type InputPhase, type QueuedMessage } from './store.js';
+import type { VoiceFrame } from './voice-features.js';
 
 export interface AssistantViewProps {
   host: AssistantState;
@@ -46,6 +51,17 @@ export interface AssistantViewProps {
   pending: { name: string; total: number } | null;
   /** Предел высоты вида (CSS-значение): кадр острова минус чёлка и ряд под видом. */
   maxHeight: string;
+  /** Эмоция звучащего предложения (L3); `null` — лицо берёт метку хода. */
+  sentenceMood: AssistantState['mood'] | null;
+  /** Кадр голоса для рта лица (Р10): геттер, рой читает его в кадре. */
+  voice?: () => VoiceFrame | null;
+  /** Реакция роя на фазу помощника (#9 §4.1): новый объект на каждое событие. */
+  pulse?: SwarmPulse | null;
+  /** Настройка Parley «Reduce motion»: рой и лицо — без движения, как при системной. */
+  reducedMotion?: boolean;
+  /** «Speak answers» включено: значок динамика нажат. */
+  speakOn: boolean;
+  onToggleSpeak(): void;
   onDraft(text: string): void;
   onSubmit(text: string): void;
   onMic(): void;
@@ -202,7 +218,8 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const elapsed = useElapsed(input === 'listening' ? props.listenStartedAt : null);
   // Пока вопрос в пути, рой думает: хост ещё в прошлой фазе.
   const swarmPhase = sending === null ? host.phase : 'thinking';
-  const spec = useMemo(() => swarmSpecFor({ ...host, phase: swarmPhase }, input, false), [swarmPhase, input]);
+  const sentenceMood = props.sentenceMood ?? undefined;
+  const spec = useMemo(() => swarmSpecFor({ ...host, phase: swarmPhase }, input, false, sentenceMood), [swarmPhase, input, host.mood, sentenceMood]);
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -234,7 +251,22 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           className="absolute inset-0 transition-opacity duration-300"
           style={{ background: `radial-gradient(ellipse 46% 62% at 50% 42%, rgba(${halo.rgb}, ${halo.alpha}), transparent 72%)` }}
         />
-        <Swarm spec={spec} souls={700} width={420} height={136} d={86} cy={62} k={0.058} minPx={2.4} fps={60} mic={levelWidth(props.level)} className="absolute inset-0" />
+        <Swarm
+          spec={spec}
+          souls={700}
+          width={420}
+          height={136}
+          d={86}
+          cy={62}
+          k={0.058}
+          minPx={2.4}
+          fps={60}
+          mic={levelWidth(props.level)}
+          {...(props.voice === undefined ? {} : { voice: props.voice })}
+          pulse={props.pulse ?? null}
+          reducedMotion={props.reducedMotion === true}
+          className="absolute inset-0"
+        />
       </div>
       <div data-testid="assistant-status" className="flex items-center justify-center gap-1.5 text-[13px] text-muted-foreground">
         <span
@@ -352,6 +384,18 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           ) : (
             <Mic size={16} />
           )}
+        </button>
+        <button
+          type="button"
+          data-testid="assistant-speak"
+          aria-label={S.assistant.settings.speak}
+          aria-pressed={props.speakOn}
+          title={S.assistant.settings.speak}
+          className={`cursor-pointer hover:text-foreground ${props.speakOn ? 'text-[var(--color-accent)]' : 'text-muted-foreground'}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={props.onToggleSpeak}
+        >
+          {props.speakOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
         </button>
       </form>
       <div className="flex justify-between text-[12px] text-muted-foreground">

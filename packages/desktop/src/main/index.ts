@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +9,7 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
+  MessageChannelMain,
   nativeImage,
   nativeTheme,
   net,
@@ -26,9 +28,10 @@ import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
-import { ISLAND_EVENTS, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
+import { ISLAND_EVENTS, ttsAvailable, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
-import type { UiFile } from '../shared/ui-types.js';
+import { TTS_MODELS } from '../shared/tts-types.js';
+import { assistantVoice, type UiFile } from '../shared/ui-types.js';
 import { createAgentDownloads } from './browser/agent-downloads.js';
 import { createAgentScripts } from './browser/agent-evaluate.js';
 import { createAgentStorage } from './browser/agent-storage.js';
@@ -57,9 +60,14 @@ import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ip
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createAssistantShortcut } from './assistant/shortcut.js';
+import { createSpeechWorker, resolveSpeech, spawnSpeech } from './assistant/speech-worker.js';
+import { createFakeTtsService, createTtsService } from './assistant/tts.js';
+import { createIslandShortcut } from './island/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
-import type { IslandPlacement } from './island/placement.js';
+import { createNotchProbe } from './island/notch-probe.js';
+import type { DisplayLike, IslandPlacement, NotchGeometry } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
+import { createSessionVisibility } from './island/visibility.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { guardAppQuit, quitQuestion } from './quit-guard.js';
@@ -81,7 +89,7 @@ import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assi
 import { isFileSync, resolveEngine } from './voice/engine.js';
 import { registerVoiceIpc } from './voice/ipc.js';
 import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
-import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
+import { createModelStore, freeBytes, ttsModelsDir, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
 import { killRunningEngines, removeStaleRecordings } from './voice/transcribe.js';
 import { createMainWindow, guardNavigation, guardWindowClose, titlebarDoubleClickAction, trackLoadedWindow } from './window.js';
@@ -318,6 +326,7 @@ if (!gotLock) {
     const pendingFocusTarget = createPendingFocusTarget();
     // Вопрос о несохранённых буферах при закрытии окна и ⌘Q (кусок 7.3a) — по окну-отправителю.
     const closeGuards = new WeakMap<WebContents, ReturnType<typeof guardWindowClose>>();
+    let sessionVisibility: ReturnType<typeof createSessionVisibility> | null = null;
 
     const openWindow = (): BrowserWindow => {
       const window = createMainWindow({
@@ -338,6 +347,7 @@ if (!gotLock) {
         forwardAppearanceToWindow(nativeTheme, window);
       });
       trackLoadedWindow(window, loadedWindows);
+      sessionVisibility?.track(window);
       const closeGuard = guardWindowClose(window, app, {
         askUnresponsive: async () => {
           // E2E (`PARLEY_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
@@ -478,6 +488,24 @@ if (!gotLock) {
 
     // Остров одобрений (спека 2026-10-12): окно по настройке «Island»; место — кеш из ui.json (читается один раз на старте), запись асинхронная.
     let islandPlacement: IslandPlacement = { displayId: ui.island.displayId, anchor: ui.island.anchor };
+    // Вырез дисплея (#9 §12.2): датчик `osascript` только на macOS; `PARLEY_NOTCH` (E2E) — подменный вырез посередине
+    // каждого дисплея, датчик тогда не запускается.
+    const notchProbe =
+      switches.notch === undefined && process.platform === 'darwin'
+        ? createNotchProbe({
+            execFile: (file, args, options, callback) => {
+              execFile(file, [...args], { ...options, encoding: 'utf8' }, (error, stdout) => callback(error, stdout));
+            },
+            displays: () => screen.getAllDisplays(),
+            onChange: () => relayoutIsland(),
+            warn: (message) => console.warn('[parley]', message),
+          })
+        : null;
+    const notchOf = (display: DisplayLike): NotchGeometry | null => {
+      const fake = switches.notch;
+      if (fake !== undefined) return { ...fake, centerX: display.bounds.width / 2 };
+      return notchProbe?.geometry(display.id) ?? null;
+    };
     const island = createIslandController<BrowserWindow>({
       createWindow: () => {
         const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
@@ -492,15 +520,16 @@ if (!gotLock) {
         islandPlacement = placement;
         void uiStore.save({ island: { ...placement } } as Partial<Omit<UiFile, 'version'>>).catch(() => undefined);
       },
+      notch: notchOf,
       cursor: () => screen.getCursorScreenPoint(),
       onHover: (hovered) => {
         const window = island.current();
         if (window !== null) window.webContents.send('island:hover', hovered);
       },
-      onKeyboardLost: () => blurAssistant(),
+      onKeyboardLost: () => blurKeyboard(),
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
-        forwardHostToPages(connection, window, { events: ISLAND_EVENTS });
+        forwardHostToPages(connection, window, { events: ISLAND_EVENTS, island: true });
         // Как у главного окна (`trackLoadedWindow`): «страница загружена» — для `islandActive`; перезагрузка снимает
         // признак до нового конца. С каждым концом загрузки — свежие настройки острова.
         trackLoadedWindow(window, loadedWindows);
@@ -508,9 +537,27 @@ if (!gotLock) {
       },
       log: (message) => console.warn('[parley]', message),
     });
+    const visibility = createSessionVisibility((snapshot) => {
+      const window = island.current();
+      if (window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('island:session-visibility', snapshot);
+    });
+    sessionVisibility = visibility;
+    visibility.track(mainWindow);
     const assistantShortcut = createAssistantShortcut({
       registry: globalShortcut,
       onTrigger: () => openAssistant({ listen: true }),
+      log: (line) => console.warn('[parley]', line),
+    });
+    let hostConnected = false;
+    let applyIslandSync: ((current: UiFile) => void) | null = null;
+    const islandShortcut = createIslandShortcut({
+      registry: globalShortcut,
+      onTrigger: () => {
+        const window = island.current();
+        if (window === null || window.isDestroyed()) return;
+        island.setKeyboard(true);
+        window.webContents.send('island:navigate-pending');
+      },
       log: (line) => console.warn('[parley]', line),
     });
     function openAssistant(request: AssistantOpenRequest): void {
@@ -518,13 +565,39 @@ if (!gotLock) {
       if (window === null || window.isDestroyed()) return;
       window.webContents.send('island:assistant-open', request);
     }
-    function blurAssistant(): void {
+    function blurKeyboard(): void {
       const window = island.current();
       if (window === null || window.isDestroyed()) return;
-      window.webContents.send('island:assistant-blur');
+      window.webContents.send('island:keyboard-blur');
     }
     const assistantLanguage = (current: UiFile): AssistantLanguage =>
       current.assistant.language ?? systemAssistantLanguage(app.getLocale());
+    // Нейроголос помощника (план 3b, B10/B15): веса в ~/.parley/desktop/voice/tts, `speech` — Resources/speech или
+    // build/speech (dev), только Apple Silicon. PARLEY_TTS=fake (E2E) — подмена без движка и весов.
+    const ttsModels = createModelStore({ dir: ttsModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes, catalog: TTS_MODELS });
+    const tts = switches.tts
+      ? createFakeTtsService()
+      : createTtsService({
+          supported: process.platform === 'darwin' && process.arch === 'arm64',
+          models: ttsModels,
+          createWorker: () =>
+            createSpeechWorker({
+              bin: () =>
+                resolveSpeech({
+                  isPackaged: app.isPackaged,
+                  resourcesPath: process.resourcesPath,
+                  devDir: path.resolve(dirname, '../../build/speech/darwin-arm64'),
+                  isFile: isFileSync,
+                }),
+              // Один файл весов на все голоса (Р6).
+              model: () => ttsModels.path('qwen3-tts-0.6b-q8_0'),
+              spawn: spawnSpeech,
+              log: (message) => console.warn('[parley] speech', message),
+            }),
+          log: (message) => console.warn('[parley] tts', message),
+        });
+    // Выход приложения: отмена речи и `SIGKILL` worker.
+    app.on('before-quit', () => tts.stop());
     // Настройки помощника — хосту для ответов из Telegram: при каждом подключении и сохранении ui.json.
     const mirrorModels = createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes });
     let hostMethods: readonly string[] | null = null;
@@ -538,6 +611,8 @@ if (!gotLock) {
       await assistantMirror.push(assistantSettingsOf(current, { downloaded: (id) => downloaded.has(id), path: (id) => mirrorModels.path(id) }, assistantLanguage));
     };
     connection.onStatus((status) => {
+      hostConnected = status.state === 'connected';
+      if (applyIslandSync !== null) void uiStore.load().then(applyIslandSync).catch((error: unknown) => console.warn('[parley] island sync failed', error));
       if (status.state !== 'connected') return;
       hostMethods = status.methods;
       void uiStore.load().then(pushAssistantSettings).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
@@ -553,10 +628,24 @@ if (!gotLock) {
           language: assistantLanguage(current),
           hotkey: current.assistant.hotkey,
           voice: { enabled: current.voice.enabled, model: current.voice.model },
+          speech: {
+            enabled: current.assistant.speak,
+            voice: assistantVoice(current.assistant).id,
+            gender: assistantVoice(current.assistant).gender,
+            available: ttsAvailable(tts.state()),
+          },
         },
-        sound: current.notifications.sound,
+        islandSound: {
+          needs: current.notifications.sound,
+          finished: current.notifications.finishedSound,
+          palette: current.island.sound.palette,
+          volume: current.island.sound.volume,
+          ui: current.island.sound.ui,
+        },
+        motion: current.island.motion,
         topInset: island.topInset(),
         anchor: island.anchor(),
+        notch: island.notch(),
       };
     };
     const pushIslandConfig = (): void => {
@@ -565,6 +654,12 @@ if (!gotLock) {
         if (window !== null) window.webContents.send('island:config', config);
       });
     };
+    // Голос скачали, удалили или движок отказал: доступность речи — острову, состояние — настройкам главного окна.
+    tts.onState((state) => {
+      pushIslandConfig();
+      const window = mainWindow;
+      if (window !== null && !window.isDestroyed()) window.webContents.send('app:assistant-voice-state', state);
+    });
     /**
      * Настройка решает, есть ли окно; `PARLEY_ISLAND=off` (E2E) — острова нет в любом случае. Место отсюда не читается:
      * его пишет только main (`savePlacement`), и чтение файла, обогнавшее незавершённую запись, откатило бы место назад.
@@ -572,9 +667,15 @@ if (!gotLock) {
     const syncIsland = (current: UiFile): void => {
       if ((current.island.enabled || current.assistant.enabled) && !switches.islandOff) island.open();
       else island.close();
+      // The assistant owns a shared accelerator when both settings request it. Release only the island's
+      // registered copy before asking Electron to register the assistant; the reverse conflict stays visible.
+      if (current.assistant.enabled && current.island.pendingHotkey !== null &&
+        current.assistant.hotkey === current.island.pendingHotkey) islandShortcut.sync(false, null);
       assistantShortcut.sync(current.assistant.enabled && !switches.islandOff, current.assistant.hotkey);
+      islandShortcut.sync(current.island.enabled && hostConnected && !switches.islandOff, current.island.pendingHotkey);
       pushIslandConfig();
     };
+    applyIslandSync = syncIsland;
     // Второстепенное окно не должно ронять старт: сбой создания — в журнал, остальное приложение работает.
     try {
       syncIsland(ui);
@@ -582,24 +683,36 @@ if (!gotLock) {
       console.warn('[parley] island sync failed', error);
     }
     // Мониторы подключили, отключили, сменили разрешение — место заново из сохранённой точки, отступ под чёлку заново.
+    // Новый замер выреза (`notchProbe.onChange`) переставляет остров так же.
     const relayoutIsland = (): void => {
       island.relayout();
       pushIslandConfig();
     };
-    screen.on('display-added', relayoutIsland);
-    screen.on('display-removed', relayoutIsland);
-    screen.on('display-metrics-changed', relayoutIsland);
+    // Датчик выреза: замер при старте; на событиях `screen` — по правилам `displaysChanged` (один `workArea` замера не даёт).
+    notchProbe?.measure();
+    screen.on('display-added', () => {
+      relayoutIsland();
+      notchProbe?.displaysChanged();
+    });
+    screen.on('display-removed', () => {
+      relayoutIsland();
+      notchProbe?.displaysChanged();
+    });
+    screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
+      relayoutIsland();
+      notchProbe?.displaysChanged(changedMetrics);
+    });
     registerIslandIpc({
       ipcMain,
       controller: island,
       config: islandConfig,
+      visibility: () => visibility.snapshot(),
       pushConfig: pushIslandConfig,
       keyboard: (on) => island.setKeyboard(on),
       openTarget: (target) => {
         focusMainWindow();
         sendFocusTarget(target);
       },
-      beep: () => shell.beep(),
       // Тот же `activity.seen`, что шлёт главное окно, когда видит сессию. Методы хоста из приветствия тут не сверяются: хост
       // без `activity.seen` молча отбрасывает уведомление (сервер хоста вызывает `handler?.()`, а неизвестное протоколу
       // только пишет в журнал), и окно само предлагает перезапустить такой хост.
@@ -614,6 +727,10 @@ if (!gotLock) {
         window.hide();
         console.warn('[parley] island render failed');
       },
+      tts,
+      ttsChannel: () => new MessageChannelMain(),
+      uiStore,
+      onUiSaved: () => handleUiSaved(),
     });
 
     // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
@@ -762,29 +879,35 @@ if (!gotLock) {
       hostStatus = status;
     });
 
+    // Сохранение ui.json из Settings и значком динамика острова (`island:assistant-speak`).
+    function handleUiSaved(): void {
+      void updates.settingsChanged();
+      // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
+      void uiStore.load().then((current) => {
+        ops.accessChanged(current.browser.agentsAllowed);
+        void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
+        // Сбой острова не должен ломать сохранение настроек.
+        try {
+          syncIsland(current);
+        } catch (error) {
+          console.warn('[parley] island sync failed', error);
+        }
+      });
+    }
     registerIpc({
       ipcMain,
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
-      onUiSaved: () => {
-        void updates.settingsChanged();
-        // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
-        void uiStore.load().then((current) => {
-          ops.accessChanged(current.browser.agentsAllowed);
-          void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
-          // Сбой острова не должен ломать сохранение настроек.
-          try {
-            syncIsland(current);
-          } catch (error) {
-            console.warn('[parley] island sync failed', error);
-          }
-        });
-      },
+      onUiSaved: () => handleUiSaved(),
+      tts,
       isIslandSender: (sender) => island.isIsland(sender),
+      reportSessionVisibility: (event, report) => visibility.report(event, report),
       openAssistant: () => openAssistant({ listen: false }),
       assistantShortcut: () => assistantShortcut.status(),
       suspendAssistantShortcut: (on) => assistantShortcut.suspend(on),
+      islandShortcut: () => islandShortcut.status(),
+      suspendIslandShortcut: (on) => islandShortcut.suspend(on),
       // «Страница острова загружена», а не просто «окно есть»: пока она грузится или не загрузилась, системные уведомления не глушатся.
       islandActive: () => {
         const window = island.current();

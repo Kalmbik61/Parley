@@ -1,13 +1,15 @@
 /**
  * React-обёртка роя: canvas с учётом `devicePixelRatio` и цикл кадров. Один движок на монтирование; смена `spec`
  * уходит в движок эффектом; кадр рисуется, если пора по `fps` (0 — только переходы и смена спеки) или движок просит
- * (`needsFrame`). Reduced motion — один статичный кадр на смену спеки, без цикла. Нет 2d-контекста (jsdom) — компонент
- * ничего не рисует. Без `setInterval`: размонтирование отменяет rAF.
+ * (`needsFrame`). Reduced motion — один статичный кадр на смену спеки, `fps` не действует: кадры идут, только пока
+ * движок просит (вспышка реакции). Проп `pulse` — одноразовая реакция (#9 §4.1): новое `at` уходит в движок. Нет
+ * 2d-контекста (jsdom) — компонент ничего не рисует. Без `setInterval`: размонтирование отменяет rAF.
  */
 
 import { useEffect, useRef } from 'react';
+import type { VoiceFrame } from '../assistant/voice-features.js';
 import { createSwarm, type SwarmEngine } from './engine.js';
-import type { SwarmSpec } from './spec.js';
+import type { SwarmPulse, SwarmSpec } from './spec.js';
 
 export interface SwarmProps {
   spec: SwarmSpec;
@@ -23,6 +25,12 @@ export interface SwarmProps {
   fps: number;
   /** Громкость микрофона 0..1 для облика «слушает». */
   mic?: number;
+  /** Кадр голоса для рта лица (Р10); `null` — голос молчит. Геттер читается в кадре, без ререндера. */
+  voice?: () => VoiceFrame | null;
+  /** Одноразовая реакция: новое `at` запускает её, тот же `at` повторно ничего не делает. */
+  pulse?: SwarmPulse | null;
+  /** Настройка Parley «Reduce motion» (`motion: 'reduce'`): действует как системная, вдобавок к ней. */
+  reducedMotion?: boolean;
   className?: string;
 }
 
@@ -34,9 +42,10 @@ export function Swarm(props: SwarmProps): JSX.Element {
   const engineRef = useRef<SwarmEngine | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const mqlRef = useRef<MediaQueryList | null>(null);
-  // Цикл кадров читает свежие `fps` и `mic` отсюда, не пересоздаваясь.
-  const live = useRef({ fps: props.fps, mic: props.mic ?? 0 });
-  live.current = { fps: props.fps, mic: props.mic ?? 0 };
+  // Цикл кадров читает свежие `fps`, `mic` и `voice` отсюда, не пересоздаваясь.
+  const live = useRef({ fps: props.fps, mic: props.mic ?? 0, voice: props.voice, forced: props.reducedMotion === true });
+  live.current = { fps: props.fps, mic: props.mic ?? 0, voice: props.voice, forced: props.reducedMotion === true };
+  const isReduced = (): boolean => live.current.forced || mqlRef.current?.matches === true;
   if (engineRef.current === null) {
     engineRef.current = createSwarm(souls, {
       width,
@@ -59,16 +68,16 @@ export function Swarm(props: SwarmProps): JSX.Element {
     const ctx = ctxRef.current;
     if (ctx === null) return undefined;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (mqlRef.current?.matches === true) return undefined;
     let raf = 0;
     let last = 0;
     const loop = (now: number): void => {
       raf = requestAnimationFrame(loop);
-      const { fps, mic } = live.current;
+      const { fps, mic, voice } = live.current;
+      const reduced = isReduced();
       const interval = 1000 / (fps || 30) - 2;
-      if ((fps > 0 || engine.needsFrame()) && now - last >= interval) {
+      if (((fps > 0 && !reduced) || engine.needsFrame()) && now - last >= interval) {
         last = now;
-        engine.frame(now, ctx, mqlRef.current?.matches === true, mic);
+        engine.frame(now, ctx, reduced, mic, voice?.() ?? null);
       }
     };
     raf = requestAnimationFrame(loop);
@@ -78,11 +87,19 @@ export function Swarm(props: SwarmProps): JSX.Element {
   useEffect(() => {
     const engine = engineRef.current;
     if (engine === null) return;
-    const reduced = mqlRef.current?.matches === true;
+    const reduced = isReduced();
     const now = performance.now();
     engine.setSpec(spec, now, reduced);
     if (reduced) engine.frame(now, ctxRef.current, true, live.current.mic);
-  }, [spec]);
+  }, [spec, props.reducedMotion]);
+
+  const pulse = props.pulse ?? null;
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (engine === null || pulse === null) return;
+    engine.react(pulse.reaction, pulse.at, performance.now(), isReduced());
+    // Реакцию задаёт пара «вид, время»: новый объект с тем же `at` — та же реакция.
+  }, [pulse?.reaction, pulse?.at]);
 
   return (
     <canvas
@@ -90,6 +107,7 @@ export function Swarm(props: SwarmProps): JSX.Element {
       aria-hidden
       data-testid="swarm"
       data-shape={spec.shape}
+      data-emo={spec.shape === 'face' ? (spec.emo ?? undefined) : undefined}
       className={className}
       width={width * dpr}
       height={height * dpr}

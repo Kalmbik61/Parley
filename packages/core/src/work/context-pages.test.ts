@@ -399,6 +399,21 @@ describe('capStrings', () => {
 });
 
 describe('карта окна', () => {
+  it('исключает private Codex proof из window и agent projections без изменения карты', () => {
+    const map = baseMap();
+    const proof = { launchRevision: '12345678-1234-1234-1234-123456789abc', pid: 42,
+      startedAtProcess: 'private-process-stamp', threadId: '019ce3d5-584a-7be2-922e-b8185a8d7c19' };
+    Object.assign(map.sessions[1]!, { codexThreadBinding: proof, providerSessionId: proof.threadId });
+    const before = JSON.stringify(map);
+    for (const projection of [compactWorkMap(map, { messageBytes: 1024 }), mapTopology(map, 's-01')]) {
+      expect(JSON.stringify(projection)).not.toContain('codexThreadBinding');
+      expect(JSON.stringify(projection)).not.toContain(proof.launchRevision);
+      expect(JSON.stringify(projection)).not.toContain(proof.startedAtProcess);
+    }
+    expect(compactWorkMap(map, { messageBytes: 1024 }).sessions[1]?.providerSessionId).toBe(proof.threadId);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
   it('не меняет исходную карту и сохраняет форму WorkMap', () => {
     const map = baseMap();
     fill(map, 30, 40);

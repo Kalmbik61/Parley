@@ -1,6 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { DownloadResult } from '../../../shared/voice-types.js';
 import { S } from '../../../shared/strings.js';
+import { TTS_VOICES } from '../../../shared/tts-types.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { chooseOption, installRadixSelectPolyfills } from '../../test-utils/radix-select.js';
@@ -129,5 +131,108 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
     withHotkey('Ctrl+Shift+J');
     render(<AssistantSettings />);
     expect(screen.queryByText(text.shortcutClaudeDesktop)).toBeNull();
+  });
+});
+
+describe('AssistantSettings: голос (план 3b, B20; #9 §6.8)', () => {
+  /** Скачивание, которое тест завершает сам: пока промис висит, идёт загрузка. */
+  const pendingDownload = (): { finish: (result: DownloadResult) => void } => {
+    let finish: (result: DownloadResult) => void = () => undefined;
+    bridge.app.assistantVoiceDownload = () => {
+      bridge.assistantVoiceCalls.push('download');
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    };
+    return { finish: (result) => finish(result) };
+  };
+  const modelRow = (): HTMLElement => document.querySelector<HTMLElement>('[data-assistant-voice-model]')!;
+
+  it('«Speak answers» пишет assistant.speak через patchUi', () => {
+    render(<AssistantSettings />);
+    fireEvent.click(screen.getByRole('switch', { name: text.speak }));
+    expect(saved).toEqual([{ assistant: { speak: true } }]);
+  });
+
+  it('G4: у голосов видны род, языки и лицензия; на чистой установке выбрана Serena; выбор пишет id голоса', async () => {
+    render(<AssistantSettings />);
+    await waitFor(() => expect(screen.getAllByRole('radio').length).toBe(5));
+    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(['Serena', 'Ryan', 'Aiden', 'Vivian', 'Ono Anna']);
+    expect((screen.getByRole('radio', { name: 'Serena' }) as HTMLInputElement).checked).toBe(true);
+    const serena = document.querySelector('[data-assistant-voice="qwen3-0.6b/serena"]')!;
+    expect(serena.textContent).toContain(text.voiceDetails(text.voiceGender.female, 'Russian, English', 'Apache-2.0'));
+    const ryan = document.querySelector('[data-assistant-voice="qwen3-0.6b/ryan"]')!;
+    expect(ryan.textContent).toContain(text.voiceGender.male);
+    fireEvent.click(screen.getByRole('radio', { name: 'Ryan' }));
+    expect(saved).toEqual([{ assistant: { voice: 'qwen3-0.6b/ryan' } }]);
+    expect(screen.getByText(text.voiceCredit)).toBeTruthy();
+  });
+
+  it('язык без голоса (uk): голосов нет, видна строка, что ответы будут текстом', async () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, language: 'uk' } } });
+    render(<AssistantSettings />);
+    await waitFor(() => expect(screen.getByText(text.voiceNoLanguage)).toBeTruthy());
+    expect(screen.queryAllByRole('radio')).toEqual([]);
+  });
+
+  it('голос недоступен (x64, сбой движка): видна строка, Download не нажимается', async () => {
+    bridge.setAssistantVoiceState({ state: 'unavailable', reason: 'the voice engine needs Apple Silicon' });
+    bridge.app.assistantVoices = async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: false }));
+    render(<AssistantSettings />);
+    await waitFor(() => expect(screen.getByText(text.voiceUnavailable)).toBeTruthy());
+    expect((within(modelRow()).getByRole('button', { name: S.voice.settings.download }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('G3: без весов — кнопка Download с размером 1214 MB, само ничего не качается', async () => {
+    render(<AssistantSettings />);
+    await waitFor(() => expect(bridge.assistantVoiceCalls).toContain('voices'));
+    expect(modelRow().textContent).toContain(S.voice.settings.sizeMb(1214));
+    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
+    expect(bridge.assistantVoiceCalls).not.toContain('download');
+  });
+
+  it('E5, Download: кнопка качает веса, виден прогресс, затем «Preparing voice…» до ready', async () => {
+    const download = pendingDownload();
+    render(<AssistantSettings />);
+    fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.download }));
+    expect(bridge.assistantVoiceCalls).toContain('download');
+    act(() => bridge.emitAssistantVoiceProgress({ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 606_767_232, totalBytes: 1_213_534_464 }));
+    expect(modelRow().textContent).toContain(S.voice.settings.progress(606_767_232, 1_213_534_464));
+    await act(async () => {
+      bridge.setAssistantVoiceState({ state: 'warming' });
+      download.finish({ ok: true });
+    });
+    await waitFor(() => expect(modelRow().textContent).toContain(text.voicePreparing));
+    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy();
+    act(() => bridge.setAssistantVoiceState({ state: 'ready' }));
+    await waitFor(() => expect(modelRow().textContent).not.toContain(text.voicePreparing));
+  });
+
+  it('D5, Cancel: во время скачивания кнопка Cancel отменяет его, голос остаётся нескачанным', async () => {
+    const download = pendingDownload();
+    render(<AssistantSettings />);
+    fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.download }));
+    await act(async () => {
+      fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.cancel }));
+    });
+    expect(bridge.assistantVoiceCalls).toContain('cancel');
+    await act(async () => download.finish({ error: 'cancelled' }));
+    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
+  });
+
+  it('D5, Delete: скачанные веса удаляются, голоса снова не скачаны, само ничего не качается', async () => {
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    bridge.app.assistantVoiceRemove = async () => {
+      bridge.assistantVoiceCalls.push('remove');
+      bridge.setAssistantVoiceState({ state: 'not-downloaded' });
+    };
+    render(<AssistantSettings />);
+    const remove = await within(modelRow()).findByRole('button', { name: S.voice.settings.remove });
+    await act(async () => {
+      fireEvent.click(remove);
+    });
+    expect(bridge.assistantVoiceCalls).toContain('remove');
+    await waitFor(() => expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy());
+    expect(bridge.assistantVoiceCalls).not.toContain('download');
   });
 });

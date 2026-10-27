@@ -8,34 +8,48 @@
  * размеры текста; карточка согласия на папку встаёт раньше карточек ленты, но не раньше раскрытого помощника.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRef } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
 import type { ConsentCard } from '@parley/protocol';
 import type { IslandApi } from '../../shared/island.js';
+import * as QuestionFormModule from './QuestionForm.js';
 import { S } from '../../shared/strings.js';
 import type { IslandModel } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { SWIPE_UP_PX } from './drag.js';
 import { HOST_IDLE } from './assistant/store.js';
+import * as engineModule from './swarm/engine.js';
 import { CARD_ARM_MS, IslandView, type IslandAssistantProps, type IslandViewProps } from './IslandView.js';
+
+/**
+ * Стили острова: переходы формы и reduced motion проверяются по тексту правил — jsdom CSS-переходов не считает, а
+ * `?raw` у vitest отдаёт CSS пустым.
+ */
+const ISLAND_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'island.css'), 'utf8');
 
 const REF = { projectPath: '/tmp/proj', workId: 'w-1', sessionId: 's-02' };
 const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'proj' }]]);
 
-/** Поля `IslandConfig` для помощника и острова: в этих тестах помощник выключен. */
+/** Поля `IslandConfig` для помощника, звука и движения: в этих тестах помощник выключен. */
 const ISLAND_BASE = {
   islandEnabled: true,
   assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
-};
+  islandSound: { needs: true, finished: false, palette: 'soft', volume: 0.6, ui: false },
+  motion: 'system',
+} as const;
 
 function api(): IslandApi {
   return {
+    visibility: vi.fn(), onVisibility: vi.fn(() => () => {}),
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
-    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onAssistantBlur: vi.fn(() => () => {}),
+    dragEnd: vi.fn(), open: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onKeyboardBlur: vi.fn(() => () => {}),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
@@ -51,6 +65,10 @@ function questionItem(options: string[]): IslandRequest {
     questions: [{ question: 'Which DB?', header: null, multiSelect: false, options: options.map((label) => ({ label, description: null })) }],
   } as unknown as FeedCard;
   return permissionItem({ key: 'k\u0000c-3', card, summary: 'Question: Which DB?' });
+}
+
+function planItem(patch: Partial<IslandRequest> = {}, plan = 'Read the code\nChange the implementation'): IslandRequest {
+  return permissionItem({ key: 'k\u0000p-1', summary: 'Plan', card: { kind: 'plan', id: 'p-1', cardId: 'p-1', state: 'pending', at: '', toolUseId: null, toolName: 'ExitPlanMode', toolInput: {}, plan, planFilePath: '/unread/plan.md' }, ...patch });
 }
 
 const MODEL: IslandModel = {
@@ -79,8 +97,8 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
-    labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
+    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
+    labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(), requestKeyboard: false, onTakeRequestKeyboard: vi.fn(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
     assistant: null,
@@ -88,6 +106,78 @@ function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
     ...patch,
   };
 }
+
+describe('selected progress detail', () => {
+  it('opens one explicit session detail and preserves the existing session action', () => {
+    const select = vi.fn(); const close = vi.fn();
+    const progress = { selected: null, state: { kind: 'loading' as const }, onSelect: select, onClose: close };
+    const props = viewProps({ listOpen: true, progress });
+    const { rerender } = render(<IslandView {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show recent actions' })); expect(select).toHaveBeenCalledWith(REF);
+    expect(props.api.open).not.toHaveBeenCalled();
+    rerender(<IslandView {...props} progress={{ ...progress, selected: REF }} />);
+    expect(screen.getAllByTestId('island-progress')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
+    fireEvent.click(screen.getByRole('button', { name: 'Close history' })); expect(close).toHaveBeenCalledOnce();
+    rerender(<IslandView {...props} progress={{ ...progress, selected: REF }} retracted />);
+    expect(screen.queryByTestId('island-progress')).toBeNull();
+  });
+});
+
+describe('subagents and room proposal badges', () => {
+  const tasks = Array.from({ length: 8 }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), agentType: '<b>worker</b>', description: `Task ${index}`, background: true }));
+  function childrenModel(items = tasks, total: number | null = 12, reported = 5): IslandModel {
+    return { ...DONE_MODEL, active: true, subagents: Math.max(total ?? 0, reported), groups: DONE_MODEL.groups.map((group) => ({ ...group,
+      rows: group.rows.map((row) => row.kind === 'session' ? { ...row, tasks: { items, total, reported } } : row),
+    })) };
+  }
+
+  it('keeps one Done parent/reply, caps8 children, reports actual overflow independently and preserves keyed nodes', () => {
+    useIslandReplies.setState({ texts: { [DONE_KEY]: REPLY } });
+    const props = viewProps({ model: childrenModel(), listOpen: true });
+    const { container, rerender } = render(<IslandView {...props} />);
+    expect(screen.getAllByTestId('island-done')).toHaveLength(1);
+    expect(screen.getByText(REPLY)).toBeTruthy(); expect(screen.getAllByTestId('island-subagent')).toHaveLength(8);
+    expect(screen.getByText('+4 more')).toBeTruthy(); expect(screen.getByText('5 reported')).toBeTruthy();
+    expect(container.querySelector('b')).toBeNull();
+    const first = screen.getByText('Task 0').closest('li');
+    rerender(<IslandView {...props} model={childrenModel([...tasks].reverse())} />);
+    expect(screen.getByText('Task 0').closest('li')).toBe(first);
+    rerender(<IslandView {...props} model={childrenModel(tasks.slice(0, 3), 3, 12)} />);
+    expect(screen.getAllByTestId('island-subagent')).toHaveLength(3); expect(screen.queryByText('+9 more')).toBeNull();
+    expect(screen.getByText('12 reported')).toBeTruthy();
+    rerender(<IslandView {...props} model={childrenModel([], 0, 12)} />);
+    expect(screen.getByText('No task details reported')).toBeTruthy();
+    rerender(<IslandView {...props} model={childrenModel([], null, 12)} />);
+    expect(screen.getByText('Task details unavailable')).toBeTruthy();
+  });
+
+  it('room waiting is a badge with current lead and Open room only, without proposal preview', () => {
+    const model: IslandModel = { working: 0, waiting: 0, done: 0, providers: [], active: true, proposals: 1, groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
+      { kind: 'room', key: 'r', projectPath: '/p', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: false,
+        proposal: { key: 'rev-key', kind: 'completion', lead: 's-02', leadLabel: 'S02 api' } },
+    ] }] };
+    Object.assign(model.groups[0]!.rows[0]!, { text: 'SECRET-proposal-preview' });
+    const props = viewProps({ model, listOpen: true });
+    render(<IslandView {...props} />);
+    expect(screen.getByText('Waiting for you')).toBeTruthy(); expect(screen.getByText('Lead: S02 api')).toBeTruthy();
+    expect(screen.queryByText('SECRET-proposal-preview')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open room' }).textContent).toBe('Open room');
+    fireEvent.click(screen.getByRole('button', { name: 'Open room' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'room', projectPath: '/p', workId: 'w-1', roomId: 'r-1' });
+    expect(props.onDecide).not.toHaveBeenCalled();
+  });
+
+  it('marks the selected room by proposal revision key', () => {
+    const model: IslandModel = { ...MODEL, proposals: 1, groups: [{ ...MODEL.groups[0]!, rows: [
+      { kind: 'room', key: 'room-row-key', projectPath: '/p', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: false,
+        proposal: { key: 'proposal-rev-key', kind: 'completion', lead: 's-02', leadLabel: 'S02 api' } },
+    ] }] };
+    view({ model, listOpen: true, navigationKey: 'room:proposal-rev-key' });
+    expect(screen.getByRole('button', { name: 'Open room' }).getAttribute('aria-current')).toBe('true');
+  });
+});
 
 /** Проходит паузу `CARD_ARM_MS`: после неё кнопки решения нажимаются. */
 function arm(): void {
@@ -123,12 +213,16 @@ beforeEach(() => {
   useIslandReplies.setState({ texts: {} });
   resizeCallbacks = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  // Рой «места» в карточке — canvas; jsdom не реализует getContext и пишет «Not implemented» — глушим, возвращая
+  // null, как в проде без контекста.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('вид острова', () => {
@@ -187,7 +281,7 @@ describe('вид острова', () => {
     expect(room.textContent).toBe('Refunds· 1 in work');
     // Подзаголовок идёт сразу после названия работы и раньше строк сессий.
     const group = room.parentElement as HTMLElement;
-    expect(Array.from(group.children).map((child) => child.getAttribute('data-testid') ?? child.tagName)).toEqual(['DIV', 'island-room', 'BUTTON']);
+    expect(Array.from(group.children).map((child) => child.getAttribute('data-testid') ?? child.tagName)).toEqual(['DIV', 'island-room', 'island-session']);
     fireEvent.click(within(room).getByRole('button', { name: 'Refunds' }));
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'room', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1' });
   });
@@ -225,22 +319,23 @@ describe('вид острова', () => {
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow', always: true });
   });
 
-  it('простой вопрос — кнопки вариантов, ответ по тексту вопроса', () => {
+  it('вопрос выбирает вариант, но отправляется только явным Submit', () => {
     const props = view({ items: [questionItem(['Postgres', 'SQLite'])] });
-    const buttons = screen.getAllByTestId('island-option');
-    expect(buttons.map((button) => button.textContent)).toEqual(['Postgres', 'SQLite']);
-    fireEvent.click(buttons[1] as HTMLElement);
+    fireEvent.click(screen.getByRole('radio', { name: 'SQLite' }));
+    expect(props.onDecide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'SQLite' } });
   });
 
-  it('варианты с одинаковой или пустой подписью — по кнопке на каждый, без предупреждения React о ключах', () => {
+  it('дубликаты и пустые подписи дают объяснение и безопасный переход', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const props = view({ items: [questionItem(['Same', 'Same', '', ''])] });
-      const buttons = screen.getAllByTestId('island-option');
-      expect(buttons.map((button) => button.textContent)).toEqual(['Same', 'Same', '', '']);
-      fireEvent.click(buttons[1] as HTMLElement);
-      expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'Same' } });
+      expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+      expect(screen.getByText('Open this question in Parley to answer it.')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+      expect(props.onDecide).not.toHaveBeenCalled();
+      expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, cardId: 'c-3' });
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
@@ -279,7 +374,7 @@ describe('вид острова', () => {
   });
 
   it('подсказки первого показа нет; отступ под чёлку', () => {
-    view({ config: { ...ISLAND_BASE, sound: true, topInset: 38, anchor: 'center' } });
+    view({ config: { ...ISLAND_BASE, topInset: 38, anchor: 'center' } });
     expect(screen.queryByText(/Drag me/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
@@ -464,15 +559,108 @@ describe('плавный размер формы', () => {
     }
   }
 
-  it('форма анимирует размер и облик: переход ширины, высоты, отступа, скругления и тени, у reduced motion перехода нет', () => {
+  /** Правило `island.css` с ровно таким селектором (с отступами строк, как в файле): тело между `{` и `}`. */
+  function cssRule(selector: string): string {
+    const rule = ISLAND_CSS.split('}').map((chunk) => chunk.split('{')).find((parts) => parts.length >= 2 && parts.at(-2)!.split('*/').at(-1)!.trim() === selector);
+    expect(rule, selector).toBeDefined();
+    return rule!.at(-1)!;
+  }
+  /** Тело блока `@media (prefers-reduced-motion: reduce)`, где стоит правило переходов формы. */
+  function reducedMediaWith(selector: string): string {
+    const blocks = ISLAND_CSS.split('@media (prefers-reduced-motion: reduce)').slice(1);
+    const block = blocks.find((text) => text.slice(0, text.indexOf('}\n}')).includes(selector));
+    expect(block, selector).toBeDefined();
+    return block!.slice(0, block!.indexOf('}\n}') + 1);
+  }
+  /** Шевелит замер: содержимое получает новый размер, наблюдатели его пересчитывают. */
+  function resize(width: number, height: number): void {
+    withOffsets(width, height, () => {
+      act(() => {
+        for (const callback of resizeCallbacks) callback();
+      });
+    });
+  }
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  it('форма анимирует размер и облик классом перехода: переход ширины, высоты, отступа, скругления и тени', () => {
     view();
     const shape = screen.getByTestId('island');
-    expect(shape.className).toContain('transition-[width,height,margin-top,border-radius,box-shadow]');
-    expect(shape.className).toContain('duration-[250ms]');
-    expect(shape.className).toContain('ease-out');
-    expect(shape.className).toContain('motion-reduce:transition-none');
+    expect(shape.className).toContain('island-morph-grow');
+    expect(shape.className).not.toContain('duration-[250ms]');
     expect(shape.className).toContain('overflow-hidden');
     expect(shape.className).toContain('rounded-b-[22px]');
+    const both = cssRule('.island-morph-grow,\n.island-morph-shrink');
+    expect(both).toContain('transition-property: width, height, margin-top, border-radius, box-shadow;');
+  });
+
+  it('M2: рост — 460 мс по кривой с перелётом, сжатие — 300 мс без перелёта', () => {
+    const grow = cssRule('.island-morph-grow');
+    expect(grow).toContain('transition-duration: 460ms;');
+    expect(grow).toContain('transition-timing-function: cubic-bezier(0.32, 1.22, 0.42, 1);');
+    const shrink = cssRule('.island-morph-shrink');
+    expect(shrink).toContain('transition-duration: 300ms;');
+    expect(shrink).toContain('transition-timing-function: cubic-bezier(0.45, 0, 0.2, 1);');
+  });
+
+  it('M2: класс перехода выбирается по площади содержимого — растёт площадь — рост, падает — сжатие', () => {
+    view();
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-grow');
+    // Карточка шире и выше пилюли.
+    resize(440, 180);
+    expect(morph()).toBe('island-morph-grow');
+    // Обратно к пилюле.
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-shrink');
+    // Площадь та же — направление прежнее.
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-shrink');
+    // Шире, но ниже: площадь меньше — сжатие; выше, но уже: площадь больше — рост.
+    resize(400, 20);
+    expect(morph()).toBe('island-morph-shrink');
+    resize(200, 60);
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M2: уборка — сжатие, выдвижение — рост, ещё до замера: отступ сверху и скругление идут той же кривой, что и размер', () => {
+    const props = viewProps();
+    const { rerender } = render(<IslandView {...props} />);
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-grow');
+    rerender(<IslandView {...props} retracted />);
+    expect(morph()).toBe('island-morph-shrink');
+    resize(40, 5);
+    expect(morph()).toBe('island-morph-shrink');
+    rerender(<IslandView {...props} retracted={false} />);
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M3: системный reduced motion снимает переход формы и появление содержимого', () => {
+    expect(reducedMediaWith('.island-morph-grow')).toContain('transition: none;');
+    expect(reducedMediaWith('.island-morph-shrink')).toContain('transition: none;');
+    expect(reducedMediaWith('.island-reveal')).toContain('animation: none;');
+  });
+
+  it('M3: настройка Parley «Reduce motion» — как системная: формы без перехода, содержимое без появления', () => {
+    view({ config: { ...ISLAND_BASE, motion: 'reduce', topInset: 0, anchor: 'center' } });
+    resize(280, 40);
+    const shape = screen.getByTestId('island');
+    expect(shape.getAttribute('data-motion')).toBe('reduce');
+    expect(morph()).toBeUndefined();
+    expect(shape.className).not.toContain('transition');
+    resize(440, 180);
+    expect(morph()).toBeUndefined();
+    expect(cssRule("[data-motion='reduce'] .island-reveal")).toContain('animation: none;');
+  });
+
+  it('M3: «Reduce motion» гасит и пульс помощника, как системная настройка', () => {
+    const rule = cssRule("[data-motion='reduce'] .assistant-pulse,\n[data-motion='reduce'] .assistant-dot-pulse");
+    expect(rule).toContain('animation: none;');
+  });
+
+  it('при системной настройке движения у формы data-motion="system"', () => {
+    view();
+    expect(screen.getByTestId('island').getAttribute('data-motion')).toBe('system');
   });
 
   it('до первого замера у формы нет явного размера (нулевой замер jsdom не в счёт)', () => {
@@ -520,6 +708,14 @@ describe('плавный размер формы', () => {
     expect(props.onToggleList).not.toHaveBeenCalled();
   });
 
+  it('содержимое проступает 220 мс с задержкой 90 мс: прозрачность, сдвиг −4 px, размытие 3 px', () => {
+    expect(cssRule('.island-reveal')).toContain('animation: island-reveal 220ms ease-out 90ms both;');
+    const from = cssRule('from');
+    expect(from).toContain('opacity: 0;');
+    expect(from).toContain('transform: translateY(-4px);');
+    expect(from).toContain('filter: blur(3px);');
+  });
+
   it('пилюля, список и карточка появляются с island-reveal', () => {
     view();
     expect(screen.getByTestId('island-pill').className).toContain('island-reveal');
@@ -537,6 +733,118 @@ describe('плавный размер формы', () => {
     const first = screen.getByTestId('island-card');
     rerender(<IslandView {...props} index={1} />);
     expect(screen.getByTestId('island-card')).not.toBe(first);
+  });
+});
+
+describe('«место» роя в шапке карточки (#9 T7, О3)', () => {
+  type EngineSpies = { setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> };
+
+  /** Движки роёв вида и шпионы их `setSpec` и `react`: шпион ставится при создании, до первого эффекта. */
+  function spyEngines(): EngineSpies[] {
+    const real = engineModule.createSwarm;
+    const engines: EngineSpies[] = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      engines.push({ setSpec: vi.spyOn(engine, 'setSpec') as unknown as EngineSpies['setSpec'], react: vi.spyOn(engine, 'react') as unknown as EngineSpies['react'] });
+      return engine;
+    });
+    return engines;
+  }
+
+  /**
+   * Подставной цикл кадров, как в тесте `Swarm`: контекст считает кадры (`clearRect`), rAF копит колбэки,
+   * `tick(from, to)` гоняет их каждые 16 мс, часы `performance.now` ставит `setClock`.
+   */
+  function fakeFrames(): { draws: () => number; tick: (from: number, to: number) => void; setClock: (ms: number) => void } {
+    const ctx = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
+      createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    return {
+      draws: () => ctx.clearRect.mock.calls.length,
+      tick: (from, to) => {
+        for (let t = from; t < to; t += 16) {
+          clock = t;
+          const run = frames;
+          frames = [];
+          for (const cb of run) cb(t);
+        }
+      },
+      setClock: (ms) => {
+        clock = ms;
+      },
+    };
+  }
+
+  it('рой 30 px — первый в шапке карточки: сфера с янтарным кольцом, без вращения', () => {
+    const engines = spyEngines();
+    view({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
+    const header = screen.getByTestId('island-card').firstElementChild as HTMLElement;
+    const seat = within(header).getByTestId('swarm') as HTMLCanvasElement;
+    expect(header.firstElementChild).toBe(seat);
+    expect(header.textContent).toContain('S02 api · Backend');
+    expect(seat.style.width).toBe('30px');
+    expect(seat.style.height).toBe('30px');
+    expect(seat.getAttribute('data-shape')).toBe('sphere');
+    expect(seat.getAttribute('class')).toContain('shrink-0');
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'sphere', fx: 'ring', pal: 'amber', rot: 0 }), expect.any(Number), false);
+  });
+
+  it('без карточки места нет: у пилюли и списка роя нет', () => {
+    view({ listOpen: true });
+    expect(screen.queryByTestId('swarm')).toBeNull();
+  });
+
+  it('показ карточки — реакция по виду запроса: разрешение и план — подскок, вопрос — кивок, терминал — как разрешение', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    const cases: Array<[IslandRequest, string]> = [
+      [permissionItem(), 'hop'],
+      [planItem(), 'hop'],
+      [questionItem(['Postgres']), 'nod'],
+      [permissionItem({ card: null, inWindow: false }), 'hop'],
+    ];
+    for (const [item, reaction] of cases) {
+      const engines = spyEngines();
+      view({ items: [item] });
+      expect(engines, reaction).toHaveLength(1);
+      expect(engines[0]!.react).toHaveBeenCalledTimes(1);
+      expect(engines[0]!.react).toHaveBeenCalledWith(reaction, 5000, 5000, false);
+      cleanup();
+      vi.mocked(engineModule.createSwarm).mockRestore();
+    }
+  });
+
+  it('P1: в покое 0 кадров; реакция рисует только свою длительность, та же карточка её не повторяет, другая — повторяет', () => {
+    const { draws, tick, setClock } = fakeFrames();
+    setClock(1000);
+    const props = viewProps({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
+    const { rerender } = render(<IslandView {...props} />);
+    tick(1000, 3000);
+    const shown = draws();
+    expect(shown).toBeGreaterThan(1); // кадр спеки и вспышка реакции малого роя
+    expect(shown).toBeLessThanOrEqual(14); // вспышка 300 мс при 30 к/с, не постоянный цикл
+    tick(3000, 8000);
+    expect(draws()).toBe(shown); // карточка открыта, кольцо стоит: 0 к/с
+    arm();
+    rerender(<IslandView {...props} items={[{ ...props.items[0]!, deciding: true }, props.items[1]!]} />);
+    tick(8000, 10000);
+    expect(draws()).toBe(shown); // решение уходит — та же карточка, реакции заново нет
+    setClock(10000);
+    rerender(<IslandView {...props} index={1} />);
+    tick(10000, 12000);
+    expect(draws()).toBeGreaterThan(shown); // другая карточка — снова реакция
+    const next = draws();
+    tick(12000, 16000);
+    expect(draws()).toBe(next);
   });
 });
 
@@ -579,7 +887,7 @@ describe('размеры текста', () => {
     }
     cleanup();
     view({ items: [questionItem(['Postgres'])] });
-    expect(screen.getByTestId('island-option').className).toContain('h-9');
+    expect(screen.getByRole('button', { name: 'Submit' }).className).toContain('h-9');
     cleanup();
     view({ items: [permissionItem({ inWindow: false })] });
     expect(screen.getByTestId('island-open').className).toContain('h-9');
@@ -587,7 +895,182 @@ describe('размеры текста', () => {
   });
 });
 
+describe('PlanView — проводка родителя', () => {
+  it('full escaped plan stays readable, truncated has a transition and Change plan only opens an explicit terminal target', () => {
+    const plan = '<img src="https://example.com" onerror="bad()">\nhttps://example.com\n' + 'x'.repeat(16000) + '\nEND';
+    const item = planItem({}, plan);
+    const props = view({ items: [{ ...item, card: { ...item.card!, truncated: true } as FeedCard }] });
+    const body = screen.getByRole('region', { name: 'Plan' });
+    expect(body.textContent).toBe(plan);
+    expect(body.querySelector('a,img,script')).toBeNull();
+    expect(body.className).not.toContain('line-clamp');
+    expect(screen.getByText('Truncated')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Change plan in terminal' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, view: 'terminal' });
+    expect(props.onDecide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+    expect(props.api.open).toHaveBeenLastCalledWith({ kind: 'session', ref: REF, cardId: 'p-1' });
+  });
+
+  it.each([['Approve, auto-accept edits', 'auto-accept'], ['Approve, approve each edit', 'manual']])('%s sends only the existing %s choice after arming', (label, choice) => {
+    const props = view({ items: [planItem()] }, false);
+    const button = screen.getByRole('button', { name: label }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); arm();
+    fireEvent.click(button);
+    expect(props.onDecide).toHaveBeenCalledWith('k\u0000p-1', { kind: 'plan', choice });
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '])('same plan card/new text rearms and resets owned focus before native %s', (key) => {
+    const props = viewProps({ items: [planItem()], requestKeyboard: true });
+    const root = render(<IslandView {...props} />); arm();
+    act(() => screen.getByRole('button', { name: 'Approve, auto-accept edits' }).focus());
+    root.rerender(<IslandView {...props} items={[planItem({}, 'New plan text')]} />);
+    const button = screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card')); arm();
+    fireEvent.keyDown(document.activeElement!, { key }); expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => button.focus()); const allowed = fireEvent.keyDown(button, { key }); fireEvent.keyUp(button, { key });
+    if (allowed && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminal-only keeps plan readable without approvals; deciding/elsewhere disable and errors allow retry', () => {
+    const props = viewProps({ items: [planItem({ inWindow: false })] });
+    const root = render(<IslandView {...props} />); arm();
+    expect(screen.getByRole('region', { name: 'Plan' }).textContent).toContain('Read the code');
+    expect(screen.getByText('Approval is available in the terminal')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve, auto-accept edits' })).toBeNull();
+    for (const patch of [{ deciding: true }, { note: 'elsewhere' as const }, { note: 'failed' as const }]) {
+      root.rerender(<IslandView {...props} items={[planItem(patch)]} />); arm();
+      expect((screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement).disabled).toBe(patch.note !== 'failed');
+    }
+  });
+
+  it('measured chrome and notch bound the scroll body to remaining frame; text/scroll cannot drag', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { height: this.dataset.testid === 'island-card' ? 300 : this.getAttribute('role') === 'region' ? 200 : 0, width: 440 } as DOMRect;
+    });
+    vi.stubGlobal('innerHeight', 520);
+    try {
+      const props = view({ items: [planItem()], config: { ...viewProps().config, topInset: 180 } });
+      const body = screen.getByRole('region', { name: 'Plan' });
+      expect(body.style.maxHeight).toBe('190px');
+      expect(screen.getByTestId('island-card').style.maxHeight).toBe('calc(100vh - 230px)');
+      for (const [type, at] of [['pointerdown', 10], ['pointermove', 50], ['pointerup', 50]] as const) fireEvent(body, new MouseEvent(type, { bubbles: true, button: 0, buttons: 1, screenX: at, screenY: at }));
+      fireEvent.scroll(body);
+      expect(props.api.dragStart).not.toHaveBeenCalled(); expect(props.onHide).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); }
+  });
+});
+
 describe('пауза кнопок решения после показа запроса', () => {
+  it('late controlled draft callback from a previous selected identity cannot overwrite the current draft', () => {
+    const spy = vi.spyOn(QuestionFormModule, 'QuestionForm');
+    try {
+      const a = questionItem(['Postgres', 'SQLite']);
+      const b = questionItem(['Postgres', 'SQLite']); b.key = 'other\u0000c-3'; b.ref = { ...REF, projectPath: '/other' };
+      const props = viewProps({ items: [a, b] });
+      const root = render(<IslandView {...props} />);
+      fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+      const old = spy.mock.calls.at(-1)![0].onDraftChange;
+      root.rerender(<IslandView {...props} index={1} />);
+      act(() => old({ step: 0, picked: { 0: ['SQLite'] }, otherOn: {}, otherText: {} }));
+      expect((screen.getByRole('radio', { name: 'SQLite' }) as HTMLInputElement).checked).toBe(false);
+      root.rerender(<IslandView {...props} index={0} />);
+      expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+      act(() => old({ step: 0, picked: { 0: ['SQLite'] }, otherOn: {}, otherText: {} }));
+      expect((screen.getByRole('radio', { name: 'SQLite' }) as HTMLInputElement).checked).toBe(false);
+    } finally { spy.mockRestore(); }
+  });
+
+  it.each(['Enter', ' '])('question reopen re-arms Submit and restores only container focus before native %s', (key) => {
+    const props = viewProps({ items: [questionItem(['Postgres'])], requestKeyboard: true });
+    const root = render(<IslandView {...props} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' })); arm();
+    const first = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    act(() => first.focus());
+    root.rerender(<IslandView {...props} retracted />);
+    root.rerender(<IslandView {...props} showId={props.showId + 1} />);
+    const current = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    expect(current.disabled).toBe(true); arm(); expect(current.disabled).toBe(false);
+    fireEvent.keyDown(document.activeElement!, { key });
+    expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => current.focus());
+    const allowed = fireEvent.keyDown(current, { key }); fireEvent.keyUp(current, { key });
+    if (allowed && document.activeElement === current && !current.disabled) fireEvent.click(current, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('question Submit mouse click does not take keyboard and unowned Enter cannot repeat it', () => {
+    const props = view({ items: [questionItem(['Postgres'])], requestKeyboard: false });
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+    const submit = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    fireEvent(submit, new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    act(() => submit.focus());
+    fireEvent.click(submit, { detail: 1 });
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+    const allowed = fireEvent.keyDown(submit, { key: 'Enter' });
+    fireEvent.keyUp(submit, { key: 'Enter' });
+    if (allowed && document.activeElement === submit && !submit.disabled) fireEvent.click(submit, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('question body fits remaining frame and editing/selection/scroll never start dragging', () => {
+    const props = view({ items: [questionItem(['Postgres'])], config: { ...viewProps().config, topInset: 80 } });
+    const card = screen.getByTestId('island-card');
+    expect(card.style.maxHeight).toBe('calc(100vh - 130px)');
+    const body = screen.getByTestId('island-question-body');
+    expect(body.className).toContain('overflow-y-auto');
+    const pointer = (type: string, screenX: number, screenY: number): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY, buttons: 1 });
+    fireEvent(body, pointer('pointerdown', 10, 10));
+    fireEvent(body, pointer('pointermove', 50, 50));
+    fireEvent(body, pointer('pointerup', 50, 50));
+    fireEvent.scroll(body);
+    expect(props.api.dragStart).not.toHaveBeenCalled();
+    expect(props.onHide).not.toHaveBeenCalled();
+  });
+  it.each(['Enter', ' '])('same cardId/fingerprint: rearm и новый явный фокус перед native %j', (key) => {
+    const first = permissionItem({ fingerprint: 'first' });
+    const props = viewProps({ items: [first], requestKeyboard: true, onTakeRequestKeyboard: vi.fn() });
+    const { rerender } = render(<IslandView {...props} />);
+    arm();
+    act(() => screen.getByTestId('island-allow').focus());
+    rerender(<IslandView {...props} items={[{ ...first, fingerprint: 'second', summary: 'Run: changed' }]} />);
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    arm();
+    // jsdom не создаёт default click от клавиши: моделируем его только для реально сфокусированной кнопки.
+    const activateFocused = (): void => {
+      const target = document.activeElement;
+      if (target instanceof HTMLButtonElement && !target.disabled && fireEvent.keyDown(target, { key })) {
+        fireEvent.keyUp(target, { key });
+        fireEvent.click(target, { detail: 0 });
+      }
+    };
+    activateFocused();
+    expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => screen.getByTestId('island-allow').focus());
+    activateFocused();
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('fingerprint change без request owner не уводит внешний DOM focus и не берёт OS keyboard', () => {
+    const first = permissionItem({ fingerprint: 'first' });
+    const props = viewProps({ items: [first], requestKeyboard: false, onTakeRequestKeyboard: vi.fn() });
+    const { rerender, container } = render(<IslandView {...props} />);
+    const input = document.createElement('input');
+    container.append(input);
+    input.focus();
+    arm();
+    rerender(<IslandView {...props} items={[{ ...first, fingerprint: 'second' }]} />);
+    expect(document.activeElement).toBe(input);
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+    expect(props.api.keyboard).not.toHaveBeenCalled();
+  });
   it('сразу после показа Allow выключен, через 500 мс нажимается и зовёт onDecide', () => {
     const props = view({ items: [permissionItem()] }, false);
     const allow = screen.getByTestId('island-allow') as HTMLButtonElement;
@@ -612,9 +1095,10 @@ describe('пауза кнопок решения после показа зап�
     expect((screen.getByTestId('island-deny') as HTMLButtonElement).disabled).toBe(true);
     cleanup();
     view({ items: [questionItem(['Postgres', 'SQLite'])] }, false);
-    expect(screen.getAllByTestId('island-option').every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+    expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(true);
     arm();
-    expect(screen.getAllByTestId('island-option').every((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
+    expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('«Open in Parley» и стрелки не защищены паузой', () => {
@@ -745,7 +1229,7 @@ describe('оформление списка', () => {
 
 describe('убранный остров', () => {
   const INSET = 38;
-  const config = { ...ISLAND_BASE, sound: true, topInset: INSET, anchor: 'center' as const };
+  const config = { ...ISLAND_BASE, topInset: INSET, anchor: 'center' as const };
   /** Единственный элемент в содержимом убранной формы: брусок или текст `✅ N`. */
   const only = (): HTMLElement => {
     const content = screen.getByTestId('island-content');
@@ -949,7 +1433,8 @@ function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssist
   return {
     view: {
       host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, sending: null, queue: [], history: [], deciding: null, hotkey: 'Alt+Space', pending: null,
-      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onUnqueue: vi.fn(), onShowRequests: vi.fn(),
+      sentenceMood: null, speakOn: false,
+      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onUnqueue: vi.fn(), onShowRequests: vi.fn(), onToggleSpeak: vi.fn(),
     },
     open: false, collapsed: false, busy: false, mini: null, onOpen: vi.fn(),
     ...patch,
@@ -979,6 +1464,63 @@ describe('помощник на острове', () => {
     render(<IslandView {...viewProps()} />);
     expect(screen.queryByTestId('assistant-dot')).toBeNull();
   });
+
+  /** Движки роёв вида и шпионы их `setSpec` и `react`: шпион ставится при создании, до первого эффекта. */
+  function spyEngines(): Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> {
+    const real = engineModule.createSwarm;
+    const engines: Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      engines.push({ setSpec: vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>, react: vi.spyOn(engine, 'react') as unknown as ReturnType<typeof vi.fn> });
+      return engine;
+    });
+    return engines;
+  }
+
+  it('мини при речи: сфера без эмоции, палитра лица звучащего предложения, подпись «Speaking·»', () => {
+    const engines = spyEngines();
+    const speaking = (sentenceMood: 'error' | null): IslandAssistantProps => {
+      const base = assistantProps({ open: true, collapsed: true, busy: true, mini: S.assistant.miniSpeaking });
+      return { ...base, view: { ...base.view, input: 'speaking', host: { ...HOST_IDLE, mood: 'joy' }, sentenceMood } };
+    };
+    const { rerender } = render(<IslandView {...viewProps({ assistant: speaking(null) })} />);
+    const mini = within(screen.getByTestId('assistant-dot')).getByTestId('swarm');
+    expect(mini.getAttribute('data-shape')).toBe('sphere');
+    expect(mini.getAttribute('data-emo')).toBeNull();
+    expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
+    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'amber' }), expect.any(Number), false);
+    rerender(<IslandView {...viewProps({ assistant: speaking('error') })} />);
+    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'coral' }), expect.any(Number), false);
+  });
+
+  it('реакция мини-роя (#9 §4.1): pulse уходит в движок один раз на событие, новое событие — снова', () => {
+    const engines = spyEngines();
+    vi.spyOn(performance, 'now').mockReturnValue(2000);
+    const pulse = { reaction: 'breathe', at: 2000 } as const;
+    const { rerender } = render(<IslandView {...viewProps({ assistant: assistantProps({ pulse }) })} />);
+    rerender(<IslandView {...viewProps({ assistant: assistantProps({ pulse }) })} />);
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.react).toHaveBeenCalledTimes(1);
+    expect(engines[0]!.react).toHaveBeenCalledWith('breathe', 2000, 2000, false);
+    rerender(<IslandView {...viewProps({ assistant: assistantProps({ pulse: { reaction: 'spin', at: 2100 } }) })} />);
+    expect(engines[0]!.react).toHaveBeenCalledTimes(2);
+    expect(engines[0]!.react).toHaveBeenLastCalledWith('spin', 2100, 2000, false);
+  });
+
+  it('M3: «Reduce motion» Parley доходит до мини-роя, роя помощника и «места» карточки', () => {
+    const reduce = { ...ISLAND_BASE, motion: 'reduce', topInset: 0, anchor: 'center' } as const;
+    let engines = spyEngines();
+    const { rerender } = render(<IslandView {...viewProps({ config: reduce, assistant: assistantProps() })} />);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'dot' }), expect.any(Number), true);
+    rerender(<IslandView {...viewProps({ config: reduce, assistant: assistantProps({ open: true }) })} />);
+    expect(engines.at(-1)!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'cloud' }), expect.any(Number), true);
+    cleanup();
+    vi.mocked(engineModule.createSwarm).mockRestore();
+    engines = spyEngines();
+    render(<IslandView {...viewProps({ config: reduce, items: [permissionItem()] })} />);
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ fx: 'ring' }), expect.any(Number), true);
+  });
 });
 
 describe('карточка согласия на острове', () => {
@@ -988,6 +1530,46 @@ describe('карточка согласия на острове', () => {
   };
   const consent = (patch: Partial<NonNullable<IslandViewProps['consent']>> = {}): NonNullable<IslandViewProps['consent']> => ({
     card: CONSENT, deciding: false, note: null, onDecide: vi.fn(), ...patch,
+  });
+
+  it.each(['Enter', ' '])('consent same id/new folder: rearm, container focus и явная native активация %j', (key) => {
+    const c = consent();
+    const props = viewProps({ consent: c, requestKeyboard: true });
+    const { rerender } = render(<IslandView {...props} />);
+    arm();
+    act(() => screen.getByTestId('island-consent-trust').focus());
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, folder: '/tmp/changed' } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-consent-request'));
+    arm();
+    fireEvent.keyDown(document.activeElement!, { key });
+    expect(c.onDecide).not.toHaveBeenCalled();
+    act(() => screen.getByTestId('island-consent-trust').focus());
+    const target = document.activeElement as HTMLButtonElement;
+    expect(target.disabled).toBe(false);
+    if (fireEvent.keyDown(target, { key })) {
+      fireEvent.keyUp(target, { key });
+      fireEvent.click(target, { detail: 0 });
+    }
+    expect(c.onDecide).toHaveBeenCalledTimes(1);
+    expect(c.onDecide).toHaveBeenCalledWith('c-01', 'allow');
+  });
+
+  it('consent metadata/state отправки не перевзводят; changed requestedBy перевзводит без захвата фокуса', () => {
+    const c = consent();
+    const props = viewProps({ consent: c });
+    const { rerender, container } = render(<IslandView {...props} />);
+    const input = document.createElement('input');
+    container.append(input);
+    input.focus();
+    arm();
+    rerender(<IslandView {...props} consent={{ ...c, deciding: true, note: 'failed', card: { ...CONSENT, at: '2026-10-27T10:00:00.000Z' } }} />);
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, at: '2026-10-27T10:00:00.000Z' } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(false);
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, requestedBy: { source: 'launch' } } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
   });
 
   it('есть и ждущий запрос ленты, и согласие — показано согласие, запрос ждёт за ним', () => {
@@ -1033,5 +1615,313 @@ describe('карточка согласия на острове', () => {
     expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(false);
     rerender(<IslandView {...first} showId={2} />);
     expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('остров в вырезе (#9 §12, план 3b B28)', () => {
+  /** Вырез MacBook Pro 14″: 185 × 32 pt; кадр окна 480 pt, центр выреза в нём — на половине точки. */
+  const NOTCH = { width: 185, height: 32, centerX: 239.5 };
+  const notched = { ...ISLAND_BASE, topInset: 32, anchor: 'center' as const, notch: NOTCH };
+  let innerWidth = 0;
+
+  beforeEach(() => {
+    innerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
+  });
+
+  /** Подменяет размер, который jsdom не считает: `offsetWidth` и `offsetHeight` содержимого. */
+  function withOffsets(width: number, height: number, body: () => void): void {
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width);
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height);
+    try {
+      body();
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
+  }
+  /** Шевелит замер: содержимое получает новый размер, наблюдатели его пересчитывают. */
+  function resize(width: number, height: number): void {
+    withOffsets(width, height, () => {
+      act(() => {
+        for (const callback of resizeCallbacks) callback();
+      });
+    });
+  }
+  const shape = (): HTMLElement => screen.getByTestId('island');
+  const content = (): HTMLElement => screen.getByTestId('island-content');
+  const morph = (): string | undefined => shape().className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  describe('форма (N3)', () => {
+    /** Голый вырез: форма ровно по вырезу, у верхнего края, скругление снизу 10 px, без тени и обводки, без отступа. */
+    function expectBare(): void {
+      const bare = screen.getByTestId('island-notch');
+      expect(bare.style.width).toBe('185px');
+      expect(bare.style.height).toBe('32px');
+      expect(content().children).toHaveLength(1);
+      expect(content().style.paddingTop).toBe('0px');
+      expect(content().style.minWidth).toBe('');
+      expect(shape().className).toContain('rounded-b-[10px]');
+      expect(shape().className).toContain('shadow-none');
+      expect(shape().className).not.toContain('shadow-lg');
+      expect(shape().className).not.toContain('ring-1');
+      expect(parseFloat(shape().style.marginTop)).toBe(0);
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
+      expect(screen.queryByTestId('swarm')).toBeNull();
+    }
+    /**
+     * Капсула фона (B26 F-B26-3): одна форма высотой выреза — поле 80 pt, вырез, поле 80 pt; без отступа сверху, без
+     * тени, скругление снизу 14 px; пилюли нет. Возвращает левое и правое поле.
+     */
+    function expectCapsule(): { left: HTMLElement; right: HTMLElement } {
+      const capsule = screen.getByTestId('island-capsule');
+      expect(capsule.style.height).toBe('32px');
+      expect([...capsule.children].map((child) => (child as HTMLElement).style.width)).toEqual(['80px', '185px', '80px']);
+      expect(content().children).toHaveLength(1);
+      expect(content().style.paddingTop).toBe('0px');
+      expect(content().style.minWidth).toBe('');
+      expect(shape().className).toContain('rounded-b-[14px]');
+      expect(shape().className).toContain('shadow-none');
+      expect(shape().className).not.toContain('shadow-lg');
+      expect(screen.queryByTestId('island-notch')).toBeNull();
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+      return { left: screen.getByTestId('island-capsule-left'), right: screen.getByTestId('island-capsule-right') };
+    }
+    const capsuleSwarm = (): Element | null => screen.getByTestId('island-capsule-left').querySelector('[data-testid="swarm"]');
+
+    it('нечего показывать — голый вырез, ровно по его размеру (B26 F-B26-3)', () => {
+      view({ config: notched, model: IDLE_MODEL });
+      expectBare();
+      cleanup();
+      // Помощник закрыт и спокоен — тоже голый вырез.
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps() })} />);
+      expectBare();
+    });
+
+    it('агенты работают — капсула: слева мини-рой агентов, справа точка и число работающих', () => {
+      view({ config: notched, model: { ...IDLE_MODEL, working: 3, active: true } });
+      const { left, right } = expectCapsule();
+      expect(left.getAttribute('aria-label')).toBe('Parley agents');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('dot');
+      expect(right.textContent).toBe('3');
+      expect(right.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('3 working');
+    });
+
+    it('непросмотренный Done — капсула «✓ N Done» справа; он важнее числа работающих; без работы слева пусто', () => {
+      view({ config: notched, model: DONE_MODEL, doneCount: 2 });
+      let { left, right } = expectCapsule();
+      expect(right.textContent).toBe('✓ 2 Done');
+      expect(left.children).toHaveLength(0);
+      cleanup();
+      view({ config: notched, model: { ...DONE_MODEL, working: 1, active: true }, doneCount: 1 });
+      ({ left, right } = expectCapsule());
+      expect(right.textContent).toBe('✓ 1 Done');
+      expect(capsuleSwarm()).not.toBeNull();
+      cleanup();
+      // Done просмотрен (`doneCount` 0) и ничего не идёт — снова голый вырез.
+      view({ config: notched, model: DONE_MODEL, doneCount: 0 });
+      expectBare();
+    });
+
+    it('помощник свёрнут, говорит или в ошибке — капсула с ним слева: мини-сфера, лицо по голосу, сфера ошибки', () => {
+      const voice = vi.fn(() => null);
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·', view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'thinking' } } }) })} />);
+      let { left, right } = expectCapsule();
+      expect(left.getAttribute('aria-label')).toBe('Assistant');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('sphere');
+      expect(right.children).toHaveLength(0);
+      cleanup();
+      // Говорит, свёрнутым или закрытым: лицо с эмоцией предложения (рот идёт по голосу), не сфера мини-облика.
+      render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: assistantProps({ open: false, busy: true, view: { ...assistantProps().view, input: 'speaking', sentenceMood: 'joy', voice } }) })} />);
+      expectCapsule();
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('face');
+      expect(capsuleSwarm()?.getAttribute('data-emo')).toBe('joy');
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, model: { ...IDLE_MODEL, working: 2, active: true }, assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
+      ({ left, right } = expectCapsule());
+      expect(left.getAttribute('aria-label')).toBe('Assistant');
+      expect(capsuleSwarm()?.getAttribute('data-shape')).toBe('sphere');
+      expect(right.textContent).toBe('2');
+    });
+
+    it('центр формы — центр выреза с точностью до половины точки; вогнутые плечи 6 px у верхнего края', () => {
+      view({ config: notched });
+      const frame = screen.getByTestId('island-frame');
+      expect(frame.contains(shape())).toBe(true);
+      expect(frame.className).toContain('relative');
+      expect(frame.style.left).toBe('-0.5px');
+      const shoulders = frame.querySelectorAll('.island-shoulder');
+      expect(shoulders).toHaveLength(2);
+      expect(shoulders[0]!.getAttribute('aria-hidden')).toBe('true');
+      const css = ISLAND_CSS.replace(/\s+/g, ' ');
+      expect(css).toContain('.island-shoulder { position: absolute; top: 0; width: 6px; height: 6px;');
+      expect(css).toMatch(/\.island-shoulder-left \{ left: -6px; background: radial-gradient\(circle at 0 100%, transparent 6px, #000 6\.5px\); \}/);
+      expect(css).toMatch(/\.island-shoulder-right \{ right: -6px; background: radial-gradient\(circle at 100% 100%, transparent 6px, #000 6\.5px\); \}/);
+    });
+
+    it('без выреза обёртка не участвует в раскладке: ни сдвига, ни плеч, ни капсулы', () => {
+      view();
+      const frame = screen.getByTestId('island-frame');
+      expect(frame.className).toBe('contents');
+      expect(frame.style.left).toBe('');
+      expect(frame.querySelector('.island-shoulder')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
+    });
+
+    it('убран без фона — голый вырез; убран с непросмотренными Done — капсула «✓ N Done»', () => {
+      view({ config: notched, model: IDLE_MODEL, retracted: true });
+      expectBare();
+      cleanup();
+      view({ config: notched, model: DONE_MODEL, retracted: true, doneCount: 2 });
+      expect(expectCapsule().right.textContent).toBe('✓ 2 Done');
+      expect(screen.queryByText('✅ 2')).toBeNull();
+    });
+
+    it('наведение форму не выдвигает: ни выдвинутого, ни убранного острова (B26 F-B26-3)', () => {
+      view({ config: notched, model: IDLE_MODEL, hovered: true });
+      expectBare();
+      cleanup();
+      view({ config: notched, model: { ...IDLE_MODEL, working: 1, active: true }, hovered: true });
+      expectCapsule();
+      cleanup();
+      view({ config: notched, model: IDLE_MODEL, retracted: true, hovered: true, listOpen: true });
+      expectBare();
+    });
+
+    it('клик по вырезу и по капсуле открывает остров (onOpen)', () => {
+      const onOpen = vi.fn();
+      view({ config: notched, model: IDLE_MODEL, onOpen });
+      fireEvent.click(screen.getByTestId('island-notch'));
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      cleanup();
+      view({ config: notched, model: { ...IDLE_MODEL, working: 1, active: true }, onOpen });
+      fireEvent.click(screen.getByTestId('island-capsule-right'));
+      expect(onOpen).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('выдвижение (N5)', () => {
+    it('открытый список выдвигает форму: пилюля под вырезом, не уже выреза с полями, скругление 22 px и тень; закрыли — снова капсула', () => {
+      const props = viewProps({ config: notched });
+      const { rerender } = render(<IslandView {...props} />);
+      expect(screen.getByTestId('island-capsule')).toBeTruthy();
+      rerender(<IslandView {...props} hovered listOpen />);
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      expect(screen.getByTestId('island-list')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      // min-width = nw + 2·(h + 4): 185 + 2·36.
+      expect(content().style.minWidth).toBe('257px');
+      expect(shape().className).toContain('rounded-b-[22px]');
+      expect(shape().className).toContain('shadow-lg');
+      rerender(<IslandView {...props} hovered={false} listOpen={false} />);
+      expect(screen.getByTestId('island-capsule')).toBeTruthy();
+      expect(content().style.minWidth).toBe('');
+    });
+
+    it('запрос, согласие, предложение комнаты и помощник выдвигают форму без клика', () => {
+      view({ config: notched, items: [permissionItem()] });
+      expect(screen.getByTestId('island-card')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      cleanup();
+      view({ config: notched, consent: { card: { id: 'c-01', kind: 'folder-trust', folder: '/tmp/proj', projectPath: '/tmp/proj', requestedBy: { source: 'launch' }, at: '', state: 'pending' } as ConsentCard, deciding: false, note: null, onDecide: vi.fn() } });
+      expect(screen.getByTestId('island-consent-request')).toBeTruthy();
+      cleanup();
+      view({ config: notched, model: { ...MODEL, proposals: 1 } });
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true }) })} />);
+      expect(screen.getByTestId('assistant-view')).toBeTruthy();
+      expect(screen.queryByTestId('island-notch')).toBeNull();
+      expect(screen.queryByTestId('island-capsule')).toBeNull();
+    });
+
+    it('вырез → капсула → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
+      const { rerender } = render(<IslandView {...props} />);
+      resize(185, 32);
+      rerender(<IslandView {...props} model={MODEL} />);
+      resize(345, 32);
+      expect(morph()).toBe('island-morph-grow');
+      rerender(<IslandView {...props} model={MODEL} listOpen />);
+      resize(400, 220);
+      expect(morph()).toBe('island-morph-grow');
+      rerender(<IslandView {...props} model={MODEL} />);
+      resize(345, 32);
+      expect(morph()).toBe('island-morph-shrink');
+      rerender(<IslandView {...props} />);
+      resize(185, 32);
+      expect(morph()).toBe('island-morph-shrink');
+    });
+  });
+
+  describe('смена дисплея (N8)', () => {
+    it('вырез → полоса → вырез: новый размер сразу и без класса перехода, переход возвращается через два кадра', () => {
+      // Подставные кадры: rAF копит колбэки по номеру, отмена их снимает, `flush` прогоняет один кадр.
+      let frames = new Map<number, FrameRequestCallback>();
+      let next = 0;
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        frames.set(++next, cb);
+        return next;
+      });
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+        frames.delete(id);
+      });
+      const flush = (): void => {
+        act(() => {
+          const run = frames;
+          frames = new Map();
+          for (const cb of run.values()) cb(0);
+        });
+      };
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
+      const { rerender } = render(<IslandView {...props} />);
+      resize(185, 32);
+      expect(morph()).toBe('island-morph-grow');
+      // Остров ушёл на внешний монитор: выреза нет — пилюля, размер сразу новый, морфа нет.
+      withOffsets(280, 40, () => rerender(<IslandView {...props} config={{ ...notched, notch: null }} />));
+      expect(shape().style.width).toBe('280px');
+      expect(shape().style.height).toBe('40px');
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      flush();
+      expect(morph()).toBeUndefined();
+      flush();
+      expect(morph()).toBe('island-morph-grow');
+      // Вернулся на встроенный дисплей: снова голый вырез, снова мгновенно.
+      withOffsets(185, 32, () => rerender(<IslandView {...props} />));
+      expect(shape().style.width).toBe('185px');
+      expect(shape().style.height).toBe('32px');
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-notch')).toBeTruthy();
+      flush();
+      flush();
+      expect(morph()).toBe('island-morph-shrink');
+    });
+
+    it('новый замер того же дисплея (другой центр выреза) — тоже без морфа и со сдвигом по новому центру', () => {
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
+      const { rerender } = render(<IslandView {...props} />);
+      rerender(<IslandView {...props} config={{ ...notched, notch: { ...NOTCH, centerX: 240.5 } }} />);
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-frame').style.left).toBe('0.5px');
+    });
+  });
+
+  describe('уменьшенное движение (N10)', () => {
+    it('«Reduce motion» в вырезе: форма без класса перехода, data-motion гасит проявление содержимого', () => {
+      view({ config: { ...notched, motion: 'reduce' }, model: IDLE_MODEL });
+      resize(185, 32);
+      expect(morph()).toBeUndefined();
+      expect(shape().getAttribute('data-motion')).toBe('reduce');
+    });
   });
 });

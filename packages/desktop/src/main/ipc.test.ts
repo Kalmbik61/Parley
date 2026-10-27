@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
+import type { FeedCard, FeedItem } from '@parley/core';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { ISLAND_EVENTS } from '../shared/island.js';
@@ -16,8 +17,10 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, forwardHostToWindow, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
+import { TTS_VOICES } from '../shared/tts-types.js';
+import type { TtsService, TtsState } from './assistant/tts.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -43,6 +46,20 @@ class FakeIpcMain {
     if (!handler) throw new Error(`нет обработчика для ${channel}`);
     return handler(event, ...args);
   }
+}
+
+/** Подменная служба нейроголоса (план 3b, B15): веса не скачаны, скачивание отдаёт один шаг прогресса. */
+function fakeTts() {
+  return {
+    voices: vi.fn(async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: false }))),
+    download: vi.fn<TtsService['download']>(async (onProgress) => {
+      onProgress({ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 5, totalBytes: 10 });
+      return { ok: true };
+    }),
+    cancelDownload: vi.fn(),
+    remove: vi.fn(async () => undefined),
+    state: vi.fn((): TtsState => ({ state: 'not-downloaded' })),
+  };
 }
 
 /** Сессия раздела браузера и чужая — мост сверяет гостя по `contents.session` (кусок 9.1). */
@@ -124,8 +141,12 @@ function setup(
     appVersion?: string | null;
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
+    reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
+    islandShortcut?: () => { accelerator: string | null; ok: boolean };
+    suspendIslandShortcut?: (on: boolean) => void;
   } = {},
 ): {
+  tts: ReturnType<typeof fakeTts>;
   ipcMain: FakeIpcMain;
   connection: HostConnection;
   layoutStore: LayoutStore;
@@ -195,6 +216,7 @@ function setup(
   const imageThumbnail = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
   const setDirtyBuffers = vi.fn();
   const answerClose = vi.fn();
+  const tts = fakeTts();
   const roots: RootsRegistry =
     overrides.roots ??
     ({
@@ -227,6 +249,9 @@ function setup(
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
+    ...(overrides.reportSessionVisibility === undefined ? {} : { reportSessionVisibility: overrides.reportSessionVisibility }),
+    ...(overrides.islandShortcut === undefined ? {} : { islandShortcut: overrides.islandShortcut }),
+    ...(overrides.suspendIslandShortcut === undefined ? {} : { suspendIslandShortcut: overrides.suspendIslandShortcut }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -236,6 +261,7 @@ function setup(
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
+    tts,
     browser: {
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
@@ -249,6 +275,7 @@ function setup(
   });
 
   return {
+    tts,
     ipcMain,
     connection,
     layoutStore,
@@ -272,6 +299,30 @@ function setup(
 }
 
 describe('registerIpc', () => {
+  it('exposes island shortcut status and suspends only through its dedicated IPC', async () => {
+    const suspend = vi.fn();
+    const { ipcMain } = setup({ islandShortcut: () => ({ accelerator: 'Control+Alt+I', ok: false }), suspendIslandShortcut: suspend });
+    expect(await ipcMain.invoke('app:island-shortcut')).toEqual({ accelerator: 'Control+Alt+I', ok: false });
+    ipcMain.invoke('app:island-shortcut-suspend', true);
+    expect(suspend).toHaveBeenCalledWith(true);
+  });
+  it('terminal session target is additive, while cardId+terminal and other view values are rejected', () => {
+    const session = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } };
+    expect(isFocusTarget(session)).toBe(true);
+    expect(isFocusTarget({ ...session, cardId: 'c-1' })).toBe(true);
+    expect(isFocusTarget({ ...session, view: 'terminal' })).toBe(true);
+    for (const view of ['chat', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'terminal', cardId: 'c-1' })).toBe(false);
+  });
+  it('session-visibility preserves sender and main-frame identity for the guarded relay', () => {
+    const reportSessionVisibility = vi.fn();
+    const { ipcMain } = setup({ reportSessionVisibility });
+    const event = { sender: {}, senderFrame: {} };
+    const value = { seq: 1, documentVisible: true, refs: [] };
+    ipcMain.invokeWithEvent('app:session-visibility', event, value);
+    expect(reportSessionVisibility).toHaveBeenCalledOnce();
+    expect(reportSessionVisibility).toHaveBeenCalledWith(event, value);
+  });
   it('host:activity-snapshot отдаёт снимок активности из HostConnection (раунд исправлений 1 куска 3.1)', async () => {
     const { ipcMain } = setup();
     expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([{ ref: { sessionId: 's-1' } }]);
@@ -604,6 +655,38 @@ describe('registerIpc', () => {
   });
 });
 
+describe('нейроголос помощника для настроек (план 3b, B15)', () => {
+  it('app:assistant-voices отдаёт каталог службы; G3: нескачанный голос — downloaded: false, ничего не качается само', async () => {
+    const { ipcMain, tts } = setup();
+    const voices = (await ipcMain.invoke('app:assistant-voices')) as { id: string; downloaded: boolean }[];
+    expect(voices.map((voice) => voice.id)).toEqual(TTS_VOICES.map((voice) => voice.id));
+    expect(voices.every((voice) => !voice.downloaded)).toBe(true);
+    expect(await ipcMain.invoke('app:assistant-voice-state')).toEqual({ state: 'not-downloaded' });
+    expect(tts.download).not.toHaveBeenCalled();
+  });
+
+  it('app:assistant-voice-download качает по запросу и шлёт прогресс отправителю; закрытому окну — нет', async () => {
+    const { ipcMain, tts } = setup();
+    const sender = { isDestroyed: vi.fn(() => false), send: vi.fn() };
+    await expect(ipcMain.invokeWithEvent('app:assistant-voice-download', { sender })).resolves.toEqual({ ok: true });
+    expect(tts.download).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 5, totalBytes: 10 });
+    const gone = { isDestroyed: vi.fn(() => true), send: vi.fn() };
+    await ipcMain.invokeWithEvent('app:assistant-voice-download', { sender: gone });
+    expect(gone.send).not.toHaveBeenCalled();
+  });
+
+  it('D5: app:assistant-voice-cancel → cancelDownload, app:assistant-voice-remove → remove', async () => {
+    const { ipcMain, tts } = setup();
+    await ipcMain.invoke('app:assistant-voice-cancel');
+    expect(tts.cancelDownload).toHaveBeenCalledTimes(1);
+    expect(tts.remove).not.toHaveBeenCalled();
+    await ipcMain.invoke('app:assistant-voice-remove');
+    expect(tts.remove).toHaveBeenCalledTimes(1);
+    expect(tts.download).not.toHaveBeenCalled();
+  });
+});
+
 describe('app:save-diagnostics', () => {
   it('зовёт saveDiagnostics с { profile: false } и показывает файл в Finder', async () => {
     const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
@@ -862,11 +945,141 @@ describe('host:call от острова', () => {
   const island = { id: 99 };
   const options = { isIslandSender: (sender: unknown) => sender === island };
   const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+  const at = '2026-10-26T10:00:00.000Z';
+  const progress = { revision: 1, availability: 'available', current: null, recent: [], truncated: false };
+
+  it('progress строго валидирует params/result и ограничивает каждый sender интервалом 250ms', async () => {
+    vi.useFakeTimers();
+    try {
+      const other = { id: 100 };
+      const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island || sender === other });
+      vi.mocked(connection.call).mockResolvedValue(progress);
+      const invoke = (sender: object, params: unknown = { ref: REF }) => ipcMain.invokeWithEvent('host:call', { sender }, 'feed.progress', params);
+      await expect(invoke(island, { ref: REF, extra: 'SECRET' })).rejects.toSatisfy((error: unknown) => decodeIpcError(error).code === 'bad_request');
+      expect(connection.call).not.toHaveBeenCalled();
+      expect(await invoke(island)).toEqual(progress);
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => {
+        const info = decodeIpcError(error);
+        return info.code === 'conflict' && info.data?.reason === 'island-progress-rate-limit' && info.data?.retryAfterMs === 250;
+      });
+      expect(await invoke(other)).toEqual(progress);
+      await vi.advanceTimersByTimeAsync(249);
+      await expect(invoke(island)).rejects.toBeTruthy();
+      await vi.advanceTimersByTimeAsync(1);
+      vi.mocked(connection.call).mockResolvedValue({ ...progress, command: 'SECRET-command' });
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => !String(error).includes('SECRET') && decodeIpcError(error).code === 'failed');
+      await vi.advanceTimersByTimeAsync(250);
+      vi.mocked(connection.call).mockRejectedValue(new HostError('failed', 'SECRET-source-error'));
+      await expect(invoke(island)).rejects.toSatisfy((error: unknown) => !String(error).includes('SECRET'));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([{ ref: null }, { ref: { ...REF, sessionId: '' } }, { ref: REF, agentId: 'child' }])('progress invalid params не доходят до хоста: %j', async (params) => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.progress', params)).rejects.toSatisfy((error: unknown) => decodeIpcError(error).code === 'bad_request');
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it.each(['conflict', 'unknown_method'])('progress сохраняет безопасный %s код без raw ошибки', async (code) => {
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockRejectedValue(new HostError(code, 'SECRET-source', {
+      reason: 'island-progress-rate-limit', retryAfterMs: 125, command: 'SECRET-command',
+    }));
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.progress', { ref: REF })).rejects.toSatisfy((error: unknown) => {
+      const info = decodeIpcError(error);
+      return info.code === code && !String(error).includes('SECRET') &&
+        (code !== 'conflict' || JSON.stringify(info.data) === JSON.stringify({ reason: 'island-progress-rate-limit', retryAfterMs: 125 }));
+    });
+  });
+  const text = (id: string): FeedItem => ({ id, at, kind: 'text', messageId: null, text: id, streaming: false });
+  const prompt = (id: string): FeedItem => ({ id, at, kind: 'prompt', text: id, images: 0 });
+  const card = (kind: FeedCard['kind'], id: string, state: FeedCard['state'] = 'pending'): FeedCard => {
+    const base = { id, at, cardId: id, state, toolUseId: null, toolName: kind, toolInput: {} };
+    if (kind === 'permission') return { ...base, kind, suggestions: [], notified: false };
+    if (kind === 'question') return { ...base, kind, questions: [{ question: 'Which?', header: null, multiSelect: false, options: [] }] };
+    return { ...base, kind, plan: 'Plan', planFilePath: null };
+  };
+  const snapshot = (items: FeedItem[]) => ({ items, revision: 7, schemaVersion: 3, mode: 'default', decisions: 'terminal' as const });
 
   it('остров зовёт методы белого списка', async () => {
     const { ipcMain, connection } = setup(options);
-    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF });
-    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF });
+    vi.mocked(connection.call).mockResolvedValue(snapshot([]));
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF, scope: 'attention' });
+  });
+
+  it.each([
+    { ref: REF },
+    { ref: REF, scope: 'full' },
+    { ref: REF, scope: 'attention', agentId: 'child' },
+    { ref: REF, scope: 'attention', agentId: undefined },
+    { ref: REF, scope: 'attention', limit: 1 },
+    { ref: REF, scope: 'attention', extra: true },
+    { scope: 'attention' },
+    { ref: null, scope: 'attention' },
+    { ref: { ...REF, projectPath: 7 }, scope: 'attention' },
+    { ref: { projectPath: '/p', workId: 'w-1' }, scope: 'attention' },
+    null,
+    [],
+  ])('island snapshot отклоняет неправильные параметры до вызова хоста: %j', async (params) => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', params)).rejects.toSatisfy(
+      (error: unknown) => decodeIpcError(error).code === 'bad_request',
+    );
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it('island snapshot использует существующий sessionRef parser', async () => {
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValue(snapshot([]));
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: { ...REF, extra: 'stripped' }, scope: 'attention' });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF, scope: 'attention' });
+  });
+
+  it('legacy full snapshot остров получает как все pending и только последний text после последнего prompt', async () => {
+    const permission = card('permission', 'permission');
+    const question = card('question', 'question');
+    const plan = card('plan', 'plan');
+    const reply = text('latest-answer');
+    const full = snapshot([
+      prompt('old-private-prompt'), text('old-answer'), permission, question, prompt('current-private-prompt'),
+      text('partial-answer'), { id: 'private-tool', at, kind: 'tool', toolUseId: 'tool-1', name: 'Read', input: { path: '/private/old-file' }, status: 'done' },
+      card('permission', 'settled', 'allowed'), plan, reply,
+    ]);
+    const originalItems = [...full.items];
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValue(full);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual({ ...full, items: [permission, question, plan, reply] });
+    expect(full.items).toEqual(originalItems);
+  });
+
+  it('island snapshot без prompt оставляет последний text, пустой новый ход не берёт text прежнего хода', async () => {
+    const pending = card('permission', 'permission');
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValueOnce(snapshot([text('old'), pending, text('last')]))
+      .mockResolvedValueOnce(snapshot([text('old'), prompt('new-private-prompt'), pending]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual(snapshot([pending, text('last')]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual(snapshot([pending]));
+  });
+
+  it('уже урезанный attention snapshot и пустая очередь проходят без потери metadata', async () => {
+    const { ipcMain, connection } = setup(options);
+    const attention = snapshot([card('plan', 'plan'), text('reply')]);
+    vi.mocked(connection.call).mockResolvedValueOnce(attention).mockResolvedValueOnce(snapshot([]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' })).toEqual(attention);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' })).toEqual(snapshot([]));
+  });
+
+  it.each([undefined, 'attention'] as const)('Chat snapshot scope=%s сохраняет исходные параметры и полный ответ', async (scope) => {
+    const { ipcMain, connection } = setup(options);
+    const full = snapshot([prompt('private-prompt'), text('first'), text('last')]);
+    const params = { ref: REF, agentId: 'child', ...(scope === undefined ? {} : { scope }) };
+    vi.mocked(connection.call).mockResolvedValue(full);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: { id: 1 } }, 'feed.snapshot', params)).toBe(full);
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', params);
   });
 
   it('прочие методы острову отказаны, хост их не видит', async () => {
@@ -1628,7 +1841,7 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
   });
 
   /** Подставное соединение: `emit` рассылает событие подписчикам, статус отдаётся при подписке. */
-  function fakeForwarding(options?: { events?: ReadonlySet<string> }) {
+  function fakeForwarding(options?: { events?: ReadonlySet<string>; island?: boolean }) {
     const eventListeners = new Set<(message: unknown) => void>();
     const connection = {
       onEvent: (listener: (message: unknown) => void) => {
@@ -1649,11 +1862,57 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     };
     forwardHostToPages(connection, window as unknown as BrowserWindow, options);
     contents.emit('did-finish-load');
-    const emit = (event: string): void => {
-      for (const listener of eventListeners) listener({ event, data: {} });
+    const emit = (event: string, data: unknown = {}): void => {
+      for (const listener of eventListeners) listener({ event, data });
     };
     return { sent, emit };
   }
+
+  it('island old-host backstop одинаково скрывает private proof в RPC и event без мутации', async () => {
+    const island = { id: 99 };
+    const proof = { launchRevision: 'private-launch-canary', pid: 42, startedAtProcess: 'private-process-canary', threadId: 'raw-thread' };
+    const source = { entries: [{ projectPath: '/p', map: { work: { id: 'w-0001' },
+      sessions: [{ id: 's-01', providerSessionId: proof.threadId, codexThreadBinding: proof }] } }], branches: {}, revision: 7 };
+    const before = JSON.stringify(source);
+    const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island });
+    vi.mocked(connection.call).mockResolvedValue(source);
+    const rpc = await ipcMain.invokeWithEvent('host:call', { sender: island }, 'works.list', {});
+    const { sent, emit } = fakeForwarding({ events: new Set(['works.changed']), island: true });
+    emit('works.changed', source);
+    expect(sent.at(-1)).toEqual(['host:event', { event: 'works.changed', data: rpc }]);
+    const json = JSON.stringify(rpc);
+    expect(json).not.toContain('codexThreadBinding');
+    expect(json).not.toContain(proof.launchRevision);
+    expect(json).not.toContain(proof.startedAtProcess);
+    expect(json).toContain(proof.threadId);
+    expect(JSON.stringify(source)).toBe(before);
+    expect(await ipcMain.invoke('host:call', 'works.list', {})).toBe(source);
+  });
+
+  it('island activity snapshot/event share projection while main receives raw payload unchanged', async () => {
+    const island = { id: 99 };
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+    const task = { id: 'RAW-SHORT-ID', agentType: 'agent', description: 'token=SECRET-token', background: true };
+    const source = { ref, activity: { activity: 'blocked' as const, subagents: 1,
+      tasks: [{ ...task, transcriptPath: '/SECRET-transcript' }], waitingFor: 'RAW-SHORT-ID', heldByBackground: false,
+      turnEndedAt: null, lastEventAt: null, source: 'hooks' as const, hooksMissing: false,
+      need: { kind: 'approval' as const, since: '2026-10-27T00:00:00.000Z', detail: 'SECRET-command', resetsAt: null, window: null, account: null } },
+      metrics: { tokensIn: 1, tokensOut: 2, durationMs: null, unread: 0, subagents: 1, model: 'SECRET-model', tasks: [task] } };
+    Object.assign(source.metrics, { plan: { raw: 'SECRET-plan' } });
+    const before = JSON.stringify(source);
+    const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island });
+    vi.mocked(connection.activitySnapshot).mockReturnValue([source]);
+    const rpc = await ipcMain.invokeWithEvent('host:activity-snapshot', { sender: island }) as unknown[];
+    const projected = fakeForwarding({ events: new Set(['activity.changed']), island: true });
+    projected.emit('activity.changed', source);
+    expect(projected.sent.at(-1)).toEqual(['host:event', { event: 'activity.changed', data: rpc[0] }]);
+    expect(JSON.stringify(rpc)).not.toMatch(/SECRET|RAW-SHORT-ID/);
+    expect(rpc[0]).toMatchObject({ islandTasksTotal: 1 });
+    expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([source]);
+    const main = fakeForwarding(); main.emit('activity.changed', source);
+    expect(main.sent.at(-1)).toEqual(['host:event', { event: 'activity.changed', data: source }]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
 
   it('с белым списком окну уходят только события из списка, статус — всегда (остров: без pty.output)', () => {
     const { sent, emit } = fakeForwarding({ events: new Set(['works.changed', 'activity.changed']) });

@@ -166,6 +166,32 @@ describe('S.update и S.settings.checkForUpdates', () => {
   });
 });
 
+describe('S.settings.island — блок «Island» (#9 §5)', () => {
+  it('подписи настроек и три палитры', () => {
+    expect(S.settings.island.palette).toBe('Island sound palette');
+    expect(S.settings.island.volume).toBe('Island volume');
+    expect(S.settings.island.interfaceSounds).toBe('Interface sounds');
+    expect(S.settings.island.reduceMotion).toBe('Reduce motion');
+    expect(Object.keys(S.settings.island.palettes)).toEqual(['soft', 'crystal', 'warm']);
+  });
+
+  it('ни одного кириллического знака', () => {
+    expect(CYRILLIC.test(JSON.stringify(S.settings.island))).toBe(false);
+  });
+});
+
+describe('S.island.capsule — капсула острова в вырезе (B26 F-B26-3)', () => {
+  it('подписи роя и статуса и счётчик Done — по-английски, с числом', () => {
+    const { capsule } = S.island;
+    expect(capsule.assistant).toBe('Assistant');
+    expect(capsule.agents).toBe('Parley agents');
+    expect(capsule.working(3)).toBe('3 working');
+    expect(capsule.done(2)).toBe('✓ 2 Done');
+    const texts = [capsule.assistant, capsule.agents, capsule.working(1), capsule.done(1)];
+    expect(texts.some((text) => CYRILLIC.test(text))).toBe(false);
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');

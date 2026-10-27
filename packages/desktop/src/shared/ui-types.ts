@@ -6,6 +6,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
+import { DEFAULT_VOICE, isAssistantVoiceId, TTS_VOICES, type AssistantVoiceId, type TtsVoice } from './tts-types.js';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
 export type Appearance = 'system' | 'dark' | 'light';
@@ -29,6 +30,24 @@ export interface BrowserUi {
 /** Точка острова у верхнего края монитора (спека острова, раздел 4). */
 export type IslandAnchor = 'left' | 'center' | 'right';
 
+/** Палитра сигналов острова (#9 §3.2): тоника и тембр одного набора рецептов (`renderer/island/sound/palettes.ts`). */
+export type IslandSoundPalette = 'soft' | 'crystal' | 'warm';
+
+/** Движение острова (#9 §4.5): `system` — по системному `prefers-reduced-motion`, `reduce` — уменьшенное всегда. */
+export type IslandMotion = 'system' | 'reduce';
+
+/**
+ * Звуки острова (#9 §5). Звук запросов и Done острова включают переключатели `notifications.sound` и
+ * `notifications.finishedSound`, отдельного «звук острова вкл/выкл» нет.
+ */
+export interface IslandSoundUi {
+  palette: IslandSoundPalette;
+  /** Общая громкость сигналов острова, 0–1; 0 — то же, что выключено. */
+  volume: number;
+  /** «Interface sounds»: наведение, открыть/закрыть, начало работы. */
+  ui: boolean;
+}
+
 /**
  * Остров одобрений (спека 2026-10-12): включён ли (по умолчанию да — у всех, включая обновившихся), где стоит
  * (`displayId` — id монитора Electron, `null` — основной; `anchor` — точка у его верхнего края).
@@ -37,6 +56,10 @@ export interface IslandUi {
   enabled: boolean;
   displayId: number | null;
   anchor: IslandAnchor;
+  /** null disables the pending queue global shortcut. */
+  pendingHotkey: string | null;
+  sound: IslandSoundUi;
+  motion: IslandMotion;
 }
 
 /** Помощник на острове (спека 2026-10-14, 6.1). Выключен по умолчанию: тратит лимит провайдера. */
@@ -50,6 +73,10 @@ export interface AssistantUi {
   hotkey: string;
   /** Код языка Whisper (`uk`, `de`, …), не `auto`; `null` — язык системы. */
   language: AssistantLanguage | null;
+  /** «Speak answers» (план 3b, B15): помощник говорит ответы нейроголосом; выключено по умолчанию. */
+  speak: boolean;
+  /** Голос каталога (`shared/tts-types.ts`); `null` — `DEFAULT_VOICE`. */
+  voice: AssistantVoiceId | null;
 }
 
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
@@ -115,8 +142,15 @@ export const DEFAULT_UI: UiFile = {
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null, agentsAllowed: true },
-  island: { enabled: true, displayId: null, anchor: 'center' },
-  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null },
+  island: {
+    enabled: true,
+    displayId: null,
+    anchor: 'center',
+    pendingHotkey: 'Control+Alt+I',
+    sound: { palette: 'soft', volume: 0.6, ui: false },
+    motion: 'system',
+  },
+  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, voice: null },
 };
 
 /**
@@ -260,6 +294,18 @@ function normalizeNotifications(value: unknown): UiFile['notifications'] {
 }
 
 const ISLAND_ANCHORS: readonly IslandAnchor[] = ['left', 'center', 'right'];
+const ISLAND_PALETTES: readonly IslandSoundPalette[] = ['soft', 'crystal', 'warm'];
+
+/** Звук острова — по образцу `notifications`: чужое значение поля даёт умолчание, громкость — в пределах 0–1. */
+function normalizeIslandSound(value: unknown): IslandSoundUi {
+  const source = isRecord(value) ? value : {};
+  const fallback = DEFAULT_UI.island.sound;
+  return {
+    palette: ISLAND_PALETTES.includes(source.palette as IslandSoundPalette) ? (source.palette as IslandSoundPalette) : fallback.palette,
+    volume: isFiniteNumber(source.volume) ? clamp(source.volume, 0, 1) : fallback.volume,
+    ui: typeof source.ui === 'boolean' ? source.ui : fallback.ui,
+  };
+}
 
 function normalizeIsland(value: unknown): IslandUi {
   const source = isRecord(value) ? value : {};
@@ -268,6 +314,10 @@ function normalizeIsland(value: unknown): IslandUi {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
     displayId: Number.isInteger(source.displayId) ? (source.displayId as number) : fallback.displayId,
     anchor: ISLAND_ANCHORS.includes(source.anchor as IslandAnchor) ? (source.anchor as IslandAnchor) : fallback.anchor,
+    pendingHotkey: typeof source.pendingHotkey === 'string' && source.pendingHotkey.trim() !== ''
+      ? source.pendingHotkey : source.pendingHotkey === null ? null : fallback.pendingHotkey,
+    sound: normalizeIslandSound(source.sound),
+    motion: source.motion === 'system' || source.motion === 'reduce' ? source.motion : fallback.motion,
   };
 }
 
@@ -281,7 +331,15 @@ function normalizeAssistant(value: unknown): AssistantUi {
     model: text(source.model),
     hotkey: text(source.hotkey) ?? fallback.hotkey,
     language: isVoiceLanguage(source.language) && source.language !== 'auto' ? source.language : null,
+    speak: typeof source.speak === 'boolean' ? source.speak : fallback.speak,
+    voice: isAssistantVoiceId(source.voice) ? source.voice : null,
   };
+}
+
+/** Голос помощника из настроек: выбранный или `DEFAULT_VOICE` (G4). Род голоса — для зеркала хосту и острова. */
+export function assistantVoice(assistant: AssistantUi): TtsVoice {
+  const id = assistant.voice ?? DEFAULT_VOICE;
+  return TTS_VOICES.find((voice) => voice.id === id) ?? TTS_VOICES[0]!;
 }
 
 /**
