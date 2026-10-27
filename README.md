@@ -106,8 +106,9 @@ voice, Qwen3-TTS 0.6B CustomVoice run on your Mac by speech.cpp:
 - the weights, 1214 MB and one file for all voices, are downloaded only when you press Download in
   Settings → Assistant, with Cancel and Delete like the Whisper models; "Preparing voice…" shows
   until the voice is ready;
-- while it speaks the swarm becomes a face: the mouth follows the voice and the mood changes from
-  sentence to sentence. Esc stops the voice at once, and the speaker button on the island turns
+- it starts speaking while the answer is still being written, sentence by sentence, and the swarm
+  becomes a face: the mouth follows the voice and the mood changes from sentence to sentence. Esc,
+  Send or Cancel on a card stop the voice at once, and the speaker button on the island turns
   "Speak answers" off and on;
 - the voice needs Apple Silicon and an answer language of Russian or English. On an Intel Mac or in
   another language the answers are text only. The first answer after installing or updating Parley
