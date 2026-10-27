@@ -132,7 +132,7 @@ describe('useWorksStore: номер снимка (P35)', () => {
 
     // Событие 9 при версии окна 7: пропущено 8, окно перечитывает держимое.
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [makeMailRoom('r-01', { prevTop: 6, top: 7, total: 7, letters: [note('m-07')] })] }));
-    await vi.waitFor(() => expect(requests).toEqual(['after:4']));
+    await vi.waitFor(() => expect(requests).toEqual([undefined]));
     dispose();
   });
 });

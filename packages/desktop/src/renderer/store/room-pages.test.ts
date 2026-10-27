@@ -3,7 +3,7 @@ import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
-import { MAIL_PAGES_MAX, followRoom, repairWork, useRoomPagesStore } from './room-pages.js';
+import { MAIL_PAGES_MAX, followRoom, repairWork, rereadRoom, useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
 const note = (id: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' } });
@@ -108,6 +108,16 @@ describe('rooms.mail: письма события и дочитывание', ()
   });
   const ids = (): string[] => useWorksStore.getState().entries[0]!.map.messages.map((message) => message.id);
   const pageCalls = (bridge: ReturnType<typeof createFakeBridge>): unknown[] => bridge.calls.filter((call) => call.method === 'context.messages');
+  /** Хост листает комнату `r-01` от вершины вниз по сотне писем (номера 1..top): без курсора — вершина, `before:N` — старше номера N. */
+  const hostPaging =
+    (top: number, cursors: Array<string | undefined>) =>
+    (params: { cursor?: string | undefined }) => {
+      cursors.push(params.cursor);
+      const below = params.cursor === undefined ? top + 1 : Number(params.cursor.slice('before:'.length));
+      const from = Math.max(1, below - 100);
+      const messages = Array.from({ length: below - from }, (_, index) => unread(`m-${from + index}`));
+      return pageOf(messages, from === 1 ? null : `before:${from}`);
+    };
 
   /** Окно с работой в снимке, подключённое к хосту с признаком `rooms-mail` (или без: `features: null`). */
   async function open(current: WindowWorkEntry | null, features: string[] | null = [ROOMS_MAIL_FEATURE]) {
@@ -173,10 +183,11 @@ describe('rooms.mail: письма события и дочитывание', ()
   });
 
   describe('followRoom', () => {
-    it('читает страницы после наибольшего держимого номера цепочкой по next и встаёт в карту свежими копиями', async () => {
+    it('читает от вершины вниз цепочкой по next до наибольшего держимого номера и встаёт в карту свежими копиями', async () => {
       const bridge = createFakeBridge();
       const cursors: Array<string | undefined> = [];
-      const answers = [pageOf([unread('m-10')], 'after:10'), pageOf([unread('m-11')])];
+      // Вторая страница достигает m-09 (наибольший держимый): `next` у неё есть, но читать дальше не нужно.
+      const answers = [pageOf([unread('m-11'), unread('m-12')], 'before:11'), pageOf([unread('m-09', { readBy: { human: 'T' } }), unread('m-10')], 'before:9')];
       bridge.setHandler('context.messages', (params) => {
         cursors.push(params.cursor);
         return answers.shift()!;
@@ -184,21 +195,20 @@ describe('rooms.mail: письма события и дочитывание', ()
       const current = entry([note('m-08'), note('m-09')], 9, 8, 5);
       useWorksStore.setState({ entries: [current] });
       await followRoom(bridge, current, 'r-01');
-      expect(cursors).toEqual(['after:9', 'after:10']);
-      expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11']);
+      expect(cursors).toEqual([undefined, 'before:11']);
+      expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11', 'm-12']);
     });
 
-    it('страниц не больше потолка: остальное добирает следующий снимок', async () => {
+    it('не дошли до держимого за потолок страниц — сбой, а письма вершины всё равно встали в карту', async () => {
       const bridge = createFakeBridge();
-      let calls = 0;
-      bridge.setHandler('context.messages', () => {
-        calls += 1;
-        return pageOf([], `after:${10 + calls}`);
-      });
+      const cursors: Array<string | undefined> = [];
+      const top = 100 * (MAIL_PAGES_MAX + 5);
+      bridge.setHandler('context.messages', hostPaging(top, cursors));
       const current = entry([note('m-09')], 9, 9, 5);
       useWorksStore.setState({ entries: [current] });
-      await followRoom(bridge, current, 'r-01');
-      expect(calls).toBe(MAIL_PAGES_MAX);
+      await expect(followRoom(bridge, current, 'r-01')).rejects.toThrow(/not read down to m-9 within/);
+      expect(cursors).toHaveLength(MAIL_PAGES_MAX);
+      expect(ids()).toContain(`m-${top}`);
     });
 
     it('комнату без держимых писем не читает', async () => {
@@ -210,11 +220,12 @@ describe('rooms.mail: письма события и дочитывание', ()
   });
 
   describe('repairWork', () => {
-    it('каждая держимая комната и Mail читаются от наименьшего держимого номера до вершины', async () => {
+    it('каждая держимая комната и Mail читаются от вершины вниз до наименьшего держимого номера', async () => {
       const bridge = createFakeBridge();
       const asked: Array<[string | null, string | undefined]> = [];
+      // Вторая страница r-01 достигает m-08 (наименьший держимый): `next` у неё есть, но третьей страницы не будет.
       const answers: Record<string, Array<ReturnType<typeof pageOf>>> = {
-        'r-01': [pageOf([unread('m-08', { readBy: { human: 'T' } }), unread('m-09')], 'after:9'), pageOf([unread('m-10')])],
+        'r-01': [pageOf([unread('m-09'), unread('m-10')], 'before:9'), pageOf([unread('m-08', { readBy: { human: 'T' } })], 'before:8')],
         direct: [pageOf([unread('m-04', { roomId: null, to: ['human'], readBy: { human: 'T' } })])],
       };
       bridge.setHandler('context.messages', (params) => {
@@ -225,9 +236,9 @@ describe('rooms.mail: письма события и дочитывание', ()
       useWorksStore.setState({ entries: [current] });
       await repairWork(bridge, current);
       expect(asked).toEqual([
-        ['r-01', 'after:7'],
-        ['r-01', 'after:9'],
-        [null, 'after:3'],
+        ['r-01', undefined],
+        ['r-01', 'before:9'],
+        [null, undefined],
       ]);
       const held = useWorksStore.getState().entries[0]!.map.messages;
       expect(held.map((message) => message.id)).toEqual(['m-04', 'm-08', 'm-09', 'm-10']);
@@ -247,6 +258,45 @@ describe('rooms.mail: письма события и дочитывание', ()
       await expect(repairWork(bridge, current)).rejects.toMatchObject({ code: 'internal' });
       expect(useWorksStore.getState().entries[0]!.map.messages.find((message) => message.id === 'm-04')?.readBy).toEqual({ human: 'T' });
       await expect(repairWork(bridge, entry([unread('m-05', { roomId: 'r-02' })], 9, 8, 5))).resolves.toBeUndefined();
+    });
+
+    it('диапазон больше потолка страниц: письма вершины доходят, старый конец остаётся, а не дочитанное — сбой, не тихий возврат', async () => {
+      const bridge = createFakeBridge();
+      const cursors: Array<string | undefined> = [];
+      const top = 100 * (MAIL_PAGES_MAX + 5);
+      bridge.setHandler('context.messages', hostPaging(top, cursors));
+      // Окно держит только два самых старых письма комнаты: диапазон от m-1 до вершины втрое длиннее потолка.
+      const current = entry([unread('m-1'), unread('m-2')], top, 1, 5);
+      useWorksStore.setState({ entries: [current] });
+      await expect(repairWork(bridge, current)).rejects.toThrow(/not read down to m-1 within/);
+      expect(cursors).toHaveLength(MAIL_PAGES_MAX);
+      const lowest = top - 100 * MAIL_PAGES_MAX + 1;
+      expect(ids()).toContain(`m-${top}`);
+      expect(ids()).toContain(`m-${lowest}`);
+      expect(ids()).not.toContain(`m-${lowest - 1}`);
+      expect(ids()).toHaveLength(2 + 100 * MAIL_PAGES_MAX);
+    });
+  });
+
+  describe('rereadRoom', () => {
+    it('диапазон укладывается в потолок: страницы идут вниз от вершины и останавливаются на странице с наименьшим держимым', async () => {
+      const bridge = createFakeBridge();
+      const cursors: Array<string | undefined> = [];
+      bridge.setHandler('context.messages', hostPaging(700, cursors));
+      const current = entry([unread('m-450'), unread('m-451')], 700, 450, 5);
+      useWorksStore.setState({ entries: [current] });
+      await rereadRoom(bridge, current, 'r-01');
+      // Страница 401..500 достигает m-450: четвёртой не будет; письма вершины на месте.
+      expect(cursors).toEqual([undefined, 'before:601', 'before:501']);
+      expect(ids()).toContain('m-700');
+      expect(ids()).toContain('m-450');
+    });
+
+    it('комнату без держимых писем не читает', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('context.messages', () => pageOf([]));
+      await rereadRoom(bridge, entry([], 9, null, 5), 'r-01');
+      expect(pageCalls(bridge)).toEqual([]);
     });
   });
 });

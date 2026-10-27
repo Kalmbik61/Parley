@@ -3,6 +3,7 @@ import type { MapCompact, Message, Room, WindowWorkEntry } from '@parley/core';
 import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type RoomsMailRoom, type WorksSnapshot } from '@parley/protocol';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { MAIL_PAGES_MAX } from './room-pages.js';
 import { orderedWorks, useWorksStore } from './works.js';
 
 function entry(id: string, createdAt: string): WindowWorkEntry {
@@ -204,7 +205,7 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     dispose();
   });
 
-  it('разрыв версии: письмо события применяется, repairWork читает after: от наименьшего держимого seq и обновляет readBy старых писем', async () => {
+  it('разрыв версии: письмо события применяется, repairWork читает от вершины вниз до наименьшего держимого seq и обновляет readBy старых писем', async () => {
     const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
     bridge.setHandler('context.messages', () =>
       page([letter('m-08', { readBy: { human: 'T' } }), letter('m-09', { readBy: { human: 'T' } }), letter('m-10')]),
@@ -214,8 +215,8 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
     await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
 
-    // m-08 — наименьший держимый номер: курсор на единицу меньше, чтобы страница вернула и его.
-    expect(pageCalls(bridge)).toEqual(['after:7']);
+    // Без курсора — страница от вершины; m-08 — наименьший держимый номер, страница его достигает, дальше читать нечего.
+    expect(pageCalls(bridge)).toEqual([undefined]);
     expect(useWorksStore.getState().entries[0]!.map.messages[1]?.readBy).toEqual({ human: 'T' });
     // Версия 8 держится: следующее событие по цепочке запросов не требует.
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
@@ -233,7 +234,7 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     });
     bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
     await vi.waitFor(() => expect(asked).toHaveLength(2));
-    expect(asked).toEqual(expect.arrayContaining([{ roomId: 'r-01', cursor: 'after:7' }, { roomId: null, cursor: 'after:6' }]));
+    expect(asked).toEqual(expect.arrayContaining([{ roomId: 'r-01' }, { roomId: null }]));
     dispose();
   });
 
@@ -250,6 +251,31 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     fail = false;
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
     await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2));
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('держимый диапазон больше потолка страниц: письма вершины доходят, починка — сбой, и следующее событие читает снова', async () => {
+    const top = 100 * (MAIL_PAGES_MAX + 5);
+    const { bridge, dispose } = await start(work([letter('m-1'), letter('m-2')], 2, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Хост листает комнату от вершины вниз по сотне писем: курсор `before:N` называет номер.
+    bridge.setHandler('context.messages', (params) => {
+      const below = params.cursor === undefined ? top + 1 : Number(params.cursor.slice('before:'.length));
+      const from = Math.max(1, below - 100);
+      const messages = Array.from({ length: below - from }, (_, index) => letter(`m-${from + index}`));
+      return { messages, page: { total: top, returned: messages.length, complete: from === 1, next: from === 1 ? null : `before:${from}`, bytes: 1, cut: 0 } };
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [roomBatch([letter(`m-${top}`)], { prevTop: 2, top, total: top })] }));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+
+    // Потолок обрезал старый конец: самые новые письма пришли, дыра осталась внизу, и окно не считает себя починенным.
+    expect(pageCalls(bridge)).toHaveLength(MAIL_PAGES_MAX);
+    expect(ids()).toContain(`m-${top - 1}`);
+    expect(ids()).toContain(`m-${top - 100 * MAIL_PAGES_MAX + 1}`);
+    expect(ids()).not.toContain(`m-${top - 100 * MAIL_PAGES_MAX}`);
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter(`m-${top + 1}`)], { prevTop: top, top: top + 1, total: top + 1 })] }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2 * MAIL_PAGES_MAX));
     warn.mockRestore();
     dispose();
   });
@@ -273,19 +299,19 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     const { bridge, dispose } = await start(work([letter('m-08')], 8, undefined));
     bridge.setHandler('context.messages', () => page([letter('m-08')]));
     bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
-    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual(['after:7']));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
     bridge.emit('rooms.mail', makeMailEvent({ version: 7, prevVersion: 6, rooms: [roomBatch([letter('m-10')], { prevTop: 9, top: 10, total: 10 })] }));
     expect(pageCalls(bridge)).toHaveLength(1);
     expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
     dispose();
   });
 
-  it('версия сходится, а верх комнаты у окна ниже prevTop: followRoom дочитывает after:<свой верх>', async () => {
+  it('версия сходится, а верх комнаты у окна ниже prevTop: followRoom дочитывает от вершины вниз до своего верха', async () => {
     const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
     bridge.setHandler('context.messages', () => page([letter('m-10'), letter('m-11'), letter('m-12')]));
     bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
     await vi.waitFor(() => expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11', 'm-12']));
-    expect(pageCalls(bridge)).toEqual(['after:9']);
+    expect(pageCalls(bridge)).toEqual([undefined]);
     dispose();
   });
 
@@ -301,7 +327,7 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
       }),
     );
     await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
-    expect(pageCalls(bridge)).toEqual(['after:7']);
+    expect(pageCalls(bridge)).toEqual([undefined]);
     dispose();
   });
 

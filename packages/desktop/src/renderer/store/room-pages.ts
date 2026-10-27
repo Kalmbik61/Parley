@@ -15,7 +15,7 @@ import { create } from 'zustand';
 import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { earlierCursor, heldRanges } from '../lib/window-merge.js';
+import { earlierCursor, heldRanges, messageSeq } from '../lib/window-merge.js';
 import { useWorksStore } from './works.js';
 
 interface Chain {
@@ -37,55 +37,70 @@ export interface RoomPagesState {
 const keyOf = (entry: WindowWorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
 
 /**
- * Страниц одной комнаты за одно дочитывание не больше (сотня писем на страницу): письма, накопившиеся за долгий обрыв,
- * добирает следующий снимок или следующий разрыв (спека rooms.mail 6.5).
+ * Страниц одной комнаты за одно дочитывание не больше. Страница — до сотни писем и 64 КиБ, поэтому потолок — не способ
+ * «дочитать часть», а защита от бесконечного чтения: диапазон, не уложившийся в него, — сбой (`readDown` бросает).
  */
 export const MAIL_PAGES_MAX = 20;
 
+/** Одна страница `context.messages`; `null` — комнату или работу удалили, пока шли страницы: читать больше нечего, это не сбой. */
+function readPage(
+  bridge: Pick<ParleyBridge, 'call'>,
+  entry: WindowWorkEntry,
+  roomId: string | null,
+  cursor: string | null,
+): Promise<{ messages: Message[]; page: { complete: boolean; next: string | null } } | null> {
+  return bridge
+    .call('context.messages', { projectPath: entry.projectPath, workId: entry.map.work.id, roomId, ...(cursor === null ? {} : { cursor }) })
+    .catch((error: unknown) => {
+      if (decodeIpcError(error).code === 'not_found') return null;
+      throw error;
+    });
+}
+
 /**
- * Страницы `context.messages` после номера `after` до вершины комнаты (или Mail при `roomId: null`); каждая встаёт в карту
- * свежими копиями. Комнату или работу, удалённые, пока шли страницы, не считаем сбоем: читать больше нечего.
+ * Читает письма комнаты (или Mail при `roomId: null`) от вершины вниз, пока страница не дойдёт до номера `reach`: сначала без
+ * курсора (самая новая страница), затем `before:` по `next`. Потолок страниц обрезает старый конец диапазона, а не вершину:
+ * письма вершины и отметки на них доходят первыми. Каждая страница встаёт в карту свежими копиями; последняя может зацепить
+ * письма ниже `reach` — они встают тоже. Не дошли за `MAIL_PAGES_MAX` страниц — бросает: вызывающий не должен считать окно
+ * починенным (спека rooms.mail 6.5).
  */
-async function readAfter(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null, after: number): Promise<void> {
-  let cursor = `after:${after}`;
+async function readDown(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null, reach: number): Promise<void> {
+  let cursor: string | null = null;
   for (let page = 0; page < MAIL_PAGES_MAX; page += 1) {
-    const answer = await bridge
-      .call('context.messages', { projectPath: entry.projectPath, workId: entry.map.work.id, roomId, cursor })
-      .catch((error: unknown) => {
-        if (decodeIpcError(error).code === 'not_found') return null;
-        throw error;
-      });
+    const answer = await readPage(bridge, entry, roomId, cursor);
     if (answer === null) return;
     useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
-    if (answer.page.complete || answer.page.next === null) return;
+    const oldest = Math.min(...answer.messages.map(messageSeq));
+    if (answer.page.complete || answer.page.next === null || oldest <= reach) return;
     cursor = answer.page.next;
   }
+  throw new Error(`rooms.mail: ${roomId ?? 'direct letters'} not read down to m-${reach} within ${MAIL_PAGES_MAX} pages`);
 }
 
 /**
  * Окно держит комнату, но верх, до которого оно дошло, ниже `prevTop` события при совпавшей версии: письма между ними
- * потерялись. Дочитывает `after:<наибольший держимый номер>` (спека rooms.mail 6.5). Комнату без держимых писем не читает:
+ * потерялись. Читает от вершины вниз до наибольшего держимого номера (спека rooms.mail 6.5). Комнату без держимых писем не читает:
  * её письма окно возьмёт страницей при открытии. `entry` — карта до применения события, иначе верх уже сдвинут.
  */
 export async function followRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null): Promise<void> {
   const range = heldRanges(entry).get(roomId);
-  if (range !== undefined) await readAfter(bridge, entry, roomId, range.max);
+  if (range !== undefined) await readDown(bridge, entry, roomId, range.max);
 }
 
 /**
- * Перечитывает весь держимый диапазон комнаты — от наименьшего держимого номера до вершины, — чтобы обновить `readBy`
+ * Перечитывает весь держимый диапазон комнаты — от вершины до наименьшего держимого номера, — чтобы обновить `readBy`
  * у каждого письма, а не только у новых: событие с признаком `reread` (потолок кадра, медленное окно, массовая отметка)
- * отметок не несёт. Номер курсора на единицу меньше наименьшего, чтобы страница вернула и это письмо.
+ * отметок не несёт.
  */
 export async function rereadRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null): Promise<void> {
   const range = heldRanges(entry).get(roomId);
-  if (range !== undefined) await readAfter(bridge, entry, roomId, Math.max(0, range.min - 1));
+  if (range !== undefined) await readDown(bridge, entry, roomId, range.min);
 }
 
 /**
  * Починка разрыва по версии работы (спека rooms.mail 6.5): держимый диапазон каждой держимой комнаты и Mail читается
- * страницами `after:`. Сбой одной комнаты остальных не останавливает; первая ошибка уходит вызывающему, и тот не
- * считает окно починенным.
+ * от вершины вниз страницами `context.messages`. Сбой одной комнаты остальных не останавливает; первая ошибка уходит
+ * вызывающему, и тот не считает окно починенным.
  */
 export async function repairWork(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry): Promise<void> {
   let failure: { error: unknown } | null = null;
