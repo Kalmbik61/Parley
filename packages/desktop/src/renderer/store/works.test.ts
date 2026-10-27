@@ -171,8 +171,16 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     unsubscribe.push(useWorksStore.getState().onMail(listener));
   };
   afterEach(() => {
+    vi.useRealTimers();
     for (const off of unsubscribe.splice(0)) off();
   });
+
+  /** Пустой ход цикла событий: цепочки обещаний и вызовы бриджа, начатые синхронно, успевают дойти до конца (реальные таймеры). */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  /** Ход поддельных часов (после `vi.useFakeTimers()`): заодно доводит до конца цепочки обещаний. */
+  const tick = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
 
   /** Окно подключено к хосту с признаком (или без: `features: null`) и получило снимок. */
   async function start(entry: WindowWorkEntry, features: string[] | null = [ROOMS_MAIL_FEATURE]) {
@@ -241,24 +249,220 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
   it('сбой починки не оставляет окно уверенным: следующее событие снова считается разрывом', async () => {
     const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
     let fail = true;
     bridge.setHandler('context.messages', () => {
       if (fail) throw { code: 'internal', message: 'нет' };
       return page([]);
     });
     bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    await tick(0);
+    expect(warn).toHaveBeenCalled();
     fail = false;
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
-    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2);
     warn.mockRestore();
     dispose();
+  });
+
+  it('событие смешанной пачки, начатой до снимка, применяется без починки', async () => {
+    // Пачка хоста держит prevVersion первой записи, пока в неё вливаются следующие, а снимок версии 7 мог выйти внутри неё:
+    // окно держит 7, событие несёт (5, 8] целиком — пропущенного нет.
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 7));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 5, rooms: [roomBatch([letter('m-10')])], unread: { letters: 1, rooms: { '': 0, 'r-01': 1 } } }));
+
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    expect(compactOf().messages.total).toBe(10);
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: { 'r-01': 1 } });
+    // Версия окна стала 8: следующее событие по цепочке тоже без запросов.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    expect(ids()).toHaveLength(4);
+    await settle();
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('событие, начатое после держимой версии, — разрыв', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    bridge.setHandler('context.messages', () => page([letter('m-08'), letter('m-09'), letter('m-10')]));
+    // prevVersion 6 больше версии окна 5: версию 6 окно не получало ни снимком, ни событием.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 6, rooms: [roomBatch([letter('m-10')])] }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    dispose();
+  });
+
+  it('починка одной работы не идёт внахлёст: второй разрыв ждёт первой и даёт одну починку', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const open: Array<() => void> = [];
+    let reading = 0;
+    let most = 0;
+    bridge.setHandler('context.messages', async () => {
+      reading += 1;
+      most = Math.max(most, reading);
+      await new Promise<void>((resolve) => open.push(resolve));
+      reading -= 1;
+      return page([letter('m-08')]);
+    });
+    const gap = (version: number): void => bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+
+    gap(8);
+    gap(12);
+    gap(16);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    open[0]!();
+    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2));
+    open[1]!();
+    await settle();
+    expect(pageCalls(bridge)).toHaveLength(2);
+    expect(most).toBe(1);
+    dispose();
+  });
+
+  it('неудачная починка забывает версию, даже если после неё пришло событие', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail!: (error: unknown) => void;
+    let first = true;
+    bridge.setHandler('context.messages', () => {
+      if (!first) return page([letter('m-08')]);
+      first = false;
+      return new Promise<never>((_resolve, reject) => (fail = reject));
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    // Пока чтение в пути, цепочка идёт дальше: версия 9 стыкуется с 8, и окно держит 9.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    fail({ code: 'internal', message: 'нет' });
+    await tick(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // Событие 10 стыкуется с 9, но чтение, начатое на 8, не удалось: окно не знает, чем располагает, — это разрыв.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 10, prevVersion: 9 }));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('после неудачной починки следующая ждёт отступа', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail = true;
+    bridge.setHandler('context.messages', () => {
+      if (fail) throw { code: 'internal', message: 'нет' };
+      return page([letter('m-08')]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    // Отступ: события применяются (письма, числа), починка не стартует.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-10')], { prevTop: 9, top: 10, total: 10 })] }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 10, prevVersion: 9, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 11, prevVersion: 10, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
+    expect(ids()).toEqual(['m-08', 'm-10', 'm-11', 'm-12']);
+    expect(compactOf().messages.total).toBe(12);
+    await tick(999);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    // Отступ кончился: одна починка на все три события.
+    fail = false;
+    await tick(1);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    await tick(60_000);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('отступ удваивается до 30 секунд, а успешная починка сбрасывает его', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail = true;
+    bridge.setHandler('context.messages', () => {
+      if (fail) throw { code: 'internal', message: 'нет' };
+      return page([letter('m-08')]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    let calls = 1;
+    let version = 8;
+
+    // Каждая починка падает: отступ перед следующей 1, 2, 4, 8, 16 с, дальше потолок 30 с.
+    for (const wait of [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]) {
+      version += 1;
+      bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+      await tick(wait - 1);
+      expect(pageCalls(bridge)).toHaveLength(calls);
+      await tick(1);
+      calls += 1;
+      expect(pageCalls(bridge)).toHaveLength(calls);
+    }
+
+    // Починка удалась после очередного отступа и обнулила счёт: следующий разрыв чинится сразу.
+    fail = false;
+    version += 1;
+    bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+    await tick(30_000);
+    expect(pageCalls(bridge)).toHaveLength(calls + 1);
+    bridge.emit('rooms.mail', makeMailEvent({ version: version + 5, prevVersion: version + 4 }));
+    await tick(0);
+    expect(pageCalls(bridge)).toHaveLength(calls + 2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('разрыв во время починки, которая потом падает, ждёт отступа', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail!: (error: unknown) => void;
+    let first = true;
+    bridge.setHandler('context.messages', () => {
+      if (!first) return page([letter('m-08')]);
+      first = false;
+      return new Promise<never>((_resolve, reject) => (fail = reject));
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 12, prevVersion: 11 }));
+    fail({ code: 'internal', message: 'нет' });
+    await tick(999);
+    expect(pageCalls(bridge)).toHaveLength(1);
+    await tick(1);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('dispose снимает отложенную починку', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'internal', message: 'нет' };
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    expect(vi.getTimerCount()).toBe(1);
+
+    dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await tick(60_000);
+    expect(pageCalls(bridge)).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it('держимый диапазон больше потолка страниц: письма вершины доходят, починка — сбой, и следующее событие читает снова', async () => {
     const top = 100 * (MAIL_PAGES_MAX + 5);
     const { bridge, dispose } = await start(work([letter('m-1'), letter('m-2')], 2, 5));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
     // Хост листает комнату от вершины вниз по сотне писем: курсор `before:N` называет номер.
     bridge.setHandler('context.messages', (params) => {
       const below = params.cursor === undefined ? top + 1 : Number(params.cursor.slice('before:'.length));
@@ -267,7 +471,8 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
       return { messages, page: { total: top, returned: messages.length, complete: from === 1, next: from === 1 ? null : `before:${from}`, bytes: 1, cut: 0 } };
     });
     bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [roomBatch([letter(`m-${top}`)], { prevTop: 2, top, total: top })] }));
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    await tick(0);
+    expect(warn).toHaveBeenCalled();
 
     // Потолок обрезал старый конец: самые новые письма пришли, дыра осталась внизу, и окно не считает себя починенным.
     expect(pageCalls(bridge)).toHaveLength(MAIL_PAGES_MAX);
@@ -275,7 +480,8 @@ describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
     expect(ids()).toContain(`m-${top - 100 * MAIL_PAGES_MAX + 1}`);
     expect(ids()).not.toContain(`m-${top - 100 * MAIL_PAGES_MAX}`);
     bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter(`m-${top + 1}`)], { prevTop: top, top: top + 1, total: top + 1 })] }));
-    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2 * MAIL_PAGES_MAX));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2 * MAIL_PAGES_MAX);
     warn.mockRestore();
     dispose();
   });

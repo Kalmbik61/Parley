@@ -10,10 +10,14 @@
  *
  * Письма и отметки прочтения приходят событием `rooms.mail` (спека rooms.mail 6.3-6.5), если хост объявил признак
  * `rooms-mail`: без него события нет, и окно живёт по `works.changed`, как прежде. Окно помнит версию каждой работы —
- * из снимка и из последнего применённого события — и сверяет с ней `prevVersion` события: совпало — событие применяется,
- * не больше версии окна — это повтор или обогнавший событие снимок, письма сливаются, а числа не трогаются; иначе окно
- * что-то пропустило, и держимые письма перечитываются (`repairWork`). Событие про комнату, которой нет в снимке, ждёт
- * снимка этой работы: структура смешанной записи может прийти позже события.
+ * из снимка и из последнего применённого события — и сверяет с ней версии события. Версия события не больше версии окна —
+ * это повтор или обогнавший событие снимок: письма сливаются, а числа не трогаются. `prevVersion` не больше версии окна —
+ * событие применяется: спека говорит «не равной», но смысл тот же — окно что-то упустило, только если событие начинается
+ * после того, что оно держит, а пачка смешанной записи хоста держит `prevVersion` первой записи, пока в неё вливаются
+ * следующие, и снимок мог выйти внутри неё (событие несёт письма и отметки всего `(prevVersion, version]`). `prevVersion`
+ * больше версии окна, а равно и неизвестная версия — разрыв: держимые письма перечитываются (`repairWork`), по одной починке
+ * на работу, после сбоя — с отступом. Событие про комнату, которой нет в снимке, ждёт снимка этой работы: структура
+ * смешанной записи может прийти позже события.
  */
 
 import { create } from 'zustand';
@@ -66,6 +70,22 @@ const mailListeners = new Set<(event: RoomsMailEvent) => void>();
 const WAITING_EVENTS_MAX = 32;
 const WAITING_WORKS_MAX = 16;
 
+/** Отступ после сбоя починки работы: первый, удвоение за каждый сбой подряд, потолок. Успешная починка счёт обнуляет. */
+const REPAIR_BACKOFF_MS = 1000;
+const REPAIR_BACKOFF_MAX_MS = 30_000;
+
+/** Починки одной работы (`init`): одна в пути, остальные разрывы помнятся флагом, после сбоя — отступ. */
+interface RepairState {
+  /** `repairWork` в пути. */
+  running: boolean;
+  /** Пока он шёл или длился отступ, пришёл ещё разрыв: после — одна починка по тогдашней карте. */
+  again: boolean;
+  /** Сбоев подряд. */
+  failures: number;
+  /** Отступ после сбоя: до его конца новая починка не стартует. */
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 const mailKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
 function notifyMail(event: RoomsMailEvent): void {
@@ -115,6 +135,7 @@ export const useWorksStore = create<WorksState>((set, get) => ({
     const held = new Map<string, number>();
     /** События, что ждут снимка своей работы (или комнаты в нём), в порядке прихода: следующее не обгоняет первое. */
     const waiting = new Map<string, RoomsMailEvent[]>();
+    const repairs = new Map<string, RepairState>();
     // Новое подключение — возможно, к только что запущенному хосту: готовность считается заново.
     set({ ready: false });
 
@@ -134,13 +155,73 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       return version !== undefined && version >= event.version ? { ...event, rooms: present } : null;
     };
 
-    /** Применяет событие к карте работы по правилам версии (6.5) и запускает дочитывание, если оно нужно. `before` — карта до применения. */
+    const repairOf = (key: string): RepairState => {
+      let state = repairs.get(key);
+      if (state === undefined) {
+        state = { running: false, again: false, failures: 0, timer: null };
+        repairs.set(key, state);
+      }
+      return state;
+    };
+
+    /**
+     * Чтение не удалось — даже если после его начала применилось ещё событие: окно не знает, чем располагает, и следующее
+     * событие станет разрывом. Новая починка этой работы начнётся не раньше конца отступа.
+     */
+    const failed = (key: string, error: unknown): void => {
+      if (disposed) return;
+      console.warn('[parley] rooms.mail repair', error);
+      held.delete(key);
+      const state = repairOf(key);
+      state.failures += 1;
+      if (state.timer !== null) clearTimeout(state.timer);
+      const delay = Math.min(REPAIR_BACKOFF_MS * 2 ** (state.failures - 1), REPAIR_BACKOFF_MAX_MS);
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        pump(key);
+      }, delay);
+    };
+
+    /**
+     * Запускает починку работы, если есть разрыв, она не идёт и отступа нет: одну на все накопившиеся разрывы. Разрыв, что
+     * стартует сразу, читает карту до своего события (`from`: комнату, которой окно не держало, оно не читает, а её письма
+     * из события уже в карте); отложенная — карту, какая есть к её старту.
+     */
+    const pump = (key: string, from?: WindowWorkEntry): void => {
+      const state = repairs.get(key);
+      if (disposed || state === undefined || !state.again || state.running || state.timer !== null) return;
+      state.again = false;
+      const entry = from ?? find(key);
+      if (entry === undefined) return;
+      state.running = true;
+      repairWork(bridge, entry)
+        .then(
+          () => {
+            state.failures = 0;
+          },
+          (error: unknown) => failed(key, error),
+        )
+        .finally(() => {
+          state.running = false;
+          pump(key);
+        });
+    };
+
+    /**
+     * Применяет событие к карте работы по правилам версии (6.5) и запускает дочитывание, если оно нужно. `before` — карта до
+     * применения. Разрыв — только версия, которой окно не покрывает: событие начинается позже держимой (`prevVersion > held`)
+     * или версия неизвестна. Спека 6.5 говорит «`prevVersion` не равна `held`», но «больше» — тот же смысл: окно пропускает
+     * что-то лишь тогда, когда событие начинается после того, что оно держит; при `prevVersion <= held < version` оно
+     * получило начало пачки снимком, а событие несёт всё остальное.
+     */
     const deliver = (before: WindowWorkEntry, event: RoomsMailEvent): void => {
       const key = mailKey(event.projectPath, event.workId);
       const version = held.get(key);
       // Версия события не больше версии окна: повтор или обогнавший событие снимок — письма и отметки сливаются, числа не трогаются.
       const stale = version !== undefined && event.version <= version;
-      const gap = !stale && version !== event.prevVersion;
+      // Разрыв — событие начинается после держимой версии или версия неизвестна; `prevVersion <= version < event.version` — пачка
+      // смешанной записи, начатая до снимка, пропущенного нет (подробнее — в описании `deliver`).
+      const gap = !stale && (version === undefined || event.prevVersion > version);
       // Версия сошлась, но верх держимой комнаты ниже `prevTop` (письма между ними потерялись) или комната помечена `reread`.
       const ranges = heldRanges(before);
       const lagging: Array<string | null> = [];
@@ -163,15 +244,15 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       notifyMail(event);
       if (stale) return;
 
-      const repair = gap
-        ? repairWork(bridge, before)
-        : Promise.all([...lagging.map((roomId) => followRoom(bridge, before, roomId)), ...rereading.map((roomId) => rereadRoom(bridge, before, roomId))]);
-      repair.catch((error: unknown) => {
-        if (disposed) return;
-        console.warn('[parley] rooms.mail repair', error);
-        // Не починено — окно не знает, чем располагает: следующее событие снова станет разрывом и повторит чтение.
-        if (held.get(key) === event.version) held.delete(key);
-      });
+      if (gap) {
+        repairOf(key).again = true;
+        pump(key, before);
+        return;
+      }
+      if (lagging.length === 0 && rereading.length === 0) return;
+      Promise.all([...lagging.map((roomId) => followRoom(bridge, before, roomId)), ...rereading.map((roomId) => rereadRoom(bridge, before, roomId))]).catch(
+        (error: unknown) => failed(key, error),
+      );
     };
 
     const enqueue = (key: string, event: RoomsMailEvent): void => {
@@ -277,6 +358,12 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       offMail?.();
       waiting.clear();
       held.clear();
+      for (const state of repairs.values()) {
+        if (state.timer !== null) clearTimeout(state.timer);
+        state.timer = null;
+        state.again = false;
+      }
+      repairs.clear();
     };
   },
 }));
