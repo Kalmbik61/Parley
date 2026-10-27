@@ -251,6 +251,20 @@ describe('createSpeaker: stop (E3)', () => {
     expect(sources()[1]?.startedAt).toBe(10);
   });
 
+  it('stop() глушит и запрошенное предложение, чьи куски ещё в пути (критик m-1457, W2)', () => {
+    const { speaker, sources } = setup();
+    speaker.expect('u1');
+    speaker.enqueue(chunk('u1', 0));
+    speaker.expect('u2');
+    speaker.stop();
+    speaker.enqueue(chunk('u2', 0));
+    expect(sources()).toHaveLength(1);
+    expect(speaker.speaking()).toBe(false);
+    speaker.expect('u3');
+    speaker.enqueue(chunk('u3', 0));
+    expect(sources()).toHaveLength(2);
+  });
+
   it('stop() не зовёт onIdle', () => {
     const { speaker } = setup();
     const idle = vi.fn();

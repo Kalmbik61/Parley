@@ -24,7 +24,15 @@ export interface SpeakerDeps {
 export interface Speaker {
   /** Ставит кусок в хвост: встык к последнему, а если очередь пуста — сразу. */
   enqueue(chunk: SpeakerChunk): void;
-  /** Глушит всё в тот же такт; опоздавшие куски заглушённых предложений больше не играют (E3). */
+  /**
+   * Остров попросил озвучить предложение (`island:tts-speak`). Его куски могут быть ещё в пути, когда звучит
+   * прошлое: `stop()` глушит и такие предложения.
+   */
+  expect(utteranceId: string): void;
+  /**
+   * Глушит всё в тот же такт; опоздавшие куски заглушённых предложений больше не играют (E3) — в том числе
+   * предложений из `expect`, чьи куски ещё не дошли.
+   */
   stop(): void;
   /** Сорвавшаяся попытка: куски `utteranceId` с `seq ≥ fromSeq` глушатся, повтор встаёт за последним оставленным. */
   discard(utteranceId: string, fromSeq: number): void;
@@ -59,6 +67,8 @@ export function createSpeaker(deps: SpeakerDeps = DEFAULT_DEPS): Speaker {
   /** Предложения идут по очереди, поэтому для «один раз на utteranceId» хватает последнего начавшегося. */
   let lastStarted: string | null = null;
   const silenced = new Set<string>();
+  /** Запрошенные, но ещё не начавшие звучать предложения. */
+  const expected = new Set<string>();
   const idleListeners = new Set<() => void>();
   const startListeners = new Set<(utteranceId: string) => void>();
   let level = 0;
@@ -69,6 +79,7 @@ export function createSpeaker(deps: SpeakerDeps = DEFAULT_DEPS): Speaker {
     const head = queue[0];
     if (!head || head.utteranceId === lastStarted) return;
     lastStarted = head.utteranceId;
+    expected.delete(head.utteranceId);
     for (const cb of [...startListeners]) cb(head.utteranceId);
   }
 
@@ -95,6 +106,9 @@ export function createSpeaker(deps: SpeakerDeps = DEFAULT_DEPS): Speaker {
   }
 
   return {
+    expect(utteranceId) {
+      if (!silenced.has(utteranceId)) expected.add(utteranceId);
+    },
     enqueue(chunk) {
       if (chunk.pcm.length === 0 || silenced.has(chunk.utteranceId)) return;
       const graph = deps.graph();
@@ -125,6 +139,8 @@ export function createSpeaker(deps: SpeakerDeps = DEFAULT_DEPS): Speaker {
         silence(item);
       }
       if (lastStarted !== null) silenced.add(lastStarted);
+      for (const utteranceId of expected) silenced.add(utteranceId);
+      expected.clear();
       queue = [];
       level = 0;
     },
