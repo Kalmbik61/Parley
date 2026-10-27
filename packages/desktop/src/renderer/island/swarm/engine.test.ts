@@ -1,9 +1,10 @@
 /**
  * Движок роя без canvas (`ctx = null`): детерминизм, границы облака, радиус сферы, лицо, переходы и reduced motion;
- * формы рта по кадру голоса (L1, F1) и пороги «рот не пропадает» (F5).
+ * формы рта по кадру голоса (L1, F1), пороги «рот не пропадает» (F5) и интонация (L2: глаза, моргание в паузе, импульс
+ * и яркость — последние на поддельном контексте).
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceFrame, Visemes } from '../assistant/voice-features.js';
 import { createSwarm, type SwarmEngine, type SwarmOptions } from './engine.js';
 import { DUR, EMO, type SwarmEmotion, type SwarmSpec } from './spec.js';
@@ -15,8 +16,15 @@ const face = (emo: SwarmEmotion, pal: SwarmSpec['pal'] = 'amber'): SwarmSpec => 
 
 const make = (seed?: number): SwarmEngine => createSwarm(300, { ...OPTIONS, ...(seed === undefined ? {} : { seed }) });
 const NO_SHAPE: Visemes = { a: 0, i: 0, u: 0, m: 0 };
-/** Кадр голоса: громкость и веса форм (по умолчанию — без формы). */
-const voice = (amp: number, visemes: Partial<Visemes> = {}): VoiceFrame => ({ amp, visemes: { ...NO_SHAPE, ...visemes } });
+type Prosody = Pick<VoiceFrame, 'pulse' | 'eyesUp' | 'blink' | 'loud'>;
+const NO_PROSODY: Prosody = { pulse: 0, eyesUp: 0, blink: false, loud: 0 };
+/** Кадр голоса: громкость, веса форм и интонация (по умолчанию — без формы и без интонации). */
+const voice = (amp: number, visemes: Partial<Visemes> = {}, prosody: Partial<Prosody> = {}): VoiceFrame => ({
+  amp,
+  visemes: { ...NO_SHAPE, ...visemes },
+  ...NO_PROSODY,
+  ...prosody,
+});
 const snapshot = (engine: SwarmEngine): number[] => engine.souls.flatMap((s) => [s.x, s.y, s.z]);
 /** Облако с 0 мс, лицо с 1000 мс; кадр после конца перехода облако → лицо (1,4 с + 0,2 с рта). */
 const FACE_DONE = 1000 + (DUR.cloudface + 0.2 + 0.1) * 1000;
@@ -383,6 +391,113 @@ describe('лицо: рот не пропадает (F5)', () => {
           expect(m.ends, where).toBeGreaterThanOrEqual(0.05);
         }
       }
+    }
+  });
+});
+
+/** Души глаза роли `role` без короны: размах по x, по y и средний y. */
+const eye = (engine: SwarmEngine, role: 0 | 1): { w: number; h: number; y: number } => {
+  const souls = engine.souls.filter((s) => s.role === role && !s.corona);
+  const xs = souls.map((s) => s.x);
+  const ys = souls.map((s) => s.y);
+  return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys), y: ys.reduce((a, v) => a + v, 0) / ys.length };
+};
+
+/** Поддельный 2d-контекст: каждое `drawImage` пишет яркость (`globalAlpha`) и размер спрайта. */
+function recordingContext(): { ctx: CanvasRenderingContext2D; draws: Array<{ alpha: number; size: number }> } {
+  const draws: Array<{ alpha: number; size: number }> = [];
+  const ctx = {
+    globalAlpha: 1,
+    globalCompositeOperation: '',
+    fillStyle: '',
+    clearRect: vi.fn(),
+    fillRect: vi.fn(),
+    createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    drawImage(_img: unknown, _x: number, _y: number, w: number) {
+      draws.push({ alpha: this.globalAlpha, size: w });
+    },
+  };
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, draws };
+}
+
+describe('лицо: интонация по голосу (L2, F2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('eyesUp расширяет глаза (a ×1,12, b ×1,25) и поднимает их на 0,03 d; в режиме громкости и при reduced motion — нет', () => {
+    const plain = faceSwarm('calm', voice(0.5));
+    const up = faceSwarm('calm', voice(0.5, {}, { eyesUp: 1 }));
+    for (const role of [0, 1] as const) {
+      expect(eye(up, role).w / eye(plain, role).w).toBeCloseTo(1.12, 2);
+      expect(eye(up, role).h / eye(plain, role).h).toBeCloseTo(1.25, 2);
+    }
+    // Душа глаза: y = 1,2·(−ey + b·Y); с подъёмом — 1,2·(−(ey + 0,03) + 1,25·b·Y).
+    const { ey } = EMO.calm;
+    plain.souls.forEach((s, k) => {
+      if (s.role === 2 || s.corona) return;
+      expect(up.souls[k]!.y / 1.2).toBeCloseTo(-(ey + 0.03) + 1.25 * (s.y / 1.2 + ey), 9);
+    });
+    expect(snapshot(faceSwarm('calm', voice(0.5, {}, { eyesUp: 1 }), 'loudness'))).toEqual(snapshot(faceSwarm('calm', voice(0.5), 'loudness')));
+    const reduced = [voice(0.5), voice(0.5, {}, { eyesUp: 1, pulse: 1, blink: true, loud: 1 })].map((frame) => {
+      const engine = make();
+      engine.setSpec(face('calm'), 0, true);
+      engine.frame(0, null, true, 0, frame);
+      return snapshot(engine);
+    });
+    expect(reduced[1]).toEqual(reduced[0]);
+  });
+
+  it('пауза зовёт моргание: глаза сходятся за 220 мс; не чаще раза в 600 мс; surprise не моргает; в режиме громкости — нет', () => {
+    // Своё моргание лица — на FACE_DONE (2,7 с), следующее не раньше 5,1 с; пауза зовёт моргание на 3,4 с.
+    const at = FACE_DONE + 700;
+    const run = (emo: SwarmEmotion, blinkAt: readonly number[], voiceMode?: SwarmOptions['voiceMode']): number => {
+      const engine = faceSwarm(emo, voice(0.3), voiceMode);
+      const open = eye(engine, 0).h;
+      let min = open;
+      for (let t = FACE_DONE + 16; t <= at + 400; t += 10) {
+        engine.frame(t, null, false, 0, voice(0.3, {}, { blink: blinkAt.some((b) => t >= b && t < b + 10) }));
+        if (t >= at) min = Math.min(min, eye(engine, 0).h);
+      }
+      return min / open;
+    };
+    expect(run('calm', [])).toBeGreaterThan(0.99);
+    expect(run('calm', [at])).toBeLessThan(0.2);
+    expect(run('calm', [FACE_DONE + 300])).toBeGreaterThan(0.99); // 300 мс после своего моргания — меньше 600 мс
+    expect(run('surprise', [at])).toBeGreaterThan(0.99);
+    expect(run('calm', [at], 'loudness')).toBeGreaterThan(0.99);
+  });
+
+  it('импульс: души +10 % размера и +45 % яркости; громче — ярче ×(0,9 + 0,25·loud); не в режиме громкости и не при reduced motion', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => recordingContext().ctx as never);
+    const draw = (frame: VoiceFrame, voiceMode?: SwarmOptions['voiceMode'], reduced = false): Array<{ alpha: number; size: number }> => {
+      const engine = createSwarm(300, { ...OPTIONS, ...(voiceMode === undefined ? {} : { voiceMode }) });
+      engine.setSpec(face('calm'), 0, reduced);
+      const { ctx, draws } = recordingContext();
+      engine.frame(0, ctx, reduced, 0, frame);
+      return draws;
+    };
+    const ratios = (a: ReadonlyArray<{ alpha: number; size: number }>, b: ReadonlyArray<{ alpha: number; size: number }>): { alpha: number[]; size: number[] } => {
+      expect(a.length).toBe(b.length);
+      const alpha: number[] = [];
+      const size: number[] = [];
+      a.forEach((d, k) => {
+        if (d.alpha < 1 && b[k]!.alpha < 1) alpha.push(d.alpha / b[k]!.alpha);
+        size.push(d.size / b[k]!.size);
+      });
+      expect(alpha.length).toBeGreaterThan(100);
+      return { alpha, size };
+    };
+    const quiet = draw(voice(0.3));
+    const loud = ratios(draw(voice(0.3, {}, { loud: 1 })), quiet);
+    for (const r of loud.alpha) expect(r).toBeCloseTo(1.15 / 0.9, 6);
+    for (const r of loud.size) expect(r).toBeCloseTo(1, 9);
+    const pulse = ratios(draw(voice(0.3, {}, { pulse: 1 })), quiet);
+    for (const r of pulse.alpha) expect(r).toBeCloseTo(1.45, 6);
+    for (const r of pulse.size) expect(r).toBeCloseTo(1.1, 6);
+    // Режим громкости и reduced motion: L2 не трогает ни яркость, ни размер.
+    for (const [mode, reduced] of [['loudness', false], [undefined, true]] as const) {
+      const base = draw(voice(0.3), mode, reduced);
+      const same = draw(voice(0.3, {}, { pulse: 1, loud: 1 }), mode, reduced);
+      expect(same).toEqual(base);
     }
   });
 });
