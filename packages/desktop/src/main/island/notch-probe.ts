@@ -16,7 +16,7 @@ const NOTCH_HEIGHT_MAX = 64;
 
 /**
  * Селекторы проверяются: на старой macOS их нет, такой экран — без выреза, а не ошибка. Имя фреймворка — в двойных
- * кавычках: `import('…')` в одинарных проверка зависимостей окна (`package-deps.test.ts`) приняла бы за пакет.
+ * кавычках: в одинарных проверка зависимостей окна (`package-deps.test.ts`) приняла бы его за пакет.
  */
 export const NOTCH_SCRIPT = `ObjC.import("AppKit");
 const screens = $.NSScreen.screens;
