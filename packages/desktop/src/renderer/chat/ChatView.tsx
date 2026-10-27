@@ -106,7 +106,7 @@ import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-
 import { FeedList } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { pasteClipboardImage } from './paste-image.js';
-import { withQuote } from './reply.js';
+import { isSlashCommand, withQuote } from './reply.js';
 import { ReplyPlate } from './ReplyPlate.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
@@ -291,7 +291,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const { setDraft, setAttachments } = useChatUiStore.getState();
     const composed = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
     // Слэш-команду CLI узнаёт только в начале строки: цитата перед ней сломала бы её — команда уходит как есть, плашка ждёт.
-    const quoting = quote !== null && !typed.trimStart().startsWith('/');
+    const quoting = quote !== null && !isSlashCommand(typed);
     const text = quoting ? withQuote(quote, composed) : composed;
     setDraft(sessionKey, '');
     if (paths.length > 0) setAttachments(sessionKey, []);

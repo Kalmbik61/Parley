@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { REPLY_QUOTE_MAX, replyQuote, selectedTextIn, splitQuote, withQuote } from './reply.js';
+import { REPLY_QUOTE_MAX, isSlashCommand, replyQuote, selectedTextIn, splitQuote, withQuote } from './reply.js';
 
 afterEach(() => {
   window.getSelection()?.removeAllRanges();
@@ -49,5 +49,12 @@ describe('withQuote и splitQuote', () => {
 
   it('текст без цитаты в начале — как есть', () => {
     expect(splitQuote('привет\n> не цитата')).toEqual({ quote: null, text: 'привет\n> не цитата' });
+  });
+});
+
+describe('isSlashCommand', () => {
+  it('команда CLI — да; абсолютный путь в начале и обычный текст — нет', () => {
+    for (const text of ['/compact', '  /model opus', '/mcp__server:tool x']) expect(isSlashCommand(text), text).toBe(true);
+    for (const text of ['/Users/me/x.ts почему падает?', 'текст /compact', '//x']) expect(isSlashCommand(text), text).toBe(false);
   });
 });

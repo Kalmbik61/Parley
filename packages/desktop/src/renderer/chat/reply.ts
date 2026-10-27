@@ -43,3 +43,8 @@ export function splitQuote(text: string): { quote: string | null; text: string }
     text: lines.slice(count).join('\n').trim(),
   };
 }
+
+/** Слэш-команда CLI (`/compact`, `/model opus`): цитата перед ней сломала бы её. Абсолютный путь (`/Users/…`) — не команда. */
+export function isSlashCommand(text: string): boolean {
+  return /^\/[A-Za-z][\w:-]*(?:\s|$)/.test(text.trimStart());
+}
