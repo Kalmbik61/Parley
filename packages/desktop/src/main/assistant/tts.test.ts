@@ -570,6 +570,19 @@ describe('createTtsService: unavailable клиента B05 липкий — но
     tts.stop();
   });
 
+  it('worker падает при каждом запуске — один повтор, дальше недоступен до скачивания (критик m-1457, W3)', async () => {
+    const { tts, createWorker } = realService(['exit', 'exit', 'exit', 'ready']);
+    await tts.warmup();
+    await tts.warmup();
+    await tts.warmup();
+    expect(tts.state()).toMatchObject({ state: 'unavailable' });
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    await expect(tts.download(() => undefined)).resolves.toEqual({ ok: true });
+    await flush();
+    expect(createWorker).toHaveBeenCalledTimes(3);
+    tts.stop();
+  });
+
   it.each<Launch>(['protocol', 'fatal'])('%s: голос остаётся недоступным, новый клиент не создаётся', async (launch) => {
     const { tts, createWorker, spawns } = realService([launch, 'ready']);
     await tts.warmup();

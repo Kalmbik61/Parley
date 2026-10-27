@@ -33,6 +33,7 @@ const DEFAULT_SAMPLE_RATE = 24_000;
 const MODEL_ID: TtsModelId = 'qwen3-tts-0.6b-q8_0';
 /** Временные отказы клиента B05: процесс не запустился или вышел до `ready`. Остальные причины — навсегда. */
 const TRANSIENT = /^(spawn failed|exited with .* before ready)/;
+const MAX_TRANSIENT_RETRIES = 1;
 
 export interface TtsChunk {
   utteranceId: string;
@@ -147,6 +148,11 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
   let worker: SpeechWorker | null = null;
   /** Причина последнего отказа worker; сбрасывается с новым клиентом и с `ready`. */
   let failure: string | null = null;
+  /**
+   * Новых клиентов после временного сбоя подряд. Один повтор, дальше голос недоступен до скачивания, удаления весов
+   * или перезапуска: каждый запуск грузит 1,2 ГБ, холодный — до 15 с (критик m-1457).
+   */
+  let transientRetries = 0;
   const queue: Job[] = [];
   let current: Job | null = null;
   let requests = 0;
@@ -201,10 +207,16 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
     const starting = target.start();
     notify();
     const status = await starting;
-    if (worker === target && status.state === 'ready') failure = null;
+    if (worker === target && status.state === 'ready') {
+      failure = null;
+      transientRetries = 0;
+    }
     if (worker === target && status.state === 'unavailable') {
       failure = status.reason;
-      if (TRANSIENT.test(status.reason)) worker = null;
+      if (TRANSIENT.test(status.reason) && transientRetries < MAX_TRANSIENT_RETRIES) {
+        transientRetries += 1;
+        worker = null;
+      }
     }
     notify();
     // `stopped` — worker остановили посреди запуска (`stop()` при выходе).
@@ -356,6 +368,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
       worker?.stop();
       worker = null;
       failure = null;
+      transientRetries = 0;
       void ensureWorker().then(() => {
         if (!pumping) armIdle();
       });
@@ -371,6 +384,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
       worker?.stop();
       worker = null;
       failure = null;
+      transientRetries = 0;
       downloaded = false;
       notify();
       await deps.models.remove(MODEL_ID);
