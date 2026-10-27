@@ -216,9 +216,9 @@ const REREAD_BYTES = Buffer.byteLength(',"reread":true');
 /**
  * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
  * 1. каркас — комнаты без писем и без кандидатов, с отметками и удалениями. Не влез он сам (сотни тысяч отметок) —
- *    комнаты с самыми тяжёлыми отметками теряют отметки других читателей и получают `reread`; отметки человека и `deleted`
+ *    комнаты с самыми тяжёлыми отметками других читателей теряют их и получают `reread`; отметки человека и `deleted`
  *    остаются: по ним окно убирает кандидатов в упоминания, в том числе из комнат, которых оно не держит. Не влезло и так
- *    (десятки тысяч отметок человека или удалений) — тогда уходят и они;
+ *    (десятки тысяч отметок человека или удалений) — тогда уходят и они, снова от самых тяжёлых комнат;
  * 2. кандидаты в упоминания — новые письма пачки: `buildMailEvent` уже собрал их под `WINDOW_MENTION_MAX_BYTES`; здесь они
  *    урезаются дальше, до остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
  * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
@@ -231,11 +231,14 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
   let size = frameBytes({ ...event, rooms, mentionCandidates: [] });
 
   if (size > MAIL_EVENT_MAX_BYTES) {
-    const heavy = rooms
-      .map((room, at) => ({ at, bytes: jsonBytes(room.reads) + jsonBytes(room.deleted) }))
-      .sort((left, right) => right.bytes - left.bytes);
+    // Порядок каждого прохода — по тому, что он может снять: первый берёт отметки других читателей, и комната, тяжёлая только
+    // отметками человека и удалениями, ничего бы ему не дала.
+    const heavyBy = (bytesOf: (room: RoomsMailRoom) => number): Array<{ at: number }> =>
+      rooms.map((room, at) => ({ at, bytes: bytesOf(room) })).sort((left, right) => right.bytes - left.bytes);
+    const removable = heavyBy((room) => jsonBytes(room.reads.filter((read) => !isHumanRead(read))));
+    const heavy = heavyBy((room) => jsonBytes(room.reads) + jsonBytes(room.deleted));
     // Сначала уходят отметки других читателей: человека и удаления окну нужны, чтобы снять кандидатов (спека 6.3).
-    for (const { at } of heavy) {
+    for (const { at } of removable) {
       if (size <= MAIL_EVENT_MAX_BYTES) break;
       const room = rooms[at] as RoomsMailRoom;
       const human = room.reads.filter(isHumanRead);

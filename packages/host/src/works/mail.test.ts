@@ -148,6 +148,24 @@ describe('fitMailEvent: потолок кадра', () => {
     expect(fitted.rooms[2]?.deleted).toEqual(['m-0001']);
   });
 
+  it('первый проход режет сначала комнату с самыми тяжёлыми отметками других читателей: отметки человека порядка не решают', () => {
+    const at = '2026-10-27T10:00:00.000Z';
+    const readOf = (n: number, reader: string) => ({ id: `m-${String(n).padStart(4, '0')}`, reader, at });
+    // r-01 тяжелее всего целиком, но почти всё в ней — отметки человека: их проход не снимает. В r-02 отметки других читателей.
+    const humanHeavy = [...Array.from({ length: 3000 }, (_, n) => readOf(n, HUMAN)), ...Array.from({ length: 100 }, (_, n) => readOf(3000 + n, 's-01'))];
+    const othersHeavy = Array.from({ length: 2000 }, (_, n) => readOf(n, 's-01'));
+    const event = eventOf([room('r-01', { reads: humanHeavy }), room('r-02', { reads: othersHeavy })]);
+    expect(frame(event)).toBeGreaterThan(MAIL_EVENT_MAX_BYTES);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    // Хватило одной комнаты: r-02 теряет отметки, а r-01 остаётся нетронутой и без reread.
+    expect(fitted.rooms[1]).toMatchObject({ roomId: 'r-02', reads: [], reread: true });
+    expect(fitted.rooms[0]?.reads).toHaveLength(3100);
+    expect(fitted.rooms[0]?.reread).toBeUndefined();
+  });
+
   it('урезанная комната сохраняет отметки человека и удаления: уходят только отметки других читателей', () => {
     const at = '2026-10-27T10:00:00.000Z';
     const others = Array.from({ length: 6000 }, (_, n) => ({ id: `m-${String(n).padStart(4, '0')}`, reader: 's-01', at }));

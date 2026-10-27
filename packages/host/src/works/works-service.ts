@@ -511,7 +511,7 @@ export function createWorksService(
    * структурой — иначе окно с прежней версией получило бы `prevVersion`, которой не держит (спека 6.5). Устаревшие записи
    * убирает `pendingStructural`, когда `published` показывает версию не ниже. Проход, у которого записи работы нет точной
    * версии (чтение вклинилось в запись), `published` не заполняет и запись не снимает: его карта могла лечь до структурной
-   * записи, и пачка за ней ждёт следующего снимка или `MAIL_HOLD_MAX_MS`.
+   * записи, и пачка за ней ждёт следующего снимка (чтение без версии `watchWorks` повторяет сам) или `MAIL_HOLD_MAX_MS`.
    */
   const mapAhead = new Map<string, number>();
   /** Работа → версия, с которой её последний раз разослал полный `publish`: запись сервиса меняется в начале прохода, а снимок уходит позже. */
@@ -630,9 +630,11 @@ export function createWorksService(
     for (const [key, batch] of batches) {
       if (batch.structuralVersion === 0) continue;
       // Работы ещё нет в списке или в нём версия старее записи — снимка с её структурой пока не было, а проход впереди.
-      // Версии у записи нет (чтение вклинилось между записями) — ждать нечего: окно держит событие само (спека 6.5).
+      // Версии у записи нет (чтение вклинилось между записями) — карта в снимке могла лечь до структурной записи, и событие
+      // обогнало бы её (спека 6.5): пачка ждёт повторного чтения, которое `watchWorks` теперь просит само (спека 6.10), или
+      // `MAIL_HOLD_MAX_MS`.
       const entry = entries.get(key);
-      if (entry === undefined || (entry.version !== undefined && entry.version < batch.structuralVersion)) continue;
+      if (entry?.version === undefined || entry.version < batch.structuralVersion) continue;
       flushMail(key);
     }
   }

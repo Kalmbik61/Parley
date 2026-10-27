@@ -42,8 +42,10 @@ vi.mock('@parley/protocol', async (importOriginal) => {
 });
 
 // Шлюзы полного прохода: пока `gate` закрыт, `refreshPass` стоит на `gitBranch` и до `publish` не доходит; `stripVersions`
-// отдаёт проходу записи без точной версии, как при записи, вклинившейся между двумя чтениями версии работы.
-const pass = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined, stripVersions: false }));
+// отдаёт проходу записи без точной версии, как при записи, вклинившейся между двумя чтениями версии работы, но наблюдателю
+// ядра этого не показывает, и повторного чтения нет; `bareReads` — сколько ближайших чтений списка вернут записи без версии
+// уже наблюдателю ядра: он по ним просит ещё одно чтение, как в проде.
+const pass = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined, stripVersions: false, bareReads: 0 }));
 vi.mock('@parley/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@parley/core')>();
   return {
@@ -52,21 +54,23 @@ vi.mock('@parley/core', async (importOriginal) => {
       await pass.gate;
       return actual.gitBranch(...args);
     }),
-    watchWorks: (onWorks: Parameters<typeof actual.watchWorks>[0], options?: Parameters<typeof actual.watchWorks>[1]) =>
-      actual.watchWorks(
-        (works, seq) =>
-          onWorks(
-            pass.stripVersions
-              ? works.map((work) => {
-                  const bare = { ...work };
-                  delete bare.version;
-                  return bare;
-                })
-              : works,
-            seq,
-          ),
-        options,
-      ),
+    watchWorks: (onWorks: Parameters<typeof actual.watchWorks>[0], options?: Parameters<typeof actual.watchWorks>[1]) => {
+      const bare = (works: Awaited<ReturnType<typeof actual.readWorks>>): typeof works =>
+        works.map((work) => {
+          const copy = { ...work };
+          delete copy.version;
+          return copy;
+        });
+      return actual.watchWorks((works, seq) => onWorks(pass.stripVersions ? bare(works) : works, seq), {
+        ...options,
+        read: async () => {
+          const works = await (options?.read ?? actual.readWorks)();
+          if (pass.bareReads <= 0) return works;
+          pass.bareReads -= 1;
+          return bare(works);
+        },
+      });
+    },
   };
 });
 
@@ -144,6 +148,7 @@ beforeEach(async () => {
   onBroadcast = undefined;
   pass.gate = undefined;
   pass.stripVersions = false;
+  pass.bareReads = 0;
   counters.reset();
   vi.mocked(encodeLine).mockClear();
 });
@@ -652,6 +657,67 @@ describe('письма хоста: пачка не ждёт снимка веч�
     // Чтение без версии могло лечь до структурной записи: карта в снимке может её не содержать, и пачка не уходит за 50 мс.
     expect(mailAt - sentAt).toBeGreaterThanOrEqual(MAIL_HOLD_MAX_MS - 50);
     expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо после прохода без версии']);
+  });
+
+  it('после прохода без версии письма снова идут за MAIL_BATCH_MS', async () => {
+    // Спека rooms.mail 6.5/6.10: повторное чтение даёт версию, `published` её видит, и пачка не ждёт потолка.
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    // Ближайшее чтение списка вклинилось в запись: проход опубликует работу без версии, ядро повторит чтение само.
+    pass.bareReads = 1;
+    let mailAt = 0;
+    onBroadcast = (event) => {
+      if (event === 'rooms.mail' && mailAt === 0) mailAt = Date.now();
+    };
+
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    // Повторное чтение и его проход дошли: запись сервиса с точной версией, `published` её видел.
+    await vi.waitFor(() => expect(s.entry(project, id)?.version).toBe(workVersion(project, id)), { timeout: 5000 });
+    await settled();
+    const sentAt = Date.now();
+    send(id, 'письмо после повторного чтения');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: MAIL_HOLD_MAX_MS + 8000 });
+
+    // Обычная пачка в 50 мс, а не потолок в `MAIL_HOLD_MAX_MS`: с запасом на нагрузку, но заметно ниже потолка.
+    expect(mailAt - sentAt).toBeLessThan(MAIL_HOLD_MAX_MS / 2);
+    expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо после повторного чтения']);
+  });
+
+  it('пачка, ждущая снимка, не выходит по снимку без версии', async () => {
+    // Пачку держит снимок с точной версией структурной записи; снимок без версии её не выпускает, она идёт со следующим.
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    // Потолок пачки здесь равен `LONG_BATCH_MS`: событие, которое придёт, ушло за снимком, а не по страховке.
+    const s = await started({ mailBatchMs: LONG_BATCH_MS });
+    pass.stripVersions = true;
+    const open = closePass();
+
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    send(id, 'письмо за структурной записью');
+    open();
+    await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    await settled();
+    // Снимок без версии ушёл, а записи сервиса версии нет: пачку он не выпускает.
+    expect(s.entry(project, id)?.version).toBeUndefined();
+    expect(events('rooms.mail')).toEqual([]);
+
+    // Следующий снимок уже с версией (чтение точное): пачка выходит за ним.
+    pass.stripVersions = false;
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'ещё одна цель';
+    });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+
+    const order = broadcasts.map((item) => item.event);
+    expect(order.indexOf('works.changed')).toBeLessThan(order.indexOf('rooms.mail'));
+    expect(s.entry(project, id)?.version).toBe(workVersion(project, id));
+    expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо за структурной записью']);
   });
 });
 

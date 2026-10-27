@@ -490,6 +490,42 @@ describe('watchWorks', () => {
     }
   });
 
+  it('чтение без версии работы повторяется: без новой записи onWorks зовётся дважды, с точной версией во второй раз', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), {
+      debounceMs: 10,
+      pollMs: NO_POLL,
+      // Первое чтение «вклинилось в запись»: список без версии работы. Второе точное.
+      read: async () => {
+        reads += 1;
+        const works = await readWorks();
+        if (reads > 1) return works;
+        return works.map((work) => {
+          const bare = { ...work };
+          delete bare.version;
+          return bare;
+        });
+      },
+    });
+
+    try {
+      await updateMap(project, created.work.id, (map) => {
+        map.work.goal = 'единственная запись';
+      });
+      await vi.waitFor(() => expect(seen).toHaveLength(2), { timeout: 2000, interval: 10 });
+      // Повтор один: во втором чтении версия есть, и третьего чтения никто не просит.
+      await sleep(200);
+      expect(reads).toBe(2);
+      expect(seen).toHaveLength(2);
+      expect(seen[0]?.[0]?.version).toBeUndefined();
+      expect(seen[1]?.[0]?.version).toBe(workVersion(project, created.work.id));
+    } finally {
+      watcher.close();
+    }
+  });
+
   it('ошибка чтения не останавливает наблюдателя: следующее событие читает снова; бросок read синхронно — тоже', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     let reads = 0;

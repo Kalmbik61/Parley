@@ -202,6 +202,8 @@ export function watchWorks(
         if (closed || seq < applied) return;
         applied = seq;
         onWorks(works, seq);
+        // Чтение вклинилось в запись (спека rooms.mail 6.5/6.10): следующее даст точную версию, а записи только писем чтений не просят.
+        if (works.some((work) => work.version === undefined)) dirty = true;
       })
       .catch((error: unknown) => onError?.(error))
       .finally(() => {
