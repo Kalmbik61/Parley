@@ -838,6 +838,20 @@ describe('область под мышь', () => {
     expect(lastRect(island)).toEqual(SHAPE);
   });
 
+  it('M2: рост с перелётом — область во время перехода крупнее, после transitionend уходит итоговая', () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    // Пружинная кривая роста на миг раздувает форму на ≈ 4 % больше итоговой.
+    const overshoot = { x: 94, y: 0, width: 291, height: 42 };
+    rects.shape = overshoot;
+    resized();
+    expect(lastRect(island)).toEqual(overshoot);
+    rects.shape = SHAPE;
+    fireEvent.transitionEnd(screen.getByTestId('island'));
+    expect(lastRect(island)).toEqual(SHAPE);
+  });
+
   it('точка острова сменилась — область замеряется заново', async () => {
     const { island, bridge } = setup({ anchor: 'right' });
     render(<IslandApp bridge={bridge} />);
@@ -852,6 +866,50 @@ describe('область под мышь', () => {
     // Язычок ушёл — остался один живой наблюдатель, а колбэк прежнего вида не сработает.
     expect(resizeCallbacks).toHaveLength(before);
     expect(observed.at(-1)).toBe(screen.getByTestId('island'));
+  });
+});
+
+describe('движение формы', () => {
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  it('RETRACT_MORPH_MS — длина сжатия формы, 300 мс', () => {
+    expect(RETRACT_MORPH_MS).toBe(300);
+  });
+
+  it('M2: стрелка ⌃ сжимает форму кривой сжатия, язычок выдвигает кривой роста', () => {
+    const { bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    expect(morph()).toBe('island-morph-grow');
+    tuck(hover);
+    expect(morph()).toBe('island-morph-shrink');
+    expand();
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M3: настройка «Reduce motion» из island:config — форма без перехода', async () => {
+    const { bridge } = setup({ motion: 'reduce' });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-motion')).toBe('reduce'));
+    expect(morph()).toBeUndefined();
+    expand();
+    expect(morph()).toBeUndefined();
+  });
+
+  it('M3: «Reduce motion» включили на лету — переход снимается; вернули «system» — переход снова есть', async () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onConfig).toHaveBeenCalled());
+    const push = (config: IslandConfig): void => {
+      act(() => {
+        vi.mocked(island.onConfig).mock.calls.at(-1)![0](config);
+      });
+    };
+    const base = await island.config();
+    push({ ...base, motion: 'reduce' });
+    expect(morph()).toBeUndefined();
+    push({ ...base, motion: 'system' });
+    expect(morph()).toBe('island-morph-grow');
   });
 });
 

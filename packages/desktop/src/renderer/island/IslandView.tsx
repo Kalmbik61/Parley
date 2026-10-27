@@ -9,7 +9,7 @@
  * не меняется — это фиксированный прозрачный кадр (`ISLAND_FRAME`), форма живёт внутри него.
  *
  * Убранный остров (`retracted`) не уезжает, а превращается в брусок, как Dynamic Island: форма — тот же элемент, содержимое
- * меняется сразу, а размер, отступ сверху, скругление и тень доезжают одним CSS-переходом (250 мс), поэтому большое чёрное
+ * меняется сразу, а размер, отступ сверху, скругление и тень доезжают одним CSS-переходом сжатия, поэтому большое чёрное
  * сжимается в маленькое. Без Done брусок — пустой блок 40×5 со скруглением `rounded-[3px]` (капсула; радиус конечный,
  * чтобы переход от 22 px шёл плавно — у `rounded-full` угол щёлкал бы) и светлой обводкой (видна и на светлом,
  * и на тёмном фоне под прозрачным окном); с непросмотренными Done (`doneCount` > 0) вместо него выглядывает форма со
@@ -116,6 +116,9 @@ export interface IslandViewProps {
   consent: IslandConsentProps | null;
   progress?: { selected: SessionRef | null; state: ProgressState; onSelect(ref: SessionRef): void; onClose(): void };
 }
+
+/** Направление перехода формы: класс `island-morph-grow` или `island-morph-shrink` в `island.css`. */
+type Morph = 'grow' | 'shrink';
 
 export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
 
@@ -466,8 +469,18 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   };
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
-  /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  /**
+   * Размер содержимого в пикселях (до первого замера `null` — у формы нет явных `width`/`height`) и направление
+   * перехода к нему (#9 §4.4): площадь выросла — рост, упала — сжатие, та же — прежнее.
+   */
+  const [shape, setShape] = useState<{ size: { width: number; height: number } | null; morph: Morph }>({ size: null, morph: 'grow' });
+  // Уборка и выдвижение меняют отступ сверху и скругление сразу, а размер — лишь после замера: направление ставится в
+  // том же кадре, иначе отступ и скругление поехали бы кривой прошлого перехода.
+  const [morphRetracted, setMorphRetracted] = useState(retracted);
+  if (morphRetracted !== retracted) {
+    setMorphRetracted(retracted);
+    setShape((current) => ({ ...current, morph: retracted ? 'shrink' : 'grow' }));
+  }
   useLayoutEffect(() => {
     const element = contentRef.current;
     if (element === null) return undefined;
@@ -476,7 +489,13 @@ export function IslandView(props: IslandViewProps): JSX.Element {
       const height = Math.ceil(element.offsetHeight);
       // Нулевой размер — страница ещё не разложена: форма схлопнулась бы и потом росла «из точки».
       if (width === 0 || height === 0) return;
-      setSize((current) => (current !== null && current.width === width && current.height === height ? current : { width, height }));
+      setShape((current) => {
+        const { size } = current;
+        if (size !== null && size.width === width && size.height === height) return current;
+        const area = width * height;
+        const before = size === null ? 0 : size.width * size.height;
+        return { size: { width, height }, morph: area > before ? 'grow' : area < before ? 'shrink' : current.morph };
+      });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -489,6 +508,8 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   const look = !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
   const marginTop = !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
   const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
+  // «Reduce motion» Parley — как системный reduced motion: класса перехода нет, а `data-motion` гасит появление внутри.
+  const morph = config.motion === 'reduce' ? '' : `island-morph-${shape.morph}`;
   return (
     // Форма — прямой элемент flex-корня `IslandApp`: `shrink-0`, чтобы узкий кадр не сжимал её.
     <div
@@ -497,9 +518,10 @@ export function IslandView(props: IslandViewProps): JSX.Element {
       data-navigation-key={props.navigationKey ?? undefined}
       tabIndex={props.requestKeyboard ? -1 : undefined}
       data-retracted={retracted}
+      data-motion={config.motion}
       aria-hidden={retracted || undefined}
-      className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} transition-[width,height,margin-top,border-radius,box-shadow] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-      style={{ ...size, marginTop }}
+      className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} ${morph} ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      style={{ ...shape.size, marginTop }}
       {...drag.handlers}
     >
       <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: retracted ? 0 : config.topInset }}>

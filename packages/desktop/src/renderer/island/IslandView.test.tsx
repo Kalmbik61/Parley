@@ -8,6 +8,9 @@
  * размеры текста; карточка согласия на папку встаёт раньше карточек ленты, но не раньше раскрытого помощника.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRef } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,14 +26,22 @@ import { SWIPE_UP_PX } from './drag.js';
 import { HOST_IDLE } from './assistant/store.js';
 import { CARD_ARM_MS, IslandView, type IslandAssistantProps, type IslandViewProps } from './IslandView.js';
 
+/**
+ * Стили острова: переходы формы и reduced motion проверяются по тексту правил — jsdom CSS-переходов не считает, а
+ * `?raw` у vitest отдаёт CSS пустым.
+ */
+const ISLAND_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'island.css'), 'utf8');
+
 const REF = { projectPath: '/tmp/proj', workId: 'w-1', sessionId: 's-02' };
 const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'proj' }]]);
 
-/** Поля `IslandConfig` для помощника и острова: в этих тестах помощник выключен. */
+/** Поля `IslandConfig` для помощника, звука и движения: в этих тестах помощник выключен. */
 const ISLAND_BASE = {
   islandEnabled: true,
   assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
-};
+  islandSound: { needs: true, finished: false, palette: 'soft', volume: 0.6, ui: false },
+  motion: 'system',
+} as const;
 
 function api(): IslandApi {
   return {
@@ -85,7 +96,7 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
+    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(), requestKeyboard: false, onTakeRequestKeyboard: vi.fn(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
@@ -358,7 +369,7 @@ describe('вид острова', () => {
   });
 
   it('подсказки первого показа нет; отступ под чёлку', () => {
-    view({ config: { ...ISLAND_BASE, sound: true, topInset: 38, anchor: 'center' } });
+    view({ config: { ...ISLAND_BASE, topInset: 38, anchor: 'center' } });
     expect(screen.queryByText(/Drag me/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
@@ -543,15 +554,108 @@ describe('плавный размер формы', () => {
     }
   }
 
-  it('форма анимирует размер и облик: переход ширины, высоты, отступа, скругления и тени, у reduced motion перехода нет', () => {
+  /** Правило `island.css` с ровно таким селектором (с отступами строк, как в файле): тело между `{` и `}`. */
+  function cssRule(selector: string): string {
+    const rule = ISLAND_CSS.split('}').map((chunk) => chunk.split('{')).find((parts) => parts.length >= 2 && parts.at(-2)!.split('*/').at(-1)!.trim() === selector);
+    expect(rule, selector).toBeDefined();
+    return rule!.at(-1)!;
+  }
+  /** Тело блока `@media (prefers-reduced-motion: reduce)`, где стоит правило переходов формы. */
+  function reducedMediaWith(selector: string): string {
+    const blocks = ISLAND_CSS.split('@media (prefers-reduced-motion: reduce)').slice(1);
+    const block = blocks.find((text) => text.slice(0, text.indexOf('}\n}')).includes(selector));
+    expect(block, selector).toBeDefined();
+    return block!.slice(0, block!.indexOf('}\n}') + 1);
+  }
+  /** Шевелит замер: содержимое получает новый размер, наблюдатели его пересчитывают. */
+  function resize(width: number, height: number): void {
+    withOffsets(width, height, () => {
+      act(() => {
+        for (const callback of resizeCallbacks) callback();
+      });
+    });
+  }
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  it('форма анимирует размер и облик классом перехода: переход ширины, высоты, отступа, скругления и тени', () => {
     view();
     const shape = screen.getByTestId('island');
-    expect(shape.className).toContain('transition-[width,height,margin-top,border-radius,box-shadow]');
-    expect(shape.className).toContain('duration-[250ms]');
-    expect(shape.className).toContain('ease-out');
-    expect(shape.className).toContain('motion-reduce:transition-none');
+    expect(shape.className).toContain('island-morph-grow');
+    expect(shape.className).not.toContain('duration-[250ms]');
     expect(shape.className).toContain('overflow-hidden');
     expect(shape.className).toContain('rounded-b-[22px]');
+    const both = cssRule('.island-morph-grow,\n.island-morph-shrink');
+    expect(both).toContain('transition-property: width, height, margin-top, border-radius, box-shadow;');
+  });
+
+  it('M2: рост — 460 мс по кривой с перелётом, сжатие — 300 мс без перелёта', () => {
+    const grow = cssRule('.island-morph-grow');
+    expect(grow).toContain('transition-duration: 460ms;');
+    expect(grow).toContain('transition-timing-function: cubic-bezier(0.32, 1.22, 0.42, 1);');
+    const shrink = cssRule('.island-morph-shrink');
+    expect(shrink).toContain('transition-duration: 300ms;');
+    expect(shrink).toContain('transition-timing-function: cubic-bezier(0.45, 0, 0.2, 1);');
+  });
+
+  it('M2: класс перехода выбирается по площади содержимого — растёт площадь — рост, падает — сжатие', () => {
+    view();
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-grow');
+    // Карточка шире и выше пилюли.
+    resize(440, 180);
+    expect(morph()).toBe('island-morph-grow');
+    // Обратно к пилюле.
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-shrink');
+    // Площадь та же — направление прежнее.
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-shrink');
+    // Шире, но ниже: площадь меньше — сжатие; выше, но уже: площадь больше — рост.
+    resize(400, 20);
+    expect(morph()).toBe('island-morph-shrink');
+    resize(200, 60);
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M2: уборка — сжатие, выдвижение — рост, ещё до замера: отступ сверху и скругление идут той же кривой, что и размер', () => {
+    const props = viewProps();
+    const { rerender } = render(<IslandView {...props} />);
+    resize(280, 40);
+    expect(morph()).toBe('island-morph-grow');
+    rerender(<IslandView {...props} retracted />);
+    expect(morph()).toBe('island-morph-shrink');
+    resize(40, 5);
+    expect(morph()).toBe('island-morph-shrink');
+    rerender(<IslandView {...props} retracted={false} />);
+    expect(morph()).toBe('island-morph-grow');
+  });
+
+  it('M3: системный reduced motion снимает переход формы и появление содержимого', () => {
+    expect(reducedMediaWith('.island-morph-grow')).toContain('transition: none;');
+    expect(reducedMediaWith('.island-morph-shrink')).toContain('transition: none;');
+    expect(reducedMediaWith('.island-reveal')).toContain('animation: none;');
+  });
+
+  it('M3: настройка Parley «Reduce motion» — как системная: формы без перехода, содержимое без появления', () => {
+    view({ config: { ...ISLAND_BASE, motion: 'reduce', topInset: 0, anchor: 'center' } });
+    resize(280, 40);
+    const shape = screen.getByTestId('island');
+    expect(shape.getAttribute('data-motion')).toBe('reduce');
+    expect(morph()).toBeUndefined();
+    expect(shape.className).not.toContain('transition');
+    resize(440, 180);
+    expect(morph()).toBeUndefined();
+    expect(cssRule("[data-motion='reduce'] .island-reveal")).toContain('animation: none;');
+  });
+
+  it('M3: «Reduce motion» гасит и пульс помощника, как системная настройка', () => {
+    const rule = cssRule("[data-motion='reduce'] .assistant-pulse,\n[data-motion='reduce'] .assistant-dot-pulse");
+    expect(rule).toContain('animation: none;');
+  });
+
+  it('при системной настройке движения у формы data-motion="system"', () => {
+    view();
+    expect(screen.getByTestId('island').getAttribute('data-motion')).toBe('system');
   });
 
   it('до первого замера у формы нет явного размера (нулевой замер jsdom не в счёт)', () => {
@@ -597,6 +701,14 @@ describe('плавный размер формы', () => {
     fireEvent.mouseEnter(shape);
     fireEvent.mouseLeave(shape);
     expect(props.onToggleList).not.toHaveBeenCalled();
+  });
+
+  it('содержимое проступает 220 мс с задержкой 90 мс: прозрачность, сдвиг −4 px, размытие 3 px', () => {
+    expect(cssRule('.island-reveal')).toContain('animation: island-reveal 220ms ease-out 90ms both;');
+    const from = cssRule('from');
+    expect(from).toContain('opacity: 0;');
+    expect(from).toContain('transform: translateY(-4px);');
+    expect(from).toContain('filter: blur(3px);');
   });
 
   it('пилюля, список и карточка появляются с island-reveal', () => {
@@ -1000,7 +1112,7 @@ describe('оформление списка', () => {
 
 describe('убранный остров', () => {
   const INSET = 38;
-  const config = { ...ISLAND_BASE, sound: true, topInset: INSET, anchor: 'center' as const };
+  const config = { ...ISLAND_BASE, topInset: INSET, anchor: 'center' as const };
   /** Единственный элемент в содержимом убранной формы: брусок или текст `✅ N`. */
   const only = (): HTMLElement => {
     const content = screen.getByTestId('island-content');
