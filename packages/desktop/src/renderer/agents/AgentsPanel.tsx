@@ -6,7 +6,7 @@
  */
 
 import { Bot, ChevronRight, LoaderCircle } from 'lucide-react';
-import type { AgentPlan, FeedItem, WorkEntry } from '@parley/core';
+import type { AgentPlan, FeedItem, WindowWorkEntry } from '@parley/core';
 import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -28,7 +28,7 @@ import { agentRows, type AgentRow } from './agents-model.js';
 
 export interface AgentsPanelProps {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
 }
 
 export function AgentsPanel({ bridge, entry }: AgentsPanelProps): JSX.Element {

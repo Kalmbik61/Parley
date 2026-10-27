@@ -6,7 +6,7 @@
  * от родителя к дочерним сессиям (`treeGuides`) считаются по этим же строкам.
  */
 
-import type { Room, WorkEntry, WorkMap, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WindowWorkMap, WorkSession } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';
@@ -20,7 +20,7 @@ export interface SidebarSection {
   key: string;                          // 'pinned' | projectPath
   title: string;                        // S.sidebar.pinned ('Pinned') | имя папки
   projectPath: string | null;
-  works: WorkEntry[];                   // показанные в секции, уже отсортированы
+  works: WindowWorkEntry[];                   // показанные в секции, уже отсортированы
   collapsed: boolean;
   /**
    * Ссылка «N archived» внизу группы проекта (спека архива комнат и проектов, 6.1): `count` — все архивные работы
@@ -54,7 +54,7 @@ export function folderName(projectPath: string): string {
 }
 
 export function buildSections(input: {
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   attention: Record<string, WorkAttention>;   // ключ — workKey
   pinned: string[]; collapsed: string[]; showDone: boolean;
   /** false — archived скрыты, как в 3.2; true — в конце своей секции, после done (кусок 6.3, спека 6.7). */
@@ -70,12 +70,12 @@ export function buildSections(input: {
   const archivedShown = new Set(input.archivedShown);
 
   // Работе без посчитанного внимания — `off` со временем карты (`attentionOf` в derive.ts).
-  const attentionOf = (entry: WorkEntry): WorkAttention => attentionIn(attention, entry);
+  const attentionOf = (entry: WindowWorkEntry): WorkAttention => attentionIn(attention, entry);
 
   // `done` внизу своей секции, показанные архивные — под ними: одно правило для всех секций,
   // «Закреплённых» тоже.
-  const tail = (entry: WorkEntry): number => (entry.map.work.status === 'archived' ? 2 : entry.map.work.status === 'done' ? 1 : 0);
-  const sortWorks = (works: WorkEntry[]): WorkEntry[] =>
+  const tail = (entry: WindowWorkEntry): number => (entry.map.work.status === 'archived' ? 2 : entry.map.work.status === 'done' ? 1 : 0);
+  const sortWorks = (works: WindowWorkEntry[]): WindowWorkEntry[] =>
     [...works].sort((a, b) => {
       const aTail = tail(a);
       const bTail = tail(b);
@@ -91,7 +91,7 @@ export function buildSections(input: {
       return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
     });
 
-  const isArchived = (entry: WorkEntry): boolean => entry.map.work.status === 'archived';
+  const isArchived = (entry: WindowWorkEntry): boolean => entry.map.work.status === 'archived';
 
   // Архивные работы проекта — все, закреплённые тоже: их число стоит в ссылке «N archived» (6.1). Закреплённая
   // архивная из «Закреплённых» уходит, а в ссылке своего проекта остаётся.
@@ -114,8 +114,8 @@ export function buildSections(input: {
     return (archivedVisible || status !== 'archived') && (showDone || status !== 'done');
   });
 
-  const pinnedWorks: WorkEntry[] = [];
-  const byProject = new Map<string, WorkEntry[]>();
+  const pinnedWorks: WindowWorkEntry[] = [];
+  const byProject = new Map<string, WindowWorkEntry[]>();
   for (const entry of shown) {
     // В «Закреплённые» архивная идёт только при общем показе архивных; при раскрытой ссылке проекта она в его группе.
     if (pinned.has(workKey(entry.projectPath, entry.map.work.id)) && (!isArchived(entry) || showArchived)) {
@@ -137,7 +137,7 @@ export function buildSections(input: {
   // Считается один раз на группу, а не в каждом вызове компаратора. Показанная архивная ранг
   // не поднимает — во внимание она не входит (спека 6.7); группа из одних архивных — ниже всех,
   // но с числом, а не `-Infinity`: разность двух бесконечностей сломала бы сортировку.
-  const groupRank = (works: WorkEntry[]): number =>
+  const groupRank = (works: WindowWorkEntry[]): number =>
     Math.max(
       -1,
       ...works.filter((entry) => entry.map.work.status !== 'archived').map((entry) => ATTENTION_RANK[attentionOf(entry).level]),
@@ -257,7 +257,7 @@ const createdMs = (room: Room): number => isoMs(room.createdAt) ?? Number.POSITI
  * раньше архивной (спека архива комнат, 5.1): сессия, числящаяся и там и там, стоит в открытой, а в архивную попадает,
  * только если открытой у неё нет.
  */
-function homeRooms(map: WorkMap): Map<string, Room> {
+function homeRooms(map: WindowWorkMap): Map<string, Room> {
   const home = new Map<string, Room>();
   const byCreation = [...map.rooms].sort((a, b) => {
     const left = createdMs(a);
@@ -278,7 +278,7 @@ function homeRooms(map: WorkMap): Map<string, Room> {
  * Комната, в которой сессия стоит в сайдбаре (`homeRooms`); `null` — сессия вне комнат. Правило «своя комната» броска
  * (кусок 7, 2.5): в свою комнату сессию не бросают, а в другую, где она числится лишь в старой карте, — можно.
  */
-export function homeRoomOf(map: WorkMap, sessionId: string): Room | null {
+export function homeRoomOf(map: WindowWorkMap, sessionId: string): Room | null {
   return homeRooms(map).get(sessionId) ?? null;
 }
 
@@ -290,7 +290,7 @@ export function homeRoomOf(map: WorkMap, sessionId: string): Room | null {
 const staysOnCard = (session: WorkSession): boolean => session.lifecycle === 'active' || session.lifecycle === 'pending';
 
 /** Строка комнаты (`cardRows`, `archivedRows`): состав участников зависит от `home` и от того, в архиве ли комната. */
-function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number, parent: string | null): CardRoomRow {
+function buildRoomRow(map: WindowWorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number, parent: string | null): CardRoomRow {
   const archived = isRoomArchived(room);
   // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
   // Работающие участники архивной комнаты стоят на карточке своими строками (`staysOnCard`), второй раз их не выводим.
@@ -321,7 +321,7 @@ function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean
  * «N archived rooms». Сессия, чья домашняя комната архивная, стоит обычной строкой, если она работает (`staysOnCard`),
  * а спящая и закрытая уходят под ссылку вместе с комнатой.
  */
-export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
+export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
   const home = homeRooms(map);
   const rows: CardRow[] = [];
   // Владелец — отдельный якорь даже внутри рабочей комнаты. Его ссылка среди участников
@@ -352,7 +352,7 @@ export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
  * Строки архивных комнат карточки (спека архива комнат, 5.1) — под ссылкой «N archived rooms», в порядке карты. Их
  * число — число в ссылке, даже у комнаты без единого участника под ссылкой.
  */
-export function archivedRows(map: WorkMap, showClosed: boolean): CardRoomRow[] {
+export function archivedRows(map: WindowWorkMap, showClosed: boolean): CardRoomRow[] {
   const home = homeRooms(map);
   return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, showClosed, room, 0, null));
 }

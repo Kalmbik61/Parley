@@ -48,7 +48,7 @@ import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecision
 import { clipText, escapeHtml, lastLines } from './format.js';
 import { classify } from './ingress.js';
 import { createLinkCode, deepLink, LINK_ATTEMPTS, matchLinkCode } from './link.js';
-import { activityTransition, emptyMemory, sessionWhere, worksTriggers } from './notify.js';
+import { activityTransition, emptyMemory, sessionWhere, worksTriggers, type TriggerLetters } from './notify.js';
 import { createOutbox } from './outbox.js';
 import type { Outbox, Priority } from './outbox.js';
 import { createPoller } from './poller.js';
@@ -63,6 +63,8 @@ export interface TelegramServiceDeps {
   home: string;
   host: Pick<HostContext, 'broadcast' | 'hold' | 'log'>;
   works: Pick<WorksService, 'snapshot' | 'onChange'>;
+  /** Письма, которых нет в снимке работ (непрочитанное человеком, последнее письмо человека в комнате); нет — из базы работы. */
+  letters?: TriggerLetters;
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   feed?: Pick<FeedService, 'snapshot' | 'decide' | 'subscribe' | 'unsubscribe'>;
   /**
@@ -475,7 +477,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     memory = emptyMemory();
     if (owner() === null) return;
     const snapshot = deps.works.snapshot();
-    worksTriggers(memory, snapshot);
+    worksTriggers(memory, snapshot, undefined, deps.letters);
     for (const entry of snapshot.entries) {
       for (const session of entry.map.sessions) {
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
@@ -791,7 +793,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   function onWorks(snapshot: Parameters<typeof worksTriggers>[1]): void {
     if (!canSend()) return;
-    const triggers = worksTriggers(memory, snapshot);
+    const triggers = worksTriggers(memory, snapshot, undefined, deps.letters);
     for (const { entry, roomId, previous, now: result } of triggers.closed) {
       const open = state.cardsFor(
         (card) => card.kind === 'room' && card.projectPath === entry.projectPath && card.workId === entry.map.work.id && card.roomId === roomId && card.proposalId === previous.id && card.rev === previous.rev,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readNativeContext, stampNativeContext, writeNativeContext, writeNativeSkillCatalog } from '../work/native-context.js';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -8,7 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SkillCatalog } from '../skills/catalog.js';
 import { addSession, transitionSession } from '../work/map.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import type { WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
 import { createParleyServer } from './tools.js';
@@ -61,10 +61,10 @@ describe('instance-local find_skill', () => {
     const adapter = vi.fn(async () => catalog('codex', project));
     const client = await connect({ skillNavigator: false, skillCatalog: adapter });
     expect((await client.listTools()).tools.some(tool => tool.name === 'find_skill')).toBe(false);
-    const before = await readFile(workPaths(project, work).map, 'utf8');
+    const before = workVersion(project, work);
     const result = await client.callTool({ name: 'find_skill', arguments: { query: 'review' }, _meta: { threadId: 'SHOULD_NOT_BIND' } });
     expect(result.isError).toBe(true); expect(adapter).not.toHaveBeenCalled();
-    expect(await readFile(workPaths(project, work).map, 'utf8')).toBe(before);
+    expect(workVersion(project, work)).toBe(before);
   });
   it('builds own Codex names once, shares a promise for concurrent calls and returns safe native load data', async () => {
     const adapter = vi.fn(async () => catalog('codex', project));

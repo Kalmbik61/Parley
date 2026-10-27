@@ -6,7 +6,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorktreeDiff } from '@parley/core';
+import type { WindowWorkEntry, WorktreeDiff } from '@parley/core';
 import type { DiffFile, FileRoot, TextFile } from '../../shared/files-types.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';
@@ -88,7 +88,7 @@ function diff(files: DiffFile[]): WorktreeDiff {
   };
 }
 
-function work(title = 'w-a', sessions = [makeSession('s-02', 'two', { worktree: WORKTREE }), makeSession('s-04', 'four')]): WorkEntry {
+function work(title = 'w-a', sessions = [makeSession('s-02', 'two', { worktree: WORKTREE }), makeSession('s-04', 'four')]): WindowWorkEntry {
   return makeWork('w-a', { projectPath: '/tmp/proj', title, sessions });
 }
 
@@ -131,7 +131,7 @@ function serve(root: FileRoot, path: string, rev = BASE): void {
   bridge.setFile(root, path, text(`${path}\n`));
 }
 
-function renderTab(entry: WorkEntry = work(), tab = diffTab()): ReturnType<typeof render> {
+function renderTab(entry: WindowWorkEntry = work(), tab = diffTab()): ReturnType<typeof render> {
   return render(<DiffTab bridge={bridge} workKey={KEY} entry={entry} tab={tab} sendDeps={{ bridge, session: () => null, openSession: () => {} }} />);
 }
 

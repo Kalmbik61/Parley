@@ -15,7 +15,7 @@
  * приём — в `lib/participant.ts` (`sessionTag`).
  */
 
-import type { WorkMap } from '@parley/core';
+import type { WindowWorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from './participant.js';
 
@@ -81,7 +81,7 @@ export function modelName(model: string | null): string | null {
  * Удалённая сессия — `S02 (удалена)`, чужой id — как есть.
  */
 export function participantTag(
-  map: WorkMap,
+  map: WindowWorkMap,
   id: string,
   model: string | null,
   providers: Array<{ id: string; label: string }>,

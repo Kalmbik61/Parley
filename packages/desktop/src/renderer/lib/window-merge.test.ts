@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MapCompact, Message, WorkEntry } from '@parley/core';
+import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { makeLetter, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
 import { earlierCursor, earlierRemaining, messageSeq, retainSeen, withMessages } from './window-merge.js';
 
@@ -17,12 +17,12 @@ function compact(total: number, tailFrom: number | null, extra: Partial<MapCompa
   };
 }
 
-function entry(messages: Message[], meta?: MapCompact): WorkEntry {
+function entry(messages: Message[], meta?: MapCompact): WindowWorkEntry {
   const base = makeWork('w-01', { rooms: [makeRoom('r-01', 'Комната')], messages });
   return meta === undefined ? base : { ...base, map: { ...base.map, compact: meta } };
 }
 
-const ids = (value: WorkEntry): string[] => value.map.messages.map((message) => message.id);
+const ids = (value: WindowWorkEntry): string[] => value.map.messages.map((message) => message.id);
 
 describe('retainSeen: хвост сдвинулся, а окно держало больше', () => {
   it('прочитанные письма прежнего снимка, которых нет в новом, остаются; порядок — по номеру', () => {

@@ -153,6 +153,7 @@ function setup(
     onEvent: vi.fn(),
     onStatus: vi.fn(),
     activitySnapshot: vi.fn().mockReturnValue([{ ref: { sessionId: 's-1' } }]),
+    noticesSnapshot: vi.fn().mockReturnValue([{ kind: 'map-migration-failed', ref: null, text: '/p/map.json', at: 'at' }]),
   } as unknown as HostConnection;
   const layoutStore: LayoutStore =
     overrides.layoutStore ??
@@ -273,6 +274,13 @@ describe('registerIpc', () => {
   it('host:activity-snapshot отдаёт снимок активности из HostConnection (раунд исправлений 1 куска 3.1)', async () => {
     const { ipcMain } = setup();
     expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([{ ref: { sessionId: 's-1' } }]);
+  });
+
+  it('host:notices-snapshot отдаёт уведомления хоста, пришедшие до подписки окна', async () => {
+    const { ipcMain } = setup();
+    expect(await ipcMain.invoke('host:notices-snapshot')).toEqual([
+      { kind: 'map-migration-failed', ref: null, text: '/p/map.json', at: 'at' },
+    ]);
   });
 
   it('неизвестный метод отвергается', async () => {

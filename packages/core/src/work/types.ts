@@ -334,18 +334,29 @@ export interface AutonomousOp {
   at: string; settledAt: string | null; result: Record<string, unknown> | null;
 }
 
-/** Local durable intent: exact captured Markdown, never rebuilt from a later live revision. */
+/**
+ * Local durable intent: exact captured Markdown, never rebuilt from a later live revision. Пока `pending`, у намерения
+ * есть `content`: файл пишется вне транзакции карты и при отказе повторяется ровно с этого текста. У `written` текста
+ * нет — он лежит в самом файле, а карта хранит его `sha256`, размер и заголовок (спека хранилища 6.2).
+ */
 export interface PlanExportIntent {
   file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
-  content: string; status: 'pending' | 'written';
+  status: 'pending' | 'written';
+  content?: string;
+  sha256?: string; bytes?: number; title?: string;
 }
 
-/** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
+/**
+ * Durable delivery record: occurrence is an item log offset or a captured source message ID. Текст письма нужен, пока
+ * эффект `queued`: по нему письмо отправляется. Отправленный и отменённый эффект хранит вместо него `textSha256` —
+ * сам текст остаётся в письме, и принадлежность письма эффекту сверяется по хэшу (спека хранилища 6.2).
+ */
 export interface PlanEffect {
   key: string; roomId: string; planId: string | null; rev: number;
   item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
-  occurrence: string; target: string; text: string; createdAt: string;
+  occurrence: string; target: string; createdAt: string;
   status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
+  text?: string; textSha256?: string;
 }
 /** Captured completion, then separately prepared file version; never a map/Markdown atomic claim. */
 export interface PlanBacklogIntent {
@@ -437,7 +448,7 @@ export interface Room {
 /** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
 export type MessageVia = 'assistant' | 'telegram';
 
-/** Письмо: доставляется по pull, живёт в карте. */
+/** Письмо: доставляется по pull, живёт в таблице `messages` (спека хранилища 6.2). */
 export interface Message {
   id: string;
   /** Комната письма; `null` — прямое письмо, как до комнат. */
@@ -571,14 +582,14 @@ export interface Work {
 }
 
 /**
- * Карта работы — один файл `map.json`, пишет только харнесс. Версия 2 — с
+ * Хранимая карта работы: всё, кроме писем. Письма лежат в своих таблицах (`messages`, `message_reads`, `message_unread`,
+ * спека хранилища 6.2) и читаются через API писем (`letter-store.ts`); карта с письмами — `WindowWorkMap`. Версия 2 — с
  * комнатами и двумя осями сессии; карту v1 `parseMap` поднимает при чтении.
  */
 export interface WorkMap {
   schemaVersion: 2;
   work: Work;
   sessions: WorkSession[];
-  messages: Message[];
   rooms: Room[];
   plans?: RoomPlan[];
   planExports?: PlanExportIntent[];
@@ -588,9 +599,18 @@ export interface WorkMap {
   planBacklogIntents?: PlanBacklogIntent[];
   /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
   resources?: WorkResources;
+}
+
+/**
+ * Карта с письмами: снимок для окна (`compactWorkMap`), страницы, разбор прежней `map.json`, полная карта из
+ * `readStoredMap` и выгрузка `parley-core work map` (спека хранилища 6.2). Чистые предикаты писем (`isUnreadFor`,
+ * `recipientsOf`, `unreadFor`, `isHumanUnread`) работают на ней — ими пользуются окно и сверка переезда.
+ */
+export type WindowWorkMap = WorkMap & {
+  messages: Message[];
   /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
   compact?: MapCompact;
-}
+};
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {

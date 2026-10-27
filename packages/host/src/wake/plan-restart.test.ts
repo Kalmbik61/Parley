@@ -5,7 +5,10 @@ import {
   addMessage,
   addSession,
   addRoom,
+  createWork,
   HUMAN,
+  mapLetterTx,
+  replaceStoredMap,
   setProposal,
   resolveProposal,
   reservePlanEffects,
@@ -31,12 +34,17 @@ afterEach(async () => {
   else process.env.PARLEY_HOME = previous;
   await rm(home, { recursive: true, force: true });
 });
-function mapFixture(): WorkMap {
+/**
+ * Карта работы с назначением плана: непрочитанное будильник читает из базы работы (спека хранилища 6.2), поэтому карта
+ * записывается в базу (`persist`) после правок теста, а снимок хоста (`entry.map`) остаётся той же картой в памяти.
+ */
+async function mapFixture(): Promise<WorkMap> {
   const at = new Date().toISOString();
+  const workId = (await createWork(path.join(home, "project"), { title: "Wake" })).work.id;
   const map: WorkMap = {
     schemaVersion: 2,
     work: {
-      id: "w-01",
+      id: workId,
       title: "Wake",
       goal: "",
       status: "active",
@@ -69,6 +77,7 @@ function mapFixture(): WorkMap {
   });
   resolveProposal(
     map,
+    mapLetterTx(map).letters,
     "r-01",
     p.proposalId,
     "accept",
@@ -79,8 +88,11 @@ function mapFixture(): WorkMap {
   transitionSession(map, "s-02", "sleeping", { at });
   map.sessions[1]!.providerSessionId = "offline-fixture";
   addMessage(map, { from: HUMAN, to: ["s-02"], text: "Old ordinary mail" }, at);
-  reservePlanEffects(map, 20, at);
+  reservePlanEffects(map, mapLetterTx(map).letters, 20, at);
   return map;
+}
+function persist(map: WorkMap): void {
+  replaceStoredMap(path.join(home, "project"), map.work.id, map);
 }
 function rig(map: WorkMap) {
   const project = path.join(home, "project");
@@ -114,7 +126,7 @@ function rig(map: WorkMap) {
     wake,
     launch,
     callbacks,
-    ref: { projectPath: project, workId: "w-01", sessionId: "s-02" },
+    ref: { projectPath: project, workId: map.work.id, sessionId: "s-02" },
   };
 }
 async function settled() {
@@ -122,7 +134,8 @@ async function settled() {
     await new Promise((resolve) => setTimeout(resolve, 5));
 }
 it("restart wakes only a current persisted sent plan assignment while ordinary old mail remains pointed", async () => {
-  const map = mapFixture();
+  const map = await mapFixture();
+  persist(map);
   const r = rig(map);
   r.wake.start();
   await settled();
@@ -133,13 +146,14 @@ it("restart wakes only a current persisted sent plan assignment while ordinary o
 it.each(["cancelled", "forged", "obsolete"] as const)(
   "restart does not wake a %s effect even with unread text",
   async (kind) => {
-    const map = mapFixture();
+    const map = await mapFixture();
     if (kind === "cancelled") map.planEffects![0]!.status = "cancelled";
     else if (kind === "forged")
       map.messages.find(
         (row) => row.id === map.planEffects![0]!.messageId,
       )!.text = "Forged payload";
     else map.plans![0]!.rev++;
+    persist(map);
     const r = rig(map);
     r.wake.start();
     await settled();

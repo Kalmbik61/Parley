@@ -192,7 +192,7 @@ export function silenceMs(lastRecordAt: string | null, now: number = Date.now())
 export type FinalStatus = SessionResult | 'sleeping';
 
 export interface FinishOptions extends MetricsRoots, TransitionOptions {
-  /** Таймаут `map.lock` записи перехода (кусок 1.4 хоста: сверка живости работ). */
+  /** Сколько ждать занятую базу (`busy_timeout`) при записи перехода (кусок 1.4 хоста: сверка живости работ). */
   lockTimeoutMs?: number;
 }
 

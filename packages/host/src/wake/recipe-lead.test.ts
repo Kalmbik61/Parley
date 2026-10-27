@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { addRoom, addSession, createWork, HUMAN, PARLEY, readMap, transitionSession, updateMap } from '@parley/core';
+import { addRoom, addSession, createWork, HUMAN, PARLEY, readStoredMap, transitionSession, updateMap } from '@parley/core';
 import type { WorkMap } from '@parley/core';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -44,7 +44,7 @@ async function prepare(): Promise<string> {
 
 /** Будильник поверх карты с диска: `fire()` — «карта изменилась», как событие работ хоста. */
 async function rig(workId: string) {
-  let map: WorkMap = await readMap(project, workId);
+  let map: WorkMap = readStoredMap(project, workId);
   let listener: () => void = () => {};
   const works = {
     snapshot: () => ({ entries: [{ projectPath: project, map }], branches: {} }),
@@ -60,10 +60,10 @@ async function rig(workId: string) {
   return {
     wake, launch,
     async fire() {
-      map = await readMap(project, workId);
+      map = readStoredMap(project, workId);
       listener();
       for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-      map = await readMap(project, workId);
+      map = readStoredMap(project, workId);
       listener();
       for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     },
@@ -74,7 +74,7 @@ it('новый ведущий получает письмо со снимком 
   const workId = await prepare();
   const first = await rig(workId);
   await first.fire();
-  const map = await readMap(project, workId);
+  const map = readStoredMap(project, workId);
   const letters = map.messages.filter((message) => message.from === PARLEY);
   expect(letters).toHaveLength(1);
   expect(letters[0]).toMatchObject({ to: ['s-02'], text: 'Recipe: Payments — you lead this room.\nOriginal playbook.' });
@@ -85,7 +85,7 @@ it('новый ведущий получает письмо со снимком 
   // Хост перезапущен: тот же диск, новый будильник — письмо уже в карте и второго нет, подъёма тоже.
   const second = await rig(workId);
   await second.fire();
-  expect((await readMap(project, workId)).messages.filter((message) => message.from === PARLEY)).toHaveLength(1);
+  expect((readStoredMap(project, workId)).messages.filter((message) => message.from === PARLEY)).toHaveLength(1);
   expect(second.launch).not.toHaveBeenCalled();
   second.wake.stop();
 });
@@ -95,6 +95,6 @@ it('комната без рецепта писем при смене ведущ
   await updateMap(project, workId, (map) => { map.rooms[0]!.recipe = null; });
   const r = await rig(workId);
   await r.fire();
-  expect((await readMap(project, workId)).messages.filter((message) => message.from === PARLEY)).toEqual([]);
+  expect((readStoredMap(project, workId)).messages.filter((message) => message.from === PARLEY)).toEqual([]);
   r.wake.stop();
 });

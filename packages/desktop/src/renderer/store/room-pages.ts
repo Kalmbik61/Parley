@@ -8,7 +8,7 @@
  */
 
 import { create } from 'zustand';
-import type { Message, WorkEntry } from '@parley/core';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { earlierCursor } from '../lib/window-merge.js';
 
@@ -25,10 +25,10 @@ export interface RoomPagesState {
    * состояния цепочки: панель успевает запомнить положение ленты. Ошибку хоста бросает наружу (вызывающий решает, что
    * показать); при ошибке цепочка не двигается.
    */
-  loadEarlier: (bridge: ParleyBridge, entry: WorkEntry, roomId: string, apply: (messages: Message[]) => void) => Promise<void>;
+  loadEarlier: (bridge: ParleyBridge, entry: WindowWorkEntry, roomId: string, apply: (messages: Message[]) => void) => Promise<void>;
 }
 
-const keyOf = (entry: WorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
+const keyOf = (entry: WindowWorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
 
 export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
   chains: {},

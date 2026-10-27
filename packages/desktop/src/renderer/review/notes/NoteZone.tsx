@@ -13,7 +13,7 @@
  */
 
 import { useLayoutEffect, useRef } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { DiffNote } from '../../../shared/notes-types.js';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
@@ -23,7 +23,7 @@ import { SendMenu } from './SendMenu.js';
 
 export interface NoteZoneProps {
   note: DiffNote;
-  entry: WorkEntry; // сессии работы — SendMenu
+  entry: WindowWorkEntry; // сессии работы — SendMenu
   defaultSessionId: string | null; // сессия диффа
   /** Подпись полосы одной колонки: `Original · line 7`. */
   caption?: string;

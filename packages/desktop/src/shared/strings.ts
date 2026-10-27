@@ -2627,6 +2627,7 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
 const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'map-lock': 'workspace map is locked — try again in a moment',
   'map-corrupt': "workspace map couldn't be read",
+  'map-migration-failed': "a workspace couldn't be moved to the new storage; it stays in its old file",
   'hooks-missing': 'Claude Code hooks did not report — falling back to log-based status',
   'launch-failed': "couldn't launch this session",
   'pointer-timeout': 'no response after the pointer',
@@ -2656,6 +2657,18 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
 };
 
 /**
+ * `map-migration-failed`: хост кладёт в `text` путь `<проект>/.parley/works/<номер>/map.json` и со следующей строки причину
+ * (спека хранилища 6.6). Работа осталась в файле, а не в базе — поэтому в фразе её номер и имя проекта; причина
+ * человеку не нужна, она в журнале хоста. Путь не той формы — прежняя общая фраза.
+ */
+function unmovedWorkDetail(text: string): string {
+  const match = /^(.*?)[\\/]\.[^\\/]+[\\/]works[\\/]([^\\/]+)[\\/]map\.json(?:\n|$)/.exec(text);
+  const project = match?.[1]?.split(/[\\/]/).pop();
+  if (!match || !project) return NOTICE_DETAIL['map-migration-failed'];
+  return `workspace ${match[2]} in ${project} couldn't be moved to the new storage. Details are in the host log`;
+}
+
+/**
  * Английский текст уведомления хоста для человека — строка статуса
  * (`shell/StatusBar.tsx`, любой `NoticeKind`) и тело macOS-уведомлений
  * хоста (`renderer/attention/notify.ts`, без ярлыка — он в заголовке). `label` — ярлык сессии по `notice.ref`, если
@@ -2664,7 +2677,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
  */
 export function noticeText(notice: HostNotice, label?: string): string {
-  const detail = NOTICE_DETAIL[notice.kind];
+  const detail = notice.kind === 'map-migration-failed' ? unmovedWorkDetail(notice.text) : NOTICE_DETAIL[notice.kind];
   if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;
   return `${label}: ${detail}.`;
 }

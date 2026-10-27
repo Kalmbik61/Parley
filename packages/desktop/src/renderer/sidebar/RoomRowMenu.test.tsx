@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { Proposal, Room, WorkEntry } from '@parley/core';
+import type { Proposal, Room, WindowWorkEntry } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -26,21 +26,21 @@ vi.mock('sonner', () => ({ toast: vi.fn() }));
 const KEY = '/tmp/proj w-01';
 let bridge: FakeBridge;
 
-const work = (room: Partial<Room> = {}): WorkEntry =>
+const work = (room: Partial<Room> = {}): WindowWorkEntry =>
   makeWork('w-01', {
     projectPath: '/tmp/proj',
     sessions: [makeSession('s-01', 'lead'), makeSession('s-02', 'build'), makeSession('s-03', 'solo')],
     rooms: [{ ...makeRoom('r-01', 'Refunds'), members: ['s-01', 's-02'], lead: 's-01', ...room }],
   });
 
-function rowOf(entry: WorkEntry): CardRoomRow {
+function rowOf(entry: WindowWorkEntry): CardRoomRow {
   const row = cardRows(entry.map, false).find((candidate): candidate is CardRoomRow => candidate.kind === 'room');
   if (row === undefined) throw new Error('строки комнаты нет');
   return row;
 }
 
 /** Строка архивной комнаты (`archivedRows`): в основных строках карточки её нет. */
-function archivedRowOf(entry: WorkEntry): CardRoomRow {
+function archivedRowOf(entry: WindowWorkEntry): CardRoomRow {
   const row = archivedRows(entry.map, false)[0];
   if (row === undefined) throw new Error('строки архивной комнаты нет');
   return row;
@@ -383,7 +383,7 @@ describe('RoomRowMenu — Archive… (спека архива комнат, 5.1)
 });
 
 describe('RoomRowMenu — архивная комната: Reopen', () => {
-  const archived = (): WorkEntry => work({ archivedAt: '2026-10-08T12:00:00.000Z' });
+  const archived = (): WindowWorkEntry => work({ archivedAt: '2026-10-08T12:00:00.000Z' });
 
   it('Reopen, Rename, разделитель, Delete…; Archive… нет', () => {
     renderMenu(archived());

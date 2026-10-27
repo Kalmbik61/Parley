@@ -9,7 +9,7 @@
 
 import type { SessionActivity } from './activity.js';
 import type { SessionNeed } from './stuck.js';
-import type { Message, Room, WorkMap, WorkSession } from './types.js';
+import type { Message, Room, WindowWorkMap, WorkSession } from './types.js';
 
 // Те же литералы, что `HUMAN` и `SYSTEM` в `types.ts`: значения не импортируем, чтобы модуль остался чистым.
 const HUMAN = 'human';
@@ -96,7 +96,7 @@ export function isHumanMention(message: Message, hasMention: (text: string) => b
  * Прямые письма человеку (roomId === null) с isHumanUnread. Упоминания в комнатах сюда не входят — их берёт
  * `humanUnreadMentions`.
  */
-export function humanUnreadLetters(map: WorkMap): Message[] {
+export function humanUnreadLetters(map: Pick<WindowWorkMap, 'messages'>): Message[] {
   return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
 }
 
@@ -104,7 +104,7 @@ export function humanUnreadLetters(map: WorkMap): Message[] {
  * Упоминания человека в комнатах с isHumanUnread, в порядке карты: последнее — самое позднее. Архивная комната
  * не источник внимания: её старые упоминания не считаются.
  */
-export function humanUnreadMentions(map: WorkMap, hasMention: (text: string) => boolean): Message[] {
+export function humanUnreadMentions(map: Pick<WindowWorkMap, 'messages' | 'rooms'>, hasMention: (text: string) => boolean): Message[] {
   const archived = new Set(map.rooms.filter(isArchived).map((room) => room.id));
   return map.messages.filter(
     (message) =>

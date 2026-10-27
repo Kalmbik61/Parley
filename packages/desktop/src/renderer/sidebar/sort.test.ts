@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStatus } from '@parley/core';
+import type { Message, Proposal, Room, WindowWorkEntry, WindowWorkMap, WorkSession, WorkStatus } from '@parley/core';
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -43,7 +43,7 @@ function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAt
   };
 }
 
-function work(projectPath: string, id: string, status: WorkStatus = 'active', createdAt = '2026-09-27T08:00:00.000Z'): WorkEntry {
+function work(projectPath: string, id: string, status: WorkStatus = 'active', createdAt = '2026-09-27T08:00:00.000Z'): WindowWorkEntry {
   return {
     projectPath,
     map: {
@@ -56,11 +56,11 @@ function work(projectPath: string, id: string, status: WorkStatus = 'active', cr
   };
 }
 
-const key = (e: WorkEntry): string => workKey(e.projectPath, e.map.work.id);
-const keysOf = (works: WorkEntry[]): string[] => works.map((e) => e.map.work.id);
+const key = (e: WindowWorkEntry): string => workKey(e.projectPath, e.map.work.id);
+const keysOf = (works: WindowWorkEntry[]): string[] => works.map((e) => e.map.work.id);
 
 function build(
-  entries: WorkEntry[],
+  entries: WindowWorkEntry[],
   levels: Record<string, WorkAttention> = {},
   opts: {
     pinned?: string[];
@@ -380,7 +380,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
     kind: 'note',
     readBy: {},
   };
-  const ref = (entry: WorkEntry, sessionId: string) => ({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId });
+  const ref = (entry: WindowWorkEntry, sessionId: string) => ({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId });
 
   /** Пять работ одного проекта: решение, письмо, работающая, простаивающая и done с решением. */
   function fixtures() {
@@ -403,7 +403,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
 
   it('группы — по высшему рангу: проект с ждущим решением выше проекта с письмом, тот выше работающего и простаивающего', () => {
     const { entries: base } = fixtures();
-    const move = (entry: WorkEntry, projectPath: string): WorkEntry => ({ ...entry, projectPath });
+    const move = (entry: WindowWorkEntry, projectPath: string): WindowWorkEntry => ({ ...entry, projectPath });
     const [calm, busy, letter, decision] = base;
     const entries = [move(calm!, '/p/a-calm'), move(busy!, '/p/b-busy'), move(letter!, '/p/c-mail'), move(decision!, '/p/d-decision')];
     const activity = activityMap([makeActivity({ projectPath: '/p/b-busy', workId: 'w-busy', sessionId: 's-01' }, 'working')]);
@@ -418,7 +418,7 @@ describe('cardRows — состав строк карточки (1.2)', () => {
   const NOW = '2026-09-29T10:00:00.000Z';
   const sessions = (...ids: string[]): WorkSession[] => ids.map((id) => makeSession(id, id));
   const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, ...patch });
-  const map = (list: WorkSession[], rooms: Room[] = [], messages: Message[] = []): WorkMap => makeWork('w-01', { sessions: list, rooms, messages }).map;
+  const map = (list: WorkSession[], rooms: Room[] = [], messages: Message[] = []): WindowWorkMap => makeWork('w-01', { sessions: list, rooms, messages }).map;
   /** `s-01` — сессия отдельной строкой, `r-01[s-02,s-03]` — комната с показанными участниками. */
   const shape = (rows: CardRow[]): string[] =>
     rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
@@ -564,7 +564,7 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
   const sessions3 = (): WorkSession[] => ['s-01', 's-02', 's-03'].map((id) => makeSession(id, id));
   const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, ...patch });
   const archivedRoom = (id: string, members: string[], patch: Partial<Room> = {}): Room => room(id, members, { archivedAt: ARCHIVED_AT, ...patch });
-  const map = (list: WorkSession[], rooms: Room[]): WorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const map = (list: WorkSession[], rooms: Room[]): WindowWorkMap => makeWork('w-01', { sessions: list, rooms }).map;
   const shape = (rows: CardRow[]): string[] =>
     rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
 
@@ -634,7 +634,7 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
 // Линии дерева от родителя к дочерним сессиям (`treeGuides`): метки по строкам `cardRows`, рисует их `TreeGuides.tsx`.
 describe('treeGuides — линии дерева в карточке', () => {
   const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, lead: members[0] ?? null, ...patch });
-  const map = (list: WorkSession[], rooms: Room[] = []): WorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const map = (list: WorkSession[], rooms: Room[] = []): WindowWorkMap => makeWork('w-01', { sessions: list, rooms }).map;
   const s = (id: string, parent: string | null = null, patch: Partial<WorkSession> = {}): WorkSession => makeSession(id, id, { parent, ...patch });
   /** Метки строки как `kind+column`, по алфавиту: `elbow0`, `pass0`, `start1`. */
   const marks = (guides: readonly TreeGuide[]): string[] => guides.map((guide) => `${guide.kind}${guide.column}`).sort();

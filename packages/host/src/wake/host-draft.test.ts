@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addSession, createWork, transitionSession, unreadFor, updateMap, workPaths } from '@parley/core';
+import { addSession, createWork, transitionSession, unreadCount, updateMap, workPaths, workVersion } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
@@ -86,8 +86,8 @@ async function activeSession(): Promise<{ workId: string; sessionId: string }> {
 }
 
 async function sendLetter(workId: string, to: string): Promise<void> {
-  await updateMap(project, workId, (map) => {
-    addMessage(map, { from: 's-00', to: [to], text: 'тело письма' });
+  await updateMap(project, workId, (map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 's-00', to: [to], text: 'тело письма' });
   });
 }
 
@@ -150,8 +150,9 @@ async function rig(enterDelayMs: number): Promise<Rig> {
 /** Письмо сессии дошло до снимка работ хоста — будильник его уже пересчитал. */
 async function letterSeen(works: WorksService, ref: SessionRef): Promise<void> {
   await waitFor(() => {
-    const map = works.entry(ref.projectPath, ref.workId)?.map;
-    return map !== undefined && unreadFor(map, ref.sessionId).length > 0;
+    // Снимок хоста — карта без писем: письмо в базе, а снимок его запись уже видел, когда его версия совпала с версией базы.
+    const entry = works.entry(ref.projectPath, ref.workId);
+    return entry !== undefined && entry.version === workVersion(ref.projectPath, ref.workId) && unreadCount(ref.projectPath, ref.workId, ref.sessionId).total > 0;
   });
 }
 

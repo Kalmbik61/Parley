@@ -20,7 +20,9 @@
  * `.gitignore` не закоммитить — состояние разошлось бы с репозиторием.
  *
  * Переехавший каталог правится в двух местах, где он называет сам себя: пути артефактов в картах и пути в
- * сохранённых брифах. Сказанное прозой (письма, резюме) — запись о сказанном, её не переписывают.
+ * сохранённых брифах. Брифы — файлы, их правит сам перенос. Карты живут в базе, куда они переезжают уже после переноса
+ * каталогов (`migrateMapsToDb`, спека хранилища 6.6), поэтому пути артефактов правит отдельный шаг `rewriteArtifactRefs`,
+ * который хост зовёт последним. Сказанное прозой (письма, резюме) — запись о сказанном, её не переписывают.
  *
  * Не переносится никогда: worktree сессий и их ветки (путь и ветка закреплены в картах, а `--resume` ищет
  * транскрипт по cwd) и `worktreeRoot`, заданный человеком.
@@ -40,7 +42,7 @@ import type { Env } from './names.js';
 import { hasLiveProcess } from './work/liveness.js';
 import { parseMap } from './work/map.js';
 import { writeSelfIgnore } from './work/state-dir.js';
-import { parleyHome, readMap, readWorksIndex, updateMap } from './work/store.js';
+import { forgetParleyHome, parleyHome, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
 import type { WorksIndex } from './work/types.js';
 import { NO_FSMONITOR } from './work/worktree.js';
 
@@ -203,6 +205,8 @@ export async function migrateHome(options: MigrateHomeOptions = {}): Promise<Mig
     } catch (error) {
       return skipped('rename-failed', from, errorText(error));
     }
+    // Дом, найденный процессом до переноса, теперь неверен (`parleyHome` помнит ответ).
+    forgetParleyHome();
     // Перенос состоялся; запись о нём — справка, её сбой перенос не отменяет.
     await appendRecord(path.join(to, MIGRATION_RECORD), {
       what: 'home',
@@ -317,7 +321,7 @@ async function rewriteBrief(file: string): Promise<void> {
   if (moved !== text) await writeFile(file, moved, 'utf8');
 }
 
-/** Пути артефактов в карте одной работы переехавшего каталога. Карта, где переписывать нечего, не трогается. */
+/** Пути артефактов в карте одной работы переехавшего каталога (строки в базе). Карта, где переписывать нечего, не трогается. */
 async function rewriteArtifactPaths(projectPath: string, workId: string): Promise<void> {
   const stale = (await readMap(projectPath, workId)).sessions.some((session) =>
     session.artifacts.some((artifact) => movedArtifactPath(artifact.path) !== null),
@@ -338,14 +342,13 @@ async function rewriteArtifactPaths(projectPath: string, workId: string): Promis
 }
 
 /**
- * Правит то, что переехавший каталог хранит о самом себе. Вызывается после `rename`, и её сбой перенос не
- * отменяет: каждая работа и каждый бриф — сами по себе, не поправленное остаётся как было до переноса.
+ * Правит бриф, который переехавший каталог хранит о самом себе. Вызывается после `rename`, и её сбой перенос не
+ * отменяет: каждый бриф сам по себе, не поправленное остаётся как было до переноса.
  */
-async function rewriteStateRefs(projectPath: string, stateRoot: string): Promise<void> {
+async function rewriteBriefs(stateRoot: string): Promise<void> {
   const worksDir = path.join(stateRoot, 'works');
   for (const item of await readdir(worksDir, { withFileTypes: true })) {
     if (!item.isDirectory()) continue;
-    await rewriteArtifactPaths(projectPath, item.name).catch(() => undefined);
     const briefs = path.join(worksDir, item.name, 'briefs');
     for (const name of await readdir(briefs).catch(() => [] as string[])) {
       if (name.endsWith('.md')) await rewriteBrief(path.join(briefs, name)).catch(() => undefined);
@@ -378,7 +381,7 @@ async function migrateProject(
     // Каталог состояния сам прячет себя от git, как созданный кодом `.parley` (R5). Не получилось — он
     // остаётся таким же видимым, каким был под прежним именем: переезд от этого не откатывается.
     await writeSelfIgnore(to).catch(() => undefined);
-    await rewriteStateRefs(projectPath, to).catch(() => undefined);
+    await rewriteBriefs(to).catch(() => undefined);
     await appendRecord(path.join(home, MIGRATION_RECORD), {
       what: 'project',
       from,
@@ -398,18 +401,37 @@ export type ProjectMigration = MigrationResult & { projectPath: string };
  * `.parley`, если у его работ нет живого процесса сессии (по карте и по командным строкам процессов) и
  * блокировки записи `map.lock`, а git не отслеживает файлы `.harnas`. Проект переносится целиком или остаётся как
  * есть. Записи индекса, чей проект исчез, пропускаются. Зовёт хост на старте — под замком единственности, до
- * сокета и наблюдателей. Индекс не прочитался — исключение: хост его и так покажет.
+ * сокета и наблюдателей. Индекс не прочитался — исключение: хост его и так покажет. Пути артефактов в картах этот
+ * перенос не правит: карт в базе ещё нет, их правит `rewriteArtifactRefs` после `migrateMapsToDb`.
  */
 export async function migrateProjects(
   options: { now?: () => Date } = {},
 ): Promise<ProjectMigration[]> {
   const now = options.now ?? (() => new Date());
   const home = parleyHome();
-  const projects = new Set((await readWorksIndex()).works.map((work) => work.projectPath));
+  // Прежний `works-index.json`, а не таблица `works`: перенос каталогов идёт раньше переезда карт в базу, и таблица тогда
+  // ещё пуста (спека хранилища 6.6); читать её — значит не найти ни одного проекта.
+  const projects = new Set((await readWorksIndex(worksIndexPath())).works.map((work) => work.projectPath));
   const processes = processTable();
   const results: ProjectMigration[] = [];
   for (const projectPath of projects) {
     results.push({ projectPath, ...(await migrateProject(projectPath, home, now, processes)) });
   }
   return results;
+}
+
+/**
+ * Пути артефактов в картах работ проектов, чей каталог состояния только что переехал (`moved` в итогах
+ * `migrateProjects`): `.harnas/works/…` → `.parley/works/…`. Идёт через `updateMap`, поэтому только после
+ * `migrateMapsToDb`: пока карт нет в базе, править нечего (спека хранилища 6.6). Каждая работа сама по себе — сбой одной
+ * остальных не останавливает; карта, которой в базе ещё нет (не переехала), остаётся как была.
+ */
+export async function rewriteArtifactRefs(migrations: readonly ProjectMigration[]): Promise<void> {
+  const moved = new Set(
+    migrations.filter((migration) => migration.status === 'moved').map((migration) => migration.projectPath),
+  );
+  if (moved.size === 0) return;
+  for (const work of (await readWorksIndex()).works) {
+    if (moved.has(work.projectPath)) await rewriteArtifactPaths(work.projectPath, work.id).catch(() => undefined);
+  }
 }

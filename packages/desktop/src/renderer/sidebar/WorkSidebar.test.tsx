@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
-import type { Room, WorkEntry } from '@parley/core';
+import type { Room, WindowWorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -50,7 +50,7 @@ vi.mock('./WorkCard.js', async (importOriginal) => {
   };
 });
 
-const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
+const keyOf = (entry: WindowWorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
 
 let setShown: (shown: boolean) => void = () => {};
 let bridge: FakeBridge;
@@ -74,7 +74,7 @@ function Harness(props: Partial<WorkSidebarProps>): JSX.Element {
   );
 }
 
-function setWorks(entries: WorkEntry[]): void {
+function setWorks(entries: WindowWorkEntry[]): void {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
 }
 
@@ -183,7 +183,7 @@ describe('WorkSidebar — состав (тест 5)', () => {
   // Раунд исправлений 1 куска 3.3: переход через порог 50 под указателем не меняет узел
   // списка — `pointerleave` приходит на тот же узел, флаг не залипает.
   it('переход через 50 карточек под указателем: узел списка тот же, уход указателя снимает флаг', () => {
-    const many = (n: number): WorkEntry[] =>
+    const many = (n: number): WindowWorkEntry[] =>
       Array.from({ length: n }, (_, index) => makeWork(`w-${String(index).padStart(2, '0')}`, { projectPath: '/p/many' }));
     setWorks(many(50));
     render(<Harness />);
@@ -543,8 +543,8 @@ function nextTabbable(from: HTMLElement): HTMLElement | null {
 describe('WorkSidebar — клавиатура, раунд исправлений 1 (находки 2–5)', () => {
   const a = makeWork('w-a', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'a1'), makeSession('s-02', 'a2')] });
   const b = makeWork('w-b', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'b1')] });
-  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
-  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+  const cardOf = (entry: WindowWorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const rowOf = (entry: WindowWorkEntry, id: string): HTMLElement =>
     document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
   const stops = (): HTMLElement[] =>
     [...list().querySelectorAll<HTMLElement>('[data-work-key], [data-session-id]')].filter((element) => element.tabIndex === 0);
@@ -642,8 +642,8 @@ describe('WorkSidebar — клавиатура, раунд исправлени�
 describe('WorkSidebar — возврат фокуса после подтверждений и палитры (кусок 3.4, раунд 2)', () => {
   const a = makeWork('w-a', { createdAt: '2026-09-27T08:00:00.000Z', sessions: [makeSession('s-01', 'a1')] });
   const b = makeWork('w-b', { createdAt: '2026-09-27T07:00:00.000Z', sessions: [makeSession('s-01', 'b1')] });
-  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
-  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+  const cardOf = (entry: WindowWorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const rowOf = (entry: WindowWorkEntry, id: string): HTMLElement =>
     document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
 
   /** Как мышью: правая кнопка фокусирует карточку и открывает её меню. */
@@ -725,13 +725,13 @@ describe('WorkSidebar — возврат фокуса после подтвер�
 describe('WorkSidebar — комнаты (кусок 5)', () => {
   const proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
   const room = (patch: Partial<Room> = {}): Room => ({ ...makeRoom('r-01', 'Возвраты'), members: ['s-01', 's-02'], lead: 's-01', ...patch });
-  const withRoom = (id: string, patch: Partial<Room> = {}, createdAt = '2026-09-27T08:00:00.000Z'): WorkEntry =>
+  const withRoom = (id: string, patch: Partial<Room> = {}, createdAt = '2026-09-27T08:00:00.000Z'): WindowWorkEntry =>
     makeWork(id, { createdAt, sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c')], rooms: [room(patch)] });
-  const cardOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
-  const roomOf = (entry: WorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-room-row]`) as HTMLElement;
-  const rowOf = (entry: WorkEntry, id: string): HTMLElement =>
+  const cardOf = (entry: WindowWorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+  const roomOf = (entry: WindowWorkEntry): HTMLElement => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-room-row]`) as HTMLElement;
+  const rowOf = (entry: WindowWorkEntry, id: string): HTMLElement =>
     document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"] [data-session-id="${id}"]`) as HTMLElement;
-  const roomExpanded = (entry: WorkEntry): boolean | undefined => useUiStore.getState().roomExpanded[`${keyOf(entry)}/r-01`];
+  const roomExpanded = (entry: WindowWorkEntry): boolean | undefined => useUiStore.getState().roomExpanded[`${keyOf(entry)}/r-01`];
   const stops = (): HTMLElement[] =>
     [...list().querySelectorAll<HTMLElement>('[data-work-key], [data-room-row], [data-session-id]')].filter((element) => element.tabIndex === 0);
 
@@ -870,7 +870,7 @@ describe('WorkSidebar — архивные работы под ссылкой п
   const live = makeWork('w-live', { projectPath: '/p/beta', title: 'Live' });
   const arch = makeWork('w-arch', { projectPath: '/p/alpha', title: 'Old job', status: 'archived' });
   const archBeta = makeWork('w-arch-beta', { projectPath: '/p/beta', title: 'Old beta', status: 'archived' });
-  const cardOf = (entry: WorkEntry): HTMLElement | null => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`);
+  const cardOf = (entry: WindowWorkEntry): HTMLElement | null => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`);
   const link = (projectPath: string): HTMLElement | null =>
     document.querySelector<HTMLElement>(`[data-section="${projectPath}"] [data-archived-works]`);
 

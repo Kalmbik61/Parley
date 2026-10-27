@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPendingSession, createWork, readMap, SYSTEM, transitionSession, updateMap } from '@parley/core';
+import { createPendingSession, createWork, readStoredMap, SYSTEM, transitionSession, updateMap } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { createHeldLaunchActions } from './held-launches.js';
 import type { HeldLaunchDeps } from './held-launches.js';
@@ -84,7 +84,7 @@ describe('refuseLaunch', () => {
 
     await refuseLaunch(hold);
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
     expect(session).toMatchObject({ lifecycle: 'closed', result: 'failed' });
     const letters = map.messages.filter((message) => message.from === SYSTEM);
@@ -100,7 +100,7 @@ describe('refuseLaunch', () => {
 
     await refuseLaunch(hold);
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.sessions.find((candidate) => candidate.id === ref.sessionId)).toMatchObject({ lifecycle: 'closed', result: 'failed' });
     expect(map.messages.filter((message) => message.from === SYSTEM)).toEqual([]);
   });
@@ -114,7 +114,7 @@ describe('refuseLaunch', () => {
 
     await refuseLaunch(hold);
 
-    expect((await readMap(project, workId)).messages.filter((message) => message.from === SYSTEM)).toEqual([]);
+    expect((readStoredMap(project, workId)).messages.filter((message) => message.from === SYSTEM)).toEqual([]);
   });
 
   it('подъём спящей: ничего не делает — письма ждут', async () => {
@@ -123,7 +123,7 @@ describe('refuseLaunch', () => {
 
     await refuseLaunch({ ref, mode: 'resume', by: 'wake' });
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.sessions.find((candidate) => candidate.id === ref.sessionId)?.lifecycle).toBe('pending');
     expect(deps.close).not.toHaveBeenCalled();
   });

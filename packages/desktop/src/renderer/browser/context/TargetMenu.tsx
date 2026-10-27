@@ -7,7 +7,7 @@
  */
 
 import { Check, ChevronDown } from 'lucide-react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { BrowserTarget } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { AgentIcon } from '../../components/AgentIcon.js';
@@ -24,14 +24,14 @@ import {
 import { targetKey, targetName, targetOptions, type TargetOption } from './targets.js';
 
 export interface TargetMenuProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Цель вкладки (из раскладки или умолчание); `null` — целиться некуда. */
   target: BrowserTarget | null;
   onChange(target: BrowserTarget): void;
 }
 
 /** Подпись справа в пункте: «not running» у сессии без процесса, иначе вид доставки (chat или terminal); комнате — нет. */
-function noteOf(entry: WorkEntry, option: TargetOption): string | null {
+function noteOf(entry: WindowWorkEntry, option: TargetOption): string | null {
   const picked = option.target;
   if (picked.kind === 'session') {
     const lifecycle = entry.map.sessions.find((session) => session.id === picked.sessionId)?.lifecycle;

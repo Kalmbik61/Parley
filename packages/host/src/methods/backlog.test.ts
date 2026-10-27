@@ -1,14 +1,28 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addRoom, addSession, archiveRoom, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, deleteWorkFiles, readMap, readStoredMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workVersion } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
+
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 let root: string;
 let project: string;
 let previous: string | undefined;
 const handlers = createBacklogHandlers();
+
+/** Копирует строки работы под другой проект: так в базе оказывается один id в двух проектах (восстановленная копия). */
+function copyWorkRows(from: string, to: string, workId: string): void {
+  const db = new DatabaseSync(path.join(process.env['PARLEY_HOME']!, 'parley.db'));
+  try {
+    db.prepare(`INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+      SELECT ?, id, title, status, updated_at, version, work_json, extra_json FROM works WHERE project_path = ? AND id = ?`).run(to, from, workId);
+    db.prepare(`INSERT INTO entries (project_path, work_id, kind, key, ord, json)
+      SELECT ?, work_id, kind, key, ord, json FROM entries WHERE project_path = ? AND work_id = ?`).run(to, from, workId);
+  } finally { db.close(); }
+}
 beforeEach(async () => {
   root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-host-')));
   project = root;
@@ -97,7 +111,7 @@ describe('human backlog handlers', () => {
   });
   it('an archived room is not a target: take is refused until the human reopens it', async () => {
     const created = await target(); const added = await add(); const id = added.items[0]!.id!;
-    await updateMap(project, created.workId, map => { archiveRoom(map, created.roomId); });
+    await updateMap(project, created.workId, (map, letters) => { archiveRoom(map, letters, created.roomId); });
     await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
     expect((await get()).items[0]!.taken).toBeUndefined();
   });
@@ -142,22 +156,30 @@ describe('human backlog handlers', () => {
     await handlers['backlog.preferences.set']({ projectPath: project, rule: 'ask' });
     await suggestBacklog(project, { kind: 'idea', title: 'Suggestion', why: 'Consider', workId: created.workId, sessionId: session.id });
     expect((await get()).suggestions[0]!.author).toMatchObject({ projectPath: project, workId: created.workId, sessionId: session.id, label: 'Reviewer', role: null });
+    // The revision names the work version in the database: any later write to the work changes it.
+    const first = (await get()).suggestions[0]!.author!.revision;
+    expect(first).toBe(`${created.workId}:${workVersion(project, created.workId)}`);
+    await updateMap(project, created.workId, current => { current.work.goal = 'moved on'; });
+    const second = (await get()).suggestions[0]!.author!.revision;
+    expect(second).toBe(`${created.workId}:${workVersion(project, created.workId)}`);
+    expect(second).not.toBe(first);
     const foreign = path.join(root, 'foreign'); await mkdir(foreign);
     const foreignWork = await createWork(foreign, { title: 'Other' });
     await updateMap(foreign, foreignWork.work.id, current => { addSession(current, { provider: 'claude', label: 'Foreign', task: '' }); });
-    const onlyForeign = { schemaVersion: 1, works: [{ id: created.workId, projectPath: foreign }] };
-    await writeFile(worksIndexPath(), JSON.stringify(onlyForeign));
-    expect((await get()).suggestions[0]!.author).toBeUndefined();
-    // An unsafe intermediate link/unknown map cannot manufacture an author either.
-    await writeFile(worksIndexPath(), JSON.stringify({ schemaVersion: 1, works: [{ id: created.workId, projectPath: project }] }));
-    await rm(workPaths(project, created.workId).map);
+    // A suggestion that names only a work of the foreign project gets no author from that map.
+    await suggestBacklog(project, { kind: 'idea', title: 'Foreign suggestion', why: 'Consider', workId: foreignWork.work.id, sessionId: 's-01' });
+    const listed = (await get()).suggestions;
+    expect(listed[0]!.author).toMatchObject({ projectPath: project, workId: created.workId });
+    expect(listed[1]!.author).toBeUndefined();
+    // A work that is gone from the database cannot manufacture an author either.
+    await deleteWorkFiles(project, created.workId);
     expect((await get()).suggestions[0]!.author).toBeUndefined();
   });
   async function padPastOneMiB(workId: string, roomId: string): Promise<void> {
-    await updateMap(project, workId, map => {
-      for (let i = 0; i < 300; i++) addMessage(map, { from: 'human', to: [], roomId, text: 'x'.repeat(4000) });
+    await updateMap(project, workId, (map, letters) => {
+      for (let i = 0; i < 300; i++) letters.add({ kind: 'note', from: 'human', to: [], roomId, text: 'x'.repeat(4000) });
     });
-    expect((await stat(workPaths(project, workId).map)).size).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(readStoredMap(project, workId)))).toBeGreaterThan(1024 * 1024);
   }
   it('take reaches a live room of a map larger than 1 MiB', async () => {
     const created = await target(); await padPastOneMiB(created.workId, created.roomId);
@@ -172,10 +194,8 @@ describe('human backlog handlers', () => {
     await suggestBacklog(project, { kind: 'idea', title: 'Suggestion', why: 'Consider', workId: created.workId, sessionId: session.id });
     expect((await get()).suggestions[0]!.author).toMatchObject({ workId: created.workId, sessionId: session.id, label: 'Reviewer' });
   });
-  it('a symlinked map is still not a target', async () => {
-    const created = await target(); const map = workPaths(project, created.workId).map;
-    const copy = path.join(root, 'elsewhere.json'); await writeFile(copy, await readFile(map, 'utf8'));
-    await rm(map); await symlink(copy, map);
+  it('a work that is gone from the database is not a target', async () => {
+    const created = await target(); await deleteWorkFiles(project, created.workId);
     const added = await add(); const id = added.items[0]!.id!;
     await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created }))
       .rejects.toMatchObject({ code: 'not_found' });
@@ -194,13 +214,9 @@ it('ambiguous same-project worktree authors retain IDs without choosing a displa
   project = main;
   const source = await createWork(main, { title: 'Source' });
   await updateMap(main, source.work.id, current => { addSession(current, { provider: 'claude', label: 'Main author', task: '' }); });
-  // Restored/local legacy maps can share IDs; seed that explicit ambiguity instead of defeating the normal global counter.
-  const other = await readMap(main, source.work.id); other.sessions[0]!.label = 'Other author';
-  await mkdir(workPaths(participant, source.work.id).dir, { recursive: true });
-  await writeFile(workPaths(participant, source.work.id).map, JSON.stringify(other));
-  await writeFile(worksIndexPath(), JSON.stringify({ schemaVersion: 1, works: [
-    { id: source.work.id, projectPath: main }, { id: source.work.id, projectPath: participant },
-  ] }));
+  // Restored databases can hold the same ID in two projects; copy the rows to seed that explicit ambiguity instead of defeating the normal global counter.
+  copyWorkRows(main, participant, source.work.id);
+  await updateMap(participant, source.work.id, current => { current.sessions[0]!.label = 'Other author'; });
   await handlers['backlog.preferences.set']({ projectPath: main, rule: 'ask' });
   await suggestBacklog(main, { kind: 'idea', title: 'Ambiguous', why: 'Observed', workId: source.work.id, sessionId: 's-01' });
   expect((await get()).suggestions[0]).toMatchObject({ workId: source.work.id, sessionId: 's-01' });

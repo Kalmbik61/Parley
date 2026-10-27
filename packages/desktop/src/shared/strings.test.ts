@@ -20,6 +20,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
+  'map-migration-failed',
   'git-connectivity-failed',
   'hooks-missing',
   'launch-failed',
@@ -329,6 +330,36 @@ describe('noticeText', () => {
     expect(noticeText(hostNotice('skill-foreign'))).toBe(
       "Agent skill not installed — that path already exists and wasn't created by Parley.",
     );
+  });
+
+  it('map-migration-failed (ref: null), текст не путь map.json — общая фраза: работа осталась в прежнем файле (спека хранилища 6.6)', () => {
+    expect(noticeText(hostNotice('map-migration-failed'))).toBe(
+      "A workspace couldn't be moved to the new storage; it stays in its old file.",
+    );
+  });
+
+  it('map-migration-failed называет работу и папку проекта по пути map.json; причина со следующей строки в окно не попадает', () => {
+    const notice = (text: string): HostNotice => ({ kind: 'map-migration-failed', ref: null, text, at: '2026-01-01T00:00:00.000Z' });
+    const expected =
+      "Workspace w-0051 in scanum couldn't be moved to the new storage. Details are in the host log.";
+    expect(noticeText(notice('/Users/me/Desktop/scanum/.parley/works/w-0051/map.json'))).toBe(expected);
+    expect(noticeText(notice('/Users/me/Desktop/scanum/.parley/works/w-0051/map.json\nbusy: map.lock is held by a running process'))).toBe(
+      expected,
+    );
+    // Проект ещё на прежнем имени каталога состояния и с пробелом в имени.
+    expect(noticeText(notice('/p/my shop/.harnas/works/w-0002/map.json\nSyntaxError: Unexpected token'))).toBe(
+      "Workspace w-0002 in my shop couldn't be moved to the new storage. Details are in the host log.",
+    );
+    expect(noticeText(notice('/p/shop/.parley/works/w-0003/map.json\nreason'))).not.toMatch(CYRILLIC);
+  });
+
+  it('map-migration-failed: путь не той формы или без проекта — общая фраза', () => {
+    const notice = (text: string): HostNotice => ({ kind: 'map-migration-failed', ref: null, text, at: '2026-01-01T00:00:00.000Z' });
+    const generic = "A workspace couldn't be moved to the new storage; it stays in its old file.";
+    expect(noticeText(notice('/p/shop/.parley/works/w-0003/map.v2.json'))).toBe(generic);
+    expect(noticeText(notice('/p/shop/map.json'))).toBe(generic);
+    expect(noticeText(notice('/.parley/works/w-0001/map.json'))).toBe(generic);
+    expect(noticeText(notice(''))).toBe(generic);
   });
 
   it('map-lock и map-corrupt (ref: null, без сессии) тоже дают английский текст', () => {

@@ -19,6 +19,7 @@ import {
   stateWord,
   type DotState,
   type FeedCard,
+  type Message,
   type ProviderEntry,
   type SessionLifecycle,
   type SessionNeed,
@@ -38,6 +39,8 @@ export type AssistantTarget =
 export interface OverviewSource {
   entries: readonly WorkEntry[];
   live(ref: SessionRef): SessionLive | undefined;
+  /** Последние `count` писем комнаты по порядку ленты: письма лежат в базе работы, а не в снимке (спека хранилища 6.2). */
+  roomTail(entry: WorkEntry, roomId: string, count: number): readonly Message[];
   /** Ждущие карточки сессии, если сервис их уже достал; нет функции или `undefined` — строка `waits:` без карточки. */
   cards?(ref: SessionRef): readonly FeedCard[] | undefined;
   /**
@@ -270,7 +273,7 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
     lines.push(`Plan: ${oneLine(plan.goal, 200)}`);
     for (const item of plan.items.slice(0, PLAN_ITEMS)) lines.push(`  ${item.id}. ${oneLine(item.title, 120)} — ${item.status}`);
   }
-  const messages = map.messages.filter((message) => message.roomId === room.id).slice(-ROOM_MESSAGES);
+  const messages = source.roomTail(entry, room.id, ROOM_MESSAGES);
   if (messages.length > 0) lines.push('Last messages:');
   for (const message of messages) lines.push(`  ${participantLabel(map, message.from)} (${message.kind}): ${oneLine(message.text, 200)}`);
   return lines.join('\n');

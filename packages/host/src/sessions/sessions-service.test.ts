@@ -20,6 +20,7 @@ import {
   NEW_LABEL,
   plannedWorktree,
   readMap,
+  readStoredMap,
   saveConfig,
   setWorkStatus,
   SKILL_MD,
@@ -1506,7 +1507,7 @@ describe('worktree (план, кусок 4.2)', () => {
     );
     expect(notice).toBeDefined();
 
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === childId)?.lifecycle).toBe('pending');
     const letter = map.messages.find((m) => m.from === SYSTEM && m.to.includes(parentId));
     expect(letter).toBeDefined();

@@ -63,7 +63,7 @@ export interface RootPath {
   caseInsensitive: boolean;
 }
 
-/** Каталоги, запись в которые из окна обошла бы git и `map.lock` хоста (спека 10.8, п. 4). */
+/** Каталоги, запись в которые из окна обошла бы git и базу хоста (спека 10.8, п. 4). */
 const WRITE_FORBIDDEN_SEGMENTS = new Set(['.git', ...STATE_DIRS]);
 
 /**

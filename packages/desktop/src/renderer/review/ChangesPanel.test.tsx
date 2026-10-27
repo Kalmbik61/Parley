@@ -7,7 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MergeCheck, ProjectChanges, WorkEntry, WorktreeDiff } from '@parley/core';
+import type { MergeCheck, ProjectChanges, WindowWorkEntry, WorktreeDiff } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -57,7 +57,7 @@ function work(sessions = [
   makeSession('s-02', 'two', { worktree: WORKTREE }),
   makeSession('s-03', 'three', { worktree: { ...WORKTREE, path: '/tmp/wt/s-03', branch: 'harnas/w-a/s03' } }),
   makeSession('s-04', 'four'),
-]): WorkEntry {
+]): WindowWorkEntry {
   return makeWork('w-a', { projectPath: '/tmp/proj', sessions });
 }
 
@@ -83,7 +83,7 @@ function focus(sessionId: string): void {
   });
 }
 
-function renderPanel(entry: WorkEntry = work()): ReturnType<typeof render> {
+function renderPanel(entry: WindowWorkEntry = work()): ReturnType<typeof render> {
   return render(<ChangesPanel bridge={bridge} workKey={KEY} entry={entry} sendDeps={sendDeps} />);
 }
 

@@ -9,6 +9,7 @@ import type {
   ConsentCard,
   EventData,
   EventName,
+  HostNotice,
   MethodName,
   NotificationName,
   Params,
@@ -75,6 +76,8 @@ export interface FakeBridge extends ParleyBridge {
   setHostMethods(methods: string[] | null): void;
   /** Что вернёт `activitySnapshot` — будто main запомнил эти события до подписки. */
   setActivitySnapshot(entries: Array<EventData<'activity.changed'>>): void;
+  /** Что вернёт `noticesSnapshot` — будто main запомнил эти уведомления хоста до подписки. */
+  setNoticesSnapshot(entries: HostNotice[]): void;
   emitMenu(id: ActionId): void;
   readonly appNotified: AppNote[];
   /** Клик по уведомлению: событие `app:focus-target` слушателям `onFocusTarget` (кусок 4.3). */
@@ -395,6 +398,7 @@ export function createFakeBridge(): FakeBridge {
   };
   let ui: UiFile = DEFAULT_UI;
   let activitySnapshot: Array<EventData<'activity.changed'>> = [];
+  let noticesSnapshot: HostNotice[] = [];
 
   const bridge: FakeBridge = {
     setHandler: (method, handler) => {
@@ -842,6 +846,10 @@ export function createFakeBridge(): FakeBridge {
     activitySnapshot: async () => [...activitySnapshot],
     setActivitySnapshot: (entries) => {
       activitySnapshot = [...entries];
+    },
+    noticesSnapshot: async () => [...noticesSnapshot],
+    setNoticesSnapshot: (entries) => {
+      noticesSnapshot = [...entries];
     },
     app: {
       openExternal: async (url) => {

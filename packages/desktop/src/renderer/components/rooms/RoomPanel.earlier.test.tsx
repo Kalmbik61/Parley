@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { MapCompact, Message, WorkEntry } from '@parley/core';
+import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { useRoomPagesStore } from '../../store/room-pages.js';
@@ -22,7 +22,7 @@ const PROJECT = '/tmp/proj';
 const note = (id: string, text: string): Message =>
   makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' }, text, at: `2026-09-27T09:00:${id.slice(2)}.000Z` });
 
-function entry(messages: Message[], total: number, tailFrom: number | null): WorkEntry {
+function entry(messages: Message[], total: number, tailFrom: number | null): WindowWorkEntry {
   const base = makeWork('w-01', {
     projectPath: PROJECT,
     sessions: [makeSession('s-01', 'архитектор')],

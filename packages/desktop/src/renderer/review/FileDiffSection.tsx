@@ -18,7 +18,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import type { DiffNote } from '../../shared/notes-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -42,7 +42,7 @@ export interface SectionNotes {
   workKey: string;
   /** Сессия диффа — владелец заметок и получатель по умолчанию. */
   sessionId: string;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   send(notes: DiffNote[], to: string): void;
 }
 

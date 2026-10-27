@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addMessage, addRoom, addSession, compactWorkMap } from '@parley/core';
-import type { WorkMap } from '@parley/core';
+import { addMessage, addRoom, addSession, compactWorkMap, mapLetterReader } from '@parley/core';
+import type { WindowWorkMap } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, contextPageMethodSchemas } from './context-pages.js';
 import { LineDecoder, LineTooLongError, MAX_LINE_BYTES, encodeLine, parseIncoming } from './framing.js';
 import { METHODS } from './methods.js';
@@ -43,8 +43,8 @@ describe('страницы переписки: методы окна', () => {
 });
 
 /** Карта с перепиской, как в воспроизведениях аудита A14. */
-function bigMap(count: number, size: number, init: { kind?: 'decision' } = {}): WorkMap {
-  const map: WorkMap = {
+function bigMap(count: number, size: number, init: { kind?: 'decision' } = {}): WindowWorkMap {
+  const map: WindowWorkMap = {
     schemaVersion: 2,
     work: { id: 'w-0001', title: 'Работа', goal: 'Цель', status: 'active', createdAt: '2026-10-05T00:00:00.000Z', updatedAt: '2026-10-05T00:00:00.000Z' },
     sessions: [],
@@ -58,7 +58,7 @@ function bigMap(count: number, size: number, init: { kind?: 'decision' } = {}): 
   return map;
 }
 
-const snapshotOf = (maps: WorkMap[]): WorksSnapshot => ({ entries: maps.map((map) => ({ projectPath: '/p', map })), branches: {}, revision: 1 });
+const snapshotOf = (maps: WindowWorkMap[]): WorksSnapshot => ({ entries: maps.map((map) => ({ projectPath: '/p', map })), branches: {}, revision: 1 });
 
 describe('рамки: снимок работ и предел кадра', () => {
   const overflow = (data: WorksSnapshot): void => {
@@ -78,7 +78,7 @@ describe('рамки: снимок работ и предел кадра', () =>
   it('воспроизведение 1 (900 писем по 10 000 знаков): полный снимок рвёт декодер, компактный проходит и разбирается', () => {
     const map = bigMap(900, 10_000);
     overflow(snapshotOf([map]));
-    const compact = snapshotOf([compactWorkMap(map, { messageBytes: 512 * 1024 })]);
+    const compact = snapshotOf([compactWorkMap(map, { messageBytes: 512 * 1024 }, mapLetterReader(map))]);
     const event = through(compact) as { event: string; data: WorksSnapshot };
     expect(event.event).toBe('works.changed');
     expect(event.data.entries[0]?.map.compact?.messages.total).toBe(900);
@@ -88,13 +88,13 @@ describe('рамки: снимок работ и предел кадра', () =>
   it('воспроизведение 2 (2 100 решений по 4 000 знаков): то же', () => {
     const map = bigMap(2100, 4000, { kind: 'decision' });
     overflow(snapshotOf([map]));
-    through(snapshotOf([compactWorkMap(map, { messageBytes: 512 * 1024 })]));
+    through(snapshotOf([compactWorkMap(map, { messageBytes: 512 * 1024 }, mapLetterReader(map))]));
   });
 
   it('10 тыс. писем в нескольких работах: компактные снимки входят в кадр с большим запасом, предел для старых клиентов ниже кадра', () => {
     const maps = [0, 1, 2, 3].map(() => bigMap(2500, 1500));
     overflow(snapshotOf(maps));
-    const compact = snapshotOf(maps.map((map) => compactWorkMap(map, { messageBytes: 512 * 1024 })));
+    const compact = snapshotOf(maps.map((map) => compactWorkMap(map, { messageBytes: 512 * 1024 }, mapLetterReader(map))));
     const bytes = Buffer.byteLength(encodeLine({ event: 'works.changed', data: compact }));
     expect(bytes).toBeLessThan(MAX_LINE_BYTES / 2);
     through(compact);

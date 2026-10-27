@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { MapCompact, Message, WorkEntry } from '@parley/core';
+import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
 import { useRoomPagesStore } from './room-pages.js';
@@ -7,7 +7,7 @@ import { useWorksStore } from './works.js';
 
 const note = (id: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' } });
 
-function entry(messages: Message[], total: number, tailFrom: number | null): WorkEntry {
+function entry(messages: Message[], total: number, tailFrom: number | null): WindowWorkEntry {
   const base = makeWork('w-01', { rooms: [makeRoom('r-01', 'К')], messages });
   const compact: MapCompact = {
     version: 1,

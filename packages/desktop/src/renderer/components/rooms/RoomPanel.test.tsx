@@ -11,7 +11,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
@@ -53,7 +53,7 @@ function message(id: string, patch: Partial<Message> = {}): Message {
   return makeLetter(id, { roomId: 'r-01', to: [], from: 'human', readBy: { human: 'x' }, ...patch });
 }
 
-function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[] } = {}): WorkEntry {
+function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[] } = {}): WindowWorkEntry {
   return makeWork(WORK_ID, {
     projectPath: PROJECT,
     title: 'Платежи',
@@ -83,7 +83,7 @@ afterEach(() => {
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
 });
 
-function props(entry: WorkEntry, patch: Partial<RoomPanelProps> = {}): RoomPanelProps {
+function props(entry: WindowWorkEntry, patch: Partial<RoomPanelProps> = {}): RoomPanelProps {
   return {
     entry,
     roomId: 'r-01',
@@ -97,10 +97,10 @@ function props(entry: WorkEntry, patch: Partial<RoomPanelProps> = {}): RoomPanel
   };
 }
 
-function renderPanel(entry: WorkEntry, patch: Partial<RoomPanelProps> = {}) {
+function renderPanel(entry: WindowWorkEntry, patch: Partial<RoomPanelProps> = {}) {
   const initial = props(entry, patch);
   const view = render(<RoomPanel {...initial} />);
-  return { ...view, initial, update: (next: WorkEntry) => view.rerender(<RoomPanel {...initial} entry={next} />) };
+  return { ...view, initial, update: (next: WindowWorkEntry) => view.rerender(<RoomPanel {...initial} entry={next} />) };
 }
 
 /** Живая активность с моделью сессии: `metrics.model` — то, что раньше `RoomBody` собирал в `models`. */
@@ -2145,7 +2145,7 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     at: '2026-09-27T09:10:00.000Z',
   };
 
-  const withProposal = (patch: Partial<typeof PROPOSAL> = {}, extra: { messages?: Message[] } = {}): WorkEntry =>
+  const withProposal = (patch: Partial<typeof PROPOSAL> = {}, extra: { messages?: Message[] } = {}): WindowWorkEntry =>
     entryOf({ room: room({ proposal: { ...PROPOSAL, ...patch } }), ...extra });
 
   const card = (): HTMLElement => document.querySelector('[data-decision-card]') as HTMLElement;
@@ -2523,7 +2523,7 @@ describe('RoomPanel — файлы, брошенные на вкладку', () 
 
 // Архив комнат (спека 2026-10-08, 5.2): вкладка архивной комнаты читается, но не пишется.
 describe('RoomPanel — архивная комната (5.2)', () => {
-  const archived = (patch: Partial<Room> = {}): WorkEntry => entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z', ...patch }) });
+  const archived = (patch: Partial<Room> = {}): WindowWorkEntry => entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z', ...patch }) });
   const withReopen = (): void => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.reopen'] } });
   };

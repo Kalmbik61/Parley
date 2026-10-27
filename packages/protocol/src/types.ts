@@ -1,4 +1,4 @@
-import type { AgentPlan, ContextFill, UsageSummary, WorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, UsageSummary, WindowWorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -179,6 +179,9 @@ export interface LiveMetrics {
 export type NoticeKind =
   | 'map-lock'
   | 'map-corrupt'
+  // Карта работы не переехала из прежнего `map.json` в базу (карта не разобралась или не сошлась со своими строками):
+  // работа остаётся в файле, и хост пробует снова на следующем старте. `text` — `<путь прежнего файла>\n<причина>` (спека хранилища 6.6).
+  | 'map-migration-failed'
   | 'git-connectivity-failed'
   | 'hooks-missing'
   | 'launch-failed'
@@ -355,8 +358,9 @@ export interface HostDiagnostics {
   profile: ProfileStatus;
 }
 
+/** Снимок работ для окна: карты с письмами (`WindowWorkMap`) — сжатые или полные, как собрал хост (спека хранилища 6.7). */
 export interface WorksSnapshot {
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   branches: Record<string, string | null>;
   /**
    * Номер снимка в жизни хоста: растёт на каждую рассылку. Окно применяет только снимок новее уже применённого, и

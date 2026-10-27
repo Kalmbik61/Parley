@@ -4,7 +4,7 @@
  * `parley-mcp` узнаёт его при первом же вызове — без гадания по cwd и времени запуска.
  */
 
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,7 +12,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addSession } from '../work/map.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { createParleyServer } from './tools.js';
 
 const THREAD = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
@@ -112,12 +112,11 @@ describe('_meta.threadId → providerSessionId', () => {
       const session = map.sessions.find((item) => item.id === 's-01');
       if (session !== undefined) session.providerSessionId = THREAD;
     });
-    const before = (await stat(workPaths(project, workId).map)).mtimeMs;
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const before = workVersion(project, workId);
     const client = await connect('s-01');
     await call(client, { threadId: THREAD, sessionId: THREAD });
     expect(await providerSessionId('s-01')).toBe(THREAD);
-    expect((await stat(workPaths(project, workId).map)).mtimeMs).toBe(before);
+    expect(workVersion(project, workId)).toBe(before);
   });
 
   it('вызов подагента не привязывает свой тред: `_meta.sessionId` — корневой тред — не совпадает с threadId', async () => {
@@ -210,11 +209,10 @@ describe('_meta.threadId → providerSessionId', () => {
   it('привязка сделана — карта больше не переписывается (её читают наблюдатели окна)', async () => {
     const client = await connect('s-01');
     await call(client, { threadId: THREAD });
-    const before = (await stat(workPaths(project, workId).map)).mtimeMs;
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const before = workVersion(project, workId);
     await call(client, { threadId: THREAD });
     await call(client, { threadId: OTHER_THREAD });
-    expect((await stat(workPaths(project, workId).map)).mtimeMs).toBe(before);
+    expect(workVersion(project, workId)).toBe(before);
   });
 
   it('вызов инструмента отвечает как обычно — привязка ответ не меняет', async () => {

@@ -9,7 +9,7 @@
 
 import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
@@ -81,7 +81,7 @@ function activeTabOf(layout: WorkLayout): string | null {
  */
 export function selectedSessionOf(
   state: Pick<LayoutState, 'activeWorkKey' | 'layouts'>,
-  works: WorkEntry[],
+  works: WindowWorkEntry[],
 ): { workKey: string; ref: SessionRef } | null {
   const key = state.activeWorkKey;
   if (key === null) return null;

@@ -5,7 +5,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import { emptyLayout, focusTab, groups, openTab, splitGroup } from './tree.js';
@@ -194,7 +194,7 @@ describe('requestCloseTabs (тест 15)', () => {
 describe('selectedSessionOf (тест 5 куска 2.7)', () => {
   // Сессии в карте работы `selectedSessionOf` не проверяет — ей нужны только
   // путь проекта и id работы, чтобы собрать `SessionRef`.
-  const works: WorkEntry[] = [
+  const works: WindowWorkEntry[] = [
     {
       projectPath: '/tmp/p',
       map: {

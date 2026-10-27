@@ -1,26 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LETTER_PAGE_MAX_ITEMS,
   PAGE_MAX_BYTES,
+  PAGE_MAX_ITEMS,
   PAGE_MIN_BYTES,
   PageError,
+  type LetterReader,
   capStrings,
   clampPageBytes,
-  compactWorkMap,
+  compactWorkMap as compactWorkMapOf,
   listPage,
-  mapTopology,
-  messagePage,
+  mapTopology as mapTopologyOf,
+  messagePage as messagePageOf,
+  type MessagePageOptions,
+  type WindowOptions,
   pageBySeq,
   parseCursor,
   seqOf,
   textPage,
   viewBytes,
 } from './context-pages.js';
+import { mapLetterReader, type LetterQuery } from './letter-store.js';
+import { unreadForHuman } from './letters.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type WorkMap } from './types.js';
+import { HUMAN, type Message, type WindowWorkMap, type WorkMap } from './types.js';
 
-const emptyMap = (): WorkMap => ({
+// Хранимая карта писем не содержит (спека хранилища 6.2): страницы и снимок берут читателя писем. Чистые тесты читают письма
+// самой карты с письмами; сборка из базы проверяется в `letter-store.test.ts` и хосте.
+const messagePage = <V extends { text: string }>(map: WorkMap, options: MessagePageOptions<V>, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  messagePageOf(map, options, letters);
+const compactWorkMap = (map: WorkMap, options: WindowOptions, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  compactWorkMapOf(map, options, letters);
+const mapTopology = (map: WorkMap, callerId: string | null, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  mapTopologyOf(map, callerId, letters);
+
+const emptyMap = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: { id: 'w-0001', title: 'Работа', goal: 'Цель', status: 'active', createdAt: '2026-10-05T00:00:00.000Z', updatedAt: '2026-10-05T00:00:00.000Z' },
   sessions: [],
@@ -153,6 +169,18 @@ describe('страницы по номеру записи', () => {
     expect(read(numbered(3), { cursor: parseCursor('after:3') }).page).toMatchObject({ returned: 0, complete: true, next: null });
   });
 
+  it('страницы не писем (история, артефакты, резюме, архив) держат прежний потолок 500: 100 им не навязан', () => {
+    const items = Array.from({ length: 700 }, (_, index) => index + 1);
+    const list = listPage(items, { view: (item) => item });
+    expect(list.items).toHaveLength(500);
+    expect(list.page).toMatchObject({ total: 700, complete: false, next: 'before:201' });
+    const small = listPage(items.slice(0, 150), { view: (item) => item });
+    expect(small.items).toHaveLength(150);
+    expect(small.page).toMatchObject({ complete: true, next: null });
+    const seq = pageBySeq(items.slice(0, 150), { seq: (item) => item, view: (item) => item, maxItems: 1000 });
+    expect(seq.items).toHaveLength(150);
+  });
+
   it('listPage: позиция в списке — номер; история и артефакты читаются теми же курсорами', () => {
     const history = ['a', 'b', 'c', 'd', 'e'];
     const first = listPage(history, { view: (item) => item, maxItems: 2 });
@@ -197,6 +225,87 @@ describe('страницы писем', () => {
     expect(only.textBytes).toBe(100_000);
     expect(only.text).toContain('cut: ');
     expect(viewBytes(messages)).toBeLessThan(4096 + 64);
+  });
+
+  it('страница не отдаёт больше 100 писем, как бы ни просили: ни предел байтов, ни maxItems его не раздвигают', () => {
+    expect(LETTER_PAGE_MAX_ITEMS).toBe(100);
+    expect(PAGE_MAX_ITEMS).toBe(500);
+    const map = baseMap();
+    fill(map, 250, 20);
+    const seen: string[] = [];
+    let cursor = null as ReturnType<typeof parseCursor>;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const { messages, page } = messagePage(map, { roomId: 'r-01', maxBytes: PAGE_MAX_BYTES, maxItems: 500, cursor, view: (message) => message });
+      expect(messages.length).toBeLessThanOrEqual(100);
+      expect(page.total).toBe(250);
+      seen.unshift(...ids(messages));
+      if (page.complete) break;
+      cursor = parseCursor(page.next);
+    }
+    expect(seen).toHaveLength(250);
+    expect(new Set(seen).size).toBe(250);
+    // Вперёд — тоже не больше 100.
+    const forward = messagePage(map, { roomId: 'r-01', cursor: parseCursor('after:0'), view: (message) => message });
+    expect(forward.messages).toHaveLength(100);
+    expect(forward.page).toMatchObject({ complete: false, next: 'after:100' });
+  });
+
+  it('письма страницы берутся у читателя: карта без писем и читатель над массивом дают те же страницы, итоги и курсоры', () => {
+    const map = baseMap();
+    addRoom(map, { title: 'Другая', creator: HUMAN, members: ['s-02'], lead: 's-02' });
+    fill(map, 30, 200);
+    fill(map, 3, 50, { roomId: 'r-02' });
+    addMessage(map, { from: 's-01', to: [], roomId: 'r-01', text: 'решили', kind: 'decision' });
+    addMessage(map, { from: 's-01', to: ['s-02'], text: 'прямое' });
+    const shell: WorkMap = { ...map, messages: [] };
+    const reader = arrayReader(map.messages);
+    for (const options of [
+      { roomId: 'r-01' },
+      { roomId: 'r-01', maxBytes: 2048 },
+      { roomId: 'r-01', kind: 'decision' as const },
+      { roomId: 'r-02' },
+      { roomId: null },
+      { roomId: 'r-01', cursor: parseCursor('before:20'), maxBytes: 2048 },
+      { roomId: 'r-01', cursor: parseCursor('after:25') },
+    ]) {
+      const expected = messagePage(map, { ...options, view: (message) => message });
+      const viaReader = messagePage(shell, { ...options, view: (message) => message }, reader);
+      expect(viaReader, JSON.stringify(options)).toEqual(expected);
+      expect(messagePage(shell, { ...options, view: (message) => message }, mapLetterReader(map)), JSON.stringify(options)).toEqual(expected);
+    }
+  });
+
+  it('отбор filter считается и в итоге страницы, и в курсоре: письма, которые он отбросил, не попадают ни туда, ни сюда', () => {
+    const map = baseMap();
+    fill(map, 12, 40);
+    fill(map, 12, 40, { from: 's-01' });
+    const odd = (message: Message): boolean => seqOf(message.id, 'm-') % 2 === 1;
+    const expected = messagePage(map, { roomId: 'r-01', filter: odd, maxItems: 5, view: (message) => message });
+    const shell: WorkMap = { ...map, messages: [] };
+    const viaReader = messagePage(shell, { roomId: 'r-01', filter: odd, maxItems: 5, view: (message) => message }, arrayReader(map.messages));
+    expect(ids(viaReader.messages)).toEqual(['m-15', 'm-17', 'm-19', 'm-21', 'm-23']);
+    expect(viaReader).toEqual(expected);
+    expect(viaReader.page).toMatchObject({ total: 12, complete: false, next: 'before:15' });
+  });
+
+  it('итог отобранной страницы — один запрос читателю, а не обход канала пачками', () => {
+    const map = baseMap();
+    fill(map, 250, 20);
+    const inner = arrayReader(map.messages);
+    let queries = 0;
+    const reader: LetterReader = {
+      ...inner,
+      page: (q) => {
+        queries += 1;
+        return inner.page(q);
+      },
+    };
+    const odd = (message: Message): boolean => seqOf(message.id, 'm-') % 2 === 1;
+    const { messages, page } = messagePage({ ...map, messages: [] }, { roomId: 'r-01', filter: odd, maxItems: 5, view: (message) => message }, reader);
+    expect(ids(messages)).toEqual(['m-241', 'm-243', 'm-245', 'm-247', 'm-249']);
+    expect(page.total).toBe(125);
+    // Одна пачка набирает страницу, один запрос — итог.
+    expect(queries).toBe(2);
   });
 
   it('чтение страницами при дописывании: каждое письмо ровно один раз, историю не теряем', () => {
@@ -399,6 +508,177 @@ describe('карта окна', () => {
     expect(frame).toBeLessThan(4 * 1024 * 1024);
     expect(elapsed).toBeLessThan(5000);
     for (const compact of compacts) expect(compact.compact?.messages.total).toBe(2500);
+  });
+});
+
+
+/**
+ * Работа для сверки снимка окна с прежним расчётом: активная и архивная комнаты, прямая почта, цитаты (своей и чужой
+ * комнаты), длинное письмо и дыры в непрочитанном человеком. Номера писем зафиксированы в комментариях.
+ */
+function windowFixture(): WorkMap {
+  const map = baseMap();
+  addRoom(map, { title: 'Архивная', creator: HUMAN, members: ['s-02'], lead: 's-02' }); // r-02
+  fill(map, 8, 30); // m-01…m-08 в r-01
+  addMessage(map, { from: 's-01', to: [HUMAN], text: 'прямое человеку' }); // m-09
+  fill(map, 6, 30, { roomId: 'r-02' }); // m-10…m-15
+  map.rooms[1]!.archivedAt = '2026-10-08T12:00:00.000Z';
+  addMessage(map, { from: 's-01', to: [], roomId: 'r-01', text: 'ответ на старое', replyTo: 'm-02' }); // m-16
+  addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'ё'.repeat(40_000) }); // m-17: длиннее предела текста окна
+  addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', text: 'человек пишет в комнату' }); // m-18
+  addMessage(map, { from: HUMAN, to: ['s-01'], text: 'человек пишет сессии' }); // m-19
+  addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'свежее 20' }); // m-20
+  addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'свежее 21' }); // m-21
+  addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'я'.repeat(40_000) }); // m-22: тоже длиннее предела
+  addMessage(map, { from: 's-01', to: [], roomId: 'r-01', text: 'цитирует начало', replyTo: 'm-02' }); // m-23
+  addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'цитирует чужую комнату', replyTo: 'm-14' }); // m-24
+  // Человек прочёл всё, кроме m-02, m-05 и писем с m-09 по m-15 и с m-20.
+  const unread = new Set(['m-02', 'm-05', 'm-09', 'm-10', 'm-11', 'm-12', 'm-13', 'm-14', 'm-15', 'm-20', 'm-21', 'm-22', 'm-23', 'm-24']);
+  for (const message of map.messages) if (!unread.has(message.id)) message.readBy[HUMAN] = '2026-10-05T00:00:00.000Z';
+  return map;
+}
+
+/**
+ * Читатель над массивом писем — отдельная от `mapLetterReader` реализация: проверяет, что страницы и снимок берут письма
+ * только через интерфейс, а не из `map.messages`. Непрочитанное считает лишь для человека (правило `unreadForHuman`).
+ */
+function arrayReader(messages: readonly Message[]): LetterReader {
+  const seq = (message: Message): number => seqOf(message.id, 'm-');
+  const matcher = (q: Omit<LetterQuery, 'limit'>) => (message: Message): boolean =>
+    (q.roomId === undefined || message.roomId === q.roomId) &&
+    (q.kind === undefined || message.kind === q.kind) &&
+    (q.from === undefined || message.from === q.from) &&
+    (q.ids === undefined || q.ids.includes(message.id)) &&
+    (q.beforeSeq === undefined || seq(message) < q.beforeSeq) &&
+    (q.afterSeq === undefined || seq(message) > q.afterSeq);
+  const sorted = [...messages].sort((a, b) => seq(a) - seq(b));
+  const page = (q: LetterQuery): Message[] => {
+    const found = sorted.filter(matcher(q));
+    return (q.newestFirst === true ? found.reverse() : found).slice(0, q.limit);
+  };
+  const countBy = (list: readonly Message[]): Record<string, number> => {
+    const byRoom: Record<string, number> = {};
+    for (const message of list) byRoom[message.roomId ?? ''] = (byRoom[message.roomId ?? ''] ?? 0) + 1;
+    return byRoom;
+  };
+  return {
+    page,
+    count: (q) => sorted.filter(matcher(q)).length,
+    byIds: (ids) => sorted.filter((message) => ids.includes(message.id)),
+    tail: (roomId, n) => sorted.filter((message) => message.roomId === roomId).slice(-n),
+    humanUnread: (limit) => sorted.filter(unreadForHuman).slice(-limit),
+    unreadCount: (reader) => {
+      if (reader !== HUMAN) throw new Error('the test reader counts unread for the human only');
+      const unread = sorted.filter(unreadForHuman);
+      return { total: unread.length, byRoom: countBy(unread) };
+    },
+    channelStats: () => {
+      const stats: Record<string, { total: number; latestId: string | null }> = {};
+      for (const message of sorted) {
+        const entry = (stats[message.roomId ?? ''] ??= { total: 0, latestId: null });
+        entry.total += 1;
+        entry.latestId = message.id;
+      }
+      return stats;
+    },
+  };
+}
+
+/** Чего ждёт снимок на `windowFixture`: расчёт прежней функции, снятый до перевода на читатель. */
+const WINDOW_GOLDEN = [
+  {
+    messageBytes: 2000,
+    ids: ['m-02', 'm-09', 'm-13', 'm-14', 'm-15', 'm-19', 'm-20', 'm-21', 'm-23', 'm-24'],
+    textBytes: [] as [string, number][],
+    compact: {
+      version: 1,
+      messages: {
+        total: 24,
+        included: 10,
+        latestId: 'm-24',
+        rooms: {
+          'r-01': { total: 16, included: 5, tailFrom: 23 },
+          direct: { total: 2, included: 2, tailFrom: 9 },
+          'r-02': { total: 6, included: 3, tailFrom: 13 },
+        },
+      },
+      unread: { letters: 1, rooms: { 'r-01': 7, 'r-02': 6 } },
+      cut: [{ path: 'messages.m-22.text', bytes: 80000 }],
+      omitted: {},
+    },
+  },
+  {
+    messageBytes: 1024 * 1024,
+    ids: ['m-02', 'm-09', 'm-13', 'm-14', 'm-15', 'm-19', 'm-20', 'm-21', 'm-22', 'm-23', 'm-24'],
+    textBytes: [['m-22', 80000]] as [string, number][],
+    compact: {
+      version: 1,
+      messages: {
+        total: 24,
+        included: 11,
+        latestId: 'm-24',
+        rooms: {
+          'r-01': { total: 16, included: 6, tailFrom: 20 },
+          direct: { total: 2, included: 2, tailFrom: 9 },
+          'r-02': { total: 6, included: 3, tailFrom: 13 },
+        },
+      },
+      unread: { letters: 1, rooms: { 'r-01': 7, 'r-02': 6 } },
+      cut: [{ path: 'messages.m-22.text', bytes: 80000 }],
+      omitted: {},
+    },
+  },
+];
+
+describe('снимок окна: письма берутся у читателя', () => {
+  const summary = (compact: WorkMap) => ({
+    ids: ids(compact.messages),
+    textBytes: compact.messages.filter((message) => message.textBytes !== undefined).map((message) => [message.id, message.textBytes]),
+    compact: compact.compact,
+  });
+
+  for (const golden of WINDOW_GOLDEN) {
+    it(`бюджет ${golden.messageBytes} Б: карта без писем и читатель над массивом дают расчёт прежней функции (архив, цитаты, длинные тексты)`, () => {
+      const map = windowFixture();
+      const options = { messageBytes: golden.messageBytes, recentPerRoom: 3, unreadMax: 5 };
+      const expected = { ids: golden.ids, textBytes: golden.textBytes, compact: golden.compact };
+      // Без читателя письма идут из `map.messages`.
+      expect(summary(compactWorkMap(map, options))).toEqual(expected);
+      // С читателем карта писем не нужна: пустая оболочка даёт тот же снимок.
+      const shell: WorkMap = { ...map, messages: [] };
+      const viaReader = compactWorkMap(shell, options, arrayReader(map.messages));
+      expect(summary(viaReader)).toEqual(expected);
+      // Читатель над картой (`mapLetterReader`) — тот же расчёт.
+      expect(summary(compactWorkMap(shell, options, mapLetterReader(map)))).toEqual(expected);
+      // Письма снимка — те же объекты по содержимому, что и в карте (с поправкой на сокращённый текст).
+      for (const message of viaReader.messages) {
+        const original = map.messages.find((candidate) => candidate.id === message.id) as Message;
+        expect({ ...message, text: undefined, textBytes: undefined }).toEqual({ ...original, text: undefined, textBytes: undefined });
+      }
+    });
+  }
+
+  it('хвост без дыр идёт глубже хвоста комнаты, пока подряд лежат непрочитанные: больше одного запроса читателя', () => {
+    const map = baseMap();
+    fill(map, 120, 20);
+    const shell: WorkMap = { ...map, messages: [] };
+    const compact = compactWorkMap(shell, { messageBytes: 1024 * 1024, recentPerRoom: 5, unreadMax: 200 }, arrayReader(map.messages));
+    expect(compact.compact?.messages.rooms['r-01']).toEqual({ total: 120, included: 120, tailFrom: 1 });
+    expect(compact.messages).toHaveLength(120);
+  });
+
+  it('счётчики и итоги приходят от читателя, а не пересчитываются по карте', () => {
+    const map = windowFixture();
+    const shell: WorkMap = { ...map, messages: [] };
+    const reader = arrayReader(map.messages);
+    const topology = mapTopology(shell, HUMAN, {
+      ...reader,
+      unreadCount: () => ({ total: 7, byRoom: { 'r-01': 4, '': 3 } }),
+    });
+    expect(topology.messages.unreadForYou).toEqual({ total: 7, rooms: { 'r-01': 4 }, direct: 3 });
+    expect(topology.messages).toMatchObject({ total: 24, latestId: 'm-24', direct: { total: 2, latestId: 'm-19' } });
+    expect(topology.rooms[0]?.messages).toEqual({ total: 16, latestId: 'm-24', unreadForYou: 4 });
+    expect(topology.rooms[1]?.messages).toEqual({ total: 6, latestId: 'm-15', unreadForYou: 0 });
   });
 });
 

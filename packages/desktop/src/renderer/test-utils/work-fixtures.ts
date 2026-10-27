@@ -1,9 +1,9 @@
 /**
  * Фикстуры работ и сессий для тестов сайдбара карточек (кусок 3.3): одна форма
- * `WorkSession`/`WorkEntry` на все его тесты вместо копии в каждом файле.
+ * `WorkSession`/`WindowWorkEntry` на все его тесты вместо копии в каждом файле.
  */
 
-import type { Activity, Message, NeedKind, Room, SessionNeed, WorkEntry, WorkSession, WorkStatus } from '@parley/core';
+import type { Activity, Message, NeedKind, Room, SessionNeed, WindowWorkEntry, WorkSession, WorkStatus } from '@parley/core';
 import { refKey, type LiveMetrics, type SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 
@@ -46,7 +46,7 @@ export interface WorkOptions {
   rooms?: Room[];
 }
 
-export function makeWork(id: string, options: WorkOptions = {}): WorkEntry {
+export function makeWork(id: string, options: WorkOptions = {}): WindowWorkEntry {
   const createdAt = options.createdAt ?? '2026-09-27T08:00:00.000Z';
   return {
     projectPath: options.projectPath ?? '/tmp/proj',

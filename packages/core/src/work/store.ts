@@ -1,9 +1,8 @@
-import { constants } from 'node:fs';
+import { constants, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 import {
   lstat,
-  mkdir,
   open,
   readFile,
   readdir,
@@ -11,20 +10,28 @@ import {
   rename,
   rm,
   stat,
-  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
-import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
-import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { envValue, ENV_PREFIX, HOME_DIR, LEGACY_ENV_PREFIX, LEGACY_HOME_DIR, type Env } from '../names.js';
+import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
+import { diffRows, isPlainJsonTree, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
+import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
+import type { LetterTx } from './letter-store.js';
+import { createTableLetterTx, loadAllLetters, replaceLetters } from './letter-tables.js';
 import { isAlive } from './pid-alive.js';
+import { sql } from './sql-statements.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+import type { WindowWorkMap, WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+
+/** Найденный дом и снимок входов, под которым он найден (`parleyHome`). */
+let homeMemo: { snapshot: string; home: string } | undefined;
 
 /**
  * Домашняя папка Parley (R4), первое подходящее:
@@ -34,6 +41,29 @@ import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js
  * Пустая переменная — то же, что незаданная. `env` и `userHome` подменяет тест.
  */
 export function parleyHome(env: Env = process.env, userHome: string = homedir()): string {
+  // Дом процесса ищут на каждой записи, чтении версии и подготовке запроса, а без переменных это два `stat`: найденное
+  // помним, пока не сменились сами входы — `PARLEY_HOME`, `HARNAS_HOME`, домашний каталог и признак теста. Каталоги
+  // `~/.parley` и `~/.harnas` при этом смотрятся один раз на снимок: перенос дома (`migrateHome`) идёт, пока процессы
+  // его агентов не живы (спека хранилища 6.9, план 4, задача 5). Чужое окружение (`env` из теста) не запоминается.
+  if (env !== process.env) return checkedHome(env, userHome);
+  const snapshot = [
+    env[ENV_PREFIX + 'HOME'],
+    env[LEGACY_ENV_PREFIX + 'HOME'],
+    env['VITEST'],
+    userHome,
+  ].join('\u0000');
+  if (homeMemo?.snapshot === snapshot) return homeMemo.home;
+  const home = checkedHome(env, userHome);
+  homeMemo = { snapshot, home };
+  return home;
+}
+
+/** Забывает найденный дом: после переноса `~/.harnas` → `~/.parley` (`migrateHome`) прежний ответ уже неверен. */
+export function forgetParleyHome(): void {
+  homeMemo = undefined;
+}
+
+function checkedHome(env: Env, userHome: string): string {
   const resolved = resolveParleyHome(env, userHome);
   refuseRealHomeUnderTest(resolved);
   return resolved;
@@ -67,16 +97,19 @@ function refuseRealHomeUnderTest(resolved: string): void {
   }
 }
 
-/** Глобальный индекс работ: все работы всех проектов. */
+/**
+ * Прежний глобальный индекс работ `works-index.json`. Список работ теперь — таблица `works` (`readWorksIndex`); путь
+ * остался для переезда прежних файлов в базу и для переноса каталогов состояния, которым нужен именно старый файл
+ * (спека хранилища 6.6).
+ */
 export function worksIndexPath(): string {
   return path.join(parleyHome(), 'works-index.json');
 }
 
 export interface WorkPaths {
   dir: string;
+  /** Прежний `map.json`: карты живут в базе, путь остался для переезда и проверок «лежит ли карта прежнего формата». */
   map: string;
-  bak: string;
-  lock: string;
   briefs: string;
   artifacts: string;
   /** Сгенерированные MCP-конфиги сессий: `mcp/<session-id>.json`. */
@@ -97,8 +130,6 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
   return {
     dir,
     map: path.join(dir, 'map.json'),
-    bak: path.join(dir, 'map.json.bak'),
-    lock: path.join(dir, 'map.lock'),
     briefs: path.join(dir, 'briefs'),
     artifacts: path.join(dir, 'artifacts'),
     mcp: path.join(dir, 'mcp'),
@@ -111,8 +142,9 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
 
 export interface WriteOptions {
   /**
-   * Блокировка, не снятая за это время, — ошибка вызова, а не тихое ожидание. Время идёт с момента, когда до вызова
-   * дошла очередь писателей этого процесса (спека хранилища 6.9).
+   * Блокировка, не снятая за это время, — ошибка вызова, а не тихое ожидание. Для базы работ это ожидание записи чужого
+   * процесса (CLI, MCP агента без канала): писатели одного процесса друг друга не ждут (спека хранилища 6.9). Файловая
+   * блокировка общих файлов проекта берёт то же значение.
    */
   lockTimeoutMs?: number;
 }
@@ -123,10 +155,11 @@ const RETRY_MS = 20;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Таймаут `map.lock` — отдельный класс, а не голая `Error`: карту пишут трое
+ * Таймаут блокировки записи — отдельный класс, а не голая `Error`: карту пишут трое
  * (хост, CLI и MCP-серверы агентов), и хосту нужно отличить именно занятость
- * блокировки от прочих сбоев записи, чтобы не падать, а сообщить `host.notice`
- * и повторить на следующем событии (план, кусок 1.4).
+ * базы от прочих сбоев записи, чтобы не падать, а сообщить `host.notice`
+ * и повторить на следующем событии (план, кусок 1.4). Бросается и когда `parley.db` занята
+ * другим процессом дольше `lockTimeoutMs` (спека хранилища 6.9, этап 2).
  */
 export class MapLockTimeoutError extends Error {
   /** `holder` — необязательный хвост про хозяина блокировки, см. `describeHolder`. */
@@ -138,8 +171,8 @@ export class MapLockTimeoutError extends Error {
 
 /**
  * Работы нет — отдельный класс, как `MapLockTimeoutError`: хосту нужно ответить
- * `not_found`, а не `internal`, и в том числе когда каталог работы удалили
- * (`works.delete` другого клиента), пока запись ждала `map.lock`.
+ * `not_found`, а не `internal`, и в том числе когда работу удалили
+ * (`works.delete` другого клиента) между проверкой и записью.
  */
 export class WorkNotFoundError extends Error {
   constructor(message: string) {
@@ -157,9 +190,10 @@ const STALE_UNOWNED_LOCK_MS = 10_000;
 /**
  * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью) —
  * старше 10 с. Не обычный файл (висячий симлинк, каталог) и любая ошибка чтения — не осиротела: ждём до таймаута,
- * как до перехвата, а не крутим цикл.
+ * как до перехвата, а не крутим цикл. Её же спрашивает переезд прежних карт: живой замок `map.lock` — работа занята
+ * процессом прежней сборки (спека хранилища 6.6).
  */
-async function isOrphaned(file: string): Promise<boolean> {
+export async function isOrphaned(file: string): Promise<boolean> {
   try {
     const info = await lstat(file);
     if (!info.isFile()) return false;
@@ -279,160 +313,454 @@ async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> 
   }
 }
 
-/**
- * Очередь писателей этого процесса по пути файла блокировки (спека хранилища 6.9, этап 1): значение — «хвост»,
- * промис, который выполнится, когда уйдёт последний из вставших. Внутри процесса хоста писатели одного замка встают
- * в цепочку и берут файловый замок по одному, а не опрашивают файл наперегонки каждые `RETRY_MS`: при десятках
- * одновременных записей одной карты хвост упирался в `lockTimeoutMs`, хотя замок держал сам процесс. Файловый замок
- * остаётся как был — для других процессов (CLI, сессии без канала): `lockTimeoutMs` считается только для него и с того
- * момента, когда очередь дошла. У ожидания в очереди своего таймаута нет: оно кончается, когда каждый, кто впереди,
- * закончит или упадёт по своему. Запись снимает уходящий писатель, если за ним никого нет.
- */
-const lockQueues = new Map<string, Promise<void>>();
+/** Коды SQLite, по которым хранилище отличает занятую базу и занятый id (расширенный код — у ограничений). */
+const SQLITE_BUSY = 5;
+const SQLITE_CONSTRAINT_PRIMARYKEY = 1555;
 
-async function withLock<T>(
-  lockFile: string,
-  timeoutMs: number,
-  body: () => Promise<T>,
-): Promise<T> {
-  const ahead = lockQueues.get(lockFile);
-  let leave!: () => void;
-  const turn = new Promise<void>((resolve) => {
-    leave = resolve;
-  });
-  lockQueues.set(lockFile, turn);
+const sqliteCode = (error: unknown): number => (error as { errcode?: number } | null)?.errcode ?? 0;
+
+/**
+ * Отказ из-за занятости базы, а не из-за карты: `MapLockTimeoutError` (запись не дождалась) или сырой `SQLITE_BUSY` у
+ * читателя. Такая работа не битая — повтор на следующем проходе удастся, и хост молчит о повреждении.
+ */
+export function isDatabaseBusy(error: unknown): boolean {
+  return error instanceof MapLockTimeoutError || (sqliteCode(error) & 0xff) === SQLITE_BUSY;
+}
+
+/**
+ * База занята другим соединением дольше `lockTimeoutMs` — тот же `MapLockTimeoutError`, что был у файловой блокировки:
+ * хост по нему не падает, а сообщает `host.notice` и повторяет (спека хранилища 6.9). Прочие ошибки идут как есть.
+ */
+function asLockTimeout(error: unknown, timeoutMs: number): unknown {
+  return (sqliteCode(error) & 0xff) === SQLITE_BUSY
+    ? new MapLockTimeoutError(path.join(parleyHome(), WORK_DB_FILE), timeoutMs)
+    : error;
+}
+
+/**
+ * Запись в базу: синхронное тело между `BEGIN IMMEDIATE` и `COMMIT`, при любом исключении — `ROLLBACK` (спека хранилища
+ * 6.9, этап 2). Синхронность ставит писателей этого процесса в очередь сама: между `BEGIN` и `COMMIT` цикл событий не
+ * освобождается. Чужие процессы ждёт `busy_timeout` соединения — на время записи он равен `lockTimeoutMs`, а после неё
+ * (в том числе после отказа) возвращается к `BUSY_TIMEOUT_MS`: иначе чтения и следующие записи ждали бы столько, сколько
+ * попросила последняя.
+ */
+function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () => T): T {
+  const timeoutMs = Number.isFinite(lockTimeoutMs)
+    ? Math.max(0, Math.trunc(lockTimeoutMs))
+    : DEFAULT_LOCK_TIMEOUT_MS;
   try {
-    await ahead;
-    const handle = await acquireLock(lockFile, timeoutMs);
     try {
-      return await body();
-    } finally {
-      await releaseLock(handle, lockFile);
+      db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
+      db.exec('BEGIN IMMEDIATE');
+    } catch (error) {
+      throw asLockTimeout(error, timeoutMs);
+    }
+    try {
+      const result = body();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Транзакции уже нет: SQLite сама откатила её при сбое.
+      }
+      throw asLockTimeout(error, timeoutMs);
     }
   } finally {
-    // Очередь отпускаем в любом исходе, и после падения тоже, — иначе идущие следом ждали бы вечно. Наш файл
-    // блокировки к этому моменту уже снят, так что без чужого замка следующий берёт его с первой попытки.
-    if (lockQueues.get(lockFile) === turn) lockQueues.delete(lockFile);
-    leave();
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
 }
 
-const serialize = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
-
-const exists = async (file: string): Promise<boolean> => {
+/** Чтение нескольких запросов с одного снимка базы; внутри уже открытой транзакции (запись, переезд) своей не открывает. */
+export function readTransaction<T>(db: DatabaseSync, body: () => T): T {
+  if (db.isTransaction) return body();
+  db.exec('BEGIN');
   try {
-    await stat(file);
-    return true;
+    const result = body();
+    db.exec('COMMIT');
+    return result;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    // Тело бросило или COMMIT не прошёл: открытая транзакция не должна остаться (следующий вызов принял бы её за свою).
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Транзакции уже нет: причина — исходная ошибка, её и бросаем.
+    }
     throw error;
   }
-};
+}
 
-/** Временный файл + rename: читатель видит либо старую карту, либо новую. */
-async function writeAtomic(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, text, 'utf8');
-  await rename(tmp, file);
+export const UPSERT_ENTRY = `INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT (project_path, work_id, kind, key) DO UPDATE SET ord = excluded.ord, json = excluded.json`;
+export const DELETE_ENTRY =
+  'DELETE FROM entries WHERE project_path = ? AND work_id = ? AND kind = ? AND key = ?';
+const INSERT_WORK = `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPDATE_WORK = `UPDATE works SET title = ?, status = ?, updated_at = ?, work_json = ?, extra_json = ?,
+  version = version + 1 WHERE project_path = ? AND id = ? RETURNING version`;
+
+const notFound = (projectPath: string, workId: string): WorkNotFoundError =>
+  new WorkNotFoundError(`workspace ${workId} does not exist in ${projectPath}`);
+
+/** Имя работы для текстов отказа `normalizeMap`: файла карты больше нет, называем работу и проект. */
+const mapSource = (projectPath: string, workId: string): string => `${workId} (${projectPath})`;
+
+/** Номер версии строки работы; `undefined` — строки нет. Запись растит его на каждой записи (спека хранилища 6.9). */
+function versionOf(db: DatabaseSync, projectPath: string, workId: string): number | undefined {
+  const row = sql(db, 'SELECT version FROM works WHERE project_path = ? AND id = ?').get(
+    projectPath,
+    workId,
+  );
+  return row === undefined ? undefined : Number(row['version']);
 }
 
 /**
- * Разобранные карты процесса по пути `map.json` (спека хранилища 6.9, этап 1). Карты бывают в мегабайты, а читают
- * их часто: разбор неизменного файла каждый раз занимал поток. Сверка — по личности файла из `stat`
- * (`dev:ino:size:mtimeNs:ctimeNs`): запись идёт атомарным rename (новый inode), правка на месте меняет время и размер,
- * так что устаревшую карту кэш не отдаст. `readMap` кладёт в кэш копию и выдаёт копии (`structuredClone`): вызывающие
- * свободно меняют полученную карту, и общий объект испортил бы её всем читателям сразу. `updateMap` копию не берёт:
- * на попадании он забирает объект из кэша себе (запись снимается), мутирует его сам, а после записи кладёт в кэш не этот
- * объект, а то, что вернёт свежий разбор записанного текста: разбор достраивает умолчания, убирает испорченное и
- * отвергает неверное, и писавший процесс не должен читать карту иначе, чем любой другой. Брошенная мутация или отказ
- * записи оставляют кэш без записи: следующее чтение разберёт файл с диска, а не увидит наполовину изменённый объект.
- * Записей не больше `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке.
+ * Версия строки работы в базе; `undefined` — работы нет. Её растит каждая запись любого процесса, поэтому по ней
+ * читатель узнаёт, что его копия карты устарела (спека хранилища 6.9). Версию берут до чтения карты: запись между ними
+ * даст запоздавший ключ и лишнюю загрузку, а не устаревшую карту под свежим ключом.
+ */
+export function workVersion(projectPath: string, workId: string): number | undefined {
+  return versionOf(storeDb(), projectPath, workId);
+}
+
+/**
+ * Личность работы для ожидания (спека хранилища 6.9): версия строки текстом, `null` — работы в базе нет. Файла карты,
+ * по `stat` которого ожидание узнавало запись, больше нет; версию растит каждая запись любого процесса, и один запрос по
+ * ключу строки дешевле разбора карты, так что ею можно сверяться на каждом тике опроса.
+ */
+export function workVersionKey(projectPath: string, workId: string): string | null {
+  const version = workVersion(projectPath, workId);
+  return version === undefined ? null : `${version}`;
+}
+
+/** То, что лежит в базе про одну работу: версия, запись работы, `extra` и строки списков. */
+interface Stored {
+  version: number;
+  work: string;
+  extra: string;
+  rows: StoredRow[];
+}
+
+/** Одним снимком читает строку работы и все её строки списков; `undefined` — работы нет. */
+function loadStored(db: DatabaseSync, projectPath: string, workId: string): Stored | undefined {
+  return readTransaction(db, () => {
+    const head = sql(
+      db,
+      'SELECT version, work_json, extra_json FROM works WHERE project_path = ? AND id = ?',
+    ).get(projectPath, workId);
+    if (head === undefined) return undefined;
+    const rows = sql(
+      db,
+      'SELECT kind, key, ord, json FROM entries WHERE project_path = ? AND work_id = ? ORDER BY kind, ord',
+    ).all(projectPath, workId) as unknown as StoredRow[];
+    return {
+      version: Number(head['version']),
+      work: String(head['work_json']),
+      extra: String(head['extra_json']),
+      rows,
+    };
+  });
+}
+
+/**
+ * Разобранные карты процесса (спека хранилища 6.9). Ключ — `проект\0работа`; запись — карта и то, что лежит в базе под её
+ * версией: JSON работы, `extra` и строки списков по ключам (`index`), с которыми `updateMap` сравнивает следующую запись.
+ * Сверка — по номеру версии строки `works`, а не по файлу: чужую запись (CLI, MCP агента без канала) видно по новой версии,
+ * устаревшую карту кэш не отдаст. Карты бывают в мегабайты, а читают их часто: неизменная работа загружается один раз.
+ * `readMap` кладёт в кэш объект и выдаёт копии (`structuredClone`): вызывающие свободно меняют полученную карту, и общий
+ * объект испортил бы её всем читателям сразу. `updateMap` копию не берёт: на попадании он забирает объект из кэша себе
+ * (запись снимается), мутирует его сам, а после записи кладёт в кэш карту, которую дал бы свежий разбор записанных
+ * строк, — писавший процесс не должен читать карту иначе, чем любой другой. Это либо свежая сборка строк (карту забирает
+ * вызывающий), либо сама записанная карта, если она чистое дерево JSON (`applyMapUpdate`). Брошенная мутация или отказ
+ * записи оставляют кэш без записи: следующее чтение загрузит базу, а не увидит наполовину изменённый объект. Записей не
+ * больше `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке. Кэш принадлежит дескриптору базы: сменился
+ * дом — кэш пуст.
  */
 export const MAP_CACHE_LIMIT = 32;
 
-const mapCache = new Map<string, { identity: string; map: WorkMap }>();
+interface CachedMap {
+  version: number;
+  map: WorkMap;
+  work: string;
+  extra: string;
+  index: ReadonlyMap<string, StoredRow>;
+}
+
+const mapCache = new Map<string, CachedMap>();
+let cacheOwner: DatabaseSync | undefined;
 let mapCacheHits = 0;
 let mapCacheMisses = 0;
 
-/** Сколько раз карту взяли из кэша и сколько раз пришлось читать с диска. Только для тестов: из `index.ts` не экспортируется. */
+/** Сколько раз карту взяли из кэша и сколько раз пришлось загружать из базы. Только для тестов: из `index.ts` не экспортируется. */
 export function mapCacheStats(): { hits: number; misses: number } {
   return { hits: mapCacheHits, misses: mapCacheMisses };
 }
 
-/** Личность файла карты. `stat` не удался (файла нет, нет доступа) — `null`: кэш не участвует, ошибку отдаст само чтение. */
-async function mapIdentity(file: string): Promise<string | null> {
-  try {
-    const info = await stat(file, { bigint: true });
-    return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':');
-  } catch {
-    return null;
+const cacheKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
+
+/** База текущего дома; у другого дескриптора (дом сменился) — свой пустой кэш. */
+export function storeDb(): DatabaseSync {
+  const db = workDb();
+  if (db !== cacheOwner) {
+    mapCache.clear();
+    cacheOwner = db;
   }
+  return db;
 }
 
-/** Закэшированный объект карты, если файл с тех пор не менялся; иначе `undefined`. Попадания и промахи считаются здесь. */
-function cachedEntry(file: string, identity: string | null): WorkMap | undefined {
-  const entry = mapCache.get(file);
-  if (identity === null || entry === undefined || entry.identity !== identity) {
+/** Запись кэша, если версия в базе всё та же; иначе `undefined`. Попадания и промахи считаются здесь. */
+function cachedEntry(key: string, version: number): CachedMap | undefined {
+  const entry = mapCache.get(key);
+  if (entry === undefined || entry.version !== version) {
     mapCacheMisses += 1;
     return undefined;
   }
   mapCacheHits += 1;
-  return entry.map;
+  return entry;
 }
 
-/** Копия закэшированной карты для читателя, если файл с тех пор не менялся; иначе `undefined`. */
-function cachedMap(file: string, identity: string | null): WorkMap | undefined {
-  const map = cachedEntry(file, identity);
-  return map === undefined ? undefined : structuredClone(map);
-}
-
-/**
- * Сам закэшированный объект, без копии, и запись при этом снимается: карта переходит вызывающему, кэш её больше не
- * держит (спека хранилища 6.9). Только для `updateMap`, который мутирует её под замком и после записи кладёт в кэш
- * свежий разбор. Что бы ни случилось с обновлением до записи (мутация бросила, отказал замок индекса), в кэше нет ничего,
- * что видело бы наполовину изменённый объект.
- */
-function takeCachedMap(file: string, identity: string | null): WorkMap | undefined {
-  const map = cachedEntry(file, identity);
-  if (map !== undefined) mapCache.delete(file);
-  return map;
-}
-
-/**
- * Кладёт карту в кэш как есть: вызывающий отдаёт объект, которого больше ни у кого нет (свежий разбор или своя копия).
- * Сверх `MAP_CACHE_LIMIT` вытесняется самая давняя по вставке.
- */
-function rememberMap(file: string, identity: string, map: WorkMap): void {
-  mapCache.set(file, { identity, map });
+/** Кладёт запись в кэш как есть: объект карты принадлежит кэшу, у вызывающего его нет. Сверх лимита уходит самая давняя. */
+function rememberMap(key: string, entry: CachedMap): void {
+  mapCache.set(key, entry);
   for (const oldest of mapCache.keys()) {
     if (mapCache.size <= MAP_CACHE_LIMIT) break;
     mapCache.delete(oldest);
   }
 }
 
-/** Что вернёт свежий разбор записанного текста; `undefined` — разбор его отверг, и читателю с диска он откажет так же. */
-function reparse(text: string, file: string): WorkMap | undefined {
-  try {
-    return parseMap(text, file);
-  } catch {
-    return undefined;
-  }
+/**
+ * Размер загруженной карты в байтах — сумма текстов её строк в базе (работа, `extra`, строки списков), как они были
+ * разобраны. Считается по кэшу процесса, а не по сборке JSON заново: на карте в десятки мегабайт `JSON.stringify` стоил бы
+ * больше самого чтения. `undefined` — карты в кэше нет (читать её нужно через `readMap`).
+ */
+export function storedMapBytes(projectPath: string, workId: string): number | undefined {
+  const entry = mapCache.get(cacheKey(projectPath, workId));
+  if (entry === undefined) return undefined;
+  let bytes = Buffer.byteLength(entry.work) + Buffer.byteLength(entry.extra);
+  for (const row of entry.index.values()) bytes += Buffer.byteLength(row.json);
+  return bytes;
 }
 
 /**
- * Читает карту работы. Битый файл — ошибка, догадки не строим. Неизменный файл разбирается один раз,
- * дальше карта приходит из кэша процесса — копией (спека хранилища 6.9).
+ * Запись базы одной работы дошла до подписчиков процесса: проект, работа и версия, под которой она теперь лежит.
+ * `removed` — работу сняли (`deleteWorkFiles`, `pruneWorksIndex`): версия тогда последняя, какая у неё была.
+ */
+export interface MapWrittenEvent {
+  projectPath: string;
+  workId: string;
+  version: number;
+  removed?: true;
+}
+
+const writeListeners = new Set<(event: MapWrittenEvent) => void>();
+
+/**
+ * Подписка на записи этого процесса (`createWork`, `updateMap`, `replaceStoredMap`, снятие работы): событие приходит после
+ * коммита и после обновления кэша. Записи других процессов видны хосту иначе — по `workDataVersion` (спека хранилища 6.9).
+ * Возвращает отписку.
+ */
+export function onMapWritten(listener: (event: MapWrittenEvent) => void): () => void {
+  writeListeners.add(listener);
+  return () => {
+    writeListeners.delete(listener);
+  };
+}
+
+/** Слушатель, который бросил, уже записанного не откатывает: падение писателя заставило бы вызывающего повторить мутацию. */
+function emitMapWritten(event: MapWrittenEvent): void {
+  for (const listener of [...writeListeners]) {
+    try {
+      listener(event);
+    } catch {
+      // Событие — уведомление, а не часть записи.
+    }
+  }
+}
+
+/** Есть ли в базе строка работы. Без разбора карты: так проверяют существование вместо `stat` файла карты. */
+export function workExists(projectPath: string, workId: string): boolean {
+  return versionOf(storeDb(), projectPath, workId) !== undefined;
+}
+
+/**
+ * База текущего дома для чтения писем работы (`letter-store.ts`, спека хранилища 6.2). Работы нет — `WorkNotFoundError`, как
+ * у `readMap`: письма без работы читать нечем, а запрос с пустым ответом выдал бы удалённую работу за пустую.
+ */
+export function letterDb(projectPath: string, workId: string): DatabaseSync {
+  const db = storeDb();
+  if (versionOf(db, projectPath, workId) === undefined) throw notFound(projectPath, workId);
+  return db;
+}
+
+/**
+ * `PRAGMA data_version` соединения: число меняется, когда запись закоммитило другое соединение (другой процесс — CLI,
+ * MCP агента без канала), и не меняется от коммитов этого. Читает только заголовок журнала, поэтому годится для опроса
+ * каждые полсекунды (спека хранилища 6.9). Записи своего процесса хост узнаёт по `onMapWritten`.
+ */
+export function workDataVersion(): number {
+  return Number(sql(storeDb(), 'PRAGMA data_version').get()?.['data_version']);
+}
+
+/** Версии всех работ базы одним запросом: после чужой записи хост сверяет их с прошлым снимком (спека хранилища 6.9). */
+export function listWorkVersions(): Array<{ projectPath: string; id: string; version: number }> {
+  return sql(storeDb(), 'SELECT project_path, id, version FROM works')
+    .all()
+    .map((row) => ({
+      projectPath: String(row['project_path']),
+      id: String(row['id']),
+      version: Number(row['version']),
+    }));
+}
+
+/**
+ * Собирает полную карту из строк базы мимо кэша — для тестов, выгрузки и сверки переезда: хранимая часть прошла
+ * `normalizeMap`, как и загрузка `readMap`, а письма с отметками прочтения собраны из своих таблиц одним снимком базы
+ * (спека хранилища 6.2). Работы нет — `WorkNotFoundError`.
+ */
+export function readStoredMap(projectPath: string, workId: string): WindowWorkMap {
+  return readStoredMapOn(storeDb(), projectPath, workId);
+}
+
+/**
+ * `readStoredMap` на заданном соединении: апгрейд базы со схемы 1 собирает и сверяет карты ещё до того, как дескриптор
+ * `workDb()` существует (`letter-upgrade.ts`, спека хранилища 6.6).
+ */
+export function readStoredMapOn(db: DatabaseSync, projectPath: string, workId: string): WindowWorkMap {
+  return readTransaction(db, () => {
+    const stored = loadStored(db, projectPath, workId);
+    if (stored === undefined) throw notFound(projectPath, workId);
+    const map = normalizeMap(rowsToMap(stored.work, stored.extra, stored.rows), mapSource(projectPath, workId));
+    return Object.assign(map, { messages: loadAllLetters(db, projectPath, workId) });
+  });
+}
+
+/**
+ * Только для тестов: записывает строки работы из произвольного объекта без `normalizeMap` и поднимает версию — так
+ * тест изображает «чужую запись» и карту, которую нормализация отвергает. Списки заменяются целиком; письма — тоже, если в
+ * объекте есть `messages` (полная карта: письма с `readBy`, кандидаты в непрочитанное раскладываются по правилам карты),
+ * иначе письма работы остаются как были. Работы нет — `WorkNotFoundError`.
+ */
+export function replaceStoredMap(projectPath: string, workId: string, data: unknown): void {
+  const db = storeDb();
+  const version = writeTransaction(db, DEFAULT_LOCK_TIMEOUT_MS, () => {
+    if (versionOf(db, projectPath, workId) === undefined) throw notFound(projectPath, workId);
+    const map = data as WorkMap;
+    const next = mapToRows(map);
+    sql(db, 'DELETE FROM entries WHERE project_path = ? AND work_id = ?').run(projectPath, workId);
+    for (const row of next.rows) {
+      sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
+    }
+    if (Array.isArray((data as Partial<WindowWorkMap>).messages)) replaceLetters(db, projectPath, workId, data as WindowWorkMap);
+    const work = map.work as unknown as Record<string, unknown>;
+    const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+    const updated = sql(db, UPDATE_WORK).get(
+      text(work['title']),
+      text(work['status']),
+      text(work['updatedAt']),
+      next.work,
+      next.extra,
+      projectPath,
+      workId,
+    );
+    return Number(updated?.['version']);
+  });
+  emitMapWritten({ projectPath, workId, version });
+}
+
+/**
+ * Только для переезда прежнего `map.json` (спека хранилища 6.6): вставляет строку работы, строки её списков и письма с
+ * отметками прочтения и кандидатами одной транзакцией и зовёт `check` до `COMMIT` — внутри транзакции видны ещё не записанные строки, и `readStoredMap` собирает
+ * из них карту для сверки. Бросил `check` (или вставка) — `ROLLBACK`, в базе ничего не остаётся. Версия — часы, как у
+ * `createWork`. Подписчики `onMapWritten` узнают о работе после коммита.
+ */
+export function insertMigratedMap(
+  projectPath: string,
+  workId: string,
+  map: WindowWorkMap,
+  check: () => void,
+): void {
+  const db = storeDb();
+  const version = writeTransaction(db, DEFAULT_LOCK_TIMEOUT_MS, () => {
+    const rows = mapToRows(map);
+    const work = map.work as unknown as Record<string, unknown>;
+    const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+    const at = Date.now();
+    sql(db, INSERT_WORK).run(
+      projectPath,
+      workId,
+      text(work['title']),
+      text(work['status']),
+      text(work['updatedAt']),
+      at,
+      rows.work,
+      rows.extra,
+    );
+    for (const row of rows.rows) {
+      sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
+    }
+    replaceLetters(db, projectPath, workId, map);
+    check();
+    return at;
+  });
+  emitMapWritten({ projectPath, workId, version });
+}
+
+/**
+ * Читает карту работы из базы. Нет строки — `WorkNotFoundError`; карта, которую `normalizeMap` не принимает, — ошибка,
+ * догадки не строим. Неизменная работа загружается один раз, дальше карта приходит из кэша процесса копией (спека
+ * хранилища 6.9).
  */
 export async function readMap(projectPath: string, workId: string): Promise<WorkMap> {
-  const file = workPaths(projectPath, workId).map;
-  // `stat` до чтения: если карту перепишут между ними, в кэше окажется новое содержимое под старой личностью,
-  // и следующее чтение просто разберёт её ещё раз.
-  const identity = await mapIdentity(file);
-  const cached = cachedMap(file, identity);
-  if (cached !== undefined) return cached;
-  const map = parseMap(await readFile(file, 'utf8'), file);
-  if (identity !== null) rememberMap(file, identity, structuredClone(map));
-  return map;
+  return loadMap(projectPath, workId, true);
+}
+
+/**
+ * Карта из кэша процесса без копии и без `await` — только чтение внутри ядра (`letter-store.ts`, спека хранилища 6.2):
+ * выданный объект принадлежит кэшу, его нельзя менять и держать за пределами вызова, потому что следующий `updateMap`
+ * забирает его себе и мутирует. Наружу из ядра уходят копии нужных частей. Ошибки те же, что у `readMap`.
+ */
+export function readMapView(projectPath: string, workId: string): Readonly<WorkMap> {
+  return loadMap(projectPath, workId, false);
+}
+
+/**
+ * Разбор карты из кэша процесса без копии, пока `read` работает: объект принадлежит кэшу, и `read` обязан отработать
+ * синхронно и не вернуть из карты ничего изменяемого (см. `readMapView`). Хост берёт так комнаты и состав работы для
+ * страницы писем, не платя копией всей карты (спека хранилища 6.2). Ошибки те же, что у `readMap`.
+ */
+export function viewMap<T>(projectPath: string, workId: string, read: (map: Readonly<WorkMap>) => T): T {
+  return read(readMapView(projectPath, workId));
+}
+
+function loadMap(projectPath: string, workId: string, copy: boolean): WorkMap {
+  const db = storeDb();
+  const key = cacheKey(projectPath, workId);
+  const version = versionOf(db, projectPath, workId);
+  if (version === undefined) {
+    mapCache.delete(key);
+    throw notFound(projectPath, workId);
+  }
+  const cached = cachedEntry(key, version);
+  if (cached !== undefined) return copy ? structuredClone(cached.map) : cached.map;
+  // Версию в запись кэша берём из той же загрузки, что и строки: запись между запросами не перепутает их.
+  const stored = loadStored(db, projectPath, workId);
+  if (stored === undefined) {
+    mapCache.delete(key);
+    throw notFound(projectPath, workId);
+  }
+  const map = normalizeMap(
+    rowsToMap(stored.work, stored.extra, stored.rows),
+    mapSource(projectPath, workId),
+  );
+  rememberMap(key, {
+    version: stored.version,
+    map,
+    work: stored.work,
+    extra: stored.extra,
+    index: rowIndex(stored.rows),
+  });
+  return copy ? structuredClone(map) : map;
 }
 
 /**
@@ -461,29 +789,49 @@ export async function deleteSessionFiles(
 }
 
 /**
- * Удаляет работу целиком: каталог `<состояние>/works/<id>` со всем содержимым,
- * включая артефакты, и её запись в глобальном индексе. Каталога уже нет —
- * не ошибка: запись из индекса всё равно снимается. Каталог удаляется только
- * после взятия блокировки индекса: отказ блокировки ничего не стирает.
+ * Удаляет работу целиком: её строки в базе (списки уходят каскадом) и каталог
+ * `<состояние>/works/<id>` со всем содержимым, включая артефакты. Каталога уже нет —
+ * не ошибка: строка из базы всё равно снимается. Каталог удаляется только после
+ * того, как строка снята: отказ записи в базу ничего не стирает.
  */
 export async function deleteWorkFiles(
   projectPath: string,
   workId: string,
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<void> {
-  await withWorksIndex(lockTimeoutMs, async (index) => {
-    await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
-    index.works = index.works.filter(
-      (work) => !(work.id === workId && work.projectPath === projectPath),
-    );
+  const db = storeDb();
+  const version = writeTransaction(db, lockTimeoutMs, () => {
+    const last = versionOf(db, projectPath, workId);
+    sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(projectPath, workId);
+    return last;
   });
+  mapCache.delete(cacheKey(projectPath, workId));
+  // Снятие — тоже запись базы: без события хост этого процесса не узнал бы об удалении (файлов, за которыми он следил, нет).
+  if (version !== undefined) emitMapWritten({ projectPath, workId, version, removed: true });
+  await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
+}
+
+/** Список работ из таблицы `works` в порядке создания. */
+function listWorks(db: DatabaseSync): WorkIndexEntry[] {
+  const rows = sql(
+    db,
+    'SELECT project_path, id, title, status, updated_at FROM works ORDER BY rowid',
+  ).all();
+  return rows.map((row) => ({
+    id: String(row['id']),
+    projectPath: String(row['project_path']),
+    title: String(row['title']),
+    status: String(row['status']) as WorkStatus,
+    updatedAt: String(row['updated_at']),
+  }));
 }
 
 /**
- * Читает глобальный индекс; файла ещё нет — индекс пустой. `file` — индекс не текущего дома, а другого:
- * перенос дома читает прежний, пока тот ещё не переехал.
+ * Список работ — все работы всех проектов, из таблицы `works` (спека хранилища 6.1). С `file` читается не база, а
+ * прежний `works-index.json` — не текущего дома, а другого: перенос дома читает индекс прежнего, пока тот ещё не переехал.
  */
-export async function readWorksIndex(file: string = worksIndexPath()): Promise<WorksIndex> {
+export async function readWorksIndex(file?: string): Promise<WorksIndex> {
+  if (file === undefined) return { schemaVersion: 1, works: listWorks(storeDb()) };
   let raw: string;
   try {
     raw = await readFile(file, 'utf8');
@@ -505,58 +853,72 @@ export async function readWorksIndex(file: string = worksIndexPath()): Promise<W
   return { schemaVersion: 1, works };
 }
 
-/** Читает индекс, даёт его изменить и записывает — всё под своей блокировкой. */
-async function withWorksIndex<T>(
-  timeoutMs: number,
-  mutate: (index: WorksIndex) => T | Promise<T>,
-): Promise<T> {
-  const file = worksIndexPath();
-  await mkdir(path.dirname(file), { recursive: true });
-  return withLock(path.join(path.dirname(file), 'works-index.lock'), timeoutMs, async () => {
-    const index = await readWorksIndex();
-    const result = await mutate(index);
-    await writeAtomic(file, serialize(index));
-    return result;
-  });
-}
-
-const entryOf = (projectPath: string, map: WorkMap): WorkIndexEntry => ({
-  id: map.work.id,
-  projectPath,
-  title: map.work.title,
-  status: map.work.status,
-  updatedAt: map.work.updatedAt,
-});
-
-function upsert(index: WorksIndex, entry: WorkIndexEntry): void {
-  const at = index.works.findIndex(
-    (work) => work.id === entry.id && work.projectPath === entry.projectPath,
-  );
-  if (at === -1) index.works.push(entry);
-  else index.works[at] = entry;
-}
+/** Папка в доме, куда `pruneWorksIndex` кладёт JSON-копию карты перед тем, как снять работу из базы. */
+const PRUNED_DIR = 'pruned';
 
 /**
- * Снимает из глобального индекса записи, у которых карты на диске больше нет:
- * каталог работы снесли руками, проект удалили или переехал. Автоматически при
- * чтении так не делается — закреплённая чужая работа на отключённом диске
- * выглядит так же. Возвращает снятые записи.
+ * Снимает из базы работы, у которых каталога на диске больше нет: каталог работы снесли руками, проект удалили или
+ * он переехал. Автоматически при чтении так не делается — закреплённая чужая работа на отключённом диске выглядит
+ * так же. «Нет» — только `ENOENT`/`ENOTDIR` от `stat`; любая другая ошибка (права, сбой диска) работу оставляет и
+ * называется в `report`, остальных не останавливая. Снятие стирает и письма, и сессии, и планы работы, поэтому перед ним
+ * карта пишется JSON-файлом в `<дом>/pruned/<номер>-<время UTC>.json` (спека хранилища 6.9); не записалась — работа остаётся.
+ * Возвращает снятые записи.
  */
 export async function pruneWorksIndex({
   lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
-}: WriteOptions = {}): Promise<WorkIndexEntry[]> {
-  return withWorksIndex(lockTimeoutMs, async (index) => {
-    const removed: WorkIndexEntry[] = [];
-    const kept: WorkIndexEntry[] = [];
-    for (const entry of index.works) {
-      const alive = await stat(workPaths(entry.projectPath, entry.id).map)
-        .then((info) => info.isFile())
-        .catch(() => false);
-      (alive ? kept : removed).push(entry);
+  report = () => undefined,
+}: WriteOptions & { report?: (line: string) => void } = {}): Promise<WorkIndexEntry[]> {
+  const db = storeDb();
+  const gone: WorkIndexEntry[] = [];
+  for (const entry of listWorks(db)) {
+    const dir = workPaths(entry.projectPath, entry.id).dir;
+    try {
+      if (!(await stat(dir)).isDirectory()) gone.push(entry);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') gone.push(entry);
+      else report(`workspace ${entry.id} (${entry.projectPath}) kept: cannot check ${dir} (${code ?? (error as Error).message})`);
     }
-    index.works = kept;
-    return removed;
+  }
+  if (gone.length === 0) return gone;
+  const removed: WorkIndexEntry[] = [];
+  const events = writeTransaction(db, lockTimeoutMs, () => {
+    const versions: MapWrittenEvent[] = [];
+    for (const entry of gone) {
+      // Копия и снятие в одной транзакции записи: между ними карту никто не изменит.
+      try {
+        savePrunedCopy(entry);
+      } catch (error) {
+        report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+        continue;
+      }
+      const version = versionOf(db, entry.projectPath, entry.id);
+      sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(
+        entry.projectPath,
+        entry.id,
+      );
+      mapCache.delete(cacheKey(entry.projectPath, entry.id));
+      removed.push(entry);
+      if (version !== undefined) {
+        versions.push({ projectPath: entry.projectPath, workId: entry.id, version, removed: true });
+      }
+    }
+    return versions;
   });
+  for (const event of events) emitMapWritten(event);
+  return removed;
+}
+
+/**
+ * Пишет карту работы (то, что отдаёт `readStoredMap`) в `<дом>/pruned/<номер>-<время UTC без двоеточий>.json`; существующий
+ * файл не затирает. Вызывается внутри транзакции записи — читает на её снимке.
+ */
+function savePrunedCopy(entry: WorkIndexEntry): void {
+  const map = readStoredMap(entry.projectPath, entry.id);
+  const dir = path.join(parleyHome(), PRUNED_DIR);
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/:/g, '');
+  writeFileSync(path.join(dir, `${entry.id}-${stamp}.json`), `${JSON.stringify(map, null, 2)}\n`, { flag: 'wx' });
 }
 
 export interface NewWork {
@@ -565,12 +927,9 @@ export interface NewWork {
 }
 
 /**
- * Создаёт работу: резервирует id в глобальном индексе (под его блокировкой,
- * поэтому два процесса не получат один номер), раскладывает каталоги и пишет карту.
- * Индекс — не единственный источник занятых номеров: он глобальный и может быть
- * пустым, когда карты в проекте уже лежат (clone проекта с закоммиченным каталогом состояния,
- * перенос дома, копия проекта). Поэтому занятые на диске id пропускаются,
- * а сама запись идёт эксклюзивным `wx` — чужую карту не затираем никогда.
+ * Создаёт работу: в одной транзакции выбирает id по всей базе (поэтому два процесса не получат один номер), вставляет
+ * строку и раскладывает каталоги. Карты прежнего формата, ещё не переехавшие в базу, тоже занимают номера: id, под
+ * которым на диске лежит `map.json`, пропускается, чужую карту не затираем никогда. Не вышли каталоги — строки нет.
  */
 export async function createWork(
   projectPath: string,
@@ -589,136 +948,224 @@ export async function createWork(
       updatedAt: at,
     },
     sessions: [],
-    messages: [],
     rooms: [],
   };
 
-  // Карта пишется под блокировкой индекса и раньше самого индекса: наблюдатель
-  // дома перечитывает список по записи индекса, и запись без карты он молча
-  // пропустил бы. За каталогом нового проекта ещё никто не следит, так что без
-  // этого порядка первая работа проекта не появилась бы в списке до следующей
-  // записи какой-нибудь карты. Сбой записи карты — и индекс не тронут.
-  await withWorksIndex(lockTimeoutMs, async (index) => {
-    let id = nextWorkId(index);
-    while (await exists(workPaths(projectPath, id).map)) id = bumpWorkId(id);
+  // Каталог состояния — до путей работы: новый `.parley` получает свой `.gitignore` (R5).
+  await ensureStateDir(projectPath);
+  const db = storeDb();
+  const created = writeTransaction(db, lockTimeoutMs, () => {
+    let id = nextWorkId({ schemaVersion: 1, works: listWorks(db) });
+    while (existsSync(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
-
-    // Каталог состояния — до путей работы: новый `.parley` получает свой `.gitignore` (R5).
-    await ensureStateDir(projectPath);
-    const paths = workPaths(projectPath, id);
-    await mkdir(paths.briefs, { recursive: true });
-    await mkdir(paths.artifacts, { recursive: true });
-    const text = serialize(map);
-    await withLock(paths.lock, lockTimeoutMs, async () => {
-      try {
-        await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        throw new Error(`map ${paths.map} already exists — the workspace was not created`);
+    const rows = mapToRows(map);
+    // Версия новой работы — часы, а не 0: удалённый и созданный заново id (`nextWorkId` берёт максимум по базе) иначе
+    // совпал бы с версией в кэше другого процесса, и тот отдал бы карту прежней работы (спека хранилища 6.9).
+    const version = Date.now();
+    try {
+      sql(db, INSERT_WORK).run(
+        projectPath,
+        id,
+        map.work.title,
+        map.work.status,
+        map.work.updatedAt,
+        version,
+        rows.work,
+        rows.extra,
+      );
+    } catch (error) {
+      if (sqliteCode(error) === SQLITE_CONSTRAINT_PRIMARYKEY) {
+        throw new Error(
+          `workspace ${id} already exists in ${projectPath} — the workspace was not created`,
+        );
       }
-      // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
-      await writeFile(paths.bak, text, 'utf8');
-    });
-    index.works.push(entryOf(projectPath, map));
+      throw error;
+    }
+    // Каталоги — до коммита: не вышли, и строка откатывается вместе с ними.
+    const paths = workPaths(projectPath, id);
+    mkdirSync(paths.briefs, { recursive: true });
+    mkdirSync(paths.artifacts, { recursive: true });
+    return { workId: id, version };
   });
+  emitMapWritten({ projectPath, ...created });
   return map;
 }
 
-/**
- * Как часто `updateMap` обновляет `map.json.bak` (спека хранилища 6.9). Раньше копия переписывалась каждой
- * записью карты целиком, а карты бывают в мегабайты: запись удваивалась.
- */
-export const MAP_BACKUP_INTERVAL_MS = 10 * 60 * 1000;
-
-/**
- * Пора ли класть копию: файла нет (человек удалил) — пора сразу; иначе — когда с её последней записи
- * прошло не меньше интервала. Разность берётся по модулю: после сдвига часов назад у копии mtime в будущем,
- * и без модуля она не обновлялась бы, пока часы не дойдут до этого времени.
- */
-async function backupDue(file: string, now: number): Promise<boolean> {
-  try {
-    return Math.abs(now - (await stat(file)).mtimeMs) >= MAP_BACKUP_INTERVAL_MS;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    throw error;
-  }
-}
-
-/**
- * Единственный способ изменить карту: читаем и пишем под блокировкой `map.lock`,
- * поэтому параллельные писатели не затирают друг друга. Новая версия появляется
- * атомарным `rename`. Прежняя уходит в `map.json.bak` не каждой записью, а когда копии нет
- * или с её записи прошло `MAP_BACKUP_INTERVAL_MS` (спека хранилища 6.9); `createWork` кладёт её
- * сразу. Битую карту не трогаем.
- */
 /** Только у updateMap: createWork, deleteWorkFiles и pruneWorksIndex берут прежний WriteOptions. */
 export interface UpdateMapOptions extends WriteOptions {
   /** false — `work.updatedAt` не сдвигается: правка не событие работы (порядок сайдбара, спека 6.2). */
   touch?: boolean;
 }
 
+/**
+ * Единственный способ изменить карту: загрузка, мутация и запись идут одной синхронной транзакцией
+ * `BEGIN IMMEDIATE … COMMIT`, поэтому параллельные писатели (хост, CLI, MCP агентов) не затирают друг друга, а
+ * неудавшаяся запись не оставляет следов (спека хранилища 6.9, этап 2). На диск уходит только изменившееся: строки
+ * списков с другим JSON или порядком (`diffRows`) и строка работы. Мутация, после которой `normalizeMap` не принимает
+ * карту, откатывается целиком — раньше такая карта ложилась в файл и ломала следующее чтение. Битую карту в базе не трогаем.
+ * Работы нет — `WorkNotFoundError`. После коммита в кэш кладётся карта, которую дал бы свежий разбор записанных строк
+ * (см. `applyMapUpdate`), подписчики `onMapWritten` получают событие, а вызывающий — изменённую карту.
+ *
+ * Мутатор получает вторым аргументом письма работы (`LetterTx`, спека хранилища 6.2); мутаторы с одним аргументом
+ * работают как прежде. Мутация, которая ничего не изменила (ни строк карты, ни работы, ни писем), не пишет: версия
+ * работы и `updatedAt` прежние, `onMapWritten` молчит (план 4, «Пустая запись не пишет»).
+ */
 export async function updateMap(
   projectPath: string,
   workId: string,
-  mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+  mutate: (map: WorkMap, letters: LetterTx) => void,
+  options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
-  const paths = workPaths(projectPath, workId);
-  // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
-  // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
-  const missing = (): WorkNotFoundError =>
-    new WorkNotFoundError(`map ${paths.map} does not exist — workspace ${workId} does not exist`);
-  if (!(await exists(paths.map))) throw missing();
+  // Карта уходит вызывающему, и он её меняет: кэшу нужен свой объект — свежая сборка строк, а не эта карта.
+  const update = applyMapUpdate(projectPath, workId, mutate, { ...options, keepResult: true });
+  return update.shared ? structuredClone(update.map) : update.map;
+}
 
-  // Каталог могли удалить после проверки выше, пока ждали лок или уже под ним:
-  // тогда ENOENT про `map.lock` или `map.json` — это тоже «работы нет». Решает
-  // не код ошибки сам по себе, а то, что каталога работы больше нет.
-  const whenGone = async (error: unknown): Promise<never> => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !(await exists(paths.dir))) {
-      throw missing();
-    }
-    throw error;
-  };
+/** Результат `applyMapUpdate`: карта и признак, что объект принадлежит кэшу (запись была пустой или кэш взял саму карту) и наружу идёт копией. */
+export interface MapUpdate {
+  map: WorkMap;
+  shared: boolean;
+}
 
-  return withLock(paths.lock, lockTimeoutMs, async () => {
-    // Карта из кэша процесса — без чтения и разбора файла и без копии (спека хранилища 6.9): запись из кэша снимается, и
-    // ниже её заменит свежий разбор записанного. Сырой текст нужен только для `.bak`: с диска он берётся по месту, и
-    // только если копию пора обновлять.
-    let raw: string | undefined;
-    let current = takeCachedMap(paths.map, await mapIdentity(paths.map));
-    if (current === undefined) {
-      raw = await readFile(paths.map, 'utf8');
-      current = parseMap(raw, paths.map);
+/** Условия `applyMapUpdate` сверх `UpdateMapOptions`: публичные `updateMap` и `writeLetters` их не знают или задают сами. */
+interface ApplyMapOptions extends UpdateMapOptions {
+  /**
+   * `true` — карту результата оставит у себя вызывающий и будет её менять (`updateMap`): кэш тогда держит свежую сборку
+   * записанных строк, и объект вызывающего ему не принадлежит. `false` (по умолчанию) — результат не нужен или идёт
+   * копией (`writeLetters`): кэш берёт саму записанную карту, уже прошедшую `normalizeMap`, и строки заново не
+   * разбираются (спека хранилища 6.9, план 4, задача 5).
+   */
+  keepResult?: boolean;
+}
+
+/**
+ * Карту без потерь переживает JSON; ошибка обхода (слишком глубокое дерево) — как «нет». Только такая карта может лечь в
+ * кэш как есть, без повторного разбора записанных строк (спека хранилища 6.9).
+ */
+const survivesJson = (map: WorkMap): boolean => {
+  try {
+    return isPlainJsonTree(map);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Синхронное тело `updateMap`: транзакция не отпускает цикл событий, поэтому им пользуются и вызывающие, которым нужен
+ * результат сразу (`writeLetters`, спека хранилища 6.2). Пустая запись возвращает объект кэша (`shared`): копию берёт
+ * тот, кому карта нужна наружу, а `writeLetters` карту не отдаёт и копии не платит.
+ *
+ * Что лежит в кэше после записи — инвариант «писавший видит то же, что другие процессы»: карта, структурно равная
+ * свежему разбору записанных строк (`rowsToMap` и `normalizeMap`). Свежий разбор стоит обхода всей карты, поэтому
+ * без `keepResult` кэш берёт саму карту мутатора, но только пока она чистое дерево JSON (`isPlainJsonTree`): ключ
+ * без значения, `NaN`, дата или массив, общий у двух писем, после записи и перечитывания выглядели бы иначе, и тогда
+ * разбор строк остаётся. С `keepResult` карта уходит вызывающему, и кэш всегда держит свой разобранный объект. Пустая
+ * запись возвращает карту в кэш на тех же условиях: строки те же, а объект мутатор мог изменить, не задев JSON.
+ */
+export function applyMapUpdate(
+  projectPath: string,
+  workId: string,
+  mutate: (map: WorkMap, letters: LetterTx) => void,
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false }: ApplyMapOptions = {},
+): MapUpdate {
+  const db = storeDb();
+  const key = cacheKey(projectPath, workId);
+  const source = mapSource(projectPath, workId);
+
+  const written = writeTransaction(db, lockTimeoutMs, () => {
+    const stored = versionOf(db, projectPath, workId);
+    if (stored === undefined) {
+      mapCache.delete(key);
+      throw notFound(projectPath, workId);
     }
-    // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
-    // осела бы запись с чужим id, которую в списке работ нечем открыть.
+    // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, после записи ниже кэш получит новую.
+    let current: WorkMap;
+    let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
+    const hit = cachedEntry(key, stored);
+    if (hit !== undefined) {
+      mapCache.delete(key);
+      current = hit.map;
+      previous = hit;
+    } else {
+      const loaded = loadStored(db, projectPath, workId);
+      if (loaded === undefined) {
+        mapCache.delete(key);
+        throw notFound(projectPath, workId);
+      }
+      current = normalizeMap(rowsToMap(loaded.work, loaded.extra, loaded.rows), source);
+      previous = { work: loaded.work, extra: loaded.extra, index: rowIndex(loaded.rows) };
+    }
+    // Карта, разошедшаяся со своим id, — повод отказаться: иначе в списке осела бы запись, которую нечем открыть.
     if (current.work.id !== workId) {
-      throw new Error(`map ${paths.map} belongs to workspace ${current.work.id}, not ${workId}`);
+      throw new Error(`map ${source} belongs to workspace ${current.work.id}, not ${workId}`);
     }
-    mutate(current);
-    if (touch) current.work.updatedAt = new Date().toISOString();
+    const { letters, wrote } = createTableLetterTx(db, projectPath, workId, current);
+    mutate(current, letters);
+    // Мутация могла дать карту, которую нормализация не примет: бросает — запись откатывается.
+    normalizeMap(current, source);
 
-    // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
-    // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
-    // Порядок записей в индексе при этом остаётся порядком записей карты.
-    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
-    // Копия — не каждой записью, а когда прежней нет или она устарела (спека хранилища 6.9).
-    if (await backupDue(paths.bak, Date.now())) {
-      await writeAtomic(paths.bak, raw ?? (await readFile(paths.map, 'utf8')));
+    // Сдвиг `updatedAt` — после проверки на пустоту: пустая запись его не трогает (спека хранилища 6.2).
+    const next = mapToRows(current, previous.index);
+    const diff = diffRows(previous, next);
+    if (
+      diff.upserts.length === 0 &&
+      diff.deletes.length === 0 &&
+      !diff.workChanged &&
+      !wrote()
+    ) {
+      // Строки в базе те же, но объект кэша мутатор мог изменить, не задев JSON (ключ без значения, общий массив): на
+      // место он возвращается, только если свежий разбор строк дал бы такую же карту. Иначе записи кэша нет — следующее
+      // чтение загрузит базу. Наружу карта уходит копией.
+      const keep = hit !== undefined && survivesJson(current);
+      if (keep) rememberMap(key, hit);
+      return { empty: true as const, current, shared: keep };
     }
-    const text = serialize(current);
-    await writeAtomic(paths.map, text);
-    // В кэш — после записи и под тем же замком, и не `current`, а то, что вернёт свежий разбор записанного текста
-    // (спека хранилища 6.9): иначе писавший процесс читал бы карту иначе, чем любой другой. Личность файла берём до
-    // разбора: перепишут его за время разбора — запись просто не совпадёт со следующей сверкой. Не вышло (каталог
-    // работы снесли; разбор отверг только что записанное) — запись снимаем и молчим: карта уже записана, ошибка
-    // заставила бы повторить мутацию, а следующее чтение или обновление прочтёт файл с диска и откажет, как прежде.
-    const written = await mapIdentity(paths.map);
-    const reread = written === null ? undefined : reparse(text, paths.map);
-    if (written !== null && reread !== undefined) rememberMap(paths.map, written, reread);
-    else mapCache.delete(paths.map);
-    return current;
-  }).catch(whenGone);
+    if (touch) {
+      current.work.updatedAt = new Date().toISOString();
+      next.work = JSON.stringify(current.work);
+    }
+    for (const row of diff.upserts) {
+      sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
+    }
+    for (const gone of diff.deletes)
+      sql(db, DELETE_ENTRY).run(projectPath, workId, gone.kind, gone.key);
+    const updated = sql(db, UPDATE_WORK).get(
+      current.work.title,
+      current.work.status,
+      current.work.updatedAt,
+      next.work,
+      next.extra,
+      projectPath,
+      workId,
+    );
+    return { empty: false as const, current, next, version: Number(updated?.['version']) };
+  });
+  if (written.empty) return { map: written.current, shared: written.shared };
+
+  // В кэш — после коммита (спека хранилища 6.9): карта, структурно равная свежему разбору записанных строк, иначе писавший
+  // процесс читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
+  // повторить мутацию, а следующее чтение загрузит базу и откажет так же, как отказал бы любой другой процесс.
+  let shared = false;
+  try {
+    // Строки записанной карты — её же JSON (`mapToRows` после `normalizeMap`), поэтому чистое дерево JSON и есть то, что
+    // даст разбор этих строк; повторять его нужно, только когда это не так или карту заберёт вызывающий.
+    const own = !keepResult && survivesJson(written.current);
+    const map = own
+      ? written.current
+      : normalizeMap(rowsToMap(written.next.work, written.next.extra, written.next.rows), source);
+    rememberMap(key, {
+      version: written.version,
+      map,
+      work: written.next.work,
+      extra: written.next.extra,
+      index: rowIndex(written.next.rows),
+    });
+    shared = own;
+  } catch {
+    mapCache.delete(key);
+  }
+  emitMapWritten({ projectPath, workId, version: written.version });
+  return { map: written.current, shared };
 }
 
 /** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */
@@ -832,10 +1279,9 @@ export async function withBacklogChoice(paths: SharedProjectPaths): Promise<Shar
 export interface SharedFileSnapshot { text: string; version: string }
 const SHARED_FILE_LIMIT = 1024 * 1024;
 /**
- * Потолок чтения для карты работы. Карта — собственный файл Parley, а не общий файл проекта: переписка
- * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Так карту читает бэклог
- * хоста (`knownMap`): `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ —
- * картам он не нужен (спека хранилища 6.9).
+ * Потолок чтения общего файла проекта, если звавший просит его поднять (`readSharedFile(file, limit)`). Карты работ давно
+ * не файлы — они в базе (спека хранилища 6.9), и бэклог хоста читает их через `readMap`; константа осталась экспортом
+ * для старых вызывающих и своих тестов.
  */
 export const MAP_SNAPSHOT_LIMIT = 256 * 1024 * 1024;
 export const MISSING_SHARED_VERSION = 'missing';

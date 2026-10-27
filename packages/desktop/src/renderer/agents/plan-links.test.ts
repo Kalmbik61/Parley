@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { WorkEntry, RoomPlan, PlanItem } from '@parley/core';
+import type { WindowWorkEntry, RoomPlan, PlanItem } from '@parley/core';
 import { roomPlanLinks } from './plan-links.js';
 it('takes only this session assignments in active or completing room plans', () => {
   const item = (id: number, owner: string, status: PlanItem['status']): PlanItem => ({
@@ -38,7 +38,7 @@ it('takes only this session assignments in active or completing room plans', () 
   });
   const entry = {
     map: { plans: [plan('active'), { ...plan('completing'), id: 'pl-02' }, plan('completed')] },
-  } as WorkEntry;
+  } as WindowWorkEntry;
   expect(roomPlanLinks(entry, 's-01').map((link) => [link.planId, link.itemId])).toEqual([
     ['pl-01', 1],
     ['pl-01', 4],

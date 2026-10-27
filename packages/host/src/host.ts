@@ -13,6 +13,7 @@ import {
   ASSISTANT_MIN_VERSIONS,
   bothEnv,
   clearSecret,
+  closeWorkDb,
   findRunnerBinary,
   grantTrust,
   isMember,
@@ -20,6 +21,7 @@ import {
   isStaleHostLock,
   loadConfig,
   loadProviders,
+  migrateMapsToDb,
   migrateProjects,
   parleyHome,
   parseHostLock,
@@ -29,9 +31,12 @@ import {
   readHostLock,
   readMap,
   readSecret,
+  rewriteArtifactRefs,
   socketIsAlive,
   versionAtLeast,
+  workPaths,
   writeSecret,
+  type ProjectMigration,
   type ProviderEntry,
 } from '@parley/core';
 import { createTelegramService } from './telegram/service.js';
@@ -49,7 +54,7 @@ import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
-import type { Result, SessionRef } from '@parley/protocol';
+import type { HostNotice, Result, SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
@@ -211,10 +216,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await writeFile(paths.token, token, { mode: 0o600 });
   await chmod(paths.token, 0o600);
 
-  // 4а. Каталоги состояния проектов переезжают со старого имени на новое (R6): под замком хоста, до сокета
-  //     и до наблюдателей — ни клиент, ни наблюдатель ещё не держат старый путь, и `works.create` не успеет
-  //     записать в каталог, который сейчас переименуется.
-  await moveProjectStateDirs(log);
+  // 4а. Данные прежней сборки переезжают (R6, спека хранилища 6.6): каталоги состояния проектов `.harnas` → `.parley`,
+  //     затем карты `map.json` → база, затем пути артефактов в картах. Под замком хоста, до сокета, службы работ и
+  //     автозапуска сессий — ни клиент, ни наблюдатель ещё не держат старый путь, `works.create` не успеет записать в
+  //     каталог, который сейчас переименуется, а служба работ первым же чтением увидит уже переехавшие карты.
+  const migration = await migrateStorage(log);
+  // Работа, что осталась в файле, из списка окна пропадает: окну нужно её назвать. Текст — путь `map.json` (из него окно
+  // берёт номер работы и имя проекта) и со следующей строки причина; подробности остаются в журнале хоста.
+  const startupNotices = migration.unmoved.map(
+    ({ projectPath, workId, reason }): HostNotice => ({
+      kind: 'map-migration-failed',
+      ref: null,
+      text: `${workPaths(projectPath, workId).map}\n${reason}`,
+      at: new Date().toISOString(),
+    }),
+  );
 
   const hostVersion = options.version ?? readHostVersion();
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
@@ -723,6 +739,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     registerClient: (client) => {
       handle.addClient(client);
       for (const data of activityService.current()) client.send({ event: 'activity.changed', data });
+      // Карты, не переехавшие в базу на старте: клиентов в тот момент ещё не было, поэтому уведомление повторяется каждому
+      // подключившемуся (оно уходит ему, а не всем, чтобы переподключение одного окна не заливало остальные).
+      for (const data of startupNotices) client.send({ event: 'host.notice', data });
     },
     // Ушедший клиент снимается и с подписок ленты: иначе его `Client` жил бы в них до следующей дельты.
     unregisterClient: (client) => {
@@ -761,10 +780,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
 
-  const worksFailure = await worksService.start().then(
+  const startFailure = await worksService.start().then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   );
+  // Прежний индекс, который не разобрался, — тот же отказ первого чтения, что и раньше: переезд карт его не пропускает, а
+  // пустая таблица иначе сошла бы за «работ нет» и окно не показало бы причину (`works-unreadable`).
+  const worksFailure = migration.unreadable ?? startFailure;
   if (worksFailure === null) {
     // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
     // посреди хода, прерваны падением прошлого хоста (спека 10).
@@ -827,6 +849,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         log.error('хук остановки упал', { error: String(error) });
       });
     }
+    // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
+    // восстанавливается следующим стартом (спека хранилища 6.1).
+    try {
+      closeWorkDb();
+    } catch (error) {
+      log.error('база работ не закрылась', { error: String(error) });
+    }
 
     // `server.close()` дожидается закрытия всех соединений — без явного
     // разрыва клиенты, которые сами не отключились, повесили бы остановку.
@@ -852,9 +881,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
  * иначе проект остаётся при нём и перенос пробуется на следующем старте. Сбой переноса хост не останавливает:
  * читатели знают оба имени.
  */
-async function moveProjectStateDirs(log: Log): Promise<void> {
+async function moveProjectStateDirs(log: Log): Promise<ProjectMigration[]> {
   try {
-    for (const { projectPath, ...result } of await migrateProjects()) {
+    const migrations = await migrateProjects();
+    for (const { projectPath, ...result } of migrations) {
       if (result.status === 'moved') {
         log.info('каталог состояния проекта перенесён', { projectPath, from: result.from, to: result.to });
       } else if (result.reason !== 'no-legacy') {
@@ -864,9 +894,48 @@ async function moveProjectStateDirs(log: Log): Promise<void> {
         log[expected ? 'info' : 'warn']('каталог состояния проекта не перенесён', { projectPath, ...result });
       }
     }
+    return migrations;
   } catch (error) {
     log.error('перенос каталогов состояния проектов не выполнен', { error: String(error) });
+    return [];
   }
+}
+
+/**
+ * Первый старт на данных прежней сборки, три шага строго по порядку (спека хранилища 6.6): (1) каталоги состояния на
+ * уровне файлов, (2) карты `map.json` → база (`migrateMapsToDb`), (3) пути артефактов в картах переехавших проектов:
+ * они правятся через `updateMap`, и строки работ к этому моменту должны быть в базе. Сбой одного шага остальные не
+ * останавливает и хост не роняет: что не переехало, остаётся в прежних файлах, и следующий старт пробует снова.
+ * Возвращает карты, которые не переехали (окно узнает о них уведомлением), и причину, если сам переезд не смог начаться:
+ * тогда первое чтение работ считается отказавшим (`works-unreadable`).
+ */
+async function migrateStorage(log: Log): Promise<{
+  /** Работы, что остались в файле: не вышло (`failed`) или заняты процессом прежней сборки (`skipped`) — окну нужны обе. */
+  unmoved: Array<{ projectPath: string; workId: string; reason: string }>;
+  unreadable: string | null;
+}> {
+  const moved = await moveProjectStateDirs(log);
+  let unmoved: Array<{ projectPath: string; workId: string; reason: string }> = [];
+  let unreadable: string | null = null;
+  try {
+    const result = await migrateMapsToDb({ log: (line) => log.info(line) });
+    unmoved = [
+      ...result.failed,
+      ...result.skipped.map(({ projectPath, workId }) => ({
+        projectPath,
+        workId,
+        reason: 'busy: map.lock is held by a running process',
+      })),
+    ];
+  } catch (error) {
+    // Прежний индекс не разобрался (или база не читается): карт не назвать, и список работ пуст не потому, что работ нет.
+    unreadable = error instanceof Error ? error.message : String(error);
+    log.error('переезд карт в базу не выполнен', { error: unreadable });
+  }
+  await rewriteArtifactRefs(moved).catch((error: unknown) => {
+    log.error('пути артефактов в переехавших каталогах не поправлены', { error: String(error) });
+  });
+  return { unmoved, unreadable };
 }
 
 /**

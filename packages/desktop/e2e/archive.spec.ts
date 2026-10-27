@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
@@ -148,8 +149,7 @@ test.describe('архив комнат и проектов, 800×500 с длин
     return ref.sessionId;
   }
 
-  const mapOf = async (workId: string): Promise<MapShape> =>
-    JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as MapShape;
+  const mapOf = async (workId: string): Promise<MapShape> => readStoredMapE2E(home, project, workId);
 
   const hiddenProjects = async (): Promise<string[]> => {
     try {

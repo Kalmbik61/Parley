@@ -25,7 +25,7 @@
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WindowWorkEntry, WindowWorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
 import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
@@ -198,7 +198,7 @@ export interface RoomModel {
 }
 
 export interface RoomModelInput {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   providers: ReadonlyArray<{ id: string; label: string }>;
   /** `useActivityStore.byRef`: живая активность по `refKey`. */
@@ -206,7 +206,7 @@ export interface RoomModelInput {
 }
 
 /** Подпись участника переписки: человек, система, сессия с номером и ярлыком, удалённая, чужой id как есть. */
-function labelOf(map: WorkMap, id: string): string {
+function labelOf(map: WindowWorkMap, id: string): string {
   if (id === HUMAN) return S.participants.human;
   if (id === SYSTEM || id === PARLEY) return S.participants.system;
   const session = map.sessions.find((candidate) => candidate.id === id);
@@ -214,12 +214,12 @@ function labelOf(map: WorkMap, id: string): string {
   return (map.work.deletedSessions ?? []).includes(id) ? `${sessionTag(id)} ${S.participants.deletedSuffix}` : id;
 }
 
-function isAlive(map: WorkMap, id: string): boolean {
+function isAlive(map: WindowWorkMap, id: string): boolean {
   return map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');
 }
 
 /** Провайдер сессии по id; `null` — сессии нет в карте (удалена или чужой id). */
-function providerOf(map: WorkMap, id: string): string | null {
+function providerOf(map: WindowWorkMap, id: string): string | null {
   return map.sessions.find((session) => session.id === id)?.provider ?? null;
 }
 

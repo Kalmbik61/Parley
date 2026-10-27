@@ -1,7 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { closeWorkDb, createWork, deleteWorkFiles, mapLetterTx, readMap, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { Message, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
-import { activityTransition, emptyMemory, sessionWhere, worksTriggers } from './notify.js';
+// Счётчик кэша карт ядра — только для тестов, из пакета он не экспортируется; тот же экземпляр модуля, что у `@parley/core`.
+import { mapCacheStats } from '../../../core/dist/work/store.js';
+import { activityTransition, emptyMemory, sessionWhere, storeTriggerLetters, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
 
 const ref: SessionRef = { projectPath: '/p/my_harnas', workId: 'w-01', sessionId: 's-01' };
 const session = (lifecycle: WorkSession['lifecycle'] = 'active'): WorkSession => ({ id: 's-01', lifecycle, result: null }) as unknown as WorkSession;
@@ -60,6 +66,12 @@ const room = (over: Partial<Room> = {}): Room => ({ id: 'r-01', title: 'Auth', m
 const entry = (messages: Message[] = [], rooms: Room[] = []): WorkEntry =>
   ({ projectPath: '/p/my_harnas', map: { work: { id: 'w-01', title: 'Parley' }, sessions: [], messages, rooms } }) as unknown as WorkEntry;
 const snap = (e: WorkEntry): WorksSnapshot => ({ entries: [e], branches: {} });
+/** Письма снимка в памяти: в настоящем хосте их читают из базы работы (спека хранилища 6.2). */
+const memoryLetters: TriggerLetters = {
+  humanUnread: (e) => mapLetterTx(e.map).letters.unreadFor('human'),
+  lastHumanLetter: (e, roomId) => mapLetterTx(e.map).letters.query({ roomId, from: 'human', limit: 1, newestFirst: true })[0],
+};
+const worksTriggers = (memory: NotifyMemory, snapshot: WorksSnapshot) => triggersWith(memory, snapshot, undefined, memoryLetters);
 const slot = (id: string, rev: number): NonNullable<Room['proposal']> => ({ id, from: 's-01', text: 'go', rev, at: '2026-10-20T10:00:00Z' });
 
 describe('worksTriggers: письма', () => {
@@ -122,5 +134,94 @@ describe('worksTriggers: решения', () => {
 describe('sessionWhere', () => {
   it('название работы и папка проекта', () => {
     expect(sessionWhere(entry())).toBe('Parley · my_harnas');
+  });
+});
+
+// Спека хранилища 6.2: без подставленного чтения письма берутся из базы работы, а не из снимка.
+describe('worksTriggers: письма из базы работы (по умолчанию)', () => {
+  let root = '';
+  let project = '';
+  let previous: string | undefined;
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'parley-notify-'));
+    project = path.join(root, 'project');
+    await mkdir(project);
+    await mkdir(path.join(root, 'home'));
+    previous = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = path.join(root, 'home');
+  });
+  afterEach(async () => {
+    if (previous === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Снимок без писем: настоящая работа в базе, а в снимке хоста о письмах ничего нет. */
+  const bare = (workId: string, rooms: Room[] = []): WorksSnapshot => ({
+    entries: [{ projectPath: project, map: { work: { id: workId, title: 'Parley' }, sessions: [], messages: [], rooms } } as unknown as WorkEntry],
+    branches: {},
+  });
+  const say = (workId: string, over: { roomId?: string | null; from?: string; to?: string[]; text?: string }): void => {
+    writeLetters(project, workId, (letters) => {
+      letters.add({ roomId: over.roomId ?? null, from: over.from ?? 's-01', to: over.to ?? ['human'], text: over.text ?? 'hello', kind: 'note' });
+    });
+  };
+
+  it('письмо человеку из карты снимка — повод, повтор — нет; карта из базы при этом не загружается', async () => {
+    const workId = (await createWork(project, { title: 'Parley' })).work.id;
+    const memory = emptyMemory();
+    const snapshotOf = async (): Promise<WorksSnapshot> => ({
+      entries: [{ projectPath: project, map: await readMap(project, workId) } as unknown as WorkEntry],
+      branches: {},
+    });
+    triggersWith(memory, await snapshotOf());
+    say(workId, { text: 'из базы' });
+    const start = mapCacheStats();
+    const next = await snapshotOf();
+    expect(mapCacheStats()).not.toEqual(start); // счётчик — тот же экземпляр модуля, что у `@parley/core`
+
+    // Спека хранилища 6.2: повод считается по карте снимка — на каждое изменение работ база не перебирает кэш карт.
+    const before = mapCacheStats();
+    expect(triggersWith(memory, next).letters.map((item) => item.message.text)).toEqual(['из базы']);
+    expect(triggersWith(memory, next).letters).toEqual([]);
+    expect(mapCacheStats()).toEqual(before);
+  });
+
+  it('слот решения исчез: итог — по последнему письму человека в базе', async () => {
+    const workId = (await createWork(project, { title: 'Parley' })).work.id;
+    const memory = emptyMemory();
+    triggersWith(memory, bare(workId, [room({ proposal: slot('p-01', 0) })]));
+    say(workId, { roomId: 'r-01', from: 'human', to: ['s-01'], text: 'Decision accepted.' });
+    const triggers = triggersWith(memory, bare(workId, [room()]));
+    expect(triggers.closed.map((c) => [c.roomId, c.now])).toEqual([['r-01', 'accepted']]);
+  });
+
+  it('работу удалили, пока она ещё в снимке, — писем нет, сбоя нет', async () => {
+    const workId = (await createWork(project, { title: 'Parley' })).work.id;
+    const memory = emptyMemory();
+    triggersWith(memory, bare(workId, [room({ proposal: slot('p-01', 0) })]));
+    await deleteWorkFiles(project, workId);
+    const triggers = triggersWith(memory, bare(workId, [room()]));
+    expect(triggers.letters).toEqual([]);
+    expect(triggers.closed.map((c) => c.now)).toEqual(['gone']);
+  });
+
+  it('lastHumanLetter: работы нет в базе — письма нет; сбой не из-за пропавшей работы идёт наружу', async () => {
+    const entry = bare('w-9999').entries[0] as WorkEntry;
+    expect(storeTriggerLetters.lastHumanLetter(entry, 'r-01')).toBeUndefined();
+
+    // Дом — путь внутри обычного файла: базу не открыть, и это не `WorkNotFoundError`, а значит и не «работы нет».
+    closeWorkDb();
+    const blocker = path.join(root, 'blocker');
+    await writeFile(blocker, 'файл на месте каталога');
+    process.env['PARLEY_HOME'] = path.join(blocker, 'home');
+    let thrown: unknown;
+    try {
+      storeTriggerLetters.lastHumanLetter(entry, 'r-01');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(WorkNotFoundError);
   });
 });

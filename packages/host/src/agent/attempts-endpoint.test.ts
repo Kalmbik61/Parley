@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { addRoom, addSession, ENGINE, HUMAN, readMap, resolveProposal, workPaths } from '@parley/core';
-import type { AttemptChannelRequest, PlanAttempt, WorkMap } from '@parley/core';
+import { addRoom, addSession, createWork, ENGINE, HUMAN, readMap, readStoredMap, replaceStoredMap, resolveProposal, updateMap } from '@parley/core';
+import type { AttemptChannelRequest, PlanAttempt, WindowWorkMap, WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsEngine } from './attempts-endpoint.js';
@@ -44,14 +44,14 @@ async function setup(withEngine = true) {
   await git('add', 'test.js');
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial fixture');
   const baseSha = await git('rev-parse', 'HEAD');
-  const map: WorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Fixture', goal: '', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, sessions: [], rooms: [], messages: [] };
+  const workId = (await createWork(projectPath, { title: 'Fixture' })).work.id;
+  const map: WindowWorkMap = { schemaVersion: 2, work: { id: workId, title: 'Fixture', goal: '', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, sessions: [], rooms: [], messages: [] };
   for (const label of ['Lead', 'Worker', 'Verifier', 'Other', 'Integration']) addSession(map, { provider: 'codex', label, task: label });
   addRoom(map, { creator: HUMAN, title: 'Plan', members: ['s-01', 's-02', 's-03', 's-05'], lead: 's-01', mode: 'autonomous' });
-  const file = workPaths(projectPath, 'w-01').map;
-  await mkdir(path.dirname(file), { recursive: true });
-  const save = (value: WorkMap) => writeFile(file, JSON.stringify(value));
+  // Карта работы лежит в базе (спека хранилища 6.2): строки пишет `replaceStoredMap`, а письма остаются как были.
+  const save = (value: WorkMap) => replaceStoredMap(projectPath, workId, value);
   await save(map);
-  const ref = { projectPath, workId: 'w-01', sessionId: 's-01' };
+  const ref = { projectPath, workId, sessionId: 's-01' };
   const calls: unknown[][] = [];
   const engine: AttemptsEngine = {
     async submit(...args) { calls.push(['submit', ...args]); return { ok: true, result: { receipt: 'from-engine' } }; },
@@ -73,7 +73,7 @@ async function setup(withEngine = true) {
     req.on('error', reject);
     endpoint.handle(req as IncomingMessage, res as unknown as ServerResponse);
   });
-  const read = () => readMap(projectPath, 'w-01');
+  const read = () => readMap(projectPath, workId);
   async function active() {
     await post(proposal());
     const value = await read();
@@ -87,7 +87,7 @@ async function setup(withEngine = true) {
     const current = registry.authenticate({ headers: { authorization: `Bearer ${tokens[session]}` } } as IncomingMessage);
     return current?.projectPath === ref.projectPath && current.workId === ref.workId && current.sessionId === session;
   };
-  return { projectPath, git, baseSha, map, save, read, post, calls, ref, registry, endpoint, authenticated, active, raw: () => readFile(file, 'utf8') };
+  return { projectPath, workId, git, baseSha, map, save, read, post, calls, ref, registry, endpoint, authenticated, active, raw: () => JSON.stringify(readStoredMap(projectPath, workId)) };
 }
 function handoff(criteriaVersion = 1) {
   const body = { version: 1 as const, criteriaVersion, dependsOn: [], coverage: 'covered' as const, scope: 'src', facts: ['Works'], hypotheses: [], notFound: [], gaps: [], text: 'Done', artifacts: [], submittedAt: new Date().toISOString() };
@@ -98,7 +98,7 @@ function attempt(baseSha: string): PlanAttempt {
   return { id: 'at-0001', item: 1, n: 1, planRev: 1, criteriaVersion: 1, worker: 's-02', verifier: 's-03', branch: 'attempt', baseSha, sha: null, tree: null, submissionKey: null, status: 'running', manifest: null, receipt: null, checks: [], failureSignature: null, startedAt: new Date().toISOString(), endedAt: null, log: [] };
 }
 async function checking(f: Awaited<ReturnType<typeof setup>>) {
-  await run('git', ['clone', '--bare', '--no-hardlinks', f.projectPath, attemptsEngineGitPath(f.projectPath, 'w-01')]);
+  await run('git', ['clone', '--bare', '--no-hardlinks', f.projectPath, attemptsEngineGitPath(f.projectPath, f.workId)]);
   const { value, plan } = await f.active();
   const entry = attempt(f.baseSha), submission = handoff();
   entry.status = 'checking'; entry.sha = f.baseSha; entry.tree = await f.git('rev-parse', 'HEAD^{tree}');
@@ -154,15 +154,15 @@ describe('agent attempts endpoint', () => {
     expect((await f.post(proposal())).body).toEqual({ ok: true, result: { proposalId: 'p-01', rev: 0 } });
     const value = await f.read(), plan = value.rooms[0]!.proposal!.plan!;
     expect(plan.items[0]).toMatchObject({ owner: ENGINE, verifier: ENGINE });
-    expect(plan.autonomous).toMatchObject({ criteriaVersion: { 1: 1 }, attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 }, budget: { spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] }, integration: { branch: 'parley/w-01/integration/pl-01', baseSha: f.baseSha, verifiedHead: f.baseSha, candidateHead: null, queue: [], suspended: null } });
+    expect(plan.autonomous).toMatchObject({ criteriaVersion: { 1: 1 }, attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 }, budget: { spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] }, integration: { branch: `parley/${f.workId}/integration/pl-01`, baseSha: f.baseSha, verifiedHead: f.baseSha, candidateHead: null, queue: [], suspended: null } });
     expect(plan.autonomous!.checks[0]!.inputs).toEqual([{ path: 'test.js', blob: await f.git('rev-parse', `${f.baseSha}:test.js`) }]);
     expect(Number.isFinite(Date.parse(plan.autonomous!.checks[0]!.frozenAt))).toBe(true);
     expect(await f.git('branch', '--format=%(refname:short)')).toBe('main');
     expect(value.sessions).toHaveLength(5); expect(value.plans).toEqual([]); expect(f.calls).toEqual([]);
     await writeFile(path.join(f.projectPath, 'test.js'), 'changed\n'); await f.git('add', 'test.js');
     await f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Move base');
-    resolveProposal(value, 'r-01', 'p-01', 'accept', { rev: 0, planId: plan.id, planRev: plan.rev });
-    expect(value.plans![0]!.autonomous).toEqual(plan.autonomous);
+    await updateMap(f.projectPath, f.workId, (map, letters) => { resolveProposal(map, letters, 'r-01', 'p-01', 'accept', { rev: 0, planId: plan.id, planRev: plan.rev }); });
+    expect((await f.read()).plans![0]!.autonomous).toEqual(plan.autonomous);
   });
   it('retries an open proposal exactly, replaces changed text, and starts a new round after return', async () => {
     const f = await setup(), body = proposal();
@@ -170,7 +170,7 @@ describe('agent attempts endpoint', () => {
     expect(await f.post(body)).toEqual(first); expect(await f.raw()).toBe(before);
     expect((await f.post(proposal('Revised wording'))).body.result).toEqual({ proposalId: 'p-01', rev: 1 });
     let value = await f.read(); expect(value.rooms[0]!.proposal!.text).toBe('Revised wording');
-    resolveProposal(value, 'r-01', 'p-01', 'return', { rev: 1, planId: value.rooms[0]!.proposal!.plan!.id, planRev: value.rooms[0]!.proposal!.plan!.rev }); await f.save(value);
+    await updateMap(f.projectPath, f.workId, (map, letters) => { const open = map.rooms[0]!.proposal!.plan!; resolveProposal(map, letters, 'r-01', 'p-01', 'return', { rev: 1, planId: open.id, planRev: open.rev }); });
     expect((await f.post(body)).body.result).toEqual({ proposalId: 'p-02', rev: 0 });
     value = await f.read(); expect(value.rooms[0]!.proposal!.plan!.id).toBe('pl-02');
   });
@@ -306,7 +306,7 @@ describe('agent attempts endpoint', () => {
     plan.autonomous!.criteriaVersion[1] = 2; await f.save(value);
     expect((await f.post(verify, 's-03')).body.error.code).toBe('stale-criteria');
     plan.autonomous!.criteriaVersion[1] = 1;
-    const repo = attemptsEngineGitPath(f.projectPath, 'w-01');
+    const repo = attemptsEngineGitPath(f.projectPath, f.workId);
     const root = (await run('git', ['-C', repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit-tree', entry.tree!, '-m', 'Unrelated root'])).stdout.trim();
     entry.sha = root; entry.manifest!.sha = root; entry.receipt!.sha = root; await f.save(value);
     const before = await f.raw();
@@ -315,7 +315,7 @@ describe('agent attempts endpoint', () => {
   });
   it('requires the engine repository even when the SHA exists in the project', async () => {
     const f = await setup(), { verify } = await checking(f);
-    await rm(attemptsEngineGitPath(f.projectPath, 'w-01'), { recursive: true });
+    await rm(attemptsEngineGitPath(f.projectPath, f.workId), { recursive: true });
     const before = await f.raw();
     expect((await f.post(verify, 's-03')).body.error.code).toBe('engine-unavailable');
     expect(f.calls).toEqual([]); expect(await f.raw()).toBe(before);

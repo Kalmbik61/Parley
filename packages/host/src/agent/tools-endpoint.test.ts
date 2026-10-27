@@ -19,7 +19,6 @@ import {
   AGENT_TOOLS_PATH,
   AGENT_TOOLS_REQUEST_BYTES,
   DEFAULT_CONFIG,
-  addMessage,
   addRoom,
   addSession,
   buildRoleCatalog,
@@ -27,7 +26,7 @@ import {
   createWork,
   ENGINE,
   HUMAN,
-  readMap,
+  readStoredMap,
   resolveProposal,
   updateMap,
   workPaths,
@@ -204,14 +203,14 @@ describe('маршрут /agent/tools: инструменты агента в п
     const reply = await post(sendCall('hi'));
     expect(reply.ok).toBe(true);
     expect((reply.result as { isError?: boolean }).isError).not.toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'hi' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'hi' });
   });
 
   it('a replayed callId does not run the tool twice', async () => {
     const { post } = await boot();
     const body = sendCall('once');
     const replies = [...(await Promise.all([post(body), post(body)])), await post(body)];
-    expect((await readMap(project, workId)).messages.filter((message) => message.text === 'once')).toHaveLength(1);
+    expect((readStoredMap(project, workId)).messages.filter((message) => message.text === 'once')).toHaveLength(1);
     // Все три получили один и тот же результат: тот же номер письма.
     expect(new Set(replies.map(textOf)).size).toBe(1);
   });
@@ -246,8 +245,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     await expect.poll(() => waiters(), POLL).toBe(0);
     // Пока агент переподключался, пришло письмо. Хранись под callId исход отменённого ожидания (`running`), повтор
     // получил бы его; повтор исполняется заново и видит письмо.
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
     });
     const retried = await post(body);
     expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message' });
@@ -299,8 +298,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     controller.abort();
     await left;
     await expect.poll(() => closes(), POLL).toBe(1);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
     });
     const retried = post(body);
     release();
@@ -317,8 +316,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     // Второму хватает времени дойти до хоста; отдельное ожидание дало бы вторую подписку.
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
     expect(waiters()).toBe(1);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'both', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'both', kind: 'note' });
     });
     notify();
     const replies = await Promise.all([first, second]);
@@ -410,8 +409,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     const pending = raw(waitCall());
     await expect.poll(() => waiters(), POLL).toBe(1);
     registry.unregister(ref);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'late', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'late', kind: 'note' });
     });
     notify();
     expect((await pending).status).toBe(401);
@@ -464,7 +463,7 @@ describe('маршрут /agent/tools: инструменты агента в п
     };
     const reply = await post({ op: 'call', launch: hostile, name: 'send_message', args: { to: 's-02', text: 'scoped' }, callId: randomUUID() });
     expect(reply.ok).toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'scoped' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'scoped' });
   });
 
   it('keeps one executor per session while the launch is unchanged and builds a new one for a new launch', async () => {
@@ -485,7 +484,7 @@ describe('маршрут /agent/tools: инструменты агента в п
     const callId = randomUUID();
     await post(sendCall('from one', callId));
     await post({ op: 'call', launch: {}, name: 'send_message', args: { to: 's-01', text: 'from two' }, callId }, { token: other });
-    expect((await readMap(project, workId)).messages.map((message) => [message.from, message.text])).toEqual([
+    expect((readStoredMap(project, workId)).messages.map((message) => [message.from, message.text])).toEqual([
       ['s-01', 'from one'],
       ['s-02', 'from two'],
     ]);
@@ -544,7 +543,7 @@ describe('маршрут /agent/tools и настоящий удалённый �
     expect(names).not.toContain('remember');
     const result = await runner.call('send_message', { to: 's-02', text: 'via runner' }, undefined);
     expect(result.isError).not.toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'via runner' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'via runner' });
   });
 
   it('a tool error and an unknown tool come back as tool results, not as route failures', async () => {
@@ -633,9 +632,9 @@ describe('host-local attempts', () => {
     expect(proposed).toEqual({ proposalId: 'p-01', rev: 0 });
     expect(perform.mock.calls[0]![0]).toEqual(ref('s-01'));
     expect(perform.mock.calls[0]![1]).toMatchObject({ action: 'propose-plan', roomId: 'r-01' });
-    await updateMap(project, workId, map => {
+    await updateMap(project, workId, (map, letters) => {
       const proposal = map.rooms[0]!.proposal!;
-      resolveProposal(map, 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev });
+      resolveProposal(map, letters, 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev });
       const accepted = map.plans![0]!;
       accepted.autonomous!.attempts.push({
         id: 'at-0001', item: 1, n: 1, planRev: accepted.rev, criteriaVersion: 1, worker: 's-02', verifier: null,

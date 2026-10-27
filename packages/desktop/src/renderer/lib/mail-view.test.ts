@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, WindowWorkEntry, WorkSession } from '@parley/core';
 import { isUnreadFor, mailView, recipientsOf } from './mail-view.js';
 
 function session(id: string, label: string, parent: string | null = null): WorkSession {
@@ -45,7 +45,7 @@ function message(partial: Partial<Message> & Pick<Message, 'id' | 'from' | 'to' 
   };
 }
 
-function entryWith(sessions: WorkSession[], messages: Message[]): WorkEntry {
+function entryWith(sessions: WorkSession[], messages: Message[]): WindowWorkEntry {
   return {
     projectPath: '/tmp/w-01',
     map: {

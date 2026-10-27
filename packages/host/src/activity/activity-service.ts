@@ -40,7 +40,7 @@ import {
   resetPointerLabel,
   selectUsage,
   sessionTag,
-  unreadFor,
+  unreadCount,
   watchEvents,
   workPaths,
   type Activity,
@@ -67,14 +67,13 @@ import {
   type MailWait,
   type LiveTask,
   type SessionRef,
-  type WorksSnapshot,
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
-import type { WorksService } from '../works/works-service.js';
+import type { WorksService, WorksView } from '../works/works-service.js';
 import { contextView, type CompactionTrack } from '../compaction/context-view.js';
 import { createLogIndex, type LogChange, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
@@ -735,8 +734,13 @@ export function createActivityService(
     return !Number.isNaN(seenMs) && !Number.isNaN(endedMs) && seenMs >= endedMs;
   }
 
+  /**
+   * Число непрочитанного сессией — счётом по карте снимка, которую хост уже держит (`entry.map`): метрики собираются для
+   * каждой сессии на каждое изменение, и из базы при числе работ больше кэша карт каждый проход грузил бы их заново
+   * (спека хранилища 6.2).
+   */
   const unreadOf = (entry: WorkEntry, sessionId: string): number =>
-    unreadFor(entry.map, sessionId).length;
+    unreadCount(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map }).total;
 
   /**
    * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —
@@ -1326,7 +1330,7 @@ export function createActivityService(
   }
 
   /** Работы и сессии, которых в свежем снимке больше нет: состояние не копится вечно. */
-  function pruneRemoved(snapshot: WorksSnapshot): void {
+  function pruneRemoved(snapshot: WorksView): void {
     const validSessions = new Set<string>();
     const validWorks = new Set<string>();
     for (const entry of snapshot.entries) {
@@ -1392,7 +1396,7 @@ export function createActivityService(
     for (const [key] of Array.from(startupTimers)) if (!validSessions.has(key)) clearStartupTimer(key);
   }
 
-  function handleWorksChange(snapshot: WorksSnapshot): void {
+  function handleWorksChange(snapshot: WorksView): void {
     if (stopped) return;
     for (const entry of snapshot.entries) {
       const { watch, renewed } = ensureWorkWatch(entry);

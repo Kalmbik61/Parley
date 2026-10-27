@@ -4,6 +4,8 @@ import { addSession, parseMap, transitionSession } from './map.js';
 import { leadRecipeBlock, recipeLeadBlock, reconcileRecipeLeads, recipeLeadsPending } from './recipe-lead.js';
 import { addRoom } from './rooms.js';
 import { HUMAN, PARLEY, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -34,7 +36,7 @@ describe('блок рецепта в слое', () => {
     map.rooms[0]!.ownerId = owner.id;
     expect(leadRecipeBlock(map, owner.id)).toBeNull();
     close(map, 's-01');
-    const sent = reconcileRecipeLeads(map);
+    const sent = reconcileRecipeLeads(map, lt(map));
     expect(sent.map(message => message.to)).toEqual([['s-02']]);
   });
   it('начинается строкой с названием, дальше снимок плейбука', () => {
@@ -65,7 +67,7 @@ describe('reconcileRecipeLeads', () => {
   it('ведущий не менялся — писем нет, карта не требует записи', () => {
     const map = roomWithRecipe();
     expect(recipeLeadsPending(map)).toBe(false);
-    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(reconcileRecipeLeads(map, lt(map))).toEqual([]);
     expect(map.messages).toEqual([]);
   });
 
@@ -73,7 +75,7 @@ describe('reconcileRecipeLeads', () => {
     const map = roomWithRecipe();
     close(map, 's-01');
     expect(recipeLeadsPending(map)).toBe(true);
-    const sent = reconcileRecipeLeads(map, '2026-10-04T11:00:00.000Z');
+    const sent = reconcileRecipeLeads(map, lt(map), '2026-10-04T11:00:00.000Z');
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ from: PARLEY, to: ['s-02'], roomId: 'r-01', kind: 'note', text: recipeLeadBlock(recipe) });
     expect(unreadFor(map, 's-02')).toHaveLength(1);
@@ -81,17 +83,17 @@ describe('reconcileRecipeLeads', () => {
     expect(map.rooms[0]!.recipeLeadNotified).toBe('s-02');
     // Повторный проход, в том числе после перезапуска хоста (карта читается с диска), письма не множит.
     expect(recipeLeadsPending(map)).toBe(false);
-    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(reconcileRecipeLeads(map, lt(map))).toEqual([]);
     const reread = parseMap(JSON.stringify(map), 'map.json');
     expect(recipeLeadsPending(reread)).toBe(false);
-    expect(reconcileRecipeLeads(reread)).toEqual([]);
+    expect(reconcileRecipeLeads(reread, lt(reread))).toEqual([]);
     expect(reread.messages).toHaveLength(1);
   });
 
   it('письмо несёт снимок, а не нынешнюю правку каталога', () => {
     const map = roomWithRecipe();
     close(map, 's-01');
-    const [letter] = reconcileRecipeLeads(map);
+    const [letter] = reconcileRecipeLeads(map, lt(map));
     expect(letter?.text).toContain('Step two.');
     expect(map.rooms[0]!.recipe).toEqual(recipe);
   });
@@ -99,9 +101,9 @@ describe('reconcileRecipeLeads', () => {
   it('следующая смена ведущего — следующее письмо новому, прежним не повторяется', () => {
     const map = roomWithRecipe();
     close(map, 's-01');
-    reconcileRecipeLeads(map);
+    reconcileRecipeLeads(map, lt(map));
     close(map, 's-02');
-    const sent = reconcileRecipeLeads(map);
+    const sent = reconcileRecipeLeads(map, lt(map));
     expect(sent.map((row) => row.to)).toEqual([['s-03']]);
     expect(map.messages).toHaveLength(2);
   });
@@ -109,23 +111,23 @@ describe('reconcileRecipeLeads', () => {
   it('комната закрыта целиком или без рецепта — писем нет', () => {
     const map = roomWithRecipe();
     for (const id of ['s-01', 's-02', 's-03']) close(map, id);
-    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(reconcileRecipeLeads(map, lt(map))).toEqual([]);
     const plain = roomWithRecipe();
     plain.rooms[0]!.recipe = null;
     close(plain, 's-01');
     expect(recipeLeadsPending(plain)).toBe(false);
-    expect(reconcileRecipeLeads(plain)).toEqual([]);
+    expect(reconcileRecipeLeads(plain, lt(plain))).toEqual([]);
   });
 
   it('комната без отметки (ведущий запущен до комнаты): плейбук уходит ему письмом один раз', () => {
     const map = roomWithRecipe();
     delete map.rooms[0]!.recipeLeadNotified;
     expect(recipeLeadsPending(map)).toBe(true);
-    const sent = reconcileRecipeLeads(map);
+    const sent = reconcileRecipeLeads(map, lt(map));
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ from: PARLEY, to: ['s-01'], text: recipeLeadBlock(recipe) });
     expect(map.rooms[0]!.recipeLeadNotified).toBe('s-01');
-    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(reconcileRecipeLeads(map, lt(map))).toEqual([]);
   });
 
   it('архивная комната: письма новому ведущему нет, записи карта не требует', () => {
@@ -134,7 +136,7 @@ describe('reconcileRecipeLeads', () => {
     map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
 
     expect(recipeLeadsPending(map)).toBe(false);
-    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(reconcileRecipeLeads(map, lt(map))).toEqual([]);
     expect(map.messages).toEqual([]);
   });
 
@@ -142,7 +144,7 @@ describe('reconcileRecipeLeads', () => {
     const map = roomWithRecipe();
     map.rooms[0]!.recipe = { ...recipe, playbook: 'first\n' + 'x'.repeat(40000) };
     close(map, 's-01');
-    const [letter] = reconcileRecipeLeads(map);
+    const [letter] = reconcileRecipeLeads(map, lt(map));
     expect(Buffer.byteLength(letter!.text)).toBeLessThanOrEqual(32768);
     expect(letter!.text.endsWith('[Playbook is cut at 32 KB by Parley]')).toBe(true);
   });

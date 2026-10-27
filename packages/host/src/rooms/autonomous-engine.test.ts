@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { addRoom, addSession, archiveRoom, cancelRoomPlan, ENGINE, HUMAN, parseMap, readMap as readDiskMap, workPaths, summarizePlanEffects, proposeCompletion, resolveProposal, halt, reserve, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, mapLetterTx, cancelRoomPlan, ENGINE, HUMAN, parseMap, readStoredMap, replaceStoredMap, summarizePlanEffects, proposeCompletion, resolveProposal, halt, reserve, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WindowWorkMap, type WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
@@ -12,6 +12,8 @@ import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
 import { createPlanHandlers } from '../methods/rooms.js';
 
 const exec = promisify(execFile);
+// Письма не лежат в карте работы: правилам комнат и планов в тестах нужен `LetterTx` над картой с письмами в памяти.
+const lt = (map: WorkMap) => mapLetterTx(map as WindowWorkMap).letters;
 const dirs: string[] = [];
 const engines: ReturnType<typeof createAutonomousEngine>[] = [];
 afterEach(async () => {
@@ -33,7 +35,7 @@ async function fixture(qualitative = false, count = 1) {
   await git('add', '.');
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial');
   const sha = await git('rev-parse', 'HEAD'), blob = await git('rev-parse', 'HEAD:test.js');
-  let map: WorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Fixture', goal: '', status: 'active', createdAt: now.toISOString(), updatedAt: now.toISOString() }, sessions: [], rooms: [], messages: [] };
+  let map: WindowWorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Fixture', goal: '', status: 'active', createdAt: now.toISOString(), updatedAt: now.toISOString() }, sessions: [], rooms: [], messages: [] };
   addSession(map, { provider: 'codex', label: 'Lead', task: 'Lead' });
   addRoom(map, { creator: HUMAN, title: 'Plan', members: ['s-01'], lead: 's-01', mode: 'autonomous' });
   const plan: RoomPlan = {
@@ -52,7 +54,7 @@ async function fixture(qualitative = false, count = 1) {
   const events: string[] = [];
   const io: EngineIO = {
     readMap: async () => structuredClone(map),
-    updateMap: async (_project, _work, mutate) => { const draft = structuredClone(map); await mutate(draft); map = draft; return structuredClone(map); },
+    updateMap: async (_project, _work, mutate) => { const draft = structuredClone(map); await mutate(draft, mapLetterTx(draft).letters); map = draft; return structuredClone(map); },
     fs,
     git: async (args, options) => (await exec('git', args, { ...options, encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 })).stdout,
     now: () => now,
@@ -285,8 +287,8 @@ describe('autonomous engine', () => {
     const f = await fixture();
     const update = f.io.updateMap;
     let armed = true;
-    f.io.updateMap = async (project, work, mutate, ...rest) => update(project, work, async map => {
-      await mutate(map);
+    f.io.updateMap = async (project, work, mutate, ...rest) => update(project, work, async (map, letters) => {
+      await mutate(map, letters);
       if (armed && map.plans![0]!.autonomous!.ops.some(op => op.kind === kind && op.state === 'done')) {
         armed = false; throw new Error('simulated map write crash');
       }
@@ -316,8 +318,8 @@ describe('autonomous engine', () => {
     f.map().plans![0] = startAttempt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), item: 1, branch: 'attempt', baseSha: f.sha });
     const update = f.io.updateMap;
     let armed = true;
-    f.io.updateMap = async (project, work, mutate, ...rest) => update(project, work, async map => {
-      await mutate(map);
+    f.io.updateMap = async (project, work, mutate, ...rest) => update(project, work, async (map, letters) => {
+      await mutate(map, letters);
       if (armed && map.plans![0]!.autonomous!.halted?.reason === 'restart') { armed = false; throw new Error('recovery write unavailable'); }
     }, ...rest);
     const onFailure = vi.fn(), restarted = f.make(true, onFailure);
@@ -404,6 +406,18 @@ describe('autonomous engine', () => {
     expect(f.map().messages.some(row => row.to.includes('s-01') && row.text.includes('at-0001'))).toBe(true);
   });
 
+  it('refreshes the halt summary once, then scans a halted plan without opening a transaction', async () => {
+    const f = await fixture();
+    f.read().autonomous!.halted = { reason: 'human', at: now.toISOString(), detail: 'Awaiting a human decision' };
+    const updateMap = f.io.updateMap, calls = vi.fn();
+    f.io.updateMap = async (...args) => { calls(); return updateMap(...args); };
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(f.read().autonomous!.halted!.detail).toMatch(/^Awaiting a human decision\nReason: human; no attempts\./);
+    await f.engine.flush(f.projectPath, 'w-01'); await f.engine.flush(f.projectPath, 'w-01');
+    expect(calls).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks a repair after two identical failure signatures without a third attempt', async () => {
     const f = await fixture();
     const runner = f.io.runner;
@@ -435,7 +449,7 @@ describe('autonomous engine', () => {
     f.read().items[1]!.after = [1];
     f.attempt(1).status = 'queued'; f.read().autonomous!.integration.queue = [f.attempt(1).id];
     const { proposal, options } = amendment(f, proposal => { proposal.plan!.items[0]!.criteria = ['New criterion']; });
-    resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', options, now.toISOString());
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', options, now.toISOString());
     expect(f.read().rev).toBe(3);
     expect(f.read().autonomous!.criteriaVersion).toEqual({ 1: 2, 2: 1 });
     expect(f.read().autonomous!.attempts.map(row => row.status)).toEqual(['superseded', 'superseded']);
@@ -452,7 +466,7 @@ describe('autonomous engine', () => {
       proposal.autonomousAmendment!.checks[0]!.argv = ['node', 'changed.js'];
       proposal.autonomousAmendment!.draft.checks[0]!.argv = ['node', 'changed.js'];
     });
-    resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', options, now.toISOString());
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', options, now.toISOString());
     expect(f.attempt().status).toBe('superseded');
     expect(f.attempt(1)).toEqual(untouched);
     expect(f.read().autonomous!.budget.spent).toEqual(spent);
@@ -466,7 +480,7 @@ describe('autonomous engine', () => {
       const result = await git(args, options);
       if (args.includes('checkout')) {
         const { proposal, options } = amendment(f, row => { row.plan!.items[0]!.criteria = ['Changed during clone']; });
-        resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', options, now.toISOString());
+        resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', options, now.toISOString());
       }
       return result;
     };
@@ -504,14 +518,14 @@ describe('autonomous engine', () => {
       draft.checks = draft.checks.filter(row => row.item !== 1);
       draft.draft.checks = draft.draft.checks.filter(row => row.item !== 1);
     });
-    resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', options, now.toISOString());
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', options, now.toISOString());
     expect(f.attempt().status).toBe('superseded');
     expect(f.read().autonomous!.criteriaVersion).toEqual({ 2: 1, 3: 1 });
     expect(parseMap(JSON.stringify(f.map()), 'fixture').plans![0]!.rev).toBe(3);
     const stale = amendment(f, () => {});
     f.read().rev++;
     const before = structuredClone(f.read());
-    resolveAutonomousProposal(f.map(), 'r-01', stale.proposal.id, 'accept', stale.options, now.toISOString());
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', stale.proposal.id, 'accept', stale.options, now.toISOString());
     expect(f.read()).toEqual(before);
     expect(f.map().rooms[0]!.proposal).toBeNull();
     expect(f.map().messages.some(row => row.text.includes('Amendment revision changed'))).toBe(true);
@@ -634,8 +648,8 @@ it.each(['merge', 'integrate', 'noop'] as const)('recovers a %s crash and reruns
   }
   const update = f.io.updateMap;
   let injected = false;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     const a = draft.plans![0]!.autonomous!;
     const hit = crash === 'integrate' ? a.attempts[0]!.status === 'integrated' :
       a.ops.some(op => op.kind === (crash === 'noop' ? 'noop-integration' : 'merge') && op.state === 'done');
@@ -771,8 +785,8 @@ it('allocates a new check result ID after a crash between effect settlement and 
   await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
   const update = f.io.updateMap;
   let injected = false;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     const a = draft.plans![0]!.autonomous!;
     const op = a.ops.findLast(row => row.kind === 'check' && row.payload.phase === 'integration');
     const result = op?.result?.checkResult as CheckResult | undefined;
@@ -832,8 +846,8 @@ it('leaves interrupted MERGE_HEAD untouched until a resumed merge prepares the c
     }
     return git(args, options);
   };
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (draft.plans![0]!.autonomous!.ops.some(op => op.kind === 'merge' && op.state === 'failed')) throw new Error('crash before merge settled');
   });
   await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('crash before merge settled');
@@ -857,8 +871,8 @@ it('performs no Git mutation when recovery persistence fails after an unwitnesse
     if (args.some(arg => arg.includes('refs/candidates/'))) throw new Error('crash before candidate publication');
     return git(args, options);
   };
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (draft.plans![0]!.autonomous!.ops.some(op => op.kind === 'merge' && op.state === 'failed')) throw new Error('crash before settle');
   });
   await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('crash before settle');
@@ -869,8 +883,8 @@ it('performs no Git mutation when recovery persistence fails after an unwitnesse
     return git(args, options);
   };
   let fail = true;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (fail && draft.plans![0]!.autonomous!.halted?.reason === 'restart') { fail = false; throw new Error('restart persistence failed'); }
   });
   const failures = vi.fn(), restarted = f.make(true, failures); restarted.start();
@@ -1012,7 +1026,7 @@ describe('autonomous completion', () => {
     expect(await fs.readFile(stored, 'utf8')).toBe('retained');
     await f.engine.flush(f.projectPath, 'w-01');
     expect(f.map().rooms[0]!.proposal).toEqual(proposal);
-    resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: plan.id, planRev: plan.rev });
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: plan.id, planRev: plan.rev });
     expect(f.read().status).toBe('completed');
     expect(f.read().completionSummary).toBe(proposal.text);
     const before = JSON.stringify(f.map());
@@ -1042,7 +1056,7 @@ describe('autonomous completion', () => {
     expect(proposal).not.toBeNull();
     f.map().plans![0] = halt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), reason: 'human', detail: 'Pause before accepting' });
     const before = JSON.stringify(f.map());
-    expect(() => resolveProposal(f.map(), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 })).toThrow();
+    expect(() => resolveProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 })).toThrow();
     expect(JSON.stringify(f.map())).toBe(before);
   });
 });
@@ -1096,28 +1110,43 @@ describe('autonomous cancellation and resume', () => {
   });
 });
 
+const stored = new WeakMap<object, string>();
+/**
+ * Кладёт карту фикстуры в базу (спека хранилища 6.2): настоящий API хоста читает её оттуда. Номер работе выдаёт база,
+ * поэтому вызовы настоящего API идут с `workId` из ответа, а `snapshot` — вид хранимой карты для «не менялась».
+ */
 async function saveFixture(f: Awaited<ReturnType<typeof fixture>>) {
-  const paths = workPaths(f.projectPath, 'w-01');
-  await fs.mkdir(paths.dir, { recursive: true });
-  await fs.writeFile(paths.map, JSON.stringify(f.map()));
-  return paths.map;
+  let workId = stored.get(f);
+  if (workId === undefined) { workId = (await createWork(f.projectPath, { title: 'Fixture' })).work.id; stored.set(f, workId); }
+  // Карта хранит номер работы в `work.id` и в записях журнала решений (`workId`, имена файлов); пути и ветки остаются
+  // прежними — по ним движок находит свои клоны.
+  const map = structuredClone(f.map());
+  map.work.id = workId;
+  for (const intent of map.decisionExports ?? []) {
+    intent.workId = workId;
+    intent.file = intent.file.replace('w-01', workId);
+    if (intent.snapshot !== null) intent.snapshot = intent.snapshot.replace('w-01', workId);
+  }
+  replaceStoredMap(f.projectPath, workId, map);
+  const id = workId;
+  return { workId: id, snapshot: () => JSON.stringify(readStoredMap(f.projectPath, id)) };
 }
 
 describe('human autonomous plan actions', () => {
   it('resumes under revision CAS, rejects a running plan, and never launches in the method', async () => {
     const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
-    const file = await saveFixture(f);
-    const input = { projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', planId: 'pl-01', rev: 1 };
+    const { workId, snapshot } = await saveFixture(f);
+    const input = { projectPath: f.projectPath, workId, roomId: 'r-01', planId: 'pl-01', rev: 1 };
     await expect(resumeAutonomousPlan(input)).rejects.toMatchObject({ code: 'bad_request', message: 'plan-not-halted' });
     f.map().plans![0] = halt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), reason: 'human', detail: 'Pause' });
     await saveFixture(f);
-    const before = await fs.readFile(file, 'utf8');
+    const before = snapshot();
     await expect(resumeAutonomousPlan({ ...input, rev: 0 })).rejects.toMatchObject({ code: 'conflict' });
     await expect(resumeAutonomousPlan({ ...input, roomId: 'r-02' })).rejects.toThrow();
-    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    expect(snapshot()).toBe(before);
     const events = [...f.events];
     await resumeAutonomousPlan(input);
-    const disk = await readDiskMap(f.projectPath, 'w-01');
+    const disk = readStoredMap(f.projectPath, workId);
     expect(disk.plans![0]!.autonomous!.halted).toBeNull();
     expect(disk.plans![0]!.autonomous!.ops.at(-1)).toMatchObject({ kind: 'resume', state: 'done', payload: { requestedBy: HUMAN } });
     expect(f.events).toEqual(events);
@@ -1135,16 +1164,16 @@ describe('human autonomous plan actions', () => {
     const firstReport = f.read().autonomous!.ops.find(op => op.payload.purpose === 'completion-report')!;
     const firstReportFile = path.resolve(f.projectPath, String(firstReport.result!.path));
     const firstReportHash = firstReport.result!.sha256;
-    resolveAutonomousProposal(f.map(), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 });
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 });
     expect(f.read().status).toBe('completed');
-    const file = await saveFixture(f);
-    const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await readDiskMap(f.projectPath, 'w-01')) });
-    const input = { projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1, item: 1, verdict: 'returned' as const, note: 'Human found a regression' };
-    const before = await fs.readFile(file, 'utf8');
+    const { workId, snapshot } = await saveFixture(f);
+    const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
+    const input = { projectPath: f.projectPath, workId, planId: 'pl-01', rev: 1, item: 1, verdict: 'returned' as const, note: 'Human found a regression' };
+    const before = snapshot();
     await expect(handlers['plans.verify']({ ...input, rev: 0 }, {} as any)).rejects.toMatchObject({ code: 'conflict' });
-    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    expect(snapshot()).toBe(before);
     await handlers['plans.verify'](input, {} as any);
-    const disk = await readDiskMap(f.projectPath, 'w-01'), plan = disk.plans![0]!;
+    const disk = readStoredMap(f.projectPath, workId), plan = disk.plans![0]!;
     expect(plan).toMatchObject({ status: 'active', rev: 2, completedAt: null, completionSummary: null });
     expect(plan.items.map(item => item.status)).toEqual(['returned', 'waiting']);
     expect(plan.items[1]!.evidence).toBeNull();
@@ -1166,7 +1195,7 @@ describe('human autonomous plan actions', () => {
     expect(createHash('sha256').update(await fs.readFile(firstReportFile)).digest('hex')).toBe(firstReportHash);
     expect(f.read().autonomous!.ops.filter(op => op.payload.purpose === 'completion-report' && op.state === 'done')).toHaveLength(2);
     const repaired = f.map().rooms[0]!.proposal!;
-    resolveAutonomousProposal(f.map(), 'r-01', repaired.id, 'accept', { rev: repaired.rev, planId: 'pl-01', planRev: f.read().rev });
+    resolveAutonomousProposal(f.map(), lt(f.map()), 'r-01', repaired.id, 'accept', { rev: repaired.rev, planId: 'pl-01', planRev: f.read().rev });
     expect(f.read().status).toBe('completed');
     expect(f.map().planExports!.filter(row => row.event === 'completed').map(row => row.rev)).toEqual([1, 2]);
   });
@@ -1175,8 +1204,8 @@ describe('human autonomous plan actions', () => {
 it('refuses direct cancellation and room archival before engine cleanup', async () => {
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
   for (const cancel of [
-    () => cancelRoomPlan(f.map(), 'pl-01', 1, HUMAN),
-    () => archiveRoom(f.map(), 'r-01'),
+    () => cancelRoomPlan(f.map(), lt(f.map()), 'pl-01', 1, HUMAN),
+    () => archiveRoom(f.map(), lt(f.map()), 'r-01'),
   ]) {
     const before = JSON.stringify(f.map());
     expect(cancel).toThrow('cancel the autonomous plan first');
@@ -1184,7 +1213,7 @@ it('refuses direct cancellation and room archival before engine cleanup', async 
   }
   await f.engine.cancel({ projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1 });
   expect(f.read().status).toBe('cancelled');
-  expect(() => archiveRoom(f.map(), 'r-01')).not.toThrow();
+  expect(() => archiveRoom(f.map(), lt(f.map()), 'r-01')).not.toThrow();
 });
 
 describe('durable autonomous budgets', () => {
@@ -1250,8 +1279,8 @@ it('rechecks a saved candidate before submitted work and replacement sessions on
   const f = await fixture(false, 3); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
   const update = f.io.updateMap;
   let rejectMerge = true, rejectCheck = false;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (rejectMerge && draft.plans![0]!.autonomous!.ops.some(op => ['merge', 'noop-integration'].includes(op.kind) && op.state === 'done')) {
       rejectMerge = false; throw new Error('crash after candidate effect');
     }
@@ -1304,8 +1333,8 @@ it('keeps a cancellation recoverable when clone removal succeeds before settleme
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
   const update = f.io.updateMap;
   let fail = true;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (fail && draft.plans![0]!.autonomous!.ops.some(op => op.kind === 'cleanup' && op.payload.dir === f.clone() && op.state === 'done')) {
       fail = false; throw new Error('crash before cleanup settlement');
     }
@@ -1342,8 +1371,8 @@ it.each(['attemptsPerItem', 'repairWaves', 'sessions', 'minutesPerAttempt'] as c
   const runner = f.io.runner, update = f.io.updateMap;
   f.io.runner = vi.fn(async (...args) => ({ ...await runner(...args), ...(limit === 'minutesPerAttempt' ? { durationMs: 61_000 } : limit === 'sessions' ? {} : { verdict: 'fail' as const, exitCode: 1 }) }));
   let injected = false;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (!injected && draft.plans![0]!.autonomous!.halted?.reason === 'budget') {
       injected = true; throw new Error('crash before budget halt');
     }
@@ -1367,7 +1396,7 @@ it('refuses terminal completion while a plan session is still open', async () =>
   const proposal = f.map().rooms[0]!.proposal!;
   f.map().sessions.find(session => session.id === f.attempt().worker)!.lifecycle = 'active';
   const before = JSON.stringify(f.map());
-  expect(() => resolveProposal(f.map(), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 })).toThrow();
+  expect(() => resolveProposal(f.map(), lt(f.map()), 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: 'pl-01', planRev: 1 })).toThrow();
   expect(JSON.stringify(f.map())).toBe(before);
 });
 
@@ -1376,7 +1405,7 @@ it('requires cleanup after a human halt before alternate cancellation routes can
   f.map().plans![0] = halt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), reason: 'human', detail: 'Pause' });
   await f.engine.flush(f.projectPath, 'w-01');
   const before = JSON.stringify(f.map());
-  expect(() => cancelRoomPlan(f.map(), 'pl-01', 1, HUMAN)).toThrow('cancel the autonomous plan first');
+  expect(() => cancelRoomPlan(f.map(), lt(f.map()), 'pl-01', 1, HUMAN)).toThrow('cancel the autonomous plan first');
   expect(JSON.stringify(f.map())).toBe(before);
 });
 
@@ -1392,8 +1421,8 @@ it('a stale cancellation revision has no filesystem, session or map effects', as
 it('stores a large completion report before its compact card and preserves its hash', async () => {
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
   const update = f.io.updateMap;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     const a = draft.plans![0]!.autonomous!;
     if (a.attempts[0]!.status === 'integrated' && !a.ops.some(op => op.key === 'report-test-0')) {
       const result = a.ops.find(op => op.kind === 'check' && op.state === 'done')!.result!.checkResult as CheckResult;
@@ -1418,8 +1447,8 @@ it('halts without truncating when the compact completion card exceeds its limit'
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
   const update = f.io.updateMap;
   let inserted = false;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     const a = draft.plans![0]!.autonomous!;
     if (!inserted && a.attempts[0]!.status === 'integrated') {
       inserted = true;
@@ -1439,8 +1468,8 @@ it('reconciles an already-written completion report after a lost settlement', as
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
   const update = f.io.updateMap;
   let fail = true;
-  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
-    await mutate(draft);
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async (draft, letters) => {
+    await mutate(draft, letters);
     if (fail && draft.plans![0]!.autonomous!.ops.some(op => op.payload.purpose === 'completion-report' && op.state === 'done')) {
       fail = false; throw new Error('lost report settlement');
     }
@@ -1462,11 +1491,11 @@ it('reconciles an already-written completion report after a lost settlement', as
 
 it('tells the human to cancel the autonomous plan before lowering room mode', async () => {
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
-  const file = await saveFixture(f), before = await fs.readFile(file, 'utf8');
-  const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await readDiskMap(f.projectPath, 'w-01')) });
-  await expect(handlers['rooms.setMode']({ projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', mode: 'free', reason: 'Human request', confirmCancel: true }, {} as any))
+  const { workId, snapshot } = await saveFixture(f), before = snapshot();
+  const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
+  await expect(handlers['rooms.setMode']({ projectPath: f.projectPath, workId, roomId: 'r-01', mode: 'free', reason: 'Human request', confirmCancel: true }, {} as any))
     .rejects.toMatchObject({ code: 'bad_request', message: 'Cancel the autonomous plan first.' });
-  expect(await fs.readFile(file, 'utf8')).toBe(before);
+  expect(snapshot()).toBe(before);
 });
 
 describe('human return of autonomous completion', () => {
@@ -1474,17 +1503,17 @@ describe('human return of autonomous completion', () => {
     const f = await fixture();
     await f.engine.flush(f.projectPath, 'w-01'); await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
     const proposal = f.map().rooms[0]!.proposal!;
-    const file = await saveFixture(f);
-    const input = { projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', proposalId: proposal.id, rev: proposal.rev, planId: 'pl-01', planRev: 1, action: 'return' as const, note: 'Human requests another look' };
-    return { f, proposal, file, input };
+    const { workId, snapshot } = await saveFixture(f);
+    const input = { projectPath: f.projectPath, workId, roomId: 'r-01', proposalId: proposal.id, rev: proposal.rev, planId: 'pl-01', planRev: 1, action: 'return' as const, note: 'Human requests another look' };
+    return { f, proposal, workId, snapshot, input };
   }
 
   it('refuses a generic completion return through the real API without changing the card or map', async () => {
-    const { f, proposal, file, input } = await completion();
-    const before = await fs.readFile(file, 'utf8');
+    const { f, proposal, workId, snapshot, input } = await completion();
+    const before = snapshot();
     await expect(resolveRoomProposal(input)).rejects.toMatchObject({ code: 'bad_request', message: 'autonomous-completion-needs-item: select an item to return' });
-    expect(await fs.readFile(file, 'utf8')).toBe(before);
-    Object.assign(f.map(), await readDiskMap(f.projectPath, 'w-01'));
+    expect(snapshot()).toBe(before);
+    Object.assign(f.map(), readStoredMap(f.projectPath, workId));
     const map = JSON.stringify(f.map()), events = [...f.events];
     await f.engine.flush(f.projectPath, 'w-01');
     expect(JSON.stringify(f.map())).toBe(map);
@@ -1494,27 +1523,27 @@ describe('human return of autonomous completion', () => {
   });
 
   it('retains revision conflicts for stale generic return requests without mutation', async () => {
-    const { file, input } = await completion();
-    const before = await fs.readFile(file, 'utf8');
+    const { snapshot, input } = await completion();
+    const before = snapshot();
     for (const stale of [{ ...input, proposalId: 'p-stale' }, { ...input, rev: input.rev + 1 }, { ...input, planId: 'pl-02' }, { ...input, planRev: 0 }])
       await expect(resolveRoomProposal(stale)).rejects.toMatchObject({ code: 'conflict' });
-    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    expect(snapshot()).toBe(before);
   });
 
   it('still accepts the completion card through the real API', async () => {
-    const { f, input } = await completion();
+    const { workId, input } = await completion();
     await resolveRoomProposal({ ...input, action: 'accept' });
-    const map = await readDiskMap(f.projectPath, 'w-01');
+    const map = readStoredMap(input.projectPath, workId);
     expect(map.plans![0]!.status).toBe('completed');
     expect(map.rooms[0]!.proposal).toBeNull();
   });
 
   it('returns the selected item through the late-defect adapter and starts its replacement', async () => {
-    const { f, input } = await completion();
+    const { f, workId, input } = await completion();
     await expect(resolveRoomProposal(input)).rejects.toMatchObject({ code: 'bad_request' });
-    const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await readDiskMap(f.projectPath, 'w-01')) });
-    await handlers['plans.verify']({ projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1, item: 1, verdict: 'returned', note: 'Fix this item' }, {} as any);
-    Object.assign(f.map(), await readDiskMap(f.projectPath, 'w-01'));
+    const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
+    await handlers['plans.verify']({ projectPath: f.projectPath, workId, planId: 'pl-01', rev: 1, item: 1, verdict: 'returned', note: 'Fix this item' }, {} as any);
+    Object.assign(f.map(), readStoredMap(f.projectPath, workId));
     expect(f.read().status).toBe('active');
     expect(f.read().autonomous!.halted).toBeNull();
     expect(f.read().items[0]!.status).toBe('returned');

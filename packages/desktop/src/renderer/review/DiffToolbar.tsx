@@ -5,7 +5,7 @@
  * неотправленные неустаревшие заметки вкладки; в режиме коммита её нет.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { Toggle } from '../ui/toggle.js';
@@ -24,7 +24,7 @@ export interface DiffToolbarProps {
   listMode: DiffListMode;
   onListMode(mode: DiffListMode): void;
   /** «Send all unsent» (8.4b); null — режим коммита, кнопки нет. */
-  sendAll?: { entry: WorkEntry; defaultSessionId: string; disabled: boolean; onSend(sessionId: string): void } | null;
+  sendAll?: { entry: WindowWorkEntry; defaultSessionId: string; disabled: boolean; onSend(sessionId: string): void } | null;
 }
 
 // Без переноса внутри кнопки: «Side by side» на узкой панели ломался в три строки. Переносится

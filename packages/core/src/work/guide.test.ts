@@ -174,8 +174,10 @@ describe('правила переписки', () => {
     expect(text).toContain('replyTo');
   });
 
-  it('тема rules запрещает читать map.json напрямую', () => {
-    expect(guideTopic('rules')).toMatch(/Do not read `map\.json`/);
+  it('карта — память работы у Parley: читать её только через get_map, read_room и check_inbox, файл map.json не упомянут', () => {
+    expect(guideTopic('rules')).toMatch(/Read the workspace map only through `get_map`, `read_room` and `check_inbox`/);
+    expect(guideTopic('overview')).toMatch(/kept by Parley/);
+    expect(GUIDE).not.toContain('map.json');
   });
 });
 

@@ -97,6 +97,18 @@ const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> =>
   }
 };
 
+let touches = 0;
+
+/**
+ * Настоящая запись в карту работы (меняется цель): она будит службу работ, а с ней и наблюдателя журнала событий.
+ * Пустой `updateMap` ничего не пишет и версию не поднимает (план 4, задача 1) — им работу не разбудить.
+ */
+const touchMap = (workId: string): Promise<unknown> =>
+  updateMap(project, workId, (current) => {
+    touches += 1;
+    current.work.goal = `запись ${touches}`;
+  });
+
 /** Заводит активную сессию codex `s-01`; журнала `events/` нет: его заводит запуск или notify. */
 async function codexSession(
   over: { provider?: string; providerSessionId?: string | null; eventsDir?: boolean } = {},
@@ -361,14 +373,14 @@ describe('сигналы терминала codex → активность', () 
     const dir = workPaths(project, workId).events;
     await mkdir(dir, { recursive: true });
     await appendFile(path.join(dir, `${ref.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`);
-    await updateMap(project, workId, () => undefined);
+    await touchMap(workId);
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
 
     await settle(30);
     a.terminalSignal(ref, WORKING);
     expect(a.get(ref)?.activity.activity).toBe('working');
-    // И держится: пересчёт от чужого события порядок не ломает.
-    await updateMap(project, workId, () => undefined);
+    // И держится: пересчёт от чужого события (запись в карту) порядок не ломает.
+    await touchMap(workId);
     await settle(200);
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
@@ -383,7 +395,7 @@ describe('сигналы терминала codex → активность', () 
     const dir = workPaths(project, workId).events;
     await mkdir(dir, { recursive: true });
     await appendFile(path.join(dir, `${ref.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`);
-    await updateMap(project, workId, () => undefined);
+    await touchMap(workId);
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
 
     // Заголовок Action Required мигает, пока Codex ждёт человека: следующее мигание — тот же вид сигнала.
@@ -448,8 +460,8 @@ describe('сигналы терминала codex → активность', () 
       path.join(dir, `${ref.sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'Готово.' })}\n`,
     );
-    // Журнал заведён после старта: наблюдатель подхватит его по следующему изменению карты.
-    await updateMap(project, workId, () => undefined);
+    // Журнал заведён после старта: наблюдатель подхватит его по следующей настоящей записи в карту.
+    await touchMap(workId);
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
   }, 20_000);
 
@@ -461,14 +473,14 @@ describe('сигналы терминала codex → активность', () 
       path.join(dir, `${ref.sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
     );
-    await updateMap(project, workId, () => undefined);
+    await touchMap(workId);
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
 
     await settle(60);
     a.terminalSignal(ref, WORKING);
     expect(a.get(ref)?.activity.activity).toBe('working');
-    // Пересчёт от чужого события (карта) порядок не ломает: Stop старше сигнала.
-    await updateMap(project, workId, () => undefined);
+    // Пересчёт от чужого события (запись в карту) порядок не ломает: Stop старше сигнала.
+    await touchMap(workId);
     await settle(200);
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);

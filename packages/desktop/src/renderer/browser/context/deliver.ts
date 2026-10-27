@@ -11,7 +11,7 @@
  */
 
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from '../../../shared/bridge.js';
 import type { SavedContext } from '../../../shared/browser-types.js';
@@ -61,7 +61,7 @@ export type OpenTarget =
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 
 export interface DeliverDeps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   target: BrowserTarget;
   sendDeps: SendWithToastDeps;
   /** Есть ли вид Chat у провайдера сейчас; по умолчанию — `feedAvailableNow`. */

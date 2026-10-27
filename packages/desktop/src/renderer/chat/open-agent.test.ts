@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
@@ -24,7 +24,7 @@ const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-0
 const KEY = '/tmp/p w-01';
 const OTHER_KEY = '/tmp/p w-02';
 
-const entries = (): WorkEntry[] => [
+const entries = (): WindowWorkEntry[] => [
   makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'one'), makeSession('s-02', 'two')] }),
   makeWork('w-02', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'other')] }),
 ];

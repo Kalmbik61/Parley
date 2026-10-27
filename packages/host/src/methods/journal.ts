@@ -1,8 +1,7 @@
-import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, parseMap, readDecisionJournalFiles,
-  readRoomHistoryStatus, shareRoomHistory, sharedProjectPaths, unshareRoomHistory, workPaths,
+  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, readDecisionJournalFiles,
+  readMap, readRoomHistoryStatus, shareRoomHistory, sharedProjectPaths, unshareRoomHistory,
 } from '@parley/core';
 import type { WorkEntry, WorkMap } from '@parley/core';
 import {
@@ -39,13 +38,11 @@ function validate<M extends JournalMethodName>(method: M, params: JournalMethodP
 }
 
 /**
- * Свежая карта с диска: проект, работа и комната проверяются по ней, а не по снимку окна.
- * Не `readSharedFile`: его лимит 1 МиБ рассчитан на общие Markdown-файлы, а карта работы бывает больше (как и у `readMap` ядра).
+ * Свежая карта из базы: проект, работа и комната проверяются по ней, а не по снимку окна (спека хранилища 6.9).
+ * Потолка размера нет: карта собирается из строк базы, как и у любого читателя `readMap` ядра.
  */
 async function freshMap(projectPath: string, workId: string): Promise<WorkMap> {
-  const file = workPaths(await realpath(projectPath), workId).map;
-  if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
-  const map = parseMap(await readFile(file, 'utf8'), file);
+  const map = await readMap(projectPath, workId);
   if (map.work.id !== workId) throw new SharedStateError('shared-state-unsafe');
   return map;
 }
@@ -99,11 +96,12 @@ async function listDecisions(works: WorksService, params: JournalMethodParams<'d
   for (const entry of relevant) {
     const map = maps.get(`${entry.projectPath}\0${entry.map.work.id}`) ?? entry.map;
     for (const intent of map.decisionExports ?? []) {
+      // Ожидающее решение ещё с текстом: заголовок берётся из него, у записанного текста в карте нет (спека хранилища 6.2).
       if (intent.status !== 'pending' || seen.has(intent.file)) continue;
       seen.add(intent.file);
       if (pending++ >= MAX_PENDING) { mapErrors++; break; }
       rows.push({ file: intent.file, workId: intent.workId, roomId: intent.roomId, proposalId: intent.proposalId, rev: intent.rev,
-        acceptedAt: intent.acceptedAt, title: firstLine(intent.content), kind: intent.kind, state: 'pending', openable: false });
+        acceptedAt: intent.acceptedAt, title: firstLine(intent.content ?? ''), kind: intent.kind, state: 'pending', openable: false });
     }
   }
   const words = [...new Set(folded(params.query ?? '').split(/\s+/).filter(Boolean))];

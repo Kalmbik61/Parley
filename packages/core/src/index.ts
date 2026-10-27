@@ -194,8 +194,12 @@ export {
   stateWord,
 } from './work/session-state.js';
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
-export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
+export { isUnreadFor, lookupIn, recipientsOf, unreadFor } from './work/letters.js';
+export type { LetterLookup } from './work/letters.js';
+export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, previewLetterTx, readLetters, roomLetterTops, storeLetterReader, storeLetterReads, unreadCount, unreadLetters, withLetterSnapshot, writeLetters } from './work/letter-store.js';
+export type { LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
 export {
+  LETTER_PAGE_MAX_ITEMS,
   PAGE_DEFAULT_BYTES,
   PAGE_MAX_BYTES,
   PAGE_MAX_ITEMS,
@@ -212,7 +216,7 @@ export {
   textPage,
   viewBytes,
 } from './work/context-pages.js';
-export type { MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
+export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
@@ -311,23 +315,33 @@ export {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  isDatabaseBusy,
   parleyHome,
   MapLockTimeoutError,
+  onMapWritten,
   pruneWorksIndex,
   readMap,
+  readStoredMap,
   readWorksIndex,
   renameWork,
+  replaceStoredMap,
   setWorkStatus,
   updateMap,
+  viewMap,
   WorkNotFoundError,
+  workExists,
   workPaths,
+  workVersion,
   worksIndexPath,
 } from './work/store.js';
-export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
+export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
 export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
 export type { HostLock } from './host-lock.js';
-export { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+export { MIGRATION_RECORD, migrateHome, migrateProjects, rewriteArtifactRefs } from './migrate.js';
+export { closeWorkDb } from './work/db.js';
+export { migrateMapsToDb } from './work/migrate-to-db.js';
+export type { MapMigrationResult } from './work/migrate-to-db.js';
 export type {
   MigrateHomeOptions,
   MigrationEntry,
@@ -397,7 +411,7 @@ export {
 } from './work/summary.js';
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { readWorks, watchWorks } from './work/works.js';
-export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
+export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
   LINK_TOLERANCE_MS,
   finishSession,
@@ -606,6 +620,7 @@ export type {
   SessionResult,
   SessionStatus,
   SummarySource,
+  WindowWorkMap,
   Work,
   WorkIndexEntry,
   WorkMap,

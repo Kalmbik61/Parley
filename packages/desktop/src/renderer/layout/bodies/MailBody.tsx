@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { MailPanel } from '../../components/mail/MailPanel.js';
@@ -14,7 +14,7 @@ import { useHostStore } from '../../store/host.js';
 
 export interface MailBodyProps {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
   active: boolean;
 }

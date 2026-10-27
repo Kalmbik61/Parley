@@ -266,6 +266,49 @@ describe('HostConnection', () => {
     server.close();
   }, 10000);
 
+  it('host.notice до подписки окна копится на подключении; новое подключение начинает снимок заново', async () => {
+    const notice = (text: string): unknown => ({
+      event: 'host.notice',
+      data: { kind: 'map-migration-failed', ref: null, text, at: '2026-10-24T00:00:00.000Z' },
+    });
+    await writeToken(paths);
+    let server = await startFakeServer(paths, { afterHello: [notice('/a/map.json'), notice('/b/map.json')] });
+    const spawn = vi.fn(() => {
+      void startFakeServer(paths, { afterHello: [notice('/c/map.json')] }).then((s) => {
+        server = s;
+      });
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
+    // Слушателей событий нет — окно ещё не подписалось.
+    await connection.connect();
+    const texts = (): string[] => connection.noticesSnapshot().map((entry) => entry.text);
+    await vi.waitFor(() => expect(texts()).toEqual(['/a/map.json', '/b/map.json']));
+
+    await connection.restartHost();
+    await vi.waitFor(() => expect(texts()).toEqual(['/c/map.json']));
+
+    connection.close();
+    server.close();
+  }, 10000);
+
+  it('снимок уведомлений хранит не больше 20 последних', async () => {
+    const notices = Array.from({ length: 25 }, (_, index) => ({
+      event: 'host.notice',
+      data: { kind: 'map-migration-failed', ref: null, text: `/p${index}/map.json`, at: '2026-10-24T00:00:00.000Z' },
+    }));
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { afterHello: notices });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 2000 });
+    await connection.connect();
+
+    await vi.waitFor(() => expect(connection.noticesSnapshot().at(-1)?.text).toBe('/p24/map.json'));
+    expect(connection.noticesSnapshot()).toHaveLength(20);
+    expect(connection.noticesSnapshot()[0]?.text).toBe('/p5/map.json');
+
+    connection.close();
+    server.close();
+  });
+
   it('после host.shutdown переподключается к новому', async () => {
     await writeToken(paths);
     let server = await startFakeServer(paths);

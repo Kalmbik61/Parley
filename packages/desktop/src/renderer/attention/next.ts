@@ -13,7 +13,7 @@
  * порядку сайдбара цель первого непустого яруса: при наличии blocked круг начинается с неё.
  */
 
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
@@ -114,7 +114,7 @@ function currentTarget(): AttentionTarget | null {
   if (key === null || workLayout === undefined) return null;
   const group = groups(workLayout).find((candidate) => candidate.id === workLayout.activeGroupId);
   const tab = group?.tabs.find((candidate) => candidate.id === group.activeTabId);
-  const entry = entries.find((candidate: WorkEntry) => workKey(candidate.projectPath, candidate.map.work.id) === key);
+  const entry = entries.find((candidate: WindowWorkEntry) => workKey(candidate.projectPath, candidate.map.work.id) === key);
   if (tab?.kind !== 'room' || entry === undefined) return null;
   return { kind: 'room', projectPath: entry.projectPath, workId: entry.map.work.id, roomId: tab.roomId };
 }

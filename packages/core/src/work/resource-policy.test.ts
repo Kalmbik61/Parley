@@ -1,6 +1,6 @@
-/** Бюджет работы и комнаты (P37): допуск, резервы, окна, отмена и неоднозначные владельцы — чистыми фикстурами и через замок карты. */
+/** Бюджет работы и комнаты (P37): допуск, резервы, окна, отмена и неоднозначные владельцы — чистыми фикстурами и через запись карты в базу. */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,8 +24,10 @@ import {
   type ResourceLimits,
 } from './resource-policy.js';
 import { addRoom } from './rooms.js';
-import { createWork, readMap, updateMap, workPaths } from './store.js';
+import { createWork, readMap, readStoredMap, updateMap } from './store.js';
 import { HUMAN, PARLEY, SYSTEM, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 /** Чуть впереди настоящих часов: отметки `history` из `transitionSession` не должны выглядеть свидетельством запуска после резерва. */
 const NOW = Date.now() + 60_000;
@@ -229,13 +231,13 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     for (const from of [HUMAN, SYSTEM, PARLEY]) addMessage(map, { from, to: [b], text: 'control', roomId: id }, iso(NOW - 1000));
 
     const base = { actor: a, room: id, messages: 1, recipients: 1, now: NOW } as const;
-    expect(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 4, roomMessages: 4 }) })).not.toThrow();
-    const work = denied(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 3, roomMessages: 50 }) }));
+    expect(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 4, roomMessages: 4 }) })).not.toThrow();
+    const work = denied(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 3, roomMessages: 50 }) }));
     expect([work.code, work.scope, work.used]).toEqual(['messages', 'work', 3]);
-    const inRoom = denied(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 50, roomMessages: 3 }) }));
+    const inRoom = denied(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 50, roomMessages: 3 }) }));
     expect([inRoom.code, inRoom.scope]).toEqual(['messages', 'room']);
     // Прямое письмо вне комнаты комнатный потолок не задевает.
-    expect(() => assertMessageBudget(map, { ...base, room: null, limits: limits({ workMessages: 50, roomMessages: 3 }) })).not.toThrow();
+    expect(() => assertMessageBudget(map, lt(map), { ...base, room: null, limits: limits({ workMessages: 50, roomMessages: 3 }) })).not.toThrow();
   });
 
   it('письма старше часа не считаются', () => {
@@ -243,7 +245,7 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     const a = addActive(map);
     const b = addActive(map);
     addMessage(map, { from: a, to: [b], text: 'старое' }, iso(NOW - RESOURCE_WINDOW_MS - 1));
-    expect(() => assertMessageBudget(map, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 1 }), now: NOW })).not.toThrow();
+    expect(() => assertMessageBudget(map, lt(map), { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 1 }), now: NOW })).not.toThrow();
   });
 
   it('рассылка: потолок адресатов считает каждого получателя, а письмо — как одно', () => {
@@ -254,16 +256,43 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     addMessage(map, { from: a, to: [], text: 'всем', roomId: id }, iso(NOW - 10)); // три адресата
 
     const fan = limits({ fanout: 4 });
-    expect(() => assertMessageBudget(map, { actor: a, room: id, messages: 1, recipients: 1, limits: fan, now: NOW })).not.toThrow();
-    const refusal = denied(() => assertMessageBudget(map, { actor: a, room: id, messages: 1, recipients: 2, limits: fan, now: NOW }));
+    expect(() => assertMessageBudget(map, lt(map), { actor: a, room: id, messages: 1, recipients: 1, limits: fan, now: NOW })).not.toThrow();
+    const refusal = denied(() => assertMessageBudget(map, lt(map), { actor: a, room: id, messages: 1, recipients: 2, limits: fan, now: NOW }));
     expect([refusal.code, refusal.used, refusal.limit]).toEqual(['fanout', 3, 4]);
+  });
+
+  it('запросы ограничены лимитами, а не письмами за час: письма человека не читаются, агентские — не больше workMessages', () => {
+    const map = emptyMap();
+    const a = addActive(map);
+    const b = addActive(map);
+    // Час, полный писем человека и хоста: у настоящего хоста их тысячи.
+    for (let i = 0; i < 300; i += 1) addMessage(map, { from: i % 2 === 0 ? HUMAN : SYSTEM, to: [b], text: 'x' }, iso(NOW - 1000));
+    for (let i = 0; i < 3; i += 1) addMessage(map, { from: a, to: [b], text: 'x' }, iso(NOW - 1000));
+    const inner = lt(map);
+    const asked: Array<{ agentsOnly?: boolean; limit?: number }> = [];
+    const spy = {
+      ...inner,
+      query: (q: Parameters<typeof inner.query>[0]) => {
+        asked.push({ ...(q.agentsOnly === undefined ? {} : { agentsOnly: q.agentsOnly }), limit: q.limit });
+        return inner.query(q);
+      },
+    };
+
+    expect(() => assertMessageBudget(map, spy, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 10 }), now: NOW })).not.toThrow();
+
+    expect(asked).toEqual([{ agentsOnly: true, limit: 3 }]);
+    // Отказ по числу писем не читает их вовсе.
+    asked.length = 0;
+    const refusal = denied(() => assertMessageBudget(map, spy, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 3 }), now: NOW }));
+    expect([refusal.code, refusal.used]).toEqual(['messages', 3]);
+    expect(asked).toEqual([]);
   });
 
   it('приглашения: N приглашённых — N писем и N адресатов сразу', () => {
     const map = emptyMap();
     const a = addActive(map);
     const refusal = denied(() =>
-      assertMessageBudget(map, { actor: a, room: null, messages: 5, recipients: 5, limits: limits({ workMessages: 4 }), now: NOW }),
+      assertMessageBudget(map, lt(map), { actor: a, room: null, messages: 5, recipients: 5, limits: limits({ workMessages: 4 }), now: NOW }),
     );
     expect(refusal.code).toBe('messages');
   });
@@ -339,9 +368,9 @@ describe('журнал в карте: чтение, запись, перезап
       for (let i = 0; i < 6; i += 1) addSession(map, { provider: 'claude', label: 'x', task: 't' });
     });
     const two = limits({ workConcurrent: 2, workLaunches: 50 });
-    // Замок карты берут опросом, порядок захвата не задан: какие две сессии займут слоты и достанется ли слот
-    // повтору `s-01`, решает очередь. Проверяются инварианты, не порядок. Таймаут замка — запас на нагрузку:
-    // семь записей подряд с индексом и `.bak` под ней укладываются в три секунды по умолчанию не всегда.
+    // Порядок записей в базу не задан: какие две сессии займут слоты и достанется ли слот
+    // повтору `s-01`, решает очередь. Проверяются инварианты, не порядок. Таймаут записи — запас на нагрузку:
+    // семь записей подряд укладываются в три секунды по умолчанию не всегда.
     const reserve = (session: string) =>
       updateMap(
         project,
@@ -379,8 +408,8 @@ describe('журнал в карте: чтение, запись, перезап
       settleAttempt(map, attempt.id, 'host-A', 'spent');
     });
 
-    // «Другой процесс» читает ту же карту заново — ничего не помнит, кроме файла.
-    const after = parseMap(await readFile(workPaths(project, workId).map, 'utf8'), workPaths(project, workId).map);
+    // «Другой процесс» читает ту же карту заново — ничего не помнит, кроме базы.
+    const after = readStoredMap(project, workId);
     expect(after.resources?.spawned).toBe(1);
     expect(after.resources?.attempts.map((attempt) => [attempt.kind, attempt.state])).toEqual([
       ['spawn', 'spent'],

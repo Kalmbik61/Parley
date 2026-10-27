@@ -28,7 +28,7 @@ export async function attemptRoomSend(_key: string, item: OutboxItem<RoomOutboxP
     const { messageId } = await bridge.call('rooms.send', { projectPath, workId, roomId, to, text, kind: 'note', requestedAt });
     return { kind: 'sent', keepAs: messageId };
   } catch (error) {
-    // Не ушло (не участник, комната в архиве, тайм-аут `map.lock`, хост недоступен): человек узнаёт об этом тостом.
+    // Не ушло (не участник, комната в архиве, база занята дольше таймаута, хост недоступен): человек узнаёт об этом тостом.
     toast(errorText(decodeIpcError(error).code, S.rooms.sendAction));
     return { kind: 'failed' };
   }

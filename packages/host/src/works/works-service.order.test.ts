@@ -75,15 +75,16 @@ describe('порядок чтений', () => {
     const s = createWorksService(fakeHost(), { debounceMs: 20 });
     service = s;
     await s.start();
-    expect(deliver.length).toBeGreaterThanOrEqual(2);
+    // Источник изменений один на всю базу (спека хранилища 6.9): наблюдателей по проектам больше нет.
+    expect(deliver).toHaveLength(1);
 
-    const onlyA = await readWorks(project);
+    const onlyA = await readWorks();
     await createWork(project, { title: 'B' });
-    const both = await readWorks(project);
+    const both = await readWorks();
 
-    // Свежее чтение (номер 11) пришло от одного наблюдателя, следом — старое
-    // (номер 10) от другого: в снимке должно остаться свежее.
-    deliver[1]?.(both, 11);
+    // Свежее чтение (номер 11) пришло раньше, следом — старое (номер 10):
+    // в снимке должно остаться свежее.
+    deliver[0]?.(both, 11);
     deliver[0]?.(onlyA, 10);
     await waitFor(() => s.snapshot().entries.length === 2);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -103,7 +104,7 @@ describe('порядок чтений', () => {
       created.pid = 999_999;
       transitionSession(current, created.id, 'active');
     });
-    const beforeReconcile = await readWorks(project);
+    const beforeReconcile = await readWorks();
 
     const s = createWorksService(fakeHost(), { debounceMs: 20 });
     service = s;
@@ -118,34 +119,5 @@ describe('порядок чтений', () => {
     await waitFor(() => refreshed);
 
     expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
-  });
-
-  it('карта нового проекта, переписанная до его наблюдателя, попадает в снимок', async () => {
-    // Первая работа нового проекта: список приходит от наблюдателя дома (индекс), а индекс
-    // пишется раньше карты (`updateMap`). Запись карты, сделанная до наблюдателя проекта,
-    // иначе не видна никому — сессия навсегда pending в снимке (fix-tests2, attention:63).
-    const s = createWorksService(fakeHost(), { debounceMs: 20 });
-    service = s;
-    await s.start();
-    const map = await createWork(project, { title: 'A' });
-    let sessionId = '';
-    await updateMap(project, map.work.id, (current) => {
-      sessionId = addSession(current, { provider: 'claude', label: 'план', task: 't' }).id;
-    });
-    const beforeLaunch = await readWorks(home);
-    await updateMap(project, map.work.id, (current) => {
-      const session = current.sessions.find((candidate) => candidate.id === sessionId);
-      if (session !== undefined) session.pid = process.pid;
-      transitionSession(current, sessionId, 'active');
-    });
-
-    let refreshed = false;
-    s.onChange(() => {
-      refreshed = true;
-    });
-    deliver[0]?.(beforeLaunch, 100);
-    await waitFor(() => refreshed);
-
-    expect(s.entry(project, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
   });
 });

@@ -4,11 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG, telegramBotId, telegramTokenFingerprint } from '@parley/core';
+import { DEFAULT_CONFIG, mapLetterTx, telegramBotId, telegramTokenFingerprint } from '@parley/core';
 import type { FeedCard, FeedItem, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
 import type { AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
+import type { TriggerLetters } from './notify.js';
 import { createTelegramService } from './service.js';
 import type { TelegramService, TelegramServiceDeps } from './service.js';
 import { T } from './texts.js';
@@ -160,6 +161,11 @@ const entry = (over: Record<string, unknown> = {}): WorkEntry =>
       ...over,
     },
   }) as unknown as WorkEntry;
+/** Письма снимка в памяти: в настоящем хосте их читают из базы работы (спека хранилища 6.2). */
+const memoryLetters: TriggerLetters = {
+  humanUnread: (item) => mapLetterTx(item.map).letters.unreadFor('human'),
+  lastHumanLetter: (item, roomId) => mapLetterTx(item.map).letters.query({ roomId, from: 'human', limit: 1, newestFirst: true })[0],
+};
 const snap = (over: Record<string, unknown> = {}): WorksSnapshot => ({ entries: [entry(over)], branches: {} }) as unknown as WorksSnapshot;
 const letter = (): unknown => ({ id: 'm-01', roomId: null, from: 's-01', to: ['human'], at: AT, text: 'hello', kind: 'note', readBy: {} });
 const decisionRoom = (): unknown => ({ id: 'r-01', title: 'Auth', members: ['s-01'], proposal: { id: 'p-01', from: 's-01', text: 'ship it', rev: 0, at: AT } });
@@ -194,6 +200,7 @@ function make(): TelegramService {
     home,
     host,
     works: { snapshot: () => snapshot, onChange: (listener: any) => ((worksListener = listener), () => (worksListener = null)) },
+    letters: memoryLetters,
     activity: {
       get: (ref: SessionRef) =>
         live[ref.sessionId] === undefined ? undefined : { activity: { activity: live[ref.sessionId], need: liveNeed }, metrics: null },

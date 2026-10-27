@@ -12,7 +12,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { LayoutNode, TabSpec } from '../../shared/layout-types.js';
@@ -135,7 +135,7 @@ function mockNonZeroRects(): void {
   } as DOMRect);
 }
 
-function work(id: string, createdAt: string, title: string, sessions: WorkSession[]): WorkEntry {
+function work(id: string, createdAt: string, title: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: `/tmp/${id}`,
     map: {
@@ -618,7 +618,7 @@ async function activateWithTerminal(key: string, sessionId: string): Promise<voi
   await flush();
 }
 
-function fourWorks(): WorkEntry[] {
+function fourWorks(): WindowWorkEntry[] {
   return [
     work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]),
     work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]),
@@ -627,7 +627,7 @@ function fourWorks(): WorkEntry[] {
   ];
 }
 
-async function renderShell(entries: WorkEntry[]): Promise<void> {
+async function renderShell(entries: WindowWorkEntry[]): Promise<void> {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
   render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
   await flush();
@@ -764,7 +764,7 @@ describe('AppShell — вход «Почта» сайдбара (тест 10 к�
     const letter = { id: 'm-1', roomId: null, from: 's-02', to: ['human'], at: '2026-01-02T10:00:00.000Z', text: 'т', kind: 'note' as const, readBy: {} };
     const a = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
     const bBase = work('w-02', '2026-01-02', 'Вторая', [session('s-02', 'два')]);
-    const b: WorkEntry = { ...bBase, map: { ...bBase.map, messages: [letter] } };
+    const b: WindowWorkEntry = { ...bBase, map: { ...bBase.map, messages: [letter] } };
     await renderShell([a, b]);
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-01')));
     await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-01')]).toBe(true));
@@ -1459,7 +1459,7 @@ describe('AppShell — видимый порядок для persistence (реш�
     act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
     await flush();
 
-    const archived3: WorkEntry = { ...w3!, map: { ...w3!.map, work: { ...w3!.map.work, status: 'archived' } } };
+    const archived3: WindowWorkEntry = { ...w3!, map: { ...w3!.map, work: { ...w3!.map.work, status: 'archived' } } };
     act(() => useWorksStore.setState({ entries: [w1!, archived3] }));
     await flush();
 
@@ -1609,14 +1609,14 @@ async function pickInPalette(query: string, row: RegExp): Promise<void> {
   await flush();
 }
 
-function archivedWork(id: string, projectPath: string, sessions: WorkSession[]): WorkEntry {
+function archivedWork(id: string, projectPath: string, sessions: WorkSession[]): WindowWorkEntry {
   const base = work(id, '2026-01-09', `Архивная ${id}`, sessions);
   return { projectPath, map: { ...base.map, work: { ...base.map.work, status: 'archived' } } };
 }
 
 
 /** Две работы; в первой комната r-01 {s-01, s-02} с решением, ждущим человека (кусок 5, спека окна 2026-09-29, 2.7). */
-function waitingWorks(): WorkEntry[] {
+function waitingWorks(): WindowWorkEntry[] {
   const waiting = work('w-01', '2026-01-01', 'Возвраты', [session('s-01', 'один'), session('s-02', 'два')]);
   waiting.map.rooms = [
     {
@@ -1705,7 +1705,7 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
   // Цели «следующей» — один список blocked → комната с решением → unseen по кругу от текущей вкладки (2.7): пока в
   // работах есть blocked-сессия, клик не застревает на ней, а доходит до комнаты с решением (сцена dark-04).
   it('blocked-сессия и комната с решением: «2 need you»; клики по счётчику идут терминал → комната → снова терминал', async () => {
-    const [waiting, other] = waitingWorks() as [WorkEntry, WorkEntry];
+    const [waiting, other] = waitingWorks() as [WindowWorkEntry, WindowWorkEntry];
     const ref = { projectPath: other.projectPath, workId: 'w-02', sessionId: 's-01' };
     useActivityStore.setState({
       byRef: {
@@ -1890,7 +1890,7 @@ describe('AppShell — фокус после выбора строки пали�
 
   it('комната: фокус — в поле ввода её тела', async () => {
     const base = work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один')]);
-    const withRoom: WorkEntry = { ...base, map: { ...base.map, rooms: [{ id: 'r-01', title: 'Совещание', creator: 'human', members: ['s-01'], createdAt: '2026-01-01T00:00:00.000Z' }] } };
+    const withRoom: WindowWorkEntry = { ...base, map: { ...base.map, rooms: [{ id: 'r-01', title: 'Совещание', creator: 'human', members: ['s-01'], createdAt: '2026-01-01T00:00:00.000Z' }] } };
     await renderShell([withRoom]);
 
     await pickInPalette('Совещание', /Совещание/);
@@ -1914,7 +1914,7 @@ describe('AppShell — несохранённые файлы при закрыт
   beforeEach(() => useFilesStore.setState({ buffers: {}, reveals: {} }));
 
   /** Открывает A и B (активна B), делает A грязной — её тело уже размонтировано. */
-  async function openDirtyA(extra: WorkEntry[] = []): Promise<void> {
+  async function openDirtyA(extra: WindowWorkEntry[] = []): Promise<void> {
     bridge.setFile(root, 'src/a.ts', text('a'));
     bridge.setFile(root, 'src/b.ts', text('b'));
     await renderShell([work('w-01', '2026-01-01', 'One', [session('s-01', 'one')]), ...extra]);
@@ -2028,7 +2028,7 @@ describe('AppShell — несохранённые файлы при закрыт
   });
 
   describe('работа исчезла из снимка не через меню окна (fix-7.3 п. 1)', () => {
-    const other = (): WorkEntry => work('w-02', '2026-01-02', 'Two', [session('s-02', 'two')]);
+    const other = (): WindowWorkEntry => work('w-02', '2026-01-02', 'Two', [session('s-02', 'two')]);
     const vanish = (): void => act(() => useWorksStore.setState({ entries: [other()] }));
     const question = 'Workspace “One” was deleted — unsaved changes in 1 file';
 

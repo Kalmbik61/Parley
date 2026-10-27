@@ -20,10 +20,9 @@ import {
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { ENGINE, HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode, requireOpenRoom, lateDefect,
+import { ENGINE, HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode, requireOpenRoom, lateDefect,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
-import { existsSync } from 'node:fs';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
@@ -109,7 +108,7 @@ class NoChange extends Error {}
 export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<import('../rooms/autonomous-engine.js').AutonomousEngine, 'cancel'>): { [M in PlanMethodName]: Handler<M> } {
   async function mutate<M extends PlanMethodName>(name: M, params: PlanMethodParams<M>): Promise<PlanActionResult> {
     const { projectPath, workId } = params;
-    if (!existsSync(workPaths(projectPath, workId).map)) throw new HostError('not_found', 'Workspace is unavailable.');
+    if (!workExists(projectPath, workId)) throw new HostError('not_found', 'Workspace is unavailable.');
     let messageId: string | null = null;
     if (name !== 'plans.retryEffects') {
       const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
@@ -122,18 +121,18 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
             await engine.cancel(input);
           }
         }
-        await updateMap(projectPath, workId, map => {
+        await updateMap(projectPath, workId, (map, letters) => {
           if (map.work.status !== 'active') throw new RoomRuleError('workspace is closed');
           reconcileRoomPlans(map);
           switch (name) {
             case 'rooms.setMode': {
               const input = params as PlanMethodParams<'rooms.setMode'>;
-              const before = map.messages.length;
-              setRoomMode(map, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
-              const source = map.messages.slice(before).find(row => row.from === SYSTEM && row.roomId === input.roomId && row.kind === 'note');
-              if (!source) throw new NoChange();
-              messageId = source.id;
-              capturePlanNotice(map, input.roomId, 'mode', source.id);
+              const written = setRoomMode(map, letters, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
+              // Строка режима — последняя из записанных: пересчёт плана (понижение verified → checklist) пишет свои строки раньше неё (спека хранилища 6.2).
+              const source = written.at(-1);
+              if (source === undefined) throw new NoChange();
+              messageId = source;
+              capturePlanNotice(map, letters, input.roomId, 'mode', source);
               break;
             }
             case 'plans.update': {
@@ -142,7 +141,7 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
             }
             case 'plans.submit': {
               const input = params as PlanMethodParams<'plans.submit'>;
-              submitPlanItem(map,input.planId,input.rev,input.item,HUMAN,input.evidence); break;
+              submitPlanItem(map,letters,input.planId,input.rev,input.item,HUMAN,input.evidence); break;
             }
             case 'plans.verify': {
               const input = params as PlanMethodParams<'plans.verify'>;
@@ -167,16 +166,16 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
                 map.rooms[map.rooms.indexOf(room)] = result.room;
                 break;
               }
-              verifyPlanItem(map,input.planId,input.rev,input.item,HUMAN,input.verdict,input.note); break;
+              verifyPlanItem(map,letters,input.planId,input.rev,input.item,HUMAN,input.verdict,input.note); break;
             }
             case 'plans.cancel': {
               const input = params as PlanMethodParams<'plans.cancel'>;
               const plan = map.plans?.find(plan => plan.id === input.planId);
               if (plan?.mode === 'autonomous' && plan.rev === input.rev && plan.status === 'cancelled') break;
-              cancelRoomPlan(map,input.planId,input.rev,HUMAN); break;
+              cancelRoomPlan(map,letters,input.planId,input.rev,HUMAN); break;
             }
           }
-          reservePlanEffects(map, rate);
+          reservePlanEffects(map, letters, rate);
         });
       } catch (error) {
         if (!(error instanceof NoChange)) {

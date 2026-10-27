@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { capPlan, type AgentPlanItem } from '@parley/core/agent-plan';
-import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
@@ -35,7 +35,7 @@ function message(id: string, patch: Partial<Message> = {}): Message {
   return makeLetter(id, { roomId: 'r-01', to: [], from: 'human', ...patch });
 }
 
-function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[]; title?: string } = {}): WorkEntry {
+function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[]; title?: string } = {}): WindowWorkEntry {
   return makeWork('w-01', {
     projectPath: PROJECT,
     title: patch.title ?? 'Платежи',
@@ -45,7 +45,7 @@ function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Mess
   });
 }
 
-function build(entry: WorkEntry, activity = {}): RoomModel {
+function build(entry: WindowWorkEntry, activity = {}): RoomModel {
   const model = buildRoomModel({ entry, roomId: 'r-01', providers: PROVIDERS, activity });
   if (model === null) throw new Error('комната не найдена');
   return model;
@@ -207,7 +207,7 @@ describe('buildRoomModel — модель участника из живых м�
 // Спека застрявших 7.3: участник несёт `need` живой сессии — слово причины рисует лента участников.
 describe('buildRoomModel — чего участник ждёт от человека (need)', () => {
   const need = makeNeed('limit', { resetsAt: '2026-10-21T16:27:00.000Z' });
-  const needOf = (entry: WorkEntry, activity: Record<string, ActivityEntry>) =>
+  const needOf = (entry: WindowWorkEntry, activity: Record<string, ActivityEntry>) =>
     build(entry, activity).participants.map((participant) => [participant.id, participant.need]);
 
   it('живая сессия с need — need как есть; без need и без активности — null', () => {
@@ -748,7 +748,7 @@ describe('buildRoomModel — доставка: кто забрал сообще�
   const T1 = '2026-09-27T09:01:00.000Z';
   const T2 = '2026-09-27T09:02:00.000Z';
   const T3 = '2026-09-27T09:03:00.000Z';
-  const deliveryOf = (entry: WorkEntry, activity = {}, index = 0) => build(entry, activity).messages[index]?.delivery;
+  const deliveryOf = (entry: WindowWorkEntry, activity = {}, index = 0) => build(entry, activity).messages[index]?.delivery;
   /** Живые метрики сессий с причиной ожидания; `undefined` — метрики есть, а поля `mailWaiting` нет (хост прежней версии). */
   const withMailWaiting = (reasons: Record<string, MailWait | null | undefined>) =>
     activityMap(

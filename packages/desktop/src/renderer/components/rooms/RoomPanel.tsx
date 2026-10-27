@@ -48,7 +48,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
@@ -91,7 +91,7 @@ import { RoomRecipeChip } from './RoomRecipeChip.js';
 import { RoomUsageChip } from './RoomUsageChip.js';
 
 export interface RoomPanelProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   providers: Array<{ id: string; label: string }>;
   /** Живая активность сессий (`useActivityStore.byRef`): состояния в ленте участников и в меню упоминаний. */
@@ -600,6 +600,6 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   );
 }
 
-function CompletionOrDecision({ plan, entry, bridge, ...props }: import('./DecisionCard.js').DecisionCardProps & { plan: import('@parley/core').RoomPlan | null; entry: WorkEntry; bridge: ParleyBridge }): JSX.Element {
+function CompletionOrDecision({ plan, entry, bridge, ...props }: import('./DecisionCard.js').DecisionCardProps & { plan: import('@parley/core').RoomPlan | null; entry: WindowWorkEntry; bridge: ParleyBridge }): JSX.Element {
   return props.proposal.kind === 'completion' ? <CompletionCard {...props} plan={plan} entry={entry} bridge={bridge}/> : <DecisionCard {...props} entry={entry} bridge={bridge}/>;
 }

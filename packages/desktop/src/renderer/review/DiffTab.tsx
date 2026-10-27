@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffNote } from '../../shared/notes-types.js';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { DiffFile, FileRoot } from '../../shared/files-types.js';
@@ -46,7 +46,7 @@ import { useChanges } from './use-changes.js';
 export interface DiffTabProps {
   bridge: ParleyBridge;
   workKey: string;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   tab: Extract<TabSpec, { kind: 'diff' }>;
   /** Шрифт редактора из настроек, как у вкладки файла; сверх брифа — без него Monaco берёт свой. */
   font?: { family: string; size: number };

@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, EyeOff, RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot, GitStatusLetter } from '../../shared/files-types.js';
@@ -89,7 +89,7 @@ function useGitStatus(bridge: ParleyBridge, root: FileRoot): { status: Status; r
 }
 
 /** Сессии, чья папка — этот корень: worktree — его сессия, проект — сессии работы без своего worktree. */
-function rootSessions(entry: WorkEntry, spec: FileRootSpec): string[] {
+function rootSessions(entry: WindowWorkEntry, spec: FileRootSpec): string[] {
   if (spec.kind === 'worktree') return [spec.sessionId];
   return entry.map.sessions.filter((session) => session.worktree === null || session.worktree.createdAt === null).map((session) => session.id);
 }
@@ -108,7 +108,7 @@ function turnEnded(prev: ActivityEntry | undefined, next: ActivityEntry | undefi
 
 export interface FilesPanelProps {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
 }
 
 export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {

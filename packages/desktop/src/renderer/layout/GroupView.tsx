@@ -24,7 +24,7 @@
 
 import { createContext, useCallback, useContext, useLayoutEffect, useRef } from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -68,7 +68,7 @@ function useLayoutBody(): LayoutBodyContextValue {
 
 interface TabBodyProps {
   tab: TabSpec;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   host: LayoutBodyContextValue;
   onMissing: () => void;
 }
@@ -142,7 +142,7 @@ function BodyDropIndicator({ workKey, groupId }: { workKey: string; groupId: str
 export interface GroupViewProps {
   workKey: string;
   group: GroupNode;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Единственная группа во всей раскладке работы — её строка вкладок портали­руется в заголовок (спека 5.3). */
   singleGroup: boolean;
 }

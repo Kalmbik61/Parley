@@ -1,11 +1,11 @@
-import type { RoomPlan, WorkEntry } from '@parley/core';
+import type { RoomPlan, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { isRoomArchived } from '../../lib/room-archive.js';
 import { Button } from '../../ui/button.js';
 import { usePlanRequest } from './PlanPanel.js';
 
-export function HaltCard({ plan, entry, bridge }: { plan: RoomPlan; entry: WorkEntry; bridge: ParleyBridge }): JSX.Element | null {
+export function HaltCard({ plan, entry, bridge }: { plan: RoomPlan; entry: WindowWorkEntry; bridge: ParleyBridge }): JSX.Element | null {
   const halted = plan.mode === 'autonomous' ? plan.autonomous?.halted : null;
   const room = entry.map.rooms.find(row => row.id === plan.roomId);
   const action = usePlanRequest(

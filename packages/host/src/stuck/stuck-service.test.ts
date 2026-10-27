@@ -3,29 +3,31 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  addMessage,
   addRoom,
   addSession,
   archiveRoom,
   backLetter,
   backLine,
   createWork,
+  deleteWorkFiles,
   HUMAN,
   PARLEY,
   readMap,
+  readStoredMap,
   STUCK_REPORT_MS,
   stuckLetter,
   stuckLine,
   SYSTEM,
   transitionSession,
   updateMap,
-  workPaths,
+  type LetterTx,
   type LimitAlternative,
   type Message,
   type NeedKind,
   type ProviderLimits,
   type ProviderReadiness,
   type SessionNeed,
+  type WindowWorkMap,
   type WorkMap,
   type WorkSession,
 } from '@parley/core';
@@ -145,20 +147,20 @@ const needOf = (kind: NeedKind, extra: Partial<SessionNeed> = {}): SessionNeed =
 
 /** Работа с тремя активными сессиями `claude`; `setup` дополняет карту (комнаты, письма). */
 async function makeWork(
-  setup: (map: WorkMap, ids: [string, string, string]) => void = () => {},
+  setup: (map: WorkMap, ids: [string, string, string], letters: LetterTx) => void = () => {},
   provider = 'claude',
 ): Promise<[string, string, string]> {
   const created = await createWork(project, { title: 'Работа' });
   workId = created.work.id;
   let ids: [string, string, string] = ['', '', ''];
-  await updateMap(project, workId, (map) => {
+  await updateMap(project, workId, (map, letters) => {
     const made = [0, 1, 2].map((index) => {
       const session = addSession(map, { provider, label: `сессия ${index}`, task: 'сделать' });
       transitionSession(map, session.id, 'active');
       return session.id;
     });
     ids = [made[0] ?? '', made[1] ?? '', made[2] ?? ''];
-    setup(map, ids);
+    setup(map, ids, letters);
   });
   await refresh();
   return ids;
@@ -177,15 +179,15 @@ const sessionOf = (map: WorkMap, id: string): WorkSession => {
   return found;
 };
 
-const lines = (map: WorkMap): Message[] => map.messages.filter((message) => message.from === SYSTEM);
-const letters = (map: WorkMap): Message[] => map.messages.filter((message) => message.from === PARLEY);
+const lines = (map: WindowWorkMap): Message[] => map.messages.filter((message) => message.from === SYSTEM);
+const letters = (map: WindowWorkMap): Message[] => map.messages.filter((message) => message.from === PARLEY);
 const whoOf = (
   id: string,
   provider = 'Claude Code',
   family = 'Claude Code',
 ): { id: string; provider: string; family: string } => ({ id, provider, family });
 const stuckOf = async (id: string): Promise<SessionNeed | null | undefined> =>
-  sessionOf(await readMap(project, workId), id).stuck;
+  sessionOf(readStoredMap(project, workId), id).stuck;
 
 const inRoom = (lead: string, ...others: string[]) => (map: WorkMap) => {
   addRoom(map, { title: 'Комната', creator: HUMAN, members: [lead, ...others], lead });
@@ -206,13 +208,13 @@ describe('служба «застрял» — пороги (спека заст�
     await emit(worker, need);
 
     await advance(90_000);
-    let map = await readMap(project, workId);
+    let map = readStoredMap(project, workId);
     expect(sessionOf(map, worker).stuck ?? null).toBeNull();
     expect(map.messages).toHaveLength(0);
 
     await advance(40_000);
     await until(async () => (await stuckOf(worker)) != null);
-    map = await readMap(project, workId);
+    map = readStoredMap(project, workId);
     const at = after(STUCK_REPORT_MS);
     expect(sessionOf(map, worker).stuck).toEqual(need);
     expect(lines(map).map((line) => line.text)).toEqual([stuckLine(whoOf(worker), need, at, false)]);
@@ -237,7 +239,7 @@ describe('служба «застрял» — пороги (спека заст�
       await advance(20_000);
     }
     await advance(200_000);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(sessionOf(map, worker).stuck ?? null).toBeNull();
     expect(map.messages).toHaveLength(0);
   });
@@ -261,7 +263,7 @@ describe('служба «застрял» — пороги (спека заст�
       await emit(worker, need);
       await until(async () => (await stuckOf(worker)) != null);
       expect(await stuckOf(worker), kind).toEqual(need);
-      expect(lines(await readMap(project, workId)), kind).toHaveLength(1);
+      expect(lines(readStoredMap(project, workId)), kind).toHaveLength(1);
       stoppers.pop()?.();
       listeners = [];
     }
@@ -280,7 +282,7 @@ describe('служба «застрял» — пороги (спека заст�
     await until(async () => (await stuckOf(worker)) != null);
     // Доклад — по последнему значению эпизода, одним письмом.
     expect(await stuckOf(worker)).toEqual(latest);
-    expect(letters(await readMap(project, workId))).toHaveLength(1);
+    expect(letters(readStoredMap(project, workId))).toHaveLength(1);
   });
 
   it('вопрос → одобрение внутри эпизода: эпизод не открывается заново (спека 3.5)', async () => {
@@ -292,7 +294,7 @@ describe('служба «застрял» — пороги (спека заст�
     await advance(91_000);
     await until(async () => (await stuckOf(worker)) != null);
     expect((await stuckOf(worker))?.kind).toBe('approval');
-    expect(letters(await readMap(project, workId))).toHaveLength(1);
+    expect(letters(readStoredMap(project, workId))).toHaveLength(1);
   });
 
   it('stop() снимает таймеры: после него доклада нет', async () => {
@@ -301,7 +303,7 @@ describe('служба «застрял» — пороги (спека заст�
     await emit(worker, needOf('approval'));
     service.stop();
     await advance(200_000);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(sessionOf(map, worker).stuck ?? null).toBeNull();
     expect(map.messages).toHaveLength(0);
   });
@@ -325,7 +327,7 @@ describe('служба «застрял» — доклад (спека заст�
     const need = needOf('limit', { resetsAt: after(3_600_000).toISOString(), window: 'session' });
     await emit(worker, need);
     await until(async () => (await stuckOf(worker)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(asked).toEqual(['claude']);
     expect(lines(map).map((line) => line.text)).toEqual([stuckLine(whoOf(worker), need, after(0), false)]);
     expect(letters(map).map((letter) => [letter.to, letter.text])).toEqual([
@@ -351,7 +353,7 @@ describe('служба «застрял» — доклад (спека заст�
     await emit(third, need);
     await until(async () => (await stuckOf(third)) != null);
     expect(calls).toBe(1);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(letters(map).at(-1)?.text).toBe(stuckLetter(whoOf(third), need, after(0), []));
     expect(logErrors).toHaveLength(1);
   });
@@ -416,7 +418,7 @@ describe('служба «застрял» — доклад (спека заст�
     const need = needOf('limit');
     await emit(worker, need);
     await until(async () => (await stuckOf(worker)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(lines(map)[0]?.text).toBe(stuckLine(whoOf(worker, 'Claude Code X'), need, after(0), false));
     expect(lines(map)[0]?.text).toContain('Claude Code X usage limit');
     // Заголовок письма называет семейство CLI, а не имя застрявшего аккаунта (решение 11).
@@ -448,7 +450,7 @@ describe('служба «застрял» — доклад (спека заст�
     });
     await emit(worker, needOf('limit'));
     await until(async () => (await stuckOf(worker)) != null);
-    const letter = letters(await readMap(project, workId))[0];
+    const letter = letters(readStoredMap(project, workId))[0];
     expect(letter?.to).toEqual([lead]);
     expect(letter?.text).toContain('Other Claude Code accounts in Parley right now: Claude Code 2 (weekly 31 % used');
     expect(letter?.text).toContain('create_session (provider: "custom-claude-2")');
@@ -477,7 +479,7 @@ describe('служба «застрял» — доклад (спека заст�
     });
     await emit(worker, needOf('limit'));
     await until(async () => (await stuckOf(worker)) != null);
-    const text = letters(await readMap(project, workId))[0]?.text ?? '';
+    const text = letters(readStoredMap(project, workId))[0]?.text ?? '';
     expect(text).toContain('Other Claude Code accounts in Parley right now: Claude Code — no limits known.');
     expect(text).toContain('create_session (provider: "claude")');
     expect(text).not.toContain('Claude Code 3');
@@ -489,7 +491,7 @@ describe('служба «застрял» — доклад (спека заст�
     const need = needOf('limit');
     await emit(worker, need);
     await until(async () => (await stuckOf(worker)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(letters(map)[0]?.text).toBe(
       stuckLetter(whoOf(worker, 'Codex', 'Codex'), need, after(0), [{ id: 'codex-2', label: 'Codex 2', limits: null }]),
     );
@@ -497,17 +499,17 @@ describe('служба «застрял» — доклад (спека заст�
   });
 
   it('застрял ведущий: письма только отправителям непрочитанных, не человеку и не системе; строка с хвостом про «Make lead»', async () => {
-    const [lead, worker, third] = await makeWork((map, [a, b, c]) => {
+    const [lead, worker, third] = await makeWork((map, [a, b, c], tx) => {
       inRoom(a, b, c)(map);
-      addMessage(map, { from: b, to: [a], text: 'жду твоего ответа' });
-      addMessage(map, { from: HUMAN, to: [a], text: 'человек писал' });
-      addMessage(map, { from: SYSTEM, to: [a], text: 'система писала' });
+      tx.add({ roomId: null, kind: 'note', from: b, to: [a], text: 'жду твоего ответа' });
+      tx.add({ roomId: null, kind: 'note', from: HUMAN, to: [a], text: 'человек писал' });
+      tx.add({ roomId: null, kind: 'note', from: SYSTEM, to: [a], text: 'система писала' });
     });
     boot({ alternatives: async () => [] });
     const need = needOf('limit', { resetsAt: after(7_200_000).toISOString() });
     await emit(lead, need);
     await until(async () => (await stuckOf(lead)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     const line = lines(map).find((item) => item.text.includes('usage limit'));
     expect(line?.text).toBe(stuckLine(whoOf(lead), need, after(0), true));
     expect(line?.text).toContain('leads this room');
@@ -518,32 +520,32 @@ describe('служба «застрял» — доклад (спека заст�
   });
 
   it('получатели: ведущий и отправитель непрочитанных — каждый один раз, без самой сессии и без закрытых', async () => {
-    const [lead, worker, third] = await makeWork((map, [a, b, c]) => {
+    const [lead, worker, third] = await makeWork((map, [a, b, c], tx) => {
       inRoom(a, b, c)(map);
-      addMessage(map, { from: c, to: [b], text: 'ответь мне' });
-      addMessage(map, { from: a, to: [b], text: 'и мне' });
-      addMessage(map, { from: c, to: [b], text: 'ещё раз' });
+      tx.add({ roomId: null, kind: 'note', from: c, to: [b], text: 'ответь мне' });
+      tx.add({ roomId: null, kind: 'note', from: a, to: [b], text: 'и мне' });
+      tx.add({ roomId: null, kind: 'note', from: c, to: [b], text: 'ещё раз' });
       transitionSession(map, c, 'closed');
     });
     boot();
     await emit(worker, needOf('approval'));
     await advance(STUCK_REPORT_MS + 1_000);
     await until(async () => (await stuckOf(worker)) != null);
-    const sent = letters(await readMap(project, workId));
+    const sent = letters(readStoredMap(project, workId));
     expect(sent.map((letter) => letter.to)).toEqual([[lead]]);
     expect(sent.some((letter) => letter.to.includes(third))).toBe(false);
   });
 
   it('нет комнаты: письма без комнаты только отправителям непрочитанных, строки в ленте нет', async () => {
-    const [first, second, third] = await makeWork((map, [a, , c]) => {
-      addMessage(map, { from: a, to: [c], text: 'ответь мне' });
-      addMessage(map, { from: HUMAN, to: [c], text: 'человек' });
+    const [first, second, third] = await makeWork((map, [a, , c], tx) => {
+      tx.add({ roomId: null, kind: 'note', from: a, to: [c], text: 'ответь мне' });
+      tx.add({ roomId: null, kind: 'note', from: HUMAN, to: [c], text: 'человек' });
     });
     boot({ alternatives: async () => [] });
     const need = needOf('limit');
     await emit(third, need);
     await until(async () => (await stuckOf(third)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(lines(map)).toHaveLength(0);
     const sent = letters(map);
     expect(sent).toHaveLength(1);
@@ -558,17 +560,17 @@ describe('служба «застрял» — доклад (спека заст�
   });
 
   it('архивная комната: stuck записан, ни строки, ни писем', async () => {
-    const [, worker] = await makeWork((map, [a, b]) => {
+    const [, worker] = await makeWork((map, [a, b], tx) => {
       inRoom(a, b)(map);
-      addMessage(map, { from: a, to: [b], text: 'до архива' });
-      archiveRoom(map, 'r-01');
+      tx.add({ roomId: null, kind: 'note', from: a, to: [b], text: 'до архива' });
+      archiveRoom(map, tx, 'r-01');
     });
-    const before = (await readMap(project, workId)).messages.length;
+    const before = (readStoredMap(project, workId)).messages.length;
     boot({ alternatives: async () => [] });
     const need = needOf('limit');
     await emit(worker, need);
     await until(async () => (await stuckOf(worker)) != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(sessionOf(map, worker).stuck).toEqual(need);
     expect(map.messages).toHaveLength(before);
   });
@@ -576,7 +578,8 @@ describe('служба «застрял» — доклад (спека заст�
   it('сбой updateMap — строка в логе, без исключения наружу', async () => {
     const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map));
     boot({ alternatives: async () => [] });
-    await rm(workPaths(project, workId).dir, { recursive: true, force: true });
+    // Карта лежит в базе, а не в каталоге работы: каталог стирать мало — запись откажет, когда снята строка работы.
+    await deleteWorkFiles(project, workId);
     fire(worker, needOf('limit'));
     await quiet();
     expect(logErrors).toHaveLength(1);
@@ -593,12 +596,12 @@ describe('служба «застрял» — смена внутри эпизо
     boot({ alternatives: async () => [] });
     await emit(worker, needOf('limit'));
     await until(async () => (await stuckOf(worker)) != null);
-    const before = (await readMap(project, workId)).messages.length;
+    const before = (readStoredMap(project, workId)).messages.length;
 
     const later = needOf('limit', { resetsAt: after(1_800_000).toISOString(), window: 'week' });
     await emit(worker, later);
     await until(async () => (await stuckOf(worker))?.resetsAt != null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(sessionOf(map, worker).stuck).toEqual(later);
     expect(map.messages).toHaveLength(before);
   });
@@ -611,7 +614,7 @@ describe('служба «застрял» — смена внутри эпизо
 
     await emit(worker, null);
     await until(async () => (await stuckOf(worker)) === null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(lines(map).map((line) => line.text).at(-1)).toBe(backLine(worker, 'limit'));
     expect(letters(map).at(-1)).toMatchObject({ to: [lead], roomId: 'r-01', text: backLetter(worker, 'limit') });
   });
@@ -624,7 +627,7 @@ describe('служба «застрял» — смена внутри эпизо
       await until(async () => (await stuckOf(worker)) != null);
       await emit(worker, null);
       await until(async () => (await stuckOf(worker)) === null);
-      const map = await readMap(project, workId);
+      const map = readStoredMap(project, workId);
       expect(lines(map).at(-1)?.text, kind).toBe(backLine(worker, kind));
       expect(letters(map).at(-1), kind).toMatchObject({ to: [lead], text: backLetter(worker, kind) });
       stoppers.pop()?.();
@@ -638,8 +641,8 @@ describe('служба «застрял» — смена внутри эпизо
     const need = needOf('limit');
     fire(worker, need);
     fire(worker, null);
-    await until(async () => lines(await readMap(project, workId)).length === 2);
-    const map = await readMap(project, workId);
+    await until(async () => lines(readStoredMap(project, workId)).length === 2);
+    const map = readStoredMap(project, workId);
     expect(lines(map).map((line) => line.text)).toEqual([
       stuckLine(whoOf(worker), need, after(0), false),
       backLine(worker, 'limit'),
@@ -653,11 +656,11 @@ describe('служба «застрял» — смена внутри эпизо
     await emit(worker, needOf('approval', { detail: 'npm install' }));
     await advance(STUCK_REPORT_MS + 1_000);
     await until(async () => (await stuckOf(worker)) != null);
-    const lettersBefore = letters(await readMap(project, workId)).length;
+    const lettersBefore = letters(readStoredMap(project, workId)).length;
 
     await emit(worker, null);
     await until(async () => (await stuckOf(worker)) === null);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(lines(map).at(-1)?.text).toBe(backLine(worker, 'approval'));
     expect(letters(map)).toHaveLength(lettersBefore);
   });
@@ -668,14 +671,14 @@ describe('служба «застрял» — смена внутри эпизо
       boot({ alternatives: async () => [] });
       await emit(worker, needOf('limit'));
       await until(async () => (await stuckOf(worker)) != null);
-      const before = (await readMap(project, workId)).messages.length;
+      const before = (readStoredMap(project, workId)).messages.length;
 
       await updateMap(project, workId, (map) => {
         transitionSession(map, worker, lifecycle);
       });
       await emit(worker, null);
       await until(async () => (await stuckOf(worker)) === null);
-      expect((await readMap(project, workId)).messages, lifecycle).toHaveLength(before);
+      expect((readStoredMap(project, workId)).messages, lifecycle).toHaveLength(before);
       stoppers.pop()?.();
       listeners = [];
     }
@@ -690,7 +693,7 @@ describe('служба «застрял» — смена внутри эпизо
     const signedOut = needOf('sign-in', { detail: 'Not logged in', account: 'auth' });
     await emit(worker, signedOut);
     await until(async () => (await stuckOf(worker))?.kind === 'sign-in');
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(lines(map).map((line) => line.text)).toEqual([
       stuckLine(whoOf(worker), needOf('limit'), after(0), false),
       stuckLine(whoOf(worker), signedOut, after(0), false),
@@ -717,35 +720,35 @@ describe('служба «застрял» — сверка по первому o
   it('в карте stuck и та же need: ни одного нового сообщения', async () => {
     const need = needOf('limit', { resetsAt: after(3_600_000).toISOString() });
     const [, worker] = await reported(need);
-    const before = (await readMap(project, workId)).messages.length;
+    const before = (readStoredMap(project, workId)).messages.length;
     boot({ alternatives: async () => [] });
     await emit(worker, need);
     await advance(STUCK_REPORT_MS * 2);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.messages).toHaveLength(before);
     expect(sessionOf(map, worker).stuck).toEqual(need);
   });
 
   it('эпизод принимается по виду, не по since: since сдвинулся — писем нет, stuck обновлён', async () => {
     const [, worker] = await reported(needOf('approval', { detail: 'старая команда' }));
-    const before = (await readMap(project, workId)).messages.length;
+    const before = (readStoredMap(project, workId)).messages.length;
     boot();
     const shifted = needOf('approval', { detail: 'старая команда', since: after(-600_000).toISOString() });
     await emit(worker, shifted);
     await advance(STUCK_REPORT_MS * 2);
     await until(async () => (await stuckOf(worker))?.since === shifted.since);
-    expect((await readMap(project, workId)).messages).toHaveLength(before);
+    expect((readStoredMap(project, workId)).messages).toHaveLength(before);
   });
 
   it('stuck есть, need нет у живой на первой сверке: stuck снят молча — ни строки, ни письма (решение 12)', async () => {
     for (const kind of ['limit', 'sign-in', 'approval'] as const) {
       const [, worker] = await reported(needOf(kind));
-      const before = (await readMap(project, workId)).messages.length;
+      const before = (readStoredMap(project, workId)).messages.length;
       boot();
       await emit(worker, null);
       await until(async () => (await stuckOf(worker)) === null);
       await quiet();
-      const map = await readMap(project, workId);
+      const map = readStoredMap(project, workId);
       expect(map.messages, kind).toHaveLength(before);
       expect(lines(map), kind).toHaveLength(0);
       expect(letters(map), kind).toHaveLength(0);
@@ -760,11 +763,11 @@ describe('служба «застрял» — сверка по первому o
       await updateMap(project, workId, (map) => {
         transitionSession(map, worker, lifecycle);
       });
-      const before = (await readMap(project, workId)).messages.length;
+      const before = (readStoredMap(project, workId)).messages.length;
       boot();
       await emit(worker, null);
       await until(async () => (await stuckOf(worker)) === null);
-      expect((await readMap(project, workId)).messages, lifecycle).toHaveLength(before);
+      expect((readStoredMap(project, workId)).messages, lifecycle).toHaveLength(before);
       stoppers.pop()?.();
       listeners = [];
     }
@@ -787,7 +790,7 @@ describe('служба «застрял» — сверка по первому o
     await emit(worker, need);
     await emit(worker, null);
     await until(async () => (await stuckOf(worker)) === null);
-    expect(lines(await readMap(project, workId)).at(-1)?.text).toBe(backLine(worker, 'limit'));
+    expect(lines(readStoredMap(project, workId)).at(-1)?.text).toBe(backLine(worker, 'limit'));
   });
 });
 

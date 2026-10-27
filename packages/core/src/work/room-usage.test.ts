@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { addSession } from './map.js';
 import { roomUsage, type UsageResolver } from './room-usage.js';
-import { addMember, addRoom, archiveRoom } from './rooms.js';
-import { HUMAN, type WorkMap, type WorkSession } from './types.js';
+import { addMember, addRoom, archiveRoom, joinedLine } from './rooms.js';
+import { HUMAN, SYSTEM, type WorkMap, type WorkSession } from './types.js';
 import type { UsageSummary, UsageWindow } from './usage-ledger.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const T0 = '2026-10-14T10:00:00.000Z';
 const T1 = '2026-10-14T11:00:00.000Z';
@@ -70,7 +72,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const fake = resolver({
       bounds: (session) => ({ startedAt: session.id === lead.id ? '2026-10-14T09:00:00.000Z' : T1, endedAt: T2 }),
     });
-    const result = await roomUsage(map, 'r-01', fake, NOW);
+    const result = await roomUsage(map, 'r-01', fake, NOW, lt(map));
     expect(result.members.map((member) => [member.sessionId, member.lead, member.status, member.method, member.usage?.input])).toEqual([
       [lead.id, true, 'counted', 'sliced', 10],
       [agent.id, false, 'counted', 'whole-session', 100],
@@ -86,11 +88,11 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const session = bound(map, 'a');
     addRoom(map, { title: 'r1', creator: HUMAN, members: [session.id] }, T0);
     addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
-    addMember(map, 'r-02', session.id, T2);
+    addMember(map, lt(map), 'r-02', session.id, T2);
     const fake = resolver({ bounds: () => ({ startedAt: T1, endedAt: T3 }) });
-    const old = await roomUsage(map, 'r-01', fake, NOW);
+    const old = await roomUsage(map, 'r-01', fake, NOW, lt(map));
     expect(old.members[0]).toMatchObject({ sessionId: session.id, current: false, periods: [{ from: T0, to: T2 }], method: 'sliced', sharedWith: [] });
-    const fresh = await roomUsage(map, 'r-02', fake, NOW);
+    const fresh = await roomUsage(map, 'r-02', fake, NOW, lt(map));
     expect(fresh.members[0]).toMatchObject({ sessionId: session.id, current: true, periods: [{ from: T2, to: null }] });
   });
 
@@ -98,9 +100,9 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const map = emptyMap();
     const session = bound(map, 'a');
     addRoom(map, { title: 'r', creator: HUMAN, members: [session.id] }, T0);
-    archiveRoom(map, 'r-01', T2);
+    archiveRoom(map, lt(map), 'r-01', T2);
     const fake = resolver({ bounds: () => ({ startedAt: T1, endedAt: T3 }) });
-    const result = await roomUsage(map, 'r-01', fake, NOW);
+    const result = await roomUsage(map, 'r-01', fake, NOW, lt(map));
     expect(fake.sliced).toEqual([{ session: session.id, windows: [{ from: T0, to: T2 }] }]);
     expect(result.members[0]).toMatchObject({ current: true, periods: [{ from: T0, to: T2 }] });
   });
@@ -111,7 +113,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const lost = bound(map, 'lost');
     const room = addRoom(map, { title: 'r', creator: HUMAN, members: [idle.id, lost.id] }, T0);
     room.memberLog!.push({ session: 's-09', from: T1, to: null });
-    const result = await roomUsage(map, 'r-01', resolver({ whole: () => null }), NOW);
+    const result = await roomUsage(map, 'r-01', resolver({ whole: () => null }), NOW, lt(map));
     expect(result.members.map((member) => [member.sessionId, member.status, member.reason, member.provider])).toEqual([
       [idle.id, 'not-started', null, 'claude'],
       [lost.id, 'unavailable', 'log-missing', 'claude'],
@@ -124,7 +126,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const map = emptyMap();
     const idle = addSession(map, { provider: 'claude', label: 'idle', task: 'x' });
     addRoom(map, { title: 'r', creator: HUMAN, members: [idle.id] }, T0);
-    const result = await roomUsage(map, 'r-01', resolver(), NOW);
+    const result = await roomUsage(map, 'r-01', resolver(), NOW, lt(map));
     expect(result.total).toMatchObject({ input: 0, output: 0, completeness: 'complete', conversations: 0 });
   });
 
@@ -133,7 +135,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const ok = bound(map, 'ok');
     const lost = bound(map, 'lost');
     addRoom(map, { title: 'r', creator: HUMAN, members: [ok.id, lost.id] }, T0);
-    const result = await roomUsage(map, 'r-01', resolver({ whole: (session) => (session.id === lost.id ? null : usage(100)) }), NOW);
+    const result = await roomUsage(map, 'r-01', resolver({ whole: (session) => (session.id === lost.id ? null : usage(100)) }), NOW, lt(map));
     expect(result.total).toMatchObject({ input: 100, completeness: 'partial' });
     expect(result.byProvider[0]?.total.completeness).toBe('partial');
   });
@@ -144,7 +146,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const b = bound(map, 'b', 'claude', 'conv-1');
     const c = bound(map, 'c', 'codex', 'thread-1');
     addRoom(map, { title: 'r', creator: HUMAN, members: [a.id, b.id, c.id] }, T0);
-    const result = await roomUsage(map, 'r-01', resolver({ whole: (session) => usage(session.provider === 'codex' ? 7 : 100) }), NOW);
+    const result = await roomUsage(map, 'r-01', resolver({ whole: (session) => usage(session.provider === 'codex' ? 7 : 100) }), NOW, lt(map));
     expect(result.total).toMatchObject({ input: 107, conversations: 2 });
     expect(result.byProvider.map((item) => [item.provider, item.total.input])).toEqual([
       ['claude', 100],
@@ -159,9 +161,26 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const r2 = addRoom(map, { title: 'r2', creator: HUMAN, members: [session.id] }, T1);
     delete r1.memberLog;
     delete r2.memberLog;
-    const result = await roomUsage(map, 'r-01', resolver(), NOW);
+    const result = await roomUsage(map, 'r-01', resolver(), NOW, lt(map));
     expect(result.reconstructed).toBe(true);
     expect(result.members[0]?.sharedWith).toEqual(['r-02']);
+  });
+
+  // Спека хранилища 6.2: ленту старой комнаты хост читает из базы, а не из `map.messages`.
+  it('старая комната: вход восстанавливается по письмам, которые дал читатель, а не по карте', async () => {
+    const map = emptyMap();
+    const session = bound(map, 'a');
+    const room = addRoom(map, { title: 'r', creator: HUMAN, members: [session.id] }, T0);
+    delete room.memberLog;
+    const line = { id: 'm-01', roomId: room.id, from: SYSTEM, to: [], text: joinedLine(session.id), kind: 'note', at: T2, readBy: {} } as const;
+    const letters = {
+      query: () => [line],
+      count: () => 1,
+    };
+    const without = await roomUsage(map, room.id, resolver(), NOW, lt(map));
+    const result = await roomUsage(map, room.id, resolver(), NOW, letters);
+    expect(without.members[0]?.periods).toEqual([{ from: T0, to: null }]);
+    expect(result.members[0]?.periods).toEqual([{ from: T2, to: null }]);
   });
 });
 
@@ -171,8 +190,8 @@ it('ownership alone never duplicates owner usage across rooms', async () => {
   const member = bound(map, 'member');
   const first = addRoom(map, { title: 'one', creator: owner.id, ownerId: owner.id, members: [member.id] }, T0);
   const second = addRoom(map, { title: 'two', creator: owner.id, ownerId: owner.id, members: [] }, T0);
-  const firstUsage = await roomUsage(map, first.id, resolver(), NOW);
-  const secondUsage = await roomUsage(map, second.id, resolver(), NOW);
+  const firstUsage = await roomUsage(map, first.id, resolver(), NOW, lt(map));
+  const secondUsage = await roomUsage(map, second.id, resolver(), NOW, lt(map));
   expect(firstUsage.members.map((entry) => entry.sessionId)).toEqual([member.id]);
   expect(firstUsage.total.input).toBe(100);
   expect(secondUsage.members).toEqual([]);

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { WorkNotFoundError } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
 import { createHistoryService } from './history-service.js';
@@ -12,12 +13,13 @@ function fixture(value = entry()) {
  };
  const io: HistoryServiceIO = {
   rebuild:vi.fn(async ()=>({sharedAt:null,diagnostics:[]})),
-  remove:vi.fn(async (_p,_w,ids)=>({removed:ids.length,failed:[]})), deleted:vi.fn(async()=>true),
+  remove:vi.fn(async (_p,_w,ids)=>({removed:ids.length,failed:[]})), deleted:vi.fn(async()=>true), tops:vi.fn(()=>({})),
  };
  const failure=vi.fn();const service=createHistoryService(works,{io,debounceMs:100,onFailure:failure});
  return {service,io,failure,changed:()=>listener(),gone:()=>{entries=[];listener();},back:()=>{entries=[value];listener();}};
 }
 afterEach(()=>vi.useRealTimers());
+const AT_TEXT = '2026-10-04T01:00:00.000Z';
 it('derivative updates debounce source changes and never rewrite an unchanged source', async()=>{
  vi.useFakeTimers();const value=entry(),f=fixture(value);f.service.start();f.changed();f.changed();
  await vi.advanceTimersByTimeAsync(100);expect(f.io.rebuild).toHaveBeenCalledTimes(1);
@@ -66,4 +68,41 @@ it('deferred captured cleanup still refuses corrupt or restored source and rejec
   expect(f.io.remove).not.toHaveBeenCalled();
   await expect(f.service.removeWork('/project', 'w-01', Array(30001).fill('r-01'))).rejects.toThrow('invalid history room IDs');
   f.service.stop();
+});
+
+// Отпечаток комнат дёшев: только поля, которые печатает история, и номер новейшего письма каждой комнаты (спека хранилища 6.2).
+it('fingerprint: a letter in a room or a rendered field rebuilds; a proposal, member log or archive change does not', async () => {
+  vi.useFakeTimers(); const value = entry(), f = fixture(value); f.service.start();
+  await vi.advanceTimersByTimeAsync(100); expect(f.io.rebuild).toHaveBeenCalledTimes(1);
+  expect(f.io.tops).toHaveBeenCalledWith('/project', 'w-01', ['r-01']);
+  const room = value.map.rooms[0]!; let rebuilds = 1;
+  const settle = async (rebuilt: boolean) => {
+    f.changed(); await vi.advanceTimersByTimeAsync(1000);
+    if (rebuilt) rebuilds++;
+    expect(f.io.rebuild).toHaveBeenCalledTimes(rebuilds);
+  };
+  room.proposal = { id: 'p-01', from: 's-01', text: 'Decide', rev: 0, at: AT_TEXT } as never; await settle(false);
+  room.memberLog = [{ session: 's-01', from: AT_TEXT, to: null }]; await settle(false);
+  room.archivedAt = AT_TEXT; await settle(false);
+  vi.mocked(f.io.tops).mockReturnValue({ 'r-01': 7 }); await settle(true);
+  vi.mocked(f.io.tops).mockReturnValue({ 'r-01': 8 }); await settle(true);
+  room.title = 'Renamed'; await settle(true);
+  room.mode = 'checklist'; await settle(true);
+  room.lead = 's-01'; await settle(true);
+  room.members = ['s-01']; await settle(true);
+  room.recipe = { id: 'rc-1', name: 'Review', playbook: 'steps' }; await settle(true);
+  room.recipe = { id: 'rc-1', name: 'Review', playbook: 'other steps' }; await settle(false);
+  value.map.work.title = 'New work title'; await settle(true);
+  f.service.stop();
+});
+it('fingerprint of a work deleted while still in the snapshot is "no letters", not a false history failure; other errors are still reported', async () => {
+  vi.useFakeTimers(); const value = entry(), f = fixture(value);
+  vi.mocked(f.io.tops).mockImplementation(() => { throw new WorkNotFoundError('workspace w-01 does not exist in /project'); });
+  f.service.start(); await vi.advanceTimersByTimeAsync(100);
+  expect(f.failure).not.toHaveBeenCalled(); expect(f.io.rebuild).toHaveBeenCalledTimes(1); f.service.stop();
+
+  const broken = fixture(entry());
+  vi.mocked(broken.io.tops).mockImplementation(() => { throw new Error('database is locked'); });
+  broken.service.start(); await vi.advanceTimersByTimeAsync(100);
+  expect(broken.failure).toHaveBeenCalledOnce(); expect(broken.io.rebuild).not.toHaveBeenCalled(); broken.service.stop();
 });

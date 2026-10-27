@@ -23,7 +23,7 @@
  * У остальных провайдеров без карточки уведомление остаётся.
  */
 
-import type { Proposal, Room, SessionActivity, SessionNeed, WorkEntry, WorkSession } from '@parley/core';
+import type { Proposal, Room, SessionActivity, SessionNeed, WindowWorkEntry, WorkSession } from '@parley/core';
 import { localClock, needReason } from '@parley/core/stuck';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
@@ -63,7 +63,7 @@ export interface NotifyDeps {
   prefs(): UiFile['notifications'];
   isTargetVisible(target: FocusTarget): boolean;
   /** Снимок работ окна: название работы, сессия (ярлык, задача, summary), письма. */
-  entries(): readonly WorkEntry[];
+  entries(): readonly WindowWorkEntry[];
   /**
    * Окно в фокусе и на экране (`windowFocused` и `documentVisible` стора окна): решение показывается карточкой
    * в самом окне (1.10), а не уведомлением macOS — человек и так за окном.
@@ -129,7 +129,7 @@ interface WaitingNeed {
 }
 
 /** Открытая комната, в которой участвует сессия: её название идёт в хвост текста, а клик по лимиту ведёт в неё. */
-function roomOf(entry: WorkEntry, session: WorkSession): Room | undefined {
+function roomOf(entry: WindowWorkEntry, session: WorkSession): Room | undefined {
   return entry.map.rooms.find((room) => !isRoomArchived(room) && room.members.includes(session.id));
 }
 
@@ -148,7 +148,7 @@ function firstLine(text: string | null): string {
   return text.split(/\r?\n/).find((line) => line.trim() !== '')?.trim() ?? '';
 }
 
-function findSession(entries: readonly WorkEntry[], ref: SessionRef): { entry: WorkEntry; session: WorkSession } | null {
+function findSession(entries: readonly WindowWorkEntry[], ref: SessionRef): { entry: WindowWorkEntry; session: WorkSession } | null {
   const entry = entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
   const session = entry?.map.sessions.find((item) => item.id === ref.sessionId);
   return entry === undefined || session === undefined ? null : { entry, session };
@@ -162,7 +162,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
    * комнату) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`, переделанное — по выросшему `rev`
    * или по новому `id` после возврата на доработку); первый снимок — база.
    */
-  onWorks(entries: readonly WorkEntry[]): void;
+  onWorks(entries: readonly WindowWorkEntry[]): void;
   /** trust-wait, launch-failed, resume-failed; ref: null или сессии нет в снимке — без уведомления. */
   onHostNotice(notice: HostNotice): void;
 } {
@@ -223,7 +223,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     ring();
   };
 
-  const notifyDecision = (entry: WorkEntry, room: Room, proposal: Proposal, change: 'new' | 'revised'): void => {
+  const notifyDecision = (entry: WindowWorkEntry, room: Room, proposal: Proposal, change: 'new' | 'revised'): void => {
     // Решение — «нужен ты» (2.7), как `blocked`: тот же ключ настроек.
     if (!deps.prefs().needsYou) return;
     // Ведущий — короткий ярлык `S01`, как в подписях `lead S01` окна и в тексте handoff (`dark-01`).
@@ -242,7 +242,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
    * решение (`id` и `rev`) молчит. Первый снимок — база: решения, что уже ждали на старте окна или после переподключения
    * к хосту, не уведомляют второй раз (как письма, спека 7.4).
    */
-  const trackDecisions = (entries: readonly WorkEntry[]): void => {
+  const trackDecisions = (entries: readonly WindowWorkEntry[]): void => {
     const isBase = knownDecisions === null;
     const known = (knownDecisions ??= new Map());
     for (const entry of entries) {

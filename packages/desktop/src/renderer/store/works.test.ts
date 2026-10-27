@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { orderedWorks, useWorksStore } from './works.js';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 
-function entry(id: string, createdAt: string): WorkEntry {
+function entry(id: string, createdAt: string): WindowWorkEntry {
   return {
     projectPath: '/tmp/proj',
     map: {

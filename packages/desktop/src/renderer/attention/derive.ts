@@ -7,7 +7,7 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, SessionNeed, WorkEntry, WorkMap } from '@parley/core';
+import type { Message, SessionNeed, WindowWorkEntry, WindowWorkMap } from '@parley/core';
 import {
   ATTENTION_RANK,
   humanUnreadLetters,
@@ -114,7 +114,7 @@ const ACCEPTED_LETTER = 'Decision accepted.';
  * решение «переделанным» не делает. Свои слова человека в комнате (без этих двух начал) в счёт не идут. Ленту читаем
  * в момент нового решения, а не ведём по снимкам окна: окно, открытое между возвратом и новым решением, тоже знает.
  */
-export function roomDecisionReturned(map: WorkMap, roomId: string): boolean {
+export function roomDecisionReturned(map: WindowWorkMap, roomId: string): boolean {
   const answer = map.messages.findLast(
     (message) =>
       message.roomId === roomId &&
@@ -133,7 +133,7 @@ export function isHumanMention(message: Message): boolean {
 }
 
 /** Упоминания человека в комнатах с isHumanUnread, без архивных комнат (правило core, разбор Markdown окна). */
-export function humanUnreadMentions(map: WorkMap): Message[] {
+export function humanUnreadMentions(map: WindowWorkMap): Message[] {
   return coreHumanUnreadMentions(map, hasHumanMention);
 }
 
@@ -145,14 +145,14 @@ export type ForYouTarget = { kind: 'mail' } | { kind: 'room'; roomId: string };
  * самого позднего из них; ничего непрочитанного — `null`. Письма первыми, потому что Mail показывает только их:
  * упоминание там не найти.
  */
-export function forYouTarget(map: WorkMap): ForYouTarget | null {
+export function forYouTarget(map: WindowWorkMap): ForYouTarget | null {
   if (humanUnreadLetters(map).length > 0) return { kind: 'mail' };
   const roomId = humanUnreadMentions(map).at(-1)?.roomId ?? null;
   return roomId === null ? null : { kind: 'room', roomId };
 }
 
 /** Сообщения комнаты с isHumanUnread: человек — участник любой комнаты. */
-export function roomUnreadForHuman(map: WorkMap, roomId: string): number {
+export function roomUnreadForHuman(map: WindowWorkMap, roomId: string): number {
   // Компактный снимок (P35) несёт точное число: письма комнаты в карте — только хвост, остальное за окном.
   const exact = map.compact?.unread.rooms[roomId];
   if (map.compact !== undefined) return exact ?? 0;
@@ -179,7 +179,7 @@ function later(a: string, b: string | null): string {
   return ta === null || tb > ta ? b : a;
 }
 
-export function workAttention(entry: WorkEntry, activity: Record<string, ActivityEntry>): WorkAttention {
+export function workAttention(entry: WindowWorkEntry, activity: Record<string, ActivityEntry>): WorkAttention {
   const { map, projectPath } = entry;
   let level: Attention = 'off';
   let needsYou = 0;
@@ -242,7 +242,7 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
  * пришёл раньше) — `off` со временем карты: одно правило для порядка (`sidebar/sort.ts`) и
  * карточек (`sidebar/WorkSidebar.tsx`), раунд исправлений 1 куска 3.3.
  */
-export function attentionOf(attention: Record<string, WorkAttention>, entry: WorkEntry): WorkAttention {
+export function attentionOf(attention: Record<string, WorkAttention>, entry: WindowWorkEntry): WorkAttention {
   return (
     attention[workKey(entry.projectPath, entry.map.work.id)] ?? {
       level: 'off',

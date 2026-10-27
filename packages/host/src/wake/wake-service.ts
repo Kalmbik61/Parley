@@ -16,7 +16,6 @@
 
 import { performance } from 'node:perf_hooks';
 import {
-  addMessage,
   DEFAULT_CONFIG,
   deliveryAction,
   hookedSince,
@@ -30,10 +29,12 @@ import {
   sessionTag,
   SYSTEM,
   PARLEY,
+  letterById,
   resumablePlanLetter,
-  unreadFor,
-  updateMap,
+  unreadCount,
+  unreadLetters,
   workPaths,
+  writeLetters,
   type DeliveryAction,
   type DeliveryInput,
   type Message,
@@ -409,12 +410,26 @@ export function createWakeService(
     activity.mailWaiting(ref, reason);
   }
 
+  /**
+   * Непрочитанное сессии. Пересчёт зовётся на каждое изменение работ для каждой сессии каждой работы, поэтому карту
+   * берём ту, что хост уже держит (`entry.map`): из базы при числе работ больше кэша карт каждый проход грузил бы их заново
+   * (спека хранилища 6.2). Живые правила идут по этой карте, письма из базы нужны только в таблицах (задача 7).
+   */
+  const unreadOf = (entry: WorkEntry, sessionId: string): Message[] =>
+    unreadLetters(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map });
+
+  /** Есть ли непрочитанное: счёт без копий писем, карта снимка — по тем же причинам, что у `unreadOf` (спека хранилища 6.2). */
+  const hasUnread = (entry: WorkEntry, sessionId: string): boolean =>
+    unreadCount(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map }).total > 0;
+
   /** Письма, непрочитанные сейчас, считаются уже указанными: будить ими некого. */
   function markUnreadPointed(ref: SessionRef, state: AttemptState, allowPlanRestart = false): void {
     const entry = works.entry(ref.projectPath, ref.workId);
     if (entry === undefined) return;
-    for (const message of unreadFor(entry.map, ref.sessionId)) {
-      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId)) state.pointed.add(message.id);
+    for (const message of unreadOf(entry, ref.sessionId)) {
+      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId, (id) => letterById(entry.projectPath, entry.map.work.id, id))) {
+        state.pointed.add(message.id);
+      }
     }
   }
 
@@ -458,10 +473,9 @@ export function createWakeService(
     const text = `${sessionTag(ref.sessionId)} did not resume: ${reason}`;
     const ids = new Set(letterIds);
     try {
-      await updateMap(ref.projectPath, ref.workId, (map) => {
-        const senders = new Set(
-          map.messages.filter((message) => ids.has(message.id)).map((message) => message.from),
-        );
+      // Только письма: отправители ожидавших писем читаются запросом, карта целиком не разбирается (спека хранилища 6.2).
+      writeLetters(ref.projectPath, ref.workId, (letters, map) => {
+        const senders = new Set(letters.query({ ids: [...ids], limit: ids.size }).map((message) => message.from));
         // Человек узнаёт из уведомления, системе писать незачем, себе — тоже.
         senders.delete(HUMAN);
         senders.delete(SYSTEM);
@@ -469,7 +483,7 @@ export function createWakeService(
         senders.delete(ref.sessionId);
         for (const sender of senders) {
           if (!map.sessions.some((session) => session.id === sender)) continue;
-          addMessage(map, { from: SYSTEM, to: [sender], text });
+          letters.add({ roomId: null, from: SYSTEM, to: [sender], text, kind: 'note' });
         }
       });
     } catch (error) {
@@ -829,7 +843,7 @@ export function createWakeService(
     state.pasteRetries = 0;
     state.choiceRetries = 0;
 
-    const letters = unreadFor(entry.map, session.id).filter((message) => message.deleted !== true);
+    const letters = unreadOf(entry, session.id).filter((message) => message.deleted !== true);
     const letterIds = letters.map((message) => message.id);
     beginAttempt(
       ref,
@@ -856,7 +870,7 @@ export function createWakeService(
     trackLimit(ref, state, entry, session, handle);
 
     if (handle === undefined) {
-      const letters = unreadFor(entry.map, session.id).length > 0;
+      const letters = hasUnread(entry, session.id);
       // Без нашего PTY письмо поднимает только спящую: живая без него —
       // сессия, поднятая не хостом (CLI), со своим каналом звонка, `pending`
       // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2). Спящую архивной работы
@@ -880,7 +894,7 @@ export function createWakeService(
         activity: null,
         hasDraft: false,
         paused: isPaused,
-        unread: unreadFor(entry.map, session.id),
+        unread: unreadOf(entry, session.id),
         rooms: entry.map.rooms,
         pointed: state.pointed,
         inFlight: false,
@@ -926,7 +940,7 @@ export function createWakeService(
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
       if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) {
-        publishWaiting(ref, state, unreadFor(entry.map, session.id).length > 0 ? 'resuming' : null);
+        publishWaiting(ref, state, hasUnread(entry, session.id) ? 'resuming' : null);
         return;
       }
       state.pointerAfter = null;
@@ -939,7 +953,7 @@ export function createWakeService(
       activity: live?.activity ?? null,
       hasDraft: handle.hasDraft(),
       paused: isPaused,
-      unread: unreadFor(entry.map, session.id),
+      unread: unreadOf(entry, session.id),
       rooms: entry.map.rooms,
       pointed: state.pointed,
       inFlight: state.inFlight,
@@ -950,7 +964,7 @@ export function createWakeService(
 
     if (action.kind !== 'type-pointer') {
       // Пауза будильника проверяется раньше писем: без непрочитанных причины нет и на паузе.
-      const letters = unreadFor(entry.map, session.id).length > 0;
+      const letters = hasUnread(entry, session.id);
       publishWaiting(ref, state, letters ? waitingOf(action, state) : null);
       return;
     }
@@ -972,7 +986,7 @@ export function createWakeService(
       return;
     }
     state.choiceRetries = 0;
-    beginAttempt(ref, state, { ...action, ...traceOf(unreadFor(entry.map, session.id), action.letterIds) }, codex);
+    beginAttempt(ref, state, { ...action, ...traceOf(unreadOf(entry, session.id), action.letterIds) }, codex);
     // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
     publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');
   }

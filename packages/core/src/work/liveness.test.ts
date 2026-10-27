@@ -311,8 +311,8 @@ describe('reconcileMap (чек-лист 15)', () => {
     const startedAtProcess = await processStartedAt(dead.pid ?? 0);
     await stop(dead);
     const id = await seed(work.id, { pid: dead.pid ?? 0, startedAtProcess });
-    await updateMap(project, work.id, (map) => {
-      removeSession(map, id);
+    await updateMap(project, work.id, (map, letters) => {
+      removeSession(map, letters, id);
     });
 
     // Мёртвый процесс в карте больше не значится: переводить некого, и записи

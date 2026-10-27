@@ -1,9 +1,10 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,10 +52,7 @@ test('room owners persist across restart and preserve rooms, leads and working m
       await expect(row.locator('[data-tree-guide="elbow"]')).toHaveCount(1);
     }
     await window.screenshot({ path: test.info().outputPath('room-owners.png') });
-    const mapOf = async () => JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
-      rooms: { id: string; ownerId: string | null; members: string[]; lead: string | null }[];
-      messages: unknown[];
-    };
+    const mapOf = async () => readStoredMapE2E(home, project, workId);
     await expect.poll(async () => (await mapOf()).rooms.map((room) => room.ownerId)).toEqual([ids[0], ids[0], ids[0]]);
     const before = await mapOf();
     expect(before.rooms.map((room) => room.members)).toEqual([[ids[1]], [ids[2]], [ids[3]]]);
