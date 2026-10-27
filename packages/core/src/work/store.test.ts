@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { contextFile } from '../context-fill.js';
+import { addAutonomousRoom, autonomousMap } from '../../test/autonomous-map.js';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
 import { addMessage, addSession } from './map.js';
 import { letterById, letterCount, readLetters, unreadCount, unreadLetters, writeLetters } from './letter-store.js';
@@ -1014,6 +1015,68 @@ describe('updateMap', () => {
     expect(index.works.map((work) => work.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(index.works.map((work) => work.title).sort()).toEqual(['вторая', 'первая']);
   }, 60_000);
+});
+
+describe('автономный план и рабочие папки сессий в хранилище (план автономной комнаты, §2; спека хранилища 6.2)', () => {
+  it('updateMap и readMap возвращают тот же план с попыткой, проверкой и операцией и обе рабочие папки сессий; свежий разбор строк даёт ту же карту', async () => {
+    await createWork(project, { title: 'Автономная комната' });
+    const expected = autonomousMap();
+
+    const written = await updateMap(project, 'w-0001', (map) => addAutonomousRoom(map));
+    const read = await readMap(project, 'w-0001');
+
+    const plan = read.plans![0]!;
+    expect(plan).toMatchObject({ mode: 'autonomous', status: 'active' });
+    expect(plan.autonomous!.attempts).toHaveLength(1);
+    expect(plan.autonomous!.checks).toHaveLength(1);
+    expect(plan.autonomous!.ops).toHaveLength(1);
+    expect(read.plans).toEqual(expected.plans);
+    expect(read.rooms).toEqual(expected.rooms);
+    expect(read.rooms[0]!.mode).toBe('autonomous');
+    expect(read.sessions).toEqual(expected.sessions);
+    expect(read.sessions.map((session) => session.workspace)).toEqual([
+      undefined,
+      { kind: 'clone', path: '/tmp/clone/at-0001', branch: 'attempts/at-0001', sha: 'a'.repeat(40) },
+      { kind: 'artifacts', path: '/tmp/engine/review/op-0003' },
+    ]);
+    expect(read).toEqual(written);
+    // Кэш прогрет самой записью; сборка из строк базы (`readStoredMap`) должна дать ровно то же.
+    expect(storedRows()).toEqual(read);
+  });
+
+  it.each([
+    [
+      'попыткой с неизвестным статусом',
+      (map: WorkMap) => {
+        (map.plans![0]!.autonomous!.attempts[0] as unknown as { status: string }).status = 'bogus';
+      },
+      'invalid autonomous plan',
+    ],
+    [
+      'автономным планом без блока autonomous',
+      (map: WorkMap) => {
+        delete map.plans![0]!.autonomous;
+      },
+      'invalid autonomous plan',
+    ],
+    [
+      'клоном без ветки',
+      (map: WorkMap) => {
+        map.sessions[1]!.workspace = { kind: 'clone', path: '/tmp/clone' } as never;
+      },
+      'unexpected shape',
+    ],
+  ])('строки с %s не собираются в карту: тот же отказ normalizeMap, что и у прежнего map.json', async (_name, damage, reason) => {
+    await createWork(project, { title: 'Автономная комната' });
+    await updateMap(project, 'w-0001', (map) => addAutonomousRoom(map));
+    const damaged = autonomousMap();
+    damage(damaged);
+
+    replaceStoredMap(project, 'w-0001', damaged);
+
+    expect(() => readStoredMap(project, 'w-0001')).toThrow(reason);
+    await expect(readMap(project, 'w-0001')).rejects.toThrow(reason);
+  });
 });
 
 describe('кэш после записи: писавший процесс видит то же, что свежая загрузка (план 4, задача 5)', () => {

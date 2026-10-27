@@ -10,6 +10,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { autonomousMap } from '../../test/autonomous-map.js';
 import { closeWorkDb, WORK_DB_FILE } from './db.js';
 import { legacyUnread, verifyLetterMap } from './letter-upgrade.js';
 import { unreadFor, unreadForHuman } from './letters.js';
@@ -337,6 +338,54 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     for (const row of settled) expect(row).not.toHaveProperty('text');
     expect(settled.filter((row) => row.status === 'sent').map((row) => row.textSha256)).toEqual(letterTexts.map(sha));
     expect(settled.find((row) => row.status === 'cancelled')!.textSha256).toBe(sha('Cancelled before it was sent'));
+  });
+
+  it('карта с автономным планом и рабочими папками сессий (clone и artifacts) переезжает и проходит сверку: непереехавшим ничего не названо', async () => {
+    const map: WindowWorkMap = { ...autonomousMap(), messages: [] };
+    const text = await legacyWork(map);
+    const expected = parseMap(text, 'fixture');
+
+    const result = await migrateMapsToDb();
+
+    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect(await exists(mapFile('w-0001'))).toBe(false);
+    expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(text);
+    const after = readStoredMap(project, 'w-0001');
+    expect(after).toEqual(expected);
+    expect(after.plans).toEqual(map.plans);
+    expect(after.plans![0]!.autonomous!.attempts).toHaveLength(1);
+    expect(after.rooms[0]!.mode).toBe('autonomous');
+    expect(after.sessions.map((session) => session.workspace?.kind)).toEqual([undefined, 'clone', 'artifacts']);
+    expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
+  });
+
+  it.each([
+    [
+      'попыткой с неизвестным статусом',
+      (map: WindowWorkMap) => {
+        (map.plans![0]!.autonomous!.attempts[0] as unknown as { status: string }).status = 'bogus';
+      },
+      'invalid autonomous plan',
+    ],
+    [
+      'клоном без ветки',
+      (map: WindowWorkMap) => {
+        map.sessions[1]!.workspace = { kind: 'clone', path: '/tmp/clone' } as never;
+      },
+      'unexpected shape',
+    ],
+  ])('карта с %s: проверка формы автономного плана и рабочих папок идёт и при переезде — failed с причиной, строки нет, файл на месте', async (_name, damage, reason) => {
+    const map: WindowWorkMap = { ...autonomousMap(), messages: [] };
+    damage(map);
+    const text = await legacyWork(map);
+
+    const result = await migrateMapsToDb();
+
+    expect(result.migrated).toEqual([]);
+    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason: expect.stringContaining(reason) }]);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(text);
+    expect(await exists(backupFile('w-0001'))).toBe(false);
   });
 
   it('карта формы w-0051 переезжает и проходит сверку: письма с отметками, удалённые, прямые человеку, старая комната, висячая ссылка', async () => {
