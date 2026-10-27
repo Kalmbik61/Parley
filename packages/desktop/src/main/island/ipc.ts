@@ -180,6 +180,8 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
     tts.cancelAll();
     port = null;
   }
+  /** Окно, чья страница держит текущий порт: гибель старого окна не трогает порт нового. */
+  let owner: object | null = null;
   const watched = new WeakSet<object>();
   ipcMain.on('island:tts-connect', (event) => {
     if (!fromIsland(event)) return;
@@ -189,9 +191,13 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
     // Окно острова закрыли (остров выключен) или его страница упала без нового connect (критик m-1463).
     if (!watched.has(sender) && sender.on) {
       watched.add(sender);
-      sender.on('destroyed', dropPort);
-      sender.on('render-process-gone', dropPort);
+      const gone = (): void => {
+        if (owner === sender) dropPort();
+      };
+      sender.on('destroyed', gone);
+      sender.on('render-process-gone', gone);
     }
+    owner = sender;
     const channel = options.ttsChannel();
     port = channel.port1;
     sender.postMessage('island:tts-port', null, [channel.port2]);

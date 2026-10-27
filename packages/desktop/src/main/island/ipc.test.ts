@@ -338,6 +338,18 @@ describe('IPC острова: нейроголос (план 3b, B15)', () => {
     expect(live.messages).toEqual([{ type: 'state', state: { state: 'ready' } }]);
   });
 
+  it('гибель старого окна острова не трогает порт нового (критик m-1468)', () => {
+    const state = setup();
+    const listeners = new Map<string, () => void>();
+    const old = { ...islandContents(), on: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)) };
+    state.ipcMain.emit('island:tts-connect', { sender: old });
+    state.ipcMain.emit('island:tts-connect', { sender: { ...islandContents(), on: vi.fn() } });
+    const cancels = state.tts.cancelAll.mock.calls.length;
+    listeners.get('destroyed')!();
+    expect(state.ports[1]!.port1.close).not.toHaveBeenCalled();
+    expect(state.tts.cancelAll).toHaveBeenCalledTimes(cancels);
+  });
+
   it('tts-speak: куски уходят в порт острова, ответ — итог службы', async () => {
     const state = setup();
     state.ipcMain.emit('island:tts-connect', { sender: islandContents() });
