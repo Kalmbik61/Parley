@@ -17,13 +17,13 @@ import {
   seqOf,
   shrinkText,
   unreadCount,
-  unreadLetters,
   viewBytes,
   viewMap,
   WINDOW_MENTION_MAX_BYTES,
   WINDOW_TEXT_MAX,
   withLetterSnapshot,
 } from '@parley/core';
+import { isHumanUnread, plainHumanMention } from '@parley/core/attention';
 import type { LetterJournal, Message } from '@parley/core';
 import type { RoomsMailEvent, RoomsMailRoom } from '@parley/protocol';
 
@@ -33,6 +33,12 @@ export const MAIL_BATCH_MS = 50;
 export const MAIL_EVENT_MAX_BYTES = 256 * 1024;
 /** Клиент, у которого в буфере записи больше, считается медленным: ему уходит склеенное событие с `reread` (спека 6.6). */
 export const MAIL_SLOW_CLIENT_BYTES = 1024 * 1024;
+
+/**
+ * Потолок ожидания пачки, которую держит снимок: страховка на случай, когда полный проход не доходит до `publish`; окно само
+ * держит событие по комнате, которой нет в его снимке (спека rooms.mail 6.5), поэтому раннее освобождение безопасно.
+ */
+export const MAIL_HOLD_MAX_MS = 2000;
 
 /** Одна запись с письмами для подписчиков хоста (`WorksService.onMail`): по уведомлению на каждый коммит с непустым журналом. */
 export interface MailNotice {
@@ -60,6 +66,8 @@ export interface MailBatch {
    * версией: окно получает структуру (комнату, участников) раньше писем (спека 6.5, «смешанная запись»).
    */
   structuralVersion: number;
+  /** Когда началась пачка, мс (`Date.now()`): от этого момента считается `MAIL_HOLD_MAX_MS`. */
+  startedAt: number;
   /** Уведомления смешанных записей: подписчики узнают о них после публикации снимка, а не в момент коммита. */
   notices: MailNotice[];
   journal: LetterJournal;
@@ -90,6 +98,7 @@ export function startBatch(projectPath: string, workId: string, prevVersion: num
     prevVersion,
     version: prevVersion,
     structuralVersion: 0,
+    startedAt: Date.now(),
     notices: [],
     journal: emptyJournal(),
     timer: undefined,
@@ -110,7 +119,8 @@ interface Touched {
  * Событие `rooms.mail` из пачки (спека 6.3). Читает таблицы писем работы одним снимком; работы нет — `WorkNotFoundError`.
  * Комнаты — те, что названы письмами, отметками, удалениями и массовой отметкой; комнаты из `droppedRooms` в `rooms` не
  * входят: окно убирает их письма и счётчики по `droppedRooms`. `top`, `total`, `lastAt` и `unread` берутся из таблиц на
- * момент сборки, а не складываются из журнала: к ним же приходит и чужая запись, которой в журнале нет.
+ * момент сборки, а не складываются из журнала: к ним же приходит и чужая запись, которой в журнале нет. Кандидаты в
+ * упоминания — только новые письма пачки (спека 6.3): весь набор непрочитанного человеком читался бы на каждое событие.
  */
 export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
   const { projectPath, workId, journal } = batch;
@@ -164,6 +174,15 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
     });
 
     const unread = unreadCount(projectPath, workId, HUMAN);
+    // Новые письма пачки с `@human` перечитываются здесь же, в снимке: к сборке человек мог письмо прочитать, а запись той же
+    // пачки — пометить удалённым. Такое письмо не кандидат (окно убрало бы его само по `reads` и `deleted`). Письмо без упоминания
+    // не перечитывается: набор от него не зависит.
+    const deleted = new Set(journal.deleted);
+    const fresh = journal.added
+      .filter((message) => plainHumanMention(message.text) && !deleted.has(message.id))
+      .map((message) => letterById(projectPath, workId, message.id))
+      .filter((message): message is Message => message !== undefined && isHumanUnread(message))
+      .sort((left, right) => seqOf(left.id, 'm-') - seqOf(right.id, 'm-'));
     return {
       projectPath,
       workId,
@@ -173,10 +192,9 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
       rooms,
       droppedRooms,
       unread: { letters: unread.total, rooms: unread.byRoom },
-      // Набор и его потолок в байтах — общий помощник ядра: тем же берёт кандидатов снимок без писем, и окно, заменяющее набор
-      // работы последним пришедшим, не видит расхождения между событием и снимком. `fitMailEvent` урезает набор дальше лишь
-      // тогда, когда каркас кадра оставил меньше потолка.
-      mentionCandidates: humanMentionCandidates(unreadLetters(projectPath, workId, HUMAN)),
+      // Потолок набора в байтах и порядок — общий помощник ядра, которым берёт кандидатов и снимок без писем. `fitMailEvent`
+      // урезает набор дальше лишь тогда, когда каркас кадра оставил меньше потолка.
+      mentionCandidates: humanMentionCandidates(fresh),
     };
   });
 }
@@ -191,8 +209,8 @@ const REREAD_BYTES = Buffer.byteLength(',"reread":true');
  * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
  * 1. каркас — комнаты без писем и без кандидатов, с отметками и удалениями. Не влез он сам (сотни тысяч отметок) —
  *    комнаты с самыми тяжёлыми отметками теряют их и получают `reread`, как у склеенного события;
- * 2. кандидаты в упоминания: `buildMailEvent` уже собрал их под `WINDOW_MENTION_MAX_BYTES`; здесь они урезаются дальше, до
- *    остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
+ * 2. кандидаты в упоминания — новые письма пачки: `buildMailEvent` уже собрал их под `WINDOW_MENTION_MAX_BYTES`; здесь они
+ *    урезаются дальше, до остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
  * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
  *    получает `reread` — окно читает её страницей. Комната целиком, а не по частям: окно, получившее хвост письма без
  *    начала, держало бы дыру, а `reread` её закрывает.
@@ -240,7 +258,8 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
 
 /**
  * Склеенное событие для медленного клиента: письма и отметки не едут, каждая комната названа с `reread`, числа и версии
- * прежние — окно ставит их из события и дочитывает письма страницами, когда буфер освободится (спека 6.6).
+ * прежние — окно ставит их из события и дочитывает письма страницами, когда буфер освободится (спека 6.6). Кандидаты в
+ * упоминания остаются: окну они нужны и по комнатам, которых оно не держит и не дочитает.
  */
 export const gluedMailEvent = (event: RoomsMailEvent): RoomsMailEvent => ({
   ...event,

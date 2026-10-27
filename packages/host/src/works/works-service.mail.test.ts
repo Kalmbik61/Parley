@@ -12,9 +12,7 @@ import {
   deleteRoom,
   deleteWorkFiles,
   HUMAN,
-  humanMentionCandidates,
   letterCount,
-  readLetters,
   readMap,
   roomLetterTops,
   unreadCount,
@@ -33,14 +31,43 @@ import { createHostContext } from '../context.js';
 import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
-import type { WorksService } from './works-service.js';
-import { MAIL_EVENT_MAX_BYTES, buildMailEvent, joinBatch, startBatch } from './mail.js';
+import type { WorksService, WorksServiceOptions } from './works-service.js';
+import { MAIL_HOLD_MAX_MS, buildMailEvent, joinBatch, startBatch } from './mail.js';
 import type { MailNotice } from './mail.js';
 
 // Шпион кодировщика кадров: в хосте им кодируется каждый кадр клиенту, и событие писем должно кодироваться один раз.
 vi.mock('@parley/protocol', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@parley/protocol')>();
   return { ...actual, encodeLine: vi.fn(actual.encodeLine) };
+});
+
+// Шлюзы полного прохода: пока `gate` закрыт, `refreshPass` стоит на `gitBranch` и до `publish` не доходит; `stripVersions`
+// отдаёт проходу записи без точной версии, как при записи, вклинившейся между двумя чтениями версии работы.
+const pass = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined, stripVersions: false }));
+vi.mock('@parley/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@parley/core')>();
+  return {
+    ...actual,
+    gitBranch: vi.fn(async (...args: Parameters<typeof actual.gitBranch>) => {
+      await pass.gate;
+      return actual.gitBranch(...args);
+    }),
+    watchWorks: (onWorks: Parameters<typeof actual.watchWorks>[0], options?: Parameters<typeof actual.watchWorks>[1]) =>
+      actual.watchWorks(
+        (works, seq) =>
+          onWorks(
+            pass.stripVersions
+              ? works.map((work) => {
+                  const bare = { ...work };
+                  delete bare.version;
+                  return bare;
+                })
+              : works,
+            seq,
+          ),
+        options,
+      ),
+  };
 });
 
 /**
@@ -115,6 +142,8 @@ beforeEach(async () => {
   broadcasts = [];
   warnings = [];
   onBroadcast = undefined;
+  pass.gate = undefined;
+  pass.stripVersions = false;
   counters.reset();
   vi.mocked(encodeLine).mockClear();
 });
@@ -141,8 +170,8 @@ async function seedWork(title = 'A'): Promise<string> {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Служба запущена и успокоилась: хвост проходов старта (аренда, сверка) дошёл, счётчики и рассылки начинаются с нуля. */
-async function started(): Promise<WorksService> {
-  const created = createWorksService(fakeHost(), { debounceMs: 5, windowCounters: counters });
+async function started(options: WorksServiceOptions = {}): Promise<WorksService> {
+  const created = createWorksService(fakeHost(), { debounceMs: 5, windowCounters: counters, ...options });
   services.push(created);
   await created.start();
   let last = -1;
@@ -169,6 +198,21 @@ function send(workId: string, text: string, roomId: string | null = 'r-01', from
   writeLetters(project, workId, (letters) => {
     letters.add({ kind: 'note', from, to: [], roomId, text });
   });
+}
+
+/** Пачка столько не доживёт до конца теста: рассылку ведёт снимок или удаление работы, а не таймер в 50 мс, который под нагрузкой обгоняет запись теста. */
+const LONG_BATCH_MS = 30_000;
+
+/** Закрывает полный проход: он встанет на `gitBranch` и не дойдёт до `publish`. Вернувшая функция открывает проход. */
+function closePass(): () => void {
+  let open = (): void => {};
+  pass.gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return () => {
+    open();
+    pass.gate = undefined;
+  };
 }
 
 /** Чужая запись: второе соединение с базой правит `work.goal` и поднимает версию, как `updateMap` в другом процессе (CLI, MCP агента). */
@@ -417,7 +461,8 @@ describe('письма хоста: запись только писем', () => 
   it('работу сняли, пока пачка ждала: события нет, ошибок письма в журнале хоста нет', async () => {
     const id = await seedWork();
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
-    const s = await started();
+    // Пачка ждёт долго: удаление работы не должно гоняться с её таймером.
+    const s = await started({ mailBatchMs: LONG_BATCH_MS });
     const notices: MailNotice[] = [];
     s.onMail((notice) => notices.push(notice));
 
@@ -448,9 +493,9 @@ describe('письма хоста: запись только писем', () => 
     expect(legacy.entries[0]?.map.compact).toBeUndefined();
   });
 
-  it('кандидаты в упоминания не съедают кадр: у них свой потолок, новое письмо едет письмом, а не reread', async () => {
+  it('событие несёт только новых кандидатов: непрочитанное @human письмо из прошлого не повторяется, новое едет', async () => {
     const id = await seedWork();
-    // Семьдесят непрочитанных человеком писем с @human по 4 КиБ: вместе выше потолка кадра.
+    // Семьдесят непрочитанных человеком писем с @human по 4 КиБ записаны раньше: событие их не повторяет и кадр не раздувается.
     writeLetters(project, id, (letters) => {
       for (let i = 0; i < 70; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `@human ${i}: ${'x'.repeat(4000)}` });
     });
@@ -462,32 +507,138 @@ describe('письма хоста: запись только писем', () => 
     const item = events('rooms.mail')[0]!;
     const event = mailOf(item);
 
-    expect(Buffer.byteLength(item.line ?? '')).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(event.mentionCandidates.map((letter) => letter.text)).toEqual(['новое письмо для @human']);
+    expect(Buffer.byteLength(item.line ?? '')).toBeLessThan(16 * 1024);
     expect(event.rooms[0]?.reread).toBeUndefined();
     expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['новое письмо для @human']);
-    expect(event.mentionCandidates.length).toBeGreaterThan(0);
-    expect(event.mentionCandidates.length).toBeLessThan(71);
-    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates))).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES + 2);
-    expect(event.mentionCandidates.at(-1)?.text).toBe('новое письмо для @human');
+    // Старые письма остались непрочитанными: числа их знают, набор события — нет (его пополняет окно, а заменяет снимок).
+    expect(unreadLetters(project, id, HUMAN).length).toBeGreaterThan(70);
+    expect(event.unread.letters).toBe(unreadCount(project, id, HUMAN).total);
+
+    send(id, 'письмо без упоминания');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(2), { timeout: 5000 });
+    expect(mailOf(events('rooms.mail')[1]).mentionCandidates).toEqual([]);
   });
 
-  it('набор кандидатов собран под потолок уже в buildMailEvent и равен набору общего помощника ядра, которым берёт снимок', async () => {
+  it('письмо, прочитанное человеком в той же пачке, — не кандидат', async () => {
     const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+    const at = new Date().toISOString();
+    let readId = '';
+
     writeLetters(project, id, (letters) => {
-      for (let i = 0; i < 70; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `@human ${i}: ${'x'.repeat(4000)}` });
+      const read = letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human, прочитано сразу' });
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human, ждёт ответа' });
+      letters.markRead(HUMAN, [read.id], at);
+      readId = read.id;
     });
-    const version = workVersion(project, id) as number;
-    const batch = startBatch(project, id, version - 1);
-    const added = readLetters(project, id, { roomId: 'r-01', limit: 1, newestFirst: true });
-    joinBatch(batch, { version, journal: { added, reads: [], deleted: [], droppedRooms: [], rereadRooms: [] }, structural: false });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    const event = mailOf(events('rooms.mail')[0]);
+
+    expect(event.rooms[0]?.reads).toEqual([{ id: readId, reader: HUMAN, at }]);
+    expect(event.mentionCandidates.map((letter) => letter.text)).toEqual(['@human, ждёт ответа']);
+  });
+
+  it('письмо, помеченное удалённым в той же пачке, — не кандидат', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+
+    writeLetters(project, id, (letters) => {
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human, от уходящей сессии' });
+      letters.add({ kind: 'note', from: 's-01', to: [], roomId: 'r-01', text: '@human, от остающейся' });
+      letters.flagDeleted('s-02');
+    });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    const event = mailOf(events('rooms.mail')[0]);
+
+    expect(event.mentionCandidates.map((letter) => letter.text)).toEqual(['@human, от остающейся']);
+    expect(event.rooms[0]?.deleted).toContain('m-02');
+  });
+
+  it('кандидаты пачки собраны под потолок уже в buildMailEvent: новейшие подряд, по возрастанию номера', async () => {
+    const id = await seedWork();
+    const before = workVersion(project, id) as number;
+    const added = writeLetters(project, id, (letters) =>
+      Array.from({ length: 70 }, (_, i) => letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `@human ${i}: ${'x'.repeat(4000)}` })),
+    );
+    const batch = startBatch(project, id, before);
+    joinBatch(batch, { version: workVersion(project, id) as number, journal: { added, reads: [], deleted: [], droppedRooms: [], rereadRooms: [] }, structural: false });
 
     // Без fitMailEvent: потолок не ждёт сборки кадра, иначе снимок (задача 7) и событие несли бы разные наборы.
-    const event = buildMailEvent(batch);
+    const { mentionCandidates } = buildMailEvent(batch);
+    const seqs = mentionCandidates.map((letter) => Number(letter.id.slice('m-'.length)));
 
-    expect(event.mentionCandidates).toEqual(humanMentionCandidates(unreadLetters(project, id, HUMAN)));
-    expect(event.mentionCandidates.length).toBeLessThan(70);
-    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates)) - 2).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES);
-    expect(event.mentionCandidates.at(-1)?.id).toBe(added[0]?.id);
+    expect(mentionCandidates.length).toBeGreaterThan(0);
+    expect(mentionCandidates.length).toBeLessThan(70);
+    expect(Buffer.byteLength(JSON.stringify(mentionCandidates)) - 2).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES);
+    expect(mentionCandidates.at(-1)?.id).toBe(added.at(-1)?.id);
+    expect(seqs.every((seq, at) => at === 0 || seq === (seqs[at - 1] as number) + 1)).toBe(true);
+  });
+
+  it('удаление письма доходит до deleted его комнаты', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+
+    writeLetters(project, id, (letters) => {
+      letters.flagDeleted('s-02');
+    });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    const event = mailOf(events('rooms.mail')[0]);
+
+    expect(event.rooms).toHaveLength(1);
+    expect(event.rooms[0]).toMatchObject({ roomId: 'r-01', letters: [], reads: [], deleted: ['m-01'] });
+    expect(event.droppedRooms).toEqual([]);
+  });
+});
+
+describe('письма хоста: пачка не ждёт снимка вечно', () => {
+  it('пачка, ждущая снимка, уходит не позже MAIL_HOLD_MAX_MS, даже когда полный проход не доходит до publish', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+    // Проход встанет на gitBranch: снимка со структурной записью не будет, пачку держит только страховка.
+    closePass();
+    let mailAt = 0;
+    onBroadcast = (event) => {
+      if (event === 'rooms.mail' && mailAt === 0) mailAt = Date.now();
+    };
+
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    const sentAt = Date.now();
+    send(id, 'письмо за структурной записью');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: MAIL_HOLD_MAX_MS + 8000 });
+
+    // Таймер не срабатывает раньше срока: событие не вышло по снимку и не ушло по обычной пачке в 50 мс.
+    expect(mailAt - sentAt).toBeGreaterThanOrEqual(MAIL_HOLD_MAX_MS - 50);
+    expect(events('works.changed')).toEqual([]);
+    expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо за структурной записью']);
+  });
+
+  it('проход, прочитавший работу без точной версии, больше не ждёт её запись: следующее письмо уходит пачкой в 50 мс, а не по потолку', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    pass.stripVersions = true;
+    let mailAt = 0;
+    onBroadcast = (event) => {
+      if (event === 'rooms.mail' && mailAt === 0) mailAt = Date.now();
+    };
+
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    expect(s.entry(project, id)?.version).toBeUndefined();
+    const sentAt = Date.now();
+    send(id, 'письмо после прохода без версии');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: MAIL_HOLD_MAX_MS + 8000 });
+
+    expect(mailAt - sentAt).toBeLessThan(MAIL_HOLD_MAX_MS);
   });
 });
 
@@ -575,7 +726,8 @@ describe('письма хоста: смешанная запись', () => {
   it('удаление комнаты, пока пачка ждёт: комната в droppedRooms, её писем в rooms[] нет', async () => {
     const id = await seedWork();
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
-    await started();
+    // Пачка с письмом ждёт долго: запись `deleteRoom` ложится в неё, сколько бы ни шла, а выпускает пачку снимок.
+    await started({ mailBatchMs: LONG_BATCH_MS });
 
     send(id, 'письмо, которое переживёт не всех');
     await updateMap(project, id, (current, letters) => {
@@ -601,11 +753,14 @@ describe('письма хоста: смешанная запись', () => {
     const goals: Array<[string | undefined, string | undefined]> = [];
     s.onChange((snapshot, previous) => goals.push([previous.entries[0]?.map.work.goal, snapshot.entries[0]?.map.work.goal]));
 
+    // Проход закрыт, пока письмо не легло: оно точно идёт «за» структурной записью, которую проход ещё не прочёл.
+    const open = closePass();
     await updateMap(project, id, (current) => {
       current.work.goal = 'новая цель';
     });
     // Пачка писем уходит раньше полного прохода: запись сервиса она не перечитывает, иначе `previous` уже нёс бы новую цель.
     send(id, 'письмо сразу за записью карты');
+    open();
     await vi.waitFor(() => expect(goals.length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
 
     expect(goals[0]).toEqual(['цель', 'новая цель']);
@@ -622,11 +777,14 @@ describe('письма хоста: смешанная запись', () => {
     await started();
 
     // Смена цели не несёт писем, письмо идёт за ней сразу: полный проход (75 мс наблюдателя и склейка) прочтёт обе записи позже
-    // таймера пачки в 50 мс. Окно с версией до смены не должно получить событие с prevVersion после неё.
+    // таймера пачки в 50 мс. Окно с версией до смены не должно получить событие с prevVersion после неё. Проход закрыт, пока
+    // письмо не легло, чтобы порядок не зависел от нагрузки.
+    const open = closePass();
     await updateMap(project, id, (current) => {
       current.work.goal = 'новая цель';
     });
     send(id, 'письмо за сменой цели');
+    open();
     await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
     await sleep(300);
 
@@ -654,10 +812,12 @@ describe('письма хоста: смешанная запись', () => {
       send(id, 'после чтения прохода');
     };
 
+    const open = closePass();
     await updateMap(project, id, (current) => {
       current.work.goal = 'новая цель';
     });
     send(id, 'письмо за сменой цели');
+    open();
     await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
     await sleep(300);
 
@@ -694,8 +854,11 @@ describe('письма хоста: смешанная запись', () => {
     expect(s.entry(project, id)?.version).toBe(workVersion(project, id));
   });
 
-  it('запись, менявшая карту, — works.changed и onChange; письма событием не идут', async () => {
+  it('запись, менявшая карту, — ровно один works.changed и onChange; письма событием не идут, чужие карты не разбираются заново', async () => {
     const id = await seedWork();
+    // Карты других работ тяжёлые: будь они разобраны заново, счётчик байт разбора ушёл бы за их размер.
+    await createWork(project, { title: 'B', goal: 'в'.repeat(20_000) });
+    await createWork(project, { title: 'C', goal: 'с'.repeat(20_000) });
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
     const s = await started();
     const changed = vi.fn();
@@ -707,9 +870,14 @@ describe('письма хоста: смешанная запись', () => {
     await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
     await sleep(300);
 
+    expect(events('works.changed')).toHaveLength(1);
     expect(events('rooms.mail')).toEqual([]);
     expect(changed).toHaveBeenCalled();
     expect(s.entry(project, id)?.map.work.goal).toBe('новая цель');
+    // Разобрана карта этой работы (несколько КиБ), а не обе карты по 20 КиБ.
+    const parsed = counters.read().mapBytesParsed;
+    expect(parsed).toBeGreaterThan(0);
+    expect(parsed).toBeLessThan(20_000);
   });
 });
 

@@ -47,6 +47,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import {
   MAIL_BATCH_MS,
+  MAIL_HOLD_MAX_MS,
   MAIL_SLOW_CLIENT_BYTES,
   buildMailEvent,
   fitMailEvent,
@@ -66,6 +67,8 @@ export interface WorksServiceOptions {
   lockTimeoutMs?: number;
   /** Счётчики окна строки состояния: один `refresh` — одна запись. */
   windowCounters?: WindowCounters;
+  /** Сколько пачка писем копится до рассылки, мс; по умолчанию `MAIL_BATCH_MS`. Тесты ставят большое значение, чтобы пачку выпускал снимок, а не таймер. */
+  mailBatchMs?: number;
 }
 
 /**
@@ -146,6 +149,7 @@ export function createWorksService(
   options: WorksServiceOptions = {},
 ): WorksService {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const mailBatchMs = options.mailBatchMs ?? MAIL_BATCH_MS;
   const lockOptions =
     options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs };
 
@@ -351,7 +355,12 @@ export function createWorksService(
     publishLegacy(toLegacy);
     if (only === undefined) {
       published.clear();
-      for (const [key, work] of entries) if (work.version !== undefined) published.set(key, work.version);
+      for (const [key, work] of entries) {
+        if (work.version !== undefined) published.set(key, work.version);
+        // Версии у записи нет, но проход работу прочёл: больше по этой структурной записи ждать нечего, и следующие пачки работы
+        // не держатся до потолка `MAIL_HOLD_MAX_MS`.
+        else mapAhead.delete(key);
+      }
       releaseMail();
     }
   }
@@ -666,9 +675,18 @@ export function createWorksService(
       const waiting = batch;
       waiting.timer = setTimeout(() => {
         waiting.timer = undefined;
-        // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не таймер.
-        if (waiting.structuralVersion === 0) flushMail(key);
-      }, MAIL_BATCH_MS);
+        // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не этот таймер, но ждёт она не дольше
+        // `MAIL_HOLD_MAX_MS` от начала пачки: снимок может не выйти (проход упал, работу сняли, у записи нет версии).
+        const rest = waiting.structuralVersion === 0 ? 0 : MAIL_HOLD_MAX_MS - (Date.now() - waiting.startedAt);
+        if (rest <= 0) {
+          flushMail(key);
+          return;
+        }
+        waiting.timer = setTimeout(() => {
+          waiting.timer = undefined;
+          flushMail(key);
+        }, rest);
+      }, mailBatchMs);
     }
   }
 
