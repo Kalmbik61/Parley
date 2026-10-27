@@ -1,6 +1,7 @@
 /**
- * Значок провайдера агента (спека 4.6; решение 6 спеки окна 2026-09-29): у claude, codex и Kimi — брендовые
- * SVG из `assets/providers/` (в тёмной теме — `codex-light.svg` и `kimi-light.svg`), у прочих провайдеров — буква
+ * Значок провайдера агента (спека 4.6; решение 6 спеки окна 2026-09-29): у claude, codex и вендоров пресетов (Kimi,
+ * DeepSeek, MiniMax, Qwen, OpenRouter) — брендовые SVG из `assets/providers/` (в тёмной теме — `*-light.svg`, где он
+ * есть), у прочих провайдеров — буква
  * на подложке `--muted`, как прежде. Файлы значков — решение пользователя для личной неподписанной
  * сборки; чьи это знаки и откуда файлы, сказано в NOTICE.
  *
@@ -17,9 +18,14 @@ import { isCustomProviderId } from '@parley/protocol';
 import claudeUrl from '../assets/providers/claude.svg';
 import codexLightUrl from '../assets/providers/codex-light.svg';
 import codexUrl from '../assets/providers/codex.svg';
+import deepseekUrl from '../assets/providers/deepseek.svg';
 import kimiLightUrl from '../assets/providers/kimi-light.svg';
 import kimiUrl from '../assets/providers/kimi.svg';
+import minimaxUrl from '../assets/providers/minimax.svg';
+import openrouterLightUrl from '../assets/providers/openrouter-light.svg';
+import openrouterUrl from '../assets/providers/openrouter.svg';
 import parleyUrl from '../assets/providers/parley.svg';
+import qwenUrl from '../assets/providers/qwen.svg';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { kindOf } from './providers/custom-provider-draft.js';
@@ -37,38 +43,51 @@ function providerLetter(provider: string): string {
   return firstCodePoint === undefined ? '?' : firstCodePoint.toUpperCase();
 }
 
+/** Знаки вендоров пресетов по id пресета: `[светлая тема, тёмная тема]`. Цветным знакам вторая тема не нужна. */
+const VENDOR_ICONS = {
+  kimi: [kimiUrl, kimiLightUrl],
+  deepseek: [deepseekUrl, deepseekUrl],
+  minimax: [minimaxUrl, minimaxUrl],
+  qwen: [qwenUrl, qwenUrl],
+  openrouter: [openrouterUrl, openrouterLightUrl],
+} as const;
+
+type Vendor = keyof typeof VENDOR_ICONS;
+
+const isVendor = (value: unknown): value is Vendor => typeof value === 'string' && Object.hasOwn(VENDOR_ICONS, value);
+
 /**
  * Семейство CLI аккаунта подписки (спека подписок 5.9): значок аккаунта — значок его CLI, а не Parley. Берётся из строки
  * `providers.list` (`family` отдаёт хост); у записи с адресом, хоть она и запускается через `claude`, значка CLI нет.
- * Kimi узнаётся по пресету endpoint-записи, а не по пользовательскому имени или id.
+ * Вендор узнаётся по пресету endpoint-записи, а не по пользовательскому имени или id.
  * Протокол пока знает только `family: 'claude'`; Codex — по виду аккаунта до этапа 3.
  */
-function providerBrand(row: ProviderInfo | undefined): 'claude' | 'codex' | 'kimi' | null {
+function providerBrand(row: ProviderInfo | undefined): 'claude' | 'codex' | Vendor | null {
   const kind = kindOf(row?.custom);
   if (kind === 'claude-account') return row?.family ?? 'claude';
   if (kind === 'codex-account') return 'codex';
-  if (kind === 'endpoint' && row?.custom && 'preset' in row.custom && row.custom.preset === 'kimi') return 'kimi';
+  if (kind === 'endpoint' && row?.custom && 'preset' in row.custom && isVendor(row.custom.preset)) return row.custom.preset;
   return null;
 }
 
 /** Адрес брендового значка; `null` — у провайдера его нет, рисуется буква. */
-function brandIcon(provider: string, dark: boolean, brand: 'claude' | 'codex' | 'kimi' | null): string | null {
+function brandIcon(provider: string, dark: boolean, brand: 'claude' | 'codex' | Vendor | null): string | null {
   // Аккаунт подписки — значок семейства (спека подписок 5.9), стоит до правила своих провайдеров.
   if (brand === 'claude') return claudeUrl;
   if (brand === 'codex') return dark ? codexLightUrl : codexUrl;
-  if (brand === 'kimi') return dark ? kimiLightUrl : kimiUrl;
+  if (brand !== null) return VENDOR_ICONS[brand][dark ? 1 : 0];
   // Свои провайдеры без известного бренда — значок Parley. По id, а не по стору:
   // удалённый провайдер в старой комнате остаётся со значком.
   if (isCustomProviderId(provider)) return parleyUrl;
-  switch (provider.toLowerCase()) {
-    case 'kimi':
-      return dark ? kimiLightUrl : kimiUrl;
+  const id = provider.toLowerCase();
+  switch (id) {
     case 'claude':
       return claudeUrl;
     case 'codex':
       return dark ? codexLightUrl : codexUrl;
     default:
-      return null;
+      // Плитки пресетов в диалоге своего провайдера передают id пресета.
+      return isVendor(id) ? VENDOR_ICONS[id][dark ? 1 : 0] : null;
   }
 }
 

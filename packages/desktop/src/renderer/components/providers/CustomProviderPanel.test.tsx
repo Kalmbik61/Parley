@@ -47,7 +47,8 @@ describe('CustomProviderPanel: новый провайдер', () => {
     const tiles = screen.getAllByRole('button').map((button) => button.textContent ?? '');
     for (const name of ['Kimi', 'MiniMax', 'Qwen', 'DeepSeek', 'OpenRouter', 'Own address'])
       expect(tiles.some((text) => text.startsWith(name))).toBe(true);
-    expect(screen.getByRole('button', { name: /^Kimi/ }).querySelector('img')?.getAttribute('src')).toMatch(/kimi\.svg$/);
+    for (const [name, file] of [['Kimi', 'kimi'], ['MiniMax', 'minimax'], ['Qwen', 'qwen'], ['DeepSeek', 'deepseek'], ['OpenRouter', 'openrouter']])
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}`) }).querySelector('img')?.getAttribute('src')).toMatch(new RegExp(`${file}\\.svg$`));
     expect(screen.getByRole('button', { name: /^Own address/ }).querySelector('img')?.getAttribute('src')).toMatch(/parley\.svg$/);
     fireEvent.click(screen.getByRole('button', { name: /^Kimi/ }));
     expect(field(S.customProviders.nameField).value).toBe('Kimi');

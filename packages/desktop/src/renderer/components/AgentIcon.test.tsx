@@ -151,6 +151,25 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
   });
 
+  it.each([
+    ['deepseek', /deepseek\.svg$/, /deepseek\.svg$/],
+    ['minimax', /minimax\.svg$/, /minimax\.svg$/],
+    ['qwen', /qwen\.svg$/, /qwen\.svg$/],
+    ['openrouter', /openrouter\.svg$/, /openrouter-light\.svg$/],
+  ])('пресет %s — знак вендора в светлой и тёмной теме', (preset, light, dark) => {
+    useProvidersStore.setState({ providers: [row('custom-work-3', { ...endpoint, kind: 'endpoint', preset })] });
+    const { container } = render(<AgentIcon provider="custom-work-3" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(light);
+    act(() => useUiStore.setState({ dark: true }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(dark);
+  });
+
+  it('незнакомый пресет — значок Parley', () => {
+    useProvidersStore.setState({ providers: [row('custom-work-4', { ...endpoint, kind: 'endpoint', preset: 'toString' })] });
+    const { container } = render(<AgentIcon provider="custom-work-4" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+
   it('custom-* без записи в сторе — значок Parley, как раньше', () => {
     const { container } = render(<AgentIcon provider="custom-claude-2" />);
     expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);

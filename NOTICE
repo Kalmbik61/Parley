@@ -202,6 +202,32 @@ SHA-256 исходных SVG:
 kimi.svg: a543446e0c6827bae262ec45e6bbc67cc0c9e9f446ebc86be916c082459aed25
 kimi-light.svg: e47dc8cfa928317cba1ce1605545d5b92f349a465b031f956a56f2788ed17c6a
 
+Файлы packages/desktop/src/renderer/assets/providers/openrouter.svg и
+openrouter-light.svg (для тёмной темы) — официальный знак OpenRouter. Скопированы
+без правок 2026-10-28 со страницы брендбука https://openrouter.ai/brand:
+https://openrouter.ai/brand/logos/transparent/glyph/svg/glyph-ink.svg и
+https://openrouter.ai/brand/logos/transparent/glyph/svg/glyph-cloud.svg
+Знак принадлежит OpenRouter, Inc.; используется для обозначения провайдера
+OpenRouter, не означает одобрения или партнёрства с Parley.
+SHA-256 исходных SVG:
+openrouter.svg: 91be6b8a91745f089bfe42b89a5cbcd4b666fca6473610f9a6c11a31bd7523bc
+openrouter-light.svg: 385bbf00cd5718ad652fdfc05b4b4e7d0ea3a834cfd807e1133d3bee2b9a7c81
+
+Файлы packages/desktop/src/renderer/assets/providers/deepseek.svg, minimax.svg и
+qwen.svg — знаки DeepSeek, MiniMax и Qwen. Отдельного SVG-знака на сайтах
+вендоров нет, поэтому файлы скопированы без правок 2026-10-28 из пакета npm
+`@lobehub/icons-static-svg` 1.101.0 (https://github.com/lobehub/lobe-icons,
+лицензия MIT, Copyright (c) LobeHub): icons/deepseek-color.svg,
+icons/minimax-color.svg и icons/qwen-color.svg. Цветные знаки одинаково читаются
+в обеих темах, отдельного варианта для тёмной темы нет.
+Знаки принадлежат их владельцам: DeepSeek — Hangzhou DeepSeek Artificial
+Intelligence Co., Ltd., MiniMax — MiniMax, Qwen — Alibaba Cloud. Используются
+для обозначения провайдеров, не означают одобрения или партнёрства с Parley.
+SHA-256 исходных SVG:
+deepseek.svg: deba5f98a5c1796e20fcac3149bcd7eb8a32f0bdd04d048819400b1f28bd1439
+minimax.svg: 7f7187fa6d9b341ac5f22f6c5a970523afb439dc45566d64eb4f4b9b604d6b01
+qwen.svg: a158a0e3ed5b541e4f91384ece02c3acf0a0d81b7b11a46d77bafb248b09e32c
+
 Файл packages/desktop/src/renderer/assets/providers/parley.svg — собственный знак
 проекта Parley, копия docs/media/brand/parley-icon.svg. Окно рисует его у своих
 (пользовательских) провайдеров, пока у них нет вендорских значков.
