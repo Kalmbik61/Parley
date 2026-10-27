@@ -153,6 +153,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
    * или перезапуска: каждый запуск грузит 1,2 ГБ, холодный — до 15 с (критик m-1457).
    */
   let transientRetries = 0;
+  let downloading: Promise<DownloadResult> | null = null;
   const queue: Job[] = [];
   let current: Job | null = null;
   let requests = 0;
@@ -363,18 +364,24 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
       await refresh();
       return TTS_VOICES.map((voice) => ({ ...voice, downloaded: downloaded && voice.modelId === MODEL_ID }));
     },
-    async download(onProgress) {
-      const result = await deps.models.download(MODEL_ID, onProgress);
-      if (!('ok' in result)) return result;
-      downloaded = true;
-      worker?.stop();
-      worker = null;
-      failure = null;
-      transientRetries = 0;
-      void ensureWorker().then(() => {
-        if (!pumping) armIdle();
+    download(onProgress) {
+      // Второй запрос (Settings открыли заново) ждёт идущее скачивание: worker пересоздаётся один раз, не дважды.
+      downloading ??= (async () => {
+        const result = await deps.models.download(MODEL_ID, onProgress);
+        if (!('ok' in result)) return result;
+        downloaded = true;
+        worker?.stop();
+        worker = null;
+        failure = null;
+        transientRetries = 0;
+        void ensureWorker().then(() => {
+          if (!pumping) armIdle();
+        });
+        return result;
+      })().finally(() => {
+        downloading = null;
       });
-      return result;
+      return downloading;
     },
     cancelDownload() {
       deps.models.cancel(MODEL_ID);

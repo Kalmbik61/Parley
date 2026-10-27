@@ -479,6 +479,17 @@ describe('createTtsService: выгрузка и прогрев', () => {
     expect((await tts.voices()).every((voice) => voice.downloaded)).toBe(true);
   });
 
+  it('два запроса скачивания разом — одно скачивание и один новый клиент worker (критик m-1471)', async () => {
+    const models = fakeModels(false);
+    const { tts, createWorker } = service({ models: models.store });
+    const [first, second] = await Promise.all([tts.download(() => undefined), tts.download(() => undefined)]);
+    expect(first).toEqual({ ok: true });
+    expect(second).toEqual({ ok: true });
+    await flush();
+    expect(models.store.download).toHaveBeenCalledTimes(1);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+  });
+
   it('D5: cancelDownload отменяет скачивание весов в хранилище', () => {
     const models = fakeModels(false);
     const { tts } = service({ models: models.store });
