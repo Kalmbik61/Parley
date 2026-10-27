@@ -1633,7 +1633,7 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
   });
 
-  /** Подменяет размер, который jsdom не считает: `offsetWidth` и `offsetHeight` (содержимого и статуса уха). */
+  /** Подменяет размер, который jsdom не считает: `offsetWidth` и `offsetHeight` содержимого. */
   function withOffsets(width: number, height: number, body: () => void): void {
     const widthSpy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width);
     const heightSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height);
@@ -1657,28 +1657,43 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
   const morph = (): string | undefined => shape().className.split(' ').find((name) => name.startsWith('island-morph-'));
 
   describe('форма (N3)', () => {
-    it('нечего выдвигать — уши: форма у верхнего края, скругление снизу 10 px, без тени и обводки, содержимое без отступа', () => {
-      view({ config: notched, model: IDLE_MODEL });
-      expect(screen.getByTestId('island-ears')).toBeTruthy();
-      expect(screen.queryByTestId('island-pill')).toBeNull();
+    /** Голый вырез: форма ровно по вырезу, у верхнего края, скругление снизу 10 px, без тени и обводки, без отступа. */
+    function expectBare(): void {
+      const bare = screen.getByTestId('island-notch');
+      expect(bare.style.width).toBe('185px');
+      expect(bare.style.height).toBe('32px');
+      expect(content().children).toHaveLength(1);
+      expect(content().style.paddingTop).toBe('0px');
+      expect(content().style.minWidth).toBe('');
       expect(shape().className).toContain('rounded-b-[10px]');
       expect(shape().className).toContain('shadow-none');
       expect(shape().className).not.toContain('shadow-lg');
       expect(shape().className).not.toContain('ring-1');
       expect(parseFloat(shape().style.marginTop)).toBe(0);
-      expect(content().style.paddingTop).toBe('0px');
-      // Покой до авто-убирания: рой слева, правое ухо пустое.
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('');
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+      expect(screen.queryByTestId('swarm')).toBeNull();
+    }
+
+    it('нечего выдвигать — голый вырез, ровно по его размеру (B26 F-B26-1)', () => {
+      view({ config: notched, model: IDLE_MODEL });
+      expectBare();
     });
 
-    it('уши ровные: оба уха одной ширины, промежуток — ширина выреза, высота — высота выреза', () => {
-      view({ config: notched, model: IDLE_MODEL });
-      const left = screen.getByTestId('island-ear-left');
-      const right = screen.getByTestId('island-ear-right');
-      expect(left.style.width).toBe('36px');
-      expect(right.style.width).toBe(left.style.width);
-      expect(screen.getByTestId('island-notch-gap').style.width).toBe('185px');
-      expect(screen.getByTestId('island-ears').style.height).toBe('32px');
+    it('фон не раздвигает форму: агенты работают, Done, ошибка помощника, помощник свёрнут после разговора — голый вырез (B26 F-B26-1)', () => {
+      view({ config: notched, model: { ...IDLE_MODEL, working: 3, active: true } });
+      expectBare();
+      cleanup();
+      view({ config: notched, model: DONE_MODEL, doneCount: 1 });
+      expectBare();
+      cleanup();
+      view({ config: notched, model: { ...MODEL, proposals: 1 } });
+      expectBare();
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true, collapsed: true, busy: false, mini: null }) })} />);
+      expectBare();
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·', view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
+      expectBare();
     });
 
     it('центр формы — центр выреза с точностью до половины точки; вогнутые плечи 6 px у верхнего края', () => {
@@ -1705,23 +1720,13 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       expect(screen.queryByTestId('island-ears')).toBeNull();
     });
 
-    it('убран без Done — голый вырез: форма ровно по вырезу, без обводки, у верхнего края', () => {
+    it('убран, и с непросмотренными Done тоже, — голый вырез', () => {
       view({ config: notched, model: IDLE_MODEL, retracted: true });
-      const bare = screen.getByTestId('island-notch');
-      expect(bare.style.width).toBe('185px');
-      expect(bare.style.height).toBe('32px');
-      expect(content().children).toHaveLength(1);
-      expect(shape().className).toContain('rounded-b-[10px]');
-      expect(shape().className).not.toContain('ring-1');
-      expect(shape().className).not.toContain('rounded-[3px]');
-      expect(parseFloat(shape().style.marginTop)).toBe(0);
-      expect(screen.queryByTestId('island-ears')).toBeNull();
-    });
-
-    it('убран с непросмотренными Done — уши с «✅ N» справа', () => {
+      expectBare();
+      cleanup();
       view({ config: notched, model: IDLE_MODEL, retracted: true, doneCount: 2 });
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('✅ 2');
-      expect(screen.queryByTestId('island-notch')).toBeNull();
+      expectBare();
+      expect(screen.queryByText('✅ 2')).toBeNull();
     });
 
     it('убранный остров наведение не выдвигает: голый вырез остаётся', () => {
@@ -1731,73 +1736,22 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     });
   });
 
-  describe('уши (N4)', () => {
-    it('рой уха получает реакции мини-роя и при выключенном помощнике (критик m-1489, F5)', () => {
-      const react = vi.fn();
-      const real = engineModule.createSwarm;
-      const spy = vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
-        const engine = real(...args);
-        vi.spyOn(engine, 'react').mockImplementation(react);
-        return engine;
-      });
-      try {
-        const { rerender } = render(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: null })} />);
-        rerender(<IslandView {...viewProps({ config: notched, model: IDLE_MODEL, assistant: null, miniPulse: { reaction: 'hop', at: 5000 } })} />);
-        expect(react).toHaveBeenCalledWith('hop', 5000, expect.any(Number), false);
-      } finally {
-        spy.mockRestore();
-      }
-    });
-
-    it('правое ухо — статус по приоритету: ждёт тебя (сессии и комнаты), ошибка помощника важнее', () => {
-      view({ config: notched, model: { ...MODEL, proposals: 1 } });
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('2');
-      expect(screen.getByTestId('island-ear-right').getAttribute('aria-label')).toBe('2 waiting for you');
-      cleanup();
-      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('!');
-    });
-
-    it('работает N — синяя точка; только Done — «✅ N»', () => {
-      view({ config: notched, model: { ...IDLE_MODEL, working: 3, active: true } });
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('3');
-      cleanup();
-      view({ config: notched, model: DONE_MODEL, doneCount: 1 });
-      expect(screen.getByTestId('island-ear-right').textContent).toBe('✅ 1');
-    });
-
-    it('левое ухо — мини-рой 24 px; «Reduce motion» Parley доходит до него', () => {
-      const engines: Array<ReturnType<typeof vi.fn>> = [];
-      const real = engineModule.createSwarm;
-      vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
-        const engine = real(...args);
-        engines.push(vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>);
-        return engine;
-      });
-      view({ config: { ...notched, motion: 'reduce' }, model: IDLE_MODEL });
-      const swarm = within(screen.getByTestId('island-ear-left')).getByTestId('swarm') as HTMLCanvasElement;
-      expect(swarm.style.width).toBe('24px');
-      expect(engines).toHaveLength(1);
-      expect(engines[0]).toHaveBeenCalledWith(expect.any(Object), expect.any(Number), true);
-    });
-  });
-
   describe('выдвижение (N5)', () => {
-    it('наведение выдвигает форму: пилюля под вырезом, не уже ушей, скругление 22 px и тень; уход курсора — снова уши', () => {
+    it('наведение выдвигает форму: пилюля под вырезом, не уже выреза с полями, скругление 22 px и тень; уход курсора — снова вырез', () => {
       const props = viewProps({ config: notched });
       const { rerender } = render(<IslandView {...props} />);
-      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      expect(screen.getByTestId('island-notch')).toBeTruthy();
       rerender(<IslandView {...props} hovered listOpen />);
-      expect(screen.queryByTestId('island-ears')).toBeNull();
+      expect(screen.queryByTestId('island-notch')).toBeNull();
       expect(screen.getByTestId('island-pill')).toBeTruthy();
       expect(screen.getByTestId('island-list')).toBeTruthy();
       expect(content().style.paddingTop).toBe('32px');
-      // min-width = nw + 2·ear: 185 + 2·36.
+      // min-width = nw + 2·(h + 4): 185 + 2·36.
       expect(content().style.minWidth).toBe('257px');
       expect(shape().className).toContain('rounded-b-[22px]');
       expect(shape().className).toContain('shadow-lg');
       rerender(<IslandView {...props} hovered={false} listOpen={false} />);
-      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      expect(screen.getByTestId('island-notch')).toBeTruthy();
       expect(content().style.minWidth).toBe('');
     });
 
@@ -1811,18 +1765,18 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       cleanup();
       render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true }) })} />);
       expect(screen.getByTestId('assistant-view')).toBeTruthy();
-      expect(screen.queryByTestId('island-ears')).toBeNull();
+      expect(screen.queryByTestId('island-notch')).toBeNull();
     });
 
-    it('уши → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
+    it('вырез → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
       const props = viewProps({ config: notched });
       const { rerender } = render(<IslandView {...props} />);
-      resize(257, 32);
+      resize(185, 32);
       rerender(<IslandView {...props} hovered listOpen />);
       resize(400, 220);
       expect(morph()).toBe('island-morph-grow');
       rerender(<IslandView {...props} />);
-      resize(257, 32);
+      resize(185, 32);
       expect(morph()).toBe('island-morph-shrink');
     });
   });
@@ -1848,7 +1802,7 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       };
       const props = viewProps({ config: notched, model: IDLE_MODEL });
       const { rerender } = render(<IslandView {...props} />);
-      resize(257, 32);
+      resize(185, 32);
       expect(morph()).toBe('island-morph-grow');
       // Остров ушёл на внешний монитор: выреза нет — пилюля, размер сразу новый, морфа нет.
       withOffsets(280, 40, () => rerender(<IslandView {...props} config={{ ...notched, notch: null }} />));
@@ -1860,12 +1814,12 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
       expect(morph()).toBeUndefined();
       flush();
       expect(morph()).toBe('island-morph-grow');
-      // Вернулся на встроенный дисплей: снова уши, снова мгновенно.
-      withOffsets(257, 32, () => rerender(<IslandView {...props} />));
-      expect(shape().style.width).toBe('257px');
+      // Вернулся на встроенный дисплей: снова голый вырез, снова мгновенно.
+      withOffsets(185, 32, () => rerender(<IslandView {...props} />));
+      expect(shape().style.width).toBe('185px');
       expect(shape().style.height).toBe('32px');
       expect(morph()).toBeUndefined();
-      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      expect(screen.getByTestId('island-notch')).toBeTruthy();
       flush();
       flush();
       expect(morph()).toBe('island-morph-shrink');
@@ -1883,12 +1837,11 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
   });
 
   describe('уменьшенное движение (N10)', () => {
-    it('«Reduce motion» в вырезе: форма без класса перехода, data-motion гасит проявление ушей', () => {
+    it('«Reduce motion» в вырезе: форма без класса перехода, data-motion гасит проявление содержимого', () => {
       view({ config: { ...notched, motion: 'reduce' }, model: IDLE_MODEL });
-      resize(257, 32);
+      resize(185, 32);
       expect(morph()).toBeUndefined();
       expect(shape().getAttribute('data-motion')).toBe('reduce');
-      expect(screen.getByTestId('island-ears').className).toContain('island-reveal');
     });
   });
 });

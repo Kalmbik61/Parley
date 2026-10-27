@@ -1,22 +1,22 @@
 /**
  * Зона нажатия убранного острова: без выреза — 64×16 под чёлкой (или по размеру `✅ N`); в вырезе (#9 §12.1, §12.3,
- * план 3b B28) — ровно прямоугольник выреза у голого выреза или невидимые уши той же ширины, что у формы, у верхнего
- * края и по центру выреза (N6: уши ловят мышь только в своём прямоугольнике). Клик и потяжка вниз выдвигают остров.
+ * план 3b B28) — ровно прямоугольник выреза у верхнего края и по центру выреза, и с непросмотренными Done тоже
+ * (B26 F-B26-1: ушей нет). Клик и потяжка вниз выдвигают остров.
  */
 
 import { createRef } from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../shared/strings.js';
 import { IslandTab, PULL_EXPAND_PX } from './IslandTab.js';
-import type { EarStatus, Notch } from './NotchEars.js';
+import type { Notch } from './notch.js';
 
 const NOTCH: Notch = { width: 185, height: 32, centerX: 240.5 };
 
-function tab(patch: { doneCount?: number; notch?: Notch | null; status?: EarStatus | null; topInset?: number } = {}) {
+function tab(patch: { doneCount?: number; notch?: Notch | null; topInset?: number } = {}) {
   const onExpand = vi.fn();
   render(
-    <IslandTab anchorClass="justify-center" topInset={patch.topInset ?? 38} doneCount={patch.doneCount ?? 0} notch={patch.notch ?? null} status={patch.status ?? null}
+    <IslandTab anchorClass="justify-center" topInset={patch.topInset ?? 38} doneCount={patch.doneCount ?? 0} notch={patch.notch ?? null}
       tabRef={createRef<HTMLButtonElement>()} onExpand={onExpand} />,
   );
   const button = screen.getByTestId('island-tab');
@@ -72,19 +72,14 @@ describe('язычок в вырезе (N6)', () => {
     expect(button.getAttribute('aria-label')).toBe(S.island.showIsland);
   });
 
-  it('уши с непросмотренными Done: зона — невидимые уши той же ширины, без роя, подпись «агенты закончили»', () => {
-    const { button } = tab({ notch: NOTCH, doneCount: 2, status: { kind: 'done', count: 2 } });
+  it('с непросмотренными Done — тот же прямоугольник выреза, подпись «агенты закончили» (B26 F-B26-1)', () => {
+    const { button } = tab({ notch: NOTCH, doneCount: 2 });
     expect(button.getAttribute('aria-label')).toBe(S.island.doneTab);
-    const ghost = button.firstElementChild as HTMLElement;
-    expect(ghost.className).toContain('opacity-0');
-    expect(ghost.getAttribute('aria-hidden')).toBe('true');
-    const ears = within(ghost).getByTestId('island-ears');
-    expect(ears.style.height).toBe('32px');
-    expect(within(ghost).getByTestId('island-ear-left').style.width).toBe('36px');
-    expect(within(ghost).getByTestId('island-ear-right').style.width).toBe('36px');
-    expect(within(ghost).getByTestId('island-notch-gap').style.width).toBe('185px');
-    expect(within(ghost).getByTestId('island-ear-right').textContent).toBe('✅ 2');
-    expect(within(ghost).queryByTestId('swarm')).toBeNull();
+    const box = button.firstElementChild as HTMLElement;
+    expect(box.getAttribute('aria-hidden')).toBe('true');
+    expect(box.style.width).toBe('185px');
+    expect(box.style.height).toBe('32px');
+    expect(button.textContent).toBe('');
   });
 
   it('клик и потяжка вниз дальше порога выдвигают остров', () => {

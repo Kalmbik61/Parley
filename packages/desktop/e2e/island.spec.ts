@@ -386,47 +386,39 @@ test.describe('остров одобрений', () => {
     expect(notes.filter((note) => note.body.includes('Run: echo island-only'))).toEqual([]);
   });
 
-  test('вырез PARLEY_NOTCH=185x32: голый вырез, уши с роем и статусом, выдвижение наведением и возврат ушей (N3–N5)', async () => {
+  test('вырез PARLEY_NOTCH=185x32: голый вырез в покое, при работе агента и после Done; выдвижение только наведением (N3, N5, B26 F-B26-1)', async () => {
     const { app, window, ref, hooks } = await open({ PARLEY_ISLAND: '', PARLEY_NOTCH: '185x32' });
     await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
     const island = islandPage(app)!;
     const shape = island.getByTestId('island');
     const center = await notchCenterX(app);
+    /** Форма — ровно прямоугольник выреза у верхнего края, по центру выреза (±0,5 pt), и так и стоит. */
+    const expectBare = async (): Promise<void> => {
+      await expect(shape.getByTestId('island-notch')).toBeVisible();
+      await expect(async () => {
+        await settled(shape);
+        const box = await boxOf(shape);
+        expect(box).toMatchObject({ y: 0, width: 185, height: 32 });
+        expect(Math.abs(box.x + box.width / 2 - center)).toBeLessThanOrEqual(0.5);
+      }).toPass({ timeout: 10_000 });
+      // Фон не раздвигает форму и чуть позже: ушей и статусов сбоку нет (решение человека, B26 F-B26-1).
+      await window.waitForTimeout(1000);
+      expect(await boxOf(shape)).toMatchObject({ y: 0, width: 185, height: 32 });
+      await expect(shape.getByTestId('swarm')).toHaveCount(0);
+    };
 
-    // N3: убранный остров без Done — ровно прямоугольник выреза у верхнего края, по центру выреза.
-    await expect(shape.getByTestId('island-notch')).toBeVisible();
-    await expect.poll(async () => boxOf(shape)).toMatchObject({ y: 0, width: 185, height: 32 });
-    const bare = await boxOf(shape);
-    expect(Math.abs(bare.x + bare.width / 2 - center)).toBeLessThanOrEqual(0.5);
+    // N3: убранный остров без Done — ровно прямоугольник выреза.
+    await expectBare();
 
-    // Агент работает — остров выдвигается в уши: слева рой, справа статус «работает 1» с точкой.
+    // Агент работает — форма остаётся вырезом: хост уже знает о работе (точка в окне Parley), а остров не растёт.
     await hooks.fire('UserPromptSubmit', { prompt: 'Run ls', permission_mode: 'default' });
-    const ears = shape.getByTestId('island-ears');
-    await expect(ears).toBeVisible({ timeout: 15_000 });
-    await expect(shape.getByTestId('island-ear-right')).toHaveAttribute('aria-label', '1 working');
-    await expect(shape.getByTestId('island-ear-right').getByTestId('island-ear-dot')).toHaveCount(1);
-    await expect(shape.getByTestId('island-ear-left').getByTestId('swarm')).toHaveCount(1);
-    // N3: уши равны, ширина формы — вырез и два уха, высота — высота выреза, центр — по вырезу (±0,5 pt).
-    // Ширину уха задаёт замер статуса, а форма доезжает до неё переходом: проверка — после того, как всё встало.
-    await expect(async () => {
-      await settled(shape);
-      const left = await boxOf(shape.getByTestId('island-ear-left'));
-      const right = await boxOf(shape.getByTestId('island-ear-right'));
-      const gap = await boxOf(shape.getByTestId('island-notch-gap'));
-      const box = await boxOf(shape);
-      expect(left.width).toBe(right.width);
-      expect(left.width).toBeGreaterThanOrEqual(32 + 4);
-      expect(gap.width).toBe(185);
-      expect(box).toMatchObject({ y: 0, width: 185 + 2 * left.width, height: 32 });
-      expect(Math.abs(gap.x + gap.width / 2 - center)).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(box.x + box.width / 2 - center)).toBeLessThanOrEqual(0.5);
-    }).toPass({ timeout: 10_000 });
-    const withEars = await boxOf(shape);
+    await expect(window.locator(`[data-session-id="${ref.sessionId}"] [data-state="working"]`)).toHaveCount(1, { timeout: 15_000 });
+    await expectBare();
 
-    // N5: наведение выдвигает форму вниз кривой роста (§4.4): ушей нет, пилюля ниже выреза, ширина не меньше ушей.
+    // N5: наведение выдвигает форму вниз кривой роста (§4.4): пилюля ниже выреза, ширина не меньше выреза с полями.
     await hoverIsland(app, true);
     await expect(shape.getByTestId('island-pill')).toBeVisible();
-    await expect(shape.getByTestId('island-ears')).toHaveCount(0);
+    await expect(shape.getByTestId('island-notch')).toHaveCount(0);
     await expect(shape).toHaveClass(/island-morph-grow/);
     expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.46s');
     await expect.poll(async () => (await boxOf(shape)).height).toBeGreaterThan(32);
@@ -435,29 +427,20 @@ test.describe('остров одобрений', () => {
     const dropped = await boxOf(shape);
     const pill = await boxOf(shape.getByTestId('island-pill'));
     expect(pill.y - dropped.y).toBeGreaterThanOrEqual(32);
-    expect(dropped.width).toBeGreaterThanOrEqual(withEars.width);
+    expect(dropped.width).toBeGreaterThanOrEqual(185 + 2 * (32 + 4));
     expect(Math.abs(dropped.x + dropped.width / 2 - center)).toBeLessThanOrEqual(0.5);
 
-    // Уход курсора возвращает уши кривой сжатия.
+    // Уход курсора возвращает голый вырез кривой сжатия.
     await hoverIsland(app, false);
-    await expect(shape.getByTestId('island-ears')).toBeVisible();
     await expect(shape).toHaveClass(/island-morph-shrink/);
     expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.3s');
-    await expect.poll(async () => boxOf(shape)).toEqual(withEars);
-    await settled(shape);
-    const back = await boxOf(shape.getByTestId('island-notch-gap'));
-    expect(Math.abs(back.x + back.width / 2 - center)).toBeLessThanOrEqual(0.5);
+    await expectBare();
 
-    // N4: статус по приоритету — работы нет, есть непросмотренный Done → `✅ N` без точки.
-    const { ref: other } = await call<{ ref: Ref }>(window, 'sessions.create', { projectPath: project, workId: ref.workId, provider: 'claude', label: 'other', task: '', parent: null });
-    const events = path.join(project, '.parley', 'works', other.workId, 'events');
-    await mkdir(events, { recursive: true });
-    await writeFile(path.join(events, `${other.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
-    await expect(shape.getByTestId('island-ear-right')).toHaveAttribute('aria-label', '2 working', { timeout: 15_000 });
-    await writeFile(path.join(events, `${other.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`, { flag: 'a' });
+    // Done — тоже фон: агент закончил, а форма остаётся вырезом, без «✅ N» сбоку.
     await hooks.fire('Stop', { stop_hook_active: false });
-    await expect(shape.getByTestId('island-ear-right')).toHaveText(/^✅ \d+$/, { timeout: 15_000 });
-    await expect(shape.getByTestId('island-ear-right').getByTestId('island-ear-dot')).toHaveCount(0);
+    await expect(window.locator(`[data-session-id="${ref.sessionId}"] [data-state="working"]`)).toHaveCount(0, { timeout: 15_000 });
+    await expectBare();
+    await expect(shape).not.toContainText('✅');
   });
 
   test('без PARLEY_NOTCH на дисплее без выреза — сегодняшняя полоса (N2)', async () => {

@@ -101,19 +101,3 @@ body {
 .island-shoulder { position: absolute; top: 0; width: 6px; height: 6px; }
 .island-shoulder-left { left: -6px; background: radial-gradient(circle at 0 100%, transparent 6px, #000 6.5px); }
 .island-shoulder-right { right: -6px; background: radial-gradient(circle at 100% 100%, transparent 6px, #000 6.5px); }
-
-/* Точка статуса в правом ухе пульсирует только прозрачностью, без масштаба; при уменьшенном движении стоит (§12.5). */
-@keyframes island-ear-pulse {
-  50% { opacity: 0.35; }
-}
-.island-ear-pulse {
-  animation: island-ear-pulse 1.4s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .island-ear-pulse {
-    animation: none;
-  }
-}
-[data-motion='reduce'] .island-ear-pulse {
-  animation: none;
-}

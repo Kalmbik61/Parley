@@ -52,10 +52,10 @@
  * динамика — «Speak answers» и `toggleSpeak`. Реакции роёв (#9 §4.1–§4.3) — одноразовые `pulse`: мини-рой отвечает на
  * начало работы, исходы показа, наведение и фазы помощника, большой рой — только на фазы помощника.
  *
- * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` наведение выдвигает форму из ушей вниз, уход курсора
- * возвращает уши (`IslandView` по `hovered`). Область под мышь — по форме: уши или выдвинутый вид у выдвинутого острова,
- * у убранного — зона нажатия по голому вырезу или по ушам с непросмотренными Done. Новый вырез (другой дисплей, новый
- * замер) сдвигает форму, поэтому область замеряется заново.
+ * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` наведение выдвигает форму из выреза вниз, уход курсора
+ * возвращает голый вырез (`IslandView` по `hovered`). Область под мышь — по форме: вырез или выдвинутый вид у
+ * выдвинутого острова, у убранного — зона нажатия по вырезу. Новый вырез (другой дисплей, новый замер) сдвигает форму,
+ * поэтому область замеряется заново.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -75,7 +75,6 @@ import { assistantBusy, useAssistantStore } from './assistant/store.js';
 import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
-import { earStatus } from './NotchEars.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
@@ -801,7 +800,6 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
         assistant={assistantProps}
-        miniPulse={miniPulse}
         consent={
           (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined)) === undefined
             ? null
@@ -814,7 +812,6 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           topInset={config.topInset}
           doneCount={unseenDone}
           notch={config.notch ?? null}
-          status={earStatus(model, unseenDone, config.assistant.enabled && assistant.host.phase === 'error')}
           tabRef={tabRef}
           onExpand={() => {
             cues.open();

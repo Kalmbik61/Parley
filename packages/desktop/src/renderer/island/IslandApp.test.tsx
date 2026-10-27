@@ -2649,7 +2649,7 @@ describe('реакции роёв помощника (#9 §4.1–§4.3, план
 });
 
 describe('остров в вырезе (#9 §12, план 3b B28)', () => {
-  /** Вырез 185 × 32 pt по центру кадра 480 pt; уши без статуса — по 36 pt. */
+  /** Вырез 185 × 32 pt по центру кадра 480 pt; выдвинутый вид не уже 185 + 2·36 pt. */
   const NOTCH = { width: 185, height: 32, centerX: 240 };
   let innerWidth = 0;
   /** Колбэки подставного rAF по номеру. */
@@ -2672,7 +2672,11 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
       const element = this as HTMLElement;
       const id = element.dataset.testid;
-      if (id === 'island') return { x: 111.5 + (parseFloat((element.parentElement as HTMLElement).style.left) || 0), y: 0, width: 257, height: 32 } as DOMRect;
+      if (id === 'island') {
+        // Голый вырез — 185 pt, выдвинутый вид — по наименьшей ширине 257 pt; оба по центру кадра.
+        const width = element.querySelector('[data-testid="island-notch"]') === null ? 257 : 185;
+        return { x: 240 - width / 2 + (parseFloat((element.parentElement as HTMLElement).style.left) || 0), y: 0, width, height: 32 } as DOMRect;
+      }
       if (id === 'island-tab') return { x: 147.5 + (parseFloat(element.style.left) || 0), y: 0, width: 185, height: 32 } as DOMRect;
       return { x: 0, y: 0, width: 0, height: 0 } as DOMRect;
     });
@@ -2702,7 +2706,7 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     });
   };
 
-  it('N6: убранный — голый вырез и зона нажатия ровно по нему; выдвинутый в покое — уши, область мыши — форма ушей', async () => {
+  it('N6: убранный — голый вырез и зона нажатия ровно по нему; выдвинутый в покое — тоже голый вырез, область мыши — по нему (B26 F-B26-1)', async () => {
     const { island, bridge } = setup({ notch: NOTCH, topInset: 32 });
     render(<IslandApp bridge={bridge} />);
     await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
@@ -2712,36 +2716,54 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     expect((tab.firstElementChild as HTMLElement).style.width).toBe('185px');
     expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
     expand();
-    expect(screen.getByTestId('island-ears')).toBeTruthy();
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
     expect(screen.queryByTestId('island-pill')).toBeNull();
-    expect(lastRect(island)).toEqual({ x: 111.5, y: 0, width: 257, height: 32 });
+    expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
   });
 
-  it('N5: наведение выдвигает форму вниз (рост), уход курсора возвращает уши (сжатие)', async () => {
+  it('фон не раздвигает форму: агенты работают, помощник свёрнут после разговора — голый вырез (B26 F-B26-1)', async () => {
+    const { island, bridge, working } = setup({
+      notch: NOTCH, topInset: 32,
+      assistant: { enabled: true, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF },
+    });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    working('s-01');
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    expect(screen.queryByTestId('swarm')).toBeNull();
+    act(() => useAssistantStore.setState({ open: true, collapsed: true, host: { ...HOST_IDLE, phase: 'idle', answer: 'Nothing is running.', turn: 1 } }));
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-view')).toBeNull();
+    expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
+  });
+
+  it('N5: наведение выдвигает форму вниз (рост), уход курсора возвращает голый вырез (сжатие)', async () => {
     const { bridge, hover } = setup({ notch: NOTCH, topInset: 32 });
     render(<IslandApp bridge={bridge} />);
     await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
     expand();
     hover(true);
     expect(screen.getByTestId('island-pill')).toBeTruthy();
-    expect(screen.queryByTestId('island-ears')).toBeNull();
+    expect(screen.queryByTestId('island-notch')).toBeNull();
     expect(screen.getByTestId('island-content').style.paddingTop).toBe('32px');
     hover(false);
-    expect(screen.getByTestId('island-ears')).toBeTruthy();
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
     expect(screen.queryByTestId('island-pill')).toBeNull();
   });
 
-  it('убран с непросмотренным Done — уши с «✅ N»; зона нажатия — невидимые уши той же ширины', async () => {
+  it('убран с непросмотренным Done — голый вырез без «✅ N»; зона нажатия — по вырезу (B26 F-B26-1)', async () => {
     useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
     useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: '2026-10-13T09:59:00.000Z' }) }, loaded: true });
     const { bridge } = setup({ notch: NOTCH, topInset: 32 });
     render(<IslandApp bridge={bridge} />);
-    await waitFor(() => expect(screen.getAllByTestId('island-ears')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Agents finished — show the island'));
     expect(isRetracted()).toBe(true);
-    expect(screen.getAllByTestId('island-ear-right').map((ear) => ear.textContent)).toEqual(['✅ 1', '✅ 1']);
-    const tab = screen.getByTestId('island-tab');
-    expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
-    expect(within(tab).getByTestId('island-ear-left').style.width).toBe(screen.getAllByTestId('island-ear-left')[0]!.style.width);
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
+    expect(screen.queryByText('✅ 1')).toBeNull();
+    expect((screen.getByTestId('island-tab').firstElementChild as HTMLElement).style.width).toBe('185px');
   });
 
   it('N8: новый замер выреза — область мыши уходит заново; вырез → полоса и обратно — без морфа', async () => {
@@ -2761,6 +2783,6 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     expect(morph()).toBeDefined();
     push(island, base);
     expect(morph()).toBeUndefined();
-    expect(screen.getByTestId('island-ears')).toBeTruthy();
+    expect(screen.getByTestId('island-notch')).toBeTruthy();
   });
 });

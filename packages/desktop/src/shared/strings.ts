@@ -2188,14 +2188,6 @@ export const S = {
     failed: "Couldn't send — try again",
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
-    /** Уши острова в вырезе (#9 §12.1): подписи для чтения с экрана — рой слева и статус справа. */
-    ears: {
-      swarm: 'Parley agents',
-      error: 'Something went wrong',
-      waiting: (count: number): string => `${count} waiting for you`,
-      working: (count: number): string => `${count} working`,
-      done: (count: number): string => `${count} done`,
-    },
     idle: 'No agents running',
     noPending: 'No pending requests',
     /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */

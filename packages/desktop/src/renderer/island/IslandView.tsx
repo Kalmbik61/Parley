@@ -31,10 +31,10 @@
  * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
  *
  * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` форма стоит у верхнего края по центру выреза (сдвиг до
- * половины точки — у обёртки, там же вогнутые плечи) и вместо пилюли и бруска показывает уши (`NotchEars`): рой
- * слева, статус справа. Убранный остров без Done — голый вырез, ровно по его размеру; с непросмотренными Done — уши.
+ * половины точки — у обёртки, там же вогнутые плечи). В покое — и убранная, и после разговора с помощником, и пока
+ * агенты работают или пришёл Done — форма ровно по вырезу, без ушей и боковых статусов (B26 F-B26-1, решение человека).
  * Наведение, запрос, согласие, помощник и переход к ждущему выдвигают форму вниз: содержимое — ниже выреза, ширина —
- * не меньше ушей. Скругление снизу — 10 px у ушей и голого выреза, 22 px у выдвинутых видов. Смена выреза (другой
+ * не меньше выреза с полями. Скругление снизу — 10 px у голого выреза, 22 px у выдвинутых видов. Смена выреза (другой
  * дисплей, новый замер) меняет форму мгновенно: два кадра у формы нет класса перехода (§12.4).
  */
 
@@ -64,7 +64,7 @@ import { ProgressView } from './ProgressView.js';
 import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
 import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
-import { earStatus, NotchEars, notchShift } from './NotchEars.js';
+import { droppedMinWidth, notchShift } from './notch.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
 export { CARD_ARM_MS };
@@ -123,8 +123,6 @@ export interface IslandViewProps {
   onDecide(key: string, decision: FeedDecision): void;
   /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
   assistant: IslandAssistantProps | null;
-  /** Реакции мини-роя (#9 §4.1): события агентов и наведение — и без помощника; рой уха в вырезе берёт их отсюда. */
-  miniPulse?: SwarmPulse | null;
   /** Карточка согласия (держит запуск Codex): показывается раньше карточек ленты; `null` — ждущих нет. */
   consent: IslandConsentProps | null;
   progress?: { selected: SessionRef | null; state: ProgressState; onSelect(ref: SessionRef): void; onClose(): void };
@@ -554,17 +552,15 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   // 2 px ниже края. `✅ N`: сразу под чёлкой. У убранных обводка вместо тени.
   const peek = retracted && doneCount > 0;
   const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
-  // В вырезе: выдвинутый вид, уши или голый вырез. Убранный остров наведение не выдвигает — его выдвигает язычок.
+  // В вырезе: выдвинутый вид или голый вырез. Убранный остров наведение не выдвигает — его выдвигает язычок.
   const dropped = !retracted && (hovered || listOpen || assistantBig || consent !== null || items.length > 0 || props.navigationKey != null || props.navigationEmpty === true);
-  const notchView = notch === null ? null : dropped ? 'dropped' : retracted && !peek ? 'bare' : 'ears';
-  /** Ширина уха по последнему замеру ушей: выдвинутый вид не уже ушей, из которых вырос. */
-  const [ear, setEar] = useState(0);
+  const notchView = notch === null ? null : dropped ? 'dropped' : 'bare';
   const look =
     notchView !== null ? (notchView === 'dropped' ? 'rounded-b-[22px] shadow-lg' : 'rounded-b-[10px] shadow-none')
       : !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
   const marginTop = notchView !== null || !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
   const paddingTop = notch !== null ? (notchView === 'dropped' ? notch.height : 0) : retracted ? 0 : config.topInset;
-  const minWidth = notch !== null && notchView === 'dropped' ? notch.width + 2 * Math.max(ear, notch.height + 4) : undefined;
+  const minWidth = notch !== null && notchView === 'dropped' ? droppedMinWidth(notch) : undefined;
   // «Reduce motion» Parley — как системный reduced motion: класса перехода нет, а `data-motion` гасит появление внутри.
   const morph = config.motion === 'reduce' || snap.on ? '' : `island-morph-${shape.morph}`;
   return (
@@ -592,13 +588,6 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop, minWidth }}>
           {notch !== null && notchView === 'bare' ? (
             <div data-testid="island-notch" style={{ width: notch.width, height: notch.height }} />
-          ) : notch !== null && notchView === 'ears' ? (
-            <NotchEars
-              notch={notch}
-              status={earStatus(model, doneCount, assistant?.view.host.phase === 'error')}
-              swarm={{ assistant, reducedMotion: config.motion === 'reduce', pulse: props.miniPulse ?? null }}
-              onEar={setEar}
-            />
           ) : retracted ? (
             // Содержимое убранной формы меняется сразу, а форма доезжает до него переходом.
             peek ? (
