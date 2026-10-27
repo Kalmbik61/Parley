@@ -1,4 +1,5 @@
-import { readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -19,6 +20,13 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  *
  * Остров создаётся вместе с главным окном (скрытым): `firstWindow()` и `getAllWindows()[0]` могут отдать его, поэтому
  * главное окно берётся по адресу страницы, остров — по `island.html`.
+ *
+ * Остров в вырезе (#9 §12, план 3b B25, T17): `PARLEY_NOTCH=185x32` даёт подменный вырез посередине каждого дисплея —
+ * N3 (голый вырез и уши), N4 (рой и статус в ушах), N5 (выдвижение и возврат). Наведение решает main по настоящему
+ * курсору; тест шлёт острову то же событие main (`island:hover`). Без переменной — полоса (N2): на Mac с вырезом
+ * датчик `osascript` нашёл бы настоящий вырез, поэтому остров ставится на дисплей без выреза (`island.displayId` в
+ * `ui.json` дома теста), а если такого дисплея нет — проверка пропускается. N8 (смена дисплеев) в E2E нет: Playwright
+ * дисплеи не меняет, её держат юниты B27/B28 и ручная проверка.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -174,6 +182,66 @@ async function loggedNotes(app: ElectronApplication): Promise<LoggedNote[]> {
   );
 }
 
+/** Наведение на остров: main шлёт то же событие, что по своему опросу настоящего курсора. */
+async function hoverIsland(app: ElectronApplication, hovered: boolean): Promise<void> {
+  await app.evaluate(
+    ({ BrowserWindow }, over) =>
+      BrowserWindow.getAllWindows()
+        .find((window) => window.webContents.getURL().endsWith('/island.html'))
+        ?.webContents.send('island:hover', over),
+    hovered,
+  );
+}
+
+/** Центр дисплея острова в координатах его кадра (окна): там стоит подменный вырез `PARLEY_NOTCH`. */
+async function notchCenterX(app: ElectronApplication): Promise<number> {
+  return app.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().endsWith('/island.html'))!;
+    const frame = window.getBounds();
+    const display = screen.getDisplayMatching(frame);
+    return display.bounds.x + display.bounds.width / 2 - frame.x;
+  });
+}
+
+/** Рамка элемента в странице острова. */
+async function boxOf(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  return locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+}
+
+/** Ждёт конца переходов и анимаций формы и её содержимого (рост, сжатие, проступание). */
+async function settled(locator: Locator): Promise<void> {
+  await locator.evaluate((element) =>
+    Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        // Бесконечный пульс точки статуса не кончается — его не ждём.
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+/**
+ * Дисплеи по данным macOS: номер дисплея (тот же id, что у Electron) и высота выреза (`safeAreaInsets.top`, 0 — выреза
+ * нет). Не macOS — пустой список.
+ */
+function macScreens(): Array<{ id: number; top: number }> {
+  if (process.platform !== 'darwin') return [];
+  const script = [
+    'ObjC.import("AppKit");',
+    'var screens = $.NSScreen.screens, out = [];',
+    'for (var i = 0; i < screens.count; i++) {',
+    '  var screen = screens.objectAtIndex(i);',
+    '  out.push({ id: screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue, top: screen.safeAreaInsets.top });',
+    '}',
+    'JSON.stringify(out);',
+  ].join('\n');
+  return JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 10_000 })) as Array<{ id: number; top: number }>;
+}
+
 interface Opened {
   app: ElectronApplication;
   window: Page;
@@ -258,19 +326,26 @@ test.describe('остров одобрений', () => {
     await expect(island.getByTestId('island-card')).toHaveCount(0);
   });
 
-  test('«×» прячет остров до следующего запроса', async () => {
+  test('стрелка ⌃ убирает остров в язычок до следующего запроса', async () => {
+    // Кнопки «×» у острова больше нет: остров не пропадает, а убирается стрелкой ⌃ (видна под курсором), окно остаётся.
     const { app, hooks } = await open({ PARLEY_ISLAND: '' });
     await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
     await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_mode: 'default', permission_suggestions: [] });
 
     await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
     const island = islandPage(app)!;
-    await island.getByRole('button', { name: 'Hide until the next request' }).click();
-    await expect.poll(() => islandVisible(app), { message: 'остров спрятан' }).toBe(false);
+    const shape = island.getByTestId('island');
+    await expect(island.getByTestId('island-card')).toContainText('Run: ls');
+    await hoverIsland(app, true);
+    await island.getByTestId('island-tuck').click();
+    await hoverIsland(app, false);
+    await expect(shape).toHaveAttribute('data-retracted', 'true');
+    await expect(island.getByTestId('island-tab')).toBeVisible();
 
-    // Второй запрос той же сессии (первый всё ещё ждёт человека): новая карточка снимает «×».
+    // Второй запрос той же сессии (первый всё ещё ждёт человека): новая карточка выдвигает остров.
     await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'pwd' }, permission_mode: 'default', permission_suggestions: [] });
-    await expect.poll(() => islandVisible(app), { message: 'остров показан снова' }).toBe(true);
+    await expect(shape).toHaveAttribute('data-retracted', 'false', { timeout: 15_000 });
+    await expect(island.getByTestId('island-card')).toBeVisible();
   });
 
   test('остров выключен в настройках — окна нет, запрос приходит уведомлением', async () => {
@@ -309,5 +384,107 @@ test.describe('остров одобрений', () => {
     await window.waitForTimeout(2000);
     const notes = await loggedNotes(app);
     expect(notes.filter((note) => note.body.includes('Run: echo island-only'))).toEqual([]);
+  });
+
+  test('вырез PARLEY_NOTCH=185x32: голый вырез, уши с роем и статусом, выдвижение наведением и возврат ушей (N3–N5)', async () => {
+    const { app, window, ref, hooks } = await open({ PARLEY_ISLAND: '', PARLEY_NOTCH: '185x32' });
+    await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
+    const island = islandPage(app)!;
+    const shape = island.getByTestId('island');
+    const center = await notchCenterX(app);
+
+    // N3: убранный остров без Done — ровно прямоугольник выреза у верхнего края, по центру выреза.
+    await expect(shape.getByTestId('island-notch')).toBeVisible();
+    await expect.poll(async () => boxOf(shape)).toMatchObject({ y: 0, width: 185, height: 32 });
+    const bare = await boxOf(shape);
+    expect(Math.abs(bare.x + bare.width / 2 - center)).toBeLessThanOrEqual(0.5);
+
+    // Агент работает — остров выдвигается в уши: слева рой, справа статус «работает 1» с точкой.
+    await hooks.fire('UserPromptSubmit', { prompt: 'Run ls', permission_mode: 'default' });
+    const ears = shape.getByTestId('island-ears');
+    await expect(ears).toBeVisible({ timeout: 15_000 });
+    await expect(shape.getByTestId('island-ear-right')).toHaveAttribute('aria-label', '1 working');
+    await expect(shape.getByTestId('island-ear-right').getByTestId('island-ear-dot')).toHaveCount(1);
+    await expect(shape.getByTestId('island-ear-left').getByTestId('swarm')).toHaveCount(1);
+    // N3: уши равны, ширина формы — вырез и два уха, высота — высота выреза, центр — по вырезу (±0,5 pt).
+    // Ширину уха задаёт замер статуса, а форма доезжает до неё переходом: проверка — после того, как всё встало.
+    await expect(async () => {
+      await settled(shape);
+      const left = await boxOf(shape.getByTestId('island-ear-left'));
+      const right = await boxOf(shape.getByTestId('island-ear-right'));
+      const gap = await boxOf(shape.getByTestId('island-notch-gap'));
+      const box = await boxOf(shape);
+      expect(left.width).toBe(right.width);
+      expect(left.width).toBeGreaterThanOrEqual(32 + 4);
+      expect(gap.width).toBe(185);
+      expect(box).toMatchObject({ y: 0, width: 185 + 2 * left.width, height: 32 });
+      expect(Math.abs(gap.x + gap.width / 2 - center)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(box.x + box.width / 2 - center)).toBeLessThanOrEqual(0.5);
+    }).toPass({ timeout: 10_000 });
+    const withEars = await boxOf(shape);
+
+    // N5: наведение выдвигает форму вниз кривой роста (§4.4): ушей нет, пилюля ниже выреза, ширина не меньше ушей.
+    await hoverIsland(app, true);
+    await expect(shape.getByTestId('island-pill')).toBeVisible();
+    await expect(shape.getByTestId('island-ears')).toHaveCount(0);
+    await expect(shape).toHaveClass(/island-morph-grow/);
+    expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.46s');
+    await expect.poll(async () => (await boxOf(shape)).height).toBeGreaterThan(32);
+    await settled(shape);
+    expect(await shape.getByTestId('island-content').evaluate((element) => getComputedStyle(element).paddingTop)).toBe('32px');
+    const dropped = await boxOf(shape);
+    const pill = await boxOf(shape.getByTestId('island-pill'));
+    expect(pill.y - dropped.y).toBeGreaterThanOrEqual(32);
+    expect(dropped.width).toBeGreaterThanOrEqual(withEars.width);
+    expect(Math.abs(dropped.x + dropped.width / 2 - center)).toBeLessThanOrEqual(0.5);
+
+    // Уход курсора возвращает уши кривой сжатия.
+    await hoverIsland(app, false);
+    await expect(shape.getByTestId('island-ears')).toBeVisible();
+    await expect(shape).toHaveClass(/island-morph-shrink/);
+    expect(await shape.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0.3s');
+    await expect.poll(async () => boxOf(shape)).toEqual(withEars);
+    await settled(shape);
+    const back = await boxOf(shape.getByTestId('island-notch-gap'));
+    expect(Math.abs(back.x + back.width / 2 - center)).toBeLessThanOrEqual(0.5);
+
+    // N4: статус по приоритету — работы нет, есть непросмотренный Done → `✅ N` без точки.
+    const { ref: other } = await call<{ ref: Ref }>(window, 'sessions.create', { projectPath: project, workId: ref.workId, provider: 'claude', label: 'other', task: '', parent: null });
+    const events = path.join(project, '.parley', 'works', other.workId, 'events');
+    await mkdir(events, { recursive: true });
+    await writeFile(path.join(events, `${other.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
+    await expect(shape.getByTestId('island-ear-right')).toHaveAttribute('aria-label', '2 working', { timeout: 15_000 });
+    await writeFile(path.join(events, `${other.sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'Stop' })}\n`, { flag: 'a' });
+    await hooks.fire('Stop', { stop_hook_active: false });
+    await expect(shape.getByTestId('island-ear-right')).toHaveText(/^✅ \d+$/, { timeout: 15_000 });
+    await expect(shape.getByTestId('island-ear-right').getByTestId('island-ear-dot')).toHaveCount(0);
+  });
+
+  test('без PARLEY_NOTCH на дисплее без выреза — сегодняшняя полоса (N2)', async () => {
+    // Остров — на дисплей без выреза: на Mac с вырезом датчик нашёл бы настоящий вырез основного дисплея.
+    const screens = macScreens();
+    const plain = screens.find((screen) => screen.top === 0);
+    test.skip(screens.length > 0 && plain === undefined, 'у всех дисплеев есть вырез — полосу без выреза проверить негде');
+    if (plain !== undefined) {
+      await mkdir(path.join(home, 'desktop'), { recursive: true });
+      await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ version: 1, island: { displayId: plain.id } }));
+    }
+    const { app, hooks } = await open({ PARLEY_ISLAND: '' });
+    await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
+    const island = islandPage(app)!;
+    const shape = island.getByTestId('island');
+
+    // Без выреза обёртка формы не участвует в раскладке, ни ушей, ни голого выреза нет; убранный остров — брусок 40×5.
+    await expect(island.getByTestId('island-frame')).toHaveClass('contents');
+    await expect(shape).toHaveAttribute('data-retracted', 'true');
+    await expect.poll(async () => boxOf(shape)).toMatchObject({ width: 40, height: 5 });
+    expect((await boxOf(shape)).y).toBeGreaterThan(0);
+    await expect(island.getByTestId('island-ears')).toHaveCount(0);
+    await expect(island.getByTestId('island-notch')).toHaveCount(0);
+
+    // Работа выдвигает пилюлю, как сегодня.
+    await hooks.fire('UserPromptSubmit', { prompt: 'Run ls', permission_mode: 'default' });
+    await expect(shape.getByTestId('island-pill')).toBeVisible({ timeout: 15_000 });
+    await expect(island.getByTestId('island-ears')).toHaveCount(0);
   });
 });
