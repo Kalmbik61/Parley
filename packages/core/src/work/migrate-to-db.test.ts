@@ -892,20 +892,20 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(lines.filter((line) => line.includes('w-0003') && line.includes('cannot be parsed'))).toHaveLength(1);
   });
 
-  it('перед переездом в log одна строка «переезд карт в базу: N работ» — только карты, что ещё лежат файлами; нечего переносить — строки нет', async () => {
+  it('перед переездом в log одна строка «moving workspace maps into the database: N» — только карты, что ещё лежат файлами; нечего переносить — строки нет', async () => {
     await legacyWork(emptyMap('w-0001', 'Первая'));
     await legacyWork(emptyMap('w-0002', 'Вторая'));
     const lines: string[] = [];
 
     await migrateMapsToDb({ log: (line) => lines.push(line) });
 
-    expect(lines[0]).toBe('переезд карт в базу: 2 работ');
-    expect(lines.filter((line) => line.startsWith('переезд карт в базу'))).toHaveLength(1);
+    expect(lines[0]).toBe('moving workspace maps into the database: 2');
+    expect(lines.filter((line) => line.startsWith('moving workspace maps into the database'))).toHaveLength(1);
 
     // Всё переехало: каталоги работ остались, а файлов карт уже нет.
     const again: string[] = [];
     await migrateMapsToDb({ log: (line) => again.push(line) });
-    expect(again.filter((line) => line.startsWith('переезд карт в базу'))).toEqual([]);
+    expect(again.filter((line) => line.startsWith('moving workspace maps into the database'))).toEqual([]);
   });
 
   it.skipIf(asRoot)('после коммита rename не вышел: failed с кодом, строка остаётся, следующий запуск только переименует', async () => {

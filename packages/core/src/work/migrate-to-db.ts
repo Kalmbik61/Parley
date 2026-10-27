@@ -241,7 +241,7 @@ export async function migrateMapsToDb(options: { log?: (line: string) => void } 
       ),
     )
   ).filter(Boolean).length;
-  if (pending > 0) log(`переезд карт в базу: ${pending} работ`);
+  if (pending > 0) log(`moving workspace maps into the database: ${pending}`);
   for (const candidate of list) {
     const { projectPath, workId } = candidate;
     const outcome = await migrateOne(candidate);
