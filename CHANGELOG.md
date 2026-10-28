@@ -4,11 +4,29 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.25.0
+
+Agents can run a research swarm for large read-only tasks, links in Chat and room feeds open in the side browser, and a deleted worktree folder no longer hides a project's memory and backlog.
+
+### Added
+
+- **Research swarms.** For a big read-only task that does not fit one context (a whole-repository audit, a large document set, a web search) an agent can start a swarm with `create_swarm`. A queen session splits the task, adds drones that read slices and verifiers that recheck claims (`swarm_add`), and hands one summary back to whoever started the swarm. Swarm members only read; they are closed when they hand in or when the swarm ends. Swarms show in the sidebar, the queen's chat header, the workspace card and the island, with an animated honeycomb icon; the swarm row menu opens the queen, cancels the swarm or marks its result as seen. ([#133](https://github.com/Kalmbik61/Parley/pull/133))
+- Swarms have their own limits in Settings: sessions per swarm (16), running sessions per swarm (8), agent-created swarms (6) and swarm sessions (64) per workspace, and a swarm lifetime (90 minutes, 0 = no limit). Swarm sessions do not use the workspace's new-session budget, but they share its running-session and launch limits. ([#133](https://github.com/Kalmbik61/Parley/pull/133))
+- The built-in `research-swarm` skill tells the queen when a swarm is worth it, how to cut the task, what drones hand in, and how to verify and summarise. `create_swarm` and the queen's brief point to it, and both say that a narrow task is faster and cheaper with one agent. ([#135](https://github.com/Kalmbik61/Parley/pull/135))
 
 ### Changed
 
-- Agents are told to keep implementation on standard-tier models (Executor) and to leave preparation, leading and review to strong ones; a strong model takes code only for a named reason. The rule is in the system insert, `read_guide` (topics `tools` and `lead`), the lead's brief, the Planner and Feature Lead prompts and the `PARLEY.md` template; a project's `PARLEY.md` can change it.
+- Agents are told to keep implementation on standard-tier models (Executor) and to leave preparation, leading and review to strong ones; a strong model takes code only for a named reason. The rule is in the system insert, `read_guide` (topics `tools` and `lead`), the lead's brief, the Planner and Feature Lead prompts and the `PARLEY.md` template; a project's `PARLEY.md` can change it. ([#137](https://github.com/Kalmbik61/Parley/pull/137))
+- A plain click on an http(s) link in a session's Chat or a room feed opens the page in that session's or room's browser panel: an address already open is reused, a closed panel opens, and the 5-page limit shows a toast. Views without a browser panel (mail, file previews) still open a tab. The link menu's Parley browser item does the same; the system browser and Copy link are unchanged. ([#134](https://github.com/Kalmbik61/Parley/pull/134))
+
+### Fixed
+
+- A git worktree whose folder was deleted (listed by `git worktree list` as `prunable`) no longer makes the whole project unavailable. Before, project memory, backlog and decisions were skipped, and every launch said "resolve memory.md conflicts" although memory.md was fine. When the project's Git repository really cannot be verified, the notice now says so instead of blaming memory.md. ([#138](https://github.com/Kalmbik61/Parley/pull/138))
+
+### What is not proven yet
+
+- `create_swarm` has not run a real task yet: both pilots emulated a swarm with ordinary sessions, so automatic closing, the "all handed in" letter and the swarm limits are covered by tests only.
+- In the pilots, on a narrow task (one module, about 15 files) a single agent covered more and finished sooner at about the same cost. On a wide audit of Parley's code the swarm finished a little sooner (12 against 14 minutes), found somewhat more and cost less, but a larger share of its findings was false (15 % against 11 %), and its verifier passed three of the five false ones.
 
 ## 0.24.0
 
