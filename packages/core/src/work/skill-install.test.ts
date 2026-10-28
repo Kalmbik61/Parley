@@ -24,6 +24,7 @@ import { installAgentSkill } from './skill-install.js';
 import { SKILL_MD } from './skill.js';
 import { MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 import { PARLEY_BROWSER_SKILL_MD } from './parley-browser-skill.js';
+import { RESEARCH_SWARM_SKILL_MD } from './research-swarm-skill.js';
 
 const run = promisify(execFile);
 const git = async (dir: string, ...args: string[]): Promise<string> =>
@@ -64,7 +65,9 @@ const minimal = (dir: string) => path.join(dir, '.agents', 'skills', 'minimal-de
 const minimalAlias = (dir: string) => path.join(dir, '.claude', 'skills', 'minimal-development');
 const browserSkill = (dir: string) => path.join(dir, '.agents', 'skills', 'parley-browser');
 const browserAlias = (dir: string) => path.join(dir, '.claude', 'skills', 'parley-browser');
-const installedPaths = (dir: string) => [canonical(dir), alias(dir), minimal(dir), minimalAlias(dir), browserSkill(dir), browserAlias(dir)];
+const swarmSkill = (dir: string) => path.join(dir, '.agents', 'skills', 'research-swarm');
+const swarmAlias = (dir: string) => path.join(dir, '.claude', 'skills', 'research-swarm');
+const installedPaths = (dir: string) => [canonical(dir), alias(dir), minimal(dir), minimalAlias(dir), browserSkill(dir), browserAlias(dir), swarmSkill(dir), swarmAlias(dir)];
 const receiptFile = (dir: string): string => path.join(dir, '.parley', 'skills-receipt.json');
 const readReceipt = async (
   dir: string,
@@ -116,6 +119,8 @@ describe('установка с нуля', () => {
         [minimalAlias(project)]: { kind: 'symlink', target: '../../.agents/skills/minimal-development' },
         [browserSkill(project)]: { kind: 'dir', sha256: sha256(PARLEY_BROWSER_SKILL_MD) },
         [browserAlias(project)]: { kind: 'symlink', target: '../../.agents/skills/parley-browser' },
+        [swarmSkill(project)]: { kind: 'dir', sha256: sha256(RESEARCH_SWARM_SKILL_MD) },
+        [swarmAlias(project)]: { kind: 'symlink', target: '../../.agents/skills/research-swarm' },
       },
     });
   });
@@ -250,12 +255,12 @@ describe('чужое и правленное не трогается', () => {
 
     expect(result).toEqual({
       skipped: [{ path: canonical(project), reason: 'foreign' }],
-      written: [minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project)],
+      written: [minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project), swarmSkill(project), swarmAlias(project)],
       removed: [],
     });
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe('чужой навык\n');
     expect(await exists(alias(project))).toBe(false);
-    expect(Object.keys((await readReceipt(project)).entries)).toEqual([minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project)]);
+    expect(Object.keys((await readReceipt(project)).entries)).toEqual([minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project), swarmSkill(project), swarmAlias(project)]);
   });
 
   it('чужая ссылка Claude Code на месте: канонная копия ставится, ссылка не тронута', async () => {
@@ -266,9 +271,9 @@ describe('чужое и правленное не трогается', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result.skipped).toEqual([{ path: alias(project), reason: 'foreign' }]);
-    expect(result.written).toEqual([canonical(project), minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project)]);
+    expect(result.written).toEqual([canonical(project), minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project), swarmSkill(project), swarmAlias(project)]);
     expect(await readlink(alias(project))).toBe(path.join('..', '..', 'свой-навык'));
-    expect(Object.keys((await readReceipt(project)).entries)).toEqual([canonical(project), minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project)]);
+    expect(Object.keys((await readReceipt(project)).entries)).toEqual([canonical(project), minimal(project), minimalAlias(project), browserSkill(project), browserAlias(project), swarmSkill(project), swarmAlias(project)]);
   });
 
   it('чужая папка вместо ссылки тоже остаётся как есть', async () => {
@@ -344,7 +349,7 @@ describe('чужое и правленное не трогается', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result.written).toEqual([]);
-    expect(result.skipped.map((item) => item.reason)).toEqual(['foreign', 'foreign', 'foreign']);
+    expect(result.skipped.map((item) => item.reason)).toEqual(['foreign', 'foreign', 'foreign', 'foreign']);
 
     const fresh = path.join(root, 'fresh');
     await mkdir(path.join(fresh, '.parley'), { recursive: true });
@@ -420,7 +425,7 @@ describe('запись за симлинк не идёт', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }, { path: swarmAlias(project), reason: 'unsafe' }]);
     expect(await readdir(elsewhere)).toEqual([]);
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
   });
@@ -433,7 +438,7 @@ describe('запись за симлинк не идёт', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result).toEqual({
-      skipped: [{ path: canonical(project), reason: 'unsafe' }, { path: minimal(project), reason: 'unsafe' }, { path: browserSkill(project), reason: 'unsafe' }],
+      skipped: [{ path: canonical(project), reason: 'unsafe' }, { path: minimal(project), reason: 'unsafe' }, { path: browserSkill(project), reason: 'unsafe' }, { path: swarmSkill(project), reason: 'unsafe' }],
       written: [],
       removed: [],
     });
@@ -447,7 +452,7 @@ describe('запись за симлинк не идёт', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }, { path: swarmAlias(project), reason: 'unsafe' }]);
     expect(await readFile(path.join(project, '.claude', 'skills'), 'utf8')).toBe('файл\n');
   });
 });
@@ -715,7 +720,7 @@ describe('worktree сессии', () => {
     await initRepo(project);
     const worktree = await addWorktree();
     await installAgentSkill({ projectPath: project, worktreePath: worktree });
-    expect(Object.keys((await readReceipt(project)).entries)).toHaveLength(12);
+    expect(Object.keys((await readReceipt(project)).entries)).toHaveLength(16);
 
     await git(project, 'worktree', 'remove', '--force', worktree);
     await installAgentSkill({ projectPath: project });
@@ -957,7 +962,7 @@ describe('прежняя установка под именем harnas (R8)', ()
 
     expect(result.removed).toEqual([legacyCanonical(project)]);
     expect(await readFile(path.join(elsewhere, 'skills', 'harnas', 'SKILL.md'), 'utf8')).toBe(OLD_STUB);
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }, { path: browserAlias(project), reason: 'unsafe' }, { path: swarmAlias(project), reason: 'unsafe' }]);
   });
 
   it('worktree сессии: прежнее убирается и там; строки exclude — когда прежнего не осталось нигде', async () => {

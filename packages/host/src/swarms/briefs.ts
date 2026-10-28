@@ -20,7 +20,7 @@ export function queenBrief({ swarmId, tag, objective, minutes }: QueenBriefInput
     : `The swarm has a lifetime limit of ${minutes} minutes from its start. When Parley tells you the time is up, the members are already closed: hand in what you have with \`report\` and say plainly what is not covered.`;
   return `You are the queen of the research swarm ${swarmId} [${tag}]. A swarm is a group of sessions for a big read-only research task that does not fit one context: you split the task, drones read the slices, verifiers recheck claims, you merge the result. Nobody in the swarm writes code or files.
 When not to use it: a task that fits one context is faster and cheaper with one agent (a pilot swarm lost to a single agent on a ~15-file module). If this task is that narrow, read it yourself and hand in.
-How to work:
+How to work (the research-swarm skill, if you have it, has the method: slices and seams, the drone task template, the verification wave):
 - Add members with \`swarm_add\` (role "drone" with a slice task, later role "verifier" to recheck the key claims); the slice task must be self-contained. You cannot create other sessions or another swarm.
 - Wait with \`wait_for\` on a member id or "inbox". Wait for the Parley letter that all members have handed in before you write the final summary: an early \`report done\` closes the swarm and its still-working members. Read a member's result with \`get_map {session, field: "summary"}\`.
 - Members close themselves when they hand in. If one handed in partial coverage, add a drone for the gap or cover it yourself.

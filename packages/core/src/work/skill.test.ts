@@ -89,6 +89,10 @@ describe('заглушка скилла parley: тело', () => {
     expect(body).toContain('load the parley-browser skill');
   });
 
+  it('отсылает к скиллу research-swarm за роем', () => {
+    expect(body).toContain('load the research-swarm skill');
+  });
+
   it('отсылает к read_guide и не пересказывает гид', () => {
     expect(body).toContain('`read_guide`');
     expect(body).toMatch(/Do not retell the guide from memory/);

@@ -25,6 +25,7 @@ import { LEGACY_SKILL_NAME, SKILL_NAME } from '../names.js';
 import { SKILL_MD } from './skill.js';
 import { MINIMAL_DEVELOPMENT_NAME, MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 import { PARLEY_BROWSER_SKILL_NAME, PARLEY_BROWSER_SKILL_MD } from './parley-browser-skill.js';
+import { RESEARCH_SWARM_SKILL_NAME, RESEARCH_SWARM_SKILL_MD } from './research-swarm-skill.js';
 import { ensureStateDir, stateDir } from './state-dir.js';
 
 const run = promisify(execFile);
@@ -56,12 +57,13 @@ const run = promisify(execFile);
 /** Те же места под прежним именем скилла: так прежняя установка лежит на диске и записана в учёте. */
 const LEGACY_SKILL_DIR = ['.agents', 'skills', LEGACY_SKILL_NAME] as const;
 const LEGACY_ALIAS_DIR = ['.claude', 'skills', LEGACY_SKILL_NAME] as const;
-/** Three fixed assets share the existing ownership and native alias delivery. */
+/** Four fixed assets share the existing ownership and native alias delivery. */
 interface BuiltinSkill { name: string; files: Readonly<Record<string, string>> }
 const BUILTIN_SKILLS: readonly BuiltinSkill[] = [
   { name: SKILL_NAME, files: { 'SKILL.md': SKILL_MD } },
   { name: MINIMAL_DEVELOPMENT_NAME, files: { 'SKILL.md': MINIMAL_DEVELOPMENT_SKILL_MD, LICENSE: MINIMAL_DEVELOPMENT_LICENSE } },
   { name: PARLEY_BROWSER_SKILL_NAME, files: { 'SKILL.md': PARLEY_BROWSER_SKILL_MD } },
+  { name: RESEARCH_SWARM_SKILL_NAME, files: { 'SKILL.md': RESEARCH_SWARM_SKILL_MD } },
 ];
 const skillDir = (skill: BuiltinSkill): readonly string[] => ['.agents', 'skills', skill.name];
 const aliasDir = (skill: BuiltinSkill): readonly string[] => ['.claude', 'skills', skill.name];

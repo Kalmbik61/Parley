@@ -243,15 +243,16 @@ describe('установщик скилла: сбой не останавлив�
 
 import { installAgentSkill as installNativeAssets } from '../../../core/src/work/skill-install.js';
 
-it('the existing start/resume installer delivers all three builtins to project/worktree and is idempotent', async () => {
+it('the existing start/resume installer delivers all four builtins to project/worktree and is idempotent', async () => {
   const project = path.join(home, 'project'); const worktree = path.join(home, 'worktree');
   await Promise.all([mkdir(project), mkdir(worktree)]);
   const installer = createSkillInstaller(fakeHost(), installNativeAssets);
   const ref = { ...REF, projectPath: project };
   await installer(ref, worktree);
   for (const root of [project, worktree]) {
-    expect(await readdir(path.join(root, '.agents/skills'))).toEqual(['minimal-development', 'parley', 'parley-browser']);
+    expect(await readdir(path.join(root, '.agents/skills'))).toEqual(['minimal-development', 'parley', 'parley-browser', 'research-swarm']);
     expect(await readFile(path.join(root, '.claude/skills/parley-browser/SKILL.md'), 'utf8')).toContain('name: parley-browser');
+    expect(await readFile(path.join(root, '.claude/skills/research-swarm/SKILL.md'), 'utf8')).toContain('name: research-swarm');
     expect(await readFile(path.join(root, '.claude/skills/minimal-development/LICENSE'), 'utf8')).toContain('Copyright (c) 2026 DietrichGebert');
   }
   const body = path.join(worktree, '.agents/skills/minimal-development/SKILL.md');
