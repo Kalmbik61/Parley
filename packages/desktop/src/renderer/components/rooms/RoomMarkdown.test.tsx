@@ -404,6 +404,7 @@ describe('RoomMarkdown — ссылки', () => {
     expect(container.querySelector('a')).toBeNull();
     expect(container.textContent).toBe('x');
     expect(openTab).not.toHaveBeenCalled();
+    expect(onOpenExternal).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -422,6 +423,7 @@ describe('RoomMarkdown — ссылки', () => {
     expect(container.querySelector('[href]')).toBeNull();
     expect(container.textContent).toBe('x');
     expect(openTab).not.toHaveBeenCalled();
+    expect(onOpenExternal).not.toHaveBeenCalled();
   });
 
   it('адрес, который связал сам remark-gfm: https и www — ссылки, хвостовая точка в адрес не входит', () => {
