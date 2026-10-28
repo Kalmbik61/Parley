@@ -41,6 +41,7 @@ import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, typ
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
+import { memberOf } from './actions.js';
 import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
@@ -594,20 +595,6 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
 
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
-
-  /**
- * Сессия работы по id, имени («S03», «S03 Ruslan») или полному id цели; закрытые тоже находятся — о них скажет `unreachable`.
- * Полный id принимается только этой работы (`prefix`): номера сессий у каждой работы свои, чужой `s-03` не подходит.
- */
-  function memberOf(map: WorkMap, wanted: string, prefix: string): { session: { id: string; name: string; lifecycle: SessionLifecycle } } | AssistantReply {
-    const key = wanted.trim().toLowerCase();
-    const all = map.sessions.map((session) => ({ id: session.id, name: participantLabel(map, session.id), lifecycle: session.lifecycle }));
-    const matches = all.filter((session) => key !== '' && (session.id.toLowerCase() === key || key === `session:${prefix}:${session.id}`.toLowerCase() || session.name.toLowerCase() === key || session.name.toLowerCase().split(' ')[0] === key));
-    const [only] = matches;
-    if (matches.length === 1 && only !== undefined) return { session: only };
-    if (matches.length > 1) return { status: 400, body: { error: `"${wanted}" matches several sessions of "${map.work.title}": ${matches.map((session) => session.name).join(', ')}` } };
-    return { status: 404, body: { error: `No session "${wanted}" in work "${map.work.title}". Call parley_overview for the current ids.` } };
-  }
 
   function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
     const found = resolveTarget(targets, stringArg(input, 'work'));
