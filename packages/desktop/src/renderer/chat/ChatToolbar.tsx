@@ -25,7 +25,9 @@ import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { RoleChip } from '../lib/role-summary.js';
+import { swarmOfSession } from '@parley/core/swarms';
 import { useWorksStore } from '../store/works.js';
+import { SwarmChip } from './SwarmChip.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
 import { updateTab, findTab } from '../layout/tree.js';
 import { PanelToggle } from '../browser/panel/PanelToggle.js';
@@ -226,6 +228,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
   const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
   const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
   const title = session === undefined ? null : sessionRowLabel(session.id, session.label);
+  const inSwarm = session === undefined || entry === undefined ? null : swarmOfSession(entry.map, session.id);
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -259,6 +262,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
       <span data-testid="chat-toolbar-title" title={title ?? undefined} className="min-w-0 flex-1 truncate text-center text-xs font-medium">
         {title}
       </span>
+      {inSwarm === null || entry === undefined ? null : <SwarmChip swarm={inSwarm.swarm} member={inSwarm.member} projectPath={entry.projectPath} workId={entry.map.work.id} />}
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}
       {agents === undefined ? null : (

@@ -4,6 +4,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
+import { SWARM_ROLES, SWARM_STATUSES, isSwarmTag, isSwarmTerminal } from './swarms.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
@@ -22,6 +23,7 @@ import type {
   SessionRole,
   WorksIndex,
 } from './types.js';
+import type { WorkSwarm } from './swarms.js';
 
 /**
  * Переходы оси процесса (спецификация 7.1). Итог в таблице не живёт: его ставит
@@ -170,7 +172,12 @@ export function addSession(
  * переписывают. След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
  * резюме в карте не остаётся.
  */
-export function removeSession(map: WorkMap, letters: LetterTx, sessionId: string): WorkSession {
+export function removeSession(
+  map: WorkMap,
+  letters: LetterTx,
+  sessionId: string,
+  now = new Date().toISOString(),
+): WorkSession {
   const at = map.sessions.findIndex((candidate) => candidate.id === sessionId);
   if (at === -1) throw new Error(`session ${sessionId} is not in the map`);
   const [removed] = map.sessions.splice(at, 1) as [WorkSession];
@@ -184,6 +191,16 @@ export function removeSession(map: WorkMap, letters: LetterTx, sessionId: string
     }
   }
   for (const room of map.rooms) if (room.ownerId === sessionId) room.ownerId = null;
+  // Рои (спека роя, 2.2): создатель-сессия уходит к человеку; запись удалённого участника остаётся (счётчик не прыгает,
+  // его состояние выводит `memberState`); удалённая королева отменяет рой, если он ещё идёт.
+  for (const swarm of map.swarms ?? []) {
+    if (swarm.creator.kind === 'session' && swarm.creator.sessionId === sessionId) swarm.creator = { kind: 'human' };
+    if (swarm.queen === sessionId && !isSwarmTerminal(swarm.status)) {
+      swarm.status = 'cancelled';
+      swarm.failure = 'queen deleted';
+      swarm.endedAt = now;
+    }
+  }
   letters.flagDeleted(sessionId);
 
   const deleted = map.work.deletedSessions ?? [];
@@ -574,6 +591,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
     migrateRoom(room as unknown, map.sessions);
   }
   map.plans ??= [];
+  map.swarms = (Array.isArray(map.swarms) ? (map.swarms as unknown[]) : []).filter((swarm) => migrateSwarm(swarm, map)) as WorkSwarm[];
   // Старый вид (записанный экспорт с текстом, отправленный эффект с текстом) переводится при разборе (спека хранилища 6.2).
   compactStoredTexts(map);
   validatePlanStorage(map);
@@ -685,6 +703,44 @@ function migrateRoom(room: unknown, sessions: WorkSession[]): void {
   // Журнал участия (спека расхода токенов, 4.1): битый убирается — комната читается как созданная до журнала,
   // а карта из-за него не становится нечитаемой.
   if (room['memberLog'] !== undefined && !isMemberLog(room['memberLog'])) delete room['memberLog'];
+}
+
+/**
+ * Запись роя неверной формы (нет `id`, статус вне списка, нет королевы среди участников) убирается: карта остаётся
+ * читаемой, как у `memberLog`. Участник с неизвестной ролью отбрасывается; создатель, которого нет в карте, становится
+ * человеком. Правит запись на месте и идемпотентна; `false` — запись надо убрать.
+ */
+function migrateSwarm(swarm: unknown, map: WorkMap): boolean {
+  if (!isRecord(swarm)) return false;
+  if (typeof swarm['id'] !== 'string' || swarm['id'] === '' || !isSwarmTag(swarm['tag']) ||
+    typeof swarm['objective'] !== 'string' || typeof swarm['queen'] !== 'string' || typeof swarm['createdAt'] !== 'string' ||
+    !(SWARM_STATUSES as readonly string[]).includes(String(swarm['status'])) || !Array.isArray(swarm['members'])) return false;
+  const createdAt = swarm['createdAt'];
+  const members = (swarm['members'] as unknown[]).filter(
+    (member): member is Record<string, unknown> =>
+      isRecord(member) && typeof member['sessionId'] === 'string' && (SWARM_ROLES as readonly string[]).includes(String(member['role'])),
+  );
+  for (const member of members) {
+    if (!Number.isInteger(member['n'])) member['n'] = 1;
+    if (typeof member['addedAt'] !== 'string') member['addedAt'] = createdAt;
+    if (typeof member['handedAt'] !== 'string') member['handedAt'] = null;
+  }
+  swarm['members'] = members;
+  if (!members.some((member) => member['sessionId'] === swarm['queen'] && member['role'] === 'queen')) return false;
+
+  const creator = swarm['creator'];
+  const known = isRecord(creator) && (
+    (creator['kind'] === 'session' && map.sessions.some((session) => session.id === creator['sessionId'])) ||
+    (creator['kind'] === 'room' && map.rooms.some((room) => room.id === creator['roomId'])) ||
+    creator['kind'] === 'human');
+  if (!known) swarm['creator'] = { kind: 'human' };
+
+  const result = swarm['result'];
+  swarm['result'] = isRecord(result) && typeof result['summary'] === 'string' && typeof result['at'] === 'string'
+    ? { summary: result['summary'], at: result['at'], deliveredAt: typeof result['deliveredAt'] === 'string' ? result['deliveredAt'] : null }
+    : null;
+  for (const key of ['endedAt', 'failure', 'seenAt', 'expiredAt']) if (typeof swarm[key] !== 'string') swarm[key] = null;
+  return true;
 }
 
 /** Полей процесса в старых картах просто не было; испорченный effort читается как «нет выбора». */

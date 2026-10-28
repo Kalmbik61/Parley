@@ -27,6 +27,7 @@ import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
@@ -72,6 +73,7 @@ import { createRecipesList } from './recipes.js';
 import { createCachedCatalog } from './role-catalog-cache.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
+import { createSwarmsCreate, swarmsCancel, swarmsSeen } from './swarms.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
 import { worksCreate, createWorksDelete, worksList, worksRename, worksSetStatus } from './works.js';
@@ -81,6 +83,8 @@ export interface MethodDeps {
   activity: ActivityService;
   pty: PtyManager;
   sessions: SessionsService;
+  /** Жизненный цикл роя: `sessions.close` сообщает ему о закрытии королевы человеком; без него закрытая королева — упавший рой. */
+  swarms?: Pick<SwarmsService, 'humanClosed'>;
   wake: WakeService;
   worktrees: WorktreesService;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
@@ -148,7 +152,7 @@ const knownAgentCode = (code: string): BrowserAgentErrorCode =>
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
  * карт с диска (works.create/delete/rename/setStatus, sessions.rename, rooms.create/addMember/rename/setLead/delete/send,
- * rooms.archive/reopen, mail.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
+ * rooms.archive/reopen, mail.*, swarms.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
   'rooms.resolveProposal',
@@ -314,6 +318,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'worktrees.mergeCheck': worktrees.worktreesMergeCheck as AnyHandler,
     'changes.project': changes.changesProject as AnyHandler,
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
+    'swarms.create': createSwarmsCreate(deps.sessions) as AnyHandler,
+    'swarms.cancel': swarmsCancel as AnyHandler,
+    'swarms.seen': swarmsSeen as AnyHandler,
     'mail.markRead': mailMarkRead as AnyHandler,
     'capabilities.list': createCapabilitiesList() as AnyHandler,
     'capabilities.get': capabilities.capabilitiesGet as AnyHandler,

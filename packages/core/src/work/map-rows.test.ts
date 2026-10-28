@@ -100,6 +100,13 @@ function fullMap(): WorkMap {
       status: 'pending',
     },
   ];
+  map.swarms = [
+    {
+      id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: 's-01',
+      members: [{ sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null }],
+      status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    },
+  ];
   map.resources = { seq: 1, spawned: 1, spawnedByRoom: { 'r-01': 1 }, attempts: [] };
   const stored: Partial<WindowWorkMap> = { ...map };
   delete stored.messages;
@@ -132,6 +139,16 @@ describe('mapToRows и rowsToMap', () => {
     const { rows } = mapToRows(map);
     expect(new Set(rows.map((row) => row.kind))).toEqual(new Set(Object.keys(ENTRY_FIELDS)));
     expect(roundTrip(map)).toEqual(map);
+  });
+
+  it('пустой список роёв в строки не пишется: ключа нет в `present`, читатель ставит [] сам', () => {
+    const map = asRead(emptyMap());
+    expect(map.swarms).toEqual([]);
+    const { work, extra, rows } = mapToRows(map);
+    expect(rows.some((row) => row.kind === 'swarm')).toBe(false);
+    expect(JSON.parse(extra).present).not.toContain('swarms');
+    expect(Object.hasOwn(rowsToMap(work, extra, rows) as object, 'swarms')).toBe(false);
+    expect(normalizeMap(rowsToMap(work, extra, rows), SOURCE).swarms).toEqual([]);
   });
 
   it('строки в любом порядке собираются в порядке ord своего вида: порядок выборки не важен', () => {
@@ -167,6 +184,7 @@ describe('mapToRows и rowsToMap', () => {
       'rooms',
       'schemaVersion',
       'sessions',
+      'swarms',
       'work',
     ]);
     expect(roundTrip(minimal)).toEqual(minimal);
@@ -230,6 +248,7 @@ describe('mapToRows и rowsToMap', () => {
     expect(keys('planBacklogIntent')).toEqual(map.planBacklogIntents!.map((row) => row.key));
     expect(keys('room')).toEqual(['r-01', 'r-02']);
     expect(keys('plan')).toEqual(map.plans!.map((row) => row.id));
+    expect(keys('swarm')).toEqual(['sw-01']);
   });
 
   it('json строки — это JSON.stringify записи, а ord по умолчанию идёт с нуля подряд', () => {

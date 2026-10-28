@@ -17,7 +17,8 @@
     "./role-choice": "./dist/work/role-choice.js",
     "./stuck": "./dist/work/stuck.js",
     "./session-names": "./dist/work/names.js",
-    "./resource-policy": "./dist/work/resource-policy.js"
+    "./resource-policy": "./dist/work/resource-policy.js",
+    "./swarms": "./dist/work/swarms.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

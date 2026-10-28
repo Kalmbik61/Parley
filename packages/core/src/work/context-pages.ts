@@ -516,12 +516,16 @@ function windowMapBase(map: WorkMap, textMax: number, cuts: CutRecord[], omitted
   const roomList = capStrings(map.rooms, textMax, 'rooms', cuts);
   const plans = map.plans === undefined ? undefined : capStrings(map.plans, textMax, 'plans', cuts);
   const effects = map.planEffects === undefined ? undefined : capStrings(map.planEffects, 1024, 'planEffects', cuts);
+  // Терминальные рои копятся, а `objective` и `result.summary` длинные: как история сессии — хвост и число опущенных.
+  if (map.swarms !== undefined && map.swarms.length > WINDOW_LIST_MAX) omitted['swarms'] = map.swarms.length - WINDOW_LIST_MAX;
+  const swarms = map.swarms === undefined ? undefined : capStrings(map.swarms.slice(-WINDOW_LIST_MAX), textMax, 'swarms', cuts);
   return {
     ...base,
     work,
     sessions,
     rooms: roomList,
     ...(plans === undefined ? {} : { plans }),
+    ...(swarms === undefined ? {} : { swarms }),
     // Окно читает только состояние снимков (`pending`/`written`): тело — целый Markdown плана — ему не нужно.
     ...(planExports === undefined ? {} : { planExports: planExports.map((intent) => ({ ...intent, content: '' })) }),
     ...(effects === undefined ? {} : { planEffects: effects }),

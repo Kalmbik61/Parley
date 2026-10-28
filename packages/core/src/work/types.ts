@@ -6,6 +6,7 @@ import type { RecipeSnapshot } from '../recipes/types.js';
 import type { SessionNeed } from './stuck.js';
 import type { FrozenUsage } from './usage-ledger.js';
 import type { SessionLifecycle, SessionResult } from './session-state.js';
+import type { WorkSwarm } from './swarms.js';
 
 // Типы статуса сессии объявлены в `session-state.ts` вместе с функциями, которые их выводят.
 export type { SessionStatus, SessionLifecycle, SessionResult } from './session-state.js';
@@ -587,6 +588,10 @@ export interface WorkResources {
   /** Сколько новых сессий агенты завели за всё время работы; удаление сессии счётчик не уменьшает. */
   spawned: number;
   spawnedByRoom: Record<string, number>;
+  /** Сессии роёв, созданные по вызову агента, за всё время работы (королева агента включена); нет поля — 0. */
+  swarmSpawned?: number;
+  /** Рои, созданные агентами, за всё время работы; нет поля — 0. */
+  swarmsCreated?: number;
   /** Только попытки в пределах окна и нерешённые: старые свёрнуты в счётчики. */
   attempts: ResourceAttempt[];
 }
@@ -618,6 +623,8 @@ export interface Work {
    */
   proposalSeq?: number;
   planSeq?: number;
+  /** Сколько номеров роёв уже выдано: id роя (`sw-NN`) не переиспользуется. */
+  swarmSeq?: number;
   /**
    * Нижняя граница номеров писем: удалённая комната уносит из карты свои письма (`deleteRoom`), и по одному
    * списку следующий `m-NN` повторил бы id уже ушедшего — а по id письма окно ставит отметки прочтения и рисует
@@ -642,6 +649,8 @@ export interface WorkMap {
   decisionExports?: DecisionJournalIntent[];
   planEffects?: PlanEffect[];
   planBacklogIntents?: PlanBacklogIntent[];
+  /** Рои работы (`swarms.ts`); читая карту, `normalizeMap` ставит `[]`, а пустой список в хранилище не пишется. */
+  swarms?: WorkSwarm[];
   /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
   resources?: WorkResources;
 }

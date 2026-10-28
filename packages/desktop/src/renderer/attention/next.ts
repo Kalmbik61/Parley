@@ -88,6 +88,11 @@ export function nextAttentionTarget(
           visitSession(row.session);
           continue;
         }
+        // Участникам роя может понадобиться человек: обход ходит и в них, в порядке раскрытой строки роя.
+        if (row.kind === 'swarm') {
+          for (const view of row.members) if (view.session !== null) visitSession(view.session);
+          continue;
+        }
         visit(
           { kind: 'room', projectPath: entry.projectPath, workId: entry.map.work.id, roomId: row.room.id },
           roomAwaitsDecision(row.room) ? 1 : null,

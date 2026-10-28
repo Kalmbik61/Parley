@@ -71,9 +71,11 @@ import {
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
+import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
+import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
@@ -1115,6 +1117,11 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
   return { messages: takeInbox(context, sessionId) };
 }
 
+/** Сессия роя в комнату не входит (спека роя v1, 4): проверка по карте, `code: message` как у остальных отказов роя. */
+function assertNotSwarmMember(map: WorkMap, sessionId: string): void {
+  if (swarmOfSession(map, sessionId) !== null) throw new Error(`swarm-member: ${sessionId} is a member of a swarm and cannot join a room.`);
+}
+
 async function createRoom(
   context: McpContext,
   sessionId: string,
@@ -1136,6 +1143,7 @@ async function createRoom(
       if (member.lifecycle === 'closed') {
         throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
+      assertNotSwarmMember(current, memberId);
     }
     // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
     // иначе исчерпанный лимит обходился бы созданием комнаты.
@@ -1177,6 +1185,7 @@ async function addToRoom(
     // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
     // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
     // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
+    assertNotSwarmMember(current, target);
     messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;
   });
   return { messageId };
@@ -1792,7 +1801,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : [])],
+    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,
@@ -1806,6 +1815,11 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
         return sessionAgent === undefined
           ? { content: [{ type: 'text', text: SESSION_CREATION_UNAVAILABLE }], isError: true }
           : createSession(sessionAgent, args, extra.signal);
+      }
+      if (request.params.name === 'create_swarm' || request.params.name === 'swarm_add') {
+        return sessionAgent === undefined
+          ? { content: [{ type: 'text', text: SWARM_UNAVAILABLE }], isError: true }
+          : (request.params.name === 'create_swarm' ? createSwarm : swarmAdd)(sessionAgent, args, extra.signal);
       }
       return tools.call(request.params.name, args, request.params._meta, extra.signal);
     },

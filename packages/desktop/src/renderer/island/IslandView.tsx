@@ -50,6 +50,7 @@ import type { IslandApi, IslandConfig } from '../../shared/island.js';
 import { alwaysRules } from '../chat/cards/always-rules.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { SwarmIcon } from '../components/SwarmIcon.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
 import { CARD_ARM_MS } from './arm.js';
@@ -141,9 +142,9 @@ type Morph = 'grow' | 'shrink';
 export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
 
 function rowTarget(row: IslandRow): FocusTarget {
-  return row.kind === 'session'
-    ? { kind: 'session', ref: row.ref }
-    : { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
+  if (row.kind === 'session') return { kind: 'session', ref: row.ref };
+  if (row.kind === 'work-swarm') return { kind: 'session', ref: { projectPath: row.projectPath, workId: row.workId, sessionId: row.queenId } };
+  return { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
 }
 
 /**
@@ -210,6 +211,29 @@ function Pill(props: IslandViewProps): JSX.Element {
 
 type RoomRow = Extract<IslandRow, { kind: 'room' }>;
 type SessionRow = Extract<IslandRow, { kind: 'session' }>;
+type WorkSwarmRow = Extract<IslandRow, { kind: 'work-swarm' }>;
+
+/** Ряд роя работы (спека роя v1, 7.4): значок, тег, счётчик и полоска сдавших; клик ведёт к королеве. */
+function SwarmLine({ row, api, reducedMotion }: { row: WorkSwarmRow; api: IslandApi; reducedMotion: boolean }): JSX.Element {
+  const percent = row.total === 0 ? 0 : Math.round((row.handed / row.total) * 100);
+  return (
+    <button
+      type="button"
+      data-testid="island-work-swarm"
+      data-swarm-status={row.state}
+      title={S.workSwarm.rowTitle(row.tag, S.workSwarm.status[row.state])}
+      className="relative flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left text-[13px] hover:bg-white/10"
+      onClick={() => api.open(rowTarget(row))}
+    >
+      <SwarmIcon status={row.state} size={16} handed={row.handed} total={row.total} theme="dark" reducedMotion={reducedMotion} />
+      <span className="min-w-0 flex-1 truncate">{S.workSwarm.island.row(row.tag, row.handed, row.total)}</span>
+      <span className="shrink-0 text-muted-foreground">{S.workSwarm.status[row.state]}</span>
+      <span aria-hidden="true" className="absolute inset-x-1 bottom-0 h-[2px] overflow-hidden rounded bg-white/15">
+        <span className="block h-full bg-[#d67f48]" style={{ width: `${percent}%` }} />
+      </span>
+    </button>
+  );
+}
 
 function RoomLine({ room, api, selected }: { room: RoomRow; api: IslandApi; selected?: boolean }): JSX.Element {
   return <div data-testid="island-room" className="flex min-w-0 flex-wrap gap-1 text-[13px] text-foreground/75">
@@ -276,6 +300,9 @@ function List(props: IslandViewProps): JSX.Element {
             {group.rows
               .filter((row): row is RoomRow => row.kind === 'room')
               .map((room) => <RoomLine key={room.key} room={room} api={api} selected={props.navigationKey === `room:${room.proposal?.key}`} />)}
+            {group.rows
+              .filter((row): row is WorkSwarmRow => row.kind === 'work-swarm')
+              .map((row) => <SwarmLine key={row.key} row={row} api={api} reducedMotion={props.config.motion === 'reduce'} />)}
             {group.rows
               .filter((row): row is SessionRow => row.kind === 'session')
               .map((row) => {

@@ -219,7 +219,11 @@ export type NoticeKind =
   // подряд (спека застрявших 4.5, 6.3). Окно даёт ему то же уведомление со звуком, что и «нужно действие».
   | 'limit-return-blocked'
   // `codexWriteApprovals = auto`, а Codex старше версии с `approvals_reviewer`: запуск идёт как `terminal` (спека 2026-10-21, 5.2).
-  | 'codex-auto-unsupported';
+  | 'codex-auto-unsupported'
+  // Рой закончил (спека роя v1, 3.3): `ref` — королева, `text` — «Рой sw-NN [тег] готов, 3/5, 4:12» и итог. Для роя, заведённого
+  // человеком или не нашедшим живого адресата-агента; создателю-агенту итог идёт письмом.
+  | 'swarm-done'
+  | 'swarm-failed';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -281,6 +285,9 @@ export type ErrorCode =
  * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
  *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
  *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
+ * - `not-queen` — `swarm_add` вызвала не королева роя; `swarm-closed` — рой в терминальном состоянии; `swarm-member` —
+ *   сессия роя вызвала `create_session` / `create_swarm` или вошла в комнату (спека роя v1, 4);
+ * - `swarms`, `swarm-sessions`, `swarm-concurrent`, `swarm-total` — пороги роёв (`ResourceDeniedCode` в core, спека роя v1, 5).
  */
 export const HOST_ERROR_REASONS = {
   gitMissing: 'git-missing',
@@ -292,6 +299,13 @@ export const HOST_ERROR_REASONS = {
   clientUpgradeRequired: 'client-upgrade-required',
   snapshotTooLarge: 'snapshot-too-large',
   busy: 'busy',
+  notQueen: 'not-queen',
+  swarmClosed: 'swarm-closed',
+  swarmMember: 'swarm-member',
+  swarms: 'swarms',
+  swarmSessions: 'swarm-sessions',
+  swarmConcurrent: 'swarm-concurrent',
+  swarmTotal: 'swarm-total',
 } as const;
 
 export type HostErrorReason = (typeof HOST_ERROR_REASONS)[keyof typeof HOST_ERROR_REASONS];

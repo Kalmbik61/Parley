@@ -645,17 +645,19 @@ describe('SettingsDialog — пороги бюджета работы (P37)', ()
   const LIMITS = {
     workConcurrent: 10, roomConcurrent: 6, workNewSessions: 30, roomNewSessions: 12, spawnDepth: 3,
     workLaunches: 40, roomLaunches: 20, workMessages: 200, roomMessages: 100, fanout: 400,
+    swarmSessions: 16, swarmConcurrent: 8, workSwarmSessions: 64, workSwarms: 6, swarmMinutes: 90,
   };
   const WITH_LIMITS = { ...CONFIG, ...LIMITS };
 
-  it('подраздел показывает все десять порогов с границами, а подсказка называет, что это не токены и не деньги', async () => {
+  it('подраздел показывает все пороги с границами, а подсказка называет, что это не токены и не деньги', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: {} }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 
     switchTo('Agents');
     const section = await screen.findByRole('region', { name: 'Work limits' });
-    expect(section.querySelectorAll('input')).toHaveLength(9);
+    expect(section.querySelectorAll('input')).toHaveLength(14);
+    expect(section.textContent).toContain('Swarm lifetime, minutes (0 = no limit) (0…1440)');
     expect(section.textContent).toContain('Running sessions, workspace (1…64)');
     expect(section.textContent).toContain('Agent-created sessions, room (0…1000)');
     expect(section.textContent).toContain('not tokens or money');
