@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
 import {
+  ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
   BROWSER_AGENT_OP_FEATURE,
   BROWSER_AGENT_OPS,
@@ -95,7 +96,7 @@ describe('HostConnection: слишком длинная строка от хос
     fakes.push(fake);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
-    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
+    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE]);
     connection.close();
   });
 

@@ -359,6 +359,162 @@ describe('карточки по action', () => {
     expect(screen.getByTestId('assistant-outcome-note').textContent).toBe('Room created, but the task was not sent');
   });
 
+  describe('карточка actions (руки помощника)', () => {
+    const ACTIONS = {
+      action: 'actions',
+      id: 'p7',
+      target: '2 steps',
+      where: 'Parley · my_harnas',
+      text: 'Update Parley to confirm this card.',
+      steps: [
+        { verb: 'sleep', line: 'Put S03 Ruslan to sleep', text: null, danger: false },
+        { verb: 'close', line: 'Close S05 Vera for good', text: null, danger: true },
+      ],
+    } as const;
+    const oneStep = (verb: 'create_work' | 'create_session' | 'create_room' | 'wake' | 'interrupt' | 'sleep' | 'close' | 'add_to_room' | 'message'): AssistantProposal => ({
+      ...ACTIONS,
+      steps: [{ verb, line: 'a step', text: null, danger: verb === 'close' }],
+    });
+
+    it('карточка шагов: строки, предупреждение у close, «Do all (2)»', () => {
+      show(ACTIONS);
+      expect(screen.getAllByTestId('assistant-step').map((el) => el.textContent)).toEqual([expect.stringContaining('Put S03 Ruslan to sleep'), expect.stringContaining('closes for good')]);
+      expect(screen.getByTestId('assistant-steps').tagName).toBe('OL');
+      expect(screen.getByTestId('assistant-send').textContent).toContain('Do all (2)');
+    });
+
+    it('текст общего вида карточки (для старого окна) не рисуется, только шаги', () => {
+      show(ACTIONS);
+      expect(screen.getByTestId('assistant-card').textContent).not.toContain('Update Parley to confirm this card.');
+    });
+
+    it('шаг без danger не получает «closes for good»', () => {
+      show(ACTIONS);
+      const [first] = screen.getAllByTestId('assistant-step');
+      expect(first!.textContent).not.toContain('closes for good');
+    });
+
+    it('один шаг: глагол шага на кнопке', () => {
+      const labels: Array<[Parameters<typeof oneStep>[0], string]> = [
+        ['create_work', 'Create'],
+        ['create_session', 'Create'],
+        ['create_room', 'Create'],
+        ['wake', 'Wake'],
+        ['interrupt', 'Stop'],
+        ['sleep', 'Put to sleep'],
+        ['close', 'Close'],
+        ['add_to_room', 'Add'],
+        ['message', 'Send'],
+      ];
+      for (const [verb, label] of labels) {
+        const { unmount } = render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: oneStep(verb) })} />);
+        expect(screen.getByTestId('assistant-send').textContent, verb).toBe(label);
+        unmount();
+      }
+    });
+
+    it('текст шага — в рамке с акцентной полосой, у шага без текста рамки нет', () => {
+      show({ ...ACTIONS, steps: [{ verb: 'message', line: 'Message S03 Ruslan', text: 'Please start with the tests.', danger: false }, { verb: 'wake', line: 'Wake S05 Vera', text: null, danger: false }] });
+      const [first, second] = screen.getAllByTestId('assistant-step');
+      expect(first!.querySelector('.border-l-2')!.textContent).toBe('Please start with the tests.');
+      expect(second!.querySelector('.border-l-2')).toBeNull();
+    });
+
+    it('Enter в пустом поле не подтверждает карточку actions; подсказка — «Confirm with the button»', () => {
+      const onDecide = vi.fn();
+      render(<AssistantView {...props({ onDecide }, { phase: 'awaiting-confirm', proposal: ACTIONS })} />);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      submitForm();
+      expect(onDecide).not.toHaveBeenCalled();
+      expect(screen.getByTestId('assistant-card').textContent).toContain('Confirm with the button');
+      expect(screen.getByTestId('assistant-card').textContent).not.toContain('Enter to send');
+    });
+
+    it('кнопка карточки actions подтверждает после взвода', () => {
+      const onDecide = vi.fn();
+      render(<AssistantView {...props({ onDecide }, { phase: 'awaiting-confirm', proposal: ACTIONS })} />);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      fireEvent.click(screen.getByTestId('assistant-send'));
+      expect(onDecide).toHaveBeenCalledWith('send');
+    });
+
+    it('отчёт: остановка на шаге и пометки', () => {
+      render(
+        <AssistantView
+          {...props(
+            {},
+            {
+              outcome: 'done',
+              report: {
+                proposalId: 'p7',
+                status: 'stopped',
+                steps: [
+                  { line: 'a', status: 'done' },
+                  { line: 'b', status: 'failed' },
+                ],
+                failedStep: 2,
+                reason: 'S05 Vera is already asleep',
+                notes: ['Alice waits for you to trust the folder'],
+              },
+            },
+          )}
+        />,
+      );
+      const report = screen.getByTestId('assistant-report');
+      expect(report.textContent).toContain('Stopped at step 2 of 2: S05 Vera is already asleep');
+      expect(report.textContent).toContain('Alice waits for you to trust the folder');
+      expect(screen.queryByTestId('assistant-done')).toBeNull();
+    });
+
+    it('отчёт: значки статусов шагов', () => {
+      render(
+        <AssistantView
+          {...props(
+            {},
+            {
+              report: {
+                proposalId: 'p7',
+                status: 'running',
+                steps: [
+                  { line: 'a', status: 'done' },
+                  { line: 'b', status: 'running' },
+                  { line: 'c', status: 'waiting' },
+                  { line: 'd', status: 'failed' },
+                  { line: 'e', status: 'skipped' },
+                ],
+                failedStep: null,
+                reason: null,
+                notes: [],
+              },
+            },
+          )}
+        />,
+      );
+      const lines = screen.getAllByTestId('assistant-report-step').map((el) => el.textContent);
+      expect(lines).toEqual(['✓a', '…b', 'c', '✗d', '–e'].map((text) => expect.stringContaining(text)));
+      expect(screen.getByTestId('assistant-report').textContent).toContain('Running step 2 of 5');
+    });
+
+    it('отчёт о завершённом плане заменяет «Done ✓»', () => {
+      render(<AssistantView {...props({}, { outcome: 'done', report: { proposalId: 'p7', status: 'done', steps: [{ line: 'a', status: 'done' }], failedStep: null, reason: null, notes: [] } })} />);
+      expect(screen.getByTestId('assistant-report').textContent).toContain('Done');
+      expect(screen.queryByTestId('assistant-done')).toBeNull();
+    });
+
+    it('пока есть карточка, отчёта нет; без отчёта (старый хост) — «Done ✓» как раньше', () => {
+      render(<AssistantView {...props({}, { outcome: 'done' })} />);
+      expect(screen.queryByTestId('assistant-report')).toBeNull();
+      expect(screen.getByTestId('assistant-done')).toBeTruthy();
+      cleanup();
+      render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: ACTIONS, report: { proposalId: 'p6', status: 'done', steps: [{ line: 'a', status: 'done' }], failedStep: null, reason: null, notes: [] } })} />);
+      expect(screen.queryByTestId('assistant-report')).toBeNull();
+    });
+  });
+
   it('Enter в пустом поле подтверждает карточку не-письма', () => {
     const onDecide = vi.fn();
     render(<AssistantView {...props({ onDecide }, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null } })} />);

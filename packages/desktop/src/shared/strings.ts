@@ -2484,6 +2484,18 @@ export const S = {
       newRoom: 'New room in',
       roomLine: (title: string, members: string, lead: string): string => `${title} · ${members} · lead ${lead}`,
       create: 'Create',
+      /** Глаголы кнопки карточки `actions` с одним шагом; письмо — `S.assistant.send`, создание — `create`. */
+      stop: 'Stop',
+      putToSleep: 'Put to sleep',
+      close: 'Close',
+      wake: 'Wake',
+      add: 'Add',
+      /** Кнопка карточки с несколькими шагами. */
+      doAll: (n: number): string => `Do all (${n})`,
+      /** Дописка к строке шага `close`: закрытая сессия не открывается заново. */
+      closesForGood: 'closes for good',
+      /** Подсказка карточки `actions` вместо «Enter to send»: её подтверждает только кнопка. */
+      confirmByButton: 'Confirm with the button',
       allow: 'Allow',
       allowAlways: "Allow, don't ask again",
       deny: 'Deny',
