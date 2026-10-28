@@ -411,6 +411,16 @@ describe('WorkCard — done и длинное название (тест 7)', ()
     expect(card().className).not.toMatch(/opacity-/);
   });
 
+  it('у архивной в слоте значка 💤 — работа спит; у активной его нет', () => {
+    renderCard(makeWork('w-01', { status: 'archived' }));
+    const sleep = card().querySelector('[data-work-glyph] [data-sleeping]');
+    expect(sleep?.textContent).toBe('💤');
+    expect(sleep?.getAttribute('title')).toBe('Archived');
+    cleanup();
+    renderCard(makeWork('w-01'));
+    expect(card().querySelector('[data-sleeping]')).toBeNull();
+  });
+
   it('название из 60 эмодзи в DOM целиком, у заголовка класс truncate', () => {
     const title = '🎉'.repeat(60);
     renderCard(makeWork('w-01', { title }));
