@@ -34,7 +34,7 @@ export const LETTER_MAX_CHARS = 4096;
 export const LETTER_SOFT_CHARS = 1200;
 
 /** Стабильная политика вставки: не зависит от id сессии и данных работы. */
-export const STABLE_POLICY_MAX_BYTES = 4096;
+export const STABLE_POLICY_MAX_BYTES = 4160;
 /** Вся системная вставка: стабильная политика и строка сессии с названием и целью. */
 export const GUIDANCE_MAX_BYTES = 8192;
 /** Бриф сессии целиком. Общий потолок аргумента (98304) проверяет сборка слоя, этот — только бриф. */

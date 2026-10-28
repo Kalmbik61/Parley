@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- An agent can close the sessions it created with `create_session`, and the sessions those created in turn, with `close_session` — without asking the human, once their work is accepted or no longer needed. Closing its own session still needs the human's consent. Sessions made by the human, by a colleague, or by a swarm, and swarm members, cannot be closed this way; the system insert, `read_guide` and the skill stub say so.
+
 ## 0.25.0
 
 Agents can run a research swarm for large read-only tasks, links in Chat and room feeds open in the side browser, and a deleted worktree folder no longer hides a project's memory and backlog.

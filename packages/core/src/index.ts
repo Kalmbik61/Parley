@@ -235,6 +235,7 @@ export {
   addSystemMessage,
   archiveRoom,
   deleteRoom,
+  isCreatedDescendant,
   isDescendant,
   isMember,
   isRoomArchived,

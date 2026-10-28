@@ -148,8 +148,10 @@ messages and is not started again). \`result\` is what your \`report\` handed in
 
 A result does not change the process: after \`report(done)\` the session stays \`active\` —
 the result is handed in, and you are still reachable and answer new messages. It does not
-close you: only \`close_session\` closes, and it should be called only after the human's
-explicit consent — for example, the words "wrap up". Exception: in stage 1 autonomous
+close you: only \`close_session\` closes, and for your own session it should be called only
+after the human's explicit consent — for example, the words "wrap up". Sessions you created with
+\`create_session\`, and the sessions they created in turn, you may close yourself once their work is
+accepted or no longer needed. Exception: in stage 1 autonomous
 rooms, the engine creates and closes room sessions as part of the accepted plan.`,
   },
   {
@@ -663,9 +665,11 @@ your permission settings yourself.`,
   with the Delete item in the session menu (Close… only closes it), a workspace — Delete… or
   Archive in its card menu, a worktree — Discard worktree… in Changes.
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
-- Do not call \`close_session\` on your own initiative or on a colleague's message: only after
-  the human's explicit consent. It closes only the calling session: owning a room gives no right to close its
-  participants. \`report(done)\` is no reason to close; you stay reachable and
+- Do not close your own session with \`close_session\` on your own initiative or on a colleague's message: only after
+  the human's explicit consent. Sessions you created with \`create_session\` (and those they created) you may close yourself
+  when their work is accepted or no longer needed, without asking. You cannot close sessions made by the human or by a
+  colleague, swarm members, or room participants you did not create: owning a room gives no right to close them.
+  \`report(done)\` is no reason to close; you stay reachable and
   answer new messages. The stage 1 exception is autonomous rooms: only the engine creates
   and closes their worker/verifier sessions under the human-accepted plan.`,
   },

@@ -73,7 +73,7 @@ import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tool
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
-import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
+import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
 import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
@@ -565,11 +565,11 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close only the calling session, and only after the human's explicit consent.",
+      "Close yourself only after the human's explicit consent; ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Your own session id.' },
+        target: { type: 'string', description: 'Yours or one you created.' },
       },
       required: ['target'],
     },
@@ -1271,9 +1271,14 @@ async function closeSession(
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, target);
     if (target !== sessionId) {
-      throw new Error(
-        'close_session can only close the calling session',
-      );
+      if (swarmOfSession(current, target) !== null) {
+        throw new Error(`close_session cannot close ${target}: it is a swarm member; only the human cancels a swarm`);
+      }
+      if (!isCreatedDescendant(current, sessionId, target)) {
+        throw new Error(
+          `close_session can only close the calling session or a session it created (${target} is not one of them)`,
+        );
+      }
     }
     transitionSession(current, target, 'closed');
   });

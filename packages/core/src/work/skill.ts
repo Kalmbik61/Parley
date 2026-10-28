@@ -72,7 +72,7 @@ ${topicLines()}
 - The human's task for everyone in a room arrives from \`check_inbox\` / \`wait_for("inbox")\` marked \`toEveryone: true\` with \`roomTask\` (your role, the lead, a hint): follow it.
 - Answering a particular message in a room — above all the human's question — pass \`replyTo\` with its id: the window shows a quote of it above your answer. The human is not a session: answer the human in the room without \`to\`. Write \`@human\` as plain text, and only when you need the human's answer or attention: it notifies the human.
 - Rules for letters (length, files instead of long text, \`replyTo\`, \`read_room\`): \`read_guide\` topic \`letters\`.
-- \`close_session\` — only after the human's explicit consent. Stage 1 exception: in autonomous rooms the engine creates and closes room sessions; agents do not.
+- \`close_session\` — your own session only after the human's explicit consent; sessions you created (and their descendants) you may close yourself when their work is accepted or not needed, never the human's, a colleague's or a swarm's. Stage 1 exception: in autonomous rooms the engine creates and closes room sessions; agents do not.
 - Before finishing, call \`report\`: without it the result will not go anywhere.
 `;
 }

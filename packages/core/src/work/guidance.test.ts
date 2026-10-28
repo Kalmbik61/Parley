@@ -145,9 +145,9 @@ describe('системная вставка', () => {
     expect(line).toContain('Implementation: standard-tier models (Executor); strong ones plan, lead, review.');
   });
 
-  it('закрытие — только с согласия человека, report не закрывает сессию', () => {
+  it('закрытие своей — только с согласия человека, созданные собой — по принятии работы, report не закрывает сессию', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
-    expect(text).toMatch(/close_session.*the human's explicit consent/);
+    expect(text).toMatch(/close_session.*the human's explicit consent.*sessions you created: once accepted/);
     expect(text).toContain('"wrap up"');
     expect(text).toMatch(/report.*stays reachable/);
   });
@@ -567,9 +567,11 @@ describe('подробный гид', () => {
     }
   });
 
-  it('report(done) — результат сдан и сессия на связи; close_session — только с согласия человека', () => {
+  it('report(done) — результат сдан и сессия на связи; close_session своей — только с согласия человека, созданных собой — можно', () => {
     expect(GUIDE).toMatch(/report\(done\)[\s\S]*you are still reachable/);
     expect(GUIDE.replace(/\s+/g, ' ')).toContain("only after the human's explicit consent");
+    expect(GUIDE.replace(/\s+/g, ' ')).toContain('Sessions you created with `create_session`');
+    expect(guideTopic('rules')).toContain('You cannot close sessions made by the human or by a');
     expect(GUIDE).toContain('"wrap up"');
     expect(GUIDE).not.toContain('pending is started by the human');
   });
@@ -819,8 +821,8 @@ describe('бюджет вставки в байтах (P34)', () => {
   });
 
   it('длинная цель у потолка остаётся текстом, вставка в бюджете', () => {
-    // 4000, а не 4096: стабильная часть варианта removed занимает все 4096 байт, строка сессии — ещё 83.
-    const goal = 'g'.repeat(4000);
+    // 3900, а не 4000: стабильная часть варианта removed занимает ~4140 байт, строка сессии — ещё 83.
+    const goal = 'g'.repeat(3900);
     const text = systemGuidance(mapOf('Authorization', goal), 's-03', { skillNavigator: true, skillList: 'removed' });
     expect(text).toContain(`Workspace goal: ${goal}`);
     expect(guidanceBudgetProblems(text, stableGuidance({ skillNavigator: true, skillList: 'removed' }))).toEqual([]);
