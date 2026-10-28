@@ -58,7 +58,7 @@ const CYRILLIC: Readonly<Record<string, string>> = {
  * (`ph` → `f`, `x` → `ks`, `c`/`q` → `k`, `w` → `v`, `y` → `i`) и одна буква вместо подряд идущих одинаковых.
  */
 export function soundKey(text: string): string {
-  const latin = [...text.toLowerCase().replace(/ё/g, 'е')]
+  const latin = [...text.toLowerCase().replace(/ё/g, 'е')] // cyrillic-ok: ё и е в транслите для поиска по звучанию
     .map((char) => CYRILLIC[char] ?? char)
     .join('');
   return latin
