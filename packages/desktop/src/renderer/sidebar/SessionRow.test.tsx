@@ -94,15 +94,22 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     { name: 'не просмотрено', session: makeSession('s-01', 'a'), activity: 'unseen', state: 'unseen', word: S.states.unseen },
     { name: 'простаивает', session: makeSession('s-01', 'a'), activity: null, state: 'idle', word: S.states.idle },
     { name: 'ожидает запуска', session: makeSession('s-01', 'a', { lifecycle: 'pending' }), activity: null, state: 'pending', word: S.states.pending },
-    { name: 'спит', session: makeSession('s-01', 'a', { lifecycle: 'sleeping' }), activity: null, state: 'exited', lifecycle: 'sleeping', word: S.states.asleep },
+    { name: 'спит', session: makeSession('s-01', 'a', { lifecycle: 'sleeping' }), activity: null, state: '💤', word: S.states.asleep },
     { name: 'закрыта', session: makeSession('s-01', 'a', { lifecycle: 'closed' }), activity: null, state: 'exited', lifecycle: 'closed', word: S.states.closed },
-    { name: 'готово', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'done' }), activity: null, state: 'done', word: S.states.done },
-    { name: 'сбой', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'failed' }), activity: null, state: 'failed', word: S.states.failed },
+    { name: 'готово', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'done' }), activity: null, state: '💤', word: S.states.done },
+    { name: 'сбой', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'failed' }), activity: null, state: '💤', word: S.states.failed },
   ];
 
   for (const c of cases) {
     it(`${c.name}: значок ${c.state} и слово «${c.word}»`, () => {
       renderRow(c.session, { activity: c.activity });
+      // Спящая сессия — 💤 вместо значка; итог (done, failed) остаётся словом.
+      if (c.state === '💤') {
+        expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+        expect(row().querySelector('[data-testid="agent-state-dot"]')).toBeNull();
+        expect(row().textContent).toContain(c.word);
+        return;
+      }
       const dot = row().querySelector('[data-testid="agent-state-dot"]');
       expect(dot?.getAttribute('data-state')).toBe(c.state);
       if (c.lifecycle !== undefined) expect(dot?.getAttribute('data-lifecycle')).toBe(c.lifecycle);
@@ -550,9 +557,10 @@ describe('SessionRow — причина «нужен ты»', () => {
     expect(dot()).toBe('blocked');
   });
 
-  it('спящая сессия с остатком need: точка по статусу карты, а не blocked', () => {
+  it('спящая сессия с остатком need: 💤, а не blocked', () => {
     renderNeed(makeNeed('limit'), 'idle', makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
-    expect(row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('exited');
+    expect(row().querySelector('[data-sleeping]')).not.toBeNull();
+    expect(row().querySelector('[data-testid="agent-state-dot"]')).toBeNull();
   });
 
   it('спящая сессия с остатком need в записи активности — слово состояния, не причина', () => {

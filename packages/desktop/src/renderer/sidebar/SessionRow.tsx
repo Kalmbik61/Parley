@@ -301,7 +301,14 @@ export const SessionRow = memo(function SessionRow({
           // Закрытая строка приглушена цветом текста (styles/dimmed.css), не opacity (ревью M12).
           {...(closed ? { 'data-dimmed': 'row' } : {})}
         >
-          <AgentStateDot state={state} lifecycle={session.lifecycle} />
+          {/* Спящая сессия (процесса нет, Resume её будит): 💤 вместо значка итога, как у архивной работы. */}
+          {session.lifecycle === 'sleeping' ? (
+            <span data-sleeping title={S.sidebar.asleepSession} aria-label={S.sidebar.asleepSession} className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-[10px] leading-none">
+              💤
+            </span>
+          ) : (
+            <AgentStateDot state={state} lifecycle={session.lifecycle} />
+          )}
           <AgentIcon provider={session.provider} size={13} />
           {renaming ? (
             <span className="flex min-w-[12ch] flex-1 items-center gap-1.5">

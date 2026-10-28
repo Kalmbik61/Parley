@@ -474,6 +474,8 @@ export const S = {
     hideArchivedWorks: 'Hide archived',
     /** Подсказка к 💤 в слоте значка архивной работы. */
     archivedWork: 'Archived',
+    /** Подсказка к 💤 в слоте значка спящей сессии. */
+    asleepSession: 'Asleep',
     /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
     removeFromList: 'Remove from list…',
     /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
