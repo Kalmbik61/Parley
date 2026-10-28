@@ -81,6 +81,7 @@ Slice: <folder, module, documents or sources>, at <commit SHA or version>.
 Question: <the sub-questions this slice answers>.
 Seams: <named links to other slices>; beyond the slice read at most <N> files or pages, and only along these seams.
 Out of scope: everything else. Do not draw conclusions about the whole subject.
+Depth: a search hit is a lead, not a finding. Open every file you cite and read it whole, not only the matched line. Read at least <N> files of the slice and list them all under COVERAGE.
 Hand in with report done, in this format:
 COVERAGE: covered | partial | failed — what you read (files, sections, URLs)
 FACTS: one claim per line, each with its source (path:line at the SHA, document and section, or URL)
@@ -89,7 +90,7 @@ NOT FOUND: what you looked for and where
 GAPS: what is left unread and why
 \`\`\`
 
-Models: cheap models (\`haiku\`, \`sonnet\` on low effort, a small Codex model on low) are fine for bounded slices: find, list, compare, quote. In pilot 1 all four Haiku drones handed in partial coverage, and the queen had to fill the gaps: make slices small enough for the model, or give a stronger model the hard ones.
+Models: cheap models (\`haiku\`, \`sonnet\` on low effort, a small Codex model on low) are fine for bounded slices: find, list, compare, quote. In pilot 1 all four Haiku drones handed in partial coverage, and the queen had to fill the gaps: make slices small enough for the model, or give a stronger model the hard ones. In pilot 2 each Haiku drone grepped its slice and handed in within two minutes: set the depth and the minimum read scope in the task, and send a hand-in that only lists search hits back to a new drone.
 
 ## Collecting hand-ins
 
@@ -110,11 +111,16 @@ Every claim that goes into the summary is "not verified" until a verifier who is
 - Each claim goes with its source. The verifier reads the source at the same SHA and answers PASS, FAIL (with the correct fact and its source) or NOT VERIFIED (and why).
 - Cheap claims need a cheap check: open the line, grep for the name. Disputed and costly claims get the strong model.
 - In pilot 1 the verifiers found and fixed 5 of 88 drone claims. Skip the wave and those errors reach the answer.
+- One verifier is not enough for disputed claims. In pilot 2 a single verifier passed three of the five claims a judge later refuted. A PASS on a claim that is disputed, that is high-harm or that goes into the top of the answer gets a second verifier, or a strong model.
 - A second round is worth it only if the first one brought a new fact or a new gap. Two rounds without anything new means stop and report what is open.
 
 ## Summary
 
-Parley writes you "All members of swarm sw-NN have handed in. Write the summary: call report with the combined result." Then write it:
+Parley writes you "All members of swarm sw-NN have handed in. Write the summary: call report with the combined result."
+
+Before you write it, look at the clock. If lifetime is left and your register has gaps, spend it on them: add drones for the uncovered parts and verifiers for the claims still not verified. In pilot 2 the queen handed in at minute 12 of 90 with a long "not covered" list. Hand in early only when the register has no gaps worth the time.
+
+Then write the summary:
 
 - the answer per sub-question;
 - facts with sources, each marked verified or not verified;

@@ -92,6 +92,9 @@ describe('скилл research-swarm: тело', () => {
       'All members of swarm sw-NN have handed in',
       'pilot 1',
       'When in doubt, answer with one agent',
+      'read it whole, not only the matched line',
+      'gets a second verifier, or a strong model',
+      'spend it on them',
     ]) {
       expect(body, phrase).toContain(phrase);
     }
