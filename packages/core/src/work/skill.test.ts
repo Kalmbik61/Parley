@@ -105,7 +105,7 @@ describe('заглушка скилла parley: тело', () => {
     );
     expect(body).toMatch(/do not start the work before acceptance/);
     expect(body).toMatch(/Only the lead can bring one more session into a room — `add_to_room`/);
-    expect(body).toMatch(/`close_session` — only after the human's explicit consent/);
+    expect(body).toMatch(/`close_session` — your own session only after the human's explicit consent; sessions you created/);
     expect(body).toMatch(/Before finishing, call `report`/);
   });
 

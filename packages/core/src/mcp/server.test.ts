@@ -1044,6 +1044,53 @@ describe('report', () => {
 
 
 
+describe('close_session', () => {
+  /** s-01 — вызывающая; s-02 создала она, s-03 — s-02, s-04 завёл человек, s-05 создала s-01, но она в рое. */
+  async function seedCreated(): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'дитя', task: 'x', createdBy: 's-01' });
+      addSession(map, { provider: 'claude', label: 'внук', task: 'x', createdBy: 's-02' });
+      addSession(map, { provider: 'claude', label: 'человека', task: 'x' });
+      addSession(map, { provider: 'claude', label: 'трутень', task: 'x', createdBy: 's-01' });
+      map.swarms = [{
+        id: 'sw-01', tag: 'T', creator: { kind: 'human' }, objective: 'o', queen: 's-05',
+        members: [{ sessionId: 's-05', role: 'queen', n: 1, addedAt: new Date().toISOString(), handedAt: null }],
+        status: 'running', createdAt: new Date().toISOString(), endedAt: null, expiredAt: null, result: null, failure: null, seenAt: null,
+      }];
+    });
+  }
+
+  it('себя можно; созданную собой и потомка потомка — тоже, без согласия человека', async () => {
+    await seedCreated();
+    const client = await connect('s-01');
+
+    await callOk(client, 'close_session', { target: 's-03' });
+    await callOk(client, 'close_session', { target: 's-02' });
+    await callOk(client, 'close_session', { target: 's-01' });
+
+    const map = await readMapFile();
+    expect(['s-01', 's-02', 's-03'].map((id) => session(map, id).lifecycle)).toEqual(['closed', 'closed', 'closed']);
+  });
+
+  it('чужую, созданную человеком и участника роя — отказ с понятным текстом, карта не меняется', async () => {
+    await seedCreated();
+    const child = await connect('s-02');
+
+    const foreign = await call(child, 'close_session', { target: 's-01' });
+    expect(foreign.isError).toBe(true);
+    expect(foreign.text).toContain('the calling session or a session it created');
+    const human = await call(await connect('s-01'), 'close_session', { target: 's-04' });
+    expect(human.isError).toBe(true);
+    expect(human.text).toContain('s-04 is not one of them');
+    const swarm = await call(await connect('s-01'), 'close_session', { target: 's-05' });
+    expect(swarm.isError).toBe(true);
+    expect(swarm.text).toContain('swarm member');
+
+    const map = await readMapFile();
+    expect(['s-01', 's-04', 's-05'].map((id) => session(map, id).lifecycle)).not.toContain('closed');
+  });
+});
+
 describe('send_message и check_inbox', () => {
   it('сообщение доходит и помечается прочитанным один раз', async () => {
     const first = await connect('s-01');

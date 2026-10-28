@@ -13,6 +13,7 @@ import {
   addSystemMessage,
   archiveRoom,
   deleteRoom,
+  isCreatedDescendant,
   isDescendant,
   isMember,
   isRoomArchived,
@@ -163,6 +164,32 @@ describe('isDescendant', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'корень', task: 'x' });
     expect(isDescendant(map, 's-01', 's-09')).toBe(false);
+  });
+});
+
+describe('isCreatedDescendant', () => {
+  it('созданная и потомок созданной — true; создатель, сосед и сессия без создателя — false', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'корень', task: 'x' }); // s-01
+    addSession(map, { provider: 'claude', label: 'дитя', task: 'x', createdBy: 's-01' }); // s-02
+    addSession(map, { provider: 'claude', label: 'внук', task: 'x', createdBy: 's-02' }); // s-03
+    addSession(map, { provider: 'claude', label: 'сосед', task: 'x', createdBy: 's-01' }); // s-04
+    addSession(map, { provider: 'claude', label: 'человека', task: 'x' }); // s-05
+
+    expect(isCreatedDescendant(map, 's-01', 's-02')).toBe(true);
+    expect(isCreatedDescendant(map, 's-01', 's-03')).toBe(true);
+    expect(isCreatedDescendant(map, 's-02', 's-04')).toBe(false);
+    expect(isCreatedDescendant(map, 's-02', 's-01')).toBe(false);
+    expect(isCreatedDescendant(map, 's-01', 's-01')).toBe(false);
+    expect(isCreatedDescendant(map, 's-01', 's-05')).toBe(false);
+    expect(isCreatedDescendant(map, 's-01', 's-09')).toBe(false);
+  });
+
+  it('цепочка с петлёй не зацикливает проверку', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x', createdBy: 's-02' }); // s-01
+    addSession(map, { provider: 'claude', label: 'b', task: 'x', createdBy: 's-01' }); // s-02
+    expect(isCreatedDescendant(map, 's-09', 's-01')).toBe(false);
   });
 });
 

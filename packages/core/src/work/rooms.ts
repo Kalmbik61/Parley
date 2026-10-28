@@ -552,8 +552,8 @@ export function joinNotice(room: Room, map: WorkMap): string {
 
 /**
  * Потомок ли сессия `id` по цепочке `parent` от `ancestor`. Сессия себе не
- * потомок: `close_session` разрешает цель либо равенством себе, либо этой
- * проверкой — смешивать их незачем.
+ * потомок: смешивать равенство себе с этой проверкой незачем. `close_session`
+ * по `parent` не ходит — он проверяет потомство по `createdBy`.
  */
 export function isDescendant(map: WorkMap, ancestor: string, id: string): boolean {
   const byId = new Map(map.sessions.map((session) => [session.id, session]));
@@ -561,6 +561,22 @@ export function isDescendant(map: WorkMap, ancestor: string, id: string): boolea
   while (current !== undefined && current.parent !== null) {
     if (current.parent === ancestor) return true;
     current = byId.get(current.parent);
+  }
+  return false;
+}
+
+/**
+ * Потомок ли сессия `id` по цепочке `createdBy` (кто кого завёл `create_session`) от `ancestor`; цепочка
+ * транзитивна. Сессия себе не потомок; сессия без создателя (завёл человек, окно, CLI, движок) — ничья.
+ */
+export function isCreatedDescendant(map: WorkMap, ancestor: string, id: string): boolean {
+  const byId = new Map(map.sessions.map((session) => [session.id, session]));
+  const seen = new Set<string>();
+  let creator = byId.get(id)?.createdBy ?? null;
+  while (creator !== null && !seen.has(creator)) {
+    if (creator === ancestor) return true;
+    seen.add(creator);
+    creator = byId.get(creator)?.createdBy ?? null;
   }
   return false;
 }
