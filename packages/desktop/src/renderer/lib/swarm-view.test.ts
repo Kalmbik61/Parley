@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSession, makeSwarm, makeSwarmMember } from '../test-utils/work-fixtures.js';
-import { swarmIconSpec, formatSwarmTimer, isSwarmShown, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
+import { nominalSwarm, formatSwarmTimer, isSwarmShown, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
 
 const T0 = Date.parse('2026-09-27T08:00:00.000Z');
 
@@ -121,16 +121,14 @@ describe('значок карточки и группы', () => {
   });
 });
 
-describe('swarmIconSpec — облик иконки (спека роя, 7.5)', () => {
-  it('идущий — янтарная точка-рой, сводящий — сфера, готовый — неподвижная сфера', () => {
-    expect(swarmIconSpec('running')).toMatchObject({ shape: 'dot', pal: 'amber', fx: null });
-    expect(swarmIconSpec('collecting')).toMatchObject({ shape: 'sphere', pal: 'amber' });
-    expect(swarmIconSpec('done')).toMatchObject({ shape: 'sphere', pal: 'amber', rot: 0 });
+describe('nominalSwarm — условный рой для значков карточки и группы (спека роя, 7.5)', () => {
+  it('идущий и сводящий — 1 из 3, готовый — 3 из 3', () => {
+    expect(nominalSwarm('running')).toEqual({ handed: 1, total: 3 });
+    expect(nominalSwarm('collecting')).toEqual({ handed: 1, total: 3 });
+    expect(nominalSwarm('done')).toEqual({ handed: 3, total: 3 });
   });
 
-  it('сбой и отмена — серая приглушённая палитра, как offline', () => {
-    for (const status of ['failed', 'cancelled'] as const) {
-      expect(swarmIconSpec(status)).toMatchObject({ pal: 'gray', vis: 0.45, dim: 0.8 });
-    }
+  it('сбой и отмена — три полные серые ячейки', () => {
+    for (const status of ['failed', 'cancelled'] as const) expect(nominalSwarm(status)).toEqual({ handed: 3, total: 3 });
   });
 });

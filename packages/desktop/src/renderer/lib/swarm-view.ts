@@ -7,7 +7,6 @@
 import type { WindowWorkMap, WorkSession, WorkSwarm, WorkSwarmMember } from '@parley/core';
 import { isSwarmTerminal, memberState, swarmProgress, type SwarmMemberState, type SwarmStatus } from '@parley/core/swarms';
 import { S } from '../../shared/strings.js';
-import type { SwarmSpec } from '../island/swarm/spec.js';
 import { isoMs } from './iso-time.js';
 
 /** Сколько миллисекунд рой идёт: `createdAt` → `endedAt ?? now`; битая дата — 0. */
@@ -124,27 +123,14 @@ export function swarmBadgeView(badge: { active: number; ready: number }): { stat
   return null;
 }
 
-const ICON_BASE: SwarmSpec = { shape: 'dot', fx: null, pal: 'amber', rot: 0.25, vis: 1, ts: 1, dim: 1, glitch: false, emo: null };
-
 /**
- * Облик живой иконки роя по статусу (спека роя v1, 7.5), из готовых полей `SwarmSpec` движка острова. `running` — рой
- * души янтарного цвета с медленным вращением (в мини-размере движок рисует облако точкой, поэтому форма `dot`),
- * `collecting` — сфера, частицы стянуты к центру: королева сводит; `done` — неподвижная сфера; `failed` и `cancelled` — серая
- * палитра, `vis` 0.45, `dim` 0.8, как у `offline` помощника.
+ * «Условный» рой для значков карточки и группы проекта (спека роя v1, 7.5): прогресс по роям там неизвестен, а иконке
+ * нужно число ячеек. Идущий рой — 1 из 3 (одна полная ячейка, остальные ждут), готовый — 3 из 3; сбой и отмена —
+ * 3 из 3, чтобы три серые ячейки были полными, а не полупустыми.
  */
-export function swarmIconSpec(status: SwarmStatus): SwarmSpec {
-  switch (status) {
-    case 'collecting':
-      return { ...ICON_BASE, shape: 'sphere', rot: 0.35 };
-    case 'done':
-      return { ...ICON_BASE, shape: 'sphere', rot: 0 };
-    case 'failed':
-    case 'cancelled':
-      return { ...ICON_BASE, pal: 'gray', vis: 0.45, ts: 0.12, dim: 0.8 };
-    default:
-      return ICON_BASE;
-  }
+export function nominalSwarm(status: SwarmStatus): { handed: number; total: number } {
+  return status === 'running' || status === 'collecting' ? { handed: 1, total: 3 } : { handed: 3, total: 3 };
 }
 
-/** Кадров в секунду у живой иконки роя; у статичной — 0 (движок рисует переходы и смену облика сам). */
+/** Кадров в секунду у живой иконки роя со слотом; реакции (сдача, «готово») идут с частотой экрана. */
 export const SWARM_ICON_FPS = 12;

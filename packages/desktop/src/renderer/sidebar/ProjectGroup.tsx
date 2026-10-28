@@ -28,7 +28,8 @@ import { S } from '../../shared/strings.js';
 import { SwarmIcon } from '../components/SwarmIcon.js';
 import { cn } from '../lib/cn.js';
 import { projectColor } from '../lib/project-color.js';
-import { swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
+import { nominalSwarm, swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
+import { useSwarmIconTheme } from '../lib/use-swarm-icon-theme.js';
 import { useUiStore } from '../store/ui.js';
 import { SectionMenu } from './SectionMenu.js';
 import type { SidebarSection } from './sort.js';
@@ -78,6 +79,7 @@ function groupSwarmBadge(section: SidebarSection): ReturnType<typeof swarmBadgeV
 
 export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly = false, children }: ProjectGroupProps): JSX.Element {
   const swarmView = section.collapsed ? groupSwarmBadge(section) : null;
+  const iconTheme = useSwarmIconTheme();
   return (
     <div data-section={section.key}>
       {section.kind === 'pinned' ? (
@@ -123,7 +125,7 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly
               aria-label={swarmView.title}
               className="inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold tabular-nums text-work-sidebar-muted-foreground"
             >
-              <SwarmIcon status={swarmView.status} size={14} still />
+              <SwarmIcon status={swarmView.status} size={14} {...nominalSwarm(swarmView.status)} theme={iconTheme} still />
               <span data-swarm-count="">{swarmView.count === null ? '✓' : swarmView.count}</span>
             </span>
           )}

@@ -225,7 +225,7 @@ function SwarmLine({ row, api, reducedMotion }: { row: WorkSwarmRow; api: Island
       className="relative flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left text-[13px] hover:bg-white/10"
       onClick={() => api.open(rowTarget(row))}
     >
-      <SwarmIcon status={row.state} size={16} handed={row.handed} reducedMotion={reducedMotion} />
+      <SwarmIcon status={row.state} size={16} handed={row.handed} total={row.total} theme="dark" reducedMotion={reducedMotion} />
       <span className="min-w-0 flex-1 truncate">{S.workSwarm.island.row(row.tag, row.handed, row.total)}</span>
       <span className="shrink-0 text-muted-foreground">{S.workSwarm.status[row.state]}</span>
       <span aria-hidden="true" className="absolute inset-x-1 bottom-0 h-[2px] overflow-hidden rounded bg-white/15">

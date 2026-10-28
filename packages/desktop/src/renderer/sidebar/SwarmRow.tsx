@@ -20,6 +20,7 @@ import { SwarmIcon } from '../components/SwarmIcon.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { useSwarmIconMotion } from '../lib/use-swarm-icon-motion.js';
+import { useSwarmIconTheme } from '../lib/use-swarm-icon-theme.js';
 import { useNow } from '../lib/use-now.js';
 import {
   formatSwarmTimer,
@@ -100,6 +101,7 @@ export const SwarmRow = memo(function SwarmRow({ workKey, projectPath, workId, b
   const key = `${workKey}/${swarm.id}`;
   const expanded = useExpandedSwarms((state) => state.keys[key] === true);
   const reducedMotion = useSwarmIconMotion();
+  const iconTheme = useSwarmIconTheme();
   const terminal = swarm.status === 'done' || swarm.status === 'failed' || swarm.status === 'cancelled';
   const statusWord = S.workSwarm.status[swarm.status];
   const title = S.workSwarm.rowTitle(swarm.tag, statusWord);
@@ -135,7 +137,7 @@ export const SwarmRow = memo(function SwarmRow({ workKey, projectPath, workId, b
     >
       <TreeGuides guides={guides} depth={row.depth} />
       <div title={title} className="flex h-[26px] items-center gap-1.5">
-        <SwarmIcon status={swarm.status} size={16} handed={handed} reducedMotion={reducedMotion} />
+        <SwarmIcon status={swarm.status} size={16} handed={handed} total={total} theme={iconTheme} reducedMotion={reducedMotion} />
         <span className="min-w-0 flex-1 truncate">
           <span className="font-medium">{S.workSwarm.swarm}</span> <span data-swarm-tag="">[{swarm.tag}]</span>
         </span>
