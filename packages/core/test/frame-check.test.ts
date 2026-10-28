@@ -419,7 +419,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:18',
-        'packages/core/src/providers.ts:350',
+        'packages/core/src/providers.ts:355',
         'packages/core/src/work/mcp-config.ts:206',
         // Комментарий службы входа: «Parley не читает … `.credentials.json`» (спека подписок 5.5 и анти-цели раздела 2).
         'packages/host/src/providers/auth-service.ts:4',

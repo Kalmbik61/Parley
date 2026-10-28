@@ -138,6 +138,8 @@ function nativeRolePairs(template: readonly string[], codex: boolean): Map<strin
     // `{leanFlags}` — готовые флаги облегчённого запуска отдельным элементом, у Claude и у Codex.
     if (flag === '{leanFlags}' || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
     if (codex && i === 0 && flag === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
+    // `--` прямо перед хвостовым `{prompt}` — закрывает вариадические флаги, а не канал роли.
+    if (flag === '--' && template[i + 1] === '{prompt}' && i + 2 === template.length) { i++; continue; }
     if (flag === '{prompt}' && i === template.length - 1) continue;
     if (!valueFlags.has(flag)) return null;
     const value = template[++i];

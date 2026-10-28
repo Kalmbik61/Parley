@@ -297,6 +297,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{agent}',
         '--disallowedTools',
         '{disallowedTools}',
+        // `--disallowedTools` вариадический: без `--` промпт стал бы ещё одним правилом запрета.
+        // `--` ставится только при непустых `{disallowedTools}` и `{prompt}`.
+        '--',
         '{prompt}',
       ],
       resumeArgs: [
@@ -323,7 +326,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{disallowedTools}',
         // Указатель на письма, которыми хост поднимает спящую сессию (спека окна
         // 7.2): первым ходом возобновлённой сессии. Ручной подъём идёт без него —
-        // пустая подстановка просто выпадает.
+        // пустая подстановка просто выпадает. `--` не даёт вариадическому
+        // `--disallowedTools` съесть промпт и ставится только при обоих значениях.
+        '--',
         '{prompt}',
       ],
       // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
@@ -420,6 +425,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
         '--disallowedTools',
         '{disallowedTools}',
+        // `--disallowedTools` вариадический: без `--` промпт стал бы ещё одним правилом запрета.
+        // `--` ставится только при непустых `{disallowedTools}` и `{prompt}`.
+        '--',
         '{prompt}',
       ],
       // Tier aliases suppress native restoration. Explicitly keep the configured launch model.
@@ -443,6 +451,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
         '--disallowedTools',
         '{disallowedTools}',
+        // `--disallowedTools` вариадический: без `--` промпт стал бы ещё одним правилом запрета.
+        // `--` ставится только при непустых `{disallowedTools}` и `{prompt}`.
+        '--',
         '{prompt}',
       ],
       mcpConfig: 'json-file',
@@ -568,6 +579,15 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
   };
 
   for (const item of template) {
+    // `--` перед `{prompt}` нужен, только если ему есть что закрывать (вариадический `--disallowedTools`)
+    // и промпт задан; иначе он выпал бы в голый хвост запуска.
+    if (item === '--') {
+      if (subs.disallowedTools !== undefined && subs.prompt !== undefined) {
+        args.push(item);
+        fromTemplate.push(true);
+      }
+      continue;
+    }
     const match = PLACEHOLDER.exec(item);
     if (match === null) {
       if (!item.includes('{effort}')) {
