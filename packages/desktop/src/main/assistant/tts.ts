@@ -76,6 +76,7 @@ export interface TtsService {
   cancelAll(): void;
   /** `ready` — голос может звучать, в том числе когда worker выгружен: `speak` запустит его сам. */
   state(): TtsState;
+  /** Срабатывает при смене состояния и при смене набора скачанных моделей (состояние при этом может не меняться). */
   onState(listener: (state: TtsState) => void): () => void;
   warmup(): Promise<TtsState>;
   voices(): Promise<AssistantVoice[]>;
@@ -83,7 +84,8 @@ export interface TtsService {
   models(): Promise<TtsModelId[]>;
   /**
    * Качает веса модели (только по кнопке, E5). Если она стала активной (или это перекачка активной) — новый клиент
-   * worker и прогрев; докачка неактивной модели речь и worker не трогает.
+   * worker и прогрев; пока идёт предложение, worker не режем, а меняем перед следующим. Докачка неактивной модели речь
+   * и worker не трогает.
    */
   download(id: TtsModelId, onProgress: (progress: ModelProgress<TtsModelId>) => void): Promise<DownloadResult>;
   /** Отмена идущего скачивания весов модели (D5: как у моделей Whisper). */
@@ -180,16 +182,21 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
     return current === null ? { state: 'ready' } : { state: 'speaking' };
   }
 
+  /** Скачанные модели в порядке каталога: так их отдаёт `models()` и так строится ключ `notify`. */
+  const inCatalogOrder = (ids: readonly TtsModelId[]): TtsModelId[] =>
+    TTS_MODELS.map((model) => model.id).filter((id) => ids.includes(id));
+
   function notify(): void {
     const next = state();
-    const key = JSON.stringify(next);
+    // Окну настроек важен и набор скачанных моделей: докачали 0.6B при активной 1.7B — состояние то же, а событие нужно.
+    const key = JSON.stringify({ next, downloaded });
     if (key === reported) return;
     reported = key;
     for (const listener of listeners) listener(next);
   }
 
   async function refresh(): Promise<void> {
-    downloaded = await deps.models.list();
+    downloaded = inCatalogOrder(await deps.models.list());
     notify();
   }
 
@@ -396,8 +403,12 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
         running = (async () => {
           const result = await deps.models.download(id, onProgress);
           if (!('ok' in result)) return result;
-          if (!downloaded.includes(id)) downloaded = [...downloaded, id];
-          if (id === activeTtsModel(downloaded)) {
+          downloaded = inCatalogOrder([...downloaded, id]);
+          if (id !== activeTtsModel(downloaded) || current !== null) {
+            // Докачали неактивную модель (0.6B при скачанной 1.7B) — речь и worker не трогаем. Стала активной посреди
+            // предложения — его не режем: расхождение моделей `ensureWorker` заметит перед следующим.
+            notify();
+          } else {
             worker?.stop();
             worker = null;
             failure = null;
@@ -405,9 +416,6 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
             void ensureWorker().then(() => {
               if (!pumping) armIdle();
             });
-          } else {
-            // Докачали неактивную модель (0.6B при скачанной 1.7B): речь и worker не трогаем.
-            notify();
           }
           return result;
         })().finally(() => {

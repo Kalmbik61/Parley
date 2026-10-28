@@ -283,6 +283,23 @@ describe('AssistantSettings: голос (план 3b, B20; #9 §6.8)', () => {
     expect(modelRow(LARGE).textContent).not.toContain('%');
   });
 
+  it('B1: заново открытые настройки, 0.6B докачалась при активной 1.7B — событие ready (то же состояние) стирает её прогресс и даёт Delete', async () => {
+    bridge.setAssistantVoiceModels([LARGE]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    render(<AssistantSettings />);
+    await waitFor(() => expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy());
+    // Скачивание началось в прошлом экземпляре окна: здесь нет записи `downloading`, прогресс пришёл только событиями.
+    act(() => bridge.emitAssistantVoiceProgress(progressOf(SMALL, 1_000_000_000)));
+    expect(modelRow(SMALL).textContent).toContain(S.voice.settings.progress(1_000_000_000, 1_213_534_464));
+    expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.cancel })).toBeTruthy();
+    bridge.setAssistantVoiceModels([SMALL, LARGE]);
+    act(() => bridge.setAssistantVoiceState({ state: 'ready' }));
+    await waitFor(() => expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy());
+    expect(modelRow(SMALL).textContent).not.toContain('%');
+    expect(modelRow(SMALL).textContent).toContain(text.voiceModelIdle);
+    expect(modelRow(LARGE).textContent).toContain(text.voiceModelInUse);
+  });
+
   it('D5, Cancel: Cancel строки отменяет скачивание именно её модели, строка возвращается к Download', async () => {
     const download = pendingDownload();
     render(<AssistantSettings />);
