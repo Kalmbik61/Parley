@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkMap, WorkSession } from '@parley/core';
+import { defaultSessionName, type WorkEntry, type WorkMap, type WorkSession } from '@parley/core';
 import type { ActionsReport, SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
 import type { PreparedPlan, PreparedStep, SessionPick } from './actions.js';
@@ -290,6 +290,31 @@ describe('runPlan: комнаты и письма', () => {
   it('письмо закрытой сессии — отказ при сверке', async () => {
     w1.sessions[2]!.lifecycle = 'closed';
     expect(await run([{ do: 'message', room: null, session: known('s-06', 'S06 Nik'), text: 'Hi.', kind: null, to: [] }])).toMatchObject({ reason: 'S06 Nik is closed' });
+    expect(exec.sessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('созданные планом агенты ещё не в снимке — комната из них всё равно создаётся', async () => {
+    // Наблюдатель за файлами отстаёт: работа и сессии записаны на диск, но снимок их не видит.
+    exec.createWork.mockImplementationOnce(async () => 'w-2');
+    exec.createSession.mockImplementation(async ({ workId }) => ({ ref: ref(workId, `s-0${nextId++}`), held: false }));
+    const report = await run([createWork, createAgent('Alice'), createAgent('Bob'), createRoom]);
+    expect(report).toMatchObject({ status: 'done', failedStep: null, reason: null });
+    expect(exec.createRoom).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-2', title: 'QA', members: ['s-01', 's-02'], lead: 's-01' });
+  });
+
+  it('агент без ярлыка, которого нет в снимке, зовётся именем по умолчанию', async () => {
+    exec.createSession.mockImplementationOnce(async ({ workId }) => ({ ref: ref(workId, 's-01'), held: true }));
+    const report = await run([createWork, createAgent('')]);
+    expect(report).toMatchObject({ status: 'done', notes: [`${defaultSessionName('s-01')} waits for you to trust the folder`] });
+  });
+
+  it('созданная планом сессия, которую снимок показывает закрытой, — отказ', async () => {
+    exec.createSession.mockImplementationOnce(async ({ workId }) => {
+      w2?.sessions.push(session('s-01', 'Alice', 'closed'));
+      return { ref: ref(workId, 's-01'), held: false };
+    });
+    const report = await run([createWork, createAgent('Alice'), { do: 'message', room: null, session: made(2, 'Alice'), text: 'Hi.', kind: null, to: [] }]);
+    expect(report).toMatchObject({ status: 'stopped', failedStep: 3, reason: 'Alice is closed' });
     expect(exec.sessionMessage).not.toHaveBeenCalled();
   });
 

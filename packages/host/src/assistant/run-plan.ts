@@ -1,11 +1,13 @@
 /**
  * Выполнение плана карточки `actions` по шагам (спека 2026-10-28, 6.1): после клика человека хост идёт по шагам по
  * очереди, перед каждым сверяет цели со свежим снимком, подставляет итоги прошлых шагов вместо `"$N"` и останавливается
- * на первом сбое. Отката нет: сделанные шаги остаются. Сами действия — функции хоста, что приходят как `PlanExecutors`
+ * на первом сбое. Отката нет: сделанные шаги остаются. Снимок отстаёт от диска (наблюдатель за файлами с задержкой), поэтому
+ * созданное этим же планом он мог ещё не увидеть: такую цель отвергает только снимок, что показывает её закрытой, а
+ * отсутствие в снимке не отказ — функции хоста сами читают работу из базы и сами проверяют. Сами действия — функции хоста, что приходят как `PlanExecutors`
  * (проводит их задача 7); модуль не лезет ни в диск, ни в процессы.
  */
 
-import { participantLabel, type SessionRole } from '@parley/core';
+import { defaultSessionName, participantLabel, type SessionRole } from '@parley/core';
 import type { ActionsReport, SessionRef } from '@parley/protocol';
 import { stateRefusal, type PreparedPlan, type PreparedStep, type RoomRef, type SessionPick, type WorkRef } from './actions.js';
 import type { OverviewSource } from './overview.js';
@@ -45,7 +47,7 @@ interface ResolvedRoom extends ResolvedWork {
 interface ResolvedSession {
   ref: SessionRef;
   name: string;
-  /** Созданная этим планом: её запись может ещё стоять в `pending`, письмо и комната её принимают. */
+  /** Созданная этим планом: её запись может ещё стоять в `pending` или не дойти до снимка, письмо и комната её принимают. */
   created: boolean;
 }
 
@@ -117,13 +119,14 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
     }
     return { ref: pick.ref, name: pick.name, created: false };
   }
-  // Сессия, над которой шаг делает `verb`: состояние сверяется заново. Созданной планом сессии хватает быть не закрытой.
+  // Сессия, над которой шаг делает `verb`: состояние сверяется заново. Созданной планом сессии хватает не быть закрытой в снимке:
+  // если снимок её ещё не видит, она принимается под именем из итога шага.
   function checked(pick: SessionPick, verb: 'wake' | 'interrupt' | 'sleep' | 'close' | 'message', source: OverviewSource): ResolvedSession {
     const resolved = sessionOf(pick);
     const session = entryOf(source, resolved.ref.projectPath, resolved.ref.workId)?.map.sessions.find((candidate) => candidate.id === resolved.ref.sessionId);
     const name = session?.label ?? resolved.name;
     if (resolved.created) {
-      if (session === undefined || session.lifecycle === 'closed') throw new Error(`${name} is closed`);
+      if (session?.lifecycle === 'closed') throw new Error(`${name} is closed`);
     } else {
       const refusal = stateRefusal(verb, name, session, source.live(resolved.ref));
       if (refusal !== null) throw new Error(refusal);
@@ -165,7 +168,8 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
           throw error;
         }
         const fresh = entryOf(exec.source(), created.ref.projectPath, created.ref.workId)?.map;
-        const name = fresh === undefined ? step.label || created.ref.sessionId : participantLabel(fresh, created.ref.sessionId);
+        // Снимок мог не успеть за диском: тогда имя — ярлык со шага или то, что ядро даёт сессии без имени.
+        const name = fresh?.sessions.some((candidate) => candidate.id === created.ref.sessionId) === true ? participantLabel(fresh, created.ref.sessionId) : step.label || defaultSessionName(created.ref.sessionId);
         outputs.set(n, { kind: 'session', ref: created.ref, name });
         if (created.held) report.notes.push(`${name} ${HELD_NOTE}`);
         return;
