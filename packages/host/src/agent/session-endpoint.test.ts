@@ -53,7 +53,7 @@ describe('agent session endpoint', () => {
   });
   it('rejects scope overrides, invalid fields and oversized bodies', async () => {
     const { post, create } = await setup();
-    for (const extra of [{ parent: null }, { projectPath: '/other' }, { workId: 'w-other' }, { role: 'executor' }, { provider: '' }, { worktree: 'yes' }, { role: 'builtin:executor', agent: 'x' }]) {
+    for (const extra of [{ swarm: { kind: 'create', tag: 'T', objective: 'o' } }, { parent: null }, { projectPath: '/other' }, { workId: 'w-other' }, { role: 'executor' }, { provider: '' }, { worktree: 'yes' }, { role: 'builtin:executor', agent: 'x' }]) {
       expect(JSON.parse((await post({ ...args, ...extra })).body)).toMatchObject({ ok: false });
     }
     expect((await post({ ...args, task: 'x'.repeat(70000) })).status).toBe(413);
