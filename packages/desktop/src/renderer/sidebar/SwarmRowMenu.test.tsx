@@ -35,7 +35,7 @@ afterEach(() => {
   useHostStore.setState({ status: { state: 'connecting' } });
 });
 
-function renderMenu(swarm: WorkSwarm, onOpenQueen = vi.fn()): { onOpenQueen: ReturnType<typeof vi.fn> } {
+function renderMenu(swarm: WorkSwarm, onOpenQueen: (() => void) | null = vi.fn()): { onOpenQueen: (() => void) | null } {
   render(
     <SwarmRowMenu workKey="/tmp/proj w-01" projectPath="/tmp/proj" workId="w-01" swarm={swarm} bridge={bridge} onOpenQueen={onOpenQueen}>
       <div>swarm row</div>
@@ -71,6 +71,12 @@ describe('SwarmRowMenu — пункты', () => {
     fireEvent.click(screen.getByText('Open the queen'));
     expect(onOpenQueen).toHaveBeenCalledTimes(1);
     expect(bridge.calls).toEqual([]);
+  });
+
+  it('сессии королевы в карте нет — «Open the queen» не показывается, остальные пункты на месте', () => {
+    renderMenu(makeSwarm('sw-01', 's-q'), null);
+    expect(screen.queryByText('Open the queen')).toBeNull();
+    expect(screen.getByText('Cancel swarm')).toBeTruthy();
   });
 
   it('хост без swarms.cancel и swarms.seen — кнопок нет, остаётся «Open the queen»', () => {

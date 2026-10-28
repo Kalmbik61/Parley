@@ -107,7 +107,7 @@ export const SwarmRow = memo(function SwarmRow({ workKey, projectPath, workId, b
   const toggle = (): void => showSwarm(key, !expanded);
 
   return (
-    <SwarmRowMenu workKey={workKey} projectPath={projectPath} workId={workId} swarm={swarm} bridge={bridge} onOpenQueen={openerFor(swarm.queen)}>
+    <SwarmRowMenu workKey={workKey} projectPath={projectPath} workId={workId} swarm={swarm} bridge={bridge} onOpenQueen={members.some((view) => view.member.sessionId === swarm.queen && view.session !== null) ? openerFor(swarm.queen) : null}>
     <div
       role="treeitem"
       aria-expanded={expanded}

@@ -36,8 +36,8 @@ export interface SwarmRowMenuProps {
   workId: string;
   swarm: WorkSwarm;
   bridge: ParleyBridge;
-  /** «Open the queen» — открыть сессию королевы. */
-  onOpenQueen(): void;
+  /** «Open the queen» — открыть сессию королевы; `null` — её удалили из карты, пункта нет. */
+  onOpenQueen: (() => void) | null;
   /** Строка — триггер ui/context-menu. */
   children: ReactNode;
 }
@@ -61,9 +61,11 @@ export function SwarmRowMenu({ workKey, projectPath, workId, swarm, bridge, onOp
       <ContextMenu onOpenChange={setOpen}>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={returnCursorFocus}>
-          <ContextMenuItem data-swarm-action="open" onSelect={onOpenQueen}>
-            {S.workSwarm.menu.open}
-          </ContextMenuItem>
+          {onOpenQueen === null ? null : (
+            <ContextMenuItem data-swarm-action="open" onSelect={onOpenQueen}>
+              {S.workSwarm.menu.open}
+            </ContextMenuItem>
+          )}
           {canMarkSeen ? (
             <ContextMenuItem data-swarm-action="seen" onSelect={() => markSwarmSeen(bridge, projectPath, workId, swarm.id)}>
               {S.workSwarm.menu.markSeen}
