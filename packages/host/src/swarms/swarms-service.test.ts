@@ -398,6 +398,19 @@ describe('переходы', () => {
     expect(sessionOf(drones[0]!).lifecycle).toBe('closed');
   });
 
+  it('метка humanClosed живёт в памяти: перезапуск между закрытием королевы человеком и сверкой даёт failed (v1)', async () => {
+    const { queen } = await makeSwarm({ drones: 1 });
+    const before = boot();
+    before.humanClosed(refOf(queen));
+    before.stop();
+    await setLifecycle(queen, 'closed');
+
+    boot();
+    await quiet();
+
+    expect(swarmOf()).toMatchObject({ status: 'failed', failure: 'the queen was closed without a report' });
+  });
+
   it('humanClosed трутня рой не отменяет', async () => {
     const { drones } = await makeSwarm({ drones: 2 });
     const service = boot();
