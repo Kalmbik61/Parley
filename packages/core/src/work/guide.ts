@@ -198,6 +198,16 @@ and launch limits apply. No room membership or ownership is inherited: the room 
 invite the new session with \`add_to_room\`. Native provider subagents remain available
 within the assigned task and permissions, separately from these Parley sessions.
 
+Pick the model by the work, not by habit. Built-in roles carry a tier: strong (Planner, Architect,
+Critic, Reviewer, Feature Lead, Debugger) prepares, leads and reviews; standard (Executor,
+Verifier) implements and checks; light (Researcher) reads. Implementation starts from a prepared
+plan: tasks with scope, files and acceptance criteria. It runs on the standard tier: pass
+\`role: "builtin:executor"\` or a standard model (Sonnet, gpt-6.1-sol), one task per session. A
+strong model writes code only when the human asks for it, a standard attempt failed twice on the
+same task, the plan marks the task strong-only (concurrency, recovery, security, the write
+boundary), or the Debugger repairs a failure it reproduced; name the reason in the room before the
+hand-off. A project's PARLEY.md may change this split.
+
 \`list_roles()\` lists builtin and native roles in your current working folder. It returns
 source-qualified ids, descriptions and defaults, without prompts or definition paths.
 \`role\` is optional: pass an id from \`list_roles\`. Provider is required even with a role; a native role requires its own CLI, so it must match the provider (Claude roles also fit GLM).
@@ -326,7 +336,9 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    \`Returned for rework.\`) means returned for rework.
 5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
    part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. Do not post
-   "plan accepted, handing out" first: the hand-out message itself is the news. The
+   "plan accepted, handing out" first: the hand-out message itself is the news. Implementation parts go to
+   standard-tier sessions (Executor); strong models keep the plan, the critique and the review, and take
+   code only for a named reason (topic \`tools\`, \`create_session\`). The
    participants' reports will come to you in the room; wait for them with one
    \`wait_for("inbox", 1500)\` too, and hand in the result of the whole work with your own
    \`report\`.

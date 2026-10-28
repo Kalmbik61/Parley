@@ -139,6 +139,12 @@ describe('системная вставка', () => {
     expect(text).not.toContain('pending is started by the human');
   });
 
+  it('строка create_session: реализация на моделях стандартного уровня, сильные готовят, ведут и проверяют', () => {
+    const line = stableGuidance().split('\n').find((candidate) => candidate.startsWith('create_session'));
+
+    expect(line).toContain('Implementation: standard-tier models (Executor); strong ones plan, lead, review.');
+  });
+
   it('закрытие — только с согласия человека, report не закрывает сессию', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     expect(text).toMatch(/close_session.*the human's explicit consent/);
@@ -812,8 +818,9 @@ describe('бюджет вставки в байтах (P34)', () => {
     expect(text).toContain('[goal is 6000 bytes');
   });
 
-  it('цель на самой границе потолка остаётся текстом, вставка в бюджете', () => {
-    const goal = 'g'.repeat(4096);
+  it('длинная цель у потолка остаётся текстом, вставка в бюджете', () => {
+    // 4000, а не 4096: стабильная часть варианта removed занимает все 4096 байт, строка сессии — ещё 83.
+    const goal = 'g'.repeat(4000);
     const text = systemGuidance(mapOf('Authorization', goal), 's-03', { skillNavigator: true, skillList: 'removed' });
     expect(text).toContain(`Workspace goal: ${goal}`);
     expect(guidanceBudgetProblems(text, stableGuidance({ skillNavigator: true, skillList: 'removed' }))).toEqual([]);

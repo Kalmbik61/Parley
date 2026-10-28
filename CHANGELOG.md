@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- Agents are told to keep implementation on standard-tier models (Executor) and to leave preparation, leading and review to strong ones; a strong model takes code only for a named reason. The rule is in the system insert, `read_guide` (topics `tools` and `lead`), the lead's brief, the Planner and Feature Lead prompts and the `PARLEY.md` template; a project's `PARLEY.md` can change it.
+
 ## 0.24.0
 
 The assistant's voice can use the larger Qwen3-TTS 1.7B model, and sleeping sessions are marked with 💤 in the sidebar.

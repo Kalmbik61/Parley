@@ -120,6 +120,22 @@ describe('темы гида', () => {
     expect(text).toContain('A bare label like `S02` without the `@` is not a mention: write `@s02`.');
   });
 
+  it('тема tools: модель выбирают по работе — реализация на стандартном уровне, сильная пишет код по названной причине', () => {
+    const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('Pick the model by the work, not by habit.');
+    expect(text).toContain('pass `role: "builtin:executor"` or a standard model (Sonnet, gpt-6.1-sol), one task per session.');
+    expect(text).toContain('name the reason in the room before the hand-off.');
+    expect(text).toContain("A project's PARLEY.md may change this split.");
+  });
+
+  it('тема lead, шаг 5: части реализации — сессиям стандартного уровня, код сильной модели — по названной причине', () => {
+    const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('Implementation parts go to standard-tier sessions (Executor)');
+    expect(text).toContain('take code only for a named reason (topic `tools`, `create_session`).');
+  });
+
   it('тема lead: ждать позиции одним wait_for("inbox", 1500), не писать «plan accepted, handing out»', () => {
     const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
 
