@@ -168,6 +168,15 @@ describe('подстановка аргументов запуска', () => {
     );
   });
 
+  it.each(['claude', 'glm'] as const)('%s: промпт после --disallowedTools отделён `--`, без промпта `--` выпадает', provider => {
+    const subs = { disallowedTools: 'Edit,Write', providerSessionId: 'bb2137cb' };
+    for (const command of [startCommand, resumeCommand]) {
+      const withPrompt = command(PROVIDERS[provider], { ...subs, prompt: 'хочу два слова' }).args;
+      expect(withPrompt.slice(-4)).toEqual(['--disallowedTools', 'Edit,Write', '--', 'хочу два слова']);
+      expect(command(PROVIDERS[provider], subs).args).not.toContain('--');
+    }
+  });
+
   it('провайдеру без такой возможности вставка не достаётся', () => {
     const guidance = 'You are inside Parley.';
     // У Codex нет подстановки системного промпта; GLM использует Claude Code.
