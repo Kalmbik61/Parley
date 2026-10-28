@@ -109,6 +109,14 @@ describe('PARLEY.md read', () => {
 });
 
 describe('PARLEY.md creation receipt', () => {
+  it('the template names the default tier split in its Roles comment and still costs no context', async () => {
+    await createParleyMd(project);
+    const file = await readFile(path.join(project, 'PARLEY.md'), 'utf8');
+
+    expect(file).toContain("Parley's default: strong models plan, lead and review, standard models implement; write here only what differs.");
+    expect(processParleyMd(file).text).toBe('');
+  });
+
   it('creates the empty-cost template once and records it in the legacy state directory', async () => {
     await mkdir(path.join(project, '.harnas'));
     expect((await ensureParleyMd(project)).created).toBe(true);

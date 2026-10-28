@@ -106,7 +106,7 @@ export function stableGuidance({ skillNavigator = false, skillList, toolProfile 
     'You are inside Parley; coordinate through the tools of the parley MCP server.',
     'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
     'report — done or failed hands in the result, the session stays reachable and does not close itself; progress — a summary.',
-    'create_session — launch a new peer in the current workspace. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate.',
+    'create_session — launch a new peer in the current workspace. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate. Implementation: standard-tier models (Executor); strong ones plan, lead, review.',
     // Одно длинное ожидание вместо цепочки коротких: каждый вызов и каждая реплика «жду» — полный ход модели.
     // 1500, а не 1800: у вызова MCP в Claude Code потолок простоя 30 минут (CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT).
     'wait_for — wait for a session by id or mail ("inbox"; marks it read). Mail: one wait_for("inbox", 1500), no text before or after, no Monitor, sleep or loops; on {"state":"running"} repeat once, then end the turn without report (not done). By id: repeat while running. New task to a session that reported: wait via "inbox", not by id.',

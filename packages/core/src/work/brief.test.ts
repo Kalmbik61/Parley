@@ -394,6 +394,15 @@ describe('бриф: роль в комнате', () => {
     );
   });
 
+  it('ведущему: реализацию — сессиям стандартного уровня, сильные модели готовят, ведут и проверяют', () => {
+    const brief = buildBrief(mapWithRoom(), 's-02');
+    const hand = 'Hand implementation to standard-tier sessions (Executor); strong models prepare, lead and review, and take code only for a named reason.';
+
+    expect(brief).toContain(hand);
+    expect(LEAD_ROLE.indexOf(hand)).toBeGreaterThan(-1);
+    expect(LEAD_ROLE.indexOf(hand)).toBeLessThan(LEAD_ROLE.indexOf('If Parley reports a participant as stuck'));
+  });
+
   it('ведущему: о застрявшем участнике — тема stuck, а не передача части самому (спека застрявших 5.4)', () => {
     const brief = buildBrief(mapWithRoom(), 's-02');
 

@@ -44,6 +44,18 @@ describe('builtin roles', () => {
     const debuggerRole = BUILTIN_ROLES.find((role) => role.id === 'builtin:debugger')!;
     expect(debuggerRole.prompt).toContain('regression test');
   });
+  it('sends implementation to the standard tier in the Feature Lead and Planner prompts without changing their tiers', () => {
+    const featureLead = BUILTIN_ROLES.find((role) => role.id === 'builtin:feature-lead')!;
+    const planner = BUILTIN_ROLES.find((role) => role.id === 'builtin:planner')!;
+
+    expect(featureLead.prompt).toContain(
+      'on the standard tier (Executor); a strong model takes code only for a named reason.',
+    );
+    expect(planner.prompt).toContain(
+      'Assign implementation steps to standard-tier executors; mark a step strong-only with its reason (concurrency, recovery, security, the write boundary).',
+    );
+    expect([featureLead.tier, planner.tier]).toEqual(['strong', 'strong']);
+  });
   it('selects the agreed model tiers from the current provider catalog', () => {
     expect(
       ['strong', 'standard', 'light'].map((tier) => modelForTier('claude', tier as RoleTier)),

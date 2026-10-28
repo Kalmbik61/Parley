@@ -187,7 +187,7 @@ Comments like this one and empty sections are not sent to agents.
 -->
 
 ## Roles
-<!-- Who leads rooms by default; which provider or model takes which kind of work. -->
+<!-- Who leads rooms by default; which provider or model takes which kind of work. Parley's default: strong models plan, lead and review, standard models implement; write here only what differs. -->
 
 ## Review
 <!-- Who checks whose work before it reaches the human. -->

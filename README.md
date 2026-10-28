@@ -153,6 +153,11 @@ sandbox, and Settings → Agents decides who answers their approvals: *Auto-revi
 Codex's own reviewer decides, nothing to answer), *Ask in Parley* (a card on the island, in the
 window and in Telegram; Codex asks once to trust Parley's hooks) or *Ask in the terminal*.
 
+**Models by tier.** Built-in roles carry a tier: strong models (Opus, GPT-6-Astra) plan, lead,
+critique and review; standard models (Sonnet, GPT-6.1-Sol) implement and verify; light ones (Haiku,
+GPT-6-Luna) research. Parley tells agents to keep implementation on the standard tier and to name
+the reason when a strong model writes code; a project's `PARLEY.md` can change the split.
+
 ## Install and use
 
 ### 1. Download
