@@ -2719,6 +2719,23 @@ describe('agent-created workspace peers', () => {
     } finally { await service.stopAll(); }
   });
 
+  it('records the creating session for the sidebar only when an agent session asks', async () => {
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null };
+    try {
+      const peer = await service.create({ ...input, requestedBy: caller });
+      const manual = await service.create(input);
+      const engine = await service.create({ ...input, requestedBy: ENGINE, deferLaunch: true });
+      const sessions = (await readMap(project, work.work.id)).sessions;
+      expect(sessions.find(s => s.id === peer.sessionId)).toMatchObject({ parent: null, createdBy: caller });
+      expect(sessions.find(s => s.id === manual.sessionId)).toMatchObject({ parent: null });
+      expect(sessions.find(s => s.id === manual.sessionId)?.createdBy ?? null).toBeNull();
+      expect(sessions.find(s => s.id === engine.sessionId)?.createdBy ?? null).toBeNull();
+    } finally { await service.stopAll(); }
+  });
+
   it('rejects an absent caller without writing a new session', async () => {
     const work = await createWork(project, { title: 'Peers', goal: '' });
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());

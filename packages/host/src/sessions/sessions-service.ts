@@ -1119,6 +1119,8 @@ export function createSessionsService(
         label,
         task,
         parent,
+        // Только для сайдбара: сессия встаёт под той, что её завела; движок — не сессия.
+        ...(input.requestedBy === undefined || input.requestedBy === ENGINE ? {} : { createdBy: input.requestedBy }),
         contextFrom: [],
         ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
         role,
