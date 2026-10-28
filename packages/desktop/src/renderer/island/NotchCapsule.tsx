@@ -107,7 +107,7 @@ export function NotchCapsule({ notch, content, assistant, pulse, reducedMotion, 
           <span>{S.island.capsule.done(right.count)}</span>
         ) : right.kind === 'swarm' ? (
           <span data-testid="island-capsule-swarm" className="flex items-center gap-1" role="img" aria-label={S.workSwarm.island.capsule(right.handed, right.total)}>
-            <SwarmIcon status="running" size={14} scope="island" handed={right.handed} />
+            <SwarmIcon status="running" size={14} handed={right.handed} reducedMotion={reducedMotion} />
             {S.workSwarm.counter(right.handed, right.total)}
           </span>
         ) : (

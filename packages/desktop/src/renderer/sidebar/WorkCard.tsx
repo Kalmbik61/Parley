@@ -50,6 +50,7 @@ import { isRoomArchived } from '../lib/room-archive.js';
 import { swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
 import { workTitleText } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
+import { useSwarmIconMotion } from '../lib/use-swarm-icon-motion.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
@@ -204,6 +205,7 @@ export const WorkCard = memo(function WorkCard({
   const secondary = 'text-work-sidebar-muted-foreground';
   // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
   const swarmView = swarmBadgeView(swarmBadge(map));
+  const reducedMotion = useSwarmIconMotion();
   const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
@@ -300,7 +302,7 @@ export const WorkCard = memo(function WorkCard({
             aria-label={swarmView.title}
             className={cn('inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold tabular-nums', secondary)}
           >
-            <SwarmIcon status={swarmView.status} size={14} />
+            <SwarmIcon status={swarmView.status} size={14} reducedMotion={reducedMotion} />
             <span data-swarm-count="">{swarmView.count === null ? '✓' : swarmView.count}</span>
           </span>
         )}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSession, makeSwarm, makeSwarmMember } from '../test-utils/work-fixtures.js';
-import { formatSwarmTimer, isSwarmShown, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
+import { swarmIconSpec, formatSwarmTimer, isSwarmShown, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
 
 const T0 = Date.parse('2026-09-27T08:00:00.000Z');
 
@@ -118,5 +118,19 @@ describe('значок карточки и группы', () => {
     expect(swarmBadgeView({ active: 1, ready: 0 })?.title).toBe('1 swarm running');
     expect(swarmBadgeView({ active: 0, ready: 1 })).toMatchObject({ status: 'done', count: null });
     expect(swarmBadgeView({ active: 0, ready: 0 })).toBeNull();
+  });
+});
+
+describe('swarmIconSpec — облик иконки (спека роя, 7.5)', () => {
+  it('идущий — янтарная точка-рой, сводящий — сфера, готовый — неподвижная сфера', () => {
+    expect(swarmIconSpec('running')).toMatchObject({ shape: 'dot', pal: 'amber', fx: null });
+    expect(swarmIconSpec('collecting')).toMatchObject({ shape: 'sphere', pal: 'amber' });
+    expect(swarmIconSpec('done')).toMatchObject({ shape: 'sphere', pal: 'amber', rot: 0 });
+  });
+
+  it('сбой и отмена — серая приглушённая палитра, как offline', () => {
+    for (const status of ['failed', 'cancelled'] as const) {
+      expect(swarmIconSpec(status)).toMatchObject({ pal: 'gray', vis: 0.45, dim: 0.8 });
+    }
   });
 });
