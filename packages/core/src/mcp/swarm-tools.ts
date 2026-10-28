@@ -6,7 +6,7 @@ const HINTS = { readOnlyHint: false, destructiveHint: false, idempotentHint: fal
 
 export const CREATE_SWARM_TOOL: Tool = {
   name: 'create_swarm',
-  description: 'Start a research swarm: a queen session that splits a read-only task between drones and verifiers. Only for a big research task that does not fit one context; a narrow task is faster and cheaper with one agent. The result goes to you. Take provider, models and effort from get_map {field: "providers"}.',
+  description: 'Start a research swarm: a queen session that splits a read-only task between drones and verifiers. Only for a big research task that does not fit one context; a narrow task is faster and cheaper with one agent. The result goes to you. Take provider, models and effort from get_map {field: "providers"}. Method: the research-swarm skill.',
   annotations: HINTS,
   inputSchema: {
     type: 'object',

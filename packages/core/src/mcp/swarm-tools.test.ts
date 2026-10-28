@@ -89,6 +89,7 @@ describe('create_swarm и swarm_add MCP', () => {
     expect(CREATE_SWARM_TOOL.description).toMatch(/one agent/);
     expect(CREATE_SWARM_TOOL.description).toMatch(/read-only/);
     expect(CREATE_SWARM_TOOL.description).toMatch(/result goes to you/);
+    expect(CREATE_SWARM_TOOL.description).toMatch(/research-swarm skill/);
     expect(SWARM_ADD_TOOL.description).toMatch(/report done/);
     expect(SWARM_ADD_TOOL.description).toMatch(/closed automatically/);
   });
