@@ -4,11 +4,36 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.23.0
+
+The assistant gets hands: it sees every work, room and session, reads them for you and prepares a plan of actions you confirm with one click. Chat and rooms learn Reply quotes, code Copy and path links, the sidebar nests agent-created sessions under their creator, and default limits are higher.
+
+### Added
+
+- **The assistant acts on a plan you confirm.** Ask the assistant to start agents, rooms or sessions and it shows one card with the whole plan: which project, role, provider and model each new agent gets. Nothing runs until you click on the card (on the island or in Telegram); the plan then runs step by step and stops at the first failure, saying where it stopped. ([#128](https://github.com/Kalmbik61/Parley/pull/128))
+  - The assistant sees every open work, room and session, finds them by the words you use (project names included, closed and archived ones too) and reads a room or a session's history page by page.
+- **Reply to a message.** A Reply action next to Copy on a model answer in Chat and on an agent's message in a room puts a quote above the input. A selected fragment is quoted in full; otherwise the start of the message, up to 300 characters. ([#123](https://github.com/Kalmbik61/Parley/pull/123))
+- **Chat links, code Copy and path links.** Code blocks have Copy, links open in Parley's browser with a link menu, and a file path becomes a link while Cmd/Ctrl is held over it. Mail letters render with the same Markdown as rooms. Codex prompts show their attachments as chips and thumbnails. ([#123](https://github.com/Kalmbik61/Parley/pull/123))
+- The Chat/Terminal toolbar names the session the tab belongs to, as in the sidebar. ([#123](https://github.com/Kalmbik61/Parley/pull/123))
+- **Sessions under their creator.** A session an agent starts with `create_session` sits under the creator's row in the sidebar, with tree lines. Only the sidebar reads this; mail, rights and limits are unchanged. ([#125](https://github.com/Kalmbik61/Parley/pull/125))
+- Archived works show 💤 in the sidebar. ([#126](https://github.com/Kalmbik61/Parley/pull/126))
+
+### Changed
+
+- **Higher default limits.** A workspace now runs up to 24 live sessions (was 10), a room up to 12 (was 6), with 50 new sessions and 60 launches per hour. Message limits are unchanged. ([#127](https://github.com/Kalmbik61/Parley/pull/127), [#129](https://github.com/Kalmbik61/Parley/pull/129))
+- On a display without a notch, the island's pill shows the assistant's speaking face while it speaks, without an orange focus ring around it. ([#122](https://github.com/Kalmbik61/Parley/pull/122))
 
 ### Fixed
 
-- GLM sessions and custom providers with a key no longer stop on Claude Code's auto mode notice ("this session isn't eligible… ask your gateway to implement"). Their endpoints cannot run auto mode's server-side checks, so Parley starts them with `CLAUDE_CODE_AUTO_MODE_SERVER=0`: auto mode checks actions with Claude Code's own classifier requests on the provider's quota, as before, without holding the first action until someone presses Enter in the terminal.
+- Custom providers and subscription accounts show their vendor logo on the island instead of the Parley icon. ([#120](https://github.com/Kalmbik61/Parley/pull/120))
+- GLM sessions and custom providers with a key no longer stop on Claude Code's auto mode notice ("this session isn't eligible… ask your gateway to implement"). Their endpoints cannot run auto mode's server-side checks, so Parley starts them with `CLAUDE_CODE_AUTO_MODE_SERVER=0`: auto mode checks actions with Claude Code's own classifier requests on the provider's quota, as before, without holding the first action until someone presses Enter in the terminal. ([#121](https://github.com/Kalmbik61/Parley/pull/121))
+- A start prompt given together with blocked tools reaches the model again instead of being read as more blocked tools. ([#124](https://github.com/Kalmbik61/Parley/pull/124))
+- A message that starts with an absolute path is no longer taken for a slash command, so a Reply quote goes out with it; the link menu opens at the cursor. ([#123](https://github.com/Kalmbik61/Parley/pull/123))
+- Autonomous mode outside a git repository is refused clearly: the project must be the repository's root, the room dialog hints at it, and a failed git check stops the plan with a reason instead of retrying silently. ([#130](https://github.com/Kalmbik61/Parley/pull/130))
+
+### What is not proven yet
+
+- The assistant's plans were checked with tests and E2E; a live run on real agents in the built app has not been done.
 
 ## 0.22.0
 
