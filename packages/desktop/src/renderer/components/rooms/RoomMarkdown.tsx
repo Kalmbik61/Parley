@@ -12,8 +12,8 @@
  * Правила безопасности — те же, что у письма (`mail/Letter.tsx`) и у превью файлов
  * (`files/preview/MarkdownPreview.tsx`), агент не должен получить из комнаты ни исполнение, ни переход окна:
  *  — `rehype-raw` нет: сырой HTML попадает в дерево узлом `html` и печатается текстом;
- *  — ссылка активна только по `http(s)`, клик — вкладка встроенного браузера Parley (`openInBrowserTab`, как ⌘-клик
- *    в терминале) с `preventDefault` (переход в самом окне открыл бы чужой домен в песочнице); правый клик — меню:
+ *  — ссылка активна только по `http(s)`, клик — панель браузера хозяина ленты (`PanelLinkContext`; у почты хозяина нет —
+ *    вкладка встроенного браузера, `openInBrowserTab`, как ⌘-клик в терминале) с `preventDefault` (переход в самом окне открыл бы чужой домен в песочнице); правый клик — меню:
  *    браузер Parley, системный браузер (`onOpenExternal`) и «Copy link». `javascript:`, `file:`, `data:`, `mailto:`, относительный путь,
  *    `//хост` и `#якорь` — текст без `href`. Адреса, которые связывает сам `remark-gfm` (`https://…`, `www.…`,
  *    почта), идут тем же путём;
@@ -64,6 +64,7 @@ import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import { Check, Copy } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
+import { PanelLinkContext } from '../../browser/panel/link-context.js';
 import { openInBrowserTab } from '../../browser/store.js';
 import { COPIED_MS } from '../../chat/items/MessageActions.js';
 import {
@@ -91,7 +92,7 @@ export interface RoomMarkdownProps {
   text: string;
   /** Ярлык участника для чипа: `S02 бэкенд`; неизвестной сессии — `S02`. */
   labelOf: (sessionId: string) => string | null;
-  /** Системный браузер — пункт меню правого клика по ссылке; обычный клик открывает вкладку браузера Parley. */
+  /** Системный браузер — пункт меню правого клика по ссылке; обычный клик открывает панель или вкладку браузера Parley. */
   onOpenExternal: (url: string) => void;
   /** Строчный вид для превью в одну строку (плашка решений): блоки сворачиваются в текст, корень — `span`. */
   inline?: boolean;
@@ -160,6 +161,12 @@ function ExternalLink({
 }): JSX.Element {
   // Точка правого клика: меню встаёт у курсора, как меню ссылки терминала (`terminal/LinkMenu.tsx`).
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Лента сессии или комнаты открывает ссылку в панели браузера хозяина; без хозяина (почта) — вкладкой.
+  const openInPanel = useContext(PanelLinkContext);
+  const openLink = (): void => {
+    if (openInPanel === null) openInBrowserTab(url);
+    else openInPanel(url);
+  };
   return (
     <InsideLink.Provider value>
       <a
@@ -168,7 +175,7 @@ function ExternalLink({
         title={url}
         onClick={(event) => {
           event.preventDefault();
-          openInBrowserTab(url);
+          openLink();
         }}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -194,7 +201,7 @@ function ExternalLink({
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" data-testid="room-link-menu">
-                <DropdownMenuItem onSelect={() => openInBrowserTab(url)}>
+                <DropdownMenuItem onSelect={openLink}>
                   {S.links.openInBrowser}
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openExternal(url)}>

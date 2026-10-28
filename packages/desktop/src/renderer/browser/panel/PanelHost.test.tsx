@@ -14,6 +14,7 @@ import { addPanelPage, panelOf, setPanelOpen } from '../../layout/panels.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { emptyLayout, PANEL_LIMITS } from '../../layout/tree.js';
 import { panelAnchor } from './anchor.js';
+import { RoomMarkdown } from '../../components/rooms/RoomMarkdown.js';
 import { PanelHost } from './PanelHost.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
 
@@ -221,5 +222,20 @@ describe('PanelHost — стор окна', () => {
     } finally {
       dispose();
     }
+  });
+});
+
+describe('PanelHost — ссылки ленты хозяина', () => {
+  it('клик по http(s)-ссылке вида открывает страницу в панели этого хозяина, а не вкладкой', () => {
+    setLayout(emptyLayout());
+    render(
+      <PanelHost workKey={KEY} owner={OWNER}>
+        <RoomMarkdown text="[PR](https://example.com/pr)" labelOf={() => null} onOpenExternal={vi.fn()} />
+      </PanelHost>,
+    );
+    fireEvent.click(screen.getByRole('link', { name: 'PR' }));
+    const layout = useLayoutStore.getState().layouts[KEY] as WorkLayout;
+    expect(panelOf(layout, OWNER)).toMatchObject({ open: true, pages: [{ url: 'https://example.com/pr' }] });
+    expect(JSON.stringify(layout.root)).not.toContain('"browser"');
   });
 });

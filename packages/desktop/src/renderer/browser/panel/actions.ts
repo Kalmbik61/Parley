@@ -132,6 +132,15 @@ export function openAgentPage(workKey: string, owner: BrowserOwner, url: string)
 }
 
 /**
+ * Клик человека по ссылке в ленте хозяина: страница — в его панель, как у `browser_open` (тот же адрес — переиспользуется,
+ * панель открывается), но клавиатурный фокус и вкладки не трогаются. Предел страниц — тост «No more than 5 pages…».
+ * Работа ещё не прочитана с диска или адрес не годится — ничего: ссылка уже прошла `externalUrl` ленты.
+ */
+export function openLinkInPanel(workKey: string, owner: BrowserOwner, url: string): void {
+  openAgentPage(workKey, owner, url);
+}
+
+/**
  * Просьба агента `browser_open` (`browser:agent-open-tab`, спека браузера 5.1, 7): страница встаёт в панель хозяина, которого
  * выбрал main. `mounted` — панель на экране (вид хозяина смонтирован): иначе страница загрузится, когда человек её откроет.
  * Предел страниц панели — `limit` (main скажет агенту закрыть одну); работа ещё не прочитана с диска или адрес не годится для
