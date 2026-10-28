@@ -135,6 +135,18 @@ describe('targetsOf и resolveTarget', () => {
       /^Session S05 Vera \[session:[^\]]+\] claude · idle · in Parley · one$/,
     );
   });
+  it('briefLine: закрытая сессия с итогом — слово итога и пометка closed в конце', () => {
+    const doneClosed = source(
+      [
+        entry('/p/b', 'w-b', 'B', {
+          sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'closed', result: 'done', role: { source: 'builtin', name: 'Reviewer' } })],
+        } as unknown as Partial<WorkMap>),
+      ],
+      {},
+    );
+    const target = targetsOf(doneClosed, { hidden: true }).find((t) => t.kind === 'session')!;
+    expect(briefLine(doneClosed, target)).toMatch(/· done · in .* · closed$/);
+  });
   it('roomHeader: участники, решение и план — строки шапки комнаты', () => {
     const lines = roomHeader(src, src.entries[0]!, 'r-1', 'Parley · one');
     expect(lines[0]).toBe('Room "Auth" in Parley · one; members: S03 Ruslan, S05 Vera');

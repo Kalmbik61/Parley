@@ -351,8 +351,9 @@ export function overviewText(source: OverviewSource, maxChars = OVERVIEW_BUDGET)
 
 /**
  * Одна строка о цели с её id (спека 5.1): работа, комната или сессия. Для находок `parley_find` и ошибок инструментов.
- * Слово состояния сессии — из core, как в обзоре; у цели из архива в конце ` · archived`, у закрытой сессии пометки
- * нет: слово состояния уже `closed`.
+ * Слово состояния сессии — из core, как в обзоре; у цели из архива в конце ` · archived`. У закрытой сессии с итогом
+ * (`done`, `failed`) слово состояния — итог, а не `closed`, поэтому в конце ` · closed`; у закрытой сессии без итога
+ * слово уже `closed`, и пометки нет.
  */
 export function briefLine(source: OverviewSource, target: AssistantTarget): string {
   const archived = target.hidden === 'archived' ? ' · archived' : '';
@@ -367,7 +368,9 @@ export function briefLine(source: OverviewSource, target: AssistantTarget): stri
   const need = needOf(session, live);
   const state = sessionDotStateWithNeed(session, live?.activity.activity ?? null, need);
   const role = session.role?.name === undefined ? '' : ` · role ${session.role.name}`;
-  return `Session ${target.name} [${target.id}] ${session.provider} · ${stateText(source, session, state, need)} · in ${target.where}${role}${archived}`;
+  const text = stateText(source, session, state, need);
+  const closed = target.hidden === 'closed' && text !== 'closed' ? ' · closed' : '';
+  return `Session ${target.name} [${target.id}] ${session.provider} · ${text} · in ${target.where}${role}${archived}${closed}`;
 }
 
 /**
