@@ -194,6 +194,8 @@ export type NoticeKind =
   | 'role-missing'
   | 'memory-truncated'
   | 'memory-unreadable'
+  // Git-репозиторий проекта не удалось проверить: общее состояние проекта (память, бэклог) пропущено.
+  | 'project-context-unavailable'
   | 'plan-effect-failed'
   | 'role-truncated'
   | 'recipe-playbook-truncated'

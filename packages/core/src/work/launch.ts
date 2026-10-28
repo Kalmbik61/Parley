@@ -57,7 +57,7 @@ import { finishSession, linkProviderSession, type MetricsRoots } from './metrics
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
-import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
+import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
@@ -482,7 +482,15 @@ async function plan(
     diagnostics.push(...parley.warnings);
     let memoryItems: MemoryItem[] = [];
     try { memoryItems = (await readProjectMemory(projectPath)).items; }
-    catch { diagnostics.push({ code: 'memory-unreadable', message: 'Parley could not read project memory; resolve memory.md conflicts or access errors before the next launch.' }); }
+    catch (error) {
+      const reason = error instanceof SharedStateError ? error.code : (error as NodeJS.ErrnoException).code ?? 'unknown';
+      // A project-context failure is another cause than a bad memory.md: name it so the human does not hunt for conflicts.
+      if (error instanceof SharedStateError && ['project-unavailable', 'git-context-unverified', 'main-project-unavailable'].includes(error.code)) {
+        diagnostics.push({ code: 'project-context-unavailable', message: `Parley could not verify this project's Git repository (${reason}); project memory is skipped. Check \`git worktree list\` and the host log.` });
+      } else {
+        diagnostics.push({ code: 'memory-unreadable', message: `Parley could not read project memory (${reason}); resolve memory.md conflicts or access errors before the next launch.` });
+      }
+    }
     const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
       ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
       : '';

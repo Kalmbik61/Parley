@@ -2321,9 +2321,19 @@ describe('fresh canonical project memory on session assembly', () => {
     await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n<<<<<<< PRIVATE CONFLICT\n');
     const unsafe = await planResume(project, workId, { ...session, providerSessionId: 'memory-thread' });
     expect(unsafe.diagnostics?.filter(row => row.code === 'memory-unreadable')).toHaveLength(1); expect(codexLayer(unsafe.args)).not.toContain('PRIVATE CONFLICT');
+    expect(unsafe.diagnostics?.find(row => row.code === 'memory-unreadable')?.message).toContain('memory-merge-conflict');
     await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n' + Array.from({ length: 50 }, (_, n) => `- ${'界'.repeat(200)} ${n} <!-- m-${String(n + 1).padStart(3, '0')} -->\n`).join(''));
     const large = await planLaunch(project, workId, session); expect(large.diagnostics?.filter(row => row.code === 'memory-truncated')).toHaveLength(1);
     expect(codexLayer(large.args)).toContain('[Project memory is cut at 12 KiB');
+  });
+  it('names the unverified Git context instead of blaming memory.md', async () => {
+    const { workId, sessionId } = await pending('codex'); const session = await sessionOf(workId, sessionId);
+    // A `.git` folder with an empty HEAD is a repository look-alike that Git rejects: the project context cannot be verified.
+    await mkdir(path.join(project, '.git')); await writeFile(path.join(project, '.git', 'HEAD'), '');
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.diagnostics?.filter(row => row.code === 'project-context-unavailable')).toHaveLength(1);
+    expect(plan.diagnostics?.find(row => row.code === 'project-context-unavailable')?.message).toContain('git-context-unverified');
+    expect(plan.diagnostics?.some(row => row.code === 'memory-unreadable')).toBe(false);
   });
 });
 
