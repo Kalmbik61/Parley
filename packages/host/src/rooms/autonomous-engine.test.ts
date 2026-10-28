@@ -1446,6 +1446,7 @@ it('stores a large completion report before its compact card and preserves its h
   expect(JSON.parse(data.toString()).checks).toHaveLength(162);
 });
 
+// 300 attempts make every map write heavy: about 3 s locally, over the default 5 s on GitHub's macOS runners.
 it('halts without truncating when the compact completion card exceeds its limit', async () => {
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
   const update = f.io.updateMap;
@@ -1465,7 +1466,7 @@ it('halts without truncating when the compact completion card exceeds its limit'
   await f.engine.flush(f.projectPath, 'w-01');
   expect(f.map().rooms[0]!.proposal).toBeNull();
   expect(f.read().autonomous!.halted).toMatchObject({ reason: 'human', detail: expect.stringContaining('completion card exceeds limit:') });
-});
+}, 20_000);
 
 it('reconciles an already-written completion report after a lost settlement', async () => {
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
