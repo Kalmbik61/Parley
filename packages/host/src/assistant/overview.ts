@@ -31,10 +31,13 @@ import type { SessionRef } from '@parley/protocol';
 import { sessionNeed } from '@parley/core/attention';
 import type { SessionLive } from '../activity/activity-service.js';
 
+/** Почему цель скрыта из обзора (спека 5.4): сессия закрыта или комната/работа в архиве; у видимых цели поля нет. */
+export type HiddenKind = 'closed' | 'archived';
+
 export type AssistantTarget =
-  | { kind: 'work'; id: string; projectPath: string; workId: string; name: string; where: string }
-  | { kind: 'room'; id: string; projectPath: string; workId: string; roomId: string; name: string; where: string }
-  | { kind: 'session'; id: string; ref: SessionRef; name: string; where: string; running: boolean; lifecycle: SessionLifecycle };
+  | { kind: 'work'; id: string; projectPath: string; workId: string; name: string; where: string; hidden?: HiddenKind }
+  | { kind: 'room'; id: string; projectPath: string; workId: string; roomId: string; name: string; where: string; hidden?: HiddenKind }
+  | { kind: 'session'; id: string; ref: SessionRef; name: string; where: string; running: boolean; lifecycle: SessionLifecycle; hidden?: HiddenKind };
 
 export interface OverviewSource {
   entries: readonly WorkEntry[];
@@ -87,19 +90,48 @@ export function projectLabel(entries: readonly WorkEntry[], projectPath: string,
 const where = (entry: WorkEntry): string => `${entry.map.work.title} · ${projectName(entry.projectPath)}`;
 const refOf = (entry: WorkEntry, session: WorkSession): SessionRef => ({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
 
-export function targetsOf(source: OverviewSource): AssistantTarget[] {
+/** Пометка скрытой цели: у цели из архивной работы всегда `archived`, иначе — своя (закрытая сессия, архивная комната). */
+const hiddenMark = (archivedWork: boolean, own?: HiddenKind): { hidden?: HiddenKind } =>
+  archivedWork ? { hidden: 'archived' } : own === undefined ? {} : { hidden: own };
+
+/**
+ * Цели помощника. Без опции — только видимое в обзоре; с `hidden: true` ещё архивные работы со всеми комнатами и
+ * сессиями (`archived`), архивные комнаты открытых работ (`archived`) и их закрытые сессии (`closed`) — с пометкой.
+ */
+export function targetsOf(source: OverviewSource, options: { hidden?: boolean } = {}): AssistantTarget[] {
+  const withHidden = options.hidden === true;
   const targets: AssistantTarget[] = [];
-  for (const entry of open(source.entries)) {
+  for (const entry of withHidden ? source.entries : open(source.entries)) {
     const { map } = entry;
+    const archivedWork = map.work.status === 'archived';
     const prefix = `${projectKey(entry.projectPath)}:${map.work.id}`;
     // Работа — цель сама по себе: по ней модель создаёт комнату; в каждой работе идёт первой.
-    targets.push({ kind: 'work', id: `work:${prefix}`, projectPath: entry.projectPath, workId: map.work.id, name: map.work.title, where: where(entry) });
+    targets.push({
+      kind: 'work',
+      id: `work:${prefix}`,
+      projectPath: entry.projectPath,
+      workId: map.work.id,
+      name: map.work.title,
+      where: where(entry),
+      ...hiddenMark(archivedWork),
+    });
     for (const room of map.rooms) {
-      if (isArchived(room)) continue;
-      targets.push({ kind: 'room', id: `room:${prefix}:${room.id}`, projectPath: entry.projectPath, workId: map.work.id, roomId: room.id, name: room.title, where: where(entry) });
+      const archivedRoom = isArchived(room);
+      if (archivedRoom && !withHidden) continue;
+      targets.push({
+        kind: 'room',
+        id: `room:${prefix}:${room.id}`,
+        projectPath: entry.projectPath,
+        workId: map.work.id,
+        roomId: room.id,
+        name: room.title,
+        where: where(entry),
+        ...hiddenMark(archivedWork, archivedRoom ? 'archived' : undefined),
+      });
     }
     for (const session of map.sessions) {
-      if (session.lifecycle === 'closed') continue;
+      const closed = session.lifecycle === 'closed';
+      if (closed && !withHidden) continue;
       const ref = refOf(entry, session);
       targets.push({
         kind: 'session',
@@ -110,14 +142,25 @@ export function targetsOf(source: OverviewSource): AssistantTarget[] {
         // Процесс есть, пока сессия `active`: после resume активность может быть ещё не выведена (`idle`), но запущена она.
         running: session.lifecycle === 'active',
         lifecycle: session.lifecycle,
+        ...hiddenMark(archivedWork, closed ? 'closed' : undefined),
       });
     }
   }
   return targets;
 }
 
-/** Цель по id из снимка, а если модель назвала имя — по однозначному имени или его первому слову («S03»). */
-export function resolveTarget(targets: readonly AssistantTarget[], wanted: string): { target: AssistantTarget } | { error: string } {
+const targetList = (targets: readonly AssistantTarget[]): string => targets.map((target) => `${target.id} (${target.name}, ${target.where})`).join('; ');
+
+/**
+ * Цель по id из снимка, а если модель назвала имя — по однозначному имени или его первому слову («S03»). Нашлось
+ * несколько — ошибка со списком. Дальше запасной путь: имя папки проекта у цели-работы (название работы всегда
+ * побеждает, потому что проверяется раньше). Скрытые цели (`options.hidden`) — только по точному id или полному имени.
+ */
+export function resolveTarget(
+  targets: readonly AssistantTarget[],
+  wanted: string,
+  options: { hidden?: readonly AssistantTarget[] } = {},
+): { target: AssistantTarget } | { error: string } {
   const key = wanted.trim();
   const exact = targets.find((target) => target.id === key);
   if (exact !== undefined) return { target: exact };
@@ -129,9 +172,24 @@ export function resolveTarget(targets: readonly AssistantTarget[], wanted: strin
   const [only] = matches;
   if (matches.length === 1 && only !== undefined) return { target: only };
   if (matches.length > 1) {
-    return { error: `"${key}" matches several targets: ${matches.map((target) => `${target.id} (${target.name}, ${target.where})`).join('; ')}` };
+    return { error: `"${key}" matches several targets: ${targetList(matches)}` };
   }
-  return { error: `No work, room or session "${key}". Call parley_overview for the current ids.` };
+  const byProject = name === '' ? [] : targets.filter((target) => target.kind === 'work' && projectName(target.projectPath).toLowerCase() === name);
+  const [project] = byProject;
+  if (byProject.length === 1 && project !== undefined) return { target: project };
+  if (byProject.length > 1) {
+    return { error: `"${key}" is the project folder of several works: ${targetList(byProject)}` };
+  }
+  const hidden = options.hidden ?? [];
+  const hiddenById = hidden.find((target) => target.id === key);
+  if (hiddenById !== undefined) return { target: hiddenById };
+  const hiddenByName = name === '' ? [] : hidden.filter((target) => target.name.toLowerCase() === name);
+  const [hiddenOnly] = hiddenByName;
+  if (hiddenByName.length === 1 && hiddenOnly !== undefined) return { target: hiddenOnly };
+  if (hiddenByName.length > 1) {
+    return { error: `"${key}" matches several closed or archived targets: ${targetList(hiddenByName)}` };
+  }
+  return { error: `No work, room or session "${key}". Call parley_overview for the current ids, or parley_find to search.` };
 }
 
 /** Строка ждущей карточки для модели: что просят и id карточки, по которому предлагается решение. */
@@ -292,6 +350,47 @@ export function overviewText(source: OverviewSource, maxChars = OVERVIEW_BUDGET)
 }
 
 /**
+ * Одна строка о цели с её id (спека 5.1): работа, комната или сессия. Для находок `parley_find` и ошибок инструментов.
+ * Слово состояния сессии — из core, как в обзоре; у цели из архива в конце ` · archived`, у закрытой сессии пометки
+ * нет: слово состояния уже `closed`.
+ */
+export function briefLine(source: OverviewSource, target: AssistantTarget): string {
+  const archived = target.hidden === 'archived' ? ' · archived' : '';
+  if (target.kind === 'work') {
+    return `Work "${target.name}" [${target.id}] (project ${projectLabel(source.entries, target.projectPath, source.home)})${archived}`;
+  }
+  if (target.kind === 'room') return `Room "${target.name}" [${target.id}] in ${target.where}${archived}`;
+  const entry = source.entries.find((item) => item.projectPath === target.ref.projectPath && item.map.work.id === target.ref.workId);
+  const session = entry?.map.sessions.find((item) => item.id === target.ref.sessionId);
+  if (session === undefined) return `${target.name} [${target.id}] is no longer in Parley.`;
+  const live = source.live(target.ref);
+  const need = needOf(session, live);
+  const state = sessionDotStateWithNeed(session, live?.activity.activity ?? null, need);
+  const role = session.role?.name === undefined ? '' : ` · role ${session.role.name}`;
+  return `Session ${target.name} [${target.id}] ${session.provider} · ${stateText(source, session, state, need)} · in ${target.where}${role}${archived}`;
+}
+
+/**
+ * Шапка комнаты (спека 5.2): участники, решение ведущего, план и его пункты. Общая для `detailText` и полного чтения
+ * комнаты; письма в неё не входят. Нет такой комнаты — пустой список.
+ */
+export function roomHeader(source: OverviewSource, entry: WorkEntry, roomId: string, place: string): string[] {
+  const { map } = entry;
+  const room = map.rooms.find((item) => item.id === roomId);
+  if (room === undefined) return [];
+  const lines = [`Room "${room.title}" in ${place}; members: ${room.members.map((id) => participantLabel(map, id)).join(', ') || 'none'}`];
+  if (room.proposal !== null) {
+    lines.push(`${proposalHead(map, room.proposal).replace(/^./, (c) => c.toUpperCase())}: ${oneLine(room.proposal.text, DECISION_FULL)}`);
+  }
+  const plan = planOf(map, room.id);
+  if (plan !== undefined) {
+    lines.push(`Plan: ${oneLine(plan.goal, 200)}`);
+    for (const item of plan.items.slice(0, PLAN_ITEMS)) lines.push(`  ${item.id}. ${oneLine(item.title, 120)} — ${item.status}`);
+  }
+  return lines;
+}
+
+/**
  * Подробности одной цели (спека 7.2.2). `lastReply` — последний ответ агента из ленты, только у сессии;
  * `cards` — её ждущие карточки: с вариантами ответа целиком, чтобы модель отвечала на вопрос по существу.
  */
@@ -325,15 +424,7 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
   }
   const room = map.rooms.find((item) => item.id === target.roomId);
   if (room === undefined) return `${target.name} is no longer in Parley.`;
-  const lines = [`Room "${room.title}" in ${target.where}; members: ${room.members.map((id) => participantLabel(map, id)).join(', ') || 'none'}`];
-  if (room.proposal !== null) {
-    lines.push(`${proposalHead(map, room.proposal).replace(/^./, (c) => c.toUpperCase())}: ${oneLine(room.proposal.text, DECISION_FULL)}`);
-  }
-  const plan = planOf(map, room.id);
-  if (plan !== undefined) {
-    lines.push(`Plan: ${oneLine(plan.goal, 200)}`);
-    for (const item of plan.items.slice(0, PLAN_ITEMS)) lines.push(`  ${item.id}. ${oneLine(item.title, 120)} — ${item.status}`);
-  }
+  const lines = roomHeader(source, entry, room.id, target.where);
   const messages = source.roomTail(entry, room.id, ROOM_MESSAGES);
   if (messages.length > 0) lines.push('Last messages:');
   for (const message of messages) lines.push(`  ${participantLabel(map, message.from)} (${message.kind}): ${oneLine(message.text, 200)}`);
