@@ -2,7 +2,7 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { S } from '../../shared/strings.js';
 // packages/desktop/src/renderer/chat/ChatToolbar.test.tsx
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -54,6 +54,43 @@ describe('ChatToolbar — кнопка «Browser» панели браузера
   it('вкладки сессии нет в раскладке — кнопки нет: панели не у кого быть', () => {
     render(<ChatToolbar workKey="k" tabId="t" view="chat" available provider="claude" />);
     expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
+  });
+});
+
+describe('ChatToolbar — где человек: тег и ярлык сессии по центру', () => {
+  const KEY = '/tmp/proj w-01';
+
+  function setUp(label: string): void {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-38', label)] })], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-38', sessionId: 's-38' }, 'active');
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: layout }, hydrated: { [KEY]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  }
+
+  it('подпись как в сайдбаре в обоих видах, полный текст в подсказке; переименование обновляет её', () => {
+    setUp('УЛУЧШАЙЗИНГ-ЛИД');
+    const { rerender } = render(<ChatToolbar workKey={KEY} tabId="terminal:s-38" view="chat" available provider="claude" />);
+    const title = screen.getByTestId('chat-toolbar-title');
+    expect(title.textContent).toBe('S38 УЛУЧШАЙЗИНГ-ЛИД');
+    expect(title.title).toBe('S38 УЛУЧШАЙЗИНГ-ЛИД');
+    // Обрезка многоточием и только свободное место: соседей подпись не теснит.
+    expect(title.className).toContain('truncate');
+    expect(title.className).toContain('min-w-0');
+    expect(title.className).toContain('flex-1');
+    rerender(<ChatToolbar workKey={KEY} tabId="terminal:s-38" view="terminal" available provider="claude" />);
+    expect(screen.getByTestId('chat-toolbar-title').textContent).toBe('S38 УЛУЧШАЙЗИНГ-ЛИД');
+
+    act(() => {
+      useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-38', 'новое имя')] })] });
+    });
+    expect(screen.getByTestId('chat-toolbar-title').textContent).toBe('S38 новое имя');
+    expect(screen.getByTestId('chat-toolbar-title').title).toBe('S38 новое имя');
+  });
+
+  it('вкладки сессии нет в раскладке — подписи нет, место остаётся пустым', () => {
+    render(<ChatToolbar workKey="k" tabId="t" view="chat" available provider="claude" />);
+    const title = screen.getByTestId('chat-toolbar-title');
+    expect(title.textContent).toBe('');
+    expect(title.hasAttribute('title')).toBe(false);
   });
 });
 
