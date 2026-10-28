@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -165,6 +165,23 @@ describe('agent attempts endpoint', () => {
     await f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Move base');
     await updateMap(f.projectPath, f.workId, (map, letters) => { resolveProposal(map, letters, 'r-01', 'p-01', 'accept', { rev: 0, planId: plan.id, planRev: plan.rev }); });
     expect((await f.read()).plans![0]!.autonomous).toEqual(plan.autonomous);
+  });
+  it('refuses a proposal outside a git repository before any base lookup', async () => {
+    const f = await setup();
+    await rm(path.join(f.projectPath, '.git'), { recursive: true, force: true });
+    // A recording git shim first in PATH: it logs argv and delegates to the real git.
+    const bin = await mkdtemp(path.join(tmpdir(), 'attempts-endpoint-bin-')); dirs.push(bin);
+    const log = path.join(bin, 'calls.log'), real = (await run('which', ['git'])).stdout.trim();
+    await writeFile(path.join(bin, 'git'), `#!/bin/sh\necho "$*" >> '${log}'\nexec '${real}' "$@"\n`); await chmod(path.join(bin, 'git'), 0o755);
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH}`);
+    try {
+      const { body } = await f.post(proposal());
+      expect(body).toMatchObject({ ok: false, error: { code: 'not-a-git-repository' } });
+      for (const part of ['needs a git repository at the project root', f.projectPath, 'front/ and back/']) expect(body.error.message).toContain(part);
+    } finally { vi.unstubAllEnvs(); }
+    const calls = await readFile(log, 'utf8').catch(() => '');
+    expect(calls).not.toMatch(/--abbrev-ref|--verify/);
+    expect((await f.read()).rooms[0]!.proposal).toBeNull();
   });
   it('retries an open proposal exactly, replaces changed text, and starts a new round after return', async () => {
     const f = await setup(), body = proposal();
