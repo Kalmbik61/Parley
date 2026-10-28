@@ -176,8 +176,11 @@ export type {
   BrowserAgentTabsResult,
   BrowserAgentWaitResult,
 } from './browser-agent.js';
-export { assistantMethodSchemas } from './assistant.js';
+export { ASSISTANT_ACTIONS_FEATURE, assistantMethodSchemas, reportLine } from './assistant.js';
 export type {
+  ActionStepView,
+  ActionVerb,
+  ActionsReport,
   AssistantDetail,
   AssistantMethodResults,
   AssistantOrigin,
