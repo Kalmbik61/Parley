@@ -1,0 +1,98 @@
+# Сайт Parley на GitHub Pages (https://kalmbik61.github.io/Parley/): папка site/ публикуется как есть, без сборки.
+# Что делает файл: на каждый pull request гоняет тесты разбора заметок релиза (scripts/site), а на push в
+# master, после выхода релиза и по кнопке — ещё и выкладывает сайт.
+#
+# Список релизов на странице — снимок site/releases.json. Задача deploy пишет его токеном репозитория прямо перед
+# загрузкой сайта; в git файл не лежит (.gitignore). Браузер посетителя в GitHub API не ходит: неавторизованный
+# лимит — 60 запросов в час на IP, и страница упёрлась бы в него.
+#
+# Почему здесь `workflow_run`: релиз публикует workflow Release токеном репозитория, а событие `release` от такого
+# токена другие workflow не запускает (так устроен GitHub: события от GITHUB_TOKEN не порождают новых прогонов).
+# Завершение самого Release запускает — и сайт перевыпускается с новой строкой в списке релизов.
+#
+# Почему черновики режутся в `jq`: токену с `contents: read` черновики релизов видны, и без фильтра заметки ещё
+# не опубликованного релиза ушли бы на публичный сайт. В снимок попадают только релизы, у которых нет ни
+# `draft`, ни `prerelease`.
+#
+# Один раз после слияния человек включает Pages: Settings → Pages → Build and deployment → Source: GitHub Actions.
+# Подробнее — в site/README.md.
+#
+# Правила те же, что в ci.yml и release.yml (причины — в шапке release.yml): чужие действия только по полному
+# SHA коммита с версией в комментарии, токен только в `env` шага, который зовёт `gh`, строк извне в `run` нет;
+# новое действие или версия — правка списка в packages/desktop/src/release-workflows.test.ts.
+name: Pages
+
+on:
+  push:
+    branches: [master]
+    paths: ['site/**', 'scripts/site/**', '.github/workflows/pages.yml']
+  pull_request:
+    paths: ['site/**', 'scripts/site/**', '.github/workflows/pages.yml']
+  # Новый релиз. Release публикует его токеном репозитория, а событие release от такого токена других workflow не
+  # запускает; workflow_run по завершении Release — запускает.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test the site scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Test the release notes parser
+        run: node --test scripts/site/releases.test.mjs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Snapshot the release list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=8"
+          --jq '[.[] | select((.draft or .prerelease) | not) | {tag_name, name, html_url, published_at, body}]'
+          > site/releases.json
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

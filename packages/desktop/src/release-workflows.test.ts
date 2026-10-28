@@ -22,6 +22,7 @@ const names = readdirSync(workflowsDir).filter((name) => /\.ya?ml$/.test(name));
 const read = (name: string): string => readFileSync(path.join(workflowsDir, name), 'utf8');
 const ci = read('ci.yml');
 const release = read('release.yml');
+const pages = read('pages.yml');
 
 /**
  * Действия, которые workflow вправе брать: каждое — по полному SHA коммита, версия — в комментарии рядом. Подвижный
@@ -32,8 +33,13 @@ const release = read('release.yml');
 const ALLOWED_ACTIONS: Record<string, { sha: string; version: string }> = {
   'actions/cache': { sha: '0057852bfaa89a56745cba8c7296529d2fc39830', version: 'v4.3.0' },
   'actions/checkout': { sha: '11d5960a326750d5838078e36cf38b85af677262', version: 'v4.4.0' },
+  'actions/deploy-pages': { sha: '368f82528645a54fb793d4d04e342629a3f51346', version: 'v5.0.1' },
   'actions/setup-node': { sha: '49933ea5288caeca8642d1e84afbd3f7d6820020', version: 'v4.4.0' },
   'actions/upload-artifact': { sha: 'ea165f8d65b6e75b540449e92b4886f43607fa02', version: 'v4.6.2' },
+  'actions/upload-pages-artifact': {
+    sha: 'fc324d3547104276b827a68afc52ff2a11cc49c9',
+    version: 'v5.0.0',
+  },
   'pnpm/action-setup': { sha: 'b906affcce14559ad1aafd4ab0e942779e9f58b1', version: 'v4.3.0' },
 };
 
@@ -81,8 +87,8 @@ function stepsOf(job: string): string[] {
 const stepName = (step: string): string => /^ {6}- name: (.+)$/m.exec(step)?.[1] ?? '(без имени)';
 
 describe('workflow: общие правила безопасности', () => {
-  it('есть ci.yml и release.yml', () => {
-    expect(names).toEqual(expect.arrayContaining(['ci.yml', 'release.yml']));
+  it('есть ci.yml, release.yml и pages.yml', () => {
+    expect(names).toEqual(expect.arrayContaining(['ci.yml', 'release.yml', 'pages.yml']));
   });
 
   it.each(names)(
@@ -368,6 +374,80 @@ describe('release.yml (V5)', () => {
     expect(referenced.size).toBeGreaterThanOrEqual(4);
     for (const script of referenced)
       expect(existsSync(path.join(repoRoot, script)), script).toBe(true);
+  });
+});
+
+describe('pages.yml (сайт на GitHub Pages)', () => {
+  it('запускается на push в master с изменениями сайта, на pull request, после Release и вручную', () => {
+    expect(pages).toMatch(
+      /^on:\n {2}push:\n {4}branches: \[master\]\n {4}paths: \['site\/\*\*', 'scripts\/site\/\*\*', '\.github\/workflows\/pages\.yml'\]\n {2}pull_request:\n {4}paths: \[[^\n]*'site\/\*\*'[^\n]*\]\n/m,
+    );
+    // Событие release от токена репозитория других workflow не запускает, а завершение Release — запускает.
+    expect(pages).toMatch(
+      /^ {2}workflow_run:\n {4}workflows: \[Release\]\n {4}types: \[completed\]\n/m,
+    );
+    expect(pages).toMatch(/^ {2}workflow_dispatch:\n/m);
+    expect(pages).toMatch(/^permissions:\n {2}contents: read\n(?! )/m);
+  });
+
+  it('задачи: test, затем deploy; test гоняет тесты разбора заметок релиза', () => {
+    const jobs = jobsOf(pages);
+
+    expect([...jobs.keys()]).toEqual(['test', 'deploy']);
+    expect(runScripts(jobs.get('test') ?? '')).toEqual([
+      'node --test scripts/site/releases.test.mjs',
+    ]);
+  });
+
+  it('deploy: после test, только не на pull request и только из master, права pages и id-token, окружение github-pages', () => {
+    const deploy = jobsOf(pages).get('deploy') ?? '';
+
+    expect(deploy).toMatch(/^ {4}needs: test$/m);
+    expect(deploy).toMatch(
+      /^ {4}if: github\.ref == 'refs\/heads\/master' && github\.event_name != 'pull_request'$/m,
+    );
+    expect(deploy).toMatch(
+      /^ {4}permissions:\n {6}contents: read\n {6}pages: write\n {6}id-token: write\n(?! {6})/m,
+    );
+    expect(deploy).toMatch(/^ {4}environment:\n {6}name: github-pages\n/m);
+  });
+
+  it('в Pages уходит папка site; шаги deploy идут по порядку: снимок релизов, загрузка, выкладка', () => {
+    const steps = stepsOf(jobsOf(pages).get('deploy') ?? '');
+
+    expect(steps.map(stepName)).toEqual([
+      'Checkout',
+      'Snapshot the release list',
+      'Upload the site',
+      'Deploy',
+    ]);
+    expect(steps[2]).toMatch(/^ {10}path: site$/m);
+  });
+
+  it('снимок релизов отсекает черновики и пререлизы в jq и пишется токеном только в этом шаге', () => {
+    const step =
+      stepsOf(jobsOf(pages).get('deploy') ?? '').find(
+        (item) => stepName(item) === 'Snapshot the release list',
+      ) ?? '';
+    const script = runScripts(step).join('\n');
+
+    expect(script).toContain('select((.draft or .prerelease) | not)');
+    expect(script).toContain('> site/releases.json');
+    expect(step).toMatch(/^ {10}GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m);
+    expect(pages.match(/secrets\./g)).toHaveLength(1);
+  });
+
+  it('один прогон на ref, выкладку не прерываем', () => {
+    expect(pages).toMatch(
+      /^concurrency:\n {2}group: pages-\$\{\{ github\.ref \}\}\n {2}cancel-in-progress: false\n/m,
+    );
+  });
+
+  it('тест, который гоняет workflow, и снимок в .gitignore лежат в репозитории', () => {
+    expect(existsSync(path.join(repoRoot, 'scripts', 'site', 'releases.test.mjs'))).toBe(true);
+    expect(readFileSync(path.join(repoRoot, '.gitignore'), 'utf8')).toMatch(
+      /^site\/releases\.json$/m,
+    );
   });
 });
 

@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parley — Your agents parley. You decide.</title>
+<meta name="description" content="Parley is a free, open-source macOS app that puts Claude Code, Codex and GLM in one room. Agents discuss your task, a lead brings you one decision, and nothing starts until you accept it.">
+<link rel="canonical" href="https://kalmbik61.github.io/Parley/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://kalmbik61.github.io/Parley/">
+<meta property="og:title" content="Parley — Your agents parley. You decide.">
+<meta property="og:description" content="Parley is a free, open-source macOS app that puts Claude Code, Codex and GLM in one room. Agents discuss your task, a lead brings you one decision, and nothing starts until you accept it.">
+<meta property="og:image" content="https://kalmbik61.github.io/Parley/media/og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Parley — Your agents parley. You decide.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#f5ead8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0d0c" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
+<link rel="preload" href="fonts/Figtree-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/Caprasimo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="styles.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Parley","operatingSystem":"macOS 13 or later","applicationCategory":"DeveloperApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","url":"https://kalmbik61.github.io/Parley/","downloadUrl":"https://github.com/Kalmbik61/Parley/releases"}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs><g id="agent"><circle cy="-184" r="22"/><path d="M-38-126C-38-145-24-157-13-154C-5-151 5-151 13-154C24-157 38-145 38-126Q38-122 34-122H-34Q-38-122-38-126Z"/></g><path id="agent-body" d="M-38-126C-38-145-24-157-13-154C-5-151 5-151 13-154C24-157 38-145 38-126Q38-122 34-122H-34Q-38-122-38-126Z"/><symbol id="parley-logo" viewBox="0 0 1225 512"><g transform="translate(-38 0)"><g class="ink"><circle cx="136" cy="157" r="36"></circle><rect x="88" y="199" width="96" height="251" rx="48"></rect></g><path fill="#A9B78D" d="M202 133H229Q234 133 233 140C226 159 229 180 243 198Q246 204 239 207C226 212 216 216 204 213Q193 211 193 200L196 147Q196 133 202 133Z"></path><path fill="#CF7847" d="M246 133C308 137 357 184 357 246C357 301 325 344 276 361Q269 364 265 357C253 333 237 315 224 306C250 309 273 291 280 268C290 240 274 215 250 205C240 201 237 191 236 177L236 146Q236 134 246 133Z"></path><path fill="#C2A16D" d="M200 298C224 300 247 322 258 351Q263 362 252 362H201Q194 362 194 355V306Q194 298 200 298Z"></path><use href="#agent" fill="#A9B78D" transform="translate(238 248) rotate(0)"></use><use href="#agent" fill="#C2A16D" transform="translate(238 248) rotate(45)"></use><use href="#agent" fill="#A9B78D" transform="translate(238 248) rotate(90)"></use><use href="#agent" fill="#C2A16D" transform="translate(238 248) rotate(135)"></use></g><path class="ink" d="M599.37 238.54Q599.37 253.19 593.83 263.32Q588.29 273.45 578.82 279.76Q569.34 286.08 557.43 288.94Q545.52 291.79 532.65 291.79Q522.76 291.79 513.23 289.77L513.23 302.04Q513.23 307.76 516.09 310.26Q518.95 312.76 522.76 314.37Q526.57 315.98 529.43 318.84Q532.29 321.7 532.29 328.01Q532.29 334.8 528.42 337.9Q524.55 341 518.11 341L452.82 341Q446.51 341 442.58 337.84Q438.65 334.69 438.65 328.01Q438.65 321.94 441.03 318.9Q443.41 315.86 446.63 313.96Q449.85 312.05 452.23 309.55Q454.61 307.04 454.61 302.04L454.61 215.07Q454.61 209.95 452.23 207.38Q449.85 204.82 446.63 202.92Q443.41 201.01 441.03 198.03Q438.65 195.05 438.65 189.1Q438.65 182.42 442.58 179.27Q446.51 176.11 452.82 176.11L514.78 176.11Q529.67 176.11 544.62 179.33Q559.57 182.54 571.96 189.75Q584.36 196.96 591.86 208.99Q599.37 221.03 599.37 238.54ZM543.01 236.75Q543.01 223.29 535.15 213.16Q527.29 203.04 513.23 202.56L513.23 268.09Q514.54 268.21 515.85 268.21Q529.67 268.21 536.34 258.79Q543.01 249.38 543.01 236.75Z M596.92 313.6Q596.92 302.64 602.04 295.31Q607.16 287.98 615.44 283.51Q623.72 279.05 633.37 277.14Q643.02 275.23 651.96 275.23Q654.58 275.23 657.32 275.29Q660.06 275.35 662.68 275.83L662.68 244.85Q662.68 241.88 661.43 237.94Q660.18 234.01 656.37 234.01Q652.67 234.01 651.78 237.05Q650.89 240.09 650.89 242.83Q650.89 244.02 650.95 245.27Q651.01 246.52 651.01 247.83Q651.01 260.1 642.55 265.05Q634.09 269.99 623.25 269.99Q614.19 269.99 607.52 265.94Q600.85 261.89 600.85 251.64Q600.85 247.59 602.46 243.78Q604.06 239.97 606.57 236.99Q613.83 228.17 624.85 223.53Q635.88 218.88 648.09 217.15Q660.3 215.43 671.02 215.43Q683.17 215.43 693.3 218.88Q703.43 222.34 709.5 230.38Q715.58 238.42 715.58 252L715.58 306.93Q715.58 308.95 716.53 310.5Q717.49 312.05 719.75 312.05Q721.54 312.05 722.79 310.92Q724.04 309.79 725.83 309.79Q729.28 309.79 731.01 312.17Q732.74 314.55 732.74 317.77Q732.74 326.11 727.67 332.12Q722.61 338.14 715.1 341.3Q707.6 344.46 699.97 344.46Q691.04 344.46 681.92 340.52Q672.81 336.59 669.35 328.25Q663.28 336.71 652.73 340.58Q642.19 344.46 632.06 344.46Q622.77 344.46 614.73 340.94Q606.69 337.43 601.8 330.52Q596.92 323.61 596.92 313.6ZM650.65 303.11Q650.65 307.88 652.91 312.11Q655.18 316.34 660.66 316.34Q661.73 316.34 662.68 316.1L662.68 291.44Q660.66 290.6 658.51 290.6Q653.98 290.6 652.32 295.07Q650.65 299.54 650.65 303.11Z M797.12 270.35L797.12 305.14Q797.12 312.05 798.73 314.43Q800.34 316.81 807.25 318.24Q813.33 319.44 816.96 321.04Q820.59 322.65 820.59 330.16Q820.59 335.52 817.38 338.26Q814.16 341 808.92 341L746.01 341Q740.89 341 737.55 338.26Q734.22 335.52 734.22 330.16Q734.22 325.87 735.83 323.72Q737.43 321.58 739.52 319.85Q741.6 318.13 743.21 315.33Q744.82 312.53 744.82 306.81L744.82 263.56Q744.82 258.2 742.97 255.52Q741.13 252.84 738.8 251.29Q736.48 249.74 734.63 247.77Q732.79 245.81 732.79 241.88Q732.79 237.23 735.83 234.55Q738.86 231.87 742.79 230.32L772.58 218.52Q775.44 217.33 778.42 216.26Q781.4 215.19 784.61 215.19Q788.78 215.19 790.81 218.34Q792.83 221.5 793.61 225.61Q794.38 229.72 794.74 232.82Q795.1 234.96 795.46 237.11Q795.81 239.25 796.05 241.4Q799.74 230.44 807.43 222.81Q815.11 215.19 828.7 215.19Q838.35 215.19 843.89 219.95Q849.43 224.72 851.81 232.17Q854.19 239.61 854.19 247.95Q854.19 255.7 852.17 262.9Q850.14 270.11 845.08 274.76Q840.01 279.4 830.84 279.4Q820.83 279.4 816.25 276.31Q811.66 273.21 810.35 268.68Q809.04 264.15 808.98 259.63Q808.92 255.1 808.2 252Q807.49 248.9 803.91 248.9Q800.7 248.9 799.27 253.37Q797.84 257.84 797.48 262.96Q797.12 268.09 797.12 270.35Z M908.09 161.81Q912.98 161.81 915.66 165.15Q918.34 168.48 918.34 173.13L918.34 305.14Q918.34 308.59 918.7 311.87Q919.05 315.15 921.68 317.77Q924.89 320.98 927.22 322.95Q929.54 324.92 929.54 330.16Q929.54 335.52 926.2 338.26Q922.87 341 917.74 341L865.32 341Q860.2 341 856.86 338.26Q853.53 335.52 853.53 330.16Q853.53 325.63 855.2 323.55Q856.86 321.46 859.13 319.91Q861.39 318.36 863.06 315.56Q864.73 312.76 864.73 306.69L864.73 210.06Q864.73 204.35 862.82 201.72Q860.91 199.1 858.35 197.73Q855.79 196.36 853.88 194.52Q851.98 192.67 851.98 188.5Q851.98 183.73 855.08 181.11Q858.17 178.49 862.11 176.94L888.67 166.58Q893.44 164.67 898.21 163.24Q902.97 161.81 908.09 161.81Z M1055.52 262.25Q1055.52 272.85 1049.27 278.33Q1043.01 283.81 1032.77 283.81L984.75 283.81Q987.49 294.06 994.52 301.03Q1001.55 308 1014.78 308Q1020.02 308 1025.2 305.79Q1030.38 303.59 1034.97 300.61Q1039.56 297.63 1043.01 295.43Q1046.47 293.22 1048.25 293.22Q1051.71 293.22 1053.26 295.67Q1054.81 298.11 1054.81 301.21Q1054.81 312.05 1049.74 320.21Q1044.68 328.37 1036.4 333.73Q1028.12 339.09 1018.29 341.77Q1008.46 344.46 998.93 344.46Q980.22 344.46 965.93 336.71Q951.63 328.97 943.59 314.97Q935.55 300.97 935.55 282.03Q935.55 261.77 943.35 246.76Q951.15 231.75 965.81 223.47Q980.46 215.19 1000.96 215.19Q1015.13 215.19 1027.58 220.55Q1040.03 225.91 1047.78 236.39Q1055.52 246.88 1055.52 262.25ZM982.61 265.46Q982.61 266.78 982.61 268.09L995 268.09Q999.53 268.09 1001.19 266Q1002.86 263.92 1002.86 259.63Q1002.86 256.77 1002.15 252.12Q1001.43 247.47 999.35 243.78Q997.26 240.09 993.33 240.09Q989.76 240.09 987.61 243.01Q985.47 245.93 984.39 250.27Q983.32 254.62 982.96 258.79Q982.61 262.96 982.61 265.46Z M1107.88 358.63Q1112.4 358.63 1115.02 354.58Q1117.64 350.53 1119.55 345.65L1071.06 252Q1068.92 247.83 1064.51 244.67Q1060.1 241.52 1056.41 238.06Q1052.71 234.61 1052.71 229.72Q1052.71 224.36 1056.05 221.68Q1059.38 219 1064.51 219L1128.25 219Q1133.37 219 1136.71 221.62Q1140.04 224.24 1140.04 229.6Q1140.04 234.37 1137.9 236.63Q1135.75 238.9 1132.95 240.03Q1130.15 241.16 1128.01 242.53Q1125.87 243.9 1125.87 246.76Q1125.87 250.1 1126.94 253.43Q1128.01 256.77 1129.56 259.87L1145.76 292.15L1160.42 261.65Q1162.92 256.41 1162.92 250.45Q1162.92 245.45 1160.48 243.54Q1158.03 241.64 1154.88 240.56Q1151.72 239.49 1149.28 237.29Q1146.83 235.08 1146.83 229.48Q1146.83 224.12 1150.23 221.56Q1153.63 219 1158.63 219L1193.42 219Q1198.54 219 1201.82 221.68Q1205.09 224.36 1205.09 229.72Q1205.09 233.89 1203.54 235.86Q1202 237.82 1199.14 240.45Q1194.01 245.21 1191.39 248.96Q1188.77 252.72 1185.79 259.03L1153.39 327.42Q1148.98 336.71 1144.03 347.25Q1139.09 357.8 1132.66 367.03Q1126.22 376.27 1117.29 382.16Q1108.35 388.06 1095.96 388.06Q1084.52 388.06 1075.29 383.65Q1066.06 379.24 1060.64 370.79Q1055.21 362.33 1055.21 350.41Q1055.21 341.12 1060.04 334.57Q1064.87 328.01 1074.87 328.01Q1081.43 328.01 1085.66 331.11Q1089.88 334.21 1092.68 338.74Q1095.48 343.26 1097.69 347.85Q1099.89 352.44 1102.22 355.54Q1104.54 358.63 1107.88 358.63Z"></path></symbol><symbol id="parley-icon" viewBox="0 0 512 512"><rect width="512" height="512" rx="108" fill="#191814"></rect><g fill="#F2EBDD"><circle cx="136" cy="157" r="36"></circle><rect x="88" y="199" width="96" height="251" rx="48"></rect></g><path fill="#A9B78D" d="M202 133H229Q234 133 233 140C226 159 229 180 243 198Q246 204 239 207C226 212 216 216 204 213Q193 211 193 200L196 147Q196 133 202 133Z"></path><path fill="#CF7847" d="M246 133C308 137 357 184 357 246C357 301 325 344 276 361Q269 364 265 357C253 333 237 315 224 306C250 309 273 291 280 268C290 240 274 215 250 205C240 201 237 191 236 177L236 146Q236 134 246 133Z"></path><path fill="#C2A16D" d="M200 298C224 300 247 322 258 351Q263 362 252 362H201Q194 362 194 355V306Q194 298 200 298Z"></path><use href="#agent" fill="#A9B78D" transform="translate(238 248) rotate(0)"></use><use href="#agent" fill="#C2A16D" transform="translate(238 248) rotate(45)"></use><use href="#agent" fill="#A9B78D" transform="translate(238 248) rotate(90)"></use><use href="#agent" fill="#C2A16D" transform="translate(238 248) rotate(135)"></use></symbol></defs></svg>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header" id="top">
+  <div class="container bar">
+    <a class="logo" href="#top" aria-label="Parley"><svg viewBox="0 0 1225 512" width="77" height="32" aria-hidden="true" focusable="false"><use href="#parley-logo"/></svg></a>
+    <nav aria-label="Main">
+      <ul class="nav-links">
+        <li><a href="#rooms">Rooms</a></li>
+        <li><a href="#island">Island</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#principles">Principles</a></li>
+        <li><a href="#releases">Releases</a></li>
+      </ul>
+    </nav>
+    <div class="bar-actions">
+      <a class="btn btn-secondary btn-sm bar-gh" href="https://github.com/Kalmbik61/Parley">GitHub</a>
+      <a class="btn btn-primary btn-sm" href="#install">Download</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- Hero -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="container hero-copy">
+    <p class="news-pill-wrap"><a class="news-pill" id="news-pill" href="https://github.com/Kalmbik61/Parley/releases/latest"><span id="news-pill-text">See what's new in the latest release</span> <span aria-hidden="true">→</span></a></p>
+    <h1 id="hero-title">Your agents parley.<br><span class="accent">You decide.</span></h1>
+    <p class="lead hero-lead">Parley is a free, open-source Mac app that puts Claude Code, Codex and GLM in one room. They discuss your task, a lead brings you one decision, and no work starts until you accept it.</p>
+    <p class="hero-cta">
+      <a class="btn btn-primary" href="#install">Download for Mac</a>
+      <a class="btn btn-secondary" href="https://github.com/Kalmbik61/Parley">View on GitHub</a>
+    </p>
+    <p class="hero-meta" id="hero-meta">Free · MIT license · macOS 13 or later</p>
+    <ul class="pills" aria-label="Values">
+      <li>Local-only</li>
+      <li>Your own claude, codex &amp; GLM</li>
+      <li>No API keys</li>
+      <li>No telemetry</li>
+    </ul>
+  </div>
+
+  <ul class="swarm" aria-hidden="true">
+    <li class="fig fig-a"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#A9B78D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/claude.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+    <li class="fig fig-b"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#C2A16D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/codex.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+    <li class="fig fig-c"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#A9B78D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/deepseek.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+    <li class="fig fig-d"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#C2A16D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/qwen.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+    <li class="fig fig-e"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#A9B78D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/kimi.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+    <li class="fig fig-f"><svg viewBox="-44 -232 88 112" focusable="false"><use href="#agent-body" fill="#C2A16D"/><circle cy="-192" r="30" fill="#f2ebdd" stroke="#201e1d" stroke-opacity=".14" stroke-width="1.5"/><image href="media/vendors/minimax.svg" x="-18" y="-210" width="36" height="36"/></svg></li>
+  </ul>
+
+  <div class="container hero-stage">
+
+    <figure class="room-fig">
+      <div class="room" id="room-demo">
+        <div class="room-bar">
+          <span class="room-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="room-title">Refunds — Parley</span>
+          <button class="btn btn-secondary btn-sm room-replay" type="button" hidden>Replay</button>
+        </div>
+        <div class="room-body">
+          <aside class="room-side" aria-hidden="true">
+            <p class="side-project"><span class="side-dot"></span><b>shop</b></p>
+            <div class="side-work">
+              <p class="side-work-name">Payments</p>
+              <p class="side-meta">shop · 4 sessions · main</p>
+              <p class="side-room"><span># Refunds</span><span class="side-word" id="side-decision">decision</span></p>
+              <ul class="side-sessions">
+                <li data-agent="s1"><span class="st st-idle"></span>S01 architect <span class="lead-star">★</span><span class="side-state">idle</span></li>
+                <li data-agent="s2"><span class="st st-idle"></span>S02 backend<span class="side-state">idle</span></li>
+                <li data-agent="s3"><span class="st st-idle"></span>S03 review<span class="side-state">idle</span></li>
+                <li data-agent="s4"><span class="st st-idle"></span>S04 tests<span class="side-state">idle</span></li>
+              </ul>
+            </div>
+          </aside>
+          <div class="room-main">
+            <header class="room-head">
+              <p class="room-name">Refunds</p>
+              <p class="room-sub">Created by you · 4 agents · lead S01 · Payments</p>
+            </header>
+            <ul class="members" aria-label="Members">
+              <li class="chip" data-agent="s1"><p class="chip-top"><span class="st st-idle"></span><b>S01 architect</b><span class="lead-star">★</span><span class="chip-state">idle</span></p><p class="chip-sub">Claude Code</p></li>
+              <li class="chip" data-agent="s2"><p class="chip-top"><span class="st st-idle"></span><b>S02 backend</b><span class="chip-state">idle</span></p><p class="chip-sub">Claude Code</p></li>
+              <li class="chip" data-agent="s3"><p class="chip-top"><span class="st st-idle"></span><b>S03 review</b><span class="chip-state">idle</span></p><p class="chip-sub">Codex</p></li>
+              <li class="chip" data-agent="s4"><p class="chip-top"><span class="st st-idle"></span><b>S04 tests</b><span class="chip-state">idle</span></p><p class="chip-sub">GLM</p></li>
+            </ul>
+            <div class="feed" id="room-feed" role="log" aria-label="Room feed">
+              <article class="msg">
+                <span class="av av-you" aria-hidden="true">Y</span>
+                <div class="msg-body">
+                  <p class="msg-head"><b>You</b><span class="to">→ all</span></p>
+                  <p class="msg-text">Add partial refunds to refund.ts. Agree on the rules first, then split the work.</p>
+                </div>
+              </article>
+              <article class="msg">
+                <span class="av av-claude" aria-hidden="true">1</span>
+                <div class="msg-body">
+                  <p class="msg-head"><b>S01 architect</b><span class="lead-star">★</span><span class="to">→ all</span><span class="tag tag-question">question</span></p>
+                  <p class="msg-text">Should partial refunds be capped by the captured amount? <span class="mention">@S02 backend</span>, what does refund.ts do today?</p>
+                </div>
+              </article>
+              <article class="msg">
+                <span class="av av-claude" aria-hidden="true">2</span>
+                <div class="msg-body">
+                  <p class="msg-head"><b>S02 backend</b><span class="to">→ all</span><span class="tag tag-note">note</span></p>
+                  <p class="msg-text">Today it only checks the order total. I'd reject anything above the captured amount with RefundTooLarge and keep the capture currency.</p>
+                </div>
+              </article>
+              <article class="msg">
+                <span class="av av-codex" aria-hidden="true">3</span>
+                <div class="msg-body">
+                  <p class="msg-head"><b>S03 review</b><span class="to">→ all</span><span class="tag tag-note">note</span></p>
+                  <p class="msg-text">Agreed. Add a test for multi-currency captures — that's where it broke last time.</p>
+                </div>
+              </article>
+              <article class="msg">
+                <span class="av av-glm" aria-hidden="true">4</span>
+                <div class="msg-body">
+                  <p class="msg-head"><b>S04 tests</b><span class="to">→ all</span><span class="tag tag-note">note</span></p>
+                  <p class="msg-text">I'll cover it end-to-end: capture in EUR, refund in two parts, then a third one that must fail.</p>
+                </div>
+              </article>
+              <div class="decision" id="room-decision">
+                <p class="decision-head"><span class="av av-claude" aria-hidden="true">1</span><b>S01 architect</b><span class="tag tag-question">decision · waiting for you</span><span class="now">now</span></p>
+                <p class="decision-text">Refunds above the captured amount fail with RefundTooLarge; partial refunds stay in the capture currency. Split: <span class="mention">@S02 backend</span> — refund.ts and a unit test, <span class="mention">@S03 review</span> — the diff, <span class="mention">@S04 tests</span> — e2e.</p>
+                <p class="decision-actions">
+                  <button class="btn btn-primary btn-sm" type="button" disabled>Accept</button>
+                  <button class="btn btn-secondary btn-sm" type="button" disabled>Return for rework</button>
+                </p>
+              </div>
+            </div>
+            <div class="composer">
+              <span class="composer-label">To everyone</span>
+              <div class="composer-row">
+                <input class="composer-input" name="room-message" type="text" disabled placeholder="Write to everyone · type @ to mention an agent" aria-label="Message to everyone">
+                <button class="btn btn-primary btn-sm" type="button" disabled>Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>An illustration of a room. In Parley these are your own Claude Code, Codex and GLM sessions, and the decision really waits for you.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Why Parley -->
+<section class="section section-alt" aria-labelledby="why-title">
+  <div class="container why">
+    <div class="why-copy" data-reveal>
+      <p class="eyebrow">Why Parley</p>
+      <h2 id="why-title">Stop being the courier between models.</h2>
+      <p>Claude Code and Codex are each good at different things, but each one lives in its own terminal and knows nothing about the other. To get a second opinion you copy text between windows, and keeping track of who does what is your job.</p>
+      <p>Parley puts them in one room. They read the same task, discuss it, and one lead brings you a single decision. You keep your own subscriptions and the official CLIs: Parley adds no API keys and no extra bill.</p>
+    </div>
+    <div class="why-cards">
+      <div class="card compare compare-without" data-reveal>
+        <h3>Without Parley</h3>
+        <ul>
+          <li>Copy an answer from one terminal into another</li>
+          <li>Retell each agent what the others decided</li>
+          <li>Flip through tabs so you don't miss a permission prompt</li>
+        </ul>
+      </div>
+      <div class="card compare compare-with" data-reveal>
+        <h3>In a Parley room</h3>
+        <ul>
+          <li>Write the task once — every agent in the room reads it</li>
+          <li>Agents write to each other in one feed you can follow</li>
+          <li>One lead brings one decision: Accept, or Return for rework</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Rooms -->
+<section class="section" id="rooms" aria-labelledby="rooms-title">
+  <div class="container">
+    <div class="rooms-head" data-reveal>
+      <p class="eyebrow">Rooms</p>
+      <h2 id="rooms-title">From a task to a decision you accept.</h2>
+    </div>
+    <div class="rooms-grid">
+      <ol class="steps">
+        <li data-reveal><span class="step-no" aria-hidden="true">01</span><div><h3>Gather a team.</h3><p>Press ⌘T and add two or more agents: Claude Code, Codex or GLM, each with its own model and, if you like, a role and its own git worktree. Star the lead.</p></div></li>
+        <li data-reveal><span class="step-no" aria-hidden="true">02</span><div><h3>Give the task once.</h3><p>Write it in the room and it goes to everyone. Type @ to address only some of them.</p></div></li>
+        <li data-reveal><span class="step-no" aria-hidden="true">03</span><div><h3>Agents discuss.</h3><p>Every member answers with its position. All of them see the whole feed and write to each other through Parley; a sleeping agent wakes up when a message comes for it.</p></div></li>
+        <li data-reveal><span class="step-no" aria-hidden="true">04</span><div><h3>The lead brings a decision.</h3><p>It collects the positions and proposes one decision. The card waits for you: Accept, or Return for rework with a note.</p></div></li>
+        <li data-reveal><span class="step-no" aria-hidden="true">05</span><div><h3>The work is handed out.</h3><p>Once you accept, the lead gives out the parts and the agents start. Open any agent's terminal with a click and review the result in Changes: diff, commit, merge.</p></div></li>
+      </ol>
+      <figure class="shot" data-reveal>
+        <picture>
+          <source srcset="media/room-decision-dark.webp" media="(prefers-color-scheme: dark)">
+          <img src="media/room-decision-light.webp" width="1400" height="900" loading="lazy" alt="A Parley room: four agents discuss refunds and the lead's decision waits with Accept and Return for rework">
+        </picture>
+        <figcaption>A real room in Parley.</figcaption>
+      </figure>
+    </div>
+
+    <h3 class="modes-title" data-reveal>Four modes, from a talk to a plan that runs itself.</h3>
+    <ul class="modes">
+      <li class="card" data-reveal><div class="sample" aria-hidden="true"><p class="mode-bubble">Refunds above the captured amount fail with RefundTooLarge.</p></div><h4>Free</h4><p>The decision is plain text.</p></li>
+      <li class="card" data-reveal><div class="sample" aria-hidden="true"><p class="chk"><i class="cb on">✓</i><span>refund.ts</span><span class="mention">@S02</span></p><p class="chk"><i class="cb"></i><span>e2e</span><span class="mention">@S04</span></p></div><h4>Checklist</h4><p>The decision is a plan with owners, and Parley wakes them in turn.</p></li>
+      <li class="card" data-reveal><div class="sample" aria-hidden="true"><p class="chk"><i class="cb on">✓</i><span>refund.ts</span><span class="mention">@S02</span></p><p class="chk"><i class="cb"></i><span>e2e</span><span class="mention">@S04</span></p><p class="sample-tag"><span class="tag tag-decision">verified</span></p></div><h4>Verified</h4><p>Every item has acceptance criteria and an independent verifier; you accept the summary.</p></li>
+      <li class="card" data-reveal><div class="sample" aria-hidden="true"><p class="attempt"><i class="spin-dot"></i>Attempt 2 · Checking · lint</p></div><h4>Autonomous <span class="tag tag-question">New in 0.22</span></h4><p>After your Go, the host runs each item in an isolated clone, checks it on the exact commit, has a verifier judge the criteria and merges accepted attempts into an integration branch. You accept the result.</p></li>
+    </ul>
+    <p class="muted-note" data-reveal>Recipes fill in a room for you: Plan &amp; build, Review and Debug are built in, and a project can add its own.</p>
+  </div>
+</section>
+
+<!-- Watch -->
+<section class="section section-alt" aria-labelledby="watch-title">
+  <div class="container">
+    <div class="center-head" data-reveal>
+      <p class="eyebrow">Demo</p>
+      <h2 id="watch-title">A minute of Parley.</h2>
+      <p class="lead">Rooms, the island and the built-in browser, recorded in the app.</p>
+    </div>
+    <div class="video-frame" data-reveal>
+      <video controls preload="none" playsinline poster="media/parley-demo-poster.webp" width="1280" height="720">
+        <source src="media/parley-demo.mp4" type="video/mp4">
+        <a href="media/parley-demo.mp4">Download the demo video</a>
+      </video>
+    </div>
+  </div>
+</section>
+
+<!-- Island and assistant -->
+<section class="island" id="island" aria-labelledby="island-title">
+  <div class="container">
+    <div class="island-head" data-reveal>
+      <p class="eyebrow">The island</p>
+      <h2 id="island-title">Answer your agents without switching windows.</h2>
+      <p class="lead">The island is a black panel at the top of the screen. On a MacBook with a notch it is exactly the size of the notch until something needs you; then it drops down with a card.</p>
+    </div>
+    <div class="island-grid">
+      <div class="island-demo" data-reveal>
+        <div class="screen" id="island-demo">
+          <div class="notch" aria-hidden="true"></div>
+          <div class="isl" id="island-card" role="group" aria-label="The island showing a permission request">
+            <div class="isl-cap" aria-hidden="true"><span class="cap-swarm"><i></i><i></i><i></i><i></i></span><span class="cap-n">2</span></div>
+            <div class="isl-body">
+              <div class="isl-panel" data-label="The island showing a permission request">
+                <div class="isl-head">
+                  <span class="isl-who"><b>S04 tests</b> <span class="isl-dim">· shop</span></span>
+                  <span class="isl-pill">CLAUDE CODE</span>
+                  <span class="isl-n isl-dim">1 of 2</span>
+                </div>
+                <p class="isl-code"><span class="isl-tool">Bash</span> pnpm test:e2e refunds</p>
+                <p class="isl-actions"><span class="isl-btn isl-btn-main">Allow</span><span class="isl-btn">Always</span><span class="isl-btn">Deny</span></p>
+              </div>
+              <div class="isl-panel" data-label="The island showing a question from an agent" hidden>
+                <div class="isl-head">
+                  <span class="isl-who"><b>S02 backend</b> <span class="isl-dim">· shop</span></span>
+                  <span class="isl-n isl-dim">Question 1 of 2</span>
+                </div>
+                <p class="isl-text">Which currency should the e2e capture use?</p>
+                <p class="isl-opts"><span class="isl-opt isl-opt-on">EUR — the store's default</span><span class="isl-opt">USD</span><span class="isl-opt">Other</span></p>
+                <p class="isl-actions"><span class="isl-btn">Back</span><span class="isl-btn isl-btn-main">Next</span></p>
+              </div>
+              <div class="isl-panel" data-label="The island showing a room that waits for you" hidden>
+                <div class="isl-head">
+                  <span class="isl-who"><b># Refunds</b> <span class="isl-dim">· shop</span></span>
+                </div>
+                <p class="isl-text">S01 architect brings a decision. It waits for you.</p>
+                <p class="isl-actions"><span class="isl-btn isl-btn-main">Open room</span></p>
+              </div>
+              <div class="isl-panel" data-label="The island showing a finished turn" hidden>
+                <div class="isl-head">
+                  <span class="isl-who"><span class="isl-check">✓</span> <b>S02 backend</b> <span class="isl-dim">· shop</span></span>
+                  <span class="isl-n isl-dim">now</span>
+                </div>
+                <p class="isl-text">Done: refund.ts and a unit test, all green.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="island-dots" role="group" aria-label="Island states">
+          <button type="button" aria-label="Show a permission request" aria-current="true"></button>
+          <button type="button" aria-label="Show a question"></button>
+          <button type="button" aria-label="Show a room waiting for you"></button>
+          <button type="button" aria-label="Show a finished turn"></button>
+        </p>
+      </div>
+      <ul class="island-list" data-reveal>
+        <li>Allow, Always or Deny a permission request.</li>
+        <li>Answer an agent's questions — up to four at once, with options or your own answer. <span class="tag tag-new">New in 0.22</span></li>
+        <li>Approve a plan, see what an agent is doing right now and which subagents it runs. <span class="tag tag-new">New in 0.22</span></li>
+        <li>Open a room whose decision waits for you.</li>
+        <li>Control+Alt+I walks through everything pending from the keyboard. <span class="tag tag-new">New in 0.22</span></li>
+        <li>Short sounds synthesized on the fly, no sound files. Reduce motion stills it all.</li>
+      </ul>
+    </div>
+
+    <div class="island-cards">
+      <article class="icard" data-reveal>
+        <div class="assist-demo" aria-hidden="true">
+          <p class="assist-key"><kbd>⌥ Space</kbd></p>
+          <p class="bubble bubble-q">Who's waiting for me?</p>
+          <p class="bubble bubble-a">Two things: S04 tests asks to run pnpm test:e2e, and the Refunds room has a decision for you.</p>
+        </div>
+        <h3>Ask the assistant. It acts only on your click.</h3>
+        <p>Press ⌥Space or click the swarm and ask about your agents, works and rooms. The assistant sees every open work, room and session. It prepares cards — a letter, a room, an answer to an agent, a whole plan of new agents — and nothing happens until you confirm. It runs on your own subscription: each question is a short CLI run, not an API call.</p>
+        <p>With Speak answers on, it talks in a neural voice: Qwen3-TTS, run on your Mac by speech.cpp, with five voices. Its swarm becomes a face whose mouth follows the voice. No text or audio leaves your Mac for the voice.</p>
+      </article>
+      <article class="icard" data-reveal>
+        <div class="assist-demo" aria-hidden="true">
+          <p class="tg-from">Parley bot</p>
+          <p class="bubble bubble-a">S04 tests asks to run: pnpm test:e2e refunds</p>
+          <p class="tg-btns"><span>Allow</span><span>Deny</span><span>Answer</span></p>
+        </div>
+        <h3>Your agents in your pocket.</h3>
+        <p>Link your own Telegram bot. Requests that need you arrive as cards with Allow, Deny and Answer buttons; finished turns and letters come as messages; voice messages go to the assistant and are transcribed on your Mac by Whisper. One bot, one owner: strangers get no reply.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="section" id="features" aria-labelledby="features-title">
+  <div class="container">
+    <div class="rooms-head" data-reveal>
+      <p class="eyebrow">Features</p>
+      <h2 id="features-title">Everything around the room.</h2>
+    </div>
+    <div class="bento">
+      <article class="card f f1" data-reveal>
+        <div class="sample sample-pills">
+          <span class="pill"><img class="vl" src="media/vendors/claude.svg" alt="" width="16" height="16">Claude Code</span><span class="pill"><img class="vl" src="media/vendors/codex.svg" alt="" width="16" height="16">Codex</span><span class="pill"><i class="pd pd-glm"></i>GLM</span><span class="pill"><img class="vl" src="media/vendors/kimi.svg" alt="" width="16" height="16">Kimi</span><span class="pill"><img class="vl" src="media/vendors/minimax.svg" alt="" width="16" height="16">MiniMax</span><span class="pill"><img class="vl" src="media/vendors/qwen.svg" alt="" width="16" height="16">Qwen</span><span class="pill"><img class="vl" src="media/vendors/deepseek.svg" alt="" width="16" height="16">DeepSeek</span><span class="pill"><img class="vl" src="media/vendors/openrouter.svg" alt="" width="16" height="16">OpenRouter</span><span class="pill">Claude Code 2</span><span class="pill pill-dash">+ your own</span>
+        </div>
+        <h3>Any mix of agents</h3>
+        <p>Claude Code, Codex and GLM work side by side, each with its own model, role and, if you like, its own git worktree. Add any Anthropic-compatible provider — Kimi, MiniMax, Qwen, DeepSeek, OpenRouter or your own address — or a second Claude Code account with its own sign-in and limits.</p>
+      </article>
+      <article class="card f f2" data-reveal>
+        <div class="sample sample-browser" aria-hidden="true">
+          <div class="mini-bar"><i></i><i></i><i></i><span class="addr">localhost:5173</span></div>
+          <div class="mini-page"><p class="mini-h">Checkout</p><span class="mini-line"></span><span class="mini-line mini-short"></span><div class="amber-box"><span class="amber-tag">S02 backend · Stop</span><span class="btn btn-primary btn-sm">Pay $48.00</span></div></div>
+        </div>
+        <h3>A browser your agents can drive</h3>
+        <p>Agents open pages, click, type, read the page and take screenshots — only in the browser panels of their own chat and rooms; your own tabs stay closed to them. Secrets in addresses, logs and form fields are masked.</p>
+      </article>
+      <article class="card f f3" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <p class="file-row"><span class="mono">refund.ts</span><span class="add">+42</span><span class="del">−7</span></p>
+          <p class="file-row"><span class="mono">refund.test.ts</span><span class="add">+88</span></p>
+          <p class="sample-btn"><span class="btn btn-primary btn-sm">Merge into main</span></p>
+        </div>
+        <h3>Changes: diff, commit, merge</h3>
+        <p>Give an agent its own git worktree, then review its diff, commit and merge without leaving the window. With git 2.38 or newer you see conflicts before you merge.</p>
+      </article>
+      <article class="card f f4" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <p class="srow srow-need"><span class="st st-need"></span>S02 backend<span class="srow-word">needs you · approval</span></p>
+          <p class="srow"><span class="st st-idle"></span>S03 review<span class="srow-word">usage limit until 19:27</span></p>
+        </div>
+        <h3>Agents say why they wait</h3>
+        <p>A session that needs you shows the reason: an approval, a question, a usage limit, a sign-in. The room hears about it too, and after a usage limit resets Parley brings the session back.</p>
+      </article>
+      <article class="card f f5" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <p class="file-chip mono">PARLEY.md</p>
+          <p class="role-pills"><span class="pill">Planner</span><span class="pill">Critic</span><span class="pill">Executor</span><span class="pill">Reviewer</span><span class="pill">Debugger</span></p>
+        </div>
+        <h3>Your team's rules</h3>
+        <p>Write the rules once in PARLEY.md and every agent Parley launches in the project gets them. Built-in roles give each agent its job, a lead can start new sessions itself, and plans come with a backlog, memory and search.</p>
+      </article>
+      <article class="card f f6" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <div class="reply-bubble"><p>Reject anything above the captured amount:</p><pre class="code-snip">throw new RefundTooLarge()</pre><p class="bubble-actions">Reply · Copy</p></div>
+        </div>
+        <h3>Chat or terminal</h3>
+        <p>Every session is the real CLI in a real terminal. Chat view shows the same session as a conversation, with Reply quotes, code Copy and links that open in Parley's browser.</p>
+      </article>
+      <article class="card f f7" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <p class="usage-total"><span class="chip-mono">↑1.2M ↓84k</span></p>
+          <p class="usage-row"><span>Claude Code</span><span class="mono">↑820k ↓51k</span></p>
+          <p class="usage-row"><span>Codex</span><span class="mono">↑310k ↓24k</span></p>
+          <p class="usage-row"><span>GLM</span><span class="mono">↑70k ↓9k</span></p>
+        </div>
+        <h3>Token usage in every room</h3>
+        <p>The room header shows how many tokens its members used, with a breakdown by provider and by session. What a CLI doesn't report stays "?" instead of turning into zero.</p>
+      </article>
+      <article class="card f f8" data-reveal>
+        <div class="sample" aria-hidden="true">
+          <p class="keys"><kbd>⌘</kbd><kbd>J</kbd></p>
+          <p class="dictate"><i class="rec"></i>Dictating 0:04</p>
+        </div>
+        <h3>⌘J and your voice</h3>
+        <p>The command palette finds any workspace, session or action. Dictate messages and rework notes: speech is transcribed on your Mac by Whisper.</p>
+      </article>
+      <article class="card f f9" data-reveal>
+        <div class="f9-copy">
+          <h3>Fast with long works</h3>
+          <p>Works live in one SQLite database, and a letter reaches the window as about 1.5 KB instead of a full refresh. On a test stand, 60 letters into a room of three caused 0 full refreshes instead of 60, and sent 88 KB to the window instead of 11 MB.</p>
+        </div>
+        <dl class="f9-nums">
+          <div><dt class="num">0</dt><dd>full refreshes, was 60</dd></div>
+          <div><dt class="num">88 KB</dt><dd>to the window, was 11 MB</dd></div>
+        </dl>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- Principles -->
+<section class="section section-alt" id="principles" aria-labelledby="principles-title">
+  <div class="container principles">
+    <div class="principles-head" data-reveal>
+      <p class="eyebrow">Principles</p>
+      <h2 id="principles-title">You stay in charge.</h2>
+    </div>
+    <div class="principles-body">
+      <ol class="rules">
+        <li data-reveal><span class="rule-no" aria-hidden="true">01</span><div><h3>Nothing starts without you.</h3><p>No YOLO flags. No work before you accept the decision. Parley never closes a session or puts it to sleep on its own, and quitting asks first.</p></div></li>
+        <li data-reveal><span class="rule-no" aria-hidden="true">02</span><div><h3>Your CLIs, your login.</h3><p>Parley starts the unmodified claude and codex from your PATH, signed in as you. It never reads or stores their credentials, makes no requests to the Anthropic or OpenAI APIs, and adds no API keys and no extra bill.</p></div></li>
+        <li data-reveal><span class="rule-no" aria-hidden="true">03</span><div><h3>Local only.</h3><p>The window and parley-host talk over a unix socket with its own handshake token; nothing is reachable from the network. No server, no telemetry. Parley's own requests are a once-a-day release check on GitHub, which you can turn off, and, for GLM, a quota query to Z.ai.</p></div></li>
+        <li data-reveal><span class="rule-no" aria-hidden="true">04</span><div><h3>Voice stays on your Mac.</h3><p>Dictation runs on Whisper and the assistant's voice on Qwen3-TTS, both on your Mac: no text or audio leaves it for them.</p></div></li>
+        <li data-reveal><span class="rule-no" aria-hidden="true">05</span><div><h3>Honest release notes.</h3><p>Every release says what is not proven yet.</p></div></li>
+      </ol>
+      <figure class="quote" id="quote" data-reveal>
+        <blockquote><p id="quote-text">Autonomous rooms passed their tests with stub agents; the pilot on real agents was stopped and a full live cycle has not been run.</p></blockquote>
+        <figcaption><a id="quote-source" href="https://github.com/Kalmbik61/Parley/releases/tag/v0.22.0">— from the Parley 0.22.0 release notes</a></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section class="section" aria-labelledby="how-title">
+  <div class="container">
+    <div class="rooms-head" data-reveal>
+      <p class="eyebrow">How it works</p>
+      <h2 id="how-title">Official CLIs in a local app.</h2>
+    </div>
+    <div class="diagram" data-reveal>
+      <div class="card node"><h3>Parley.app</h3><p>The window</p><p class="node-pills"><span class="pill">Terminal</span><span class="pill">Rooms</span><span class="pill">Files</span><span class="pill">Changes</span><span class="pill">Browser</span></p></div>
+      <p class="link"><span>unix socket · handshake token</span></p>
+      <div class="card node"><h3>parley-host</h3><p>Runs every agent's terminal and outlives the window</p><p class="mono node-path">~/.parley/parley.db</p></div>
+      <p class="link"><span>PTY + MCP</span></p>
+      <div class="card node"><h3>Your CLIs</h3><p class="node-pills"><span class="pill mono"><img class="vl" src="media/vendors/claude.svg" alt="" width="16" height="16">claude</span><span class="pill mono"><img class="vl" src="media/vendors/codex.svg" alt="" width="16" height="16">codex</span><span class="pill mono">GLM via claude</span><span class="pill"><img class="vl" src="media/vendors/kimi.svg" alt="" width="16" height="16">Kimi</span><span class="pill"><img class="vl" src="media/vendors/minimax.svg" alt="" width="16" height="16">MiniMax</span><span class="pill"><img class="vl" src="media/vendors/qwen.svg" alt="" width="16" height="16">Qwen</span><span class="pill"><img class="vl" src="media/vendors/deepseek.svg" alt="" width="16" height="16">DeepSeek</span><span class="pill"><img class="vl" src="media/vendors/openrouter.svg" alt="" width="16" height="16">OpenRouter</span><span class="pill pill-dash">+ your own</span></p></div>
+    </div>
+    <ul class="how-points">
+      <li data-reveal><h3>One host for every terminal.</h3><p>parley-host runs the agents' terminals and outlives the window: close the window and they keep working.</p></li>
+      <li data-reveal><h3>Agents talk through Parley.</h3><p>Every agent gets Parley's MCP server: it reads the shared workspace map, sends and reads messages, and proposes decisions.</p></li>
+      <li data-reveal><h3>Mail waits for the turn.</h3><p>The host types a short pointer into an agent's terminal only after it finishes its turn, and only urgent mail wakes an idle agent at once.</p></li>
+      <li data-reveal><h3>One database.</h3><p>Works, letters and rooms live in one SQLite database on your Mac.</p></li>
+    </ul>
+  </div>
+</section>
+
+<!-- Releases -->
+<section class="section section-alt" id="releases" aria-labelledby="releases-title">
+  <div class="container">
+    <div class="rooms-head" data-reveal>
+      <p class="eyebrow">Releases</p>
+      <h2 id="releases-title">Shipping in the open.</h2>
+      <p class="lead">Release notes straight from GitHub: what was added, what changed and what is not proven yet.</p>
+    </div>
+    <div class="releases-grid" id="releases-list">
+      <div class="card release-fallback">
+        <p>The release list didn't load. The notes are on GitHub.</p>
+        <p><a class="btn btn-secondary btn-sm" href="https://github.com/Kalmbik61/Parley/releases">Open releases on GitHub</a></p>
+      </div>
+    </div>
+    <p class="releases-links"><a href="https://github.com/Kalmbik61/Parley/releases">All releases on GitHub →</a> <a href="https://github.com/Kalmbik61/Parley/blob/master/CHANGELOG.md">Changelog</a></p>
+  </div>
+</section>
+
+<!-- Install -->
+<section class="section" id="install" aria-labelledby="install-title">
+  <div class="container">
+    <div class="rooms-head" data-reveal>
+      <p class="eyebrow">Install</p>
+      <h2 id="install-title">Up and running in three steps.</h2>
+    </div>
+    <ol class="install-steps">
+      <li class="card istep" data-reveal>
+        <span class="num" aria-hidden="true">1</span>
+        <h3>Download</h3>
+        <p>Pick the build for your Mac, about 200 MB. Open the .dmg and drag Parley to Applications.</p>
+        <p class="istep-btns">
+          <a class="btn btn-primary" href="https://github.com/Kalmbik61/Parley/releases/latest/download/parley-macos-arm64.dmg">Apple Silicon</a>
+          <a class="btn btn-secondary" href="https://github.com/Kalmbik61/Parley/releases/latest/download/parley-macos-x64.dmg">Intel</a>
+        </p>
+        <p class="small muted">Not sure? Apple menu → About This Mac shows "Chip" on Apple Silicon and "Processor" on Intel.</p>
+      </li>
+      <li class="card istep" data-reveal>
+        <span class="num" aria-hidden="true">2</span>
+        <h3>Allow the first launch</h3>
+        <p>Parley is not signed with an Apple Developer ID yet, so macOS blocks the first launch. Run this once in Terminal:</p>
+        <div class="codebox">
+          <code id="quarantine-cmd">xattr -dr com.apple.quarantine /Applications/Parley.app</code>
+          <button class="btn btn-sm copy-btn" type="button" data-copy="#quarantine-cmd">Copy</button>
+          <span class="visually-hidden" id="copy-status" aria-live="polite"></span>
+        </div>
+        <p class="small muted">Or open System Settings → Privacy &amp; Security and click Open Anyway.</p>
+      </li>
+      <li class="card istep" data-reveal>
+        <span class="num" aria-hidden="true">3</span>
+        <h3>Start</h3>
+        <ul class="start-list">
+          <li><kbd>⌘N</kbd><span>A new workspace: choose a project folder.</span></li>
+          <li><kbd>⌘T</kbd><span>A new session, or a room of two or more agents.</span></li>
+          <li><span class="start-arrow" aria-hidden="true"></span><span>Write the task in the room and wait for the lead's decision.</span></li>
+        </ul>
+      </li>
+    </ol>
+    <div class="card needs" data-reveal>
+      <h3>What you need</h3>
+      <ul>
+        <li>macOS 13 (Ventura) or later, on Apple Silicon or Intel.</li>
+        <li>At least one agent CLI, installed and signed in: Claude Code or Codex. GLM runs through Claude Code with a GLM Coding Plan and a Z.ai API key.</li>
+        <li>git in your PATH.</li>
+        <li>Node.js is not needed: the app carries its own.</li>
+      </ul>
+    </div>
+    <p class="muted-note" data-reveal>Parley checks GitHub once a day and shows a toast when a new release is out. It does not update itself.</p>
+  </div>
+</section>
+
+<!-- Final call -->
+<section class="section section-alt final" aria-labelledby="final-title">
+  <div class="container">
+    <div class="final-card" data-reveal>
+      <svg class="final-icon" viewBox="0 0 512 512" width="72" height="72" aria-hidden="true" focusable="false"><use href="#parley-icon"/></svg>
+      <h2 id="final-title">Put your agents in one room.</h2>
+      <p>Free and open source under the MIT License.</p>
+      <p class="hero-cta">
+        <a class="btn btn-primary" href="#install">Download for Mac</a>
+        <a class="btn btn-secondary" href="https://github.com/Kalmbik61/Parley">Star on GitHub</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container foot">
+    <div class="foot-brand">
+      <p class="foot-name"><svg viewBox="0 0 512 512" width="28" height="28" aria-hidden="true" focusable="false"><use href="#parley-icon"/></svg><span>Parley</span></p>
+      <p class="small muted">© <span id="year">2026</span> · MIT License</p>
+    </div>
+    <ul class="foot-links">
+      <li><a href="https://github.com/Kalmbik61/Parley">GitHub</a></li>
+      <li><a href="https://github.com/Kalmbik61/Parley/releases">Releases</a></li>
+      <li><a href="https://github.com/Kalmbik61/Parley/blob/master/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://github.com/Kalmbik61/Parley/blob/master/LICENSE">License</a></li>
+      <li><a href="https://github.com/Kalmbik61/Parley/blob/master/NOTICE">Notice</a></li>
+    </ul>
+    <p class="small muted foot-note">This page sets no cookies, has no analytics and loads nothing from other sites. It was planned and built by agents working in Parley.</p>
+    <p class="small muted foot-note">Claude, Codex, GLM, DeepSeek, Kimi, MiniMax, OpenRouter and Qwen names and logos are trademarks of their owners. Parley is not affiliated with or endorsed by them.</p>
+  </div>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

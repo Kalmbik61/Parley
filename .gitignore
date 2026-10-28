@@ -18,3 +18,5 @@ packages/desktop/build/whisper/
 packages/desktop/build/speech/
 test-results/
 **/.omc/state/
+# Снимок релизов для сайта: его пишет workflow Pages (см. site/README.md), в git он не нужен.
+site/releases.json
