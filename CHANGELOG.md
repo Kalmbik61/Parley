@@ -4,6 +4,23 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.24.0
+
+The assistant's voice can use the larger Qwen3-TTS 1.7B model, and sleeping sessions are marked with 💤 in the sidebar.
+
+### Added
+
+- **Qwen3-TTS 1.7B voice.** Settings → Assistant → Voice lists the 0.6B and 1.7B models, each with its own Download, Cancel, Delete and progress. The assistant speaks with the largest downloaded model; nothing downloads on its own. ([#132](https://github.com/Kalmbik61/Parley/pull/132))
+- Sleeping sessions (no process; Resume wakes them) show 💤 in the sidebar instead of their last result's glyph, with an "Asleep" tooltip. The state word still says done, failed or asleep. ([#131](https://github.com/Kalmbik61/Parley/pull/131))
+
+### Fixed
+
+- A re-opened Settings window no longer keeps stale download progress and Cancel after a voice model finishes downloading or is removed. A model that finishes downloading mid-sentence takes over from the next sentence instead of cutting the current one. ([#132](https://github.com/Kalmbik61/Parley/pull/132))
+
+### What is not proven yet
+
+- How fast the 1.7B voice speaks on a real machine has not been measured.
+
 ## 0.23.0
 
 The assistant gets hands: it sees every work, room and session, reads them for you and prepares a plan of actions you confirm with one click. Chat and rooms learn Reply quotes, code Copy and path links, the sidebar nests agent-created sessions under their creator, and default limits are higher.
