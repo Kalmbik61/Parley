@@ -17,6 +17,9 @@ export const ASSISTANT_PATH = '/assistant';
 export const ASSISTANT_TOOL_NAMES = [
   'parley_overview',
   'parley_detail',
+  'parley_find',
+  'parley_room',
+  'parley_session',
   'propose_message',
   'propose_room',
   'propose_decision',

@@ -84,6 +84,12 @@ describe('historyText', () => {
     expect(text).not.toContain('  · read: f8');
     expect(text).toContain('  · …and 4 more tool calls');
   });
+  it('ответ из одних пробелов не запись «Agent:»', () => {
+    const { text } = historyText('h', [prompt('go'), reply('  \n\t '), reply('done', 'text:done')], {}) as { text: string };
+    expect(text).toContain('Asked: go');
+    expect(text).toContain('Agent: done');
+    expect(text.match(/Agent:/g)).toHaveLength(1);
+  });
   it('курсор назад до начала: 60 записей — три страницы', () => {
     let page = historyText('h', items30, {}) as { text: string };
     let pages = 1;

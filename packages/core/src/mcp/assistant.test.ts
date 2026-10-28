@@ -15,12 +15,15 @@ async function connect(fetch: typeof globalThis.fetch): Promise<Client> {
 const reply = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 describe('parley-mcp в режиме помощника', () => {
-  it('отдаёт десять инструментов в заданном порядке', async () => {
+  it('отдаёт тринадцать инструментов в заданном порядке', async () => {
     const client = await connect(vi.fn());
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
       'parley_overview',
       'parley_detail',
+      'parley_find',
+      'parley_room',
+      'parley_session',
       'propose_message',
       'propose_room',
       'propose_decision',
@@ -41,6 +44,8 @@ describe('parley-mcp в режиме помощника', () => {
     expect(byName('propose_room').inputSchema.required).toEqual(['work', 'title', 'members']);
     expect(byName('list_reminders').annotations).toEqual({ readOnlyHint: true });
     expect(byName('cancel_reminder').description).toContain('*');
+    expect(byName('parley_find').inputSchema.required).toEqual(['query']);
+    expect(byName('parley_room').annotations).toEqual({ readOnlyHint: true });
   });
   it('propose_room уходит POST на /propose_room', async () => {
     const fetch = vi.fn().mockResolvedValue(reply(200, { text: 'Card prepared' }));

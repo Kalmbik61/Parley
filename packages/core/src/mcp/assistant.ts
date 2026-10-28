@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): десять инструментов, каждый — POST в маршрут хоста
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): тринадцать инструментов, каждый — POST в маршрут хоста
  * `/assistant/<имя>` с токеном разговора. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -23,6 +23,51 @@ export const ASSISTANT_TOOLS: Tool[] = [
     name: 'parley_detail',
     description: 'Details of one room (plan items and the last messages) or one session (its last reply and what it waits for).',
     inputSchema: { type: 'object', properties: { target: TARGET }, required: ['target'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'parley_find',
+    description:
+      "Search works, projects, rooms and sessions by the person's words: names, project folders, roles, tasks and summaries. Spelling and alphabet may differ (Сканум finds scanum). include_closed also searches closed sessions and archived rooms and works.", // cyrillic-ok: пример транслита для модели
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: "The person's words to look for." },
+        include_closed: { type: 'boolean', description: 'Also search closed sessions and archived rooms and works.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'parley_room',
+    description: 'The whole room: members, lead, decision, plan and the messages in full, newest page first. before (from the last reply) pages back to older messages. Works for archived rooms too.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: TARGET,
+        before: { type: 'number', description: 'The number from the last reply: show messages older than that.' },
+        limit: { type: 'number', description: 'How many messages to show (30 by default, 50 at most).' },
+      },
+      required: ['target'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'parley_session',
+    description: 'The history of one agent session: what it was asked, what it answered and which tools it ran, newest page first. before (from the last reply) pages back. Works for closed sessions too.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: TARGET,
+        before: { type: 'string', description: 'The cursor from the last reply: show entries older than that.' },
+        limit: { type: 'number', description: 'How many entries to show (20 by default, 50 at most).' },
+      },
+      required: ['target'],
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: true },
   },
   {

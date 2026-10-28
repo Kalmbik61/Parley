@@ -44,6 +44,11 @@ describe('промпт и версии', () => {
     // Пример больше не начинается с радости приветствия: спокойный тон — по умолчанию.
     expect(prompt).not.toContain('[[joy]] Hi!');
   });
+  it('промпт: поиск и чтение, без «не показано»', () => {
+    const prompt = assistantPrompt('ru');
+    expect(prompt).toContain('call parley_find with their words before saying you do not know');
+    expect(prompt).toContain('never tell the person that something is not shown');
+  });
   it('строка рода по голосу для трёх родов (G1), по умолчанию — женский', () => {
     const female = '- You speak as a female assistant; in languages with grammatical gender use feminine forms for yourself (in Russian: «я проверила», «подготовила», never «я проверил»).';
     const male = '- You speak as a male assistant; in languages with grammatical gender use masculine forms for yourself (in Russian: «я проверил», «подготовил»).';

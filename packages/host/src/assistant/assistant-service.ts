@@ -6,6 +6,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import {
   ASSISTANT_DEFAULT_MODELS,
@@ -30,6 +31,7 @@ import {
   type AssistantLanguage,
   type FeedCard,
   type FeedDecision,
+  type FeedItem,
   type ProviderEntry,
   type SessionLifecycle,
   type WorkMap,
@@ -41,13 +43,16 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
 import type { WorksService } from '../works/works-service.js';
+import { findText } from './find.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
 import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
+import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
+import { historyText } from './session-history.js';
 import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js';
 
 export const ASSISTANT_IDLE_MS = 15 * 60_000;
-export const ASSISTANT_TURN_MS = 60_000;
+export const ASSISTANT_TURN_MS = 180_000;
 const MAX_TEXT = 4000;
 const MAX_TITLE = 80;
 const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.';
@@ -175,6 +180,19 @@ const roomTailOf: OverviewSource['roomTail'] = (entry, roomId, count) => {
   }
 };
 
+/** Страница писем комнаты из базы работы, от новых к старым; работы в базе нет — писем нет. */
+const letterPageOf: LetterPage = (entry, roomId, query) => {
+  try {
+    return readLetters(entry.projectPath, entry.map.work.id, { roomId, ...query, newestFirst: true });
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return [];
+    throw error;
+  }
+};
+
+/** Скрытые цели (закрытые сессии, архив) — только для инструментов чтения и `parley_detail`: их находят по точному id или имени. */
+const hiddenOf = (src: OverviewSource): AssistantTarget[] => targetsOf(src, { hidden: true }).filter((target) => target.hidden !== undefined);
+
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
 /** Эмоция первой фразы: отметка в самом начале ответа; нет её — `calm`. */
 const firstMood = (moods: readonly MoodMark[]): AssistantMood => (moods[0]?.at === 0 ? moods[0].mood : 'calm');
@@ -221,11 +239,11 @@ const hostSummary = (card: FeedCard, projectPath: string): string => {
 };
 const stringArg = (input: Record<string, unknown>, key: string): string => (typeof input[key] === 'string' ? (input[key] as string) : '');
 
-function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[]): AssistantDetail {
-  if (name === 'parley_overview') return { tool: 'overview', target: null };
+function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantDetail {
+  if (name === 'parley_overview' || name === 'parley_find') return { tool: 'overview', target: null };
   if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision' || name === 'propose_decision') return { tool: 'propose', target: null };
-  if (name === 'parley_detail') {
-    const found = resolveTarget(targets, stringArg(input, 'target'));
+  if (name === 'parley_detail' || name === 'parley_room' || name === 'parley_session') {
+    const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     return { tool: 'detail', target: 'target' in found ? found.target.name : null };
   }
   return { tool: 'other', target: null };
@@ -267,6 +285,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     entries: deps.works.snapshot().entries,
     live: (ref) => deps.activity.get(ref),
     roomTail: roomTailOf,
+    home: homedir(),
   });
   /**
    * Реестр провайдеров и часы для строки `need` в обзоре (имя аккаунта и время сброса в причине); сбой реестра —
@@ -436,7 +455,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           answer = '';
           moods = [];
           tail = '';
-          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(source())), answer, moods });
+          const src = source();
+          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(src), hiddenOf(src)), answer, moods });
         } else if (event.type === 'text') {
           // Дельты всех блоков хода идут подряд: «посмотрю.» + «[[calm]] В работе» склеились бы в «посмотрю.В работе».
           // Блок Claude начинает `content_block_start`, у Codex каждый текст — целое сообщение.
@@ -489,7 +509,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       end.kind === 'limit'
         ? `${entry.label} limit reached — ${firstLine(end.message)}`
         : end.kind === 'timeout'
-          ? 'No answer in 60 s'
+          ? `No answer in ${Math.round((deps.turnTimeoutMs ?? ASSISTANT_TURN_MS) / 1000)} s`
           : end.kind === 'start'
             ? `${entry.label} CLI didn't start`
             : 'Something went wrong — try again';
@@ -1027,18 +1047,58 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
       const src = source();
       const targets = targetsOf(src);
+      const hidden = hiddenOf(src);
       switch (name) {
         case 'parley_overview': {
           const cards = await waitingCards(src);
           return { status: 200, body: { text: overviewText({ ...src, ...(await reasonContext()), cards: (ref) => cards.get(refKey(ref)) }) } };
         }
         case 'parley_detail': {
-          const found = resolveTarget(targets, stringArg(input, 'target'));
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
           if ('error' in found) return { status: 404, body: { error: found.error } };
           const target = found.target;
           const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
           const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
           return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
+        }
+        case 'parley_find': {
+          const query = stringArg(input, 'query').trim();
+          if (query === '') return { status: 400, body: { error: 'query is empty' } };
+          return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
+        }
+        case 'parley_room': {
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+          if ('error' in found) return { status: 404, body: { error: found.error } };
+          const target = found.target;
+          if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
+          const before = input['before'];
+          if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
+            return { status: 400, body: { error: 'before must be the number from the last reply' } };
+          }
+          const limit = input['limit'];
+          return {
+            status: 200,
+            body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
+          };
+        }
+        case 'parley_session': {
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+          if ('error' in found) return { status: 404, body: { error: found.error } };
+          const target = found.target;
+          if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
+          const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
+          let items: readonly FeedItem[] = [];
+          if (deps.feed !== undefined) {
+            try {
+              items = (await deps.feed.snapshot(target.ref)).items;
+            } catch {
+              // ленты у сессии нет — «истории пока нет»
+            }
+          }
+          const before = stringArg(input, 'before');
+          const limit = input['limit'];
+          const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
+          return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
         }
         case 'propose_message':
           return propose(input, src, targets);

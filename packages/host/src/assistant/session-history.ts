@@ -63,7 +63,7 @@ function entryOf(item: FeedItem): Entry | null {
     case 'prompt':
       return make(`Asked: ${clip(item.text, LETTER_MAX)}`);
     case 'text':
-      return item.text === ''
+      return item.text.trim() === ''
         ? null
         : make(`Agent: ${clip(item.text, LETTER_MAX)}${item.streaming ? ' (still writing)' : ''}`);
     case 'error':

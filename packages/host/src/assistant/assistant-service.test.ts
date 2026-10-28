@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1198,5 +1199,106 @@ describe('assistant-service: письма комнаты из базы рабо�
       else process.env['PARLEY_HOME'] = previous;
       closeWorkDb();
     }
+  });
+});
+
+describe('assistant-service: чтение', () => {
+  // Закрытая сессия `s-09` из MAP: в обзоре её нет, id строится как у targetsOf — по хешу пути проекта.
+  const closedId = `session:${createHash('sha1').update('/p').digest('hex').slice(0, 6)}:w-1:s-09`;
+  const feed = (items: unknown[]): AssistantServiceDeps['feed'] => ({ snapshot: vi.fn(async () => ({ items })), decide: vi.fn() }) as never;
+
+  it('parley_find: пустой запрос — 400, имя проекта — работа', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    expect(await service.tool('parley_find', { query: '  ' })).toEqual({ status: 400, body: { error: 'query is empty' } });
+    expect(await service.tool('parley_find', { query: 'Parley' })).toMatchObject({ status: 200, body: { text: expect.stringContaining('Work "Parley"') } });
+  });
+  it('parley_find: закрытая сессия находится только с include_closed', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    const plain = await service.tool('parley_find', { query: 'Old' });
+    expect((plain.body as { text: string }).text).toBe('Nothing found for "Old".');
+    expect(await service.tool('parley_find', { query: 'Old', include_closed: true })).toMatchObject({ status: 200, body: { text: expect.stringContaining('S09 Old') } });
+  });
+  it('parley_room читает письма из базы работы целиком', async () => {
+    const project = path.join(home, 'project');
+    await mkdir(project);
+    await mkdir(path.join(home, 'store'));
+    const previous = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = path.join(home, 'store');
+    try {
+      const workId = (await createWork(project, { title: 'Parley' })).work.id;
+      writeLetters(project, workId, (letters) => {
+        letters.add({ roomId: 'r-1', from: 's-03', to: [], text: 'короткое письмо', kind: 'note' });
+        letters.add({ roomId: 'r-1', from: 's-03', to: [], text: 'д'.repeat(4500), kind: 'note' });
+      });
+      const map = { ...MAP, work: { ...MAP.work, id: workId } } as unknown as WorkMap;
+      const service = createAssistantService({ ...deps, works: { snapshot: () => ({ entries: [{ projectPath: project, map }] as WorkEntry[], branches: {} }) } });
+      await service.ask(ASK);
+      const reply = await service.tool('parley_room', { target: 'Auth' });
+      expect(reply.status).toBe(200);
+      const { text } = reply.body as { text: string };
+      expect(text).toContain('короткое письмо');
+      expect(text).toContain(`${'д'.repeat(3999)}…`);
+      expect(text).not.toContain('д'.repeat(4000));
+      expect(text).toContain('This is the beginning of the room.');
+    } finally {
+      if (previous === undefined) delete process.env['PARLEY_HOME'];
+      else process.env['PARLEY_HOME'] = previous;
+      closeWorkDb();
+    }
+  });
+  it('parley_room: работы нет в базе — комната без писем, не сбой', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    const reply = await service.tool('parley_room', { target: 'Auth' });
+    expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('No messages yet.') } });
+  });
+  it('parley_room и parley_session: чужая цель и плохой курсор — 400', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    expect(await service.tool('parley_room', { target: 'S03' })).toEqual({ status: 400, body: { error: 'S03 Ruslan is not a room' } });
+    expect(await service.tool('parley_room', { target: 'Auth', before: 'm-3' })).toEqual({ status: 400, body: { error: 'before must be the number from the last reply' } });
+    expect(await service.tool('parley_room', { target: 'Auth', before: 0 })).toMatchObject({ status: 400 });
+    expect(await service.tool('parley_session', { target: 'Auth' })).toEqual({ status: 400, body: { error: 'Auth is not a session' } });
+  });
+  it('parley_session: закрытая сессия по id читается, лента — из feed.snapshot', async () => {
+    const service = createAssistantService({ ...deps, feed: feed([{ kind: 'text', id: 'text:#1', at: '', messageId: null, text: 'done', streaming: false }]) });
+    await service.ask(ASK);
+    const reply = await service.tool('parley_session', { target: closedId });
+    expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('Agent: done') } });
+  });
+  it('parley_session: лента не читается — шапка и «нет истории», не ошибка', async () => {
+    const service = createAssistantService({ ...deps, feed: { snapshot: vi.fn().mockRejectedValue(new Error('no feed')), decide: vi.fn() } as never });
+    await service.ask(ASK);
+    const reply = await service.tool('parley_session', { target: closedId });
+    expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('No history for this session yet.') } });
+  });
+  it('parley_session: курсора нет в ленте — 400 с советом', async () => {
+    const service = createAssistantService({ ...deps, feed: feed([{ kind: 'text', id: 'text:#1', at: '', messageId: null, text: 'done', streaming: false }]) });
+    await service.ask(ASK);
+    const reply = await service.tool('parley_session', { target: closedId, before: 'text:#99' });
+    expect(reply).toMatchObject({ status: 400, body: { error: expect.stringContaining('without before') } });
+  });
+  it('parley_detail по id закрытой сессии — не 404', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    expect((await service.tool('parley_detail', { target: closedId })).status).toBe(200);
+  });
+  it('ход дольше минуты не обрывается; таймаут называет свою длину', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    expect(turns[0]?.spec.timeoutMs).toBe(180_000);
+    turns[0]?.end({ ok: false, kind: 'timeout', message: '' });
+    await flush();
+    expect(last().error).toBe('No answer in 180 s');
+  });
+  it('подпись: parley_room — detail с именем комнаты, parley_find — overview', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'tool', name: 'parley_room', input: { target: 'Auth' } });
+    expect(last().detail).toEqual({ tool: 'detail', target: 'Auth' });
+    turns[0]?.emit({ type: 'tool', name: 'parley_find', input: { query: 'x' } });
+    expect(last().detail).toEqual({ tool: 'overview', target: null });
   });
 });
