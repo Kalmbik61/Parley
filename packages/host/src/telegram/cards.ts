@@ -113,7 +113,7 @@ function confirmLabel(proposal: AssistantProposal): string {
     case 'room-decision':
       return proposal.choice === 'accept' ? B.acceptDecision : B.return;
     default:
-      return proposal.wake ? B.wakeAndSend : B.send;
+      return 'wake' in proposal && proposal.wake ? B.wakeAndSend : B.send;
   }
 }
 

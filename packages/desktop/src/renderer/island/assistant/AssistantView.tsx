@@ -92,7 +92,7 @@ function confirmLabel(proposal: AssistantProposal): string {
     case 'room-decision':
       return proposal.choice === 'accept' ? S.assistant.card.accept : S.assistant.card.return;
     default:
-      return proposal.wake ? S.assistant.wakeAndSend : S.assistant.send;
+      return 'wake' in proposal && proposal.wake ? S.assistant.wakeAndSend : S.assistant.send;
   }
 }
 
@@ -176,7 +176,7 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
               {S.assistant.to} <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
             </span>
           </div>
-          {proposal.wake ? (
+          {'wake' in proposal && proposal.wake ? (
             <div data-testid="assistant-wake-note" className="text-[12px] text-muted-foreground">
               {S.assistant.wakeNote}
             </div>

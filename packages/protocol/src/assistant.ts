@@ -59,7 +59,7 @@ export interface ActionStepView {
   line: string;
   /** Текст под шагом (задача агента, письмо); `null` — нечего показать. */
   text: string | null;
-  /** Шаг необратим или прерывает работу (прервать, закрыть): окно выделяет строку. */
+  /** `true` только у `close`: окно и Telegram выделяют строку и добавляют «closes for good». */
   danger: boolean;
 }
 
