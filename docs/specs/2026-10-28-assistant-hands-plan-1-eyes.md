@@ -19,7 +19,7 @@
 
   По-русски пишутся комментарии в коде и имена тестов, как в соседних файлах.
 - Каждое сообщение коммита кончается строкой `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- Кириллица в строковых литералах `packages/core/src` и `packages/protocol/src` ловится тестом `core/src/english-text.test.ts`. Если без неё не обойтись, строку помечают `// cyrillic-ok: <почему>`. `packages/host/src` этот тест не проверяет.
+- Кириллицу в строковых литералах ловят тесты `core/src/english-text.test.ts` (core и protocol) и `host/src/english-text.test.ts` (host). Если без неё не обойтись, строку помечают `// cyrillic-ok: <почему>` на той же строке.
 - Слова состояний сессий берутся только из `@parley/core` (`sessionDotStateWithNeed`, `stateWord`, `needWord`), своих правил нет (память «статусы из одного места»).
 - Помощник ничего не пишет на диск сам (спека 9). Новые инструменты этого плана — только чтение, с `annotations: { readOnlyHint: true }`.
 - Перед запуском тестов смотреть `uptime`. При load ≥ числа ядер — подождать.
