@@ -251,7 +251,14 @@ export const WorkCard = memo(function WorkCard({
     >
       <div className="flex h-[22px] min-w-0 items-center gap-2 pr-1">
         <span data-work-glyph className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
-          {glyph === null ? null : <AgentStateDot state={glyph.state} lifecycle={glyph.lifecycle} />}
+          {/* Архивная работа спит: 💤 вместо точки, как 📌 у закреплённой. */}
+          {map.work.status === 'archived' ? (
+            <span data-sleeping title={S.sidebar.archivedWork} aria-label={S.sidebar.archivedWork} className="text-[10px] leading-none">
+              💤
+            </span>
+          ) : glyph === null ? null : (
+            <AgentStateDot state={glyph.state} lifecycle={glyph.lifecycle} />
+          )}
         </span>
         {renaming ? (
           <InlineRename entry={entry} bridge={bridge} onDone={() => setRenaming(false)} />
