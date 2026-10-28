@@ -378,6 +378,119 @@ test.describe('помощник на острове', () => {
     await expect(window.locator('[data-room-row]').filter({ hasText: 'Release' })).toHaveCount(1);
   });
 
+  /** Работа проекта теста в снимке хоста: обзор помощника строится из снимка, а проект для шагов плана стаб берёт из обзора. */
+  async function seedWork(window: Page): Promise<void> {
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    type WorksList = { entries: Array<{ map: { work: { id: string } } }> };
+    await expect
+      .poll(async () => (await call<WorksList>(window, 'works.list', {})).entries.some((entry) => entry.map.work.id === workId), {
+        message: 'работа в снимке работ хоста',
+        timeout: 30_000,
+      })
+      .toBe(true);
+  }
+
+  /**
+   * Приложение теста — активное. Приложение E2E запущено в фоне, и macOS отдаёт фокус другому приложению; остров, потерявший
+   * клавиатуру, убирает вид помощника, как по Esc.
+   */
+  async function takeFocus(): Promise<void> {
+    await app!.evaluate(({ app: electronApp }) => {
+      electronApp.focus({ steal: true });
+    });
+  }
+
+  /**
+   * Вид помощника на месте. Остров без клавиатуры убирает вид, а карточка плана ждёт в хосте: если фокус ушёл посреди
+   * проверок, вид открывается снова (палитрой, как у человека) и карточка встаёт на место.
+   */
+  async function revealAssistant(window: Page, island: Page): Promise<void> {
+    if ((await island.getByTestId('assistant-view').count()) === 0) await openAssistant(window);
+  }
+
+  test('карточка плана из шести шагов: всё в кадре 800×500, Enter не подтверждает, Cancel', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant();
+    await seedWork(window);
+    await takeFocus();
+    const island = await openAssistant(window);
+    await ask(island, 'plan six');
+
+    // Проверки повторяются целиком, если остров потерял клавиатуру посреди них: все они ничего не меняют.
+    await expect(async () => {
+      await revealAssistant(window, island);
+      await expect(island.getByTestId('assistant-step')).toHaveCount(6);
+      await expect(island.getByTestId('assistant-send')).toHaveText(/Do all \(6\)/);
+
+      // Кнопка и поле ввода в кадре острова, карточка прокручивается внутри него — тем же способом, что шаг 7 первого теста.
+      const frameHeight = await island.evaluate(() => globalThis.innerHeight);
+      const boxOf = async (testId: string): Promise<{ top: number; bottom: number }> => {
+        const box = (await island.getByTestId(testId).boundingBox())!;
+        return { top: box.y, bottom: box.y + box.height };
+      };
+      expect((await boxOf('island')).bottom).toBeLessThanOrEqual(frameHeight);
+      expect((await boxOf('assistant-input')).bottom).toBeLessThanOrEqual(frameHeight);
+      const scroll = island.getByTestId('assistant-scroll');
+      expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+      // Длинные названия и тексты переносятся: по горизонтали прокрутки нет.
+      expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      const send = await boxOf('assistant-send');
+      const area = await boxOf('assistant-scroll');
+      expect(send.bottom).toBeLessThanOrEqual(area.bottom);
+      expect(send.top).toBeGreaterThanOrEqual(area.top);
+
+      // Enter в пустом поле планом не подтверждает: карточка на месте, отчёта нет, работа плана не создана.
+      await island.waitForTimeout(600);
+      await island.getByTestId('assistant-input').press('Enter');
+      await island.waitForTimeout(600);
+      await expect(island.getByTestId('assistant-card')).toBeVisible();
+      await expect(island.getByTestId('assistant-report')).toHaveCount(0);
+      type WorksTitles = { entries: Array<{ map: { work: { title: string } } }> };
+      const titles = (await call<WorksTitles>(window, 'works.list', {})).entries.map((entry) => entry.map.work.title);
+      expect(titles.filter((title) => title.startsWith('A very long work title that checks'))).toEqual([]);
+
+      await island.screenshot({ path: test.info().outputPath('plan-six.png') });
+    }).toPass({ timeout: 60_000 });
+
+    await expect(async () => {
+      await revealAssistant(window, island);
+      await island.getByTestId('assistant-cancel').click({ timeout: 3000 });
+      await expect(island.getByText('Cancelled')).toBeVisible({ timeout: 3000 });
+    }).toPass({ timeout: 30_000 });
+  });
+
+  test('план из одного шага выполняется кликом', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant();
+    await seedWork(window);
+    await takeFocus();
+    const island = await openAssistant(window);
+    await ask(island, 'plan one');
+
+    // Карточка и клик — одним куском: остров, потерявший клавиатуру, убирает вид, и клик повторяется на возвращённой карточке.
+    await expect(async () => {
+      await revealAssistant(window, island);
+      await expect(island.getByTestId('assistant-step')).toHaveCount(1);
+      await expect(island.getByTestId('assistant-send')).toHaveText('Create');
+      // Кнопка взводится через 500 мс.
+      await island.waitForTimeout(600);
+      await island.getByTestId('assistant-send').click({ timeout: 3000 });
+    }).toPass({ timeout: 60_000 });
+    await expect(async () => {
+      await revealAssistant(window, island);
+      await expect(island.getByTestId('assistant-report')).toContainText('Done', { timeout: 3000 });
+    }).toPass({ timeout: 30_000 });
+
+    // Работа плана появилась в снимке хоста (он обновляется из файлов с задержкой).
+    type WorksTitles = { entries: Array<{ map: { work: { title: string } } }> };
+    await expect
+      .poll(async () => (await call<WorksTitles>(window, 'works.list', {})).entries.map((entry) => entry.map.work.title), {
+        message: 'работа плана в снимке работ хоста',
+        timeout: 30_000,
+      })
+      .toContain('E2E plan work');
+  });
+
   test('«check in 2 seconds» → ответ → Esc → остров сам раскрывается с ответом по напоминанию', async () => {
     test.setTimeout(120_000);
     const window = await launchWithAssistant();

@@ -21,6 +21,8 @@ export function assistantSettingsOf(
     language: language(ui),
     voiceModel: ui.voice.enabled && model !== null && voice.downloaded(model) ? voice.path(model) : null,
     voiceGender: assistantVoice(ui.assistant).gender,
+    // Провайдер последней новой работы — умолчание для агентов, которых помощник создаёт сам.
+    defaultProvider: ui.lastProvider,
   };
 }
 

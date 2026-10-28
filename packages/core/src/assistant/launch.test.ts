@@ -44,6 +44,11 @@ describe('промпт и версии', () => {
     // Пример больше не начинается с радости приветствия: спокойный тон — по умолчанию.
     expect(prompt).not.toContain('[[joy]] Hi!');
   });
+  it('промпт: поиск и чтение, без «не показано»', () => {
+    const prompt = assistantPrompt('ru');
+    expect(prompt).toContain('call parley_find with their words before saying you do not know');
+    expect(prompt).toContain('never tell the person that something is not shown');
+  });
   it('строка рода по голосу для трёх родов (G1), по умолчанию — женский', () => {
     const female = '- You speak as a female assistant; in languages with grammatical gender use feminine forms for yourself (in Russian: «я проверила», «подготовила», never «я проверил»).';
     const male = '- You speak as a male assistant; in languages with grammatical gender use masculine forms for yourself (in Russian: «я проверил», «подготовил»).';
@@ -68,6 +73,13 @@ describe('промпт и версии', () => {
     expect(prompt).toContain('both choices approve');
     expect(prompt).not.toContain('cannot approve agent requests');
     expect(prompt).not.toContain('create rooms');
+  });
+  it('промпт отдаёт старт, остановку и закрытие карточке с планом и просит нажать кнопку', () => {
+    const prompt = assistantPrompt('ru');
+    expect(prompt).not.toContain('You cannot start or stop sessions');
+    expect(prompt).toContain('call propose_actions with one plan for the whole request');
+    expect(prompt).toContain('confirmed only by its button');
+    expect(prompt).toContain('[system: proposal … stopped at step N …] means the steps after N did not run');
   });
   it('versionAtLeast читает версию из вывода --version', () => {
     expect(versionAtLeast('2.1.300 (Claude Code)', '2.1.300')).toBe(true);

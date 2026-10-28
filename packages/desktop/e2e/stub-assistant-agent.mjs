@@ -39,6 +39,7 @@ if (process.argv[2] === '--version') {
   const room = /\[(room:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   const session = /\[(session:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   const work = /\[(work:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
+  const project = /\(project ([^)]+)\)/.exec(overview.text ?? '')?.[1];
   let answer = '[[calm]] Nothing is open right now.';
   /** Пауза между словами ответа, мс: «moods …» идёт словами долго, чтобы фаза ответа была видна. */
   let wordDelay = 0;
@@ -52,6 +53,24 @@ if (process.argv[2] === '--version') {
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_room', input }] } });
     await call('propose_room', input);
     answer = '[[calm]] Prepared a room card.';
+  } else if (/^plan (six|one)$/i.test(ask) && project !== undefined) {
+    // Карточка плана: проект — из обзора (`(project <имя>)`). «plan six» — шесть шагов с самыми длинными названиями и
+    // текстами (правило визуальных проверок, карточка в окне 800×500); «plan one» — один шаг, который человек выполняет кликом.
+    const fill = (seed, length) => seed.repeat(Math.ceil(length / seed.length)).slice(0, length);
+    const steps =
+      ask.toLowerCase() === 'plan six'
+        ? [
+            { do: 'create_work', project, title: fill('A very long work title that checks how the plan card wraps inside a narrow island ', 80) },
+            { do: 'create_session', work: '$1', name: 'Reviewer with a rather long display name', role: 'Feature Lead', task: fill('Read the whole change and report every risk you find. ', 500) },
+            { do: 'create_session', work: '$1' },
+            { do: 'create_room', work: '$1', title: fill('A very long room title that checks how the plan card wraps inside the island ', 80), members: ['$2', '$3'], task: fill('Agree on the order of the work before anyone starts. ', 500) },
+            { do: 'message', target: '$4', text: fill('Start with the file /very/long/unbroken/path/to/some/module/that/never/wraps/by/itself.ts and then explain what you found. ', 500) },
+            { do: 'create_session', work: '$1', name: 'Third' },
+          ]
+        : [{ do: 'create_work', project, title: 'E2E plan work' }];
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_actions', input: { steps } }] } });
+    const proposed = await call('propose_actions', { steps });
+    answer = proposed.error === undefined ? '[[calm]] Prepared a plan card.' : `[[calm]] The plan was refused: ${proposed.error}`;
   } else if (/^check in 2 seconds/i.test(ask)) {
     // Напоминание через 2 с: ход по напоминанию придёт промптом `[reminder …]`.
     const input = { at: new Date(Date.now() + 2000).toISOString(), what: 'the room' };

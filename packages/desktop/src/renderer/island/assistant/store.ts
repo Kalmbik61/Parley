@@ -516,7 +516,8 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         set({ draft: '', notice: null });
         const { proposal } = get().host;
         const answer = proposal === null ? null : matchConfirm(text);
-        if (answer !== null) {
+        // Карточку `actions` подтверждает только кнопка: «да» текстом или голосом — обычный вопрос, отмена словом остаётся.
+        if (answer === 'cancel' || (answer === 'send' && proposal?.action !== 'actions')) {
           await get().decide(answer);
           return;
         }
@@ -537,7 +538,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         silence();
         set({ deciding: decision, cardError: null });
         try {
-          const result = await deps.call('assistant.decide', { proposalId: proposal.id, decision });
+          const result = await deps.call('assistant.decide', { proposalId: proposal.id, decision, ...(proposal.action === 'actions' ? { action: 'actions' as const } : {}) });
           set({ cardError: result.error });
         } catch (error) {
           set({ cardError: (error as Error).message });

@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { roleProvider } from '@parley/core/role-choice';
 import type { Result, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -80,8 +81,7 @@ export interface AgentEnv {
 export const roleOf = (env: AgentEnv, row: AgentRow): RoleSummary | undefined => env.roles.find((role) => role.id === row.role);
 
 export function providerIdOf(env: AgentEnv, row: AgentRow): string | null {
-  const role = roleOf(env, row);
-  return role?.source !== undefined && role.source !== 'builtin' ? role.provider : row.provider ?? role?.provider ?? env.defaultId;
+  return roleProvider(roleOf(env, row), row.provider, env.defaultId);
 }
 
 export function infoOf(env: AgentEnv, row: AgentRow): ProviderOption | undefined {

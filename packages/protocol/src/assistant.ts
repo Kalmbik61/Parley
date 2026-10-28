@@ -6,6 +6,9 @@
 import { z } from 'zod';
 import type { AssistantMood, FeedDecision } from '@parley/core';
 
+/** Признак клиента в `hello.features`: окно умеет рисовать карточку `actions` и её отчёт. Старый хост его не знает. */
+export const ASSISTANT_ACTIONS_FEATURE = 'assistant-actions';
+
 export type AssistantPhase = 'idle' | 'thinking' | 'tool' | 'answering' | 'awaiting-confirm' | 'error' | 'offline';
 
 /** Что помощник смотрит сейчас — подпись острова строит окно (`Checking rooms…`, `Reading Auth…`). */
@@ -35,6 +38,58 @@ export interface RoomProposalView {
   text: string;
   planId?: string;
   planRev?: number;
+}
+
+/** Глагол шага плана карточки `actions`. */
+export type ActionVerb =
+  | 'create_work'
+  | 'create_session'
+  | 'wake'
+  | 'interrupt'
+  | 'sleep'
+  | 'close'
+  | 'create_room'
+  | 'add_to_room'
+  | 'message';
+
+/** Шаг плана так, как его видит человек на карточке. */
+export interface ActionStepView {
+  verb: ActionVerb;
+  /** Строка шага: «Wake S05 Vera». */
+  line: string;
+  /** Текст под шагом (задача агента, письмо); `null` — нечего показать. */
+  text: string | null;
+  /** `true` только у `close`: окно и Telegram выделяют строку и добавляют «closes for good». */
+  danger: boolean;
+}
+
+/** Как идёт выполнение плана карточки `actions`; хост шлёт его в `AssistantState.report`. */
+export interface ActionsReport {
+  proposalId: string;
+  status: 'running' | 'done' | 'stopped';
+  steps: Array<{ line: string; status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' }>;
+  /** Номер упавшего шага с 1; у running и done — null. */
+  failedStep: number | null;
+  reason: string | null;
+  /** Пометки сделанных шагов: «Alice waits for you to trust the folder». */
+  notes: string[];
+}
+
+/** Строка итога отчёта для острова и Telegram: ход, готово или остановка. */
+export function reportLine(report: ActionsReport): string {
+  const total = report.steps.length;
+  switch (report.status) {
+    case 'done':
+      return 'Done';
+    case 'stopped':
+      // По договору у stopped номер и причина есть; запасные значения — только чтобы строка не вышла с «null».
+      return `Stopped at step ${report.failedStep ?? total} of ${total}: ${report.reason ?? 'unknown reason'}`;
+    case 'running': {
+      let current = report.steps.findIndex((step) => step.status === 'running');
+      if (current < 0) current = report.steps.findIndex((step) => step.status === 'waiting');
+      return `Running step ${current < 0 ? total : current + 1} of ${total}`;
+    }
+  }
 }
 
 /**
@@ -88,6 +143,11 @@ export type AssistantProposal =
       decision: FeedDecision;
     })
   | (ProposalBase & {
+      /** План из шагов: создать, разбудить, прервать, усыпить, закрыть, написать. Выполняется только кнопкой карточки. */
+      action: 'actions';
+      steps: ActionStepView[];
+    })
+  | (ProposalBase & {
       /** Решить предложение ведущего комнаты. */
       action: 'room-decision';
       proposal: RoomProposalView;
@@ -124,6 +184,8 @@ export interface AssistantState {
   instance?: string;
   /** Откуда пришёл ход. Старый хост не шлёт — окно считает `island`. */
   origin?: AssistantOrigin;
+  /** Отчёт о выполнении карточки `actions`; `null` — плана нет. Старый хост не шлёт. */
+  report?: ActionsReport | null;
 }
 
 const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessionId: z.string() });
@@ -140,7 +202,12 @@ export const assistantMethodSchemas = {
     askId: z.string().min(1).max(128).optional(),
   }),
   'assistant.cancel': z.object({}),
-  'assistant.decide': z.object({ proposalId: z.string().min(1), decision: z.enum(['send', 'cancel']) }),
+  'assistant.decide': z.object({
+    proposalId: z.string().min(1),
+    decision: z.enum(['send', 'cancel']),
+    /** `actions` — решение по карточке с планом; без поля хост такой план не выполнит. Старый хост поле молча отбросит. */
+    action: z.literal('actions').optional(),
+  }),
   'assistant.reset': z.object({}),
   'assistant.state': z.object({}),
   'assistant.sent': z.object({ ref: sessionRef }),
@@ -154,6 +221,8 @@ export const assistantMethodSchemas = {
     voiceModel: z.string().min(1).nullable(),
     /** Род, в котором помощник говорит о себе, — по выбранному голосу (#9 §6.8). Без поля — `female`. */
     voiceGender: z.enum(['female', 'male', 'neutral']).optional(),
+    /** Провайдер по умолчанию для новых агентов помощника; `null` — первый готовый. Старый хост поле молча отбросит. */
+    defaultProvider: z.string().min(1).nullable().optional(),
   }),
 } as const;
 

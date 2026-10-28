@@ -17,6 +17,21 @@ describe('createAssistantHandlers', () => {
     expect(configure).toHaveBeenCalledWith({ enabled: true, provider: null, model: null, language: 'ru', voiceModel: null, voiceGender: 'male' });
   });
 
+  it('assistant.decide передаёт action сервису', async () => {
+    const decide = vi.fn().mockResolvedValue({ applied: true, error: null });
+    const handlers = createAssistantHandlers({ decide } as unknown as AssistantService);
+    const params = METHODS['assistant.decide'].parse({ proposalId: 'p1', decision: 'send', action: 'actions' });
+    expect(await call(handlers, 'assistant.decide', params)).toEqual({ applied: true, error: null });
+    expect(decide).toHaveBeenCalledWith('p1', 'send', 'actions');
+  });
+
+  it('assistant.decide без action: третий аргумент не задан', async () => {
+    const decide = vi.fn().mockResolvedValue({ applied: true, error: null });
+    const handlers = createAssistantHandlers({ decide } as unknown as AssistantService);
+    await call(handlers, 'assistant.decide', METHODS['assistant.decide'].parse({ proposalId: 'p1', decision: 'cancel' }));
+    expect(decide).toHaveBeenCalledWith('p1', 'cancel', undefined);
+  });
+
   it('assistant.ask не меняется: рода в параметрах вопроса нет', () => {
     const parsed = METHODS['assistant.ask'].parse({ text: 'x', provider: null, model: null, language: 'ru', voiceGender: 'male' });
     expect(parsed).not.toHaveProperty('voiceGender');

@@ -4,6 +4,7 @@ import { createConnection, type Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import type { HostPaths } from '@parley/host';
 import {
+  ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
   BROWSER_AGENT_OP_FEATURE,
   BROWSER_AGENT_OPS,
@@ -386,12 +387,12 @@ export class HostConnection {
         method: 'hello',
         // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`; письма и
         // отметки прочтения берёт событием `rooms.mail` (спека rooms.mail 6.10); исполняет операции агента над своим
-        // браузером (спека браузера 3.7).
+        // браузером (спека браузера 3.7); рисует карточку шагов помощника и её отчёт (руки помощника).
         params: {
           token,
           protocol: PROTOCOL_VERSION,
           client: 'desktop',
-          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)],
+          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE],
         },
       }),
     );

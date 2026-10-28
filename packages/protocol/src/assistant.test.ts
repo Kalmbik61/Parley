@@ -1,6 +1,17 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AssistantMood } from '@parley/core';
-import type { AssistantOrigin, AssistantProposal, AssistantState, ProposalCardView, RoomProposalView } from './assistant.js';
+import {
+  ASSISTANT_ACTIONS_FEATURE,
+  assistantMethodSchemas,
+  reportLine,
+  type ActionStepView,
+  type ActionsReport,
+  type AssistantOrigin,
+  type AssistantProposal,
+  type AssistantState,
+  type ProposalCardView,
+  type RoomProposalView,
+} from './assistant.js';
 import { METHODS } from './methods.js';
 
 describe('схемы методов помощника', () => {
@@ -77,5 +88,47 @@ describe('виды карточки помощника', () => {
 
   it('AssistantState.moods необязателен: позиции эмоций в очищенном ответе', () => {
     expectTypeOf<AssistantState['moods']>().toEqualTypeOf<Array<{ at: number; mood: AssistantMood }> | undefined>();
+  });
+});
+
+describe('протокол карточки действий', () => {
+  it('decide принимает action: actions, без поля — тоже; чужое значение — нет', () => {
+    const decide = assistantMethodSchemas['assistant.decide'];
+    expect(decide.parse({ proposalId: 'p1', decision: 'send', action: 'actions' })).toEqual({ proposalId: 'p1', decision: 'send', action: 'actions' });
+    expect(decide.parse({ proposalId: 'p1', decision: 'send' })).toEqual({ proposalId: 'p1', decision: 'send' });
+    expect(decide.safeParse({ proposalId: 'p1', decision: 'send', action: 'room' }).success).toBe(false);
+  });
+  it('configure: defaultProvider необязателен и может быть null', () => {
+    const base = { enabled: true, provider: null, model: null, language: 'ru', voiceModel: null };
+    expect(assistantMethodSchemas['assistant.configure'].parse({ ...base, defaultProvider: null })).toMatchObject({ defaultProvider: null });
+    expect(assistantMethodSchemas['assistant.configure'].parse({ ...base, defaultProvider: 'glm' })).toMatchObject({ defaultProvider: 'glm' });
+    expect(assistantMethodSchemas['assistant.configure'].parse(base)).not.toHaveProperty('defaultProvider');
+    expect(assistantMethodSchemas['assistant.configure'].safeParse({ ...base, defaultProvider: '' }).success).toBe(false);
+  });
+  it('reportLine: ход, итог и остановка', () => {
+    const steps = [{ line: 'a', status: 'done' }, { line: 'b', status: 'failed' }, { line: 'c', status: 'skipped' }] as const;
+    expect(reportLine({ proposalId: 'p1', status: 'stopped', steps: [...steps], failedStep: 2, reason: 'S05 Vera is already asleep', notes: [] })).toBe('Stopped at step 2 of 3: S05 Vera is already asleep');
+    expect(reportLine({ proposalId: 'p1', status: 'running', steps: [{ line: 'a', status: 'done' }, { line: 'b', status: 'running' }], failedStep: null, reason: null, notes: [] })).toBe('Running step 2 of 2');
+  });
+  it('reportLine: пока ни один шаг не running — первый waiting; готово — Done', () => {
+    const waiting: ActionsReport = {
+      proposalId: 'p1',
+      status: 'running',
+      steps: [{ line: 'a', status: 'done' }, { line: 'b', status: 'waiting' }, { line: 'c', status: 'waiting' }],
+      failedStep: null,
+      reason: null,
+      notes: [],
+    };
+    expect(reportLine(waiting)).toBe('Running step 2 of 3');
+    expect(reportLine({ ...waiting, status: 'done', steps: waiting.steps.map((step) => ({ ...step, status: 'done' as const })) })).toBe('Done');
+  });
+  it('карточка actions входит в AssistantProposal, признак клиента задан', () => {
+    const step: ActionStepView = { verb: 'wake', line: 'Wake S05 Vera', text: null, danger: false };
+    const card: AssistantProposal = { id: 'p1', target: 'Auth', where: 'Parley · my_harnas', text: 'Wake S05 Vera', action: 'actions', steps: [step] };
+    expect(card.action).toBe('actions');
+    expect(ASSISTANT_ACTIONS_FEATURE).toBe('assistant-actions');
+  });
+  it('AssistantState.report необязателен: ActionsReport или null', () => {
+    expectTypeOf<AssistantState['report']>().toEqualTypeOf<ActionsReport | null | undefined>();
   });
 });

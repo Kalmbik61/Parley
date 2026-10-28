@@ -2,7 +2,7 @@
 
 import { cardDetail } from '@parley/core/card-gist';
 import type { FeedCard, FeedDecision, FeedQuestionCard, Proposal } from '@parley/core';
-import type { AssistantProposal, ConsentCard } from '@parley/protocol';
+import type { ActionVerb, AssistantProposal, ConsentCard } from '@parley/protocol';
 import { CALLBACK_CODES } from './callbacks.js';
 import { clipText, escapeHtml } from './format.js';
 import { B, T } from './texts.js';
@@ -20,8 +20,13 @@ export interface CardMeta {
 
 const BUTTON_MAX = 64;
 const DETAIL_MAX = 1500;
+/** Карточка помощника целиком: запас до 4096 знаков Telegram остаётся под квитанцию. */
+export const ASSISTANT_CARD_MAX = 4000;
+/** Ступени сжатия карточки `actions`, когда она не влезает. */
+const STEP_TEXT_SHORT = 100;
+const STEP_LINE_MAX = 120;
 
-const pre = (text: string): string => `<pre>${escapeHtml(clipText(text, DETAIL_MAX))}</pre>`;
+const pre = (text: string, max = DETAIL_MAX): string => `<pre>${escapeHtml(clipText(text, max))}</pre>`;
 const button = (text: string, data: string): { text: string; callback_data: string } => ({ text, callback_data: data });
 const pc1 = (shortId: string, code: string): string => `pc1:${shortId}:${code}`;
 const label = (text: string): string => (text.length > BUTTON_MAX ? `${text.slice(0, BUTTON_MAX - 1)}…` : text);
@@ -112,9 +117,63 @@ function confirmLabel(proposal: AssistantProposal): string {
     }
     case 'room-decision':
       return proposal.choice === 'accept' ? B.acceptDecision : B.return;
+    case 'actions': {
+      const only = proposal.steps.length === 1 ? proposal.steps[0] : undefined;
+      return only === undefined ? B.doAll(proposal.steps.length) : verbLabel(only.verb);
+    }
     default:
-      return proposal.wake ? B.wakeAndSend : B.send;
+      return 'wake' in proposal && proposal.wake ? B.wakeAndSend : B.send;
   }
+}
+
+/** Кнопка карточки из одного шага — глагол шага, как на острове. */
+function verbLabel(verb: ActionVerb): string {
+  switch (verb) {
+    case 'create_work':
+    case 'create_session':
+    case 'create_room':
+      return B.create;
+    case 'wake':
+      return B.wake;
+    case 'interrupt':
+      return B.stop;
+    case 'sleep':
+      return B.putToSleep;
+    case 'close':
+      return B.close;
+    case 'add_to_room':
+      return B.add;
+    case 'message':
+      return B.send;
+  }
+}
+
+/** Заголовок плана и шаги. `textMax` — до скольких знаков резать текст шага (`null` — текстов нет), `lineMax` — строки шагов (`null` — как есть). */
+function planLines(proposal: Extract<AssistantProposal, { action: 'actions' }>, textMax: number | null, lineMax: number | null): string[] {
+  const out = [escapeHtml(T.assistantPlan(proposal.where))];
+  proposal.steps.forEach((step, index) => {
+    const line = lineMax !== null && step.line.length > lineMax ? `${step.line.slice(0, lineMax - 1)}…` : step.line;
+    // Предупреждение дописывается после среза строки: оно не должно потеряться.
+    out.push(`<b>${index + 1}.</b> ${escapeHtml(line)}${step.danger ? escapeHtml(` — ${T.closesForGood}`) : ''}`);
+    if (step.text !== null && textMax !== null) out.push(pre(step.text, textMax));
+  });
+  return out;
+}
+
+/** План целиком; не влез в `ASSISTANT_CARD_MAX` — тексты шагов режутся, затем пропадают, затем режутся строки. */
+function actionsBody(proposal: Extract<AssistantProposal, { action: 'actions' }>): string[] {
+  const tiers: Array<[number | null, number | null]> = [
+    [DETAIL_MAX, null],
+    [STEP_TEXT_SHORT, null],
+    [null, null],
+    [null, STEP_LINE_MAX],
+  ];
+  let body: string[] = [];
+  for (const [textMax, lineMax] of tiers) {
+    body = planLines(proposal, textMax, lineMax);
+    if (body.join('\n').length <= ASSISTANT_CARD_MAX) break;
+  }
+  return body;
 }
 
 function assistantBody(proposal: AssistantProposal): string[] {
@@ -143,6 +202,8 @@ function assistantBody(proposal: AssistantProposal): string[] {
         pre(proposal.proposal.text),
         ...(proposal.note === null ? [] : [escapeHtml(T.assistantNote(proposal.note))]),
       ];
+    case 'actions':
+      return actionsBody(proposal);
     default:
       return [escapeHtml(T.assistantTo(proposal.target, proposal.where)), pre(proposal.text)];
   }

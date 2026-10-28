@@ -12,7 +12,7 @@ describe('assistantSettingsOf', () => {
       voice,
       () => 'en',
     );
-    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null, voiceGender: 'female' });
+    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null, voiceGender: 'female', defaultProvider: null });
   });
 
   it('голос включён, модель скачана: путь к модели', () => {
@@ -32,6 +32,13 @@ describe('assistantSettingsOf', () => {
   it('род голоса (Р3): без выбора — serena, female; ryan и aiden — male', () => {
     expect(assistantSettingsOf(ui({}), voice, () => 'en').voiceGender).toBe('female');
     expect(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/aiden' } }), voice, () => 'en').voiceGender).toBe('male');
+  });
+});
+
+describe('defaultProvider: провайдер последней новой работы', () => {
+  it('lastProvider уходит в defaultProvider; без него — null', () => {
+    expect(assistantSettingsOf({ ...ui({}), lastProvider: 'codex' }, voice, () => 'en').defaultProvider).toBe('codex');
+    expect(assistantSettingsOf({ ...ui({}), lastProvider: null }, voice, () => 'en').defaultProvider).toBeNull();
   });
 });
 

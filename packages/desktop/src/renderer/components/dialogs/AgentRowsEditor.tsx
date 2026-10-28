@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useRef, type ComponentPropsWithoutRef } from 'react';
+import { roleModel as roleModelOf } from '@parley/core/role-choice';
 import { GitBranch, Plus, X } from 'lucide-react';
 import { providerName, S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
@@ -122,8 +123,8 @@ export function AgentRowsEditor({
         {agents.map((row, index) => {
           const role = roleOf(env, row);
           const info = infoOf(env, row);
-          const roleModel = role?.source === 'builtin' ? (providerIdOf(env, row) === 'codex' ? role.models?.codex : role.models?.claude) : role?.model;
-          const displayedModel = row.modelTouched ? chosenModel(row, info) : roleModel ?? null;
+          const roleModel = roleModelOf(role, providerIdOf(env, row));
+          const displayedModel = row.modelTouched ? chosenModel(row, info) : roleModel;
           const models = info?.models ?? null;
           const efforts = effortChoices(info, chosenModel(row, info));
           // Без касания показывается умолчание роли, если оно есть среди уровней модели, иначе `Default`.

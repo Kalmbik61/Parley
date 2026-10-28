@@ -17,7 +17,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
-import type { AssistantProposal, AssistantState } from '@parley/protocol';
+import { reportLine, type ActionsReport, type ActionStepView, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { Button } from '../../ui/button.js';
@@ -91,9 +91,69 @@ function confirmLabel(proposal: AssistantProposal): string {
     }
     case 'room-decision':
       return proposal.choice === 'accept' ? S.assistant.card.accept : S.assistant.card.return;
+    case 'actions':
+      return actionsLabel(proposal.steps);
     default:
-      return proposal.wake ? S.assistant.wakeAndSend : S.assistant.send;
+      return 'wake' in proposal && proposal.wake ? S.assistant.wakeAndSend : S.assistant.send;
   }
+}
+
+/** Кнопка карточки `actions`: у одного шага — его глагол, у нескольких — «Do all (n)». */
+function actionsLabel(steps: readonly ActionStepView[]): string {
+  const only = steps.length === 1 ? steps[0] : undefined;
+  if (only === undefined) return S.assistant.card.doAll(steps.length);
+  switch (only.verb) {
+    case 'create_work':
+    case 'create_session':
+    case 'create_room':
+      return S.assistant.card.create;
+    case 'wake':
+      return S.assistant.card.wake;
+    case 'interrupt':
+      return S.assistant.card.stop;
+    case 'sleep':
+      return S.assistant.card.putToSleep;
+    case 'close':
+      return S.assistant.card.close;
+    case 'add_to_room':
+      return S.assistant.card.add;
+    case 'message':
+      return S.assistant.send;
+  }
+}
+
+/** Значок статуса шага в отчёте; у ждущего шага значка нет, строка тусклая. */
+const STEP_MARK: Record<ActionsReport['steps'][number]['status'], string> = { done: '✓', failed: '✗', running: '…', skipped: '–', waiting: '' };
+
+/** Отчёт о плане `actions`: шаги со значками, строка итога и пометки сделанных шагов. */
+function PlanReport({ report }: { report: ActionsReport }): JSX.Element {
+  return (
+    <div data-testid="assistant-report" className="flex shrink-0 flex-col gap-1 text-[13px]">
+      <ol className="flex flex-col gap-0.5">
+        {report.steps.map((step, index) => (
+          <li
+            key={`${index}:${step.line}`}
+            data-testid="assistant-report-step"
+            data-status={step.status}
+            className={`flex gap-1.5 [overflow-wrap:anywhere] ${step.status === 'failed' ? 'text-[var(--status-warning-text)]' : step.status === 'done' ? '' : 'text-muted-foreground'}`}
+          >
+            <span aria-hidden className={`w-3 shrink-0 text-center ${step.status === 'done' ? 'text-[var(--color-accent)]' : ''}`}>
+              {STEP_MARK[step.status]}
+            </span>
+            <span className="min-w-0">{step.line}</span>
+          </li>
+        ))}
+      </ol>
+      <div data-testid="assistant-report-line" className={report.status === 'stopped' ? 'text-[var(--status-warning-text)]' : 'text-[var(--color-accent)]'}>
+        {reportLine(report)}
+      </div>
+      {report.notes.map((note) => (
+        <div key={note} className="text-muted-foreground [overflow-wrap:anywhere]">
+          {note}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** Глагол заголовка карточки решения: что сделает подтверждение. */
@@ -167,6 +227,33 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
         </>
       );
     }
+    case 'actions': {
+      // `proposal.text` — общий вид для старых окон; здесь его место занимают сами шаги.
+      return (
+        <>
+          <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
+            <AssistantMark size={12} />
+            <span className="min-w-0 truncate">
+              <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
+            </span>
+          </div>
+          <ol data-testid="assistant-steps" className="flex flex-col gap-1.5">
+            {proposal.steps.map((step, index) => (
+              <li key={`${index}:${step.line}`} data-testid="assistant-step" className="flex flex-col gap-1">
+                <div className={`flex gap-1.5 text-[13px] [overflow-wrap:anywhere] ${step.danger ? 'text-destructive' : ''}`}>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{index + 1}.</span>
+                  <span className="min-w-0">
+                    {step.line}
+                    {step.danger ? ` — ${S.assistant.card.closesForGood}` : ''}
+                  </span>
+                </div>
+                {step.text === null ? null : <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2 [overflow-wrap:anywhere]">{step.text}</div>}
+              </li>
+            ))}
+          </ol>
+        </>
+      );
+    }
     default: {
       return (
         <>
@@ -176,7 +263,7 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
               {S.assistant.to} <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
             </span>
           </div>
-          {proposal.wake ? (
+          {'wake' in proposal && proposal.wake ? (
             <div data-testid="assistant-wake-note" className="text-[12px] text-muted-foreground">
               {S.assistant.wakeNote}
             </div>
@@ -232,8 +319,10 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
     if ((proposalId === null && queue.length === 0 && history.length === 0) || element === null) return;
     element.scrollTop = element.scrollHeight;
   }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice]);
+  // Отчёт плана живёт, пока нет карточки; он заменяет «Done ✓». Карточку `actions` Enter не подтверждает — только кнопка.
+  const report = proposal === null ? (host.report ?? null) : null;
   const submit = (): void => {
-    if (draft.trim() === '' && proposal !== null && armed && deciding === null) props.onDecide('send');
+    if (draft.trim() === '' && proposal !== null && proposal.action !== 'actions' && armed && deciding === null) props.onDecide('send');
     else props.onSubmit(draft);
   };
   const question = sending ?? host.question;
@@ -299,7 +388,8 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
         )}
         {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
         {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
-        {sending === null && host.outcome === 'done' ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
+        {sending === null && host.outcome === 'done' && report === null ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
+        {report === null ? null : <PlanReport report={report} />}
         {/* Карточку закрыл хост с причиной (уже отвечена, решение пересмотрено, задача не ушла): карточки уже нет, причина — рядом с итогом. */}
         {sending === null && proposal === null && props.cardError !== null ? (
           <div data-testid="assistant-outcome-note" className="text-[13px] text-[var(--status-warning-text)]">
@@ -318,7 +408,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
               <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding !== null} onClick={() => props.onDecide('cancel')}>
                 {S.assistant.cancel}
               </Button>
-              <span className="ml-auto text-[12px] text-muted-foreground">{S.assistant.enterToSend}</span>
+              <span className="ml-auto text-right text-[12px] text-muted-foreground">{proposal.action === 'actions' ? S.assistant.card.confirmByButton : S.assistant.enterToSend}</span>
             </div>
           </div>
         )}

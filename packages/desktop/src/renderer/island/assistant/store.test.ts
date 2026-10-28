@@ -56,6 +56,43 @@ describe('стор помощника', () => {
     expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p1', decision: 'send' });
     expect(deps.call).not.toHaveBeenCalledWith('assistant.ask', expect.anything());
   });
+  const ACTIONS_CARD = {
+    action: 'actions' as const,
+    id: 'p7',
+    target: '2 steps',
+    where: 'Parley · my_harnas',
+    text: 'Update Parley to confirm this card.',
+    steps: [
+      { verb: 'sleep' as const, line: 'Put S03 Ruslan to sleep', text: null, danger: false },
+      { verb: 'close' as const, line: 'Close S05 Vera for good', text: null, danger: true },
+    ],
+  };
+  it('«да» при карточке actions — вопрос, а не решение', async () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: ACTIONS_CARD, turn: 1 });
+    await store.getState().submit('да');
+    expect(deps.call).not.toHaveBeenCalledWith('assistant.decide', expect.anything());
+    expect(deps.call).toHaveBeenCalledWith('assistant.ask', expect.objectContaining({ text: 'да' }));
+  });
+  it('«нет» при карточке actions — отмена, как у письма', async () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: ACTIONS_CARD, turn: 1 });
+    await store.getState().submit('нет');
+    expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p7', decision: 'cancel', action: 'actions' });
+    expect(deps.call).not.toHaveBeenCalledWith('assistant.ask', expect.anything());
+  });
+  it('решение по карточке actions — с action: actions', async () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: ACTIONS_CARD, turn: 1 });
+    await store.getState().decide('send');
+    expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p7', decision: 'send', action: 'actions' });
+  });
+  it('решение по письму — без поля action', async () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: { id: 'p1', target: 'Auth', where: 'w', kind: 'note', text: 't', wake: false }, turn: 1 });
+    await store.getState().decide('send');
+    expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p1', decision: 'send' });
+  });
   it('ответ раскрывает свёрнутый вид', () => {
     const { store } = setup();
     store.getState().openMode({ listen: false });

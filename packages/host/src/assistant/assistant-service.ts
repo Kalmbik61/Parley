@@ -6,6 +6,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import {
   ASSISTANT_DEFAULT_MODELS,
@@ -30,27 +31,37 @@ import {
   type AssistantLanguage,
   type FeedCard,
   type FeedDecision,
+  type FeedItem,
   type ProviderEntry,
+  type RoleSummary,
   type SessionLifecycle,
   type WorkMap,
 } from '@parley/core';
-import { createMoodStripper, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
+import { feedDecision, refKey, type ActionsReport, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
+import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
 import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
 import type { WorksService } from '../works/works-service.js';
+import { findText } from './find.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
 import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
+import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
+import { runPlan, type PlanExecutors } from './run-plan.js';
+import { historyText } from './session-history.js';
 import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js';
 
 export const ASSISTANT_IDLE_MS = 15 * 60_000;
-export const ASSISTANT_TURN_MS = 60_000;
+export const ASSISTANT_TURN_MS = 180_000;
 const MAX_TEXT = 4000;
 const MAX_TITLE = 80;
 const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.';
+const ACTIONS_SHOWN = 'Shown to the person as a card with the plan; they confirm it with its button only. Tell them in one short sentence what you prepared.';
+/** Ход получает эту строку, когда человек пишет «да» словами, пока ждёт карточка `actions`: она подтверждается только кнопкой. */
+const ACTIONS_BUTTON_NOTE = '[system: a card with actions is waiting; it is confirmed only by its button]';
 
 export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
@@ -70,6 +81,20 @@ export interface AssistantServiceDeps {
   createRoom(input: Params<'rooms.create'>): Promise<string>;
   /** `resolveRoomProposal`: принять или вернуть решение ведущего из карточки `room-decision`. */
   resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string>;
+  /** Шаги плана карточки `actions` (спека 2026-10-28, 6.1): функции хоста, что и у окна; возвращают id созданного. */
+  createWork(input: Params<'works.create'>): Promise<string>;
+  createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust' }>;
+  resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held'>;
+  interrupt(ref: SessionRef): void;
+  stopSession(ref: SessionRef): Promise<void>;
+  closeSession(ref: SessionRef): Promise<void>;
+  addRoomMember(input: Params<'rooms.addMember'>): Promise<string>;
+  roles(projectPath: string): Promise<readonly RoleSummary[]>;
+  leanAgents(): Promise<boolean>;
+  /** Готовность провайдера к запуску агента, без проверки версии для помощника. */
+  providerReady(entry: ProviderEntry): Promise<string | null>;
+  /** Карточку `actions` есть кому показать: окно с `assistant-actions` или привязанный Telegram. */
+  actionsShown(): boolean;
   /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
   endpoint: { origin(): string | null; setToken(token: string | null): void };
   providers(): Promise<Record<string, ProviderEntry>>;
@@ -98,7 +123,8 @@ export interface AssistantService {
   /** `null` — зеркала нет (старое окно). */
   settings(): AssistantSettings | null;
   cancel(): void;
-  decide(proposalId: string, decision: 'send' | 'cancel'): Promise<{ applied: boolean; error: string | null }>;
+  /** `action: 'actions'` — подтверждение карточки с планом; без него хост такой план не выполнит (старое окно). */
+  decide(proposalId: string, decision: 'send' | 'cancel', action?: 'actions'): Promise<{ applied: boolean; error: string | null }>;
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
@@ -151,6 +177,11 @@ type PendingBody =
       view: Extract<AssistantProposal, { action: 'decision' }>;
       /** Сессия, чью карточку решаем; сама карточка — `view.card.cardId`. */
       ref: SessionRef;
+    }
+  | {
+      kind: 'actions';
+      view: Extract<AssistantProposal, { action: 'actions' }>;
+      plan: PreparedPlan;
     };
 
 const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', moods: [], proposal: null, outcome: null, error: null, turn: 0, askId: null };
@@ -174,6 +205,19 @@ const roomTailOf: OverviewSource['roomTail'] = (entry, roomId, count) => {
     throw error;
   }
 };
+
+/** Страница писем комнаты из базы работы, от новых к старым; работы в базе нет — писем нет. */
+const letterPageOf: LetterPage = (entry, roomId, query) => {
+  try {
+    return readLetters(entry.projectPath, entry.map.work.id, { roomId, ...query, newestFirst: true });
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return [];
+    throw error;
+  }
+};
+
+/** Скрытые цели (закрытые сессии, архив) — только для инструментов чтения и `parley_detail`: их находят по точному id или имени. */
+const hiddenOf = (src: OverviewSource): AssistantTarget[] => targetsOf(src, { hidden: true }).filter((target) => target.hidden !== undefined);
 
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
 /** Эмоция первой фразы: отметка в самом начале ответа; нет её — `calm`. */
@@ -221,11 +265,11 @@ const hostSummary = (card: FeedCard, projectPath: string): string => {
 };
 const stringArg = (input: Record<string, unknown>, key: string): string => (typeof input[key] === 'string' ? (input[key] as string) : '');
 
-function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[]): AssistantDetail {
-  if (name === 'parley_overview') return { tool: 'overview', target: null };
-  if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision' || name === 'propose_decision') return { tool: 'propose', target: null };
-  if (name === 'parley_detail') {
-    const found = resolveTarget(targets, stringArg(input, 'target'));
+function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantDetail {
+  if (name === 'parley_overview' || name === 'parley_find') return { tool: 'overview', target: null };
+  if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision' || name === 'propose_decision' || name === 'propose_actions') return { tool: 'propose', target: null };
+  if (name === 'parley_detail' || name === 'parley_room' || name === 'parley_session') {
+    const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     return { tool: 'detail', target: 'target' in found ? found.target.name : null };
   }
   return { tool: 'other', target: null };
@@ -242,6 +286,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let conversation: Conversation | null = null;
   let turn: TurnHandle | null = null;
   let pending: Pending | null = null;
+  /** Id карточки `actions`, чей план выполняется сейчас; пока он не `null`, второй план не предлагается и не стартует. */
+  let running: string | null = null;
   let outcomeNote: string | null = null;
   let proposals = 0;
   let idleTimer: NodeJS.Timeout | null = null;
@@ -267,6 +313,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     entries: deps.works.snapshot().entries,
     live: (ref) => deps.activity.get(ref),
     roomTail: roomTailOf,
+    home: homedir(),
   });
   /**
    * Реестр провайдеров и часы для строки `need` в обзоре (имя аккаунта и время сброса в причине); сбой реестра —
@@ -367,7 +414,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const codex = entry.runner.mcpConfig === 'codex-override';
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
-    const prompt = [voiceNote, outcomeNote, text].filter((part) => part !== null).join('\n');
+    // «Да» словами при ждущей карточке `actions` её не подтверждает: ход узнаёт об этом от Parley и просит нажать кнопку.
+    const buttonNote = pending?.kind === 'actions' && matchConfirm(text) === 'send' ? ACTIONS_BUTTON_NOTE : null;
+    const prompt = [voiceNote, outcomeNote, buttonNote, text].filter((part) => part !== null).join('\n');
     outcomeNote = null;
     const command = assistantCommand(
       entry,
@@ -397,7 +446,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Остановка хоста во время запуска — то же самое: процесс уже не нужен.
     if (ask.ticket !== asks || stopped) return 'evicted';
     current.gender = gender;
-    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin });
+    // Отчёт идущего плана переживает новый ход; законченный убирается.
+    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
 
     // Метки эмоций срезаются все, по предложениям (#9 §6.7 L3). Эмоцию решает первый текст после последнего
     // инструмента: GLM ставит метку до инструмента отдельным блоком.
@@ -436,7 +486,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           answer = '';
           moods = [];
           tail = '';
-          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(source())), answer, moods });
+          const src = source();
+          publish({ phase: 'tool', detail: detailOf(event.name, event.input, targetsOf(src), hiddenOf(src)), answer, moods });
         } else if (event.type === 'text') {
           // Дельты всех блоков хода идут подряд: «посмотрю.» + «[[calm]] В работе» склеились бы в «посмотрю.В работе».
           // Блок Claude начинает `content_block_start`, у Codex каждый текст — целое сообщение.
@@ -489,7 +540,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       end.kind === 'limit'
         ? `${entry.label} limit reached — ${firstLine(end.message)}`
         : end.kind === 'timeout'
-          ? 'No answer in 60 s'
+          ? `No answer in ${Math.round((deps.turnTimeoutMs ?? ASSISTANT_TURN_MS) / 1000)} s`
           : end.kind === 'start'
             ? `${entry.label} CLI didn't start`
             : 'Something went wrong — try again';
@@ -531,13 +582,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { ok: picked };
   }
 
-  function propose(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
+  /** Цель из скрытых (закрытая сессия, архив) для карточки не годится: её находят по точному id или имени и отказывают понятно. */
+  const hiddenRefusal = (target: AssistantTarget): AssistantReply | null =>
+    target.hidden === undefined ? null : { status: 409, body: { error: `${target.name} is ${target.hidden}; reopen it in Parley first` } };
+
+  function propose(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const text = stringArg(input, 'text').trim();
     if (text === '') return { status: 400, body: { error: 'text is empty' } };
     if (text.length > MAX_TEXT) return { status: 400, body: { error: `text is longer than ${MAX_TEXT} characters` } };
-    const found = resolveTarget(targets, stringArg(input, 'target'));
+    const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const target = found.target;
+    const gone = hiddenRefusal(target);
+    if (gone !== null) return gone;
     if (target.kind === 'work') return { status: 400, body: { error: `${target.name} is a work; message a room or a session` } };
     const wanted = Array.isArray(input['mention']) ? input['mention'].filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
     let mentioned: SessionTarget[] = [];
@@ -575,24 +632,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
 
-  /**
- * Сессия работы по id, имени («S03», «S03 Ruslan») или полному id цели; закрытые тоже находятся — о них скажет `unreachable`.
- * Полный id принимается только этой работы (`prefix`): номера сессий у каждой работы свои, чужой `s-03` не подходит.
- */
-  function memberOf(map: WorkMap, wanted: string, prefix: string): { session: { id: string; name: string; lifecycle: SessionLifecycle } } | AssistantReply {
-    const key = wanted.trim().toLowerCase();
-    const all = map.sessions.map((session) => ({ id: session.id, name: participantLabel(map, session.id), lifecycle: session.lifecycle }));
-    const matches = all.filter((session) => key !== '' && (session.id.toLowerCase() === key || key === `session:${prefix}:${session.id}`.toLowerCase() || session.name.toLowerCase() === key || session.name.toLowerCase().split(' ')[0] === key));
-    const [only] = matches;
-    if (matches.length === 1 && only !== undefined) return { session: only };
-    if (matches.length > 1) return { status: 400, body: { error: `"${wanted}" matches several sessions of "${map.work.title}": ${matches.map((session) => session.name).join(', ')}` } };
-    return { status: 404, body: { error: `No session "${wanted}" in work "${map.work.title}". Call parley_overview for the current ids.` } };
-  }
-
-  function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
-    const found = resolveTarget(targets, stringArg(input, 'work'));
+  function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+    const found = resolveTarget(targets, stringArg(input, 'work'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const work = found.target;
+    const gone = hiddenRefusal(work);
+    if (gone !== null) return gone;
     if (work.kind !== 'work') return { status: 404, body: { error: `${work.name} is not a work` } };
     const map = workMap(src, work);
     if (map === undefined) return { status: 404, body: { error: `No work "${work.name}"` } };
@@ -646,10 +691,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
-  function proposeRoomDecision(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
-    const found = resolveTarget(targets, stringArg(input, 'target'));
+  function proposeRoomDecision(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+    const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const room = found.target;
+    const gone = hiddenRefusal(room);
+    if (gone !== null) return gone;
     if (room.kind !== 'room') return { status: 404, body: { error: `${room.name} is not a room` } };
     const choice = input['choice'];
     if (choice !== 'accept' && choice !== 'return') return { status: 400, body: { error: 'choice must be "accept" or "return"' } };
@@ -713,10 +760,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { error: `answers must cover every question, by its number or exact text: ${list}` };
   }
 
-  async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[]): Promise<AssistantReply> {
-    const found = resolveTarget(targets, stringArg(input, 'target'));
+  async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
+    const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const session = found.target;
+    const gone = hiddenRefusal(session);
+    if (gone !== null) return gone;
     if (session.kind !== 'session') return { status: 404, body: { error: `${session.name} is not a session` } };
     const parsed = feedDecision.safeParse(input['decision']);
     if (!parsed.success) return { status: 400, body: { error: 'decision must be {kind:"permission",behavior:"allow"|"deny"}, {kind:"question",answers:{...}} or {kind:"plan",choice:"auto-accept"|"manual"}' } };
@@ -822,26 +871,35 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { applied: true, error: error ?? null };
   }
 
+  /**
+   * Письмо сессии от имени человека: живой — `send`, спящей — подъём этим текстом первым ходом, запись в журнале
+   * отправленного. `string` — отказ (причина по-английски), `null` — ушло. Общая для карточки письма и шага плана.
+   */
+  async function sendToSession(ref: SessionRef, name: string, text: string): Promise<string | null> {
+    // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
+    const session = deps.works
+      .snapshot()
+      .entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)
+      ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    const refusal = unreachable(name, session?.lifecycle);
+    if (refusal !== null) return refusal;
+    if (session?.lifecycle === 'sleeping') {
+      await deps.launch(ref, 'resume', { by: 'human', prompt: text });
+    } else {
+      const result = await deps.send({ ref, text, submit: true });
+      if (!result.inserted) return `${name} can't take a message now (${result.reason ?? 'busy'})`;
+    }
+    await appendSent(deps.home, ref, text, new Date(now()).toISOString());
+    return null;
+  }
+
   async function applyMessage(current: Extract<Pending, { kind: 'message' }>): Promise<{ applied: boolean; error: string | null }> {
     if (current.target.kind === 'room') {
       const { projectPath, workId, roomId } = current.target;
       await deps.sendLetter({ projectPath, workId, roomId, to: current.to, text: withMentions(current.to, current.view.text), kind: current.view.kind ?? 'note' });
     } else {
-      const { ref, name } = current.target;
-      // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
-      const session = deps.works
-        .snapshot()
-        .entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)
-        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
-      const refusal = unreachable(name, session?.lifecycle);
+      const refusal = await sendToSession(current.target.ref, current.target.name, current.view.text);
       if (refusal !== null) return { applied: false, error: refusal };
-      if (session?.lifecycle === 'sleeping') {
-        await deps.launch(ref, 'resume', { by: 'human', prompt: current.view.text });
-      } else {
-        const result = await deps.send({ ref, text: current.view.text, submit: true });
-        if (!result.inserted) return { applied: false, error: `${name} can't take a message now (${result.reason ?? 'busy'})` };
-      }
-      await appendSent(deps.home, ref, current.view.text, new Date(now()).toISOString());
     }
     return settle(current, 'sent');
   }
@@ -900,6 +958,99 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return settle(current, 'cancelled', 'already answered', 'Already answered');
     }
     return settle(current, 'done');
+  }
+
+  async function proposeActions(input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
+    if (running !== null) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
+    if (!deps.actionsShown()) return { status: 409, body: { error: 'No Parley window can show this card; ask the person to open or update Parley' } };
+    const prepared = await preparePlan(input, {
+      source: src,
+      roles: deps.roles,
+      registry: await deps.providers(),
+      ready: deps.providerReady,
+      fallbackProvider: mirror?.defaultProvider ?? null,
+    });
+    if ('error' in prepared) return { status: 400, body: { error: prepared.error } };
+    const { plan } = prepared;
+    proposals += 1;
+    pending = {
+      token: conversation?.token ?? '',
+      kind: 'actions',
+      view: { action: 'actions', id: `p${proposals}`, target: plan.target, where: plan.where, text: plan.text, steps: plan.view },
+      plan,
+    };
+    publish({ proposal: pending.view, outcome: null });
+    return { status: 200, body: { text: ACTIONS_SHOWN } };
+  }
+
+  /** Функции хоста, которыми `runPlan` исполняет шаги: те же, что зовёт окно, от имени человека. */
+  const executors: PlanExecutors = {
+    source,
+    createWork: (input) => deps.createWork(input),
+    createSession: async ({ projectPath, workId, provider, label, task, role, model, lean }) => {
+      // `requestedBy` не передаётся: помощник действует от имени человека, лимиты агентов на него не распространяются, как у окна.
+      // `model` — только когда названа: явный `null` стёр бы умолчание роли.
+      const { held, ...ref } = await deps.createSession({ projectPath, workId, provider, label, task, parent: null, lean, ...(role === null ? {} : { role }), ...(model === null ? {} : { model }) });
+      return { ref, held: held !== undefined };
+    },
+    resume: (ref, prompt) => deps.resume(ref, prompt),
+    interrupt: async (ref) => deps.interrupt(ref),
+    sleep: (ref) => deps.stopSession(ref),
+    close: (ref) => deps.closeSession(ref),
+    createRoom: (input) => deps.createRoom(input),
+    addMember: async (input) => {
+      await deps.addRoomMember(input);
+    },
+    roomMessage: async (input) => {
+      await deps.sendLetter({ ...input, text: withMentions(input.to, input.text) });
+    },
+    sessionMessage: sendToSession,
+    lean: () => deps.leanAgents(),
+  };
+
+  /** Что сказать модели о плане, который кончился: сделано всё или остановка на шаге. */
+  function planNote(id: string, report: ActionsReport): string {
+    if (report.status !== 'stopped') return `[system: proposal ${id} was done${report.notes.length === 0 ? '' : ` (${report.notes.join('; ')})`}]`;
+    const at = report.failedStep ?? report.steps.length;
+    const done = at - 1 <= 0 ? 'no steps done' : at - 1 === 1 ? 'step 1 done' : `steps 1–${at - 1} done`;
+    return `[system: proposal ${id} stopped at step ${at} of ${report.steps.length}: ${report.reason ?? 'unknown reason'}; ${done}]`;
+  }
+
+  /**
+   * Клик по карточке `actions`: карточка уходит до первого `await`, план идёт в фоне, вызов окна его конца не ждёт.
+   * Каждый шаг публикует отчёт; в конце — итог, `outcome: 'done'` и заметка модели, если разговор тот же.
+   */
+  function startPlan(current: Extract<Pending, { kind: 'actions' }>): { applied: true; error: null } {
+    pending = null;
+    const id = current.view.id;
+    running = id;
+    publish({
+      proposal: null,
+      outcome: null,
+      phase: turn === null ? restPhase() : state.phase,
+      report: { proposalId: id, status: 'running', steps: current.plan.view.map((step) => ({ line: step.line, status: 'waiting' })), failedStep: null, reason: null, notes: [] },
+    });
+    void runPlan(id, current.plan, executors, (report) => publish({ report }), () => stopped)
+      .catch(
+        (error: unknown): ActionsReport => ({
+          proposalId: id,
+          status: 'stopped',
+          steps: current.plan.view.map((step) => ({ line: step.line, status: 'skipped' as const })),
+          failedStep: 1,
+          reason: (error as Error).message,
+          notes: [],
+        }),
+      )
+      .then((final) => {
+        running = null;
+        touch();
+        if (conversation?.token === current.token) outcomeNote = planNote(id, final);
+        publish({ report: final, outcome: 'done', phase: turn === null ? restPhase() : state.phase });
+      })
+      .catch((error: unknown) => {
+        deps.log(`assistant: plan ${id} report failed: ${(error as Error).message}`);
+      });
+    return { applied: true, error: null };
   }
 
   /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
@@ -986,9 +1137,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       stopTurn();
       publish({ phase: restPhase(), detail: null });
     },
-    async decide(proposalId, decision) {
+    async decide(proposalId, decision, action) {
       const current = pending;
       if (current === null || current.view.id !== proposalId) return { applied: false, error: 'This card is no longer current' };
+      if (current.kind === 'actions') {
+        if (decision === 'send') {
+          // План выполняется только по кнопке карточки нового окна: клиент без поля `action` его не подтверждает.
+          if (action !== 'actions') return { applied: false, error: 'Update Parley to confirm this card' };
+          if (running !== null) return { applied: false, error: 'Another plan is still running' };
+          return startPlan(current);
+        }
+        pending = null;
+        return settle(current, 'cancelled');
+      }
       // Карточка забирается до первого await: второй `decide` с тем же id не выполнит действие повторно.
       pending = null;
       if (decision === 'cancel') return settle(current, 'cancelled');
@@ -1017,7 +1178,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       stopTurn();
       endConversation();
       pending = null;
-      publish({ ...EMPTY, turn: state.turn });
+      // Идущий план продолжается: его отчёт остаётся на острове, пока не кончится.
+      publish({ ...EMPTY, turn: state.turn, report: running === null ? null : (state.report ?? null) });
     },
     state: () => state,
     sent: (ref) => readSent(deps.home, ref),
@@ -1027,27 +1189,69 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
       const src = source();
       const targets = targetsOf(src);
+      const hidden = hiddenOf(src);
       switch (name) {
         case 'parley_overview': {
           const cards = await waitingCards(src);
           return { status: 200, body: { text: overviewText({ ...src, ...(await reasonContext()), cards: (ref) => cards.get(refKey(ref)) }) } };
         }
         case 'parley_detail': {
-          const found = resolveTarget(targets, stringArg(input, 'target'));
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
           if ('error' in found) return { status: 404, body: { error: found.error } };
           const target = found.target;
           const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
           const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
           return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
         }
+        case 'parley_find': {
+          const query = stringArg(input, 'query').trim();
+          if (query === '') return { status: 400, body: { error: 'query is empty' } };
+          return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
+        }
+        case 'parley_room': {
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+          if ('error' in found) return { status: 404, body: { error: found.error } };
+          const target = found.target;
+          if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
+          const before = input['before'];
+          if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
+            return { status: 400, body: { error: 'before must be the number from the last reply' } };
+          }
+          const limit = input['limit'];
+          return {
+            status: 200,
+            body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
+          };
+        }
+        case 'parley_session': {
+          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+          if ('error' in found) return { status: 404, body: { error: found.error } };
+          const target = found.target;
+          if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
+          const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
+          let items: readonly FeedItem[] = [];
+          if (deps.feed !== undefined) {
+            try {
+              items = (await deps.feed.snapshot(target.ref)).items;
+            } catch {
+              // ленты у сессии нет — «истории пока нет»
+            }
+          }
+          const before = stringArg(input, 'before');
+          const limit = input['limit'];
+          const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
+          return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
+        }
         case 'propose_message':
-          return propose(input, src, targets);
+          return propose(input, src, targets, hidden);
         case 'propose_room':
-          return proposeRoom(input, src, targets);
+          return proposeRoom(input, src, targets, hidden);
         case 'propose_room_decision':
-          return proposeRoomDecision(input, src, targets);
+          return proposeRoomDecision(input, src, targets, hidden);
         case 'propose_decision':
-          return proposeDecision(input, targets);
+          return proposeDecision(input, targets, hidden);
+        case 'propose_actions':
+          return proposeActions(input, src);
         case 'schedule_check':
         case 'list_reminders':
         case 'cancel_reminder':

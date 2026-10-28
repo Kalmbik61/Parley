@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedCard, SessionNeed, WorkEntry, WorkMap } from '@parley/core';
 import type { SessionLive } from '../activity/activity-service.js';
-import { cardLine, detailText, overviewText, resolveTarget, targetsOf, type OverviewSource } from './overview.js';
+import { briefLine, cardLine, detailText, overviewText, resolveTarget, roomHeader, targetsOf, type OverviewSource } from './overview.js';
 
 function session(id: string, label: string, extra: Record<string, unknown> = {}) {
   return { id, label, provider: 'claude', task: `task of ${label}`, summary: null, lifecycle: 'active', ...extra };
@@ -45,6 +45,11 @@ function source(entries: WorkEntry[], states: Record<string, SessionLive>): Over
 
 describe('targetsOf и resolveTarget', () => {
   const src = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('working'), 's-05': live('idle') });
+  const archived = entry('/p/a', 'w-a', 'Old', { work: { id: 'w-a', title: 'Old', goal: '', status: 'archived' } } as Partial<WorkMap>);
+  const roomArchived = entry('/p/b', 'w-b', 'B', {
+    rooms: [{ id: 'r-9', title: 'Gone', creator: 's-03', members: [], createdAt: '', lead: null, proposal: null, archivedAt: '2026-10-01' }],
+    sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'closed', role: { source: 'builtin', name: 'Reviewer' } })],
+  } as unknown as Partial<WorkMap>);
   it('id по проекту, работе и элементу', () => {
     const ids = targetsOf(src).map((target) => target.id);
     expect(ids).toHaveLength(4);
@@ -70,11 +75,6 @@ describe('targetsOf и resolveTarget', () => {
     expect(resolveTarget(two, 'Billing')).toMatchObject({ error: expect.stringContaining('parley_overview') });
   });
   it('архивная работа, архивная комната и закрытая сессия — не цели', () => {
-    const archived = entry('/p/a', 'w-a', 'Old', { work: { id: 'w-a', title: 'Old', goal: '', status: 'archived' } } as Partial<WorkMap>);
-    const roomArchived = entry('/p/b', 'w-b', 'B', {
-      rooms: [{ id: 'r-9', title: 'Gone', creator: 's-03', members: [], createdAt: '', lead: null, proposal: null, archivedAt: '2026-10-01' }],
-      sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'closed' })],
-    } as unknown as Partial<WorkMap>);
     // Остаётся только цель-работа: комната в архиве, сессия закрыта, архивной работы нет вовсе.
     expect(targetsOf(source([archived, roomArchived], {})).map((target) => target.kind)).toEqual(['work']);
   });
@@ -91,6 +91,66 @@ describe('targetsOf и resolveTarget', () => {
   it('живая сессия без выведенной activity — тоже running: true', () => {
     const target = targetsOf(source([entry('/p/one', 'w-1', 'Parley')], {})).find((item) => item.kind === 'session');
     expect(target).toMatchObject({ running: true, lifecycle: 'active' });
+  });
+  it('hidden: true — архивные и закрытые с пометкой', () => {
+    const targets = targetsOf(source([archived, roomArchived], {}), { hidden: true });
+    expect(targets.filter((t) => t.hidden === 'archived').map((t) => t.kind)).toEqual(expect.arrayContaining(['work', 'room']));
+    expect(targets.find((t) => t.kind === 'session' && t.hidden === 'closed')).toBeDefined();
+    // Без опции пометок нет вовсе.
+    expect(targetsOf(source([archived, roomArchived], {})).some((t) => t.hidden !== undefined)).toBe(false);
+  });
+  it('имя проекта — запасной путь к его единственной работе', () => {
+    const targets = targetsOf(source([entry('/u/scanum', 'w-1', 'Billing')], {}));
+    expect(resolveTarget(targets, 'Scanum')).toMatchObject({ target: { kind: 'work', name: 'Billing' } });
+  });
+  it('название работы побеждает имя проекта другого проекта', () => {
+    const targets = targetsOf(source([entry('/u/parley', 'w-1', 'Site'), entry('/u/other', 'w-2', 'Parley')], {}));
+    expect(resolveTarget(targets, 'parley')).toMatchObject({ target: { kind: 'work', name: 'Parley' } });
+  });
+  it('проект с двумя работами — ошибка со списком', () => {
+    const targets = targetsOf(source([entry('/u/scanum', 'w-1', 'A'), entry('/u/scanum', 'w-2', 'B')], {}));
+    expect(resolveTarget(targets, 'scanum')).toMatchObject({ error: expect.stringMatching(/several works.*work:/) });
+  });
+  it('два проекта с одним именем папки — тоже ошибка со списком', () => {
+    const targets = targetsOf(source([entry('/a/scanum', 'w-1', 'A'), entry('/b/scanum', 'w-2', 'B')], {}));
+    expect(resolveTarget(targets, 'scanum')).toMatchObject({ error: expect.stringMatching(/several works.*work:/) });
+  });
+  it('скрытая цель — только по id или полному имени и с пометкой', () => {
+    const only = source([roomArchived], {});
+    const hidden = targetsOf(only, { hidden: true }).filter((t) => t.hidden !== undefined);
+    const closed = hidden.find((t) => t.kind === 'session')!;
+    expect(resolveTarget(targetsOf(only), closed.id, { hidden })).toEqual({ target: closed });
+    expect(resolveTarget(targetsOf(only), 'S03 Ruslan', { hidden })).toMatchObject({ target: { hidden: 'closed' } });
+    expect(resolveTarget(targetsOf(only), 'S03 Ruslan')).toMatchObject({ error: expect.stringContaining('parley_find') });
+  });
+  it('briefLine: работа, комната и сессия — состояние, где, роль и пометка', () => {
+    const only = source([roomArchived], {});
+    const hidden = targetsOf(only, { hidden: true });
+    const closedTarget = hidden.find((t) => t.kind === 'session')!;
+    const archivedRoomTarget = hidden.find((t) => t.kind === 'room')!;
+    expect(briefLine(only, closedTarget)).toMatch(/^Session S03 Ruslan \[session:[^\]]+\] claude · closed · in B · b · role Reviewer$/);
+    expect(briefLine(only, archivedRoomTarget)).toMatch(/^Room "Gone" \[room:[^\]]+\] in B · b · archived$/);
+    expect(briefLine(src, targetsOf(src)[0]!)).toMatch(/^Work "Parley" \[work:[^\]]+\] \(project one\)$/);
+    expect(briefLine(src, targetsOf(src).find((t) => t.kind === 'session' && t.name.startsWith('S05'))!)).toMatch(
+      /^Session S05 Vera \[session:[^\]]+\] claude · idle · in Parley · one$/,
+    );
+  });
+  it('briefLine: закрытая сессия с итогом — слово итога и пометка closed в конце', () => {
+    const doneClosed = source(
+      [
+        entry('/p/b', 'w-b', 'B', {
+          sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'closed', result: 'done', role: { source: 'builtin', name: 'Reviewer' } })],
+        } as unknown as Partial<WorkMap>),
+      ],
+      {},
+    );
+    const target = targetsOf(doneClosed, { hidden: true }).find((t) => t.kind === 'session')!;
+    expect(briefLine(doneClosed, target)).toMatch(/· done · in .* · closed$/);
+  });
+  it('roomHeader: участники, решение и план — строки шапки комнаты', () => {
+    const lines = roomHeader(src, src.entries[0]!, 'r-1', 'Parley · one');
+    expect(lines[0]).toBe('Room "Auth" in Parley · one; members: S03 Ruslan, S05 Vera');
+    expect(roomHeader(src, src.entries[0]!, 'r-404', 'x')).toEqual([]);
   });
 });
 
@@ -157,11 +217,78 @@ describe('overviewText', () => {
   it('пусто — так и говорит', () => {
     expect(overviewText(source([], {}))).toBe('No works are open in Parley right now.');
   });
-  it('длинный снимок срезается по работам с пометкой', () => {
-    const many = Array.from({ length: 60 }, (_, index) => entry(`/p/${index}`, `w-${index}`, `Work ${index}`));
-    const text = overviewText(source(many, {}), 2000);
-    expect(text.length).toBeLessThanOrEqual(2200);
-    expect(text).toMatch(/more works not shown/);
+  // 12 работ по 8 сессий (task 150 знаков, summary 200) и 3 комнаты; s-07 каждой работы — blocked.
+  const levelLabels = ['S01 Anna', 'S02 Boris', 'S03 Ruslan', 'S04 Dina', 'S05 Vera', 'S06 Oleg', 'S07 Lena', 'S08 Igor'];
+  const levelSessions = levelLabels.map((label, index) =>
+    session(`s-0${index + 1}`, label, { task: `task of ${label}`.padEnd(150, '.'), summary: `summary of ${label}`.padEnd(200, '.') }),
+  );
+  const levelStates: Record<string, SessionLive> = {
+    's-01': live('idle'), 's-02': live('idle'), 's-03': live('working'), 's-04': live('idle'),
+    's-05': live('idle'), 's-06': live('idle'), 's-07': live('blocked', 'Bash: rm'), 's-08': live('idle'),
+  };
+  const levelRooms = [
+    { id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03', 's-05', 's-07'], createdAt: '', lead: null, proposal: null },
+    { id: 'r-2', title: 'Ship', creator: 's-01', members: ['s-01'], createdAt: '', lead: 's-01', proposal: { id: 'p-01', from: 's-01', text: 'Accept the change', rev: 1, at: '' } },
+    { id: 'r-3', title: 'Empty', creator: 's-03', members: [], createdAt: '', lead: null, proposal: null },
+  ];
+  const src = source(
+    Array.from({ length: 12 }, (_, index) =>
+      entry(`/p/proj-${index + 1}`, `w-${index + 1}`, `Work ${index + 1}`, { sessions: levelSessions, rooms: levelRooms } as unknown as Partial<WorkMap>),
+    ),
+    levelStates,
+  );
+  // Одна открытая работа с закрытой сессией и архивной комнатой и одна архивная работа.
+  const hiddenSrc = source(
+    [
+      entry('/p/open', 'w-1', 'Open', {
+        sessions: [session('s-03', 'S03 Ruslan'), session('s-09', 'S09 Old', { lifecycle: 'closed' })],
+        rooms: [
+          { id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03'], createdAt: '', lead: null, proposal: null },
+          { id: 'r-9', title: 'Gone', creator: 's-03', members: [], createdAt: '', lead: null, proposal: null, archivedAt: '2026-10-01' },
+        ],
+      } as unknown as Partial<WorkMap>),
+      entry('/p/old', 'w-2', 'Old', { work: { id: 'w-2', title: 'Old', goal: '', status: 'archived' } } as Partial<WorkMap>),
+    ],
+    {},
+  );
+
+  it('обзор без потерь: 12 работ по 8 сессий и 3 комнаты — все id в тексте', () => {
+    const text = overviewText(src);
+    for (const target of targetsOf(src)) expect(text).toContain(`[${target.id}]`);
+    expect(text).not.toContain('not shown');
+  });
+  it('ступень 1: у простаивающих нет task, у работающих есть', () => {
+    const full = overviewText(src, Number.POSITIVE_INFINITY);
+    const one = overviewText(src, full.length - 1);
+    expect(one).toContain('task: task of S03 Ruslan'); // working
+    expect(one).not.toContain('task: task of S05 Vera'); // idle
+  });
+  it('ступень 2: task остаётся только у ждущих человека', () => {
+    const one = overviewText(src, overviewText(src, Number.POSITIVE_INFINITY).length - 1);
+    const two = overviewText(src, one.length - 1);
+    expect(two).not.toContain('task: task of S03 Ruslan');
+    expect(two).toContain('task: task of S07 Lena');
+  });
+  it('ступень 3: сжатые строки, ждущие и решения ведущих — целиком', () => {
+    const three = overviewText(src, 1);
+    expect(three).toMatch(/^ {2}Session S05 Vera \[session:[0-9a-f]{6}:w-1:s-05\] claude · idle · in room "Auth"$/m);
+    expect(three).toMatch(/^ {2}Room "Auth" \[room:[0-9a-f]{6}:w-1:r-1\]: 3 members, 1 working, 1 need the person$/m);
+    expect(three).toContain('waiting for: Bash: rm');
+    expect(three).toContain('waits: decision from');
+  });
+  it('строка о скрытом: закрытые, архивные комнаты и работы', () => {
+    expect(overviewText(hiddenSrc)).toMatch(/Also 1 closed session, 1 archived room, 1 archived work — use parley_find with include_closed/);
+    expect(overviewText(src)).not.toContain('Also ');
+  });
+  it('нет открытых работ, но есть архивные — пустой обзор и строка о скрытом', () => {
+    const onlyOld = source([entry('/p/old', 'w-2', 'Old', { work: { id: 'w-2', title: 'Old', goal: '', status: 'archived' } } as Partial<WorkMap>)], {});
+    expect(overviewText(onlyOld)).toMatch(/^No works are open in Parley right now\.\n\nAlso 1 archived work — use parley_find/);
+  });
+  it('две папки с одним именем — у работы родительская папка', () => {
+    const text = overviewText({ ...source([entry('/u/me/Desktop/scanum', 'w-1', 'A'), entry('/u/me/work/scanum', 'w-2', 'B')], {}), home: '/u/me' });
+    expect(text).toContain('(project scanum in ~/Desktop)');
+    expect(text).toContain('(project scanum in ~/work)');
+    expect(overviewText(source([entry('/p/parley', 'w-1', 'A')], {}))).toContain('(project parley)');
   });
 });
 
