@@ -65,6 +65,14 @@ describe('shared project identity', () => {
       kind: 'git', projectPath: path.join(main, 'nested'), checkoutRoot: linked, mainRoot: main,
     });
   });
+  it('skips prunable linked worktrees whose folders were deleted', async () => {
+    const main = await repository(); const gone = path.join(root, 'gone'); const live = path.join(root, 'live');
+    await git(main, 'worktree', 'add', '-b', 'gone', gone); await git(main, 'worktree', 'add', '-b', 'live', live);
+    await rm(gone, { recursive: true, force: true });
+    expect(await resolveSharedProjectContext(main)).toMatchObject({ kind: 'git', projectPath: main, mainRoot: main });
+    expect(await resolveSharedProjectContext(live)).toMatchObject({ kind: 'git', projectPath: main, checkoutRoot: live, mainRoot: main });
+    expect(await resolveMainCheckout(live)).toBe(main);
+  });
   it('does not substitute another folder when the corresponding main folder is missing', async () => {
     const main = await repository(); const linked = path.join(root, 'linked');
     await git(main, 'worktree', 'add', '-b', 'linked', linked); await mkdir(path.join(linked, 'only-linked'));

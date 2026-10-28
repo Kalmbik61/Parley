@@ -4,7 +4,7 @@ import { validMemoryText, validateMemoryProvenance, type MemoryItem } from './pr
 
 export const SESSION_ARGUMENT_MAX_BYTES = 98304;
 export const MEMORY_MAX_BYTES = 12288;
-export interface MemoryLayerWarning { code: 'memory-truncated' | 'memory-unreadable'; message: string }
+export interface MemoryLayerWarning { code: 'memory-truncated' | 'memory-unreadable' | 'project-context-unavailable'; message: string }
 export type SessionLayerWarning = LayerWarning | MemoryLayerWarning;
 export const MEMORY_TRUNCATION_MARKER = '[Project memory is cut at 12 KiB; clean up memory.md to include the remaining facts.]';
 const SPAWN_RESERVE_BYTES = 32768;

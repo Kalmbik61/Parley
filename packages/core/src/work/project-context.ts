@@ -103,6 +103,8 @@ async function resolveProjectIdentity(
     for (const record of records) {
       const fields = record.split('\0');
       if (!fields[0]?.startsWith('worktree ') || fields.includes('bare')) return unavailable;
+      // Git marks a linked worktree whose folder was deleted as `prunable`; such a record is not a root.
+      if (fields.some(field => field === 'prunable' || field.startsWith('prunable '))) continue;
       const folder = fields[0].slice(9);
       if (!path.isAbsolute(folder)) return unavailable;
       const canonical = await realpath(folder);
