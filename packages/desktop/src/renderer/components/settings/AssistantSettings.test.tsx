@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DownloadResult } from '../../../shared/voice-types.js';
 import { S } from '../../../shared/strings.js';
-import { TTS_VOICES } from '../../../shared/tts-types.js';
+import { TTS_MODELS, TTS_VOICES, type TtsModelId } from '../../../shared/tts-types.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { chooseOption, installRadixSelectPolyfills } from '../../test-utils/radix-select.js';
@@ -135,18 +135,25 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
 });
 
 describe('AssistantSettings: голос (план 3b, B20; #9 §6.8)', () => {
-  /** Скачивание, которое тест завершает сам: пока промис висит, идёт загрузка. */
-  const pendingDownload = (): { finish: (result: DownloadResult) => void } => {
-    let finish: (result: DownloadResult) => void = () => undefined;
-    bridge.app.assistantVoiceDownload = () => {
-      bridge.assistantVoiceCalls.push('download');
+  const SMALL: TtsModelId = 'qwen3-tts-0.6b-q8_0';
+  const LARGE: TtsModelId = 'qwen3-tts-1.7b-q8_0';
+  /** Скачивание, которое тест завершает сам: пока промис висит, идёт загрузка этой модели. */
+  const pendingDownload = (): { finish: (id: TtsModelId, result: DownloadResult) => void } => {
+    const finishers = new Map<TtsModelId, (result: DownloadResult) => void>();
+    bridge.app.assistantVoiceDownload = (id) => {
+      bridge.assistantVoiceCalls.push(`download:${id}`);
       return new Promise((resolve) => {
-        finish = resolve;
+        finishers.set(id, resolve);
       });
     };
-    return { finish: (result) => finish(result) };
+    return { finish: (id, result) => finishers.get(id)?.(result) };
   };
-  const modelRow = (): HTMLElement => document.querySelector<HTMLElement>('[data-assistant-voice-model]')!;
+  const modelRow = (id: TtsModelId): HTMLElement => document.querySelector<HTMLElement>(`[data-assistant-voice-model="${id}"]`)!;
+  const progressOf = (id: TtsModelId, received: number): { id: TtsModelId; receivedBytes: number; totalBytes: number } => ({
+    id,
+    receivedBytes: received,
+    totalBytes: TTS_MODELS.find((model) => model.id === id)!.bytes,
+  });
 
   it('«Speak answers» пишет assistant.speak через patchUi', () => {
     render(<AssistantSettings />);
@@ -175,64 +182,177 @@ describe('AssistantSettings: голос (план 3b, B20; #9 §6.8)', () => {
     expect(screen.queryAllByRole('radio')).toEqual([]);
   });
 
-  it('голос недоступен (x64, сбой движка): видна строка, Download не нажимается', async () => {
+  it('голос недоступен (x64, сбой движка): видна строка, у обеих моделей Download не нажимается', async () => {
     bridge.setAssistantVoiceState({ state: 'unavailable', reason: 'the voice engine needs Apple Silicon' });
     bridge.app.assistantVoices = async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: false }));
     render(<AssistantSettings />);
     await waitFor(() => expect(screen.getByText(text.voiceUnavailable)).toBeTruthy());
-    expect((within(modelRow()).getByRole('button', { name: S.voice.settings.download }) as HTMLButtonElement).disabled).toBe(true);
+    for (const { id } of TTS_MODELS) {
+      expect((within(modelRow(id)).getByRole('button', { name: S.voice.settings.download }) as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 
-  it('G3: без весов — кнопка Download с размером 1214 MB, само ничего не качается', async () => {
+  it('по строке на каждую модель каталога: имя и размер (1214 и 2288 MB), у каждой своя кнопка Download', async () => {
+    render(<AssistantSettings />);
+    await waitFor(() => expect(bridge.assistantVoiceCalls).toContain('models'));
+    expect(document.querySelectorAll('[data-assistant-voice-model]')).toHaveLength(2);
+    expect(modelRow(SMALL).textContent).toContain(`${text.voiceModels[SMALL]} · ${S.voice.settings.sizeMb(1214)}`);
+    expect(modelRow(LARGE).textContent).toContain(`${text.voiceModels[LARGE]} · ${S.voice.settings.sizeMb(2288)}`);
+    expect(text.voiceModels[SMALL]).toBe('Qwen3-TTS 0.6B CustomVoice');
+    expect(text.voiceModels[LARGE]).toBe('Qwen3-TTS 1.7B CustomVoice');
+    for (const { id } of TTS_MODELS) {
+      expect(within(modelRow(id)).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
+    }
+  });
+
+  it('G3: без весов — у обеих строк «One download for all voices.» и Download, само ничего не качается', async () => {
     render(<AssistantSettings />);
     await waitFor(() => expect(bridge.assistantVoiceCalls).toContain('voices'));
-    expect(modelRow().textContent).toContain(S.voice.settings.sizeMb(1214));
-    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
-    expect(bridge.assistantVoiceCalls).not.toContain('download');
+    for (const { id } of TTS_MODELS) {
+      expect(modelRow(id).textContent).toContain(text.voiceModelHint);
+      expect(modelRow(id).textContent).not.toContain(text.voiceModelInUse);
+    }
+    expect(bridge.assistantVoiceCalls.filter((call) => call.startsWith('download'))).toEqual([]);
   });
 
-  it('E5, Download: кнопка качает веса, виден прогресс, затем «Preparing voice…» до ready', async () => {
+  it('E5, Download: кнопка строки качает именно её модель, прогресс виден только в этой строке', async () => {
+    const download = pendingDownload();
+    bridge.setAssistantVoiceModels([SMALL]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    render(<AssistantSettings />);
+    fireEvent.click(await within(modelRow(LARGE)).findByRole('button', { name: S.voice.settings.download }));
+    expect(bridge.assistantVoiceCalls.filter((call) => call.startsWith('download'))).toEqual([`download:${LARGE}`]);
+    act(() => bridge.emitAssistantVoiceProgress(progressOf(LARGE, 1_143_890_176)));
+    expect(modelRow(LARGE).textContent).toContain(S.voice.settings.progress(1_143_890_176, 2_287_780_352));
+    expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.cancel })).toBeTruthy();
+    expect(modelRow(SMALL).textContent).not.toContain('50%');
+    expect(modelRow(SMALL).textContent).toContain(text.voiceModelInUse);
+    expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy();
+    // Скачивание кончилось: прогресс уходит, 1.7B становится активной.
+    bridge.setAssistantVoiceModels([SMALL, LARGE]);
+    await act(async () => download.finish(LARGE, { ok: true }));
+    await waitFor(() => expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy());
+    expect(modelRow(LARGE).textContent).not.toContain('%');
+  });
+
+  it('событие состояния движка (ready) не стирает прогресс 1.7B, пока она качается при скачанной 0.6B', async () => {
+    pendingDownload();
+    bridge.setAssistantVoiceModels([SMALL]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    render(<AssistantSettings />);
+    fireEvent.click(await within(modelRow(LARGE)).findByRole('button', { name: S.voice.settings.download }));
+    act(() => bridge.emitAssistantVoiceProgress(progressOf(LARGE, 457_000_000)));
+    const shown = S.voice.settings.progress(457_000_000, 2_287_780_352);
+    expect(modelRow(LARGE).textContent).toContain(shown);
+    const callsBefore = bridge.assistantVoiceCalls.filter((call) => call === 'models').length;
+    act(() => bridge.setAssistantVoiceState({ state: 'ready' }));
+    act(() => bridge.setAssistantVoiceState({ state: 'speaking' }));
+    await waitFor(() => expect(bridge.assistantVoiceCalls.filter((call) => call === 'models').length).toBeGreaterThan(callsBefore));
+    expect(modelRow(LARGE).textContent).toContain(shown);
+    expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.cancel })).toBeTruthy();
+  });
+
+  it('E5: после скачивания единственной модели — «Preparing voice…» у активной строки до ready', async () => {
     const download = pendingDownload();
     render(<AssistantSettings />);
-    fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.download }));
-    expect(bridge.assistantVoiceCalls).toContain('download');
-    act(() => bridge.emitAssistantVoiceProgress({ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 606_767_232, totalBytes: 1_213_534_464 }));
-    expect(modelRow().textContent).toContain(S.voice.settings.progress(606_767_232, 1_213_534_464));
+    fireEvent.click(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.download }));
+    act(() => bridge.emitAssistantVoiceProgress(progressOf(SMALL, 606_767_232)));
+    expect(modelRow(SMALL).textContent).toContain(S.voice.settings.progress(606_767_232, 1_213_534_464));
+    bridge.setAssistantVoiceModels([SMALL]);
     await act(async () => {
       bridge.setAssistantVoiceState({ state: 'warming' });
-      download.finish({ ok: true });
+      download.finish(SMALL, { ok: true });
     });
-    await waitFor(() => expect(modelRow().textContent).toContain(text.voicePreparing));
-    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy();
+    await waitFor(() => expect(modelRow(SMALL).textContent).toContain(text.voicePreparing));
+    expect(modelRow(LARGE).textContent).not.toContain(text.voicePreparing);
+    expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy();
     act(() => bridge.setAssistantVoiceState({ state: 'ready' }));
-    await waitFor(() => expect(modelRow().textContent).not.toContain(text.voicePreparing));
+    await waitFor(() => expect(modelRow(SMALL).textContent).not.toContain(text.voicePreparing));
+    expect(modelRow(SMALL).textContent).toContain(text.voiceModelInUse);
   });
 
-  it('D5, Cancel: во время скачивания кнопка Cancel отменяет его, голос остаётся нескачанным', async () => {
+  it('прогресс скачивания, начатого до открытия настроек, кончается, когда модель появилась на диске', async () => {
+    bridge.setAssistantVoiceModels([SMALL]);
+    render(<AssistantSettings />);
+    await waitFor(() => expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy());
+    act(() => bridge.emitAssistantVoiceProgress(progressOf(LARGE, 2_000_000_000)));
+    expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.cancel })).toBeTruthy();
+    bridge.setAssistantVoiceModels([SMALL, LARGE]);
+    act(() => bridge.setAssistantVoiceState({ state: 'warming' }));
+    await waitFor(() => expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy());
+    expect(modelRow(LARGE).textContent).not.toContain('%');
+  });
+
+  it('D5, Cancel: Cancel строки отменяет скачивание именно её модели, строка возвращается к Download', async () => {
     const download = pendingDownload();
     render(<AssistantSettings />);
-    fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.download }));
+    fireEvent.click(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.download }));
     await act(async () => {
-      fireEvent.click(within(modelRow()).getByRole('button', { name: S.voice.settings.cancel }));
+      fireEvent.click(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.cancel }));
     });
-    expect(bridge.assistantVoiceCalls).toContain('cancel');
-    await act(async () => download.finish({ error: 'cancelled' }));
-    expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
+    expect(bridge.assistantVoiceCalls).toContain(`cancel:${LARGE}`);
+    expect(bridge.assistantVoiceCalls).not.toContain(`cancel:${SMALL}`);
+    await act(async () => download.finish(LARGE, { error: 'cancelled' }));
+    expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
+    expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
   });
 
-  it('D5, Delete: скачанные веса удаляются, голоса снова не скачаны, само ничего не качается', async () => {
+  it('D5, Delete: Delete скачанной строки удаляет её модель по id, строка возвращается к Download, само ничего не качается', async () => {
+    bridge.setAssistantVoiceModels([SMALL]);
     bridge.setAssistantVoiceState({ state: 'ready' });
-    bridge.app.assistantVoiceRemove = async () => {
-      bridge.assistantVoiceCalls.push('remove');
+    bridge.app.assistantVoiceRemove = async (id) => {
+      bridge.assistantVoiceCalls.push(`remove:${id}`);
+      bridge.setAssistantVoiceModels([]);
       bridge.setAssistantVoiceState({ state: 'not-downloaded' });
     };
     render(<AssistantSettings />);
-    const remove = await within(modelRow()).findByRole('button', { name: S.voice.settings.remove });
+    const remove = await within(modelRow(SMALL)).findByRole('button', { name: S.voice.settings.remove });
+    // У 1.7B нечего удалять — у неё Download.
+    expect(within(modelRow(LARGE)).queryByRole('button', { name: S.voice.settings.remove })).toBeNull();
     await act(async () => {
       fireEvent.click(remove);
     });
-    expect(bridge.assistantVoiceCalls).toContain('remove');
-    await waitFor(() => expect(within(modelRow()).getByRole('button', { name: S.voice.settings.download })).toBeTruthy());
-    expect(bridge.assistantVoiceCalls).not.toContain('download');
+    expect(bridge.assistantVoiceCalls).toContain(`remove:${SMALL}`);
+    await waitFor(() => expect(within(modelRow(SMALL)).getByRole('button', { name: S.voice.settings.download })).toBeTruthy());
+    expect(bridge.assistantVoiceCalls.filter((call) => call.startsWith('download'))).toEqual([]);
+  });
+
+  it('«In use.» у активной модели: только 0.6B — у неё, 1.7B остаётся с «One download for all voices.»', async () => {
+    bridge.setAssistantVoiceModels([SMALL]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    render(<AssistantSettings />);
+    await waitFor(() => expect(modelRow(SMALL).textContent).toContain('In use.'));
+    expect(modelRow(LARGE).textContent).toContain('One download for all voices.');
+    expect(modelRow(LARGE).textContent).not.toContain('In use.');
+  });
+
+  it('скачаны обе: «In use.» у 1.7B, у 0.6B — «Not in use while the larger model is downloaded.», у обеих Delete', async () => {
+    bridge.setAssistantVoiceModels([SMALL, LARGE]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    render(<AssistantSettings />);
+    await waitFor(() => expect(modelRow(LARGE).textContent).toContain('In use.'));
+    expect(modelRow(SMALL).textContent).toContain('Not in use while the larger model is downloaded.');
+    expect(modelRow(SMALL).textContent).not.toContain('In use.');
+    for (const { id } of TTS_MODELS) {
+      expect(within(modelRow(id)).getByRole('button', { name: S.voice.settings.remove })).toBeTruthy();
+    }
+  });
+
+  it('удаление 1.7B при скачанной 0.6B: «In use.» переходит к 0.6B', async () => {
+    bridge.setAssistantVoiceModels([SMALL, LARGE]);
+    bridge.setAssistantVoiceState({ state: 'ready' });
+    bridge.app.assistantVoiceRemove = async (id) => {
+      bridge.assistantVoiceCalls.push(`remove:${id}`);
+      bridge.setAssistantVoiceModels([SMALL]);
+      bridge.setAssistantVoiceState({ state: 'ready' });
+    };
+    render(<AssistantSettings />);
+    const remove = await within(modelRow(LARGE)).findByRole('button', { name: S.voice.settings.remove });
+    await act(async () => {
+      fireEvent.click(remove);
+    });
+    expect(bridge.assistantVoiceCalls).toContain(`remove:${LARGE}`);
+    await waitFor(() => expect(modelRow(SMALL).textContent).toContain('In use.'));
+    expect(within(modelRow(LARGE)).getByRole('button', { name: S.voice.settings.download })).toBeTruthy();
   });
 });

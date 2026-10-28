@@ -243,11 +243,13 @@ for (const size of [
       await expect(window.getByRole('dialog')).toContainText('Settings');
       problems.push(...(await overflowOf(window, 'Settings')));
       problems.push(...(await footerProblemsOf(window, 'Settings')));
-      // Вкладка Assistant (план 3b B20, B25): голоса каталога с родом, языками и лицензией и строка весов с кнопкой.
+      // Вкладка Assistant (план 3b B20, B25): голоса каталога с родом, языками и лицензией и по строке весов с кнопкой
+      // на каждую модель (0.6B и 1.7B).
       const settings = window.getByRole('dialog');
       await settings.getByRole('tab', { name: 'Assistant' }).click();
       await expect(settings.getByRole('switch', { name: 'Speak answers' })).toBeVisible();
-      await expect(settings.locator('[data-assistant-voice-model]')).toBeVisible();
+      await expect(settings.locator('[data-assistant-voice-model="qwen3-tts-0.6b-q8_0"]')).toBeVisible();
+      await expect(settings.locator('[data-assistant-voice-model="qwen3-tts-1.7b-q8_0"]')).toBeVisible();
       problems.push(...(await overflowOf(window, 'Settings → Assistant')));
       problems.push(...(await footerProblemsOf(window, 'Settings → Assistant')));
       await closeDialog(window);

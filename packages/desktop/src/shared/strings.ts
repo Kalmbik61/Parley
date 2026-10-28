@@ -19,6 +19,7 @@ import { providerLabel } from '@parley/core/stuck';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
+import type { TtsModelId } from './tts-types.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
 const CONTEXT_NAMES: Record<ContextKind, string> = {
@@ -2558,8 +2559,14 @@ export const S = {
       voice: 'Voice',
       voiceGender: { female: 'Female', male: 'Male', neutral: 'Neutral' },
       voiceDetails: (gender: string, languages: string, licence: string): string => `${gender} · ${languages} · ${licence}`,
-      voiceModel: 'Qwen3-TTS 0.6B CustomVoice',
+      /** Имена моделей весов по id (`TTS_MODELS`): строка на каждую. Говорит самая большая из скачанных. */
+      voiceModels: {
+        'qwen3-tts-0.6b-q8_0': 'Qwen3-TTS 0.6B CustomVoice',
+        'qwen3-tts-1.7b-q8_0': 'Qwen3-TTS 1.7B CustomVoice',
+      } satisfies Record<TtsModelId, string>,
       voiceModelHint: 'One download for all voices.',
+      voiceModelInUse: 'In use.',
+      voiceModelIdle: 'Not in use while the larger model is downloaded.',
       voicePreparing: 'Preparing voice…',
       voiceUnavailable: 'Voice is unavailable on this Mac. Answers are shown as text.',
       voiceNoLanguage: 'No voice for this language yet. Answers are shown as text.',

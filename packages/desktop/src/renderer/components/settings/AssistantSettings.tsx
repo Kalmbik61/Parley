@@ -3,8 +3,9 @@
  * сочетание. Всё — в `ui.json` (`patchUi`); main по сохранению перерегистрирует хоткей и шлёт острову конфиг.
  *
  * Голос (план 3b, B20; #9 §6.8): «Speak answers», голоса каталога для языка помощника с родом, языками и лицензией,
- * веса — как модели Whisper во вкладке Voice: Download с прогрессом, Cancel, Delete (D5). Одни веса на все голоса (Р6).
- * Само ничего не качается (G3); после скачивания до `ready` — `Preparing voice…` (Р7).
+ * веса — как модели Whisper во вкладке Voice: Download с прогрессом, Cancel, Delete (D5), своя строка на каждую
+ * модель (0.6B и 1.7B); говорит самая большая из скачанных (`activeTtsModel`). Само ничего не качается (G3); после
+ * скачивания до `ready` — `Preparing voice…` (Р7).
  */
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -12,7 +13,7 @@ import type { Result } from '@parley/protocol';
 import { systemAssistantLanguage } from '../../../shared/assistant-language.js';
 import type { AssistantShortcutStatus, TtsEngineState } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
-import { DEFAULT_VOICE, ttsModel, type AssistantVoice } from '../../../shared/tts-types.js';
+import { activeTtsModel, DEFAULT_VOICE, TTS_MODELS, type AssistantVoice, type TtsModelId } from '../../../shared/tts-types.js';
 import { LANGUAGE_OPTIONS, type DownloadResult } from '../../../shared/voice-types.js';
 import type { AssistantUi, UiFile } from '../../../shared/ui-types.js';
 import { getHostClient } from '../../host-client.js';
@@ -28,8 +29,6 @@ type ProviderRow = Result<'providers.list'>['providers'][number];
 const AUTO = '__auto';
 const DEFAULT_MODEL = '__default';
 const SYSTEM_LANGUAGE = '__system';
-/** Веса всех голосов каталога (Р6): размер и прогресс скачивания. */
-const VOICE_MODEL = ttsModel('qwen3-tts-0.6b-q8_0');
 
 function languageNames(codes: readonly string[]): string {
   return codes.map((code) => LANGUAGE_OPTIONS.find((option) => option.code === code)?.name ?? code).join(', ');
@@ -43,9 +42,12 @@ export function AssistantSettings(): JSX.Element {
   const [shortcut, setShortcut] = useState<AssistantShortcutStatus | null>(null);
   const [voices, setVoices] = useState<AssistantVoice[]>([]);
   const [voiceState, setVoiceState] = useState<TtsEngineState | null>(null);
-  const [downloading, setDownloading] = useState(false);
-  /** Скачано байт; `null` — прогресса нет. Приходит и к заново открытым настройкам, пока загрузка идёт в main. */
-  const [received, setReceived] = useState<number | null>(null);
+  /** Скачанные модели весов; говорит самая большая из них. */
+  const [models, setModels] = useState<TtsModelId[]>([]);
+  /** Модели, чей вызов `download` из этого окна ещё не вернулся. */
+  const [downloading, setDownloading] = useState<ReadonlySet<TtsModelId>>(new Set());
+  /** Скачано байт по моделям; нет записи — прогресса нет. Приходит и к заново открытым настройкам, пока загрузка идёт в main. */
+  const [received, setReceived] = useState<ReadonlyMap<TtsModelId, number>>(new Map());
 
   useEffect(() => {
     let alive = true;
@@ -62,15 +64,23 @@ export function AssistantSettings(): JSX.Element {
 
   const refreshVoice = useCallback((): void => {
     void bridge.app.assistantVoices().then(setVoices);
+    void bridge.app.assistantVoiceModels().then((ids) => {
+      setModels(ids);
+      // Модель уже на диске — прогресс её скачивания кончился (в том числе начатого до открытия этих настроек).
+      setReceived((previous) => {
+        const kept = [...previous].filter(([id]) => !ids.includes(id));
+        return kept.length === previous.size ? previous : new Map(kept);
+      });
+    });
     void bridge.app.assistantVoiceState().then(setVoiceState);
   }, [bridge]);
   useEffect(() => {
     // Состояние движка меняют скачивание, удаление, прогрев и отказ worker: каждый раз перечитываем и отметки «скачан».
-    const offState = bridge.app.onAssistantVoiceState((state) => {
-      if (state.state !== 'not-downloaded') setReceived(null);
-      refreshVoice();
-    });
-    const offProgress = bridge.app.onAssistantVoiceProgress((progress) => setReceived(progress.receivedBytes));
+    // Прогресс по событию состояния не сбрасываем: при скачанной 0.6B движок уже `ready`, а 1.7B ещё качается.
+    const offState = bridge.app.onAssistantVoiceState(() => refreshVoice());
+    const offProgress = bridge.app.onAssistantVoiceProgress((progress) =>
+      setReceived((previous) => new Map(previous).set(progress.id, progress.receivedBytes)),
+    );
     refreshVoice();
     return () => {
       offState();
@@ -78,23 +88,37 @@ export function AssistantSettings(): JSX.Element {
     };
   }, [bridge, refreshVoice]);
 
-  const downloadVoice = async (): Promise<void> => {
-    setDownloading(true);
-    const result: DownloadResult = await bridge.app.assistantVoiceDownload().catch(() => ({ error: 'network' }) as const);
-    setDownloading(false);
-    setReceived(null);
+  const setDownloadingModel = (id: TtsModelId, on: boolean): void =>
+    setDownloading((previous) => {
+      const next = new Set(previous);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const clearProgress = (id: TtsModelId): void =>
+    setReceived((previous) => {
+      const next = new Map(previous);
+      next.delete(id);
+      return next;
+    });
+  const downloadVoice = async (id: TtsModelId): Promise<void> => {
+    setDownloadingModel(id, true);
+    const result: DownloadResult = await bridge.app.assistantVoiceDownload(id).catch(() => ({ error: 'network' }) as const);
+    // Прогресс строки кончается вместе с её вызовом: успех, ошибка или отмена.
+    setDownloadingModel(id, false);
+    clearProgress(id);
     refreshVoice();
     if ('ok' in result) return;
     if (result.error === 'disk_full') toast(S.voice.diskFull(Math.ceil(result.needBytes / 1_000_000)));
     else if (result.error === 'corrupted') toast(S.voice.downloadCorrupted);
     else if (result.error === 'network') toast(S.voice.downloadFailed);
   };
-  const cancelVoice = async (): Promise<void> => {
-    await bridge.app.assistantVoiceCancel();
-    setReceived(null);
+  const cancelVoice = async (id: TtsModelId): Promise<void> => {
+    await bridge.app.assistantVoiceCancel(id);
+    clearProgress(id);
   };
-  const removeVoice = async (): Promise<void> => {
-    await bridge.app.assistantVoiceRemove();
+  const removeVoice = async (id: TtsModelId): Promise<void> => {
+    await bridge.app.assistantVoiceRemove(id);
     refreshVoice();
   };
 
@@ -106,14 +130,13 @@ export function AssistantSettings(): JSX.Element {
   const language = assistant.language ?? systemAssistantLanguage(navigator.language);
   const languageVoices = voices.filter((voice) => voice.languages.includes(language));
   const selectedVoice = assistant.voice ?? DEFAULT_VOICE;
-  const voiceDownloaded = voices.some((voice) => voice.downloaded);
-  const voiceBusy = downloading || received !== null;
-  const voiceHint =
-    received !== null
-      ? S.voice.settings.progress(received, VOICE_MODEL.bytes)
-      : voiceState?.state === 'warming'
-        ? text.voicePreparing
-        : text.voiceModelHint;
+  const activeModel = activeTtsModel(models);
+  const modelHint = (id: TtsModelId, totalBytes: number): string => {
+    const bytes = received.get(id);
+    if (bytes !== undefined) return S.voice.settings.progress(bytes, totalBytes);
+    if (id === activeModel) return voiceState?.state === 'warming' ? text.voicePreparing : text.voiceModelInUse;
+    return models.includes(id) ? text.voiceModelIdle : text.voiceModelHint;
+  };
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -224,33 +247,35 @@ export function AssistantSettings(): JSX.Element {
         {voices.length > 0 && languageVoices.length === 0 ? (
           <p className="text-xs text-muted-foreground">{text.voiceNoLanguage}</p>
         ) : null}
-        <div data-assistant-voice-model className="flex min-w-0 items-center gap-2">
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate">
-              {text.voiceModel} · {S.voice.settings.sizeMb(Math.round(VOICE_MODEL.bytes / 1_000_000))}
+        {TTS_MODELS.map((model) => (
+          <div key={model.id} data-assistant-voice-model={model.id} className="flex min-w-0 items-center gap-2">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">
+                {text.voiceModels[model.id]} · {S.voice.settings.sizeMb(Math.round(model.bytes / 1_000_000))}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">{modelHint(model.id, model.bytes)}</span>
             </span>
-            <span className="truncate text-xs text-muted-foreground">{voiceHint}</span>
-          </span>
-          {voiceBusy ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => void cancelVoice()}>
-              {S.voice.settings.cancel}
-            </Button>
-          ) : voiceDownloaded ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => void removeVoice()}>
-              {S.voice.settings.remove}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={voiceState?.state === 'unavailable'}
-              onClick={() => void downloadVoice()}
-            >
-              {S.voice.settings.download}
-            </Button>
-          )}
-        </div>
+            {downloading.has(model.id) || received.has(model.id) ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => void cancelVoice(model.id)}>
+                {S.voice.settings.cancel}
+              </Button>
+            ) : models.includes(model.id) ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => void removeVoice(model.id)}>
+                {S.voice.settings.remove}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={voiceState?.state === 'unavailable'}
+                onClick={() => void downloadVoice(model.id)}
+              >
+                {S.voice.settings.download}
+              </Button>
+            )}
+          </div>
+        ))}
       </div>
       {voiceState?.state === 'unavailable' ? <p className="text-xs text-muted-foreground">{text.voiceUnavailable}</p> : null}
       <p className="text-xs text-muted-foreground">{text.voiceCredit}</p>

@@ -102,19 +102,21 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
   });
 
-  it('нейроголос помощника (план 3b, B15): каталог, скачивание, отмена, удаление и состояние — свои каналы app:assistant-voice*', async () => {
+  it('нейроголос помощника (план 3b, B15): каталог, скачанные модели, скачивание, отмена, удаление и состояние — свои каналы app:assistant-voice*; id модели уходит в main', async () => {
     const bridge = await loadPreload();
     const { ipcRenderer } = await import('electron');
     void bridge.app.assistantVoices();
-    void bridge.app.assistantVoiceDownload();
-    void bridge.app.assistantVoiceCancel();
-    void bridge.app.assistantVoiceRemove();
+    void bridge.app.assistantVoiceModels();
+    void bridge.app.assistantVoiceDownload('qwen3-tts-1.7b-q8_0');
+    void bridge.app.assistantVoiceCancel('qwen3-tts-1.7b-q8_0');
+    void bridge.app.assistantVoiceRemove('qwen3-tts-0.6b-q8_0');
     void bridge.app.assistantVoiceState();
-    expect(vi.mocked(ipcRenderer.invoke).mock.calls.slice(-5)).toEqual([
+    expect(vi.mocked(ipcRenderer.invoke).mock.calls.slice(-6)).toEqual([
       ['app:assistant-voices'],
-      ['app:assistant-voice-download'],
-      ['app:assistant-voice-cancel'],
-      ['app:assistant-voice-remove'],
+      ['app:assistant-voice-models'],
+      ['app:assistant-voice-download', 'qwen3-tts-1.7b-q8_0'],
+      ['app:assistant-voice-cancel', 'qwen3-tts-1.7b-q8_0'],
+      ['app:assistant-voice-remove', 'qwen3-tts-0.6b-q8_0'],
       ['app:assistant-voice-state'],
     ]);
   });

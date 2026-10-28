@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VOICE, isAssistantVoiceId, TTS_MODELS, TTS_VOICES, ttsModel } from './tts-types.js';
+import { activeTtsModel, DEFAULT_VOICE, isAssistantVoiceId, isTtsModelId, TTS_MODELS, TTS_VOICES, ttsModel } from './tts-types.js';
 
 /** Лицензии, под которыми веса можно отдавать пользователю (спека #9 §6.8: других голосов Parley не предлагает). */
 const DISTRIBUTABLE = ['Apache-2.0', 'MIT', 'CC0-1.0', 'CC-BY-4.0'];
 
 describe('модель TTS (план 3b, B04)', () => {
-  it('одна модель: Qwen3-TTS 0.6B Q8_0, точный размер и полный sha256', () => {
+  it('две модели в порядке «меньшая, большая»: Qwen3-TTS 0.6B и 1.7B Q8_0, точный размер и полный sha256', () => {
     expect(TTS_MODELS).toEqual([
       {
         id: 'qwen3-tts-0.6b-q8_0',
@@ -13,6 +13,13 @@ describe('модель TTS (план 3b, B04)', () => {
         bytes: 1_213_534_464,
         sha256: 'f606ea3981aa42762b16db9a94826d2d560eb60f0b102001618f40d5a2f78cc6',
         url: 'https://huggingface.co/sakasegawa/Qwen3-TTS-12Hz-0.6B-CustomVoice-GGUF/resolve/fd9df9364613a92a86b4137074bc281204823033/Qwen3-TTS-12Hz-0.6B-CustomVoice-Q8_0.gguf',
+      },
+      {
+        id: 'qwen3-tts-1.7b-q8_0',
+        file: 'Qwen3-TTS-12Hz-1.7B-CustomVoice-Q8_0.gguf',
+        bytes: 2_287_780_352,
+        sha256: '1bc0ef69547c003507b6536639a6080c8856382f4d0963b15d4475528330592d',
+        url: 'https://huggingface.co/sakasegawa/Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF/resolve/a72e6c6575d67652488cdffc1c863215a9899978/Qwen3-TTS-12Hz-1.7B-CustomVoice-Q8_0.gguf',
       },
     ]);
   });
@@ -26,7 +33,38 @@ describe('модель TTS (план 3b, B04)', () => {
 
   it('ttsModel находит модель по id и падает на чужом', () => {
     expect(ttsModel('qwen3-tts-0.6b-q8_0').bytes).toBe(1_213_534_464);
+    expect(ttsModel('qwen3-tts-1.7b-q8_0').bytes).toBe(2_287_780_352);
     expect(() => ttsModel('q6' as never)).toThrow('unknown tts model: q6');
+  });
+
+  it('файлы моделей на диске не совпадают: скачанная 0.6B не подменяет 1.7B', () => {
+    expect(new Set(TTS_MODELS.map((model) => model.file)).size).toBe(TTS_MODELS.length);
+  });
+
+  it('isTtsModelId пускает только id каталога', () => {
+    expect(isTtsModelId('qwen3-tts-0.6b-q8_0')).toBe(true);
+    expect(isTtsModelId('qwen3-tts-1.7b-q8_0')).toBe(true);
+    expect(isTtsModelId('qwen3-tts-1.7b-q4_0')).toBe(false);
+    expect(isTtsModelId('base')).toBe(false);
+    expect(isTtsModelId(null)).toBe(false);
+    expect(isTtsModelId(undefined)).toBe(false);
+    expect(isTtsModelId(7)).toBe(false);
+  });
+});
+
+describe('activeTtsModel: говорит самая большая из скачанных', () => {
+  it('ни одной скачанной — null', () => {
+    expect(activeTtsModel([])).toBeNull();
+  });
+
+  it('скачана одна — она', () => {
+    expect(activeTtsModel(['qwen3-tts-0.6b-q8_0'])).toBe('qwen3-tts-0.6b-q8_0');
+    expect(activeTtsModel(['qwen3-tts-1.7b-q8_0'])).toBe('qwen3-tts-1.7b-q8_0');
+  });
+
+  it('скачаны обе, в любом порядке, — 1.7B', () => {
+    expect(activeTtsModel(['qwen3-tts-0.6b-q8_0', 'qwen3-tts-1.7b-q8_0'])).toBe('qwen3-tts-1.7b-q8_0');
+    expect(activeTtsModel(['qwen3-tts-1.7b-q8_0', 'qwen3-tts-0.6b-q8_0'])).toBe('qwen3-tts-1.7b-q8_0');
   });
 });
 
@@ -80,12 +118,11 @@ describe('каталог голосов (спека #9 §6.8, G4)', () => {
     });
   });
 
-  it('Р6: все голоса ссылаются на один файл весов, размер — его мегабайты', () => {
+  it('голос не привязан к файлу весов: ни modelId, ни sizeMb (модель — по скачанному, размер — у модели)', () => {
     for (const voice of TTS_VOICES) {
-      expect(voice.modelId).toBe('qwen3-tts-0.6b-q8_0');
-      expect(voice.sizeMb).toBe(Math.round(ttsModel(voice.modelId).bytes / 1_000_000));
+      expect(voice).not.toHaveProperty('modelId');
+      expect(voice).not.toHaveProperty('sizeMb');
     }
-    expect(TTS_VOICES[0]?.sizeMb).toBe(1214);
   });
 
   it('isAssistantVoiceId пускает только ids каталога', () => {

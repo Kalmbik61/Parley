@@ -580,7 +580,7 @@ if (!gotLock) {
       : createTtsService({
           supported: process.platform === 'darwin' && process.arch === 'arm64',
           models: ttsModels,
-          createWorker: () =>
+          createWorker: (model) =>
             createSpeechWorker({
               bin: () =>
                 resolveSpeech({
@@ -589,8 +589,8 @@ if (!gotLock) {
                   devDir: path.resolve(dirname, '../../build/speech/darwin-arm64'),
                   isFile: isFileSync,
                 }),
-              // Один файл весов на все голоса (Р6).
-              model: () => ttsModels.path('qwen3-tts-0.6b-q8_0'),
+              // Файл весов активной модели (самая большая из скачанных): голоса у моделей общие.
+              model: () => ttsModels.path(model),
               spawn: spawnSpeech,
               log: (message) => console.warn('[parley] speech', message),
             }),
