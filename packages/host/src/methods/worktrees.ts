@@ -22,9 +22,13 @@ export interface WorktreesHandlers {
 
 export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHandlers {
   return {
-    worktreesAvailable: async (params) => ({
-      available: await deps.worktrees.available(params.projectPath),
-    }),
+    worktreesAvailable: async (params) => {
+      const [available, gitRoot] = await Promise.all([
+        deps.worktrees.available(params.projectPath),
+        deps.worktrees.gitRoot(params.projectPath),
+      ]);
+      return { available, gitRoot };
+    },
 
     worktreesDiff: async (params) => deps.worktrees.diff(params.ref, params.patch),
 

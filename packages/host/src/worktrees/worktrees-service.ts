@@ -14,6 +14,7 @@ import {
   GitStateError,
   InvalidRevisionError,
   isGitRepo,
+  isGitRoot,
   mergeCheck,
   mergeWorktree,
   NothingToCommitError,
@@ -38,6 +39,8 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 export interface WorktreesService {
   /** Флажок «в своём worktree» в диалоге живёт, только пока проект — git-репозиторий. */
   available(projectPath: string): Promise<boolean>;
+  /** Папка проекта — сам корень репозитория: автономному режиму нужен корень, а не подкаталог чужого репозитория. */
+  gitRoot(projectPath: string): Promise<boolean>;
   /** `patch: false` — без текста патча: окну этапа 8 он не нужен, а строка протокола ограничена 8 МБ. */
   diff(ref: SessionRef, patch?: boolean): Promise<WorktreeDiff>;
   commit(ref: SessionRef, message: string): Promise<string>;
@@ -144,6 +147,7 @@ export function createWorktreesService(
 ): WorktreesService {
   return {
     available: (projectPath) => isGitRepo(projectPath),
+    gitRoot: (projectPath) => isGitRoot(projectPath),
 
     async diff(ref, patch) {
       const { worktree } = await requirePresentWorktree(ref);

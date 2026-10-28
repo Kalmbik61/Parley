@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import {
   ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
   liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, RoomRuleError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
-  integrate, isGitRepo, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  integrate, isGitRoot, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type LetterTx, type PlanAttempt,
   type RoomPlan, type WorkMap,
 } from '@parley/core';
@@ -287,7 +287,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       if (await reservedTemporaryPath(loc, plan.autonomous!.integration.baseSha, true)) return;
     } catch (error) {
       // This project git call runs outside effect(); without a halt here the poll would retry the same failure forever.
-      const detail = await isGitRepo(loc.projectPath) ? `clone: ${errorText(error)}` : notGitRepositoryMessage(loc.projectPath);
+      const detail = await isGitRoot(loc.projectPath) ? `clone: ${errorText(error)}` : notGitRepositoryMessage(loc.projectPath);
       await change(loc, current => halt(current, { ...context(current, at()), reason: 'human', detail }));
       return;
     }

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,12 +36,15 @@ function proposal(text = 'Implement the plan'): Extract<AttemptChannelRequest, {
 function keyed(body: Extract<AttemptChannelRequest, { action: 'propose-plan' }>) {
   return { ...body, requestKey: digest({ roomId: body.roomId, planId: body.planId ?? null, rev: body.rev ?? null, text: body.text, draft: body.plan }) };
 }
-async function setup(withEngine = true) {
-  const projectPath = await mkdtemp(path.join(tmpdir(), 'attempts-endpoint-')); dirs.push(projectPath);
-  const git = async (...args: string[]) => (await run('git', ['-c', 'core.fsmonitor=false', '-C', projectPath, ...args])).stdout.trim();
+async function setup(withEngine = true, nested = false) {
+  // `nested`: the repository root is a parent folder and the project is its `sub` folder.
+  const repoPath = await mkdtemp(path.join(tmpdir(), 'attempts-endpoint-')); dirs.push(repoPath);
+  const projectPath = nested ? path.join(repoPath, 'sub') : repoPath;
+  if (nested) await mkdir(projectPath);
+  const git = async (...args: string[]) => (await run('git', ['-c', 'core.fsmonitor=false', '-C', repoPath, ...args])).stdout.trim();
   await git('init', '-b', 'main');
   await writeFile(path.join(projectPath, 'test.js'), 'console.log("pass");\n');
-  await git('add', 'test.js');
+  await git('add', path.relative(repoPath, path.join(projectPath, 'test.js')));
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial fixture');
   const baseSha = await git('rev-parse', 'HEAD');
   const workId = (await createWork(projectPath, { title: 'Fixture' })).work.id;
@@ -181,6 +184,12 @@ describe('agent attempts endpoint', () => {
     } finally { vi.unstubAllEnvs(); }
     const calls = await readFile(log, 'utf8').catch(() => '');
     expect(calls).not.toMatch(/--abbrev-ref|--verify/);
+    expect((await f.read()).rooms[0]!.proposal).toBeNull();
+  });
+  it('refuses a proposal when the project is only a subfolder of a git repository', async () => {
+    const f = await setup(true, true);
+    const { body } = await f.post(proposal());
+    expect(body).toMatchObject({ ok: false, error: { code: 'not-a-git-repository' } });
     expect((await f.read()).rooms[0]!.proposal).toBeNull();
   });
   it('retries an open proposal exactly, replaces changed text, and starts a new round after return', async () => {

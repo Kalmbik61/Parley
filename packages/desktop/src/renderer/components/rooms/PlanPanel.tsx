@@ -163,17 +163,17 @@ export function RoomModeControl({
   const [reason, setReason] = useState("");
   const modeDraft = useRef("");
   modeDraft.current = JSON.stringify([selected, reason]);
-  // Autonomous требует Git в корне проекта: «неизвестно» (null, старый хост, сбой) — без подсказки.
-  const [gitAvailable, setGitAvailable] = useState<boolean | null>(null);
+  // Autonomous требует, чтобы папка проекта сама была корнем Git: «неизвестно» (null, старый хост без gitRoot, сбой) — без подсказки.
+  const [gitRoot, setGitRoot] = useState<boolean | null>(null);
   const autonomousChosen = (selected ?? mode) === "autonomous";
   useEffect(() => {
-    setGitAvailable(null);
+    setGitRoot(null);
     if (!autonomousChosen) return;
     let stale = false;
     bridge
       .call("worktrees.available", { projectPath: entry.projectPath })
       .then((result) => {
-        if (!stale) setGitAvailable(result.available);
+        if (!stale) setGitRoot(typeof result.gitRoot === "boolean" ? result.gitRoot : null);
       })
       .catch(() => {});
     return () => {
@@ -227,7 +227,7 @@ export function RoomModeControl({
         </select>
       </label>
       <span className="text-muted-foreground">{P.modeHelp[mode]}</span>
-      {autonomousChosen && gitAvailable === false ? (
+      {autonomousChosen && gitRoot === false ? (
         <span role="status" data-autonomous-needs-git="">
           {P.autonomousNeedsGit}
         </span>

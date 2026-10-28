@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import {
-  activeRoomPlan, baseBranchOf, ENGINE, isGitRepo, isMember, liveLead, PlanConflictError,
+  activeRoomPlan, baseBranchOf, ENGINE, isGitRoot, isMember, liveLead, PlanConflictError,
   normalizeAttemptSubmission, readMap, requireOpenRoom, setProposal, submitAttempt, updateMap,
   validateAutonomousDraft, workPaths,
 } from '@parley/core';
@@ -135,7 +135,7 @@ async function propose(ref: SessionRef, request: Extract<AttemptChannelRequest, 
   if (!authenticated()) fail('forbidden', 'The session token was revoked.');
   const retry = (proposal: Proposal | null) => proposal?.from === ref.sessionId && (proposal as AttemptsProposal).requestKey === request.requestKey;
   if (retry(room.proposal)) return { ok: true, result: { proposalId: room.proposal!.id, rev: room.proposal!.rev } };
-  if (!(await isGitRepo(ref.projectPath))) fail(NOT_A_GIT_REPOSITORY, notGitRepositoryMessage(ref.projectPath));
+  if (!(await isGitRoot(ref.projectPath))) fail(NOT_A_GIT_REPOSITORY, notGitRepositoryMessage(ref.projectPath));
   const now = new Date().toISOString();
   const baseSha = await git(ref.projectPath, 'rev-parse', '--verify', '--end-of-options', `${await baseBranchOf(ref.projectPath)}^{commit}`);
   const accepted = activeRoomPlan(before, room.id);

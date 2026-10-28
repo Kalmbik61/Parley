@@ -466,7 +466,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'rooms.resolveProposal': { messageId: string };
   'plans.resumeAutonomous': { ok: true };
   'rooms.send': { messageId: string };
-  'worktrees.available': { available: boolean };
+  'worktrees.available': { available: boolean; gitRoot?: boolean };
   'worktrees.diff': WorktreeDiff;
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;

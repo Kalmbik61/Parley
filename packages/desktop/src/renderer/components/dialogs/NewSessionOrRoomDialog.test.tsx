@@ -1465,7 +1465,7 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
   });
 
   it('не git-проект: у выбранного Autonomous видна подсказка про Git; в git-проекте и при другом режиме её нет', async () => {
-    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    bridge.setHandler('worktrees.available', async () => ({ available: false, gitRoot: false }));
     await renderDialog();
     await pick('Plan & build');
     expect(screen.queryByText(/^Autonomous mode needs a Git repository/)).toBeNull();
@@ -1473,11 +1473,46 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
     expect(screen.getByText(/^Autonomous mode needs a Git repository at the project root\./)).toBeTruthy();
     cleanup();
     bridge.calls.length = 0;
-    bridge.setHandler('worktrees.available', async () => ({ available: true }));
+    bridge.setHandler('worktrees.available', async () => ({ available: true, gitRoot: true }));
     await renderDialog();
     await pick('Plan & build');
     await chooseOption(modeSelect(), 'Autonomous');
     await waitFor(() => expect(screen.queryByText(/^Autonomous mode needs a Git repository/)).toBeNull());
+  });
+
+  it('git-подкаталог (available, но не корень): у выбранного Autonomous видна подсказка', async () => {
+    bridge.setHandler('worktrees.available', async () => ({ available: true, gitRoot: false }));
+    await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Autonomous');
+    expect(await screen.findByText(/^Autonomous mode needs a Git repository at the project root\./)).toBeTruthy();
+  });
+
+  it('ответ worktrees.available ещё не пришёл: у выбранного Autonomous подсказки нет', async () => {
+    bridge.setHandler('worktrees.available', () => new Promise<never>(() => {}));
+    await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Autonomous');
+    await act(async () => {});
+    expect(screen.queryByText(/^Autonomous mode needs a Git repository/)).toBeNull();
+  });
+
+  it('worktrees.available упал: у выбранного Autonomous подсказки нет', async () => {
+    bridge.setHandler('worktrees.available', async () => { throw Object.assign(new Error('boom'), { code: 'internal' }); });
+    await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Autonomous');
+    await act(async () => {});
+    expect(screen.queryByText(/^Autonomous mode needs a Git repository/)).toBeNull();
+  });
+
+  it('старый хост без gitRoot: у выбранного Autonomous подсказки нет', async () => {
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Autonomous');
+    await act(async () => {});
+    expect(screen.queryByText(/^Autonomous mode needs a Git repository/)).toBeNull();
   });
 
   it('сбой строки: комнаты и рецепта нет, итог по строке; Retry создаёт только упавших и комнату с mode и снимком', async () => {

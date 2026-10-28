@@ -79,6 +79,16 @@ export async function isGitRepo(projectPath: string): Promise<boolean> {
   }
 }
 
+/** Папка проекта — сам корень рабочего дерева git (а не подкаталог чужого репозитория): автономному режиму нужен корень. */
+export async function isGitRoot(projectPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await run('git', [...NO_FSMONITOR, '-C', projectPath, 'rev-parse', '--show-toplevel']);
+    return (await realpath(stdout.trim())) === (await realpath(projectPath));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ветка каталога; при отсоединённой голове ветки нет — берём SHA коммита,
  * чтобы worktree всё равно мог отвестись от чего-то конкретного.
