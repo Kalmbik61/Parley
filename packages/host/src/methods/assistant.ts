@@ -12,7 +12,7 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     service.cancel();
     return { ok: true };
   };
-  const decide: Handler<'assistant.decide'> = (params) => service.decide(params.proposalId, params.decision);
+  const decide: Handler<'assistant.decide'> = (params) => service.decide(params.proposalId, params.decision, params.action);
   const reset: Handler<'assistant.reset'> = async () => {
     service.reset();
     return { ok: true };

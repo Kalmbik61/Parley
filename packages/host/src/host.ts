@@ -14,6 +14,7 @@ import {
   bothEnv,
   clearSecret,
   closeWorkDb,
+  createWork,
   findRunnerBinary,
   grantTrust,
   isMember,
@@ -32,6 +33,7 @@ import {
   readMap,
   readSecret,
   rewriteArtifactRefs,
+  roleSummaries,
   socketIsAlive,
   versionAtLeast,
   workPaths,
@@ -53,7 +55,7 @@ import { createWindowCounters } from './health/window-counters.js';
 import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
-import { HOST_ERROR_REASONS } from '@parley/protocol';
+import { ASSISTANT_ACTIONS_FEATURE, HOST_ERROR_REASONS } from '@parley/protocol';
 import type { HostNotice, Result, SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
@@ -85,7 +87,7 @@ import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { autonomousEngineIO, createAutonomousEngine } from './rooms/autonomous-engine.js';
 import { createHistoryService } from './rooms/history-service.js';
-import { createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
+import { addRoomMember, createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { createReminderStore } from './assistant/reminders.js';
@@ -573,6 +575,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
+  // Готовность провайдера к запуску агента: ключ, версия CLI для окна, вход аккаунта подписки. Версия для помощника — в `ready`.
+  const sessionReady = async (entry: ProviderEntry): Promise<string | null> => {
+    await providerVersions.ready;
+    const key = await secretOf(entry);
+    const readiness = await providerReadiness(entry, {
+      keyPresent: key !== null,
+      probeVersion: (command) => providerVersions.fresh(command),
+      // Аккаунт подписки готов только со входом (спека подписок 5.5): без этого помощник отказывал бы и вошедшему.
+      signedIn: entry.account === undefined ? null : await accountSignedIn(entry.id),
+    });
+    if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
+    return null;
+  };
   const reminders = createReminderStore({ home: parleyHome(), log: (line) => log.info(line) });
   assistantService = createAssistantService({
     broadcast: (event, data) => handle.context.broadcast(event, data),
@@ -590,17 +605,38 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     createRoom: (input) => createHumanRoom(input),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
     endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
+    // Шаги плана карточки `actions` (спека 2026-10-28, 6.1): те же функции хоста, что зовёт окно.
+    createWork: async (input) => (await createWork(input.projectPath, { title: input.title, goal: input.goal })).work.id,
+    // `exactOptionalPropertyTypes`: zod даёт `role?: … | undefined`, а `CreateSessionInput` явного `undefined` ключом не принимает —
+    // как в `sessionsCreate` (methods/sessions.ts). Отсутствующая `model` остаётся без ключа, явный `null` доходит.
+    createSession: (input) => {
+      const { worktree, model, effort, role, agent, lean, ...rest } = input;
+      return sessionsService.create({
+        ...rest,
+        ...(role === undefined ? {} : { role }),
+        ...(agent === undefined ? {} : { agent }),
+        ...(worktree === undefined ? {} : { worktree }),
+        ...(model === undefined ? {} : { model }),
+        ...(effort === undefined ? {} : { effort }),
+        ...(lean === undefined ? {} : { lean }),
+      });
+    },
+    resume: (ref, prompt) => sessionsService.launch(ref, 'resume', { by: 'human', ...(prompt === null ? {} : { prompt }) }),
+    interrupt: (ref) => feedService.interrupt(ref),
+    stopSession: (ref) => sessionsService.stop(ref),
+    closeSession: (ref) => sessionsService.close(ref),
+    addRoomMember: (input) => addRoomMember(input),
+    roles: async (projectPath) => roleSummaries(await roleCatalog(projectPath, { codex: true })).roles,
+    leanAgents: async () => (await loadConfig()).config.leanAgents,
+    providerReady: sessionReady,
+    // `telegram` создаётся ниже, но зовётся уже после запуска, как `onReminderWhileOff`.
+    actionsShown: () =>
+      handle.context.clients().some((client) => client.features.has(ASSISTANT_ACTIONS_FEATURE)) ||
+      (telegram.status().enabled && telegram.status().owner !== null),
     providers: () => loadProviders(),
     ready: async (entry) => {
-      await providerVersions.ready;
-      const key = await secretOf(entry);
-      const readiness = await providerReadiness(entry, {
-        keyPresent: key !== null,
-        probeVersion: (command) => providerVersions.fresh(command),
-        // Аккаунт подписки готов только со входом (спека подписок 5.5): без этого помощник отказывал бы и вошедшему.
-        signedIn: entry.account === undefined ? null : await accountSignedIn(entry.id),
-      });
-      if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
+      const notReady = await sessionReady(entry);
+      if (notReady !== null) return notReady;
       const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];
       const version = providerVersions.get(entry.runner.command);
       return min !== undefined && version !== null && !versionAtLeast(version, min)
