@@ -551,6 +551,9 @@ describe('рои: пороги, отказы и проверка до общег
     expect(checkSwarmSpawn(map, limits({ swarmConcurrent: 4 }), { swarm, creatingSwarm: false, byAgent: true }))
       .toMatchObject({ code: 'swarm-concurrent', scope: 'swarm', used: 4, limit: 4 });
     expect(checkSwarmSpawn(map, limits({ swarmConcurrent: 5 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+    // Сдавший места не держит, даже пока хост не закрыл его сессию.
+    swarm.members.find((member) => member.sessionId === ordered.id)!.handedAt = AT;
+    expect(checkSwarmSpawn(map, limits({ swarmConcurrent: 4 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
   });
 
   it('порядок: размер роя раньше сессий роёв работы, они раньше живых; создание роя — число роёв после сессий', () => {
