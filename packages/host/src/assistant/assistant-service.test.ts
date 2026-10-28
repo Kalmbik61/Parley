@@ -1473,7 +1473,7 @@ describe('assistant-service: план действий', () => {
     await expect(service.sent({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' })).resolves.toMatchObject([{ text: 'hello' }]);
     expect(deps.closeSession).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-02' });
   });
-  it('работа → агент → комната с задачей: ссылки \"$N\" подставляются итогами, роль и модель уходят только когда названы', async () => {
+  it('работа → агент → комната с задачей: ссылки "$N" подставляются итогами, роль и модель уходят только когда названы', async () => {
     const entries: WorkEntry[] = [{ projectPath: '/p', map: MAP }] as WorkEntry[];
     const fresh = { ...MAP, work: { id: 'w-2', title: 'Fresh', goal: '', status: 'active' }, sessions: [], rooms: [] } as unknown as WorkMap;
     (deps.createWork as Mock).mockImplementation(async () => {
