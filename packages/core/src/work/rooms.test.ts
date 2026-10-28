@@ -32,6 +32,7 @@ import {
   setRoomOwner,
   canReadRoom,
 } from './rooms.js';
+import type { WorkSwarm } from './swarms.js';
 import { HUMAN, PARLEY, SYSTEM, type Room, type WorkMap } from './types.js';
 import { mapLetterTx, type LetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
@@ -805,6 +806,26 @@ describe('deleteRoom', () => {
     (map.rooms[1] as Room).members.push('s-01');
 
     expect(deleteRoom(map, lt(map), 'r-01', NOW)).toEqual([]);
+  });
+
+  it('рой, заведённый ведущим комнаты, остаётся, а итог теперь идёт человеку; прочие создатели не меняются', () => {
+    const map = roomsWithFeed();
+    const swarm = (id: string, creator: WorkSwarm['creator']): WorkSwarm => ({
+      id, tag: 'Research', creator, objective: 'Audit', queen: 's-03',
+      members: [{ sessionId: 's-03', role: 'queen', n: 1, addedAt: NOW, handedAt: null }],
+      status: 'running', createdAt: NOW, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    });
+    map.swarms = [
+      swarm('sw-01', { kind: 'room', roomId: 'r-01' }),
+      swarm('sw-02', { kind: 'room', roomId: 'r-02' }),
+      swarm('sw-03', { kind: 'session', sessionId: 's-01' }),
+    ];
+    deleteRoom(map, lt(map), 'r-01', NOW);
+
+    expect(map.swarms.map((row) => row.creator)).toEqual([
+      { kind: 'human' }, { kind: 'room', roomId: 'r-02' }, { kind: 'session', sessionId: 's-01' },
+    ]);
+    expect(map.swarms[0]).toMatchObject({ id: 'sw-01', status: 'running' });
   });
 
   it('номера комнаты, писем и решения не переиспользуются', () => {

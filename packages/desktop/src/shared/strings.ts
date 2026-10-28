@@ -1185,6 +1185,11 @@ export const S = {
       workMessages: 'Agent messages per hour, workspace',
       roomMessages: 'Agent messages per hour, room',
       fanout: 'Message deliveries per hour, workspace',
+      swarmSessions: 'Sessions per swarm',
+      swarmConcurrent: 'Running sessions per swarm',
+      workSwarmSessions: 'Agent-created swarm sessions, workspace',
+      workSwarms: 'Agent-created swarms, workspace',
+      swarmMinutes: 'Swarm lifetime, minutes (0 = no limit)',
       range: (min: number, max: number): string => `${min}…${max}`,
     },
     notifyNeedsYou: 'Needs you',
@@ -2734,6 +2739,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
   'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
   'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
+  'swarm-done': 'swarm finished',
+  'swarm-failed': "swarm didn't finish",
 };
 
 /**

@@ -15,6 +15,14 @@ describe('HOST_ERROR_REASONS', () => {
       snapshotTooLarge: 'snapshot-too-large',
       // Нормалайзер модели и effort (5.7–5.8): «сессия занята» у `sessions.setEffort` и `sessions.setModel`.
       busy: 'busy',
+      // Рой v1 (спека роя, 4–5): отказы `create_session` / `swarm_add` / `create_swarm` и пороги роёв.
+      notQueen: 'not-queen',
+      swarmClosed: 'swarm-closed',
+      swarmMember: 'swarm-member',
+      swarms: 'swarms',
+      swarmSessions: 'swarm-sessions',
+      swarmConcurrent: 'swarm-concurrent',
+      swarmTotal: 'swarm-total',
     });
   });
 });

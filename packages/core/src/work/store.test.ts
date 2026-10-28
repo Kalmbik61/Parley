@@ -406,8 +406,8 @@ describe('createWork', () => {
     expect(await isDirectory(paths.artifacts)).toBe(true);
     expect(await exists(path.join(home, 'works-index.json'))).toBe(false);
     // Omitted optional plans are normalized to an empty list by the accepted map reader.
-    expect(await readMap(project, 'w-0001')).toEqual({ ...map, plans: [] });
-    expect(storedRows()).toEqual({ ...map, plans: [] });
+    expect(await readMap(project, 'w-0001')).toEqual({ ...map, plans: [], swarms: [] });
+    expect(storedRows()).toEqual({ ...map, plans: [], swarms: [] });
     expect((await readWorksIndex()).works).toEqual([
       {
         id: 'w-0001',
@@ -523,6 +523,33 @@ describe('updateMap', () => {
     const stored = readStoredMap(project, 'w-0001');
     expect(stored.rooms).toEqual([]);
     expect(storedRows()).toEqual(updated);
+  });
+
+  it('пустой список роёв в базу не пишется; рой ложится строкой и читается обратно', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const stored = (): { extra: { present: string[] }; swarms: number } => ({
+      extra: JSON.parse((workDb().prepare('SELECT extra_json FROM works').get() as { extra_json: string }).extra_json) as { present: string[] },
+      swarms: (workDb().prepare("SELECT COUNT(*) AS n FROM entries WHERE kind = 'swarm'").get() as { n: number }).n,
+    });
+
+    const empty = await updateMap(project, 'w-0001', (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });
+    });
+    expect(empty.swarms).toEqual([]);
+    expect(stored().extra.present).not.toContain('swarms');
+    expect(stored().swarms).toBe(0);
+
+    const swarm = {
+      id: 'sw-01', tag: 'Research', creator: { kind: 'human' as const }, objective: 'Audit', queen: 's-01',
+      members: [{ sessionId: 's-01', role: 'queen' as const, n: 1, addedAt: '2026-10-28T10:00:00.000Z', handedAt: null }],
+      status: 'running' as const, createdAt: '2026-10-28T10:00:00.000Z', endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    };
+    await updateMap(project, 'w-0001', (map) => {
+      map.swarms = [swarm];
+    });
+    expect(stored().swarms).toBe(1);
+    expect((await readMap(project, 'w-0001')).swarms).toEqual([swarm]);
+    expect(storedRows().swarms).toEqual([swarm]);
   });
 
   it('пишет карту в базу и обновляет список работ', async () => {

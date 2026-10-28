@@ -154,6 +154,11 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   workMessages: 'WORK_MESSAGES',
   roomMessages: 'ROOM_MESSAGES',
   fanout: 'FANOUT',
+  swarmSessions: 'SWARM_SESSIONS',
+  swarmConcurrent: 'SWARM_CONCURRENT',
+  workSwarmSessions: 'WORK_SWARM_SESSIONS',
+  workSwarms: 'WORK_SWARMS',
+  swarmMinutes: 'SWARM_MINUTES',
 };
 
 export interface LoadedConfig {

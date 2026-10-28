@@ -13,6 +13,7 @@ import {
 } from './map.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
+import { memberState, swarmProgress, type WorkSwarm } from './swarms.js';
 import { HUMAN, type Room, type SessionLifecycle, type WindowWorkMap, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
@@ -395,6 +396,7 @@ describe('transitionSession', () => {
 describe('parseMap', () => {
   const planMap = (mode: 'verified' | 'autonomous') => ({
     ...emptyMap(),
+    swarms: [],
     rooms: [{
       id: 'r-01', title: 'Комната', creator: HUMAN, ownerId: null, members: [],
       lead: null, mode, proposal: null, recipe: null, archivedAt: null,
@@ -620,7 +622,7 @@ describe('parseMap', () => {
 
   it('читает карту нужной формы', () => {
     const map = emptyMap();
-    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual({ ...map, plans: [] });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual({ ...map, plans: [], swarms: [] });
   });
 
   it('карта v1 поднимается до v2 поле в поле (три сессии и пять писем, как в w-0010)', () => {
@@ -775,6 +777,7 @@ describe('parseMap', () => {
       work: v1.work,
       rooms: [],
       plans: [],
+      swarms: [],
       sessions: [
         {
           ...strip(s1),
@@ -1438,4 +1441,137 @@ it('parses engine artifact workspaces without clone branch metadata', () => {
   const map = emptyMap();
   Object.assign(addSession(map, { provider: 'codex', label: 'Review', task: 'Review' }), { workspace: { kind: 'artifacts', path: '/engine/review/op-01' } });
   expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toEqual({ kind: 'artifacts', path: '/engine/review/op-01' });
+});
+
+describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
+  const AT = '2026-10-28T10:00:00.000Z';
+  const swarmOf = (patch: Partial<WorkSwarm> = {}): WorkSwarm => ({
+    id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: 's-01',
+    members: [
+      { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null },
+      { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: null },
+    ],
+    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    ...patch,
+  });
+  /** Карта с тремя сессиями, комнатой r-01 и роем в сыром виде, как он лежит в файле. */
+  const withSwarms = (...swarms: unknown[]): WindowWorkMap => {
+    const map = emptyMap();
+    for (const label of ['королева', 'трутень', 'создатель']) addSession(map, { provider: 'claude', label, task: 't' });
+    map.rooms.push({
+      id: 'r-01', title: 'Комната', creator: HUMAN, ownerId: null, members: [], lead: null, mode: 'free', proposal: null,
+      recipe: null, archivedAt: null, createdAt: AT,
+    } as Room);
+    (map as unknown as Record<string, unknown>)['swarms'] = swarms;
+    return map;
+  };
+  const read = (map: WindowWorkMap): WorkMap => parseMap(JSON.stringify(map), 'map.json');
+
+  it('карта без swarms читается: поле становится []', () => {
+    const map = emptyMap();
+    expect('swarms' in map).toBe(false);
+    expect(read(map).swarms).toEqual([]);
+  });
+
+  it('карта с роем читается без изменений, повторный разбор идемпотентен', () => {
+    const map = withSwarms(swarmOf({ creator: { kind: 'session', sessionId: 's-03' } }), swarmOf({ id: 'sw-02', creator: { kind: 'room', roomId: 'r-01' } }));
+    const parsed = read(map);
+    expect(parsed.swarms).toEqual(map.swarms);
+    expect(parseMap(JSON.stringify(parsed), 'again.json')).toEqual(parsed);
+  });
+
+  it.each([
+    ['не объект', 42],
+    ['без id', { ...swarmOf(), id: undefined }],
+    ['статус вне списка', { ...swarmOf(), status: 'paused' }],
+    ['без королевы среди участников', swarmOf({ queen: 's-09' })],
+    ['королева с неизвестной ролью', swarmOf({ members: [{ sessionId: 's-01', role: 'boss', n: 1, addedAt: AT, handedAt: null } as never] })],
+    ['участники не массив', { ...swarmOf(), members: 'x' }],
+  ])('битая запись роя (%s) убирается, карта и соседний рой читаются', (_name, broken) => {
+    const parsed = read(withSwarms(broken, swarmOf({ id: 'sw-02' })));
+    expect(parsed.swarms?.map((swarm) => swarm.id)).toEqual(['sw-02']);
+  });
+
+  it('swarms не массив читается как []', () => {
+    const map = withSwarms();
+    (map as unknown as Record<string, unknown>)['swarms'] = 'x';
+    expect(read(map).swarms).toEqual([]);
+  });
+
+  it('migrateSwarm: участник с неизвестной ролью отбрасывается, остальные остаются', () => {
+    const odd = { sessionId: 's-05', role: 'scout', n: 1, addedAt: AT, handedAt: null };
+    const parsed = read(withSwarms(swarmOf({ members: [...swarmOf().members, odd as never] })));
+    expect(parsed.swarms?.[0]?.members.map((m) => m.sessionId)).toEqual(['s-01', 's-02']);
+  });
+
+  it('migrateSwarm: создатель-сессия или комната, которых нет в карте, становится human; существующие остаются', () => {
+    const parsed = read(withSwarms(
+      swarmOf({ id: 'sw-01', creator: { kind: 'session', sessionId: 's-77' } }),
+      swarmOf({ id: 'sw-02', creator: { kind: 'room', roomId: 'r-77' } }),
+      { ...swarmOf({ id: 'sw-03' }), creator: undefined },
+      swarmOf({ id: 'sw-04', creator: { kind: 'session', sessionId: 's-03' } }),
+      swarmOf({ id: 'sw-05', creator: { kind: 'room', roomId: 'r-01' } }),
+    ));
+    expect(parsed.swarms?.map((swarm) => swarm.creator)).toEqual([
+      { kind: 'human' }, { kind: 'human' }, { kind: 'human' },
+      { kind: 'session', sessionId: 's-03' }, { kind: 'room', roomId: 'r-01' },
+    ]);
+  });
+
+  it('migrateSwarm: недостающие необязательные поля получают null', () => {
+    const raw = swarmOf() as unknown as Record<string, unknown>;
+    for (const key of ['endedAt', 'result', 'failure', 'seenAt', 'expiredAt']) delete raw[key];
+    const parsed = read(withSwarms(raw));
+    expect(parsed.swarms?.[0]).toMatchObject({ endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null });
+  });
+
+  describe('removeSession', () => {
+    const NOW = '2026-10-28T12:00:00.000Z';
+
+    it('(а) создатель-сессия удалена: рой переходит к человеку и продолжает идти', () => {
+      const map = read(withSwarms(swarmOf({ creator: { kind: 'session', sessionId: 's-03' } })));
+      removeSession(map, lt(map), 's-03', NOW);
+      expect(map.swarms?.[0]).toMatchObject({ creator: { kind: 'human' }, status: 'running', endedAt: null });
+    });
+
+    it('(б) участник удалён: запись остаётся, счётчик не прыгает; состояние — failed, а у сдавшего — handed', () => {
+      const map = read(withSwarms(swarmOf({
+        members: [
+          { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null },
+          { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: AT },
+          { sessionId: 's-03', role: 'drone', n: 2, addedAt: AT, handedAt: null },
+        ],
+      })));
+      removeSession(map, lt(map), 's-02', NOW);
+      removeSession(map, lt(map), 's-03', NOW);
+      const swarm = map.swarms![0]!;
+      expect(swarm.members.map((m) => m.sessionId)).toEqual(['s-01', 's-02', 's-03']);
+      expect(swarmProgress(swarm)).toEqual({ handed: 1, total: 2 });
+      expect(memberState(swarm, swarm.members[1]!, undefined)).toBe('handed');
+      expect(memberState(swarm, swarm.members[2]!, undefined)).toBe('failed');
+      expect(swarm.status).toBe('running');
+    });
+
+    it('(в) королева удалена, рой идёт: cancelled, причина «queen deleted», endedAt ставится', () => {
+      for (const status of ['running', 'collecting'] as const) {
+        const map = read(withSwarms(swarmOf({ status })));
+        removeSession(map, lt(map), 's-01', NOW);
+        expect(map.swarms?.[0]).toMatchObject({ status: 'cancelled', failure: 'queen deleted', endedAt: NOW });
+      }
+    });
+
+    it('(в) королева удалена, рой уже закончился: итог и причина не перезаписываются', () => {
+      const done = swarmOf({ status: 'done', endedAt: AT, result: { summary: 'итог', at: AT, deliveredAt: null } });
+      const failed = swarmOf({ id: 'sw-02', status: 'failed', endedAt: AT, failure: 'budget' });
+      const map = read(withSwarms(done, failed));
+      removeSession(map, lt(map), 's-01', NOW);
+      expect(map.swarms).toEqual([done, failed]);
+    });
+
+    it('сессия вне роёв ничего в роях не меняет', () => {
+      const map = read(withSwarms(swarmOf()));
+      removeSession(map, lt(map), 's-03', NOW);
+      expect(map.swarms).toEqual([swarmOf()]);
+    });
+  });
 });

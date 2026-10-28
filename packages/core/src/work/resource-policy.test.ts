@@ -11,7 +11,10 @@ import {
   RESOURCE_WINDOW_MS,
   ResourceDeniedError,
   assertMessageBudget,
+  RESOURCE_LIMIT_BOUNDS,
+  RESOURCE_LIMIT_KEYS,
   attemptKindFor,
+  checkSwarmSpawn,
   deniedForAgent,
   limitsFromConfig,
   reserveAttempt,
@@ -24,6 +27,7 @@ import {
   type ResourceLimits,
 } from './resource-policy.js';
 import { addRoom } from './rooms.js';
+import type { WorkSwarm } from './swarms.js';
 import { createWork, readMap, readStoredMap, updateMap } from './store.js';
 import { HUMAN, PARLEY, SYSTEM, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
@@ -445,5 +449,147 @@ describe('ownership resource accounting', () => {
     expect(RESOURCE_COVERAGE.counted).not.toContain('spawn_session');
     expect(countRecipients(map, HUMAN, first.id, [])).toBe(1);
     expect(countRecipients(map, member, first.id, [owner])).toBe(1);
+  });
+});
+
+describe('рои: пороги, отказы и проверка до общего резерва (спека роя v1, 5)', () => {
+  const AT = iso(NOW);
+  const swarmOf = (sessionIds: string[]): WorkSwarm => ({
+    id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: sessionIds[0]!,
+    members: sessionIds.map((sessionId, index) => ({ sessionId, role: index === 0 ? 'queen' : 'drone', n: index === 0 ? 1 : index, addedAt: AT, handedAt: null })),
+    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+  });
+  /** Карта с роем из `count` участников; `active` из них живые, остальные закрыты. */
+  const mapWithSwarm = (count: number, active: number): { map: WorkMap; swarm: WorkSwarm } => {
+    const map = emptyMap();
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const id = addSession(map, { provider: 'claude', label: `m${i}`, task: 't' }).id;
+      transitionSession(map, id, i < active ? 'active' : 'closed');
+      ids.push(id);
+    }
+    const swarm = swarmOf(ids);
+    map.swarms = [swarm];
+    return { map, swarm };
+  };
+
+  it('умолчания и границы: 16 (2…64), 8 (2…64), 64 (0…1000), 6 (0…100), срок 90 (0…1440)', () => {
+    expect(DEFAULT_RESOURCE_LIMITS).toMatchObject({ swarmSessions: 16, swarmConcurrent: 8, workSwarmSessions: 64, workSwarms: 6, swarmMinutes: 90 });
+    expect(RESOURCE_LIMIT_BOUNDS.swarmSessions).toEqual({ min: 2, max: 64 });
+    expect(RESOURCE_LIMIT_BOUNDS.swarmConcurrent).toEqual({ min: 2, max: 64 });
+    expect(RESOURCE_LIMIT_BOUNDS.workSwarmSessions).toEqual({ min: 0, max: 1000 });
+    expect(RESOURCE_LIMIT_BOUNDS.workSwarms).toEqual({ min: 0, max: 100 });
+    expect(RESOURCE_LIMIT_BOUNDS.swarmMinutes).toEqual({ min: 0, max: 1440 });
+    for (const key of ['swarmSessions', 'swarmConcurrent', 'workSwarmSessions', 'workSwarms', 'swarmMinutes'] as const) {
+      expect(RESOURCE_LIMIT_KEYS).toContain(key);
+    }
+  });
+
+  it('четыре кода отказа: область swarm, счётчики и текст, а агенту ещё и «только человек»', () => {
+    const cases: Array<[ConstructorParameters<typeof ResourceDeniedError>[0], RegExp]> = [
+      ['swarms', /swarm limit reached: agents already created 6 of 6 swarms in this workspace/],
+      ['swarm-sessions', /swarm size limit reached: 6 of 6 sessions already belong to this swarm/],
+      ['swarm-concurrent', /swarm concurrency limit reached: 6 of 6 sessions of this swarm are running or reserved/],
+      ['swarm-total', /swarm session limit reached: agents already created 6 of 6 swarm sessions in this workspace/],
+    ];
+    for (const [code, text] of cases) {
+      const error = new ResourceDeniedError(code, 'swarm', 6, 6);
+      expect(error).toMatchObject({ code, scope: 'swarm', used: 6, limit: 6 });
+      expect(error.message).toMatch(text);
+      expect(error.message).toContain('Settings');
+      expect(deniedForAgent(error)).toContain('Only the human can raise this limit');
+    }
+  });
+
+  it('рой жив и места есть: отказа нет, карта не меняется', () => {
+    const { map, swarm } = mapWithSwarm(3, 3);
+    const before = JSON.stringify(map);
+    expect(checkSwarmSpawn(map, limits(), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('swarm-sessions: участников уже столько, сколько порог, королева включена', () => {
+    const { map, swarm } = mapWithSwarm(4, 0);
+    const error = checkSwarmSpawn(map, limits({ swarmSessions: 4 }), { swarm, creatingSwarm: false, byAgent: true });
+    expect(error).toMatchObject({ code: 'swarm-sessions', scope: 'swarm', used: 4, limit: 4 });
+    expect(checkSwarmSpawn(map, limits({ swarmSessions: 5 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+  });
+
+  it('swarm-total: сессии роёв, созданные агентами за всё время; ноль — рои агентам запрещены; человека не касается', () => {
+    const { map, swarm } = mapWithSwarm(2, 2);
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 5 };
+    expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 5 }), { swarm, creatingSwarm: false, byAgent: true }))
+      .toMatchObject({ code: 'swarm-total', scope: 'swarm', used: 5, limit: 5 });
+    expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 6 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+    expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 0 }), { swarm: null, creatingSwarm: true, byAgent: true })?.code).toBe('swarm-total');
+    // `swarms.create` человека: ни одного порога работы, пока нет роя, который мог бы упереться в размер.
+    expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 0, workSwarms: 0 }), { swarm: null, creatingSwarm: true, byAgent: false })).toBeNull();
+  });
+
+  it('swarms: роёв, созданных агентами, уже порог — только для создания роя', () => {
+    const map = emptyMap();
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6 };
+    expect(checkSwarmSpawn(map, limits(), { swarm: null, creatingSwarm: true, byAgent: true }))
+      .toMatchObject({ code: 'swarms', scope: 'swarm', used: 6, limit: 6 });
+    expect(checkSwarmSpawn(map, limits({ workSwarms: 7 }), { swarm: null, creatingSwarm: true, byAgent: true })).toBeNull();
+    // Добавить участника в уже созданный рой это не мешает.
+    const { map: inner, swarm } = mapWithSwarm(2, 2);
+    inner.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6 };
+    expect(checkSwarmSpawn(inner, limits(), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+    // Без счётчиков (старая карта) — ноль; ноль порога — запрет.
+    expect(checkSwarmSpawn(emptyMap(), limits({ workSwarms: 0 }), { swarm: null, creatingSwarm: true, byAgent: true })?.code).toBe('swarms');
+    expect(checkSwarmSpawn(emptyMap(), limits(), { swarm: null, creatingSwarm: true, byAgent: true })).toBeNull();
+  });
+
+  it('swarm-concurrent: считаются живые и заказанные (pending) участники этого роя, закрытые и чужие — нет', () => {
+    const { map, swarm } = mapWithSwarm(6, 3);
+    const ordered = addSession(map, { provider: 'claude', label: 'p', task: 't' });
+    swarm.members.push({ sessionId: ordered.id, role: 'drone', n: 5, addedAt: AT, handedAt: null });
+    const stranger = addActive(map);
+    expect(stranger).not.toBe(ordered.id);
+    // Живых три, заказанный один: четыре.
+    expect(checkSwarmSpawn(map, limits({ swarmConcurrent: 4 }), { swarm, creatingSwarm: false, byAgent: true }))
+      .toMatchObject({ code: 'swarm-concurrent', scope: 'swarm', used: 4, limit: 4 });
+    expect(checkSwarmSpawn(map, limits({ swarmConcurrent: 5 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+  });
+
+  it('порядок: размер роя раньше сессий роёв работы, они раньше живых; создание роя — число роёв после сессий', () => {
+    const { map, swarm } = mapWithSwarm(4, 4);
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 100, swarmsCreated: 100 };
+    const all = limits({ swarmSessions: 4, swarmConcurrent: 2, workSwarmSessions: 1, workSwarms: 1 });
+    expect(checkSwarmSpawn(map, all, { swarm, creatingSwarm: false, byAgent: true })?.code).toBe('swarm-sessions');
+    expect(checkSwarmSpawn(map, { ...all, swarmSessions: 64 }, { swarm, creatingSwarm: false, byAgent: true })?.code).toBe('swarm-total');
+    expect(checkSwarmSpawn(map, { ...all, swarmSessions: 64, workSwarmSessions: 1000 }, { swarm, creatingSwarm: false, byAgent: true })?.code).toBe('swarm-concurrent');
+    expect(checkSwarmSpawn(map, all, { swarm: null, creatingSwarm: true, byAgent: true })?.code).toBe('swarm-total');
+    expect(checkSwarmSpawn(map, { ...all, workSwarmSessions: 1000 }, { swarm: null, creatingSwarm: true, byAgent: true })?.code).toBe('swarms');
+  });
+
+  it('общий резерв остаётся за хостом: проверка роёв его не берёт и обычные пороги спавна не читает', () => {
+    const { map, swarm } = mapWithSwarm(2, 2);
+    map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [] };
+    expect(checkSwarmSpawn(map, limits({ workNewSessions: 0 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
+    expect(map.resources.attempts).toEqual([]);
+    expect(map.resources.spawned).toBe(50);
+  });
+
+  it('resourceStatus: счётчики роёв по работе; исчерпанные пороги названы кодами роёв', () => {
+    const map = emptyMap();
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 3, swarmsCreated: 2 };
+    const status = resourceStatus(map, limits({ workSwarmSessions: 10, workSwarms: 2 }), NOW);
+    expect(status.work.swarmSessions).toEqual({ used: 3, reserved: 0, limit: 10, remaining: 7 });
+    expect(status.work.swarms).toEqual({ used: 2, reserved: 0, limit: 2, remaining: 0 });
+    expect(status.exhausted).toContain('swarms');
+    expect(status.exhausted).not.toContain('swarm-total');
+    expect(resourceStatus(emptyMap(), limits(), NOW).work.swarms.used).toBe(0);
+  });
+
+  it('validateResources: необязательные счётчики роёв — неотрицательные целые, иначе карта не читается', () => {
+    const ledger = (extra: Record<string, unknown>) => ({ ...emptyMap(), resources: { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], ...extra } });
+    const ok = parseMap(JSON.stringify(ledger({ swarmSpawned: 4, swarmsCreated: 0 })), 'map.json');
+    expect(ok.resources).toMatchObject({ swarmSpawned: 4, swarmsCreated: 0 });
+    expect(parseMap(JSON.stringify(ledger({})), 'map.json').resources?.swarmSpawned).toBeUndefined();
+    for (const bad of [{ swarmSpawned: -1 }, { swarmsCreated: 1.5 }, { swarmSpawned: '2' }, { swarmsCreated: null }]) {
+      expect(() => parseMap(JSON.stringify(ledger(bad)), 'map.json')).toThrow('invalid resource ledger');
+    }
   });
 });

@@ -387,6 +387,11 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['workMessages', 'WORK_MESSAGES', '300', 300],
     ['roomMessages', 'ROOM_MESSAGES', '150', 150],
     ['fanout', 'FANOUT', '500', 500],
+    ['swarmSessions', 'SWARM_SESSIONS', '10', 10],
+    ['swarmConcurrent', 'SWARM_CONCURRENT', '4', 4],
+    ['workSwarmSessions', 'WORK_SWARM_SESSIONS', '0', 0],
+    ['workSwarms', 'WORK_SWARMS', '2', 2],
+    ['swarmMinutes', 'SWARM_MINUTES', '0', 0],
   ] as const;
 
   it('ключи таблицы ENV_NAMES — соответствуют всем настройкам', () => {

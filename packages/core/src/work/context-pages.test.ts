@@ -509,6 +509,49 @@ describe('карта окна', () => {
     expect(frameBytes(compact)).toBeLessThan(64 * 1024);
   });
 
+  it('рои: хвост не больше WINDOW_LIST_MAX с числом опущенных, длинные тексты сокращены; без роёв ключа omitted нет', () => {
+    const map = baseMap();
+    const at = '2026-10-28T10:00:00.000Z';
+    map.swarms = Array.from({ length: 130 }, (_, i) => ({
+      id: `sw-${String(i + 1).padStart(3, '0')}`, tag: 'Research', creator: { kind: 'human' as const }, objective: 'Audit', queen: 's-01',
+      members: [{ sessionId: 's-01', role: 'queen' as const, n: 1, addedAt: at, handedAt: null }],
+      status: 'done' as const, createdAt: at, endedAt: at, result: { summary: 'итог', at, deliveredAt: null }, failure: null, seenAt: null, expiredAt: null,
+    }));
+    map.swarms[129]!.objective = 'ж'.repeat(100_000);
+    map.swarms[129]!.result!.summary = 'ж'.repeat(100_000);
+
+    const compact = compactWorkMap(map, { messageBytes: 1024 });
+    expect(compact.swarms).toHaveLength(100);
+    expect(compact.swarms?.[0]?.id).toBe('sw-031');
+    expect(compact.swarms?.[99]?.id).toBe('sw-130');
+    expect(compact.compact?.omitted['swarms']).toBe(30);
+    expect(compact.swarms?.[99]?.objective).toContain('cut: ');
+    expect(compact.swarms?.[99]?.result?.summary).toContain('cut: ');
+    const cuts = compact.compact?.cut.map((cut) => cut.path) ?? [];
+    expect(cuts).toContain('swarms[99].objective');
+    expect(cuts).toContain('swarms[99].result.summary');
+
+    const few = baseMap();
+    few.swarms = map.swarms.slice(0, 3);
+    const small = compactWorkMap(few, { messageBytes: 1024 });
+    expect(small.swarms).toHaveLength(3);
+    expect(small.compact?.omitted['swarms']).toBeUndefined();
+    expect(compactWorkMap(baseMap(), { messageBytes: 1024 }).swarms).toBeUndefined();
+  });
+
+  it('агентская топология (get_map) роёв не показывает', () => {
+    const map = baseMap();
+    const at = '2026-10-28T10:00:00.000Z';
+    map.swarms = [{
+      id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: 's-01',
+      members: [{ sessionId: 's-01', role: 'queen', n: 1, addedAt: at, handedAt: null }],
+      status: 'running', createdAt: at, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    }];
+    const text = JSON.stringify(mapTopology(map, 's-01'));
+    expect(text).not.toContain('sw-01');
+    expect(text).not.toContain('swarms');
+  });
+
   it('бюджет писем 0 — только итоги и точные счётчики (архивная работа)', () => {
     const map = baseMap();
     fill(map, 50, 20);

@@ -162,6 +162,21 @@ export const METHODS = {
   'sessions.stop': z.object({ ref: sessionRef }),
   'sessions.delete': z.object({ ref: sessionRef, force: z.boolean().optional() }),
   'sessions.close': z.object({ ref: sessionRef }),
+  // Рой из окна (спека роя v1, 6): человек заводит королеву; создатель — `human`, лимиты агентов рой не тратит. Тег — 1–24 знака
+  // без перевода строки, задача — до 4096 (`isSwarmTag`, `SWARM_OBJECTIVE_MAX` в core); остальные поля как у `sessions.create`.
+  // Отмена закрывает живых участников; «seen» — человек увидел итог. Старый хост методов не знает — окно прячет кнопки.
+  'swarms.create': z.object({
+    projectPath: z.string(),
+    workId: z.string(),
+    tag: z.string().min(1).max(24).regex(/^[^\r\n]*$/),
+    objective: z.string().max(4096),
+    provider: z.string(),
+    role: z.object({ source: z.enum(['builtin', 'claude', 'codex']), name: z.string().min(1).max(4096) }).nullable().optional(),
+    model: z.string().max(200).regex(/^(?:[^\s-]\S*)?$/).nullable().optional(),
+    effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
+  }),
+  'swarms.cancel': z.object({ projectPath: z.string(), workId: z.string(), swarmId: z.string() }),
+  'swarms.seen': z.object({ projectPath: z.string(), workId: z.string(), swarmId: z.string() }),
   // Rename из меню строки сессии (часть 2 спеки архива комнат, 15). Ярлык — по правилу `works.rename`: пустое после
   // обрезки не проходит схему. Сессии нет в карте — `bad_request`, как у `rooms.rename`. Старый хост метода не знает —
   // окно по списку методов прячет пункт.
@@ -416,6 +431,9 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'sessions.stop': { ok: true };
   'sessions.delete': { ok: true };
   'sessions.close': { ok: true };
+  'swarms.create': { swarmId: string; queenSessionId: string };
+  'swarms.cancel': { ok: true };
+  'swarms.seen': { ok: true };
   'sessions.rename': { ok: true };
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */

@@ -14,6 +14,7 @@
 
 import type { LetterTx } from './letter-store.js';
 import { HUMAN, PARLEY, SYSTEM } from './types.js';
+import type { WorkSwarm } from './swarms.js';
 import type { Message, ResourceAttempt, ResourceKind, WindowWorkMap, WorkMap, WorkResources } from './types.js';
 
 /** Скользящее окно запусков, возобновлений и писем. */
@@ -42,6 +43,16 @@ export interface ResourceLimits {
   roomMessages: number;
   /** Адресатов, которым агенты доставили письма за скользящий час в работе. */
   fanout: number;
+  /** Участников одного роя, королева включена. */
+  swarmSessions: number;
+  /** Одновременно живых и заказанных участников одного роя. */
+  swarmConcurrent: number;
+  /** Сессий роёв, созданных агентами, за всё время работы. */
+  workSwarmSessions: number;
+  /** Роёв, созданных агентами, за всё время работы. */
+  workSwarms: number;
+  /** Срок жизни одного роя в минутах от создания; 0 — без срока. */
+  swarmMinutes: number;
 }
 
 /**
@@ -58,11 +69,19 @@ export const DEFAULT_RESOURCE_LIMITS: Readonly<ResourceLimits> = {
   workMessages: 200,
   roomMessages: 100,
   fanout: 400,
+  swarmSessions: 16,
+  swarmConcurrent: 8,
+  workSwarmSessions: 64,
+  workSwarms: 6,
+  swarmMinutes: 90,
 };
 
 export const RESOURCE_LIMIT_KEYS = Object.keys(DEFAULT_RESOURCE_LIMITS) as ReadonlyArray<keyof ResourceLimits>;
 
-/** Границы значений настройки: ноль новых сессий разрешён (агентам породить нельзя), прочие пороги — от единицы. */
+/**
+ * Границы значений настройки: ноль новых сессий, сессий роёв и роёв разрешён (агентам породить нельзя), прочие пороги —
+ * от единицы; рой — от двух (королева и хотя бы один участник); ноль `swarmMinutes` — рой без срока жизни.
+ */
 export const RESOURCE_LIMIT_BOUNDS: Readonly<Record<keyof ResourceLimits, { min: number; max: number }>> = {
   workConcurrent: { min: 1, max: 64 },
   roomConcurrent: { min: 1, max: 64 },
@@ -73,6 +92,11 @@ export const RESOURCE_LIMIT_BOUNDS: Readonly<Record<keyof ResourceLimits, { min:
   workMessages: { min: 1, max: 10_000 },
   roomMessages: { min: 1, max: 10_000 },
   fanout: { min: 1, max: 100_000 },
+  swarmSessions: { min: 2, max: 64 },
+  swarmConcurrent: { min: 2, max: 64 },
+  workSwarmSessions: { min: 0, max: 1000 },
+  workSwarms: { min: 0, max: 100 },
+  swarmMinutes: { min: 0, max: 1440 },
 };
 
 /** Из любого объекта с ключами порогов (настройки целиком) берёт только пороги. */
@@ -111,16 +135,23 @@ export type ResourceDeniedCode =
   | 'launches'
   | 'resume-rate'
   | 'messages'
-  | 'fanout';
+  | 'fanout'
+  | 'swarms'
+  | 'swarm-sessions'
+  | 'swarm-concurrent'
+  | 'swarm-total';
+
+/** Область отказа: `swarm` — пороги роёв (один рой или все рои работы, смотря по коду). */
+export type ResourceDeniedScope = 'work' | 'room' | 'session' | 'swarm';
 
 /** Бюджет исчерпан: безопасный исход вместо операции. Ничего не записано, модель не запущена. */
 export class ResourceDeniedError extends Error {
   readonly code: ResourceDeniedCode;
-  readonly scope: 'work' | 'room' | 'session';
+  readonly scope: ResourceDeniedScope;
   readonly limit: number;
   readonly used: number;
 
-  constructor(code: ResourceDeniedCode, scope: 'work' | 'room' | 'session', used: number, limit: number) {
+  constructor(code: ResourceDeniedCode, scope: ResourceDeniedScope, used: number, limit: number) {
     super(`${DENIED_TEXT[code](scope, used, limit)}`);
     this.name = 'ResourceDeniedError';
     this.code = code;
@@ -130,10 +161,10 @@ export class ResourceDeniedError extends Error {
   }
 }
 
-const where = (scope: 'work' | 'room' | 'session'): string =>
-  scope === 'room' ? 'in this room' : scope === 'session' ? 'for this session' : 'in this workspace';
+const where = (scope: ResourceDeniedScope): string =>
+  scope === 'room' ? 'in this room' : scope === 'session' ? 'for this session' : scope === 'swarm' ? 'in this swarm' : 'in this workspace';
 
-const DENIED_TEXT: Record<ResourceDeniedCode, (scope: 'work' | 'room' | 'session', used: number, limit: number) => string> = {
+const DENIED_TEXT: Record<ResourceDeniedCode, (scope: ResourceDeniedScope, used: number, limit: number) => string> = {
   concurrent: (scope, used, limit) =>
     `session limit reached: ${used} of ${limit} sessions are running or reserved ${where(scope)}; stop one or raise the limit in Settings`,
   'new-sessions': (scope, used, limit) =>
@@ -146,6 +177,15 @@ const DENIED_TEXT: Record<ResourceDeniedCode, (scope: 'work' | 'room' | 'session
     `message limit reached: ${used} of ${limit} agent messages in the last hour ${where(scope)}; wait or raise the limit in Settings`,
   fanout: (scope, used, limit) =>
     `delivery limit reached: ${used} of ${limit} message deliveries in the last hour ${where(scope)}; wait or raise the limit in Settings`,
+  // Область у всех четырёх `swarm`, но фразу каждый код строит сам: `swarms` и `swarm-total` считают всю работу.
+  swarms: (_scope, used, limit) =>
+    `swarm limit reached: agents already created ${used} of ${limit} swarms in this workspace; raise the limit in Settings`,
+  'swarm-sessions': (_scope, used, limit) =>
+    `swarm size limit reached: ${used} of ${limit} sessions already belong to this swarm; raise the limit in Settings`,
+  'swarm-concurrent': (_scope, used, limit) =>
+    `swarm concurrency limit reached: ${used} of ${limit} sessions of this swarm are running or reserved; wait for one to hand in or raise the limit in Settings`,
+  'swarm-total': (_scope, used, limit) =>
+    `swarm session limit reached: agents already created ${used} of ${limit} swarm sessions in this workspace; raise the limit in Settings`,
 };
 
 /** Текст отказа агенту: причина и что делать — расширение бюджета за человеком. */
@@ -326,6 +366,44 @@ export function settleAttempt(
   return true;
 }
 
+export interface SwarmSpawnRequest {
+  /** Рой, в который добавляют участника; `null` — рой создаётся вместе с королевой. */
+  swarm: WorkSwarm | null;
+  /** Создаётся рой (`create_swarm`), а не участник существующего. */
+  creatingSwarm: boolean;
+  /** Действие агента: считается в `workSwarmSessions` и `workSwarms`. Королева роя человека (`swarms.create`) не считается. */
+  byAgent: boolean;
+}
+
+/**
+ * Пороги роёв для новой сессии роя (спека роя, 5), в порядке спеки: размер роя → сессии роёв работы (для нового роя ещё
+ * и число роёв) → живые участники роя. Закрытость роя (`swarm-closed`) — код хоста, не бюджета: вызывающий проверяет её
+ * раньше, а общий `reserveAttempt` берёт после. Карту не меняет; отказ возвращается, а не бросается, чтобы хост сам
+ * решил, где поднять `ResourceDeniedError`. Счётчики растут только у хоста, в той же записи карты.
+ */
+export function checkSwarmSpawn(map: WorkMap, limits: ResourceLimits, request: SwarmSpawnRequest): ResourceDeniedError | null {
+  const { swarm, creatingSwarm, byAgent } = request;
+  if (swarm !== null && swarm.members.length >= limits.swarmSessions) {
+    return new ResourceDeniedError('swarm-sessions', 'swarm', swarm.members.length, limits.swarmSessions);
+  }
+  if (byAgent) {
+    const spawned = map.resources?.swarmSpawned ?? 0;
+    if (spawned >= limits.workSwarmSessions) return new ResourceDeniedError('swarm-total', 'swarm', spawned, limits.workSwarmSessions);
+    if (creatingSwarm) {
+      const created = map.resources?.swarmsCreated ?? 0;
+      if (created >= limits.workSwarms) return new ResourceDeniedError('swarms', 'swarm', created, limits.workSwarms);
+    }
+  }
+  if (swarm !== null) {
+    // Заказанный, но не стартовавший участник занимает место и без родителя: `occupied` берёт `pending` только с ним.
+    const busy = occupied(map);
+    for (const session of map.sessions) if (session.lifecycle === 'pending') busy.add(session.id);
+    const used = swarm.members.filter((member) => busy.has(member.sessionId)).length;
+    if (used >= limits.swarmConcurrent) return new ResourceDeniedError('swarm-concurrent', 'swarm', used, limits.swarmConcurrent);
+  }
+  return null;
+}
+
 export interface MessageRequest {
   actor: string;
   /** Комната письма; `null` — прямое письмо. */
@@ -401,7 +479,7 @@ export interface ScopeStatus {
 }
 
 export interface ResourceStatus {
-  work: ScopeStatus & { fanout: Meter };
+  work: ScopeStatus & { fanout: Meter; swarmSessions: Meter; swarms: Meter };
   /** `null` — комната не названа. */
   room: ScopeStatus | null;
   /** Резервы чужого поколения без свидетельств: считаются занятыми, пока их не закроет свидетельство или повтор. */
@@ -470,9 +548,13 @@ export function resourceStatus(
   check(work);
   if (room !== null) check(room);
   if (delivered >= limits.fanout) exhausted.add('fanout');
+  const swarmSessions = meter(resources?.swarmSpawned ?? 0, 0, limits.workSwarmSessions);
+  const swarms = meter(resources?.swarmsCreated ?? 0, 0, limits.workSwarms);
+  if (swarmSessions.remaining === 0) exhausted.add('swarm-total');
+  if (swarms.remaining === 0) exhausted.add('swarms');
 
   return {
-    work: { ...work, fanout: meter(delivered, 0, limits.fanout) },
+    work: { ...work, fanout: meter(delivered, 0, limits.fanout), swarmSessions, swarms },
     room,
     ambiguous: (resources?.attempts ?? []).filter(
       (attempt) => attempt.state === 'reserved' && owner !== null && attempt.owner !== owner,
@@ -513,10 +595,13 @@ export function validateResources(map: WorkMap): void {
     throw new Error('invalid resource ledger');
   };
   if (typeof resources !== 'object' || resources === null || Array.isArray(resources)) return bad();
-  const { seq, spawned, spawnedByRoom, attempts } = resources as Record<string, unknown>;
+  const { seq, spawned, spawnedByRoom, attempts, swarmSpawned, swarmsCreated } = resources as Record<string, unknown>;
   if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(spawned) || (seq as number) < 0 || (spawned as number) < 0) return bad();
   if (typeof spawnedByRoom !== 'object' || spawnedByRoom === null || Array.isArray(spawnedByRoom)) return bad();
   if (!Object.values(spawnedByRoom).every((value) => Number.isSafeInteger(value) && (value as number) >= 0)) return bad();
+  for (const counter of [swarmSpawned, swarmsCreated]) {
+    if (counter !== undefined && (!Number.isSafeInteger(counter) || (counter as number) < 0)) return bad();
+  }
   if (!Array.isArray(attempts)) return bad();
   for (const attempt of attempts as unknown[]) {
     if (typeof attempt !== 'object' || attempt === null) return bad();

@@ -412,6 +412,10 @@ export function deleteRoom(map: WorkMap, letters: LetterTx, roomId: string, at =
   if (map.planBacklogIntents !== undefined) {
     map.planBacklogIntents = map.planBacklogIntents.filter((intent) => !plans.has(intent.planId));
   }
+  // Рой, заведённый ведущим этой комнаты, остаётся: итог теперь идёт человеку (спека роя, 2.2).
+  for (const swarm of map.swarms ?? []) {
+    if (swarm.creator.kind === 'room' && swarm.creator.roomId === roomId) swarm.creator = { kind: 'human' };
+  }
   if (map.resources !== undefined) {
     delete map.resources.spawnedByRoom[roomId];
     for (const attempt of map.resources.attempts) if (attempt.room === roomId) attempt.room = null;

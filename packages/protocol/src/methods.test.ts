@@ -846,3 +846,32 @@ it('accepts autonomous room creation and mode changes while rejecting unknown mo
   expect(METHODS['rooms.create'].safeParse({ ...create, mode: 'unknown' }).success).toBe(false);
   expect(METHODS['rooms.setMode'].safeParse({ ...change, mode: 'unknown' }).success).toBe(false);
 });
+
+describe('swarms.* — рой из окна (спека роя v1, 6)', () => {
+  const work = { projectPath: '/p', workId: 'w-0001' };
+  const create = { ...work, tag: 'Research', objective: 'Audit the repo', provider: 'claude' };
+
+  it('swarms.create: тег 1–24 знака без перевода строки, задача до 4096; модель, effort и роль необязательны', () => {
+    expect(METHODS['swarms.create'].safeParse(create).success).toBe(true);
+    expect(METHODS['swarms.create'].safeParse({ ...create, tag: 'Аудит', model: 'opus', effort: 'high', role: null }).success).toBe(true);
+    expect(METHODS['swarms.create'].safeParse({ ...create, role: { source: 'builtin', name: 'researcher' } }).success).toBe(true);
+    for (const tag of ['', 'x'.repeat(25), 'a\nb', 'a\rb']) expect(METHODS['swarms.create'].safeParse({ ...create, tag }).success).toBe(false);
+    expect(METHODS['swarms.create'].safeParse({ ...create, tag: 'x'.repeat(24) }).success).toBe(true);
+    expect(METHODS['swarms.create'].safeParse({ ...create, objective: 'x'.repeat(4097) }).success).toBe(false);
+    expect(METHODS['swarms.create'].safeParse({ ...create, model: '-flag' }).success).toBe(false);
+    expect(METHODS['swarms.create'].safeParse({ ...work, tag: 'Research', objective: 'x' }).success).toBe(false);
+    expectTypeOf<Result<'swarms.create'>>().toEqualTypeOf<{ swarmId: string; queenSessionId: string }>();
+  });
+
+  it('swarms.cancel и swarms.seen: работа и id роя обязательны; ответ — ok', () => {
+    for (const method of ['swarms.cancel', 'swarms.seen'] as const) {
+      expect(METHODS[method].safeParse({ ...work, swarmId: 'sw-01' }).success).toBe(true);
+      expect(METHODS[method].safeParse(work).success).toBe(false);
+      expectTypeOf<Result<typeof method>>().toEqualTypeOf<{ ok: true }>();
+    }
+  });
+
+  it('виды уведомлений роя входят в NoticeKind', () => {
+    expectTypeOf<'swarm-done' | 'swarm-failed'>().toExtend<import('./types.js').NoticeKind>();
+  });
+});

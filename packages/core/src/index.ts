@@ -712,6 +712,7 @@ export {
   ResourceDeniedError,
   assertMessageBudget,
   attemptKindFor,
+  checkSwarmSpawn,
   countRecipients,
   deniedForAgent,
   limitsFromConfig,
@@ -727,11 +728,30 @@ export type {
   MessageRequest,
   ReserveRequest,
   ResourceDeniedCode,
+  ResourceDeniedScope,
   ResourceLimits,
   ResourceStatus,
   ScopeStatus,
+  SwarmSpawnRequest,
 } from './work/resource-policy.js';
 export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+
+export {
+  SWARM_OBJECTIVE_MAX,
+  SWARM_ROLES,
+  SWARM_STATUSES,
+  SWARM_SUMMARY_MAX,
+  SWARM_TAG_MAX,
+  isSwarmTag,
+  isSwarmExpired,
+  isSwarmTerminal,
+  memberState,
+  swarmDeadline,
+  swarmMemberIds,
+  swarmOfSession,
+  swarmProgress,
+} from './work/swarms.js';
+export type { SwarmCreator, SwarmMemberState, SwarmRole, SwarmStatus, WorkSwarm, WorkSwarmMember } from './work/swarms.js';
 
 export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
 export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';

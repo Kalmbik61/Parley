@@ -19,6 +19,7 @@ export type EntryKind =
   | 'session'
   | 'room'
   | 'plan'
+  | 'swarm'
   | 'planExport'
   | 'decisionExport'
   | 'planEffect'
@@ -30,6 +31,7 @@ export const ENTRY_FIELDS: Record<
   | 'sessions'
   | 'rooms'
   | 'plans'
+  | 'swarms'
   | 'planExports'
   | 'decisionExports'
   | 'planEffects'
@@ -38,6 +40,7 @@ export const ENTRY_FIELDS: Record<
   session: 'sessions',
   room: 'rooms',
   plan: 'plans',
+  swarm: 'swarms',
   planExport: 'planExports',
   decisionExport: 'decisionExports',
   planEffect: 'planEffects',
@@ -51,6 +54,7 @@ const KINDS = Object.keys(ENTRY_FIELDS) as EntryKind[];
 /** Списки, которых в карте может не быть: сборка возвращает их, только если они были (`present`). */
 const OPTIONAL_FIELDS: readonly EntryField[] = [
   'plans',
+  'swarms',
   'planExports',
   'decisionExports',
   'planEffects',
@@ -168,6 +172,8 @@ export function mapToRows(map: WorkMap, previous?: ReadonlyMap<string, StoredRow
     const field = ENTRY_FIELDS[kind];
     const entries = map[field] as readonly unknown[] | undefined;
     if (entries === undefined) continue;
+    // Пустой список роёв не пишется: `normalizeMap` ставит его при чтении, а в базе ключа нет (спека роя, 2.1).
+    if (field === 'swarms' && entries.length === 0) continue;
     if (OPTIONAL_FIELDS.includes(field)) present.push(field);
     const keys = uniqueKeys(kind, entries);
     const ords = orderOf(kind, keys, previous);
