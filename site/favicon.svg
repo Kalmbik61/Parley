@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Parley">
+  <defs>
+    <g id="parley-icon-agent">
+      <circle cy="-184" r="22"></circle>
+      <path d="M-38-126C-38-145-24-157-13-154C-5-151 5-151 13-154C24-157 38-145 38-126Q38-122 34-122H-34Q-38-122-38-126Z"></path>
+    </g>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="#191814"></rect>
+
+  <g fill="#F2EBDD">
+    <circle cx="136" cy="157" r="36"></circle>
+    <rect x="88" y="199" width="96" height="251" rx="48"></rect>
+  </g>
+
+  <path fill="#A9B78D" d="M202 133H229Q234 133 233 140C226 159 229 180 243 198Q246 204 239 207C226 212 216 216 204 213Q193 211 193 200L196 147Q196 133 202 133Z"></path>
+  <path fill="#CF7847" d="M246 133C308 137 357 184 357 246C357 301 325 344 276 361Q269 364 265 357C253 333 237 315 224 306C250 309 273 291 280 268C290 240 274 215 250 205C240 201 237 191 236 177L236 146Q236 134 246 133Z"></path>
+  <path fill="#C2A16D" d="M200 298C224 300 247 322 258 351Q263 362 252 362H201Q194 362 194 355V306Q194 298 200 298Z"></path>
+
+  <use href="#parley-icon-agent" fill="#A9B78D" transform="translate(238 248) rotate(0)"></use>
+  <use href="#parley-icon-agent" fill="#C2A16D" transform="translate(238 248) rotate(45)"></use>
+  <use href="#parley-icon-agent" fill="#A9B78D" transform="translate(238 248) rotate(90)"></use>
+  <use href="#parley-icon-agent" fill="#C2A16D" transform="translate(238 248) rotate(135)"></use>
+</svg>
