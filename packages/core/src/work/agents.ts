@@ -210,6 +210,8 @@ export interface RoleSummary {
   models?: { claude: string | null; codex: string | null };
 }
 export interface RoleList { roles: RoleSummary[]; partial: boolean; diagnostics: Array<{ source: SessionRole['source']; code: string }> }
+/** Правило провайдера и модели роли живёт в чистом модуле: его берёт и окно (`@parley/core/role-choice`). */
+export { roleProvider, roleModel } from './role-choice.js';
 /** Public whitelist: never expose native prompt, path or raw config. */
 export function roleSummaries(catalog: RoleCatalog): RoleList {
   return { partial: catalog.partial, diagnostics: catalog.diagnostics.map(({ source, code }) => ({ source, code })), roles: catalog.roles.map(role => {

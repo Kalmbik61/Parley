@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agentDirs, assertAgent, listAgents, prepareSessionRole, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext } from './agents.js';
+import { agentDirs, assertAgent, listAgents, prepareSessionRole, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
 import { PROVIDERS } from '../providers.js';
 import { buildRoleCatalog, resolveRoleChoice } from '../roles/catalog.js';
 let project = '', claudeHome = '';
@@ -263,5 +263,24 @@ describe('chosen native runner context projection', () => {
       ['-c', 'skills.config=[{name="review",enabled=false,secret="SECRET"}]'], ['--', '{prompt}']])
       expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: false, configArgs: [] });
     expect(projectSkillRunnerContext(PROVIDERS.claude, PROVIDERS.claude.runner.args!)).toEqual({ verified: false, configArgs: [] });
+  });
+});
+
+describe('roleProvider и roleModel', () => {
+  const builtin = { source: 'builtin', provider: 'claude', model: null, models: { claude: 'opus', codex: 'gpt-5.5' } } as const;
+  const codexRole = { source: 'codex', provider: 'codex', model: 'gpt-5.5' } as const;
+  it('не встроенная роль навязывает провайдера', () => {
+    expect(roleProvider(codexRole, 'claude', 'glm')).toBe('codex');
+  });
+  it('встроенная: выбранный, потом свой, потом умолчание', () => {
+    expect(roleProvider(builtin, 'codex', 'glm')).toBe('codex');
+    expect(roleProvider(builtin, null, 'glm')).toBe('claude');
+    expect(roleProvider(undefined, null, 'glm')).toBe('glm');
+  });
+  it('модель роли по провайдеру', () => {
+    expect(roleModel(builtin, 'codex')).toBe('gpt-5.5');
+    expect(roleModel(builtin, 'glm')).toBe('opus');
+    expect(roleModel(codexRole, 'codex')).toBe('gpt-5.5');
+    expect(roleModel(undefined, 'claude')).toBeNull();
   });
 });
