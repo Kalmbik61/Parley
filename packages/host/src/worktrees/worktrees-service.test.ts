@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -21,6 +21,7 @@ import type { WorktreeInfo } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import { HostError } from '../errors.js';
+import { createWorktreesHandlers } from '../methods/worktrees.js';
 import { createWorktreesService, gitFailure } from './worktrees-service.js';
 
 // Подставной stat: по умолчанию настоящий; тест «папка временно недоступна» велит отказать по пути
@@ -114,6 +115,30 @@ describe('available', () => {
     const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
     expect(await service.available(plain)).toBe(false);
     await rm(plain, { recursive: true, force: true });
+  });
+
+  it('gitRoot: корень репозитория — true, его подкаталог и обычный каталог — false', async () => {
+    const service = createWorktreesService(stubSessions());
+    const sub = path.join(project, 'sub');
+    await mkdir(sub);
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
+    try {
+      expect({ available: await service.available(project), gitRoot: await service.gitRoot(project) }).toEqual({ available: true, gitRoot: true });
+      expect({ available: await service.available(sub), gitRoot: await service.gitRoot(sub) }).toEqual({ available: true, gitRoot: false });
+      expect({ available: await service.available(plain), gitRoot: await service.gitRoot(plain) }).toEqual({ available: false, gitRoot: false });
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+
+  it('метод worktrees.available отдаёт available и gitRoot', async () => {
+    const service = createWorktreesService(stubSessions());
+    const sub = path.join(project, 'sub');
+    await mkdir(sub);
+    const { worktreesAvailable } = createWorktreesHandlers({ worktrees: service });
+    const call = (projectPath: string) => worktreesAvailable({ projectPath } as never, {} as never);
+    expect(await call(project)).toEqual({ available: true, gitRoot: true });
+    expect(await call(sub)).toEqual({ available: true, gitRoot: false });
   });
 });
 

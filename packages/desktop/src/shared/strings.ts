@@ -54,6 +54,8 @@ export const S = {
     revision: (n: number) => 'Revision ' + n,
     mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified', autonomous: 'Autonomous' },
     modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.', autonomous: 'The engine runs attempts after Go; the human accepts the result' },
+    /** Подсказка человеку при выборе Autonomous в папке без Git: хост такой план всё равно откажет (`not-a-git-repository`). */
+    autonomousNeedsGit: 'Autonomous mode needs a Git repository at the project root. This folder is not one; if it holds several repositories (for example front/ and back/), open the one you need as a separate project.',
     reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },

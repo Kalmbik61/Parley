@@ -165,6 +165,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   const [inRoom, setInRoom] = useState(true);
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
+  // Корень git для Autonomous: null — ответа нет (ждём, сбой, старый хост без gitRoot) и подсказки тоже нет.
+  const [gitRoot, setGitRoot] = useState<boolean | null>(null);
   /** «Lean session» одиночной сессии: по умолчанию снят. У комнаты вместо него настройка `leanAgents`. */
   const [lean, setLean] = useState(false);
   /** `leanAgents` из настроек этого открытия; `null` — хост её не отдал (старый хост) или ответ не пришёл. */
@@ -269,13 +271,16 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
 
   useEffect(() => {
     setWorktreeAvailable(false);
+    setGitRoot(null);
     setWorktree(false);
     if (!open || projectPath === null) return;
     let stale = false;
     bridge
       .call('worktrees.available', { projectPath })
       .then((result) => {
-        if (!stale) setWorktreeAvailable(result.available);
+        if (stale) return;
+        setWorktreeAvailable(result.available);
+        if (typeof result.gitRoot === 'boolean') setGitRoot(result.gitRoot);
       })
       .catch(() => {
         // Без ответа флажок просто остаётся неактивным.
@@ -650,6 +655,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           </div>
           {/* Рецепт и режим живут только у комнаты (спека рецептов, 5.3: не меньше двух агентов): без комнаты они молча терялись. */}
           {!roomMode && (recipeId !== null || mode !== 'free') ? <p role="status" data-recipe-dropped className="m-0 text-xs text-neutral-700">{multi ? text.separateDropsRecipe : S.recipes.singleDropsRecipe}</p> : null}
+          {/* Подсказка — только у выбранного Autonomous и только по явному ответу «не корень git» (gitRoot === false): пока ответа нет или он не пришёл, её нет. */}
+          {roomMode && mode === 'autonomous' && gitRoot === false ? <p role="status" data-autonomous-needs-git className="m-0 text-xs text-neutral-700">{S.plans.autonomousNeedsGit}</p> : null}
           {multi && !worktreeAvailable && agents.some((row) => row.worktree === true) ? <p className="m-0 text-xs text-neutral-700">{S.recipes.noWorktree}</p> : null}
         </div>
         </TooltipProvider>

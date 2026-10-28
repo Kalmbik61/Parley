@@ -16,6 +16,7 @@ import {
   GitStateError,
   InvalidRevisionError,
   isGitRepo,
+  isGitRoot,
   joinDiffFiles,
   mergeCheck,
   mergeWorktree,
@@ -184,6 +185,29 @@ describe('isGitRepo', () => {
     expect(await isGitRepo(project)).toBe(false);
     await initProject();
     expect(await isGitRepo(project)).toBe(true);
+  });
+});
+
+describe('isGitRoot', () => {
+  it('не git — false, корень репозитория — true', async () => {
+    expect(await isGitRoot(project)).toBe(false);
+    await initProject();
+    expect(await isGitRoot(project)).toBe(true);
+  });
+
+  it('подкаталог репозитория — false, хотя isGitRepo там true', async () => {
+    await initProject();
+    const sub = path.join(project, 'sub');
+    await mkdir(sub);
+    expect(await isGitRepo(sub)).toBe(true);
+    expect(await isGitRoot(sub)).toBe(false);
+  });
+
+  it('корень, заданный через симлинк, — true', async () => {
+    await initProject();
+    const link = path.join(root, 'link');
+    await symlink(project, link);
+    expect(await isGitRoot(link)).toBe(true);
   });
 });
 

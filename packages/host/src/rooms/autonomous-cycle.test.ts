@@ -424,6 +424,25 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     expect(await f.bare('rev-parse', `refs/heads/${(await f.state()).integration.branch}`)).toBe(f.baseSha);
   });
 
+  it('halts once with a visible detail when the project is no longer a git repository', async () => {
+    const f = await fixture({ count: 1 });
+    expect(await f.post(keyed({ action: 'propose-plan', roomId: 'r-01', text: 'Go: implement the frozen specifications', plan: f.draft, requestKey: '' }))).toMatchObject({ ok: true });
+    await fs.rm(path.join(f.projectPath, '.git'), { recursive: true, force: true });
+    await f.accept();
+    await f.flush();
+    const halted = (await f.state()).halted;
+    expect(halted?.reason).toBe('human');
+    for (const part of ['needs a git repository at the project root', f.projectPath, 'front/ and back/']) expect(halted?.detail).toContain(part);
+    expect(await fs.stat(attemptsEngineGitPath(f.projectPath, f.workId)).catch(() => null)).toBeNull();
+    expect(f.gitCalls.filter(args => args.includes('fetch'))).toEqual([]);
+    // The halted plan is skipped by later cycles, so the poll does not retry the failing git call.
+    const calls = f.gitCalls.length;
+    await f.flush(); await f.flush();
+    expect(f.gitCalls).toHaveLength(calls);
+    expect((await f.state()).halted?.reason).toBe('human');
+    expect((await f.state()).halted?.detail).toContain(halted!.detail);
+  });
+
   it('deduplicates simultaneous submissions by submissionKey with one receipt and one capture', async () => {
     const f = await fixture({ count: 1 }); await f.go(); await f.write();
     const request = await f.submission();

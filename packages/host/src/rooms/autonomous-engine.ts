@@ -7,12 +7,12 @@ import { promisify } from 'node:util';
 import {
   ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
   liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, RoomRuleError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
-  integrate, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  integrate, isGitRoot, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type LetterTx, type PlanAttempt,
   type RoomPlan, type WorkMap,
 } from '@parley/core';
 import {
-  attemptsEngineGitPath, type AttemptsEngine, type AttemptsProposal, type AttemptsResult,
+  attemptsEngineGitPath, notGitRepositoryMessage, type AttemptsEngine, type AttemptsProposal, type AttemptsResult,
 } from '../agent/attempts-endpoint.js';
 import type { CreateSessionInput, SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -283,7 +283,14 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     const plan = await load(loc);
     const previous = plan.autonomous!.ops.find(row => row.kind === 'clone' && row.payload.purpose === 'engine' && row.state !== 'failed');
     if (previous?.state === 'done') return;
-    if (await reservedTemporaryPath(loc, plan.autonomous!.integration.baseSha, true)) return;
+    try {
+      if (await reservedTemporaryPath(loc, plan.autonomous!.integration.baseSha, true)) return;
+    } catch (error) {
+      // This project git call runs outside effect(); without a halt here the poll would retry the same failure forever.
+      const detail = await isGitRoot(loc.projectPath) ? `clone: ${errorText(error)}` : notGitRepositoryMessage(loc.projectPath);
+      await change(loc, current => halt(current, { ...context(current, at()), reason: 'human', detail }));
+      return;
+    }
     const op = previous ?? await intend(loc, 'clone', null, { purpose: 'engine', baseSha: plan.autonomous!.integration.baseSha, branch: plan.autonomous!.integration.branch });
     await effect(loc, op, async () => {
       const repo = attemptsEngineGitPath(loc.projectPath, loc.workId), integration = plan.autonomous!.integration;

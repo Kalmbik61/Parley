@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import {
-  activeRoomPlan, baseBranchOf, ENGINE, isMember, liveLead, PlanConflictError,
+  activeRoomPlan, baseBranchOf, ENGINE, isGitRoot, isMember, liveLead, PlanConflictError,
   normalizeAttemptSubmission, readMap, requireOpenRoom, setProposal, submitAttempt, updateMap,
   validateAutonomousDraft, workPaths,
 } from '@parley/core';
@@ -19,6 +19,10 @@ export const AGENT_ATTEMPTS_PATH = '/agent/attempts';
 /** The engine owns this bare repository; capture objects need not exist in the project. */
 export const attemptsEngineGitPath = (projectPath: string, workId: string): string =>
   path.join(workPaths(projectPath, workId).dir, 'engine.git');
+export const NOT_A_GIT_REPOSITORY = 'not-a-git-repository';
+/** Autonomous mode works on the git repository at the project root only (one base SHA, one engine.git). */
+export const notGitRepositoryMessage = (projectPath: string): string =>
+  `Autonomous mode needs a git repository at the project root; ${projectPath} is not one. If the folder holds several repositories (for example front/ and back/), open the one you need as a separate project.`;
 
 export type AttemptsResult =
   | { ok: true; result: object }
@@ -131,6 +135,7 @@ async function propose(ref: SessionRef, request: Extract<AttemptChannelRequest, 
   if (!authenticated()) fail('forbidden', 'The session token was revoked.');
   const retry = (proposal: Proposal | null) => proposal?.from === ref.sessionId && (proposal as AttemptsProposal).requestKey === request.requestKey;
   if (retry(room.proposal)) return { ok: true, result: { proposalId: room.proposal!.id, rev: room.proposal!.rev } };
+  if (!(await isGitRoot(ref.projectPath))) fail(NOT_A_GIT_REPOSITORY, notGitRepositoryMessage(ref.projectPath));
   const now = new Date().toISOString();
   const baseSha = await git(ref.projectPath, 'rev-parse', '--verify', '--end-of-options', `${await baseBranchOf(ref.projectPath)}^{commit}`);
   const accepted = activeRoomPlan(before, room.id);

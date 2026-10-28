@@ -290,6 +290,7 @@ export {
   discardWorktree,
   DirtyWorktreeError,
   isGitRepo,
+  isGitRoot,
   baseBranchOf,
   checkoutGitDir,
   checkProjectConnectivity,
