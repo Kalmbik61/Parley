@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import type { WindowWorkMap, WorkSwarm } from '@parley/core';
-import { stopApp } from './stop-app.js';
+import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { readStoredMapE2E, replaceStoredMapE2E, withoutLettersE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -16,7 +16,12 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * 1) рой, записанный в карту (как «чужая запись»): четыре места показа — строка в сайдбаре под сессией, под комнатой и
  *    на верхнем уровне, чип шапки королевы и трутня, значки карточки и свёрнутой группы, ряд острова и счётчик капсулы;
  * 2) живой рой от `create_swarm` до итога создателю: королева, `swarm_add`, сдача трутня закрывает его сессию, счётчик и
- *    точки, collecting и письмо королеве, done и письмо создателю, «Mark as seen».
+ *    точки, collecting и письмо королеве, done и письмо создателю, «Mark as seen»;
+ * 3) лимиты: обычный new-sessions (при заполненном рой создаётся, `spawned` не растёт), swarm-concurrent, общие
+ *    workConcurrent и workLaunches — отказ агенту без записи в карту;
+ * 4) отмена человеком из меню строки: живые участники закрыты, королева жива;
+ * 5) срок жизни `PARLEY_SWARM_MINUTES=1`: failed по таймеру хоста, письмо королеве, итог с частичной сводкой;
+ * 6) перезапуск хоста: недоставленный итог уходит создателю один раз, сдавший трутень дозакрыт.
  *
  * Скриншоты — в каталог `SWARM_SHOTS`, если он задан (в коммит они не идут).
  */
@@ -77,7 +82,7 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     await rm(project, { recursive: true, force: true });
   });
 
-  async function openApp() {
+  async function openApp(extraEnv: Record<string, string> = {}, existingHome = false) {
     const env = {
       ...process.env,
       PARLEY_HOME: home,
@@ -89,6 +94,7 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
       // Остров с подменным вырезом: капсула с правым статусом (island.spec.ts, N4a).
       PARLEY_ISLAND: '',
       PARLEY_NOTCH: '185x32',
+      ...extraEnv,
     };
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
@@ -97,9 +103,15 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     await electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().find((candidate) => !candidate.webContents.getURL().endsWith('/island.html'))?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }),
     );
-    await expect(window.getByTestId('landing')).toBeVisible();
+    // Дом с работой открывается сразу в оболочке, пустой — на заставке.
+    await expect(window.getByTestId(existingHome ? 'app-shell' : 'landing')).toBeVisible();
     // Будильник печатал бы в терминал стаба указатели на письма и портил бы строки вызовов.
     await call(window, 'wake.pause', {});
+    if (existingHome) {
+      const { entries } = await call<{ entries: Array<{ projectPath: string; map: { work: { id: string } } }> }>(window, 'works.list', {});
+      const workId = entries.find((entry) => entry.projectPath === project)!.map.work.id;
+      return { electronApp, window, workId, workKey: `${project} ${workId}` };
+    }
     const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-swarm', goal: '' });
     return { electronApp, window, workId, workKey: `${project} ${workId}` };
   }
@@ -152,6 +164,34 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
   /** Письма карты, адресованные `to`, с текстом, где есть `part`. */
   const lettersTo = (opened: Opened, to: string, part: string) =>
     mapOf(opened).messages.filter((message) => message.to.includes(to) && message.text.includes(part));
+
+  /** Создатель, `create_swarm`, королева запущена: общий разгон сценариев 3–6. */
+  async function startSwarm(opened: Opened, tag = 'Research') {
+    const creator = await sessionCreate(opened, 'creator');
+    await startSession(opened, creator);
+    const created = await agentTool(opened, creator, 'create_swarm', { tag, objective: 'Compare how crawlers retry', provider: 'claude' });
+    expect(created.isError, created.text).toBe(false);
+    const { swarmId, queenSessionId: queen } = JSON.parse(created.text) as { swarmId: string; queenSessionId: string };
+    await expect(swarmRow(opened, swarmId)).toBeVisible({ timeout: 20_000 });
+    await waitRunning(opened, queen);
+    return { creator, swarmId, queen };
+  }
+
+  /** `swarm_add` королевы; возвращает результат инструмента, отказ тоже. */
+  const addMember = (opened: Opened, queen: string, role: 'drone' | 'verifier', task: string): Promise<McpResult> =>
+    agentTool(opened, queen, 'swarm_add', { role, task, provider: 'claude' });
+
+  /** Что отказ не должен менять: сессии, участники роя и счётчики ресурсов. */
+  const footprint = (opened: Opened): string => {
+    const map = mapOf(opened);
+    return JSON.stringify({
+      sessions: map.sessions.map((session) => session.id),
+      swarms: (map.swarms ?? []).map((swarm) => swarm.members.map((member) => member.sessionId)),
+      spawned: map.resources?.spawned ?? 0,
+      swarmSpawned: map.resources?.swarmSpawned ?? 0,
+      swarmsCreated: map.resources?.swarmsCreated ?? 0,
+    });
+  };
 
   const swarmsOf = (opened: Opened): WorkSwarm[] => readStoredMapE2E(home, project, opened.workId).swarms ?? [];
   const mapOf = (opened: Opened): WindowWorkMap => readStoredMapE2E(home, project, opened.workId);
@@ -347,5 +387,159 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     expect(swarmsOf(opened)[0]?.seenAt).not.toBeNull();
     await expect(card.locator('[data-swarm-badge]')).toHaveCount(0);
     await shot(window, '2-seen');
+  });
+
+  test('3a) лимит обычных new-sessions рой не тратит; swarm-concurrent отказывает без записи', async () => {
+    const opened = await openApp({ PARLEY_WORK_NEW_SESSIONS: '1', PARLEY_SWARM_CONCURRENT: '3' });
+    const creator = await sessionCreate(opened, 'creator');
+    await startSession(opened, creator);
+    // Обычная сессия агента заполняет лимит new-sessions (1 из 1); вторая отказывает.
+    const first = await agentTool(opened, creator, 'create_session', { provider: 'claude', label: 'helper', task: 'help' });
+    expect(first.isError, first.text).toBe(false);
+    const second = await agentTool(opened, creator, 'create_session', { provider: 'claude', label: 'helper2', task: 'help' });
+    expect(second.isError).toBe(true);
+    expect(second.text).toContain('new-session limit reached');
+    expect(mapOf(opened).resources?.spawned).toBe(1);
+
+    // Рой при заполненном лимите создаётся; `spawned` не растёт, растёт `swarmSpawned`.
+    const created = await agentTool(opened, creator, 'create_swarm', { tag: 'Research', objective: 'Study crawlers', provider: 'claude' });
+    expect(created.isError, created.text).toBe(false);
+    const { swarmId, queenSessionId: queen } = JSON.parse(created.text) as { swarmId: string; queenSessionId: string };
+    await waitRunning(opened, queen);
+    for (const task of ['slice one', 'slice two']) {
+      const added = await addMember(opened, queen, 'drone', task);
+      expect(added.isError, added.text).toBe(false);
+    }
+    expect(mapOf(opened).resources).toMatchObject({ spawned: 1, swarmSpawned: 3, swarmsCreated: 1 });
+
+    // Живых в рое три (королева и два трутня): четвёртый отказывает по swarm-concurrent, карта и счётчики не меняются.
+    const before = footprint(opened);
+    const denied = await addMember(opened, queen, 'drone', 'slice three');
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('swarm concurrency limit reached');
+    expect(footprint(opened)).toBe(before);
+    await expect(swarmRow(opened, swarmId).locator('[data-swarm-counter]')).toHaveText('0/2');
+  });
+
+  test('3b) общий лимит одновременных сессий работы действует и для роя: отказ без записи', async () => {
+    const opened = await openApp({ PARLEY_WORK_CONCURRENT: '3' });
+    const { swarmId, queen } = await startSwarm(opened);
+    const ok = await addMember(opened, queen, 'drone', 'slice one');
+    expect(ok.isError, ok.text).toBe(false);
+    // Создатель, королева и трутень заняли три места из трёх.
+    const before = footprint(opened);
+    const denied = await addMember(opened, queen, 'drone', 'slice two');
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('session limit reached');
+    expect(footprint(opened)).toBe(before);
+    await expect(swarmRow(opened, swarmId).locator('[data-swarm-counter]')).toHaveText('0/1');
+  });
+
+  test('3c) лимит запусков в час (workLaunches) действует для роя: resource-budget без записи', async () => {
+    const opened = await openApp({ PARLEY_WORK_LAUNCHES: '3' });
+    const { swarmId, queen } = await startSwarm(opened);
+    // В счёте запусков за час и запуск сессии создателя: создатель — первый, королева — второй, трутень — третий; четвёртый отказывает.
+    const ok = await addMember(opened, queen, 'drone', 'slice one');
+    expect(ok.isError, ok.text).toBe(false);
+    const before = footprint(opened);
+    const denied = await addMember(opened, queen, 'drone', 'slice two');
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toMatch(/launch limit reached|resource-budget/);
+    expect(footprint(opened)).toBe(before);
+    await expect(swarmRow(opened, swarmId).locator('[data-swarm-counter]')).toHaveText('0/1');
+  });
+
+  test('4) отмена человеком из меню строки: живые участники закрыты, королева жива, рой cancelled', async () => {
+    const opened = await openApp();
+    const { window, workKey } = opened;
+    const { swarmId, queen } = await startSwarm(opened);
+    const drones: string[] = [];
+    for (const task of ['slice one', 'slice two']) drones.push((JSON.parse((await addMember(opened, queen, 'drone', task)).text) as { sessionId: string }).sessionId);
+    for (const id of drones) await waitRunning(opened, id);
+    const row = swarmRow(opened, swarmId);
+    await row.click({ button: 'right' });
+    await window.getByRole('menuitem', { name: 'Cancel swarm' }).click();
+    await expect(window.getByText('Cancel swarm Research?')).toBeVisible();
+    await shot(window, '4-cancel-confirm');
+    // Первая по DOM «Cancel swarm» — кнопка подтверждения диалога.
+    await window.getByRole('button', { name: 'Cancel swarm' }).first().click();
+    await expect.poll(() => swarmsOf(opened)[0]?.status, { timeout: 20_000 }).toBe('cancelled');
+    for (const id of drones) await expect.poll(() => mapOf(opened).sessions.find((session) => session.id === id)?.lifecycle, { timeout: 20_000 }).toBe('closed');
+    // Королева остаётся обычной сессией: с ней можно продолжить разговор.
+    expect(mapOf(opened).sessions.find((session) => session.id === queen)?.lifecycle).not.toBe('closed');
+    // Отменённый рой с карточки уходит (виден только при «N more closed»), значка нет.
+    await expect(row).toHaveCount(0, { timeout: 20_000 });
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-swarm-badge]`)).toHaveCount(0);
+    await shot(window, '4-cancelled');
+  });
+
+  test('5) срок жизни: рой закрывается по swarmMinutes, королеве письмо, итог создателю с частичной сводкой', async () => {
+    test.setTimeout(300_000);
+    const opened = await openApp({ PARLEY_SWARM_MINUTES: '1' });
+    const { window } = opened;
+    const { creator, swarmId, queen } = await startSwarm(opened);
+    const drone = (JSON.parse((await addMember(opened, queen, 'drone', 'slice one')).text) as { sessionId: string }).sessionId;
+    await waitRunning(opened, drone);
+    // Минута срока, таймер хоста раз в 30 с: ждём до двух минут.
+    await expect.poll(() => swarmsOf(opened)[0]?.status, { message: 'рой просрочен', timeout: 150_000, intervals: [2_000] }).toBe('failed');
+    const swarm = swarmsOf(opened)[0]!;
+    expect(swarm.failure).toBe('time limit: 1 min');
+    expect(swarm.expiredAt).not.toBeNull();
+    expect(swarm.endedAt).toBe(swarm.expiredAt);
+    await expect.poll(() => mapOf(opened).sessions.find((session) => session.id === drone)?.lifecycle, { timeout: 20_000 }).toBe('closed');
+    expect(mapOf(opened).sessions.find((session) => session.id === queen)?.lifecycle).not.toBe('closed');
+    await expect.poll(() => lettersTo(opened, queen, 'time limit').length, { message: 'письмо королеве «сдай что есть»', timeout: 20_000 }).toBeGreaterThan(0);
+    expect(lettersTo(opened, queen, 'time limit')[0]?.text).toContain('Hand in what you have');
+    // Итог создателю ждёт report королевы: пока не сдала, письма с итогом нет.
+    expect(lettersTo(opened, creator, 'Partial result: covered one slice of two').length).toBe(0);
+    const row = swarmRow(opened, swarmId);
+    await expect(row).toHaveAttribute('data-swarm-status', 'failed');
+    await expect(row.locator('[data-swarm-end="failed"]')).toBeVisible();
+    await shot(window, '5-expired');
+    // Королева сдаёт что есть: статус остаётся failed, создателю уходит итог с частичной сводкой.
+    await agentTool(opened, queen, 'report', { status: 'done', summary: 'Partial result: covered one slice of two' });
+    await expect.poll(() => lettersTo(opened, creator, 'Partial result: covered one slice of two').length, { message: 'итог создателю', timeout: 30_000 }).toBeGreaterThan(0);
+    expect(swarmsOf(opened)[0]?.status).toBe('failed');
+    await shot(window, '5-expired-result');
+  });
+
+  test('6) перезапуск хоста посреди роя: рой на месте, сверка дозакрывает сдавшего и отправляет недоставленный итог', async () => {
+    test.setTimeout(240_000);
+    const first = await openApp();
+    const { creator, swarmId, queen } = await startSwarm(first);
+    const drones: string[] = [];
+    for (const task of ['slice one', 'slice two']) drones.push((JSON.parse((await addMember(first, queen, 'drone', task)).text) as { sessionId: string }).sessionId);
+    for (const id of drones) await waitRunning(first, id);
+    await agentTool(first, drones[0] as string, 'report', { status: 'done', summary: 'slice one: findings' });
+    await expect.poll(() => swarmsOf(first)[0]?.members.find((member) => member.sessionId === drones[0])?.handedAt ?? null, { timeout: 20_000 }).not.toBeNull();
+    // Окно и хост выключаются; дом остаётся.
+    await quitApp(first.electronApp);
+    app = null;
+    await stopHost(home);
+    // Пока хоста нет, рой «дошёл до конца» чужой записью: сдача второго трутня записана, закрытие не успело, итог не доставлен.
+    const stored = readStoredMapE2E(home, project, first.workId);
+    const at = new Date().toISOString();
+    const swarms = (stored.swarms ?? []).map((swarm) => ({
+      ...swarm,
+      status: 'done' as const,
+      endedAt: at,
+      result: { summary: 'Result written before the restart', at, deliveredAt: null },
+      members: swarm.members.map((member) => (member.sessionId === drones[1] ? { ...member, handedAt: at } : member)),
+    }));
+    replaceStoredMapE2E(home, project, first.workId, { ...withoutLettersE2E(stored), swarms });
+
+    // Новый boot хоста: сверка отправляет итог создателю и закрывает сдавшего трутня.
+    const second = await openApp({}, true);
+    const row = swarmRow(second, swarmId);
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toHaveAttribute('data-swarm-status', 'done');
+    await expect(row.locator('[data-swarm-counter]')).toHaveText('2/2');
+    await expect.poll(() => lettersTo(second, creator, 'Result written before the restart').length, { message: 'недоставленный итог отправлен после рестарта', timeout: 30_000 }).toBe(1);
+    await expect.poll(() => swarmsOf(second)[0]?.result?.deliveredAt ?? null, { timeout: 30_000 }).not.toBeNull();
+    await expect.poll(() => mapOf(second).sessions.find((session) => session.id === drones[1])?.lifecycle, { message: 'сдавший дозакрыт', timeout: 30_000 }).toBe('closed');
+    // Повторная сверка итог не дублирует.
+    await second.window.waitForTimeout(3_000);
+    expect(lettersTo(second, creator, 'Result written before the restart').length).toBe(1);
+    await shot(second.window, '6-after-restart');
   });
 });
