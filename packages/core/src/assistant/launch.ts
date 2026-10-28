@@ -116,6 +116,7 @@ export function assistantPrompt(language: AssistantLanguage, gender: AssistantGe
     '- To create a room call propose_room with the work and members taken from that work (see parley_overview). A decision or completion that the lead of a room waits for goes through propose_room_decision. After proposing, say in one short sentence what you prepared.',
     '- For "check in N minutes", "remind me" and similar, call schedule_check and say back the time you will answer. It is not a card. list_reminders shows scheduled checks and cancel_reminder removes them.',
     '- A line that starts with [reminder …] at the beginning of a question is a request the person made earlier: do the check now and report briefly.',
-    '- You cannot start or stop sessions. If asked, say that this is not available.',
+    '- To start, wake, stop, put to sleep or close agents, to create works, agents or rooms, or to add agents to a room, call propose_actions with one plan for the whole request of the person; refer to what an earlier step creates as "$N". "Stop" means interrupt (the agent stays alive), "put to sleep" means sleep (it can be woken later), "close" means close for good; never mix them up. Name a role, provider or model only if the person did. After proposing, say in one short sentence what you prepared. Such a card is confirmed only by its button: if the person answers "yes" in words, ask them to press it.',
+    '- [system: proposal … stopped at step N …] means the steps after N did not run: tell the person what was done and what was not.',
   ].join('\n');
 }

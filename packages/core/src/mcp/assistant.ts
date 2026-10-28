@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): тринадцать инструментов, каждый — POST в маршрут хоста
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов, каждый — POST в маршрут хоста
  * `/assistant/<имя>` с токеном разговора. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -165,6 +165,107 @@ export const ASSISTANT_TOOLS: Tool[] = [
         note: { type: 'string', description: 'Only with return: a note to the lead of the room.' },
       },
       required: ['target', 'choice'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'propose_actions',
+    description:
+      'Prepare one card with a plan of actions; the person confirms it with the card\'s button. Steps: create works and agents (with a role, provider or model only if the person named them), wake, stop (interrupt: the agent stays alive), put to sleep (sleep: it can be woken), close (for good), create rooms, add agents to rooms, send messages. One request of the person is one plan; a single action is a plan of one step. A field that takes a work, room or session accepts an id from parley_overview, an exact name, or "$N" for what step N of this plan creates. Nothing happens until the person clicks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          description: 'The steps in the order they run. A later step may refer to what an earlier one creates as "$N" (N counts from 1).',
+          items: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['create_work'] },
+                  project: { type: 'string', description: 'The project: its folder path, its folder name, or the id of a work in it.' },
+                  title: { type: 'string', description: 'The title of the new work.' },
+                  goal: { type: 'string', description: 'Optional: the goal of the work.' },
+                },
+                required: ['do', 'project', 'title'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['create_session'] },
+                  work: { type: 'string', description: 'A work:… id, the exact title of the work, or "$N" for a work created by step N.' },
+                  name: { type: 'string', description: 'Optional: the name of the new agent.' },
+                  role: { type: 'string', description: 'Only if the person named a role.' },
+                  provider: { type: 'string', description: 'Only if the person named a provider.' },
+                  model: { type: 'string', description: 'Only if the person named a model.' },
+                  task: { type: 'string', description: 'Optional: the first task of the agent, in the words the person used.' },
+                },
+                required: ['do', 'work'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['wake'] },
+                  session: { type: 'string', description: 'A session id or exact name of an agent that is asleep, or "$N".' },
+                  text: { type: 'string', description: 'Optional: the first turn the agent gets after waking.' },
+                },
+                required: ['do', 'session'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['interrupt', 'sleep', 'close'], description: 'interrupt: stop what the agent is doing, it stays alive. sleep: put it to sleep, it can be woken. close: close it for good.' },
+                  session: { type: 'string', description: 'A session id or exact name.' },
+                },
+                required: ['do', 'session'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['create_room'] },
+                  work: { type: 'string', description: 'A work:… id, the exact title of the work, or "$N" for a work created by step N.' },
+                  title: { type: 'string', description: 'The title of the new room.' },
+                  members: { type: 'array', items: { type: 'string' }, description: 'Session ids or exact names of sessions of this work, or "$N" for an agent created by step N.' },
+                  lead: { type: 'string', description: 'Optional: the member who leads the room.' },
+                  task: { type: 'string', description: 'Optional: the first message sent to the room once it exists.' },
+                },
+                required: ['do', 'work', 'title', 'members'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['add_to_room'] },
+                  room: { type: 'string', description: 'A room:… id, the exact name of the room, or "$N" for a room created by step N.' },
+                  session: { type: 'string', description: 'A session id or exact name of a session of the same work, or "$N".' },
+                },
+                required: ['do', 'room', 'session'],
+                additionalProperties: false,
+              },
+              {
+                type: 'object',
+                properties: {
+                  do: { type: 'string', enum: ['message'] },
+                  target: { type: 'string', description: 'A room or a session: an id, an exact name, or "$N".' },
+                  text: { type: 'string', description: 'The exact text to send, in the words the person asked for.' },
+                  kind: { type: 'string', enum: ['note', 'question', 'decision'], description: 'Only for rooms; note by default.' },
+                  mention: { type: 'array', items: { type: 'string' }, description: 'Only for rooms: the agents of the room the message is for.' },
+                },
+                required: ['do', 'target', 'text'],
+                additionalProperties: false,
+              },
+            ],
+          },
+        },
+      },
+      required: ['steps'],
       additionalProperties: false,
     },
   },

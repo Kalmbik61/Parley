@@ -24,6 +24,7 @@ export const ASSISTANT_TOOL_NAMES = [
   'propose_room',
   'propose_decision',
   'propose_room_decision',
+  'propose_actions',
   'schedule_check',
   'list_reminders',
   'cancel_reminder',

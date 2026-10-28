@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { closeWorkDb, createWork, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
@@ -14,6 +14,7 @@ import type { TurnEnd, TurnSpec } from './turn.js';
 interface FakeTurn { spec: TurnSpec; emit(event: AssistantStreamEvent): void; end(result: TurnEnd): void; cancelled: boolean }
 
 const CLAUDE = { id: 'claude', label: 'Claude', runner: { command: 'claude', mcpConfig: 'json-file', assistantArgs: ['-p', '{prompt}'], assistantResumeArgs: ['-p', '{prompt}', '--resume', '{providerSessionId}'] } } as unknown as ProviderEntry;
+const CODEX = { id: 'codex', label: 'Codex', runner: { command: 'codex', mcpConfig: 'codex-override', assistantArgs: ['exec', '{prompt}'] } } as unknown as ProviderEntry;
 const MAP = {
   schemaVersion: 2,
   work: { id: 'w-1', title: 'Parley', goal: '', status: 'active' },
@@ -48,8 +49,19 @@ beforeEach(async () => {
     sendLetter: vi.fn().mockResolvedValue('m-1'),
     createRoom: vi.fn().mockResolvedValue('r-9'),
     resolveRoomProposal: vi.fn().mockResolvedValue('m-2'),
+    createWork: vi.fn().mockResolvedValue('w-2'),
+    createSession: vi.fn().mockResolvedValue({ projectPath: '/p', workId: 'w-1', sessionId: 's-10' }),
+    resume: vi.fn().mockResolvedValue('started'),
+    interrupt: vi.fn(),
+    stopSession: vi.fn().mockResolvedValue(undefined),
+    closeSession: vi.fn().mockResolvedValue(undefined),
+    addRoomMember: vi.fn().mockResolvedValue('m-3'),
+    roles: async () => [],
+    leanAgents: async () => true,
+    providerReady: async () => null,
+    actionsShown: () => true,
     endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (value) => { token = value; } },
-    providers: async () => ({ claude: CLAUDE }),
+    providers: async () => ({ claude: CLAUDE, codex: CODEX }),
     ready: async () => null,
     launchEnv: async () => ({}),
     binary: async (command) => `/bin/${command}`,
@@ -1300,5 +1312,234 @@ describe('assistant-service: чтение', () => {
     expect(last().detail).toEqual({ tool: 'detail', target: 'Auth' });
     turns[0]?.emit({ type: 'tool', name: 'parley_find', input: { query: 'x' } });
     expect(last().detail).toEqual({ tool: 'overview', target: null });
+  });
+});
+
+describe('assistant-service: план действий', () => {
+  // Закрытая сессия `s-09` из MAP: id строится как у targetsOf — по хешу пути проекта.
+  const closedS09Id = `session:${createHash('sha1').update('/p').digest('hex').slice(0, 6)}:w-1:s-09`;
+  const asked = async (over: Partial<AssistantServiceDeps> = {}) => {
+    const service = createAssistantService({ ...deps, ...over });
+    await service.ask(ASK);
+    return service;
+  };
+  const order = (fn: unknown): number => (fn as Mock).mock.invocationCallOrder[0] ?? 0;
+
+  it('propose_actions → карточка actions с шагами; Send старого окна — отказ, карточка остаётся', async () => {
+    const service = await asked();
+    expect((await service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] })).status).toBe(200);
+    expect(last().proposal).toMatchObject({ action: 'actions', steps: [{ verb: 'interrupt', line: 'Stop what S03 Ruslan is doing', danger: false }] });
+    expect(await service.decide('p1', 'send')).toEqual({ applied: false, error: 'Update Parley to confirm this card' });
+    expect(service.state().proposal).not.toBeNull();
+    expect(deps.interrupt).not.toHaveBeenCalled();
+  });
+  it('клик с action: actions — шаги идут, отчёт и заметка модели', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+    expect(await service.decide('p1', 'send', 'actions')).toEqual({ applied: true, error: null });
+    await vi.waitFor(() => expect(last().report).toMatchObject({ status: 'done' }));
+    expect(order(deps.interrupt)).toBeLessThan(order(deps.stopSession));
+    expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(turns.at(-1)?.spec.args[1]).toMatch(/^\[system: proposal p1 was done\]/);
+  });
+  it('ход плана виден: сначала все шаги waiting, потом running у текущего', async () => {
+    let release: () => void = () => {};
+    (deps.interrupt as Mock).mockImplementation(() => undefined);
+    (deps.stopSession as Mock).mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+    await service.decide('p1', 'send', 'actions');
+    expect(states.find((state) => state.report?.status === 'running')?.report?.steps.map((step) => step.status)).toEqual(['waiting', 'waiting']);
+    await vi.waitFor(() => expect(last().report?.steps.map((step) => step.status)).toEqual(['done', 'running']));
+    release();
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+  });
+  it('двойное подтверждение — план выполняется один раз', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    const [first, second] = await Promise.all([service.decide('p1', 'send', 'actions'), service.decide('p1', 'send', 'actions')]);
+    expect([first.applied, second.applied].sort()).toEqual([false, true]);
+    expect([first, second].find((result) => !result.applied)?.error).toBe('This card is no longer current');
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    expect(deps.stopSession).toHaveBeenCalledTimes(1);
+  });
+  it('второй план, пока идёт первый, — 409', async () => {
+    (deps.stopSession as Mock).mockImplementation(() => new Promise(() => {})); // первый план висит
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await service.decide('p1', 'send', 'actions');
+    expect(await service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] })).toEqual({ status: 409, body: { error: 'A plan is still running; wait until it ends' } });
+  });
+  it('нет окна с признаком и нет Telegram — ошибка модели, карточки нет', async () => {
+    const service = await asked({ actionsShown: () => false });
+    expect(await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).toEqual({
+      status: 409,
+      body: { error: 'No Parley window can show this card; ask the person to open or update Parley' },
+    });
+    expect(last().proposal).toBeNull();
+  });
+  it('план не прошёл проверку — 400 с номером шага, карточки нет', async () => {
+    const service = await asked();
+    expect(await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }, { do: 'wake', session: 'S02' }] })).toEqual({ status: 400, body: { error: 'Step 2: S02 Anna is already awake' } });
+    expect(last().proposal).toBeNull();
+  });
+  it('«да» словами при карточке actions — системная строка в ходе, не выполнение', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'Да' }, 'telegram');
+    expect(turns.at(-1)?.spec.args[1]).toContain('[system: a card with actions is waiting; it is confirmed only by its button]');
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(service.state().proposal).not.toBeNull();
+  });
+  it('не «да» при карточке actions и «да» при письме — без системной строки', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'а что в комнате?' });
+    expect(turns.at(-1)?.spec.args[1]).not.toContain('confirmed only by its button');
+    await service.decide('p1', 'cancel');
+    await service.tool('propose_message', { target: 'Auth', text: 'x' });
+    await service.ask({ ...ASK, text: 'да' });
+    expect(turns.at(-1)?.spec.args[1]).not.toContain('confirmed only by its button');
+  });
+  it('отмена карточки actions — исход cancelled, шаги не идут', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await expect(service.decide('p1', 'cancel')).resolves.toEqual({ applied: true, error: null });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'cancelled' });
+    expect(deps.stopSession).not.toHaveBeenCalled();
+  });
+  it('падение шага: заметка stopped at step', async () => {
+    (deps.stopSession as Mock).mockRejectedValue(new Error('pty is gone'));
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report).toMatchObject({ status: 'stopped', failedStep: 2, reason: 'pty is gone' }));
+    await service.ask({ ...ASK, text: 'ну?' });
+    expect(turns.at(-1)?.spec.args[1]).toMatch(/^\[system: proposal p1 stopped at step 2 of 2: pty is gone; step 1 done\]/);
+  });
+  it('падение на первом шаге: no steps done; на третьем — steps 1–2 done', async () => {
+    (deps.stopSession as Mock).mockRejectedValue(new Error('boom'));
+    const first = await asked();
+    await first.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await first.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report?.status).toBe('stopped'));
+    await first.ask({ ...ASK, text: 'ну?' });
+    expect(turns.at(-1)?.spec.args[1]).toContain('[system: proposal p1 stopped at step 1 of 1: boom; no steps done]');
+    const second = createAssistantService(deps);
+    await second.ask(ASK);
+    await second.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+    await second.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report).toMatchObject({ status: 'stopped', failedStep: 3 }));
+    await second.ask({ ...ASK, text: 'ну?' });
+    expect(turns.at(-1)?.spec.args[1]).toContain('stopped at step 3 of 3: boom; steps 1–2 done]');
+  });
+  it('пометки шагов попадают в заметку модели', async () => {
+    (deps.createSession as Mock).mockResolvedValue({ projectPath: '/p', workId: 'w-1', sessionId: 's-03', held: 'folder-trust' });
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley' }] });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    await service.ask({ ...ASK, text: 'ну?' });
+    expect(turns.at(-1)?.spec.args[1]).toContain('[system: proposal p1 was done (S03 Ruslan waits for you to trust the folder)]');
+  });
+  it('create_session: вход sessions.create — без requestedBy, lean из настроек, role и model только когда названы', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley', name: 'Vera', task: 'Run tests' }] });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    expect(deps.createSession).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', provider: 'claude', label: 'Vera', task: 'Run tests', parent: null, lean: true });
+  });
+  it('шаги над комнатой и сессиями уходят в функции хоста с id и текстом', async () => {
+    const service = await asked();
+    await service.tool('propose_actions', {
+      steps: [
+        { do: 'add_to_room', room: 'Auth', session: 'S02' },
+        { do: 'message', target: 'Auth', text: 'ping', mention: ['S02'] },
+        { do: 'message', target: 'S03', text: 'hello' },
+        { do: 'close', session: 'S02' },
+      ],
+    });
+    expect(last().proposal).toMatchObject({ action: 'actions', target: '4 steps' });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report).toMatchObject({ status: 'done' }));
+    expect(deps.addRoomMember).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-1', sessionId: 's-02' });
+    expect(deps.sendLetter).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-1', to: ['s-02'], text: '@s02 ping', kind: 'note' });
+    expect(deps.send).toHaveBeenCalledWith({ ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, text: 'hello', submit: true });
+    await expect(service.sent({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' })).resolves.toMatchObject([{ text: 'hello' }]);
+    expect(deps.closeSession).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-02' });
+  });
+  it('работа → агент → комната с задачей: ссылки \"$N\" подставляются итогами, роль и модель уходят только когда названы', async () => {
+    const entries: WorkEntry[] = [{ projectPath: '/p', map: MAP }] as WorkEntry[];
+    const fresh = { ...MAP, work: { id: 'w-2', title: 'Fresh', goal: '', status: 'active' }, sessions: [], rooms: [] } as unknown as WorkMap;
+    (deps.createWork as Mock).mockImplementation(async () => {
+      entries.push({ projectPath: '/p', map: fresh } as WorkEntry);
+      return 'w-2';
+    });
+    (deps.createSession as Mock).mockImplementation(async () => {
+      (fresh.sessions as unknown[]).push({ id: 's-01', label: 'S01 Vera', provider: 'claude', task: 'x', summary: null, lifecycle: 'active' });
+      return { projectPath: '/p', workId: 'w-2', sessionId: 's-01' };
+    });
+    const service = await asked({ works: { snapshot: () => ({ entries, branches: {} }) } });
+    await service.tool('propose_actions', {
+      steps: [
+        { do: 'create_work', project: '/p', title: 'Fresh' },
+        { do: 'create_session', work: '$1', name: 'Vera', task: 'Look around' },
+        { do: 'create_room', work: '$1', title: 'Duo', members: ['$2'], task: 'Start' },
+      ],
+    });
+    expect(last().proposal).toMatchObject({ action: 'actions', target: '3 steps' });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report).toMatchObject({ status: 'done' }));
+    expect(deps.createWork).toHaveBeenCalledWith({ projectPath: '/p', title: 'Fresh', goal: '' });
+    expect(deps.createSession).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-2', provider: 'claude', label: 'Vera', task: 'Look around', parent: null, lean: true });
+    expect(deps.createRoom).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-2', title: 'Duo', members: ['s-01'], lead: 's-01' });
+    expect(deps.sendLetter).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-2', roomId: 'r-9', to: [], text: 'Start', kind: 'note' });
+  });
+  it('роль и модель в sessions.create — когда названы', async () => {
+    const reviewer = { id: 'builtin:reviewer', name: 'Reviewer', source: 'builtin', provider: 'claude', models: { claude: 'opus' } };
+    const service = await asked({ roles: async () => [reviewer] as never });
+    await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley', role: 'reviewer', model: 'opus' }] });
+    expect(last().proposal).toMatchObject({ action: 'actions' });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ role: { source: 'builtin', name: 'reviewer' }, model: 'opus' }));
+  });
+  it('провайдер по умолчанию — из зеркала окна', async () => {
+    const service = await asked();
+    service.configure({ enabled: true, provider: null, model: null, language: 'ru', voiceModel: null, defaultProvider: 'codex' });
+    await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley' }] });
+    expect(last().proposal).toMatchObject({ steps: [{ line: expect.stringContaining('· Codex') }] });
+  });
+  it('закрытая цель старой карточки — «reopen it in Parley first»', async () => {
+    const service = await asked();
+    expect(await service.tool('propose_message', { target: closedS09Id, text: 'hi' })).toEqual({ status: 409, body: { error: 'S09 Old is closed; reopen it in Parley first' } });
+    expect(await service.tool('propose_decision', { target: closedS09Id, decision: { kind: 'plan', choice: 'manual' } })).toMatchObject({ status: 409, body: { error: 'S09 Old is closed; reopen it in Parley first' } });
+    expect(last().proposal).toBeNull();
+  });
+  it('reset во время плана не стирает отчёт идущего плана; новый ход после конца плана его убирает', async () => {
+    let release: () => void = () => {};
+    (deps.stopSession as Mock).mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await service.decide('p1', 'send', 'actions');
+    service.reset();
+    expect(last().report).toMatchObject({ proposalId: 'p1', status: 'running' });
+    release();
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    service.reset();
+    expect(last().report).toBeNull();
+    await service.ask(ASK);
+    expect(last()).toMatchObject({ phase: 'thinking', report: null });
+  });
+  it('подпись: propose_actions — propose', async () => {
+    const service = await asked();
+    void service;
+    turns[0]?.emit({ type: 'tool', name: 'propose_actions', input: { steps: [] } });
+    expect(last().detail).toEqual({ tool: 'propose', target: null });
   });
 });

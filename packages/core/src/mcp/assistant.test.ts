@@ -15,7 +15,7 @@ async function connect(fetch: typeof globalThis.fetch): Promise<Client> {
 const reply = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 describe('parley-mcp в режиме помощника', () => {
-  it('отдаёт тринадцать инструментов в заданном порядке', async () => {
+  it('отдаёт четырнадцать инструментов в заданном порядке', async () => {
     const client = await connect(vi.fn());
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -28,6 +28,7 @@ describe('parley-mcp в режиме помощника', () => {
       'propose_room',
       'propose_decision',
       'propose_room_decision',
+      'propose_actions',
       'schedule_check',
       'list_reminders',
       'cancel_reminder',
@@ -46,6 +47,16 @@ describe('parley-mcp в режиме помощника', () => {
     expect(byName('cancel_reminder').description).toContain('*');
     expect(byName('parley_find').inputSchema.required).toEqual(['query']);
     expect(byName('parley_room').annotations).toEqual({ readOnlyHint: true });
+  });
+  it('propose_actions: до двадцати шагов, ветки oneOf по глаголам, не только чтение', () => {
+    const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === 'propose_actions')!;
+    expect(tool.annotations).toBeUndefined();
+    expect(tool.inputSchema.required).toEqual(['steps']);
+    const steps = (tool.inputSchema.properties as { steps: { minItems: number; maxItems: number; items: { oneOf: Array<{ properties: { do: { enum: string[] } }; additionalProperties: boolean }> } } }).steps;
+    expect([steps.minItems, steps.maxItems]).toEqual([1, 20]);
+    expect(steps.items.oneOf.flatMap((branch) => branch.properties.do.enum)).toEqual(['create_work', 'create_session', 'wake', 'interrupt', 'sleep', 'close', 'create_room', 'add_to_room', 'message']);
+    expect(steps.items.oneOf.every((branch) => branch.additionalProperties === false)).toBe(true);
+    expect(tool.description).toContain('Nothing happens until the person clicks.');
   });
   it('propose_room уходит POST на /propose_room', async () => {
     const fetch = vi.fn().mockResolvedValue(reply(200, { text: 'Card prepared' }));
