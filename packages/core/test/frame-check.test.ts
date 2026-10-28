@@ -496,7 +496,7 @@ describe('строка статуса не пишет в каталоги аге
 });
 
 describe('скилл агентов не пишет в каталоги агента (юридическая рамка, кусок 10)', () => {
-  // Скиллы `parley`, `minimal-development` и `parley-browser` кладутся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
+  // Скиллы `parley`, `minimal-development`, `parley-browser` и `research-swarm` кладутся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
   // `~/.claude.json` не трогаются ни при каких условиях: ни установкой, ни учётом, ни строками exclude.
   it('домашняя папка после установки в проект и в worktree не изменилась ни на байт', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'frame-skill-'));
@@ -523,17 +523,19 @@ describe('скилл агентов не пишет в каталоги аген
       await installAgentSkill({ projectPath: path.join(home, '.claude') });
 
       expect(await snapshot(home)).toEqual(before);
-      // А в проекте и в worktree скиллы легли (parley, внутренний minimal-development, P39, и parley-browser, этап D браузера):
+      // А в проекте и в worktree скиллы легли (parley, внутренний minimal-development, P39, parley-browser, этап D браузера, и research-swarm, рой v1):
       // проверка не прошла бы на пустом месте.
       expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual([
         'minimal-development',
         'parley',
         'parley-browser',
+        'research-swarm',
       ]);
       expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual([
         'minimal-development',
         'parley',
         'parley-browser',
+        'research-swarm',
       ]);
     } finally {
       if (savedHome === undefined) delete process.env['HOME'];
