@@ -2339,6 +2339,8 @@ export const S = {
       archiveRoom: 'archive room',
       reopenRoom: 'reopen room',
       makeLead: 'change the room lead',
+      cancelSwarm: 'cancel the swarm',
+      markSwarmSeen: 'mark the swarm as seen',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',
       createParleyMd: 'create PARLEY.md',

@@ -364,6 +364,9 @@ export const WorkCard = memo(function WorkCard({
               <SwarmRow
                 key={`swarm ${row.swarm.id}`}
                 workKey={key}
+                projectPath={projectPath}
+                workId={map.work.id}
+                bridge={bridge}
                 row={row}
                 guides={guides[index] ?? NO_GUIDES}
                 selectedSessionId={selectedSessionId}

@@ -14,8 +14,10 @@ import { create } from 'zustand';
 import { AlertTriangle, Check, ChevronDown, X } from 'lucide-react';
 import type { WorkSwarm } from '@parley/core';
 import { swarmProgress } from '@parley/core/swarms';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { SwarmIcon } from '../components/SwarmIcon.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { useSwarmIconMotion } from '../lib/use-swarm-icon-motion.js';
 import { useNow } from '../lib/use-now.js';
@@ -29,6 +31,7 @@ import {
   type SwarmMemberView,
 } from '../lib/swarm-view.js';
 import { NO_GUIDES, type CardSwarmRow, type TreeGuide } from './sort.js';
+import { markSwarmSeen, SwarmRowMenu, swarmResultUnseen } from './SwarmRowMenu.js';
 import { TREE_STEP, TreeGuides } from './TreeGuides.js';
 
 /** Раскрытые рои — до конца сеанса окна, по ключу `workKey/swarmId`. */
@@ -80,6 +83,10 @@ function Dots({ views }: { views: readonly SwarmMemberView[] }): JSX.Element | n
 
 export interface SwarmRowProps {
   workKey: string;
+  /** Работа строки — для меню и «Mark as seen»; строками, а не ref, как у `SessionRow`. */
+  projectPath: string;
+  workId: string;
+  bridge: ParleyBridge;
   row: CardSwarmRow;
   /** Линии дерева к этой строке и сквозь неё (`sort.ts#treeGuides`). */
   guides?: readonly TreeGuide[];
@@ -88,7 +95,7 @@ export interface SwarmRowProps {
   openerFor(sessionId: string): () => void;
 }
 
-export const SwarmRow = memo(function SwarmRow({ workKey, row, guides = NO_GUIDES, selectedSessionId, openerFor }: SwarmRowProps): JSX.Element {
+export const SwarmRow = memo(function SwarmRow({ workKey, projectPath, workId, bridge, row, guides = NO_GUIDES, selectedSessionId, openerFor }: SwarmRowProps): JSX.Element {
   const { swarm, members } = row;
   const key = `${workKey}/${swarm.id}`;
   const expanded = useExpandedSwarms((state) => state.keys[key] === true);
@@ -100,6 +107,7 @@ export const SwarmRow = memo(function SwarmRow({ workKey, row, guides = NO_GUIDE
   const toggle = (): void => showSwarm(key, !expanded);
 
   return (
+    <SwarmRowMenu workKey={workKey} projectPath={projectPath} workId={workId} swarm={swarm} bridge={bridge} onOpenQueen={openerFor(swarm.queen)}>
     <div
       role="treeitem"
       aria-expanded={expanded}
@@ -146,10 +154,11 @@ export const SwarmRow = memo(function SwarmRow({ workKey, row, guides = NO_GUIDE
           {members.map((view) => (
             <MemberLine key={view.member.sessionId} swarm={swarm} view={view} selected={view.session?.id === selectedSessionId} openerFor={openerFor} />
           ))}
-          {terminal ? <Outcome swarm={swarm} /> : null}
+          {terminal ? <Outcome swarm={swarm} projectPath={projectPath} workId={workId} bridge={bridge} /> : null}
         </div>
       ) : null}
     </div>
+    </SwarmRowMenu>
   );
 });
 
@@ -191,13 +200,27 @@ function MemberLine({ swarm, view, selected, openerFor }: { swarm: WorkSwarm; vi
 }
 
 /** Итог законченного роя: сводка королевы или причина остановки (спека роя, 3.3). */
-function Outcome({ swarm }: { swarm: WorkSwarm }): JSX.Element {
+function Outcome({ swarm, projectPath, workId, bridge }: { swarm: WorkSwarm; projectPath: string; workId: string; bridge: ParleyBridge }): JSX.Element {
   const text = swarm.result?.summary ?? '';
+  const canMarkSeen = useHostSupports('swarms.seen') && swarmResultUnseen(swarm);
   return (
     <div data-swarm-outcome="" className="mt-0.5 rounded-lg bg-foreground/4 px-2 py-1.5 text-[11px] leading-4">
       {swarm.failure !== null ? <div className="font-semibold text-accent-800">{S.workSwarm.failure(swarm.failure)}</div> : null}
       <div className="mb-0.5 font-semibold">{S.workSwarm.result}</div>
       <div className="line-clamp-6 whitespace-pre-wrap break-words text-work-sidebar-muted-foreground">{text === '' ? S.workSwarm.noResult : text}</div>
+      {canMarkSeen ? (
+        <button
+          type="button"
+          data-swarm-action="seen"
+          onClick={(event) => {
+            event.stopPropagation();
+            markSwarmSeen(bridge, projectPath, workId, swarm.id);
+          }}
+          className="mt-1 cursor-pointer rounded-full px-1.5 py-0.5 text-[11px] font-medium hover:bg-foreground/6"
+        >
+          {S.workSwarm.menu.markSeen}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import type { WindowWorkEntry, WorkSwarm } from '@parley/core';
 import type { WorkAttention } from '../attention/derive.js';
 import { useHostStore } from '../store/host.js';
-import { createFakeBridge } from '../test-utils/fake-bridge.js';
+import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { workKey } from '../lib/tree-order.js';
 import { showSwarm } from './SwarmRow.js';
@@ -19,9 +19,11 @@ vi.mock('sonner', () => ({ toast: vi.fn() }));
 const NOW = new Date('2026-09-27T08:04:12.000Z');
 const attention: WorkAttention = { level: 'idle', needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, roomMentions: {}, lastEventAt: '2026-09-27T08:00:00.000Z' };
 let disposeHost: () => void = () => {};
+let bridge: FakeBridge;
 
 beforeEach(() => {
-  disposeHost = useHostStore.getState().init(createFakeBridge());
+  bridge = createFakeBridge();
+  disposeHost = useHostStore.getState().init(bridge);
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
   vi.setSystemTime(NOW);
 });
@@ -60,7 +62,7 @@ function renderCard(entry: WindowWorkEntry, onOpenSession: (id: string) => void 
       onOpenSession={onOpenSession}
       onOpenMail={() => {}}
       onOpenRoom={() => {}}
-      bridge={createFakeBridge()}
+      bridge={bridge}
     />,
   );
 }
@@ -147,6 +149,21 @@ describe('SwarmRow', () => {
     expect(within(swarmRow()).getByText('Stopped: time limit: 90 min')).toBeTruthy();
     expect(within(swarmRow()).getByText('No summary was handed in.')).toBeTruthy();
     expect(within(swarmRow()).getByRole('button', { name: 'Drone 2: closed' })).toBeTruthy();
+  });
+
+  it('«Mark as seen» в раскрытом итоге шлёт swarms.seen; без метода у хоста кнопки нет', async () => {
+    const done = makeSwarm('sw-01', 's-q', { members, status: 'done', endedAt: '2026-09-27T08:03:00.000Z' });
+    bridge.setHandler('swarms.seen', () => ({ ok: true as const }));
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: [] } });
+    const without = renderCard(entryWith(done));
+    fireEvent.click(swarmRow());
+    expect(document.querySelector('[data-swarm-outcome] [data-swarm-action="seen"]')).toBeNull();
+    without.unmount();
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['swarms.seen'] } });
+    renderCard(entryWith(done));
+    // Рой остался раскрытым с прошлого показа: раскрытие живёт в памяти окна.
+    fireEvent.click(document.querySelector('[data-swarm-outcome] [data-swarm-action="seen"]') as HTMLElement);
+    expect(bridge.calls).toEqual([{ method: 'swarms.seen', params: { projectPath: '/tmp/proj', workId: 'w-01', swarmId: 'sw-01' } }]);
   });
 
   it('просмотренный готовый рой с карточки уходит', () => {
