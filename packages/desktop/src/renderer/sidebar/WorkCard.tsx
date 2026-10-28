@@ -43,9 +43,11 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { forYouTarget, roomAwaitsDecision, sessionNeed, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { SwarmIcon } from '../components/SwarmIcon.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { isRoomArchived } from '../lib/room-archive.js';
+import { swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
 import { workTitleText } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
@@ -56,6 +58,7 @@ import { InlineRename } from './InlineRename.js';
 import { RoomRow } from './RoomRow.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
+import { SwarmRow } from './SwarmRow.js';
 import { archivedRows, cardRows, NO_GUIDES, treeGuides, type CardRoomRow, type TreeGuide } from './sort.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
@@ -200,6 +203,7 @@ export const WorkCard = memo(function WorkCard({
   // Вторичный текст — свой токен: на активной карточке `--muted-foreground` ниже 4.5:1.
   const secondary = 'text-work-sidebar-muted-foreground';
   // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
+  const swarmView = swarmBadgeView(swarmBadge(map));
   const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
@@ -288,6 +292,18 @@ export const WorkCard = memo(function WorkCard({
             <span className="tabular-nums">{attention.humanUnread}</span>
           </button>
         ) : null}
+        {swarmView === null ? null : (
+          // Значок считается из `map.swarms`, а не из строк: виден и когда рои свёрнуты, и у свёрнутой карточки группы.
+          <span
+            data-swarm-badge={swarmView.status}
+            title={swarmView.title}
+            aria-label={swarmView.title}
+            className={cn('inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold tabular-nums', secondary)}
+          >
+            <SwarmIcon status={swarmView.status} size={14} />
+            <span data-swarm-count="">{swarmView.count === null ? '✓' : swarmView.count}</span>
+          </span>
+        )}
         {map.rooms.some((room) => !isRoomArchived(room)) ? (
           <RoomsMenu map={map} onOpenRoom={onOpenRoom}>
             <button
@@ -341,6 +357,15 @@ export const WorkCard = memo(function WorkCard({
                 selected={row.session.id === selectedSessionId}
                 onOpen={openerFor(row.session.id)}
                 guides={guides[index] ?? NO_GUIDES}
+              />
+            ) : row.kind === 'swarm' ? (
+              <SwarmRow
+                key={`swarm ${row.swarm.id}`}
+                workKey={key}
+                row={row}
+                guides={guides[index] ?? NO_GUIDES}
+                selectedSessionId={selectedSessionId}
+                openerFor={openerFor}
               />
             ) : (
               renderRoomRow(row, guides[index])

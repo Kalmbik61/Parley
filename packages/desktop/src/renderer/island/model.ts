@@ -17,6 +17,7 @@
  */
 
 import type { WindowWorkEntry } from '@parley/core';
+import { isSwarmTerminal, swarmMemberIds, swarmProgress, type SwarmStatus } from '@parley/core/swarms';
 import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import { sessionAttention } from '../attention/derive.js';
 import { sessionRowLabel, workTitleText } from '../lib/participant.js';
@@ -32,7 +33,9 @@ export type IslandRow =
   | (SessionBase & { state: 'working' | 'needs-you' | 'subagents'; inTerminal: boolean })
   | (SessionBase & { state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null; seen: boolean })
   | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; title: string; busy: number; done: boolean;
-      proposal?: { key: string; kind: 'decision' | 'completion'; lead: string | null; leadLabel: string | null } };
+      proposal?: { key: string; kind: 'decision' | 'completion'; lead: string | null; leadLabel: string | null } }
+  // Рой работы (спека роя v1, 7.4): его сессии отдельными рядами не стоят; клик ведёт к королеве.
+  | { kind: 'work-swarm'; key: string; projectPath: string; workId: string; swarmId: string; queenId: string; tag: string; handed: number; total: number; state: SwarmStatus };
 
 export interface IslandGroup {
   key: string;
@@ -49,6 +52,8 @@ export interface IslandModel {
   providers: string[];
   groups: IslandGroup[];
   active: boolean;
+  /** Идущие рои всех работ: сколько их и сколько сдали из скольких — правый статус капсулы `🐝 3/5`. */
+  swarm?: { count: number; handed: number; total: number };
   subagents?: number;
   proposals?: number;
 }
@@ -79,6 +84,7 @@ export function islandModel(
   let subagents = 0;
   let childrenActive = false;
   let proposals = 0;
+  const swarmTotals = { count: 0, handed: 0, total: 0 };
   const providers = new Set<string>();
   const groups: IslandGroup[] = [];
   for (const entry of entries) {
@@ -88,7 +94,10 @@ export function islandModel(
     const doneRows: IslandRow[] = [];
     const busy = new Set<string>();
     const finished = new Set<string>();
+    // Участники роя — не «в работе» и не Done: остров показывает рой одним рядом.
+    const swarmSessions = swarmMemberIds(entry.map);
     for (const session of entry.map.sessions) {
+      if (swarmSessions.has(session.id)) continue;
       const ref = { projectPath: entry.projectPath, workId: work.id, sessionId: session.id };
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
@@ -142,10 +151,22 @@ export function islandModel(
           lead, leadLabel: leader === undefined ? null : sessionRowLabel(leader.id, leader.label) } }),
       });
     }
+    for (const swarm of entry.map.swarms ?? []) {
+      const live = !isSwarmTerminal(swarm.status);
+      // Законченный рой остаётся рядом, пока человек не увидел итог (`done`/`failed`).
+      if (!live && !((swarm.status === 'done' || swarm.status === 'failed') && swarm.seenAt === null)) continue;
+      const { handed, total } = swarmProgress(swarm);
+      if (live) {
+        swarmTotals.count += 1;
+        swarmTotals.handed += handed;
+        swarmTotals.total += total;
+      }
+      rows.push({ kind: 'work-swarm', key: `${groupKey}\u0000swarm\u0000${swarm.id}`, projectPath: entry.projectPath, workId: work.id, swarmId: swarm.id, queenId: swarm.queen, tag: swarm.tag, handed, total, state: swarm.status });
+    }
     if (rows.length > 0) groups.push({ key: groupKey, title: workTitleText(work.title), project: projectName(entry.projectPath), rows });
   }
-  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 || childrenActive || proposals > 0,
-    ...(childrenActive ? { subagents } : {}), ...(proposals > 0 ? { proposals } : {}),
+  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 || childrenActive || proposals > 0 || swarmTotals.count > 0,
+    ...(childrenActive ? { subagents } : {}), ...(proposals > 0 ? { proposals } : {}), ...(swarmTotals.count > 0 ? { swarm: swarmTotals } : {}),
   };
 }
 

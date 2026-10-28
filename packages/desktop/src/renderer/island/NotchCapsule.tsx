@@ -16,23 +16,29 @@ import { HOST_IDLE } from './assistant/store.js';
 import type { IslandAssistantProps } from './IslandView.js';
 import type { IslandModel } from './model.js';
 import { CAPSULE_SIDE, type Notch } from './notch.js';
+import { SwarmIcon } from '../components/SwarmIcon.js';
 import { Swarm } from './swarm/Swarm.js';
 import { swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
 
 /** Что в капсуле: слева помощник или агенты (`null` — пусто), справа один статус (`null` — пусто). */
 export interface CapsuleContent {
   left: 'assistant' | 'agents' | null;
-  right: { kind: 'done' | 'working'; count: number } | null;
+  right: { kind: 'done' | 'working'; count: number } | { kind: 'swarm'; handed: number; total: number } | null;
 }
 
 type CapsuleAssistant = Pick<IslandAssistantProps, 'open' | 'collapsed'> & { view: Pick<IslandAssistantProps['view'], 'host' | 'input'> };
 
 /** Содержимое капсулы; `null` — показывать нечего, форма — ровно вырез. */
-export function capsuleContent(model: Pick<IslandModel, 'active' | 'working'>, doneCount: number, assistant: CapsuleAssistant | null): CapsuleContent | null {
+export function capsuleContent(model: Pick<IslandModel, 'active' | 'working' | 'swarm'>, doneCount: number, assistant: CapsuleAssistant | null): CapsuleContent | null {
   const input = assistant?.view.input;
   const shown = assistant !== null &&
     ((assistant.open && assistant.collapsed) || input === 'speaking' || input === 'settling' || assistant.view.host.phase === 'error');
-  const right = doneCount > 0 ? { kind: 'done' as const, count: doneCount } : model.working > 0 ? { kind: 'working' as const, count: model.working } : null;
+  // `🐝 3/5` приоритетнее «точка и число работающих», но ниже `✓ N Done` (спека роя, 7.4).
+  const right = doneCount > 0
+    ? { kind: 'done' as const, count: doneCount }
+    : model.swarm !== undefined
+      ? { kind: 'swarm' as const, handed: model.swarm.handed, total: model.swarm.total }
+      : model.working > 0 ? { kind: 'working' as const, count: model.working } : null;
   const left = shown ? 'assistant' : model.active ? 'agents' : null;
   return left === null && right === null ? null : { left, right };
 }
@@ -99,6 +105,11 @@ export function NotchCapsule({ notch, content, assistant, pulse, reducedMotion, 
       <div data-testid="island-capsule-right" className="flex items-center justify-center whitespace-nowrap text-[13px] tabular-nums" style={{ width: CAPSULE_SIDE }}>
         {right === null ? null : right.kind === 'done' ? (
           <span>{S.island.capsule.done(right.count)}</span>
+        ) : right.kind === 'swarm' ? (
+          <span data-testid="island-capsule-swarm" className="flex items-center gap-1" role="img" aria-label={S.workSwarm.island.capsule(right.handed, right.total)}>
+            <SwarmIcon status="running" size={14} scope="island" handed={right.handed} />
+            {S.workSwarm.counter(right.handed, right.total)}
+          </span>
         ) : (
           <span className="flex items-center" role="img" aria-label={S.island.capsule.working(right.count)}>
             <span className="mr-[5px] size-1.5 shrink-0 rounded-full bg-[#5fb4ff]" />

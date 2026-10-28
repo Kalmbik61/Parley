@@ -6,13 +6,15 @@
  * от родителя к дочерним сессиям (`treeGuides`) считаются по этим же строкам.
  */
 
-import type { Room, WindowWorkEntry, WindowWorkMap, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WindowWorkMap, WorkSession, WorkSwarm } from '@parley/core';
+import { swarmMemberIds } from '@parley/core/swarms';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';
 import { agentsLeftWithoutRoom, isRoomArchived } from '../lib/room-archive.js';
 import { roomLiveLead } from '../lib/room-lead.js';
 import { roomLastAt, roomSessions } from '../lib/room-view.js';
+import { isSwarmShown, swarmMemberViews, type SwarmMemberView } from '../lib/swarm-view.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 
 export interface SidebarSection {
@@ -248,7 +250,21 @@ export interface CardRoomRow {
   archiveStops: WorkSession[];
 }
 
-export type CardRow = CardSessionRow | CardRoomRow;
+/**
+ * Строка карточки — рой (спека роя v1, 7.1). Сессии роя обычными строками не выводятся: они видны только в раскрытой
+ * строке роя (`members`: королева, трутни, проверяющие).
+ */
+export interface CardSwarmRow {
+  kind: 'swarm';
+  swarm: WorkSwarm;
+  /** Глубина создателя + 1; у роя человека и роя, чьего создателя не видно, — 0. */
+  depth: number;
+  /** Создатель для линии дерева: id его строки (сессия или комната); `null` — рой на верхнем уровне. */
+  parent: string | null;
+  members: SwarmMemberView[];
+}
+
+export type CardRow = CardSessionRow | CardRoomRow | CardSwarmRow;
 
 /** Время создания комнаты для порядка «самая ранняя»; битая дата — самая поздняя: настоящая её всегда обходит. */
 const createdMs = (room: Room): number => isoMs(room.createdAt) ?? Number.POSITIVE_INFINITY;
@@ -360,28 +376,44 @@ export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
   // не раскрывает поддерево повторно, поэтому self-membership и циклы владения безопасны.
   const activeRooms = map.rooms.filter((room) => !isRoomArchived(room));
   const owners = new Set(activeRooms.flatMap((room) => room.ownerId ? [room.ownerId] : []));
+  // Сессии роя обычными строками не выводятся (спека роя, 7.1): они в раскрытой строке роя.
+  const swarmSessions = swarmMemberIds(map);
   const own = treeOrder(map.sessions).filter(({ session }) => {
+    if (swarmSessions.has(session.id)) return false;
     const room = home.get(session.id);
     const anchor = owners.has(session.id);
     return (anchor || room === undefined || (isRoomArchived(room) && staysOnCard(session))) &&
       (anchor || showClosed || session.lifecycle !== 'closed');
   });
   const created = createdUnder(own.map(({ session }) => session));
+  // Рои: видимые стоят под создателем (сессия — после его комнат, комната — сразу под строкой), остальные — на верхнем
+  // уровне в конце, как комнаты без владельца.
+  const swarms = (map.swarms ?? []).filter((swarm) => isSwarmShown(swarm, showClosed));
+  const placed = new Set<string>();
+  const pushSwarms = (matches: (swarm: WorkSwarm) => boolean, depth: number, parent: string | null): void => {
+    for (const swarm of swarms) {
+      if (placed.has(swarm.id) || !matches(swarm)) continue;
+      placed.add(swarm.id);
+      rows.push({ kind: 'swarm', swarm, depth, parent, members: swarmMemberViews(swarm, map.sessions) });
+    }
+  };
+  const pushRoom = (room: Room, depth: number, parent: string | null): void => {
+    rows.push(buildRoomRow(map, home, showClosed, room, depth, parent));
+    pushSwarms((swarm) => swarm.creator.kind === 'room' && swarm.creator.roomId === room.id, depth + 1, room.id);
+  };
   const push = (session: WorkSession, depth: number, parent: string | null): void => {
     rows.push({ kind: 'session', session, depth, parent });
-    for (const owned of activeRooms.filter((candidate) => candidate.ownerId === session.id)) {
-      rows.push(buildRoomRow(map, home, showClosed, owned, depth + 1, session.id));
-    }
+    for (const owned of activeRooms.filter((candidate) => candidate.ownerId === session.id)) pushRoom(owned, depth + 1, session.id);
+    pushSwarms((swarm) => swarm.creator.kind === 'session' && swarm.creator.sessionId === session.id, depth + 1, session.id);
     for (const child of created.children.get(session.id) ?? []) push(child, depth + 1, session.id);
   };
   for (const { session, depth } of own) {
     if (!created.placed.has(session.id)) push(session, depth, session.parent);
   }
   for (const room of activeRooms) {
-    if (!room.ownerId || !map.sessions.some((session) => session.id === room.ownerId)) {
-      rows.push(buildRoomRow(map, home, showClosed, room, 0, null));
-    }
+    if (!room.ownerId || !map.sessions.some((session) => session.id === room.ownerId)) pushRoom(room, 0, null);
   }
+  pushSwarms(() => true, 0, null);
   return rows;
 }
 
@@ -410,7 +442,11 @@ export const NO_GUIDES: readonly TreeGuide[] = [];
 
 /** Строка карточки показывает сессию `id`: строка сессии или строка комнаты, где она стоит среди участников. */
 const rowHolds = (row: CardRow, id: string): boolean =>
-  row.kind === 'session' ? row.session.id === id : row.sessions.some((member) => member.id === id);
+  row.kind === 'session'
+    ? row.session.id === id
+    : row.kind === 'room'
+      ? row.room.id === id || row.sessions.some((member) => member.id === id)
+      : row.swarm.id === id;
 
 /**
  * Метки линий дерева по строкам карточки (`cardRows`), по массиву на строку. Ребро — от строки ребёнка `i` к ближайшей

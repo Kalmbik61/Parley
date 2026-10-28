@@ -3,7 +3,7 @@
  * `WorkSession`/`WindowWorkEntry` на все его тесты вместо копии в каждом файле.
  */
 
-import type { Activity, Message, NeedKind, Room, SessionNeed, WindowWorkEntry, WorkSession, WorkStatus } from '@parley/core';
+import type { Activity, Message, NeedKind, Room, SessionNeed, WindowWorkEntry, WorkSession, WorkStatus, WorkSwarm, WorkSwarmMember } from '@parley/core';
 import { refKey, type LiveMetrics, type RoomsMailEvent, type RoomsMailRoom, type SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 
@@ -44,6 +44,7 @@ export interface WorkOptions {
   sessions?: WorkSession[];
   messages?: Message[];
   rooms?: Room[];
+  swarms?: WorkSwarm[];
 }
 
 export function makeWork(id: string, options: WorkOptions = {}): WindowWorkEntry {
@@ -56,6 +57,7 @@ export function makeWork(id: string, options: WorkOptions = {}): WindowWorkEntry
       sessions: options.sessions ?? [],
       messages: options.messages ?? [],
       rooms: options.rooms ?? [],
+      ...(options.swarms === undefined ? {} : { swarms: options.swarms }),
     },
   };
 }
@@ -135,6 +137,31 @@ export function makeMailEvent(patch: Partial<RoomsMailEvent> & Pick<RoomsMailEve
     droppedRooms: [],
     unread: { letters: 0, rooms: {} },
     mentionCandidates: [],
+    ...patch,
+  };
+}
+
+/** Участник роя: `role` и номер, `handed` — сдал (иначе работает). */
+export function makeSwarmMember(sessionId: string, role: WorkSwarmMember['role'], n = 1, handed = false): WorkSwarmMember {
+  return { sessionId, role, n, addedAt: '2026-09-27T08:01:00.000Z', handedAt: handed ? '2026-09-27T08:05:00.000Z' : null };
+}
+
+/** Рой: по умолчанию `running`, создатель — человек, королева — первый участник. */
+export function makeSwarm(id: string, queen: string, patch: Partial<WorkSwarm> = {}): WorkSwarm {
+  return {
+    id,
+    tag: 'Research',
+    creator: { kind: 'human' },
+    objective: 'Study the crawlers',
+    queen,
+    members: [makeSwarmMember(queen, 'queen')],
+    status: 'running',
+    createdAt: '2026-09-27T08:00:00.000Z',
+    endedAt: null,
+    result: null,
+    failure: null,
+    seenAt: null,
+    expiredAt: null,
     ...patch,
   };
 }

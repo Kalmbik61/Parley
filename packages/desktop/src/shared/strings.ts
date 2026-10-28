@@ -450,6 +450,48 @@ export const S = {
   },
 
   /**
+   * Рой работы (спека роя v1, раздел 7): строка в сайдбаре, чип шапки чата, значки карточки и группы, ряд острова и
+   * правый статус капсулы. Слова интерфейса английские, как у остальных строк окна; «трутень» — `Drone`.
+   */
+  workSwarm: {
+    swarm: 'Swarm',
+    /** Тултип и `aria-label` строки роя: `Swarm [Research] · running`. */
+    rowTitle: (tag: string, status: string): string => `Swarm [${tag}] · ${status}`,
+    status: { running: 'running', collecting: 'collecting', done: 'done', failed: 'failed', cancelled: 'cancelled' },
+    role: { queen: 'Queen', drone: (n: number): string => `Drone ${n}`, verifier: 'Verifier' },
+    /** Текст королевы выводится из роя: режет задачу, ждёт сдачи, сводит, сдала. */
+    queen: { cutting: 'cutting the task…', waiting: 'waiting for hand-ins…', collecting: 'collecting…', handed: 'handed in ✓' },
+    /** Состояние трутня и проверяющего. */
+    member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', failed: 'failed', closed: 'closed' },
+    /** Счётчик `3/5` (сдавшие / все трутни и проверяющие); до первого трутня — многоточие. */
+    counter: (handed: number, total: number): string => (total === 0 ? '…' : `${handed}/${total}`),
+    counterLabel: (handed: number, total: number): string => `${handed} of ${total} handed in`,
+    /** Значок карточки работы и группы проекта. */
+    activeSwarms: (n: number): string => (n === 1 ? '1 swarm running' : `${n} swarms running`),
+    readySwarms: (n: number): string => (n === 1 ? '1 swarm result to see' : `${n} swarm results to see`),
+    /** Чип шапки чата: королева — `Research · 3/5`, трутень и проверяющий — ссылка на рой. */
+    inSwarm: (tag: string): string => `in swarm ${tag}`,
+    openQueen: 'Open the queen',
+    /** Итог роя в раскрытой строке. */
+    result: 'Result',
+    failure: (reason: string): string => `Stopped: ${reason}`,
+    noResult: 'No summary was handed in.',
+    menu: {
+      open: 'Open the queen',
+      cancel: 'Cancel swarm',
+      cancelTitle: (tag: string): string => `Cancel swarm ${tag}?`,
+      cancelDescription: 'The queen stays; the drones and verifiers still running are closed.',
+      markSeen: 'Mark as seen',
+    },
+    /** Остров: ряд роя в списке и правый статус капсулы. */
+    island: {
+      swarmsTitle: 'Swarms',
+      capsule: (handed: number, total: number): string => `Swarm ${handed}/${total}`,
+      row: (tag: string, handed: number, total: number): string => `${tag} ${total === 0 ? '…' : `${handed}/${total}`}`,
+    },
+  },
+
+  /**
    * Сайдбар карточек (куски 3.3–3.5): `sidebar/WorkSidebar.tsx`, `WorkCard.tsx`,
    * `ProjectGroup.tsx`, `SessionRow.tsx` и меню строки `SessionRowMenu.tsx`.
    */
