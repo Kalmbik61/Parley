@@ -209,7 +209,10 @@ export interface CardSessionRow {
   kind: 'session';
   session: WorkSession;
   depth: number;
-  /** Кто запустил сессию (`WorkSession.parent`); от этой строки до строки родителя идёт линия дерева (`treeGuides`). */
+  /**
+   * Кто запустил сессию (`WorkSession.parent`, у новых — показанный создатель `createdBy`); от этой строки до строки
+   * родителя идёт линия дерева (`treeGuides`).
+   */
   parent: string | null;
 }
 
@@ -312,7 +315,36 @@ function buildRoomRow(map: WindowWorkMap, home: Map<string, Room>, showClosed: b
 }
 
 /**
- * Сессии-якоря идут в порядке `treeOrder`, принадлежащие им комнаты — сразу под ними.
+ * Сессии, что встают под строкой своего создателя (`WorkSession.createdBy`): `children` — по создателю в порядке карты,
+ * `placed` — их id. Создатель должен сам стоять строкой среди `shown`; иначе (удалён, спрятан закрытым, стоит участником
+ * комнаты) сессия остаётся на своём месте, как комната без живого владельца. Сессия, чья цепочка создателей
+ * возвращается к ней самой, тоже остаётся на месте: битая карта не прячет строки и не зацикливает обход.
+ */
+function createdUnder(shown: readonly WorkSession[]): { children: Map<string, WorkSession[]>; placed: Set<string> } {
+  const byId = new Map(shown.map((session) => [session.id, session]));
+  const children = new Map<string, WorkSession[]>();
+  const placed = new Set<string>();
+  for (const session of shown) {
+    const creator = session.createdBy ?? null;
+    if (creator === null || !byId.has(creator)) continue;
+    const seen = new Set<string>();
+    let up: string | null = creator;
+    while (up !== null && up !== session.id && !seen.has(up)) {
+      seen.add(up);
+      up = byId.get(up)?.createdBy ?? null;
+    }
+    if (up === session.id) continue;
+    const list = children.get(creator);
+    if (list === undefined) children.set(creator, [session]);
+    else list.push(session);
+    placed.add(session.id);
+  }
+  return { children, placed };
+}
+
+/**
+ * Сессии-якоря идут в порядке `treeOrder`, принадлежащие им комнаты — сразу под ними, а следом — сессии, заведённые
+ * ими через `create_session` (`createdUnder`), со своими комнатами и сессиями глубже.
  * Владелец остаётся видимым, пока у него есть открытые комнаты, даже если закрыт или состоит
  * в другой комнате. Комнаты без владельца стоят в корне, в порядке карты. Рабочие участники
  * показаны внутри комнаты; их ссылки не раскрывают принадлежащие им комнаты повторно.
@@ -328,17 +360,22 @@ export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
   // не раскрывает поддерево повторно, поэтому self-membership и циклы владения безопасны.
   const activeRooms = map.rooms.filter((room) => !isRoomArchived(room));
   const owners = new Set(activeRooms.flatMap((room) => room.ownerId ? [room.ownerId] : []));
-  for (const { session, depth } of treeOrder(map.sessions)) {
+  const own = treeOrder(map.sessions).filter(({ session }) => {
     const room = home.get(session.id);
     const anchor = owners.has(session.id);
-    if (anchor || room === undefined || (isRoomArchived(room) && staysOnCard(session))) {
-      if (anchor || showClosed || session.lifecycle !== 'closed') {
-        rows.push({ kind: 'session', session, depth, parent: session.parent });
-        for (const owned of activeRooms.filter((candidate) => candidate.ownerId === session.id)) {
-          rows.push(buildRoomRow(map, home, showClosed, owned, depth + 1, session.id));
-        }
-      }
+    return (anchor || room === undefined || (isRoomArchived(room) && staysOnCard(session))) &&
+      (anchor || showClosed || session.lifecycle !== 'closed');
+  });
+  const created = createdUnder(own.map(({ session }) => session));
+  const push = (session: WorkSession, depth: number, parent: string | null): void => {
+    rows.push({ kind: 'session', session, depth, parent });
+    for (const owned of activeRooms.filter((candidate) => candidate.ownerId === session.id)) {
+      rows.push(buildRoomRow(map, home, showClosed, owned, depth + 1, session.id));
     }
+    for (const child of created.children.get(session.id) ?? []) push(child, depth + 1, session.id);
+  };
+  for (const { session, depth } of own) {
+    if (!created.placed.has(session.id)) push(session, depth, session.parent);
   }
   for (const room of activeRooms) {
     if (!room.ownerId || !map.sessions.some((session) => session.id === room.ownerId)) {

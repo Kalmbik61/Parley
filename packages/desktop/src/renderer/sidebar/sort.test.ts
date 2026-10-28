@@ -632,6 +632,42 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
 });
 
 // Линии дерева от родителя к дочерним сессиям (`treeGuides`): метки по строкам `cardRows`, рисует их `TreeGuides.tsx`.
+describe('cardRows — сессия под создателем (createdBy)', () => {
+  const map = (list: WorkSession[], rooms: Room[] = []): WindowWorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const s = (id: string, createdBy: string | null = null, patch: Partial<WorkSession> = {}): WorkSession =>
+    makeSession(id, id, { ...(createdBy === null ? {} : { createdBy }), ...patch });
+  const rowId = (row: CardRow): string => (row.kind === 'session' ? row.session.id : row.room.id);
+  const marks = (guides: readonly TreeGuide[]): string[] => guides.map((guide) => `${guide.kind}${guide.column}`).sort();
+
+  it('созданная сессия стоит под создателем после его комнат, с линией; вложенность многоуровневая', () => {
+    const lead = s('s-01');
+    const rows = cardRows(map([lead, s('s-02'), s('s-03', 's-01'), s('s-04', 's-03'), s('s-05')], [{ ...makeRoom('r-01', 'Team'), ownerId: lead.id }]), false);
+    expect(rows.map(rowId)).toEqual(['s-01', 'r-01', 's-03', 's-04', 's-02', 's-05']);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 2, 0, 0]);
+    expect(rows.map((row) => row.parent)).toEqual([null, 's-01', 's-01', 's-03', null, null]);
+    expect(rows.every((row) => row.kind === 'room' || row.session.parent === null)).toBe(true);
+    expect(treeGuides(rows).map(marks)).toEqual([['start0'], ['elbow0', 'pass0'], ['elbow0', 'start1'], ['elbow1'], [], []]);
+  });
+
+  it('создатель удалён, закрыт и спрятан или стоит участником комнаты — сессия на верхнем уровне без линии', () => {
+    expect(cardRows(map([s('s-02', 's-01')]), false).map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null]]);
+
+    const closed = [s('s-01', null, { lifecycle: 'closed' }), s('s-02', 's-01')];
+    const hidden = cardRows(map(closed), false);
+    expect(hidden.map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null]]);
+    expect(treeGuides(hidden).map(marks)).toEqual([[]]);
+    expect(cardRows(map(closed), true).map((row) => [rowId(row), row.depth])).toEqual([['s-01', 0], ['s-02', 1]]);
+
+    const member = cardRows(map([s('s-01'), s('s-02', 's-01')], [{ ...makeRoom('r-01', 'Team'), members: ['s-01'] }]), false);
+    expect(member.map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null], ['r-01', 0, null]]);
+  });
+
+  it('цикл создателей не вешает обход и не прячет строки: сессии цикла на верхнем уровне, хвост — под своим создателем', () => {
+    const rows = cardRows(map([s('s-01', 's-02'), s('s-02', 's-01'), s('s-03', 's-03'), s('s-04', 's-01')]), false);
+    expect(rows.map((row) => [rowId(row), row.depth])).toEqual([['s-01', 0], ['s-04', 1], ['s-02', 0], ['s-03', 0]]);
+  });
+});
+
 describe('treeGuides — линии дерева в карточке', () => {
   const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, lead: members[0] ?? null, ...patch });
   const map = (list: WorkSession[], rooms: Room[] = []): WindowWorkMap => makeWork('w-01', { sessions: list, rooms }).map;

@@ -115,6 +115,11 @@ export interface WorkSession {
   task: string;
   /** Сессия-родитель, если её породил агент; у ручной — null. */
   parent: string | null;
+  /**
+   * Сессия, чей `create_session` завёл эту, — только чтобы сайдбар поставил её под создателем. Ничего не наследует:
+   * ни почту, ни права, ни лимиты, ни бриф. Нет поля или `null` — сессию завели человек, окно, CLI или движок.
+   */
+  createdBy?: string | null;
   /** Сессии, чьи резюме и артефакты попали в бриф. */
   contextFrom: string[];
   lifecycle: SessionLifecycle;

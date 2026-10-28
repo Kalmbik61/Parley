@@ -103,6 +103,8 @@ export interface NewSession {
   label: string;
   task: string;
   parent?: string | null;
+  /** Сессия-создатель (`create_session` агента); без поля — записи как до этого куска. */
+  createdBy?: string;
   contextFrom?: string[];
   /** Роль Claude Code, которой запустится сессия; без неё — обычная сессия. */
   agent?: string | null;
@@ -152,6 +154,7 @@ export function addSession(
     role: init.role ?? (init.agent == null ? null : { source: 'claude', name: init.agent }),
     worktree: null,
     ...(init.workspace === undefined ? {} : { workspace: init.workspace }),
+    ...(init.createdBy === undefined ? {} : { createdBy: init.createdBy }),
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
@@ -174,6 +177,8 @@ export function removeSession(map: WorkMap, letters: LetterTx, sessionId: string
 
   for (const session of map.sessions) {
     if (session.parent === sessionId) session.parent = removed.parent;
+    // Как комната без владельца: сессия удалённого создателя встаёт в сайдбаре на верхний уровень.
+    if (session.createdBy === sessionId) session.createdBy = null;
     if (session.contextFrom.includes(sessionId)) {
       session.contextFrom = session.contextFrom.filter((id) => id !== sessionId);
     }
@@ -697,6 +702,8 @@ function migrateSession(session: Record<string, unknown>): void {
   if (role !== null && (!isRecord(role) || !['builtin', 'claude', 'codex'].includes(String(role['source'])) ||
     typeof role['name'] !== 'string' || role['name'] === '')) throw new Error('invalid session role');
   delete session['agent'];
+  // Создатель только для сайдбара: битое значение читается как «нет создателя», карта из-за него не ломается.
+  if (session['createdBy'] !== undefined && session['createdBy'] !== null && typeof session['createdBy'] !== 'string') delete session['createdBy'];
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
   // Effort уходит в команду, у Codex — в кавычки TOML: значение, не прошедшее токен, не уходит никуда.
