@@ -1,9 +1,10 @@
 /**
  * Вложение «Chat» одним чипом: картинка с готовой миниатюрой (`use-thumbnail.ts`) — самой миниатюрой, всё
  * прочее и картинка без миниатюры (грузится, файла уже нет, больше 20 МБ) — значком и именем файла; полный
- * путь — в `title`. Тот же чип стоит над полем ввода (с крестиком), над полем комнаты и в пузыре промпта ленты
- * (без него). Рамка миниатюры фиксированного размера: высота строки виртуального списка не зависит от пропорций
- * картинки. Длинное имя режется многоточием, а не раздвигает поле и пузырь.
+ * путь — в `title`. Тот же чип стоит над полем ввода (с крестиком), над полем комнаты, в пузыре промпта ленты и в
+ * сообщении человека в комнате (без него; там миниатюра — кнопка, клик открывает картинку, `onOpen`). Рамка миниатюры
+ * фиксированного размера: высота строки виртуального списка не зависит от пропорций картинки. Длинное имя режется
+ * многоточием, а не раздвигает поле и пузырь.
  *
  * Файл-контекст браузера (`drops/context/*.md`, спека браузера 4.5) — значок по виду и метка из имени файла; у
  * элемента и аннотаций — ещё миниатюра соседнего `.png`: человек видит снимок до отправки.
@@ -16,6 +17,7 @@ import { isImagePath } from '../../shared/image-path.js';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { contextAttachment } from './context-attachments.js';
+import type { ImagePreviewTarget } from './ImagePreview.js';
 import { useThumbnail } from './use-thumbnail.js';
 
 export interface AttachmentChipProps {
@@ -26,6 +28,8 @@ export interface AttachmentChipProps {
   size: 'composer' | 'feed';
   /** Есть — у чипа кнопка «убрать»: так стоит чип над полем ввода. */
   onRemove?: () => void;
+  /** Есть — миниатюра картинки кнопкой: клик открывает картинку (`open-attachment.ts`). Так стоит чип в ленте. */
+  onOpen?: (target: ImagePreviewTarget, opener: HTMLElement) => void;
 }
 
 /** Значок файла-контекста по виду. */
@@ -45,7 +49,7 @@ function fileName(path: string): string {
 const PILL =
   'inline-flex min-w-0 max-w-[min(16rem,100%)] items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground';
 
-export function AttachmentChip({ path, bridge, size, onRemove }: AttachmentChipProps): JSX.Element {
+export function AttachmentChip({ path, bridge, size, onRemove, onOpen }: AttachmentChipProps): JSX.Element {
   const name = fileName(path);
   const image = isImagePath(path);
   const context = contextAttachment(path);
@@ -89,7 +93,20 @@ export function AttachmentChip({ path, bridge, size, onRemove }: AttachmentChipP
           size === 'feed' ? 'h-[120px] w-[160px]' : 'size-14',
         )}
       >
-        <img src={thumbnail} alt={name} title={path} className="size-full object-cover" />
+        {onOpen === undefined ? (
+          <img src={thumbnail} alt={name} title={path} className="size-full object-cover" />
+        ) : (
+          <button
+            type="button"
+            aria-label={name}
+            aria-haspopup="dialog"
+            title={path}
+            className="size-full cursor-zoom-in"
+            onClick={(event) => onOpen({ path, label: name, thumbnail }, event.currentTarget)}
+          >
+            <img src={thumbnail} alt="" className="size-full object-cover" />
+          </button>
+        )}
         {onRemove === undefined ? null : (
           <button
             type="button"

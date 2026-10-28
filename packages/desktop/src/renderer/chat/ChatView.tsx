@@ -106,6 +106,8 @@ import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-
 import { FeedList } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { pasteClipboardImage } from './paste-image.js';
+import { isSlashCommand, withQuote } from './reply.js';
+import { ReplyPlate } from './ReplyPlate.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
@@ -280,12 +282,20 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     });
   }, [items, sessionKey]);
 
+  // Цитата Reply (`reply.ts`) — своя у сессии вида: другая сессия во вкладке её не видит.
+  const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | null>(null);
+  const quote = replyTo?.sessionKey === sessionKey ? replyTo.quote : null;
+
   // Поле и вложения очищаются сразу; сообщение — в очередь окна (`chat-outbox.ts`): серым сразу, уходит строго по одному.
   const submit = (typed: string, paths: readonly string[]): void => {
     const { setDraft, setAttachments } = useChatUiStore.getState();
-    const text = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
+    const composed = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
+    // Слэш-команду CLI узнаёт только в начале строки: цитата перед ней сломала бы её — команда уходит как есть, плашка ждёт.
+    const quoting = quote !== null && !isSlashCommand(typed);
+    const text = quoting ? withQuote(quote, composed) : composed;
     setDraft(sessionKey, '');
     if (paths.length > 0) setAttachments(sessionKey, []);
+    if (quoting) setReplyTo(null);
     chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
   };
 
@@ -405,6 +415,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       resend: (text: string) => {
         chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
       },
+      reply: (text: string) => setReplyTo({ sessionKey, quote: text }),
     }),
     [bridge, sessionKey, workKey, tab.id, sendDeps],
   );
@@ -491,6 +502,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             </Button>
           </div>
         ) : null}
+        {quote === null ? null : <ReplyPlate quote={quote} onRemove={() => setReplyTo(null)} />}
         <Composer
           history={history}
           source={suggestionSource}

@@ -6,7 +6,11 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { openInBrowserTab } from '../../browser/store.js';
 import { Decisions, type DecisionsProps } from './Decisions.js';
+
+// Клик по ссылке — вкладка встроенного браузера (`RoomMarkdown`): раскладки в тесте нет, вызов только записывается.
+vi.mock('../../browser/store.js', () => ({ openInBrowserTab: vi.fn() }));
 
 afterEach(cleanup);
 
@@ -80,7 +84,7 @@ describe('Decisions — строчный Markdown', () => {
     expect(item.querySelector('br')).toBeNull();
   });
 
-  it('ссылка http(s) — наружу с preventDefault; javascript: и почта — текстом', () => {
+  it('ссылка http(s) — во вкладку браузера Parley с preventDefault; javascript: и почта — текстом', () => {
     const { item, onOpenExternal } = renderPlate(
       '[доки](https://example.com/d), [x](javascript:alert(1)), dev@example.com и https://example.org/a.',
     );
@@ -92,8 +96,9 @@ describe('Decisions — строчный Markdown', () => {
     expect(item.querySelector('[href^="javascript:"], [href^="mailto:"]')).toBeNull();
     expect(flat(item)).toContain('x, dev@example.com');
     expect(clickPrevented(screen.getByRole('link', { name: 'доки' }))).toBe(true);
-    expect(onOpenExternal).toHaveBeenCalledTimes(1);
-    expect(onOpenExternal).toHaveBeenCalledWith('https://example.com/d');
+    expect(openInBrowserTab).toHaveBeenCalledTimes(1);
+    expect(openInBrowserTab).toHaveBeenCalledWith('https://example.com/d');
+    expect(onOpenExternal).not.toHaveBeenCalled();
   });
 
   it('сырой HTML — текстом, не элементом', () => {

@@ -11,13 +11,16 @@
  * монтирует ни терминал, ни подписку на ленту.
  */
 
+import { useMemo } from 'react';
 import type { WorkSession } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { PanelHost } from '../../browser/panel/PanelHost.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
+import { FilePathLinksContext, type FilePathLinks } from '../../components/rooms/FilePathText.js';
 import { effectiveView, useFeedAvailability, useHostHasFeed, useSessionStarted, type TerminalTab } from '../../lib/feed-view.js';
+import { sessionCwd } from '../../terminal/links.js';
 import type { SendWithToastDeps } from '../../terminal/send.js';
 
 export interface TerminalBodyProps {
@@ -36,24 +39,29 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
   const available = useFeedAvailability()(session.provider);
   const started = useSessionStarted(sessionRef);
   const view = effectiveView(tab, available, started);
+  // Пути в тексте ленты «Chat» (⌘/Ctrl-ссылки, `FilePathText`): относительные — от папки сессии, как в терминале.
+  const cwd = sessionCwd(session, sessionRef.projectPath);
+  const pathLinks = useMemo<FilePathLinks>(() => ({ bridge, workKey, cwd }), [bridge, workKey, cwd]);
   if (view === null) return <div data-testid="tab-view-pending" className="h-full w-full" />;
   // Панель браузера сессии (спека браузера 4.11) стоит справа от вида — и от Chat, и от терминала (его поверхность в слое
   // уступает ей ширину, `TerminalSurface#reserveAnchor`).
   return (
     <PanelHost workKey={workKey} owner={{ kind: 'session', sessionId: session.id }}>
       {view === 'chat' ? (
-        <ChatView
-          workKey={workKey}
-          tab={tab}
-          sessionRef={sessionRef}
-          visible={active}
-          live={session.lifecycle === 'active'}
-          bridge={bridge}
-          sendDeps={sendDeps}
-          provider={session.provider}
-          storedModel={session.model ?? null}
-          storedEffort={session.effort ?? null}
-        />
+        <FilePathLinksContext.Provider value={pathLinks}>
+          <ChatView
+            workKey={workKey}
+            tab={tab}
+            sessionRef={sessionRef}
+            visible={active}
+            live={session.lifecycle === 'active'}
+            bridge={bridge}
+            sendDeps={sendDeps}
+            provider={session.provider}
+            storedModel={session.model ?? null}
+            storedEffort={session.effort ?? null}
+          />
+        </FilePathLinksContext.Provider>
       ) : (
         <div data-testid="terminal-body" className="flex h-full w-full flex-col">
           {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} provider={session.provider} micTargetId={`terminal:${refKey(sessionRef)}`} /> : null}

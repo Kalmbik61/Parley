@@ -33,6 +33,7 @@ import type { SendWithToastDeps } from '../terminal/send.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
 import { CHAT_RETRY_MS, chatOutbox } from './chat-outbox.js';
+import { replyQuote, withQuote } from './reply.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 import { resetThumbnailCacheForTests } from './use-thumbnail.js';
@@ -1629,6 +1630,40 @@ describe('ChatView — очередь отправки', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('Reply у ответа модели: цитата — плашкой над полем, уходит блоком «> …» перед текстом, в пузыре — свёрнутой; × убирает', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    const answer = `${'длинный ответ '.repeat(30)}конец`;
+    setFeed([prompt('p1', 'вопрос'), text('t1', answer), turn('u1')]);
+    const reply = (): void => {
+      fireEvent.click(within(screen.getByTestId('chat-text')).getByRole('button', { name: S.chat.actions.reply }));
+    };
+    reply();
+    const quote = replyQuote(answer, '');
+    expect(quote.endsWith('…')).toBe(true);
+    expect(screen.getByTestId('reply-plate').textContent).toBe(quote);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.reply.remove }));
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+
+    reply();
+    // Слэш-команда уходит без цитаты, плашка остаётся до следующего сообщения.
+    type('/compact');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['/compact']);
+    expect(screen.getByTestId('reply-plate').textContent).toBe(quote);
+    type('уточни');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['/compact', withQuote(quote, 'уточни')]);
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+
+    setFeed([prompt('p1', 'вопрос'), text('t1', answer), turn('u1'), prompt('p2', withQuote(quote, 'уточни'))], 2);
+    const bubble = screen.getAllByTestId('chat-prompt').at(-1) as HTMLElement;
+    expect(within(bubble).getByTestId('chat-prompt-quote').textContent).toBe(quote);
+    expect(within(bubble).getByTestId('chat-prompt-quote').className).toContain('line-clamp-3');
   });
 
   it('Send again под своим сообщением — тот же текст уходит через очередь', async () => {

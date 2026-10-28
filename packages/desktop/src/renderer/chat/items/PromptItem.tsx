@@ -4,8 +4,10 @@
  * оно ждёт в очереди CLI, пока не придёт настоящий промпт с тем же текстом (решение 8).
  *
  * Хвостовые упоминания `@"путь"` — вложения, которые окно дописало при отправке (`attachments.ts`): в
- * пузыре они над текстом чипами (картинка — миниатюрой), самих путей в тексте нет. Снимок файла-контекста
- * браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его миниатюра — в чипе `.md`.
+ * пузыре они над текстом чипами (картинка — миниатюрой, клик открывает её: `open-attachment.ts`), самих путей в
+ * тексте нет. У Codex вложения уходят списком «Attachments:» (`components/rooms/attachments.ts`) — он разбирается
+ * так же. Снимок файла-контекста браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его
+ * миниатюра — в чипе `.md`. Цитата Reply (`> …` в начале, `chat/reply.ts`) — над текстом, свёрнутая до трёх строк.
  *
  * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
  * `waiting` (ждёт отправки окном: пока не ушло, у него «Send now» и ×; в полёте — «Sending…») и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
@@ -21,9 +23,12 @@ import { cn } from '../../lib/cn.js';
 import { Button } from '../../ui/button.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { AttachmentChip } from '../AttachmentChip.js';
+import { splitRoomAttachments } from '../../components/rooms/attachments.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { pairContextAttachments } from '../context-attachments.js';
+import { useOpenAttachmentImage } from '../open-attachment.js';
+import { splitQuote } from '../reply.js';
 import { MessageActions } from './MessageActions.js';
 
 export interface PromptItemProps {
@@ -46,8 +51,13 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
   const env = useContext(ChatEnvContext);
   const bridge = env?.bridge ?? null;
   const resend = env?.resend;
+  const openImage = useOpenAttachmentImage();
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
-  const { text: body, attachments } = splitAttachments(text);
+  // Вложения Claude — хвостовые `@"путь"`; у Codex окно шлёт их списком «Attachments:» (`composeRoomMessage`).
+  const mentions = splitAttachments(text);
+  const { text: rest, attachments } = mentions.attachments.length > 0 ? mentions : splitRoomAttachments(mentions.text);
+  // Цитата Reply (`reply.ts`) — в начале текста блоком `> …`: в пузыре она свёрнута до трёх строк.
+  const { quote, text: body } = splitQuote(rest);
   const shown = pairContextAttachments(attachments);
   const grey = state !== undefined;
   return (
@@ -71,10 +81,25 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
         {shown.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
             {shown.map((path, index) => (
-              <AttachmentChip key={`${index}:${path}`} path={path} bridge={bridge} size="feed" />
+              <AttachmentChip
+                key={`${index}:${path}`}
+                path={path}
+                bridge={bridge}
+                size="feed"
+                {...(openImage === null ? {} : { onOpen: openImage })}
+              />
             ))}
           </div>
         ) : null}
+        {quote === null ? null : (
+          <span
+            data-testid="chat-prompt-quote"
+            title={quote}
+            className="line-clamp-3 whitespace-pre-wrap border-l-[3px] border-muted-foreground/50 pl-2 text-xs opacity-75 [overflow-wrap:anywhere]"
+          >
+            {quote}
+          </span>
+        )}
         {body === '' ? null : <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</span>}
         {images > 0 ? (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">

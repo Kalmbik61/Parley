@@ -10,8 +10,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
+import { S } from '../../../shared/strings.js';
+import { openInBrowserTab } from '../../browser/store.js';
 import type { LetterView } from '../../lib/mail-view.js';
 import { Letter } from './Letter.js';
 
@@ -20,6 +22,9 @@ vi.mock('react-markdown', async (importOriginal) => {
   const original = await importOriginal<typeof import('react-markdown')>();
   return { ...original, default: vi.fn(original.default) };
 });
+
+// Клик по ссылке — вкладка встроенного браузера: раскладки в тесте нет, вызов только записывается.
+vi.mock('../../browser/store.js', () => ({ openInBrowserTab: vi.fn() }));
 
 afterEach(cleanup);
 
@@ -54,6 +59,26 @@ describe('Letter (тест 5)', () => {
     const code = container.querySelector('pre code');
     expect(code).not.toBeNull();
     expect(code?.textContent).toContain('console.log(1)');
+    // Тело — RoomMarkdown: у блока кода Copy, как в комнате и в «Chat».
+    expect(screen.getByRole('button', { name: S.chat.actions.copy })).toBeTruthy();
+  });
+
+  it('ссылки — правила комнаты: http(s) открывает вкладку браузера Parley, javascript: — текст без href', () => {
+    const onOpenExternal = vi.fn();
+    const { container } = render(
+      <Letter letter={letter({ text: '[доки](https://example.com/d) и [x](javascript:alert(1))' })} onOpenExternal={onOpenExternal} />,
+    );
+    fireEvent.click(screen.getByRole('link', { name: 'доки' }));
+    expect(openInBrowserTab).toHaveBeenCalledWith('https://example.com/d');
+    expect(onOpenExternal).not.toHaveBeenCalled();
+    expect(container.querySelector('[href^="javascript:"]')).toBeNull();
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+  });
+
+  it('упоминание — чип с тегом сессии, путь к файлу — кандидат в ⌘-ссылку', () => {
+    const { container } = render(<Letter letter={letter({ text: '@s02 см. `src/a.ts:3`' })} onOpenExternal={() => {}} />);
+    expect(container.querySelector('[data-mention="s-02"]')?.textContent).toBe('@S02');
+    expect(container.querySelector('[data-file-path]')?.textContent).toBe('src/a.ts:3');
   });
 });
 

@@ -12,8 +12,9 @@
  * Правила безопасности — те же, что у письма (`mail/Letter.tsx`) и у превью файлов
  * (`files/preview/MarkdownPreview.tsx`), агент не должен получить из комнаты ни исполнение, ни переход окна:
  *  — `rehype-raw` нет: сырой HTML попадает в дерево узлом `html` и печатается текстом;
- *  — ссылка активна только по `http(s)`, клик — `onOpenExternal` с `preventDefault` (переход в самом окне
- *    открыл бы чужой домен в песочнице). `javascript:`, `file:`, `data:`, `mailto:`, относительный путь,
+ *  — ссылка активна только по `http(s)`, клик — вкладка встроенного браузера Parley (`openInBrowserTab`, как ⌘-клик
+ *    в терминале) с `preventDefault` (переход в самом окне открыл бы чужой домен в песочнице); правый клик — меню:
+ *    браузер Parley, системный браузер (`onOpenExternal`) и «Copy link». `javascript:`, `file:`, `data:`, `mailto:`, относительный путь,
  *    `//хост` и `#якорь` — текст без `href`. Адреса, которые связывает сам `remark-gfm` (`https://…`, `www.…`,
  *    почта), идут тем же путём;
  *  — `<img>` нет: CSP окна пускает только `img-src 'self' data: blob:`, удалённая картинка не загрузилась бы.
@@ -35,6 +36,12 @@
  * стоит под `MarkdownBoundary` — вместо Markdown сообщение показывается сырым текстом (`whitespace-pre-wrap`), а вкладка
  * не падает; новый текст — новая попытка.
  *
+ * У блока кода — кнопка Copy (`CodeBlock`): видна при наведении и фокусе, кладёт в буфер код без ```, после — галочка
+ * «Copied», как у `chat/items/MessageActions.tsx`. Подписи у неё нет, только `aria-label`: текст сообщения не меняется.
+ *
+ * Пути к файлам в тексте и в строчном коде (`src/foo.ts:12`) — ссылки только с ⌘/Ctrl и только найденные main в корне
+ * работы (`FilePathText`, `remarkFilePaths`); без модификатора — текст.
+ *
  * Типографика — потомковые селекторы на корне, как в `MarkdownPreview.tsx`, по токенам темы: светлая и тёмная.
  *
  * Строчный вид (`inline`) — для превью в одну строку, плашка решений `mail/Decisions.tsx` под `line-clamp-2`:
@@ -43,19 +50,48 @@
  * кода разворачиваются в свой текст (`allowedElements` + `unwrapDisallowed`), перенос строки — пробел, а не `<br>`.
  */
 
-import { Children, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import {
+  Children,
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
+import { Check, Copy } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
+import { openInBrowserTab } from '../../browser/store.js';
+import { COPIED_MS } from '../../chat/items/MessageActions.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../ui/dropdown-menu.js';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
 import { MarkdownBoundary } from '../MarkdownBoundary.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
-import { HUMAN_MENTION_ATTR, MENTION_ATTR, remarkPluginsFor } from './room-remark.js';
+import { FilePathText } from './FilePathText.js';
+import {
+  FILE_COL_ATTR,
+  FILE_LINE_ATTR,
+  FILE_PATH_ATTR,
+  HUMAN_MENTION_ATTR,
+  MENTION_ATTR,
+  remarkPluginsFor,
+  withFilePaths,
+} from './room-remark.js';
 
 export interface RoomMarkdownProps {
   text: string;
   /** Ярлык участника для чипа: `S02 бэкенд`; неизвестной сессии — `S02`. */
   labelOf: (sessionId: string) => string | null;
+  /** Системный браузер — пункт меню правого клика по ссылке; обычный клик открывает вкладку браузера Parley. */
   onOpenExternal: (url: string) => void;
   /** Строчный вид для превью в одну строку (плашка решений): блоки сворачиваются в текст, корень — `span`. */
   inline?: boolean;
@@ -122,6 +158,8 @@ function ExternalLink({
   openExternal: (url: string) => void;
   children: ReactNode;
 }): JSX.Element {
+  // Точка правого клика: меню встаёт у курсора, как меню ссылки терминала (`terminal/LinkMenu.tsx`).
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   return (
     <InsideLink.Provider value>
       <a
@@ -130,13 +168,96 @@ function ExternalLink({
         title={url}
         onClick={(event) => {
           event.preventDefault();
-          openExternal(url);
+          openInBrowserTab(url);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
         }}
         className="text-primary underline"
       >
         {children}
       </a>
+      {/* Порталом в body: строка виртуальной ленты сдвинута `transform`, и `position: fixed` якоря считался бы от неё. */}
+      {menu === null
+        ? null
+        : createPortal(
+            <DropdownMenu
+              open
+              modal={false}
+              onOpenChange={(open) => (open ? undefined : setMenu(null))}
+            >
+              <DropdownMenuTrigger asChild>
+                <span
+                  aria-hidden
+                  style={{ position: 'fixed', left: menu.x, top: menu.y, width: 0, height: 0 }}
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" data-testid="room-link-menu">
+                <DropdownMenuItem onSelect={() => openInBrowserTab(url)}>
+                  {S.links.openInBrowser}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openExternal(url)}>
+                  {S.links.openInSystemBrowser}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    navigator.clipboard
+                      .writeText(url)
+                      .catch((error: unknown) => console.warn('[parley] clipboard', error));
+                  }}
+                >
+                  {S.links.copyLink}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>,
+            document.body,
+          )}
     </InsideLink.Provider>
+  );
+}
+
+/** Текст узла hast со всеми потомками: так блок кода отдаёт Copy свой код, а не разметку. */
+function hastText(node: ExtraProps['node']): string {
+  if (node === undefined) return '';
+  return node.children
+    .map((child) =>
+      child.type === 'text' ? child.value : child.type === 'element' ? hastText(child) : '',
+    )
+    .join('');
+}
+
+/** Блок кода с Copy в правом верхнем углу; `code` — его текст без ``` и последнего перевода строки. */
+function CodeBlock({ code, children }: { code: string; children: ReactNode }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const label = copied ? S.chat.actions.copied : S.chat.actions.copy;
+  return (
+    <div data-code-block="" className="group/code relative">
+      <pre>{children}</pre>
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        onClick={() => {
+          navigator.clipboard.writeText(code).then(
+            () => setCopied(true),
+            (error: unknown) => console.warn('[parley] clipboard', error),
+          );
+        }}
+        className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-sm bg-background/85 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100 motion-reduce:transition-none"
+      >
+        {copied ? (
+          <Check className="size-3.5" aria-hidden="true" />
+        ) : (
+          <Copy className="size-3.5" aria-hidden="true" />
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -176,10 +297,28 @@ function markdownComponents(openExternal: (url: string) => void): Components {
       );
     },
     img: ({ src, alt }) => <RoomImage src={src} alt={alt} openExternal={openExternal} />,
-    // Единственные `span` в дереве — упоминания из плагина (`room-remark.ts`): сессии и человека.
+    // Строчный вид блоков кода не оставляет (`INLINE_ELEMENTS`), так что Copy — только у блока в ленте.
+    pre: ({ node, children }) => (
+      <CodeBlock code={hastText(node).replace(/\n$/, '')}>{children}</CodeBlock>
+    ),
+    // Единственные `span` в дереве — из плагинов (`room-remark.ts`): упоминания сессии и человека и кандидаты в путь.
     span: ({ node, children }) => {
       const sessionId = node?.properties[MENTION_ATTR];
       if (typeof sessionId === 'string') return <MentionChip sessionId={sessionId} />;
+      const path = node?.properties[FILE_PATH_ATTR];
+      if (typeof path === 'string') {
+        const line = node?.properties[FILE_LINE_ATTR];
+        const col = node?.properties[FILE_COL_ATTR];
+        return (
+          <FilePathText
+            path={path}
+            {...(typeof line === 'string' ? { line: Number(line) } : {})}
+            {...(typeof col === 'string' ? { col: Number(col) } : {})}
+          >
+            {children}
+          </FilePathText>
+        );
+      }
       return node?.properties[HUMAN_MENTION_ATTR] === undefined ? (
         <span>{children}</span>
       ) : (
@@ -204,7 +343,7 @@ const ROOT_CLASS = [
   'min-w-0 text-sm leading-[1.55] break-words [overflow-wrap:anywhere] [text-wrap:pretty]',
   // Блоки: между абзацами небольшие отступы, а у первого и последнего блока снаружи их нет — текст сидит
   // в сообщении и в карточке решения ровно там, где сидел обычный.
-  '[&>:first-child]:mt-0 [&>:last-child]:mb-0 [&_p]:my-1.5',
+  '[&>:first-child]:mt-0 [&>:last-child]:mb-0 [&>:first-child>pre]:mt-0 [&>:last-child>pre]:mb-0 [&_p]:my-1.5',
   // Заголовки: полужирные и умеренные — лента комнаты разговор, а не документ.
   '[&_:is(h1,h2,h3,h4,h5,h6)]:mt-3 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold',
   '[&_h1]:text-base [&_h2]:text-[15px]',
@@ -246,7 +385,12 @@ export function RoomMarkdown({
       // не ошибка вкладки.
       <MarkdownBoundary text={text}>
         <ReactMarkdown
-          remarkPlugins={remarkPluginsFor(inline, humanChips, codePaths)}
+          // Пути к файлам (⌘/Ctrl-ссылки, `FilePathText`) — только в ленте: строчный вид — превью, по нему не кликают.
+          remarkPlugins={
+            inline
+              ? remarkPluginsFor(true, humanChips)
+              : withFilePaths(remarkPluginsFor(false, humanChips, codePaths))
+          }
           components={components}
           allowedElements={inline ? INLINE_ELEMENTS : undefined}
           unwrapDisallowed={inline}

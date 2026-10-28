@@ -15,6 +15,7 @@ import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import { ROOMS_MAIL_FEATURE, type LiveMetrics, type LiveTask, type MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
+import { openInBrowserTab } from '../../browser/store.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { emptyLayout } from '../../layout/tree.js';
 import { S } from '../../../shared/strings.js';
@@ -25,10 +26,17 @@ import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeMailEvent, makeMailRoom, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import { composeRoomMessage } from './attachments.js';
+import { FilePathLinksContext } from './FilePathText.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
 import { roomOutbox } from './room-outbox.js';
 
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
+// Клик по ссылке в ленте — вкладка встроенного браузера (`RoomMarkdown`): вызов только записывается.
+vi.mock('../../browser/store.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../browser/store.js')>()),
+  openInBrowserTab: vi.fn(),
+}));
 
 const PROJECT = '/tmp/proj';
 const WORK_ID = 'w-01';
@@ -532,7 +540,8 @@ describe('RoomPanel — пустая комната и блок Decisions', () =
       ),
     ).toEqual(['s-02', 's-03']);
     expect(fireEvent.click(within(item).getByRole('link', { name: 'ревью' }))).toBe(false);
-    expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/pr');
+    expect(openInBrowserTab).toHaveBeenCalledWith('https://example.com/pr');
+    expect(initial.onOpenExternal).not.toHaveBeenCalled();
   });
 });
 
@@ -670,12 +679,36 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(messageRow('m-1').querySelector('code')?.textContent).toBe('@s03');
   });
 
-  it('ссылка http(s) открывается в системном браузере, а не в окне', () => {
+  it('вложения человека («Attachments:» от поля ввода) — чипами в пузыре, картинки миниатюрами-кнопками; у агента — текст', async () => {
+    const shots = ['/h/.parley/desktop/drops/a.png', '/h/Снимок экрана 2026-10-28 в 10.00.00.png', '/h/notes.txt'];
+    const text = composeRoomMessage('смотри', shots);
+    const entry = entryOf({ messages: [message('m-1', { text }), message('m-2', { from: 's-01', text })] });
+    const fake = createFakeBridge();
+    fake.setThumbnail(shots[0] as string, 'data:image/png;base64,AAAA');
+    fake.setThumbnail(shots[1] as string, 'data:image/png;base64,BBBB');
+    render(
+      <FilePathLinksContext.Provider value={{ bridge: fake, workKey: 'w', cwd: PROJECT }}>
+        <RoomPanel {...props(entry)} />
+      </FilePathLinksContext.Provider>,
+    );
+    await act(async () => {});
+    const human = messageRow('m-1');
+    expect(human.querySelector('[data-room-markdown]')?.textContent).toBe('смотри');
+    expect(Array.from(human.querySelectorAll('[data-testid="chat-attachment"]'), (chip) => chip.getAttribute('data-path'))).toEqual(shots);
+    expect(within(human).getAllByRole('button', { name: /\.png$/ })).toHaveLength(2);
+    expect(within(human).getByText('notes.txt')).toBeTruthy();
+    const agent = messageRow('m-2');
+    expect(agent.querySelector('[data-testid="chat-attachment"]')).toBeNull();
+    expect(agent.textContent).toContain('Attachments:');
+  });
+
+  it('ссылка http(s) открывается во вкладке браузера Parley, а не в окне', () => {
     const { initial } = renderPanel(entryOf({ messages: [message('m-1', { text: 'см. https://example.com/doc.' })] }));
     const link = within(messageRow('m-1')).getByRole('link', { name: 'https://example.com/doc' });
     const notPrevented = fireEvent.click(link);
     expect(notPrevented).toBe(false);
-    expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/doc');
+    expect(openInBrowserTab).toHaveBeenCalledWith('https://example.com/doc');
+    expect(initial.onOpenExternal).not.toHaveBeenCalled();
   });
 
   it('точка «непрочитано» — у сообщения агента, которое человек не прочёл; у прочитанного и своего её нет', () => {
@@ -1557,6 +1590,32 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     fireEvent.input(editor());
     fireEvent.keyDown(editor(), { key: 'Enter' });
   }
+
+  it('Reply у сообщения агента: выделенный фрагмент — плашкой над полем, уходит «> …» перед текстом; у человека Reply нет', async () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { from: 's-01', text: 'Первый абзац ответа.\n\nВторой абзац с деталями.' }),
+          message('m-2', { from: 'human', text: 'моё' }),
+        ],
+      }),
+    );
+    expect(within(messageRow('m-2')).queryByRole('button', { name: S.chat.actions.reply })).toBeNull();
+    const paragraph = Array.from(messageRow('m-1').querySelectorAll('p')).find((p) => p.textContent?.startsWith('Второй')) as HTMLElement;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.click(within(messageRow('m-1')).getByRole('button', { name: S.chat.actions.reply }));
+    expect(screen.getByTestId('reply-plate').textContent).toBe('Второй абзац с деталями.');
+    document.getSelection()?.removeAllRanges();
+    typeAndSend('Почему?');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    expect((bridge.calls.find((call) => call.method === 'rooms.send')?.params as { text: string }).text).toBe(
+      '> Второй абзац с деталями.\n\nПочему?',
+    );
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+  });
 
   it('письмо без упоминаний уходит всем: rooms.send с to: [], kind note, roomId и работой', async () => {
     renderPanel(entryOf());
@@ -2543,7 +2602,7 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     expect(card().className).toContain('max-w-[680px]');
   });
 
-  it('текст решения — Markdown (GFM): список и жирный — элементами, чип в пункте, ссылка уходит в системный браузер', () => {
+  it('текст решения — Markdown (GFM): список и жирный — элементами, чип в пункте, ссылка уходит во вкладку браузера Parley', () => {
     const { initial } = renderPanel(
       withProposal({
         text: '**План**\n\n- @s02 — код\n- @s03 — [ревью](https://example.com/review)\n\n`@s02` не чип',
@@ -2563,7 +2622,8 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     expect(body.querySelector('p code')?.textContent).toBe('@s02');
     const notPrevented = fireEvent.click(within(card()).getByRole('link', { name: 'ревью' }));
     expect(notPrevented).toBe(false);
-    expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/review');
+    expect(openInBrowserTab).toHaveBeenCalledWith('https://example.com/review');
+    expect(initial.onOpenExternal).not.toHaveBeenCalled();
   });
 });
 

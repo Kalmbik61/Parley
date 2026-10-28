@@ -103,4 +103,19 @@ describe('AttachmentChip', () => {
     render(<AttachmentChip path="/h/notes/element-x-0001.md" bridge={bridge} size="composer" />);
     expect(screen.getByTestId('chat-attachment').hasAttribute('data-context-kind')).toBe(false);
   });
+
+  it('миниатюра в ленте с onOpen — кнопка: клик отдаёт путь, имя и миниатюру; без миниатюры кнопки нет', async () => {
+    const bridge = createFakeBridge();
+    bridge.setThumbnail('/h/shot.png', PNG);
+    const onOpen = vi.fn();
+    const view = render(<AttachmentChip path="/h/shot.png" bridge={bridge} size="feed" onOpen={onOpen} />);
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: 'shot.png' });
+    fireEvent.click(button);
+    expect(onOpen).toHaveBeenCalledWith({ path: '/h/shot.png', label: 'shot.png', thumbnail: PNG }, button);
+
+    view.rerender(<AttachmentChip path="/h/missing.png" bridge={bridge} size="feed" onOpen={onOpen} />);
+    await act(async () => {});
+    expect(screen.queryByRole('button')).toBeNull();
+  });
 });

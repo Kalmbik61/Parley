@@ -11,7 +11,9 @@ import { useFeedUnavailableReason } from '../lib/feed-view.js';
  * методов — подпись модели простым текстом («Stop» ушёл в поле ввода).
  * Левее них, пока в ленте есть работающие карточки агентов, — «N agents running» (кусок 4b): клик ведёт ленту к первой из
  * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала. Правее всего — кнопка
- * «Browser» панели браузера сессии (`browser/panel/PanelToggle.tsx`, этап B2).
+ * «Browser» панели браузера сессии (`browser/panel/PanelToggle.tsx`, этап B2). По центру — где человек: тег и ярлык
+ * сессии, как в строке сайдбара (`sessionRowLabel`); длинный обрезается многоточием с полным текстом в подсказке и
+ * занимает только свободное место между соседями: на узкой вкладке пропадает она, а не модель (ярлык виден во вкладке).
  */
 
 import type { ReactNode } from 'react';
@@ -21,6 +23,7 @@ import type { EffortOption, LiveMetrics, ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
+import { sessionRowLabel } from '../lib/participant.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { useWorksStore } from '../store/works.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
@@ -222,6 +225,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
   const tab = found?.group.tabs[found.index];
   const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
   const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
+  const title = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -252,7 +256,9 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </ToggleGroup>
       </span>
       {session && entry ? <RoleChip cwd={session.worktree?.path ?? entry.projectPath} revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
-      <span className="min-w-0 flex-1" />
+      <span data-testid="chat-toolbar-title" title={title ?? undefined} className="min-w-0 flex-1 truncate text-center text-xs font-medium">
+        {title}
+      </span>
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}
       {agents === undefined ? null : (

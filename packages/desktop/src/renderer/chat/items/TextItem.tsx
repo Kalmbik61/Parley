@@ -3,21 +3,25 @@
  * (правила ссылок и HTML — `lib/markdown-links.ts`), ссылки открываются в браузере человека. Упоминаний
  * сессий в ответе модели нет — `labelOf` пустой. Пока текст пишется (`streaming`), за ним мигает
  * курсор; обрезанный хостом текст — с пометкой. Дописанный кусок — с Copy (исходный Markdown, спека 2026-10-16,
- * 3.1); пока пишется — без строки действий.
+ * 3.1) и Reply (выделенный в нём фрагмент или начало — цитатой над полем ввода, `chat/reply.ts`); пока пишется — без
+ * строки действий.
  */
 
+import { useRef } from 'react';
 import type { FeedText } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { RoomMarkdown } from '../../components/rooms/RoomMarkdown.js';
 import { useChatEnv } from '../chat-env.js';
+import { replyQuote, selectedTextIn } from '../reply.js';
 import { MessageActions } from './MessageActions.js';
 
 const noLabel = (): null => null;
 
 export function TextItem({ item }: { item: FeedText }): JSX.Element {
-  const { bridge } = useChatEnv();
+  const { bridge, reply } = useChatEnv();
+  const rootRef = useRef<HTMLDivElement>(null);
   return (
-    <div data-testid="chat-text" className="group min-w-0 text-sm [overflow-wrap:anywhere]">
+    <div ref={rootRef} data-testid="chat-text" className="group min-w-0 text-sm [overflow-wrap:anywhere]">
       <RoomMarkdown text={item.text} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
       {item.streaming ? (
         <span
@@ -28,7 +32,13 @@ export function TextItem({ item }: { item: FeedText }): JSX.Element {
         />
       ) : null}
       {item.truncated === true ? <p className="m-0 mt-1 text-xs text-[var(--status-warning-text)]">{S.chat.textTruncated}</p> : null}
-      {item.streaming ? null : <MessageActions copyText={item.text} align="start" />}
+      {item.streaming ? null : (
+        <MessageActions
+          copyText={item.text}
+          align="start"
+          {...(reply === undefined ? {} : { onReply: () => reply(replyQuote(item.text, selectedTextIn(rootRef.current))) })}
+        />
+      )}
     </div>
   );
 }
