@@ -4,7 +4,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
-import { SWARM_ROLES, SWARM_STATUSES, isSwarmTerminal } from './swarms.js';
+import { SWARM_ROLES, SWARM_STATUSES, isSwarmTag, isSwarmTerminal } from './swarms.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
@@ -712,7 +712,7 @@ function migrateRoom(room: unknown, sessions: WorkSession[]): void {
  */
 function migrateSwarm(swarm: unknown, map: WorkMap): boolean {
   if (!isRecord(swarm)) return false;
-  if (typeof swarm['id'] !== 'string' || swarm['id'] === '' || typeof swarm['tag'] !== 'string' ||
+  if (typeof swarm['id'] !== 'string' || swarm['id'] === '' || !isSwarmTag(swarm['tag']) ||
     typeof swarm['objective'] !== 'string' || typeof swarm['queen'] !== 'string' || typeof swarm['createdAt'] !== 'string' ||
     !(SWARM_STATUSES as readonly string[]).includes(String(swarm['status'])) || !Array.isArray(swarm['members'])) return false;
   const createdAt = swarm['createdAt'];
