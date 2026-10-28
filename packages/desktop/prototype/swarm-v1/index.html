@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Parley: рой v1, кликабельный прототип</title>
+<link rel="icon" href="data:,">
+<!--
+  Прототип «Рой v1» (спека docs/specs/2026-10-28-swarm-v1-design.md). Кликабельная картинка, не код приложения.
+  Самодостаточный: без внешних загрузок, шрифт системный, один файл. Формат и панель управления взяты из
+  prototype/island-motion-sound/index.html.
+  Облик повторяет настоящее приложение: токены renderer/styles/tokens.css (Organic, светлая и тёмная темы),
+  карточка работы WorkCard.tsx, строки SessionRow.tsx и RoomRow.tsx, линии дерева TreeGuides.tsx + sort.ts#treeGuides
+  (скруглённый угол от родителя к дочерней строке), полоса вкладок TabStrip.tsx/Tab.tsx, верхняя панель чата
+  ChatToolbar.tsx, лист центра (bg-sheet, rounded-lg), остров island/ (NotchCapsule.tsx, IslandView.tsx, island.css).
+  Модель: статусы роя running / collecting / done / failed / cancelled; участники — королева, трутни, проверка;
+  состояния участника — working / waiting / handed / failed. Счётчик «3/5» = сдавшие трутни и проверки / все трутни и проверки,
+  королева не считается. Слово «закрыт» у остановленных участников добавлено прототипом для наглядности (в словаре его нет).
+-->
+<style>
+/* ---- токены Organic (renderer/styles/tokens.css) ---- */
+:root{
+ --bg:#f5ead8;--surface:#ebddc5;--text:#201e1d;--acc:#c67139;--sheet:#f9f4ed;
+ --n100:#f9f4ed;--n200:#eee7db;--n300:#dcd3c4;--n400:#c0b6a5;--n500:#a19786;--n600:#82796a;--n700:#645c50;--n800:#474238;--n900:#2e2b25;
+ --a100:#fff2eb;--a200:#ffe1d0;--a500:#d67f48;--a600:#b2622d;--a700:#8c491a;--a800:#643312;
+ --g200:#e1eecc;--g600:#728157;--g700:#56633f;
+ --div:color-mix(in srgb,#201e1d 16%,transparent);
+ --hov9:color-mix(in srgb,var(--text) 9%,transparent);--hov4:color-mix(in srgb,var(--text) 4%,transparent);--hov7:color-mix(in srgb,var(--text) 7%,transparent);
+ --done:var(--g700);--warn:var(--a700);--tree:var(--n400);--shadow:0 1px 2px color-mix(in srgb,#2e2b25 14%,transparent);
+ --shadow-lg:0 12px 32px color-mix(in srgb,#2e2b25 22%,transparent);
+ --pbg:rgba(255,250,242,.9);--pline:rgba(0,0,0,.14);
+}
+:root.dark{
+ --bg:#0e0d0c;--surface:#161513;--text:#ece6dc;--acc:#d67f48;--sheet:#0b0a09;
+ --n100:#23211e;--n200:#2c2926;--n300:#3b3732;--n400:#524d46;--n500:#6e675e;--n600:#8b8479;--n700:#a8a095;--n800:#cbc4b9;--n900:#e9e3d9;
+ --a100:#2a1a10;--a200:#3a2314;--a500:#c46d37;--a600:#dc8753;--a700:#eea373;--a800:#f8c39f;
+ --g200:#242b1a;--g600:#9aad7b;--g700:#b5c697;
+ --div:color-mix(in srgb,#ece6dc 14%,transparent);
+ --done:var(--g600);--shadow:0 0 0 1px color-mix(in srgb,#ece6dc 9%,transparent),0 1px 2px rgb(0 0 0/.5);
+ --shadow-lg:0 0 0 1px color-mix(in srgb,#ece6dc 10%,transparent),0 12px 32px rgb(0 0 0/.6);
+ --pbg:rgba(24,21,19,.9);--pline:rgba(255,255,255,.16);
+}
+*{box-sizing:border-box}
+html{background:#1b1730}
+body{margin:0;min-height:100vh;font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;color:var(--text);
+ background:radial-gradient(ellipse 80% 60% at 18% 8%,#4d3b80,transparent 60%),radial-gradient(ellipse 70% 60% at 88% 28%,#a24a6c,transparent 55%),linear-gradient(160deg,#1b2145,#2b1d3d 55%,#1a1a2b);background-attachment:fixed}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+.mut{color:var(--n700)}
+#menubar{position:fixed;inset:0 0 auto 0;height:32px;z-index:40;display:flex;align-items:center;gap:18px;padding:0 14px;font-size:13px;background:rgba(0,0,0,.3);backdrop-filter:blur(20px);color:#fff}
+#menubar b{font-weight:600}#menubar .r{margin-left:auto;margin-right:330px}
+
+/* ---- остров (island/NotchCapsule.tsx, IslandView.tsx, island.css) ---- */
+#isl{position:fixed;top:0;left:0;right:340px;height:0;z-index:50;display:flex;justify-content:center;pointer-events:none}
+#ishape{position:relative;pointer-events:auto;background:#000;color:#ece6dc;border-radius:0 0 18px 18px;overflow:hidden;width:var(--w,150px);height:32px;font-size:13px;
+ transition:width .46s cubic-bezier(.32,1.22,.42,1),height .46s cubic-bezier(.32,1.22,.42,1),box-shadow .3s;cursor:default}
+#ishape.open{box-shadow:0 14px 40px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.35)}
+.icapw{width:390px;margin:0 auto}
+.icap{display:flex;height:32px;align-items:center}
+.iear{position:relative;width:120px;height:32px;display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.igap{width:150px;display:flex;justify-content:center}.igap i{width:6px;height:6px;border-radius:50%;background:#1b222c;margin-top:-8px}
+.iear.l{font-size:15px}
+.bee{display:inline-block}.bee.act{animation:wob 1.6s ease-in-out infinite}
+@keyframes wob{0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-2px) rotate(6deg)}}
+.iprog{position:absolute;left:14px;right:14px;bottom:3px;height:2px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
+.iprog b{display:block;height:100%;background:#d67f48;transition:width .4s}
+.iprog.ok b{background:#9aad7b}.iprog.bad b{background:#eea373}
+.ilist{width:430px;padding:2px 10px 8px}
+.ihd{font-size:12px;color:#a8a095;padding:4px 4px 2px}
+.irow{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px}
+.irow:hover{background:rgba(255,255,255,.1)}
+.irow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.irow .nm small{color:#a8a095;font-size:12px}
+.irow .t{color:#a8a095;font-size:12px;font-variant-numeric:tabular-nums}
+.iempty{padding:8px 6px;color:#a8a095}
+
+/* ---- окно приложения ---- */
+main{padding:38px 340px 12px 12px;height:100vh;min-height:640px}
+#app{height:100%;display:flex;border-radius:14px;overflow:hidden;background:var(--surface);color:var(--text);box-shadow:0 20px 60px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.08)}
+#sidebar{width:300px;flex:none;display:flex;flex-direction:column;padding:6px 8px 8px;overflow:auto;font-size:12px}
+.grp{display:flex;align-items:center;gap:6px;padding:8px 6px 0;font-weight:700;font-size:13px}
+.grp small{font-weight:400;color:var(--n700);font-size:11px}
+
+/* карточка работы (WorkCard.tsx): радиус 16, отступ 8 8 8 10, активная — neutral-100 + shadow-sm */
+.wc{position:relative;margin-top:6px;border-radius:16px;padding:8px 8px 8px 10px;display:flex;flex-direction:column;overflow:hidden}
+.wc.act{background:var(--n100);box-shadow:var(--shadow)}
+.wc:not(.act):hover{background:var(--hov4)}
+.wh{display:flex;align-items:center;gap:8px;height:22px;min-width:0;padding-right:4px;cursor:default;user-select:none}
+.wh .gl{width:12px;height:12px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.wh .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500}
+.wh .ct{font-size:11px;font-weight:600;color:var(--a700);flex:none}
+.wh .hs{font-size:11px;font-weight:600;color:var(--n700);flex:none}
+.wh .tm{font-size:10px;color:var(--n700);min-width:22px;text-align:right;flex:none}
+.wh .cv{font-size:11px;color:var(--n700);flex:none;width:12px;text-align:center}
+.wm{display:flex;align-items:center;gap:4px;height:16px;padding-left:20px;font-size:11px;color:var(--n700);white-space:nowrap;overflow:hidden}
+.wm .br{font-family:ui-monospace,Menlo,monospace}
+.rows{display:flex;flex-direction:column;gap:1px;margin-top:6px}
+.wc.shut .rows{display:none}
+/* бейдж роя на заголовке: виден и у свёрнутой карточки */
+.wbadge{display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 7px;border-radius:999px;font-size:11px;font-weight:600;flex:none;font-variant-numeric:tabular-nums;
+ background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--a700)}
+.wbadge.on .bee{animation:wob 1.6s ease-in-out infinite}
+.wbadge.on{animation:bpulse 1.8s ease-in-out infinite}
+.wbadge.ok{background:var(--g200);color:var(--done)}.wbadge.bad{background:var(--a200);color:var(--warn)}.wbadge.off{background:var(--hov9);color:var(--n700)}
+@keyframes bpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--acc) 45%,transparent)}50%{box-shadow:0 0 0 4px transparent}}
+
+/* строки (SessionRow.tsx: h-26, rounded-full, text-xs; RoomRow.tsx) и линии дерева (TreeGuides.tsx) */
+.row{position:relative;display:flex;align-items:center;gap:6px;height:26px;min-width:0;border-radius:999px;font-size:12px;padding:0 6px 0 8px;cursor:default;outline:none;user-select:none}
+.row:hover{background:var(--hov9)}
+.row.sel{background:var(--hov9);font-weight:700}
+.row:focus-visible{box-shadow:inset 0 0 0 1px var(--a700)}
+.row .nm{flex:1;min-width:5ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .wd{font-size:11px;color:var(--n700);flex:none;white-space:nowrap}
+.row .tm{font-size:10px;color:var(--n700);width:22px;text-align:right;flex:none}
+.row .ic{width:13px;text-align:center;flex:none;font-size:11px;color:var(--n700)}
+.g{position:absolute;pointer-events:none;border-left:1px solid var(--tree)}
+.g.elbow{top:0;height:13px;border-bottom:1px solid var(--tree);border-bottom-left-radius:6px}
+.st{width:12px;height:12px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.spin{width:10px;height:10px;border-radius:50%;border:2px solid color-mix(in srgb,var(--acc) 28%,transparent);border-top-color:var(--acc);animation:rot 1s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.w{background:var(--acc);animation:dp 1.4s ease-in-out infinite}
+.dot.q{border:1.5px solid var(--n600)}
+.dot.h{background:var(--done);opacity:.55}
+.dot.f{background:var(--warn)}
+.dot.c{border:1.5px solid var(--n500);opacity:.5}
+@keyframes dp{50%{transform:scale(1.35);opacity:.6}}
+.pv{display:inline-flex;gap:4px}
+.pv{color:var(--n600)}
+.row.mem.hd .nm,.row.mem.hd .wd{color:var(--n700);opacity:.85}
+.row.mem.fl .wd{color:var(--warn);font-weight:600}
+.row.mem.cl .nm,.row.mem.cl .wd{opacity:.55}
+.row.mem.wk .wd{color:var(--a800)}
+/* строка роя */
+.row.sw{gap:5px;padding-right:4px}
+.row.sw .bee{font-size:12px;flex:none;width:14px;text-align:center}
+.row.sw .rl{flex:none;font-weight:500}
+.row.sw .tg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n800)}
+.row.sw .tg b{font-weight:500;color:var(--text)}
+.dots{display:inline-flex;gap:2px;flex:none}
+.dots i{width:5px;height:5px;border-radius:50%;border:1px solid var(--n600);display:block}
+.dots i.f{background:var(--done);border-color:var(--done)}.dots i.x{background:var(--warn);border-color:var(--warn)}
+.row.sw .cn{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;flex:none}
+.row.sw .tmr{font-size:11px;color:var(--n700);font-variant-numeric:tabular-nums;flex:none;text-align:right}
+.row.sw .sg{flex:none;font-size:11px;font-weight:700}
+.sg.ok{color:var(--done)}.sg.bad{color:var(--warn)}.sg.off{color:var(--n600)}.sg.col{color:var(--a600);animation:dp 1.2s ease-in-out infinite}
+.row.sw .cv{flex:none;width:10px;text-align:center;color:var(--n700)}
+.row.sw.end .rl,.row.sw.end .tg{color:var(--n700)}
+.row.flash{animation:flash 1.2s ease-out}
+@keyframes flash{0%,60%{background:color-mix(in srgb,var(--acc) 28%,transparent)}100%{background:transparent}}
+.rmrow .hash{font-size:12px;color:var(--n700);width:13px;text-align:center;flex:none}
+.provider{width:13px;height:13px;border-radius:4px;background:var(--a500);flex:none;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:8px;font-weight:700}
+.more{margin-top:4px;padding-left:20px;font-size:11px;color:var(--n700)}
+.newwork{margin-top:auto;padding:8px 6px 0;font-size:12px;color:var(--n700)}
+
+/* ---- чат (лист центра) ---- */
+#chat{flex:1;min-width:0;margin:8px 8px 8px 0;border-radius:28px;background:var(--sheet);box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.tabs{display:flex;align-items:center;gap:4px;height:36px;padding:0 8px;border-bottom:1px solid var(--div);flex:none;overflow:hidden}
+.tab{display:flex;align-items:center;gap:7px;height:28px;padding:0 5px 0 11px;border-radius:999px;font-size:12px;max-width:190px;min-width:0;cursor:default;white-space:nowrap}
+.tab:hover{background:var(--hov7)}.tab.act{background:var(--n100);box-shadow:var(--shadow);font-weight:600}
+.tab .nm{overflow:hidden;text-overflow:ellipsis}
+.tab .x{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--n800)}.tab .x:hover{background:color-mix(in srgb,var(--text) 12%,transparent)}
+.tool-bar{display:flex;align-items:center;gap:8px;height:36px;padding:0 8px;border-bottom:1px solid var(--div);flex:none;font-size:12px}
+.seg{display:inline-flex;border:1px solid var(--div);border-radius:999px;padding:1px;flex:none}
+.seg span{height:22px;padding:0 10px;border-radius:999px;display:inline-flex;align-items:center;font-size:12px}
+.seg span.on{background:var(--hov9)}
+.tool-bar .ttl{flex:1;min-width:0;text-align:center;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{height:24px;padding:0 10px;border-radius:999px;border:1px solid var(--div);background:transparent;font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;flex:none}
+.btn:hover{background:var(--hov7)}
+.btn.sm{height:22px;padding:0 9px}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:600;flex:none;white-space:nowrap;background:color-mix(in srgb,var(--acc) 15%,transparent);color:var(--a700);font-variant-numeric:tabular-nums}
+.chip .sp{font-weight:500;color:var(--n800);padding-left:6px;border-left:1px solid color-mix(in srgb,var(--acc) 40%,transparent)}
+.chip.ok{background:var(--g200);color:var(--done)}.chip.bad{background:var(--a200);color:var(--warn)}.chip.off{background:var(--hov9);color:var(--n700)}
+.lnk{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 9px;border-radius:999px;font-size:12px;color:var(--a700);background:color-mix(in srgb,var(--acc) 12%,transparent);cursor:pointer;flex:none;border:0;white-space:nowrap}
+.lnk:hover{background:color-mix(in srgb,var(--acc) 24%,transparent)}
+.feed{flex:1;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:10px;font-size:13.5px}
+.feed>*{max-width:640px;width:100%;margin-left:auto;margin-right:auto}
+.u{align-self:flex-end;margin-left:auto!important;margin-right:0!important;width:auto!important;max-width:80%!important;background:var(--n200);border-radius:18px;padding:8px 14px}
+.a{line-height:1.55}
+.tl{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--n700);padding:1px 4px}
+.tl code{font:12px ui-monospace,Menlo,monospace;color:var(--n800)}
+.tl .ok{color:var(--done)}.tl .sp2{width:10px;height:10px;border-radius:50%;border:2px solid color-mix(in srgb,var(--acc) 28%,transparent);border-top-color:var(--acc);animation:rot 1s linear infinite;flex:none}
+.note{text-align:center;font-size:12px;color:var(--n700);padding:4px 0}
+.card{border:1px solid var(--div);border-radius:16px;background:var(--n100);padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.card .hd{display:flex;align-items:center;gap:8px;font-weight:600}
+.card .hd .sp{flex:1}
+.card .bd{font-size:13px;color:var(--n800)}
+.card.warn{border-color:color-mix(in srgb,var(--warn) 40%,transparent);background:color-mix(in srgb,var(--warn) 7%,var(--n100))}
+.card.res{border-color:color-mix(in srgb,var(--done) 45%,transparent);background:color-mix(in srgb,var(--done) 8%,var(--n100))}
+.card .kv{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--n700)}
+.card .tmr{font-variant-numeric:tabular-nums}
+.typing{display:inline-flex;gap:3px;padding-left:4px}.typing i{width:5px;height:5px;border-radius:50%;background:var(--n600);animation:dp 1s ease-in-out infinite}.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+.err{border-left:3px solid var(--warn);padding:6px 10px;background:color-mix(in srgb,var(--warn) 8%,transparent);border-radius:0 10px 10px 0;font-size:13px;color:var(--a800)}
+.comp{display:flex;align-items:flex-end;gap:8px;border-top:1px solid var(--div);padding:10px 16px 12px;flex:none}
+.comp .pc{width:38px;height:38px;border-radius:50%;border:1px solid var(--div);display:flex;align-items:center;justify-content:center;color:var(--n700);flex:none}
+.comp .in{flex:1;min-height:38px;border:1px solid var(--div);border-radius:19px;padding:8px 16px;color:var(--n700)}
+.comp.off .in{opacity:.6}
+
+/* ---- панель прототипа ---- */
+#panel{position:fixed;right:16px;top:44px;width:308px;max-height:calc(100vh - 60px);overflow:auto;z-index:30;padding:14px;border-radius:14px;background:var(--pbg);backdrop-filter:blur(18px);border:1px solid var(--pline);font-size:13px;color:var(--text)}
+#panel h2{margin:0 0 8px;font-size:15px}
+#panel h3{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--n700);font-weight:600}
+.bs{display:flex;flex-wrap:wrap;gap:5px}
+.bs button{padding:4px 9px;border-radius:7px;border:1px solid var(--pline);background:none;font-size:12.5px}
+.bs button:hover{background:rgba(127,127,127,.2)}
+.bs button.on,.bs button.big{background:var(--acc);border-color:var(--acc);color:#fff}
+.bs button.big{font-weight:500}
+.opts{display:flex;flex-direction:column;gap:6px;margin-top:6px}.opts label{display:flex;gap:7px;align-items:center}
+.ptabs{display:flex;gap:4px;margin-bottom:8px}.ptabs button{flex:1;padding:5px;border-radius:8px;border:1px solid var(--pline);background:none}.ptabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+#hud{padding:8px 10px;border-radius:9px;background:rgba(127,127,127,.16);line-height:1.5;font-size:12px;color:var(--n700);font-variant-numeric:tabular-nums}
+#hud b{color:var(--text);font-weight:600}
+.pn{font-size:12px;color:var(--n700);margin-top:8px}
+.lg{font-size:12.5px;line-height:1.45}.lg p{margin:4px 0}.lg ol,.lg ul{margin:4px 0;padding-left:18px}.lg li{margin:3px 0}.lg code{font:11.5px ui-monospace,Menlo,monospace;background:rgba(127,127,127,.18);padding:0 4px;border-radius:4px}
+.nb{display:inline-flex;width:16px;height:16px;border-radius:50%;background:#e0457b;color:#fff;font-size:10px;font-weight:700;align-items:center;justify-content:center;vertical-align:1px;margin-right:4px}
+/* подсветка четырёх мест */
+body.spots [data-spot]{outline:2px solid #e0457b;outline-offset:2px;border-radius:12px}
+body.spots [data-spot]::after{content:attr(data-spot);position:absolute;top:-9px;left:-9px;width:18px;height:18px;border-radius:50%;background:#e0457b;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:5}
+body.spots [data-spot]{position:relative}
+body.spots #ishape[data-spot]{outline-offset:-2px;border-radius:0 0 18px 18px}
+body.spots #ishape[data-spot]::after{top:7px;left:8px}
+@media(max-width:1099px){
+ main{padding:44px 12px 12px;height:auto;min-height:0}#app{height:720px}
+ #panel{position:static;width:auto;max-height:none;margin:0 12px 24px}
+ #isl{right:0}#menubar .r{margin-right:0}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="menubar"><b>Parley</b><span>Файл</span><span>Правка</span><span>Вид</span><span>Окно</span><span>Справка</span><span class="r">Ср 28 окт&nbsp; 14:07</span></div>
+
+<div id="isl"><div id="ishape" data-spot="4" title="Остров"></div></div>
+
+<main>
+ <div id="app">
+  <aside id="sidebar" aria-label="Работы"></aside>
+  <section id="chat"></section>
+ </div>
+</main>
+
+<aside id="panel" aria-label="Управление прототипом">
+ <h2>Рой v1: прототип</h2>
+ <div class="ptabs"><button data-ptab="ctl" class="on">Управление</button><button data-ptab="lg">Легенда</button></div>
+ <div id="p-ctl">
+  <div id="hud"></div>
+  <h3>Тема</h3>
+  <div class="bs" id="themes"><button data-theme="light" class="on">Светлая</button><button data-theme="dark">Тёмная</button></div>
+  <h3>Состояние роя</h3>
+  <div class="bs" id="tgt" style="margin-bottom:6px"></div>
+  <div class="bs" id="stages">
+   <button data-stage="launch">Запуск</button><button data-stage="work">Трутни работают</button><button data-stage="collect">Сводка</button>
+   <button data-stage="done">Готово</button><button data-stage="failed">Сбой</button><button data-stage="cancelled">Отмена</button>
+  </div>
+  <h3>Живой прогон</h3>
+  <div class="bs"><button class="big" id="live">▶ Живой прогон (~20 с)</button><button id="stoplive" hidden>Остановить</button></div>
+  <h3>Рои</h3>
+  <div class="opts">
+   <label><input type="checkbox" id="cbB" checked> Второй рой в комнате # Review (Аудит, 2/4)</label>
+   <label><input type="checkbox" id="cbC"> Рой, созданный человеком (Сравнение цен)</label>
+  </div>
+  <h3>Показ</h3>
+  <div class="opts">
+   <label><input type="checkbox" id="cbIsl"> Остров развёрнут (иначе — по наведению)</label>
+   <label><input type="checkbox" id="cbSpots"> Подсветить четыре места роя</label>
+  </div>
+  <div class="pn">Клик по строке роя раскрывает его, клик по участнику открывает чат справа, клик по заголовку карточки сворачивает её. Остров раскрывается по наведению и по клику.</div>
+ </div>
+ <div id="p-lg" class="lg" hidden></div>
+</aside>
+
+<script>
+(()=>{
+'use strict';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const clock=()=>performance.now()/1000;
+const STATUS_RU={running:'идёт',collecting:'сводка',done:'готово',failed:'сбой',cancelled:'отменён'};
+const ACTIVE=['running','collecting'];
+
+/* ================= модель ================= */
+function mkSwarm(id,tag,creator,topics,cfg){
+  const members=[{id:'q',role:'queen',st:'working'}];
+  topics.forEach((t,i)=>members.push({id:'d'+(i+1),role:'drone',n:i+1,topic:t,st:'waiting'}));
+  members.push({id:'v',role:'verifier',st:'waiting'});
+  return Object.assign({id,tag,creator,members,topics,status:'running',phase:'cut',spawned:false,base:0,since:null,seen:false},cfg);
+}
+const S={
+  theme:'light',cardOpen:true,card2Open:false,sel:'session:S01',tabs:['session:S01'],target:'A',
+  islPinned:false,islHover:false,expanded:{A:false,B:false,C:false},on:{A:true,B:true,C:false},liveTimer:null,
+  sw:{
+    A:mkSwarm('A','Research',{k:'session',id:'S01'},
+      ['Scrapy: RetryMiddleware и политика повторов','Crawlee: RequestQueue и повторы','Colly: лимиты и повторы запросов','Got и Playwright: бэкофф и таймауты'],
+      {workBase:252,handed:[0,2,3],task:'Как открытые краулеры делают повторные запросы и бэкофф. Свести выводы в рекомендацию для нашего парсера каталога.',
+       verifier:'Проверить ссылки и цитаты в сдачах трутней',result:'4 источника разобраны, ссылки проверены. Рекомендация: экспоненциальный бэкофф с джиттером, не больше 5 попыток и общий бюджет повторов на хост.'}),
+    B:mkSwarm('B','Аудит',{k:'room',id:'review'},
+      ['Модуль auth','Модуль billing','Модуль api'],
+      {workBase:65,handed:[0,1],task:'Аудит трёх модулей на утечки секретов и небезопасные дефолты.',
+       verifier:'Перепроверить находки трутней по коду',result:'Найдено 2 замечания высокой важности (auth, billing) и 5 средней. Список с путями к файлам — в сводке королевы.'}),
+    C:mkSwarm('C','Сравнение цен',{k:'human'},
+      ['Магазин «Север»','Магазин «Юг»','Магазин «Запад»'],
+      {workBase:38,handed:[0],task:'Сравнить цены на 12 позиций из списка в трёх магазинах.',
+       verifier:'Свериться с актуальными прайсами',result:'Самая выгодная корзина — «Юг», итого на 8% дешевле «Севера». По двум позициям лучше «Запад».'}),
+  }
+};
+const counted=sw=>sw.spawned?sw.members.filter(m=>m.role!=='queen'):[];
+const handedN=sw=>counted(sw).filter(m=>m.st==='handed').length;
+const cnt=sw=>sw.spawned?handedN(sw)+'/'+counted(sw).length:'…';
+const elapsed=sw=>sw.base+(sw.since===null?0:clock()-sw.since);
+const fmt=s=>{s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+const isActive=sw=>ACTIVE.includes(sw.status);
+const onList=()=>Object.keys(S.sw).filter(k=>S.on[k]).map(k=>S.sw[k]);
+const freeze=sw=>{sw.base=elapsed(sw);sw.since=null};
+const queen=sw=>sw.members[0];
+const drones=sw=>sw.members.filter(m=>m.role==='drone');
+const verifier=sw=>sw.members.find(m=>m.role==='verifier');
+
+function stage(sw,name){
+  const ds=drones(sw),v=verifier(sw),q=queen(sw),W=sw.workBase;
+  sw.spawned=name!=='launch';
+  sw.members.forEach(m=>m.st='waiting');q.st='working';sw.seen=false;
+  const work=()=>ds.forEach((d,i)=>d.st=sw.handed.includes(i)?'handed':'working');
+  let base,run=false;
+  switch(name){
+    case 'launch':sw.status='running';sw.phase='cut';base=3;run=true;break;
+    case 'work':sw.status='running';sw.phase='wait';work();base=W;run=true;break;
+    case 'collect':sw.status='collecting';sw.phase='collect';counted(sw).forEach(m=>m.st='handed');base=W+88;run=true;break;
+    case 'done':sw.status='done';sw.phase='collect';counted(sw).forEach(m=>m.st='handed');q.st='handed';base=W+110;break;
+    case 'failed':{sw.status='failed';work();const bad=ds.find(d=>d.st==='working');if(bad)bad.st='failed';
+      sw.members.forEach(m=>{if(m.st==='working'||m.st==='waiting')m.st='closed'});q.st='failed';base=Math.max(12,W-40);break}
+    case 'cancelled':sw.status='cancelled';work();sw.members.forEach(m=>{if(m.st==='working'||m.st==='waiting')m.st='closed'});base=Math.max(10,W-90);break;
+  }
+  sw.base=base;sw.since=run?clock():null;
+}
+const word=(sw,m)=>{
+  switch(m.st){
+    case 'handed':return 'сдал ✓';
+    case 'failed':return 'сбой';
+    case 'waiting':return 'ждёт';
+    case 'closed':return 'закрыт';
+    default:return m.role==='drone'?'читает…':m.role==='verifier'?'проверяет…':({cut:'режет задачу…',wait:'ждёт сдачи…',collect:'сводит…'})[sw.phase];
+  }
+};
+const label=m=>m.role==='queen'?'👑 Королева':m.role==='drone'?'Трутень '+m.n:'Проверка';
+
+/* ================= выбор и вкладки ================= */
+const parse=k=>{const p=k.split(':');return {k:p[0],a:p[1],b:p[2]}};
+function tabTitle(key){
+  const p=parse(key);
+  if(p.k==='session')return p.a==='S01'?'S01 Фиче-лид':'S02 Тесты';
+  if(p.k==='room')return '# Review';
+  const sw=S.sw[p.a];
+  if(p.k==='q')return '👑 '+sw.tag;
+  const m=sw.members.find(x=>x.id===p.b);return label(m)+' · '+sw.tag;
+}
+function select(key){
+  const p=parse(key);
+  if((p.k==='q'||p.k==='m')&&!S.on[p.a])return;
+  S.sel=key;if(!S.tabs.includes(key))S.tabs.push(key);if(S.tabs.length>5)S.tabs.shift();
+  // Просмотр результата гасит остров: создатель (или человек, открывший рой) увидел итог.
+  Object.values(S.sw).forEach(sw=>{
+    if(isActive(sw))return;
+    const own=(sw.creator.k==='session'&&key==='session:'+sw.creator.id)||(sw.creator.k==='room'&&key==='room:'+sw.creator.id)||((p.k==='q'||p.k==='m')&&p.a===sw.id);
+    if(own)sw.seen=true;
+  });
+  S.cardOpen=true;
+  render();
+}
+
+/* ================= сайдбар ================= */
+function buildRows(){
+  const rows=[];
+  rows.push({t:'session',key:'session:S01',depth:0});
+  const swarmRows=(id,d)=>{
+    if(!S.on[id])return;
+    rows.push({t:'swarm',sw:id,depth:d});
+    if(S.expanded[id])S.sw[id].members.filter(m=>m.role==='queen'||S.sw[id].spawned).forEach(m=>rows.push({t:'mem',sw:id,m,depth:d+1}));
+  };
+  swarmRows('A',1);
+  rows.push({t:'session',key:'session:S02',depth:0});
+  rows.push({t:'room',key:'room:review',depth:0});
+  swarmRows('B',1);
+  swarmRows('C',0);
+  return rows;
+}
+// sort.ts#treeGuides: у строки ребёнка — скруглённый угол к стволу родителя; у родителя — начало ствола; у строк между — проходящий ствол.
+function treeGuides(rows){
+  const out=rows.map(()=>[]),seen=new Set();
+  const add=(i,kind,col)=>{const k=i+kind+col;if(seen.has(k))return;seen.add(k);out[i].push({kind,col})};
+  rows.forEach((r,i)=>{
+    if(r.depth===0)return;
+    let p=i-1;while(p>=0&&rows[p].depth>=r.depth)p--;
+    if(p<0)return;
+    const col=r.depth-1;
+    add(i,'elbow',col);add(p,'start',col);
+    for(let k=p+1;k<i;k++)add(k,'pass',col);
+  });
+  return out;
+}
+function guideHTML(gs,depth){
+  return gs.map(({kind,col})=>{
+    const left=(col-depth)*20+14;
+    if(kind==='elbow'){const w=-left;return `<span class="g elbow" style="left:${left}px;width:${w}px;border-bottom-left-radius:${Math.min(6,w)}px"></span>`}
+    return `<span class="g" style="left:${left}px;top:${kind==='start'?20:0}px;bottom:-1px"></span>`;
+  }).join('');
+}
+const dotOf=m=>`<span class="st"><span class="dot ${({working:'w',waiting:'q',handed:'h',failed:'f',closed:'c'})[m.st]}"></span></span>`;
+function swarmRow(r,gs,first){
+  const sw=S.sw[r.sw],exp=S.expanded[r.sw],end=!isActive(sw);
+  const sig=({collecting:['col','✎','Королева пишет сводку'],done:['ok','✓','Готово'],failed:['bad','⚠','Сбой'],cancelled:['off','✕','Отменён']})[sw.status];
+  return `<div class="row sw${end?' end':''}" role="treeitem" tabindex="0" aria-expanded="${exp}" data-act="swarm" data-sw="${sw.id}" data-row="sw-${sw.id}" ${first?'data-spot="1"':''} style="margin-left:${r.depth*20}px" title="Рой [${esc(sw.tag)}] · ${STATUS_RU[sw.status]}">
+   <span class="bee${isActive(sw)?' act':''}">🐝</span><span class="rl">Рой</span><span class="tg">[<b>${esc(sw.tag)}</b>]</span>
+   <span class="dots">${counted(sw).map(m=>`<i class="${m.st==='handed'?'f':m.st==='failed'?'x':''}"></i>`).join('')}</span>
+   <span class="cn">${cnt(sw)}</span>${sig?`<span class="sg ${sig[0]}" title="${sig[2]}">${sig[1]}</span>`:''}
+   <span class="tmr" data-timer="${sw.id}">${fmt(elapsed(sw))}</span><span class="cv">${exp?'⌄':'›'}</span>${guideHTML(gs,r.depth)}</div>`;
+}
+function memRow(r,gs){
+  const m=r.m,sw=S.sw[r.sw],key=`${m.role==='queen'?'q':'m'}:${sw.id}:${m.id}`;
+  const cls=({handed:'hd',failed:'fl',closed:'cl',working:'wk',waiting:''})[m.st];
+  const [emo,...rest]=label(m).split(' ');
+  const icon=m.role==='queen'?`<span class="st" style="font-size:12px">👑</span>`:dotOf(m);
+  return `<div class="row mem ${cls}${S.sel===key?' sel':''}" role="treeitem" tabindex="0" data-act="sel" data-key="${key}" style="margin-left:${r.depth*20}px" title="${esc(m.topic||'')}">
+   ${icon}<span class="nm">${m.role==='queen'?rest.join(' '):label(m)}</span><span class="wd">${word(sw,m)}</span>${guideHTML(gs,r.depth)}</div>`;
+}
+function sessionRow(r,gs){
+  const s1=r.key==='session:S01';
+  return `<div class="row${S.sel===r.key?' sel':''}" role="treeitem" tabindex="0" data-act="sel" data-key="${r.key}" style="margin-left:${r.depth*20}px;padding-left:8px">
+   <span class="st">${s1?'<span class="spin"></span>':'<span style="color:var(--done);font-size:11px">✓</span>'}</span><span class="provider">C</span>
+   <span class="nm">${s1?'S01 Фиче-лид':'S02 Тесты'}</span><span class="wd">${s1?'работает':'готово'}</span><span class="tm">${s1?'1м':'12м'}</span>${guideHTML(gs,r.depth)}</div>`;
+}
+function roomRow(r,gs){
+  return `<div class="row rmrow${S.sel===r.key?' sel':''}" role="treeitem" tabindex="0" data-act="sel" data-key="${r.key}" style="margin-left:${r.depth*20}px">
+   <span class="st"></span><span class="hash">#</span><span class="nm">Review</span><span class="wd">2 участника</span><span class="tm">3м</span>${guideHTML(gs,r.depth)}</div>`;
+}
+// Бейдж роя на заголовке карточки: пульсирует, пока рои идут; после конца — след последнего итога.
+function cardBadge(){
+  const l=onList(),act=l.filter(isActive);
+  if(act.length===1)return `<span class="wbadge on" data-spot="3" title="Рой [${esc(act[0].tag)}] идёт"><span class="bee">🐝</span>${cnt(act[0])}</span>`;
+  if(act.length>1)return `<span class="wbadge on" data-spot="3" title="Активных роёв: ${act.length}"><span class="bee">🐝</span>${act.length}</span>`;
+  const ended=l.filter(s=>!s.seen);
+  if(!ended.length)return l.length?`<span class="wbadge off" data-spot="3" title="Роёв нет в работе"><span class="bee">🐝</span></span>`:'';
+  const last=ended[ended.length-1];
+  const k=last.status==='done'?'ok':last.status==='failed'?'bad':'off';
+  return `<span class="wbadge ${k}" data-spot="3" title="Рой [${esc(last.tag)}]: ${STATUS_RU[last.status]}"><span class="bee">🐝</span>${last.status==='done'?'✓':last.status==='failed'?'⚠':'✕'}</span>`;
+}
+function renderSidebar(){
+  const rows=buildRows(),gs=treeGuides(rows);
+  let firstSw=true;
+  const body=rows.map((r,i)=>{
+    if(r.t==='swarm'){const h=swarmRow(r,gs[i],firstSw);firstSw=false;return h}
+    return r.t==='mem'?memRow(r,gs[i]):r.t==='room'?roomRow(r,gs[i]):sessionRow(r,gs[i]);
+  }).join('');
+  const letters=onList().filter(s=>s.creator.k==='human'&&!isActive(s)&&!s.seen&&s.status==='done').length;
+  const open=S.cardOpen;
+  $('#sidebar').innerHTML=`
+   <div class="grp">▾ parley <small>1 работа</small></div>
+   <div class="wc act${open?'':' shut'}" data-card="1">
+    <div class="wh" data-act="card" role="button" aria-expanded="${open}">
+     <span class="gl"><span class="spin"></span></span><span class="tt">Каталог</span>
+     ${letters?`<span class="ct" title="Результат роя человека">✉ ${letters}</span>`:''}
+     ${cardBadge()}<span class="hs">#1</span><span class="tm">сейчас</span><span class="cv">${open?'⌄':'›'}</span>
+    </div>
+    <div class="wm"><span>parley</span><span>·</span><span>${open?'3 сессии':'свёрнута'}</span><span>·</span><span class="br">feat/catalog</span></div>
+    <div class="rows" role="group">${body}</div>
+   </div>
+   <div class="wc" data-card="2">
+    <div class="wh" role="button"><span class="gl"><span style="color:var(--done);font-size:11px">✓</span></span><span class="tt">Миграция БД</span><span class="hs">#2</span><span class="tm">2ч</span></div>
+    <div class="wm"><span>parley</span><span>·</span><span>1 сессия</span><span>·</span><span class="br">chore/db</span></div>
+   </div>
+   <div class="newwork">＋ Новая работа</div>`;
+}
+
+/* ================= чат ================= */
+const tool=(name,arg,run)=>`<div class="tl">${run?'<span class="sp2"></span>':'<span class="ok">✓</span>'}<code>${name}</code><span>${esc(arg)}</span></div>`;
+const user=t=>`<div class="u">${t}</div>`,ai=t=>`<div class="a">${t}</div>`,note=t=>`<div class="note">${t}</div>`;
+const typing='<div class="a"><span class="typing"><i></i><i></i><i></i></span></div>';
+function dotsHTML(sw){return `<span class="dots">${counted(sw).map(m=>`<i class="${m.st==='handed'?'f':m.st==='failed'?'x':''}"></i>`).join('')}</span>`}
+function swarmCard(sw){
+  const q=queen(sw);
+  return `<div class="card"><div class="hd"><span class="bee${isActive(sw)?' act':''}">🐝</span>Рой [${esc(sw.tag)}]<span class="sp"></span><span class="chip ${chipCls(sw)}">${STATUS_RU[sw.status]}</span></div>
+   <div class="kv">${dotsHTML(sw)}<b>${cnt(sw)}</b><span class="tmr" data-timer="${sw.id}">${fmt(elapsed(sw))}</span><span>Королева: ${word(sw,q)}</span></div>
+   <div><button class="btn sm" data-act="sel" data-key="q:${sw.id}:q">Открыть королеву</button> <button class="btn sm" data-act="swarm-open" data-sw="${sw.id}">Показать в сайдбаре</button></div></div>`;
+}
+const chipCls=sw=>sw.status==='done'?'ok':sw.status==='failed'?'bad':sw.status==='cancelled'?'off':'';
+function endCards(sw){
+  if(sw.status==='done')return `<div class="card res"><div class="hd">✉ Результат роя ${esc(sw.tag)}</div><div class="bd">Результат роя ${esc(sw.tag)}: ${esc(sw.result)}</div><div class="kv">От королевы · ${fmt(elapsed(sw))}</div></div>`;
+  if(sw.status==='failed'){const bad=sw.members.find(m=>m.st==='failed'&&m.role!=='queen');return `<div class="card warn"><div class="hd">⚠ Рой ${esc(sw.tag)} остановлен: сбой</div><div class="bd">${bad?esc(label(bad)):'Участник'} не смог закончить работу. Остальные участники закрыты.</div></div>`}
+  if(sw.status==='cancelled')return `<div class="card"><div class="hd">✕ Рой ${esc(sw.tag)} отменён</div><div class="bd">Сессии роя закрыты. Сданные результаты сохранены.</div></div>`;
+  return '';
+}
+function feedCreator(key){
+  if(key==='session:S01'){
+    const sw=S.sw.A;let h=user('Нужен обзор: как краулеры делают повторные запросы и бэкофф. Запусти рой на исследование и сведи выводы.');
+    h+=ai('Запускаю рой Research: королева разрежет задачу на части, трутни прочитают источники, проверка сверит ссылки.');
+    h+=tool('create_swarm','tag=Research · 4 трутня + проверка');
+    if(S.on.A){h+=swarmCard(sw)+endCards(sw)}
+    return h;
+  }
+  if(key==='room:review'){
+    let h=note('Комната # Review · S02, S05')+ai('<b>S05 Ревьюер:</b> Нужен аудит auth, billing и api перед релизом.')+ai('<b>S02 Тесты:</b> Запускаю рой Аудит, пока гоняю регрессию.');
+    if(S.on.B){const sw=S.sw.B;h+=swarmCard(sw)+endCards(sw)}
+    return h;
+  }
+  return user('Прогони тесты каталога.')+tool('Bash','npm test')+ai('Все 214 тестов прошли.')+note('Сессия завершена');
+}
+function feedQueen(sw){
+  let h=user(esc(sw.task));
+  h+=ai(sw.spawned?`Режу задачу на ${drones(sw).length} части и проверку.`:'Разбираю задачу и режу её на части…');
+  if(!sw.spawned)return h+typing;
+  drones(sw).forEach(d=>{h+=tool('swarm.spawn_drone',`${label(d)}: ${d.topic}`)});
+  h+=tool('swarm.spawn_verifier',sw.verifier);
+  const n=handedN(sw),t=counted(sw).length;
+  if(sw.status==='running')h+=ai(`Жду сдачи трутней: ${n} из ${t}.`)+typing;
+  if(sw.status==='collecting')h+=ai('Все сдали. Свожу выводы в итоговую записку…')+tool('Write','summary.md',true)+typing;
+  if(sw.status==='done')h+=ai('Сводка готова и отправлена создателю.')+`<div class="card res"><div class="hd">Итог</div><div class="bd">${esc(sw.result)}</div></div>`;
+  if(sw.status==='failed')h+=`<div class="err">Рой остановлен: сбой участника. Сводка не написана.</div>`;
+  if(sw.status==='cancelled')h+=note('Рой отменён человеком. Сессия закрыта.');
+  return h;
+}
+function feedMember(sw,m){
+  const topic=m.role==='verifier'?sw.verifier:m.topic;
+  let h=user(`Задача от королевы: ${esc(topic)}. Верни три вывода со ссылками и сдай работу.`);
+  if(m.st==='waiting')return h+note(m.role==='verifier'?`Проверка ждёт, пока трутни сдадут работу: ${handedN(sw)} из ${counted(sw).length-1}.`:'Трутень ждёт очереди.');
+  const verb=m.role==='verifier'?['Read|сдачи трутней','Grep|ссылки и цитаты']:['WebFetch|документация','Read|исходники','Grep|упоминания'];
+  if(m.st==='working')return h+verb.map((x,i)=>tool(x.split('|')[0],x.split('|')[1],i===verb.length-1)).join('')+ai(m.role==='verifier'?'Проверяю ссылки…':'Читаю источники…')+typing;
+  if(m.st==='handed')return h+verb.map(x=>tool(x.split('|')[0],x.split('|')[1])).join('')+ai('Готово, три вывода собраны.')+`<div class="card res"><div class="hd">Сдача принята</div><div class="bd">3 вывода со ссылками переданы королеве.</div></div>`+note('Сессия закрыта автоматически: участник сдал работу');
+  if(m.st==='failed')return h+verb.slice(0,2).map(x=>tool(x.split('|')[0],x.split('|')[1])).join('')+`<div class="err">Сбой: превышен лимит запросов (429), повтор не помог.</div>`;
+  return h+note('Сессия закрыта: рой остановлен');
+}
+function toolbar(key){
+  const p=parse(key),seg='<span class="seg"><span class="on">Чат</span><span>Терминал</span></span>';
+  const tail='<span class="btn">Авто ⌄</span><span class="btn">Opus · high ⌄</span>';
+  if(p.k==='q'){
+    const sw=S.sw[p.a];
+    return `<div class="tool-bar">${seg}<span class="chip ${chipCls(sw)}" data-spot="2" data-chip="${sw.id}" title="Статус роя: ${sw.status}">🐝 ${esc(sw.tag)} · <span data-cnt="${sw.id}">${cnt(sw)}</span><span class="sp" data-st="${sw.id}">${STATUS_RU[sw.status]}</span></span><span class="ttl">Королева · ${esc(sw.tag)}</span>${tail}</div>`;
+  }
+  if(p.k==='m'){
+    const sw=S.sw[p.a],m=sw.members.find(x=>x.id===p.b);
+    return `<div class="tool-bar">${seg}<button class="lnk" data-act="to-swarm" data-sw="${sw.id}" title="Показать рой в сайдбаре">🐝 в рое ${esc(sw.tag)}</button><span class="ttl">${label(m)}</span>${tail}</div>`;
+  }
+  return `<div class="tool-bar">${seg}<span class="ttl">${esc(tabTitle(key))}</span>${tail}</div>`;
+}
+function renderChat(){
+  const el=$('#chat'),key=S.sel,p=parse(key),old=el.querySelector('.feed');const top=old?old.scrollTop:0;
+  let feed,off=false;
+  if(p.k==='q')feed=feedQueen(S.sw[p.a]);
+  else if(p.k==='m'){const sw=S.sw[p.a],m=sw.members.find(x=>x.id===p.b);feed=feedMember(sw,m);off=['handed','closed','failed'].includes(m.st)}
+  else feed=feedCreator(key);
+  const tabs=S.tabs.map(k=>`<div class="tab${k===S.sel?' act':''}" data-act="tab" data-key="${k}"><span class="nm">${esc(tabTitle(k))}</span><span class="x" data-act="tabx" data-key="${k}">✕</span></div>`).join('');
+  el.innerHTML=`<div class="tabs" role="tablist">${tabs}</div>${toolbar(key)}<div class="feed">${feed}</div>
+   <div class="comp${off?' off':''}"><span class="pc">📎</span><div class="in">${off?'Сессия закрыта':'Сообщение…'}</div><span class="pc" style="background:var(--acc);color:#fff;border-color:var(--acc)">↑</span></div>`;
+  const f=el.querySelector('.feed');f.scrollTop=top||0;
+}
+
+/* ================= остров ================= */
+function islandItems(){const l=onList();return l.filter(s=>isActive(s)||!s.seen)}
+function renderIsland(){
+  const sh=$('#ishape'),items=islandItems(),act=items.filter(isActive);
+  const open=S.islPinned||S.islHover;
+  let right='',prog='',bad='',pct=0;
+  if(items.length){
+    const sumH=items.reduce((a,s)=>a+handedN(s),0),sumT=items.reduce((a,s)=>a+counted(s).length,0);
+    pct=sumT?sumH/sumT*100:0;
+    if(items.length===1){
+      const s=items[0];
+      right=isActive(s)?`<b>${esc(s.tag)}</b> ${s.status==='collecting'?'сводка':cnt(s)}`:`<b>${esc(s.tag)}</b> ${s.status==='done'?'✓':s.status==='failed'?'⚠':'✕'}`;
+      if(s.status==='done'){pct=100;bad='ok'}else if(s.status==='failed')bad='bad';
+    }else right=`<b>${items.length} ${items.length<5?'роя':'роёв'}</b> ${sumH}/${sumT}`;
+  }
+  const bee=`<span class="bee${act.length?' act':''}">🐝</span>`;
+  const cap=items.length?`<div class="icap"><div class="iear l">${bee}</div><div class="igap"><i></i></div><div class="iear r">${right}<div class="iprog ${bad}"><b style="width:${pct}%"></b></div></div></div>`:`<div class="icap"><div class="igap" style="width:100%"><i></i></div></div>`;
+  const list=`<div class="ilist"><div class="ihd">${act.length?'Активные рои':'Рои'}</div>${items.length?items.map(s=>`
+   <div class="irow" data-act="isl-open" data-sw="${s.id}"><span class="bee${isActive(s)?' act':''}">🐝</span><span class="nm">${esc(s.tag)} <small>${s.creator.k==='session'?'· S01 Фиче-лид':s.creator.k==='room'?'· # Review':'· человек'}</small></span>
+   ${dotsHTML(s)}<b>${cnt(s)}</b><span class="t" data-timer="${s.id}">${fmt(elapsed(s))}</span><span class="t">${STATUS_RU[s.status]}</span></div>`).join(''):'<div class="iempty">Активных роёв нет</div>'}</div>`;
+  sh.innerHTML=`<div class="icapw">${cap}</div>${open?list:''}`;
+  sh.classList.toggle('open',open);
+  sh.style.setProperty('--w',(open?430:items.length?390:150)+'px');
+  sh.style.height=(open?32+sh.querySelector('.ilist').offsetHeight:32)+'px';
+}
+
+/* ================= панель ================= */
+function renderPanel(){
+  const sw=S.sw[S.target];
+  $('#tgt').innerHTML=Object.keys(S.sw).filter(k=>S.on[k]).map(k=>`<button data-tgt="${k}" class="${k===S.target?'on':''}">${esc(S.sw[k].tag)}</button>`).join('');
+  $('#hud').innerHTML=`Рой <b>${esc(sw.tag)}</b>: статус <b>${sw.status}</b> (${STATUS_RU[sw.status]})<br>Счётчик <b>${cnt(sw)}</b> · таймер <b data-timer="${sw.id}">${fmt(elapsed(sw))}</b>${sw.since===null?' · остановлен':''}<br>Королева: <b>${word(sw,queen(sw))}</b>`;
+  $$('#themes button').forEach(b=>b.classList.toggle('on',b.dataset.theme===S.theme));
+}
+const LEGEND=`
+ <p><b>Четыре места, где виден рой</b> (включите «Подсветить четыре места»):</p>
+ <ol>
+  <li><span class="nb">1</span><b>Сайдбар.</b> Строка роя «отпочковывается» от создателя: сессии, комнаты или человека (тогда она на верхнем уровне карточки). Королева внутри роя рядом с трутнями. По умолчанию свёрнута, клик раскрывает (<code>›</code> / <code>⌄</code>).</li>
+  <li><span class="nb">2</span><b>Шапка чата королевы:</b> «🐝 Research · 3/5» и статус. В чате трутня — ссылка «в рое Research».</li>
+  <li><span class="nb">3</span><b>Бейдж на карточке работы</b> виден и у свёрнутой карточки: «🐝 2» — два активных роя, «🐝 3/5» — один; после конца остаётся ✓ или ⚠.</li>
+  <li><span class="nb">4</span><b>Остров:</b> капсула «🐝 Research 3/5» с полоской прогресса; по наведению или клику — список активных роёв. Гаснет, когда результат просмотрен.</li>
+ </ol>
+ <p><b>Статус роя</b> (строка в сайдбаре, шапка, остров):</p>
+ <ul>
+  <li><code>running</code> «идёт»: королева режет задачу, трутни работают.</li>
+  <li><code>collecting</code> «сводка»: все сдали, королева пишет сводку (✎ в строке).</li>
+  <li><code>done</code> «готово»: ✓, таймер стоит, создателю приходит «Результат роя …».</li>
+  <li><code>failed</code> «сбой»: ⚠, остальные участники закрыты.</li>
+  <li><code>cancelled</code> «отменён»: ✕, все закрыты.</li>
+ </ul>
+ <p><b>Участники:</b> «👑 Королева», «Трутень N», «Проверка».</p>
+ <ul>
+  <li>● работает: «читает…» (трутень), «проверяет…» (проверка), у королевы «режет задачу…» / «ждёт сдачи…» / «сводит…».</li>
+  <li>○ «ждёт».</li>
+  <li>«сдал ✓»: сессия закрыта автоматически, строка приглушена.</li>
+  <li>«сбой»: цвет предупреждения.</li>
+  <li>«закрыт»: добавлено прототипом, у участников остановленного роя.</li>
+ </ul>
+ <p><b>Счётчик</b> <code>3/5</code> = сдавшие трутни и проверки / все трутни и проверки; королева не считается. Точки: по одной на трутня или проверку, закрашена — сдал. Пока королева режет задачу, трутней ещё нет, счётчик «…».</p>
+ <p><b>Таймер</b> <code>м:сс</code> идёт с создания и останавливается, когда рой закончился.</p>`;
+
+/* ================= отрисовка ================= */
+function render(){renderSidebar();renderChat();renderIsland();renderPanel()}
+function tick(){
+  $$('[data-timer]').forEach(e=>{const sw=S.sw[e.dataset.timer];if(sw)e.textContent=fmt(elapsed(sw))});
+}
+
+/* ================= события ================= */
+function openSwarm(id){S.cardOpen=true;S.expanded[id]=true;render()}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-act]');
+  if(!t){return}
+  const a=t.dataset.act;
+  if(a==='card'){S.cardOpen=!S.cardOpen;render()}
+  else if(a==='swarm'){S.expanded[t.dataset.sw]=!S.expanded[t.dataset.sw];render()}
+  else if(a==='sel')select(t.dataset.key);
+  else if(a==='tab')select(t.dataset.key);
+  else if(a==='tabx'){
+    e.stopPropagation();const k=t.dataset.key;
+    if(S.tabs.length>1){const i=S.tabs.indexOf(k);S.tabs.splice(i,1);if(S.sel===k)S.sel=S.tabs[Math.max(0,i-1)];render()}
+  }
+  else if(a==='swarm-open')openSwarm(t.dataset.sw);
+  else if(a==='to-swarm'){
+    const id=t.dataset.sw;openSwarm(id);
+    const row=$(`[data-row="sw-${id}"]`);if(row){row.classList.remove('flash');void row.offsetWidth;row.classList.add('flash');row.scrollIntoView({block:'nearest'})}
+  }
+  else if(a==='isl-open'){
+    const id=t.dataset.sw;S.expanded[id]=true;S.islHover=false;
+    const sw=S.sw[id];
+    select(sw.creator.k==='session'?'session:'+sw.creator.id:sw.creator.k==='room'?'room:'+sw.creator.id:'q:'+id+':q');
+  }
+});
+document.addEventListener('keydown',e=>{
+  if((e.key==='Enter'||e.key===' ')&&e.target.matches('.row[data-act]')){e.preventDefault();e.target.click()}
+});
+// Остров: наведение раскрывает список, клик закрепляет.
+const ish=$('#ishape');
+ish.addEventListener('mouseenter',()=>{S.islHover=true;renderIsland()});
+ish.addEventListener('mouseleave',()=>{S.islHover=false;renderIsland()});
+ish.addEventListener('click',e=>{
+  if(e.target.closest('[data-act]'))return;
+  S.islPinned=!S.islPinned;$('#cbIsl').checked=S.islPinned;renderIsland();
+});
+
+function stopLive(){clearInterval(S.liveTimer);S.liveTimer=null;$('#live').textContent='▶ Живой прогон (~20 с)';$('#stoplive').hidden=true}
+function startLive(){
+  stopLive();
+  const sw=S.sw.A;S.on.A=true;S.target='A';stage(sw,'launch');sw.base=0;sw.since=clock();
+  const ds=drones(sw),v=verifier(sw),q=queen(sw),t0=clock();
+  const steps=[
+    [2,()=>{sw.spawned=true;sw.phase='wait';ds.forEach(d=>d.st='working')}],
+    [5.5,()=>{ds[0].st='handed'}],[8.5,()=>{ds[2].st='handed'}],[11,()=>{ds[3].st='handed'}],
+    [14,()=>{ds[1].st='handed';v.st='working'}],
+    [17,()=>{v.st='handed';sw.status='collecting';sw.phase='collect'}],
+    [20,()=>{sw.status='done';q.st='handed';freeze(sw)}]
+  ];
+  $('#live').textContent='Идёт прогон…';$('#stoplive').hidden=false;render();
+  S.liveTimer=setInterval(()=>{
+    const t=clock()-t0;let fired=false;
+    while(steps.length&&steps[0][0]<=t){steps.shift()[1]();fired=true}
+    if(fired)render();
+    if(!steps.length)stopLive();
+  },200);
+}
+$('#live').onclick=startLive;$('#stoplive').onclick=stopLive;
+$('#stages').addEventListener('click',e=>{
+  const b=e.target.closest('[data-stage]');if(!b)return;
+  stopLive();stage(S.sw[S.target],b.dataset.stage);render();
+});
+$('#tgt').addEventListener('click',e=>{const b=e.target.closest('[data-tgt]');if(b){S.target=b.dataset.tgt;renderPanel()}});
+$('#themes').addEventListener('click',e=>{
+  const b=e.target.closest('[data-theme]');if(!b)return;
+  S.theme=b.dataset.theme;document.documentElement.classList.toggle('dark',S.theme==='dark');renderPanel();
+});
+function toggleSwarm(id,on){
+  S.on[id]=on;
+  if(on){stage(S.sw[id],'work');S.sw[id].seen=false}
+  if(!on&&S.target===id)S.target='A';
+  if(!on&&parse(S.sel).a===id)S.sel='session:S01';
+  S.tabs=S.tabs.filter(k=>{const p=parse(k);return !((p.k==='q'||p.k==='m')&&p.a===id&&!on)});
+  if(!S.tabs.includes(S.sel))S.tabs.push(S.sel);
+  render();
+}
+$('#cbB').onchange=e=>toggleSwarm('B',e.target.checked);
+$('#cbC').onchange=e=>toggleSwarm('C',e.target.checked);
+$('#cbIsl').onchange=e=>{S.islPinned=e.target.checked;renderIsland()};
+$('#cbSpots').onchange=e=>document.body.classList.toggle('spots',e.target.checked);
+$$('[data-ptab]').forEach(b=>b.onclick=()=>{
+  $$('[data-ptab]').forEach(x=>x.classList.toggle('on',x===b));
+  $('#p-ctl').hidden=b.dataset.ptab!=='ctl';$('#p-lg').hidden=b.dataset.ptab!=='lg';
+});
+$('#p-lg').innerHTML=LEGEND;
+
+stage(S.sw.A,'work');stage(S.sw.B,'work');stage(S.sw.C,'work');
+render();
+setInterval(tick,500);
+})();
+</script>
+</body>
+</html>
