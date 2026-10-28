@@ -615,3 +615,34 @@ it('selects the highest attempt number and latest check without showing an older
   expect(line.textContent).toMatch(/…$/);
   expect(line.textContent).not.toContain('Restart still fails');
 });
+
+const NEEDS_GIT = /^Autonomous mode needs a Git repository at the project root\./;
+it('autonomous room in a non-git project shows the git hint; git project and other modes do not', async () => {
+  const bridge = createFakeBridge(); bridge.setHandler('worktrees.available', () => ({ available: false }));
+  const view = render(<RoomModeControl entry={entryOf(planOf({ mode: 'autonomous', autonomous: autonomousPlan() }))} roomId="r-01" bridge={bridge} />);
+  expect(await screen.findByText(NEEDS_GIT)).toBeTruthy();
+  expect(bridge.calls).toEqual([{ method: 'worktrees.available', params: { projectPath: '/tmp/one' } }]);
+  view.unmount();
+
+  const git = createFakeBridge(); git.setHandler('worktrees.available', () => ({ available: true }));
+  render(<RoomModeControl entry={entryOf(planOf({ mode: 'autonomous', autonomous: autonomousPlan() }))} roomId="r-01" bridge={git} />);
+  await waitFor(() => expect(git.calls).toHaveLength(1));
+  await act(async () => {});
+  expect(screen.queryByText(NEEDS_GIT)).toBeNull();
+  cleanup();
+
+  const other = createFakeBridge(); other.setHandler('worktrees.available', () => ({ available: false }));
+  render(<RoomModeControl entry={entryOf()} roomId="r-01" bridge={other} />);
+  await act(async () => {});
+  expect(other.calls).toHaveLength(0);
+  expect(screen.queryByText(NEEDS_GIT)).toBeNull();
+});
+it('picking Autonomous in the selector asks about git once and shows the hint for a non-git project', async () => {
+  const bridge = createFakeBridge(); bridge.setHandler('worktrees.available', () => ({ available: false }));
+  render(<RoomModeControl entry={entryOf()} roomId="r-01" bridge={bridge} />);
+  fireEvent.change(screen.getByLabelText('Room mode'), { target: { value: 'autonomous' } });
+  expect(await screen.findByText(NEEDS_GIT)).toBeTruthy();
+  expect(bridge.calls.filter((call) => call.method === 'worktrees.available')).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText('Room mode'), { target: { value: 'checklist' } });
+  expect(screen.queryByText(NEEDS_GIT)).toBeNull();
+});

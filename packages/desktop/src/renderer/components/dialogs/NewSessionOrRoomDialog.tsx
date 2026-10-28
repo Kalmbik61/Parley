@@ -650,6 +650,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           </div>
           {/* Рецепт и режим живут только у комнаты (спека рецептов, 5.3: не меньше двух агентов): без комнаты они молча терялись. */}
           {!roomMode && (recipeId !== null || mode !== 'free') ? <p role="status" data-recipe-dropped className="m-0 text-xs text-neutral-700">{multi ? text.separateDropsRecipe : S.recipes.singleDropsRecipe}</p> : null}
+          {/* Как и noWorktree: до ответа worktrees.available флаг ложный, поэтому подсказка до ответа тоже видна — только у выбранного Autonomous. */}
+          {roomMode && mode === 'autonomous' && !worktreeAvailable ? <p role="status" data-autonomous-needs-git className="m-0 text-xs text-neutral-700">{S.plans.autonomousNeedsGit}</p> : null}
           {multi && !worktreeAvailable && agents.some((row) => row.worktree === true) ? <p className="m-0 text-xs text-neutral-700">{S.recipes.noWorktree}</p> : null}
         </div>
         </TooltipProvider>

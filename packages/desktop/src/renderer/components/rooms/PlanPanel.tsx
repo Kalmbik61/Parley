@@ -163,6 +163,23 @@ export function RoomModeControl({
   const [reason, setReason] = useState("");
   const modeDraft = useRef("");
   modeDraft.current = JSON.stringify([selected, reason]);
+  // Autonomous требует Git в корне проекта: «неизвестно» (null, старый хост, сбой) — без подсказки.
+  const [gitAvailable, setGitAvailable] = useState<boolean | null>(null);
+  const autonomousChosen = (selected ?? mode) === "autonomous";
+  useEffect(() => {
+    setGitAvailable(null);
+    if (!autonomousChosen) return;
+    let stale = false;
+    bridge
+      .call("worktrees.available", { projectPath: entry.projectPath })
+      .then((result) => {
+        if (!stale) setGitAvailable(result.available);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [bridge, entry.projectPath, autonomousChosen]);
   const action = usePlanRequest(
     [
       entry.projectPath,
@@ -210,6 +227,11 @@ export function RoomModeControl({
         </select>
       </label>
       <span className="text-muted-foreground">{P.modeHelp[mode]}</span>
+      {autonomousChosen && gitAvailable === false ? (
+        <span role="status" data-autonomous-needs-git="">
+          {P.autonomousNeedsGit}
+        </span>
+      ) : null}
       <PlanHaltBadge plan={plan} />
       {!canChange ? <span>{P.oldHost}</span> : null}
       {!action.canMutate ? <span>{archived ? P.roomArchived : P.workClosed}</span> : null}
