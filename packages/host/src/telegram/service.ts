@@ -852,8 +852,10 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     );
   }
 
-  function closeAssistantCard(proposalId: string, receipt: 'sent' | 'done' | 'cancelled' | 'current'): void {
-    const text = receipt === 'current' ? T.noLongerCurrent : line(receipt);
+  function closeAssistantCard(proposalId: string, receipt: 'sent' | 'done' | 'stopped' | 'cancelled' | 'current', extra?: string): void {
+    const head = receipt === 'current' ? T.noLongerCurrent : line(receipt);
+    // Экранирует `closeCard` (`closedText`) — один раз на всё, в том числе на `extra`.
+    const text = extra === undefined || extra === '' ? head : `${head}\n${extra}`;
     for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant' && card.proposalId === proposalId)) closeCard(shortId, text);
     if (sending.has(`assistant:${proposalId}`)) closeEarly.set(`assistant:${proposalId}`, text);
   }
@@ -1227,7 +1229,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
           if (canSend()) send('notice', text, { plain: true });
         },
         sendCard: async (proposal) => sendAssistantCard(proposal),
-        closeCard: async (proposalId, receipt) => closeAssistantCard(proposalId, receipt),
+        closeCard: async (proposalId, receipt, extra) => closeAssistantCard(proposalId, receipt, extra),
         typing: () => {
           const chatId = owner()?.chatId;
           if (chatId === undefined || !canSend()) return;

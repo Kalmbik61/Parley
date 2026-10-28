@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedPermissionCard, FeedPlanCard, FeedQuestionCard, Proposal } from '@parley/core';
 import type { AssistantProposal, ConsentCard } from '@parley/protocol';
-import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecisionFor, questionKeyboard, receiptText, roomCardMessage, type CardMeta } from './cards.js';
+import { ASSISTANT_CARD_MAX, assistantCardMessage, consentCardMessage, feedCardMessage, feedDecisionFor, questionKeyboard, receiptText, roomCardMessage, type CardMeta } from './cards.js';
 
 const meta: CardMeta = { sessionName: 'S03 Ruslan', where: 'Parley · my_harnas', projectPath: '/p/my_harnas', shortId: 'aB3dE9fG', buttons: true };
 
@@ -132,6 +132,68 @@ describe('assistantCardMessage', () => {
   });
   it('текст письма экранирован', () => {
     expect(assistantCardMessage({ ...common, text: '<b>x</b>', kind: null, wake: false }).text).toContain('&lt;b&gt;x&lt;/b&gt;');
+  });
+
+  describe('карточка actions', () => {
+    const ACTIONS: Extract<AssistantProposal, { action: 'actions' }> = {
+      ...common,
+      id: 'p7',
+      action: 'actions',
+      target: '2 steps',
+      text: 'Update Parley…',
+      steps: [
+        { verb: 'sleep', line: 'Put S03 Ruslan to sleep', text: null, danger: false },
+        { verb: 'close', line: 'Close S05 Vera for good', text: null, danger: true },
+      ],
+    };
+    const oneStep = (verb: Extract<AssistantProposal, { action: 'actions' }>['steps'][number]['verb']): AssistantProposal => ({
+      ...ACTIONS,
+      steps: [{ verb, line: 'Do it', text: null, danger: false }],
+    });
+
+    it('шаги, close с предупреждением, «Do all (2)»', () => {
+      const { text, keyboard } = assistantCardMessage(ACTIONS);
+      expect(text).toContain('Plan in Parley · my_harnas');
+      expect(text).toContain('<b>1.</b> Put S03 Ruslan to sleep');
+      expect(text).toContain('<b>2.</b> Close S05 Vera for good — closes for good');
+      expect(keyboard[0]?.[0]).toEqual({ text: 'Do all (2)', callback_data: 'pa1:p7:send' });
+      expect(keyboard[0]?.[1]).toEqual({ text: 'Cancel', callback_data: 'pa1:p7:cancel' });
+    });
+    it('один шаг — глагол шага на кнопке', () => {
+      expect(labelOf(oneStep('create_work'))).toBe('Create');
+      expect(labelOf(oneStep('create_session'))).toBe('Create');
+      expect(labelOf(oneStep('create_room'))).toBe('Create');
+      expect(labelOf(oneStep('wake'))).toBe('Wake');
+      expect(labelOf(oneStep('interrupt'))).toBe('Stop');
+      expect(labelOf(oneStep('sleep'))).toBe('Put to sleep');
+      expect(labelOf(oneStep('close'))).toBe('Close');
+      expect(labelOf(oneStep('add_to_room'))).toBe('Add');
+      expect(labelOf(oneStep('message'))).toBe('Send');
+    });
+    it('текст шага — под строкой в pre и экранирован', () => {
+      const { text } = assistantCardMessage({ ...ACTIONS, steps: [{ verb: 'message', line: 'Message S03 Ruslan', text: 'a <b> & c', danger: false }] });
+      expect(text).toContain('<b>1.</b> Message S03 Ruslan\n<pre>a &lt;b&gt; &amp; c</pre>');
+    });
+    it('20 шагов с текстами по 300 знаков влезают в 4096', () => {
+      const steps = Array.from({ length: 20 }, (_, i) => ({ verb: 'message' as const, line: `Message room "Room with a very long name number ${i}"`, text: 'x'.repeat(300), danger: false }));
+      const { text } = assistantCardMessage({ ...ACTIONS, steps });
+      expect(text.length).toBeLessThanOrEqual(ASSISTANT_CARD_MAX);
+      expect(text).toContain('<pre>');
+    });
+    it('не влезает с текстами по 100 знаков — тексты убираются', () => {
+      const steps = Array.from({ length: 20 }, (_, i) => ({ verb: 'message' as const, line: `Message room "${'R'.repeat(80)}" ${i}`, text: 'x'.repeat(300), danger: false }));
+      const { text } = assistantCardMessage({ ...ACTIONS, steps });
+      expect(text.length).toBeLessThanOrEqual(ASSISTANT_CARD_MAX);
+      expect(text).not.toContain('<pre>');
+      expect(text).toContain('<b>20.</b>');
+    });
+    it('не влезает и без текстов — строки режутся до 120 знаков, предупреждение close остаётся', () => {
+      const steps = Array.from({ length: 20 }, (_, i) => ({ verb: 'close' as const, line: `Close ${'W'.repeat(280)} ${i}`, text: null, danger: true }));
+      const { text } = assistantCardMessage({ ...ACTIONS, steps });
+      expect(text.length).toBeLessThanOrEqual(ASSISTANT_CARD_MAX);
+      expect(text).toContain('<b>20.</b>');
+      expect(text.split('— closes for good')).toHaveLength(21);
+    });
   });
 });
 

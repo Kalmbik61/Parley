@@ -1,11 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistantProposal, AssistantSettings, AssistantState } from '@parley/protocol';
+import type { ActionsReport, AssistantProposal, AssistantSettings, AssistantState } from '@parley/protocol';
 import { createAssistantBridge, type BridgeDeps } from './assistant-bridge.js';
 import { T } from './texts.js';
 
 const BASE: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0 };
 const SETTINGS: AssistantSettings = { enabled: true, provider: 'claude', model: null, language: 'en', voiceModel: null };
 const CARD = { id: 'p-1', action: 'message', kind: 'note' } as unknown as AssistantProposal;
+const ACTIONS = {
+  id: 'p7',
+  action: 'actions',
+  target: '2 steps',
+  where: 'Parley · my_harnas',
+  text: 'Update Parley…',
+  steps: [
+    { verb: 'sleep', line: 'Put S03 Ruslan to sleep', text: null, danger: false },
+    { verb: 'wake', line: 'Wake S05 Vera', text: null, danger: false },
+  ],
+} as unknown as AssistantProposal;
+const REPORT: ActionsReport = {
+  proposalId: 'p7',
+  status: 'running',
+  steps: [
+    { line: 'Put S03 Ruslan to sleep', status: 'done' },
+    { line: 'Wake S05 Vera', status: 'running' },
+  ],
+  failedStep: null,
+  reason: null,
+  notes: [],
+};
 
 let state: AssistantState;
 let settings: AssistantSettings | null;
@@ -129,8 +151,29 @@ describe('assistant-bridge: вход', () => {
     const bridge = createAssistantBridge(deps);
     expect(await bridge.onCallback('p-1', 'send')).toBe('');
     expect(service.decide).toHaveBeenCalledWith('p-1', 'send');
-    service.decide.mockResolvedValue({ applied: false, error: 'x' });
+    service.decide.mockResolvedValue({ applied: false, error: null });
     expect(await bridge.onCallback('p-1', 'cancel')).toBe(T.noLongerCurrent);
+  });
+
+  it('callback: ошибка хоста идёт в тост как есть', async () => {
+    const bridge = createAssistantBridge(deps);
+    service.decide.mockResolvedValue({ applied: false, error: 'This card is no longer current' });
+    expect(await bridge.onCallback('p-1', 'send')).toBe('This card is no longer current');
+  });
+
+  it('кнопка карточки actions — decide с action: actions; ошибка — в тосте', async () => {
+    const bridge = createAssistantBridge(deps);
+    state = { ...BASE, proposal: ACTIONS };
+    service.decide.mockResolvedValue({ applied: false, error: 'Another plan is still running' });
+    expect(await bridge.onCallback('p7', 'send')).toBe('Another plan is still running');
+    expect(service.decide).toHaveBeenCalledWith('p7', 'send', 'actions');
+  });
+
+  it('карточка actions уже не текущая — decide без action', async () => {
+    const bridge = createAssistantBridge(deps);
+    state = { ...BASE, proposal: ACTIONS };
+    await bridge.onCallback('p-old', 'send');
+    expect(service.decide).toHaveBeenCalledWith('p-old', 'send');
   });
 });
 
@@ -219,6 +262,66 @@ describe('assistant-bridge: выход', () => {
     emit({ phase: 'awaiting-confirm', origin: 'island', proposal: { ...CARD, id: 'p-9' } as AssistantProposal });
     emit({ phase: 'idle', proposal: null, outcome: 'cancelled' });
     expect(closeCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('план остановился — квитанция «Stopped» с шагом и причиной', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: null, report: { ...REPORT, status: 'running' } });
+    await flush();
+    expect(closeCard).not.toHaveBeenCalled();
+    emit({ outcome: 'done', report: { ...REPORT, status: 'stopped', failedStep: 2, reason: 'S05 Vera is already asleep' } });
+    await flush();
+    expect(closeCard).toHaveBeenCalledTimes(1);
+    expect(closeCard).toHaveBeenCalledWith('p7', 'stopped', 'Stopped at step 2 of 2: S05 Vera is already asleep');
+  });
+
+  it('план выполнен — квитанция «done» с пометками; повтор того же отчёта ничего не закрывает', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: null, report: { ...REPORT, status: 'running' } });
+    const done: ActionsReport = { ...REPORT, status: 'done', notes: ['Alice waits for you to trust the folder'] };
+    emit({ outcome: 'done', report: done });
+    emit({ outcome: 'done', report: done });
+    await flush();
+    expect(closeCard).toHaveBeenCalledTimes(1);
+    expect(closeCard).toHaveBeenCalledWith('p7', 'done', 'Alice waits for you to trust the folder');
+  });
+
+  it('план выполнен без пометок — квитанция без третьего аргумента', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: null, report: { ...REPORT, status: 'running' } });
+    emit({ outcome: 'done', report: { ...REPORT, status: 'done' } });
+    await flush();
+    expect(closeCard).toHaveBeenCalledWith('p7', 'done');
+  });
+
+  it('остановка с пометками: сначала строка остановки, затем пометки', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: null, report: { ...REPORT, status: 'running' } });
+    emit({ outcome: 'done', report: { ...REPORT, status: 'stopped', failedStep: 2, reason: 'no such agent', notes: ['Alice waits for you to trust the folder'] } });
+    await flush();
+    expect(closeCard).toHaveBeenCalledWith('p7', 'stopped', 'Stopped at step 2 of 2: no such agent\nAlice waits for you to trust the folder');
+  });
+
+  it('карточка actions, что в чат не уходила, отчётом не закрывается', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'island', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: null, report: { ...REPORT, status: 'running' } });
+    emit({ outcome: 'done', report: { ...REPORT, status: 'done' } });
+    await flush();
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(closeCard).not.toHaveBeenCalled();
+  });
+
+  it('отмена карточки actions закрывает её как cancelled', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
+    emit({ phase: 'idle', proposal: null, outcome: 'cancelled' });
+    await flush();
+    expect(closeCard).toHaveBeenCalledWith('p7', 'cancelled');
   });
 
   it('stop снимает слушателя и таймер typing', () => {

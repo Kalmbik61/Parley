@@ -11,6 +11,7 @@ export type ReceiptKind =
   | 'revised'
   | 'sent'
   | 'done'
+  | 'stopped'
   | 'cancelled'
   | 'unlinked'
   | 'restarted';
@@ -26,6 +27,7 @@ const RECEIPTS: Record<ReceiptKind, string> = {
   revised: 'Revised',
   sent: 'Sent',
   done: 'Done',
+  stopped: 'Stopped',
   cancelled: 'Cancelled',
   unlinked: 'Unlinked',
   restarted: 'Restarted',
@@ -76,6 +78,8 @@ export const T = {
   completionTitle: 'Completion',
   assistantTo: (target: string, where: string): string => `To ${target} · ${where}`,
   assistantNewRoom: (where: string): string => `New room in ${where}`,
+  assistantPlan: (where: string): string => `Plan in ${where}`,
+  closesForGood: 'closes for good',
   assistantRoomLine: (title: string, members: string, lead: string): string => `${title} · ${members} · lead ${lead}`,
   assistantNote: (text: string): string => `Note: ${text}`,
   assistantAnswerLine: (question: string, answer: string): string => `${question} → ${answer}`,
@@ -107,4 +111,10 @@ export const B = {
   return: 'Return',
   wakeAndSend: 'Wake and send',
   trust: 'Trust',
+  stop: 'Stop',
+  putToSleep: 'Put to sleep',
+  close: 'Close',
+  wake: 'Wake',
+  add: 'Add',
+  doAll: (n: number): string => `Do all (${n})`,
 } as const;

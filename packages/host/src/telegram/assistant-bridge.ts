@@ -4,7 +4,7 @@
  * не знает, только его интерфейс.
  */
 
-import type { AssistantProposal, AssistantState } from '@parley/protocol';
+import { reportLine, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import { splitText } from './format.js';
 import { T } from './texts.js';
@@ -19,7 +19,8 @@ export interface BridgeDeps {
   sendText(text: string): Promise<void>;
   /** Карточка предложения; messageId запоминает вызывающая сторона. */
   sendCard(proposal: AssistantProposal): Promise<void>;
-  closeCard(proposalId: string, receipt: 'sent' | 'done' | 'cancelled' | 'current'): Promise<void>;
+  /** `extra` — строки под квитанцией (где остановился план, пометки); без него — только квитанция. */
+  closeCard(proposalId: string, receipt: 'sent' | 'done' | 'stopped' | 'cancelled' | 'current', extra?: string): Promise<void>;
   /** `sendChatAction typing`. */
   typing(): void;
   /** `telegramCards`: карточки и для ходов с острова. */
@@ -48,6 +49,8 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
   let lastProposal: string | null = null;
   /** Карточки, что мы отправили в чат: закрывать нужно только их. */
   const cards = new Set<string>();
+  /** Карточка `actions`, что ушла в выполнение: её квитанцию даёт итог отчёта, а не исход карточки. */
+  let runningPlan: string | null = null;
   /** Номер хода, чей текст уже ушёл в чат: на ход текст уходит один раз. */
   let lastSentTurn: number | null = null;
   /** Ход, что мост сам отменил ради нового текста: его оборванный ответ в чат не идёт. */
@@ -84,10 +87,21 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
       cards.add(proposal.id);
       void deps.sendCard(proposal).catch(fail('sendCard'));
     }
-    if (proposal === null && lastProposal !== null && state.outcome !== null && cards.delete(lastProposal)) {
+    const report = state.report ?? null;
+    if (proposal === null && lastProposal !== null && report?.proposalId === lastProposal && report.status === 'running' && cards.delete(lastProposal)) {
+      // План пошёл: кнопки карточки уже ничего не решают, но квитанцию закроет итог отчёта.
+      runningPlan = lastProposal;
+    } else if (proposal === null && lastProposal !== null && state.outcome !== null && cards.delete(lastProposal)) {
       void deps.closeCard(lastProposal, state.outcome).catch(fail('closeCard'));
     }
     lastProposal = proposal?.id ?? null;
+    if (runningPlan !== null && report?.proposalId === runningPlan && report.status !== 'running') {
+      const id = runningPlan;
+      runningPlan = null;
+      const lines = [...(report.status === 'stopped' ? [reportLine(report)] : []), ...report.notes];
+      const receipt = report.status === 'done' ? 'done' : 'stopped';
+      void (lines.length === 0 ? deps.closeCard(id, receipt) : deps.closeCard(id, receipt, lines.join('\n'))).catch(fail('closeCard'));
+    }
 
     if (TERMINAL.has(state.phase) && toChat(state) && state.turn !== lastSentTurn && state.turn !== cancelledTurn) {
       const text = state.answer !== '' ? state.answer : (state.error ?? '');
@@ -121,8 +135,11 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
       await deps.sendText(T.newConversation);
     },
     async onCallback(proposalId, code) {
-      const result = await deps.assistant.decide(proposalId, code);
-      return result.applied ? '' : T.noLongerCurrent;
+      // Карточка плана подтверждается только с `action: 'actions'`: хост без него план не выполнит.
+      const current = deps.assistant.state().proposal;
+      const forPlan = current !== null && current.id === proposalId && current.action === 'actions';
+      const result = await (forPlan ? deps.assistant.decide(proposalId, code, 'actions') : deps.assistant.decide(proposalId, code));
+      return result.applied ? (result.error ?? '') : (result.error ?? T.noLongerCurrent);
     },
     stop() {
       unsubscribe();
