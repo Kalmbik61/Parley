@@ -28,6 +28,7 @@ import { projectIslandActivity } from './island/activity-projection.js';
 import type { IslandActivityEntry } from '../shared/island.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { TtsService } from './assistant/tts.js';
+import { isTtsModelId, type TtsModelId } from '../shared/tts-types.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
 import { parseContextInput } from './browser/context-files.js';
@@ -259,10 +260,10 @@ export interface RegisterIpcOptions {
   islandShortcut?: () => AssistantShortcutStatus;
   suspendIslandShortcut?: (on: boolean) => void;
   /**
-   * Нейроголос помощника (план 3b, B15) для настроек: каталог, скачивание весов только по кнопке (E5), отмена и
-   * удаление (D5), состояние движка.
+   * Нейроголос помощника (план 3b, B15) для настроек: каталог, скачанные модели, скачивание весов модели только по
+   * кнопке (E5), отмена и удаление (D5), состояние движка.
    */
-  tts: Pick<TtsService, 'voices' | 'download' | 'cancelDownload' | 'remove' | 'state'>;
+  tts: Pick<TtsService, 'voices' | 'models' | 'download' | 'cancelDownload' | 'remove' | 'state'>;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -494,18 +495,24 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:island-shortcut', withIpcError(() => options.islandShortcut?.() ?? { accelerator: null, ok: true }));
   ipcMain.on('app:island-shortcut-suspend', (_event, on: unknown) => options.suspendIslandShortcut?.(on === true));
 
+  const ttsModelIdOf = (id: unknown): TtsModelId => {
+    if (!isTtsModelId(id)) throw new HostError('bad_request', 'invalid tts model id');
+    return id;
+  };
   ipcMain.handle('app:assistant-voices', withIpcError(() => tts.voices()));
+  ipcMain.handle('app:assistant-voice-models', withIpcError(() => tts.models()));
   ipcMain.handle(
     'app:assistant-voice-download',
-    withIpcError((event) => {
+    withIpcError((event, id: unknown) => {
+      const model = ttsModelIdOf(id);
       const sender = (event as { sender: Pick<WebContents, 'isDestroyed' | 'send'> }).sender;
-      return tts.download((progress) => {
+      return tts.download(model, (progress) => {
         if (!sender.isDestroyed()) sender.send('app:assistant-voice-progress', progress);
       });
     }),
   );
-  ipcMain.handle('app:assistant-voice-cancel', withIpcError(() => tts.cancelDownload()));
-  ipcMain.handle('app:assistant-voice-remove', withIpcError(() => tts.remove()));
+  ipcMain.handle('app:assistant-voice-cancel', withIpcError((_event, id: unknown) => tts.cancelDownload(ttsModelIdOf(id))));
+  ipcMain.handle('app:assistant-voice-remove', withIpcError((_event, id: unknown) => tts.remove(ttsModelIdOf(id))));
   ipcMain.handle('app:assistant-voice-state', withIpcError(() => tts.state()));
 
   ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {

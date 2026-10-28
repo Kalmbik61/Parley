@@ -55,7 +55,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
 import type { TtsEngineState } from '../../shared/island.js';
-import { TTS_VOICES } from '../../shared/tts-types.js';
+import { TTS_VOICES, type TtsModelId } from '../../shared/tts-types.js';
 
 type Handler = (params: never) => unknown;
 
@@ -149,8 +149,13 @@ export interface FakeBridge extends ParleyBridge {
   /** Вызовы `app.assistantShortcutSuspend` (поле записи сочетания): значение аргумента на каждый вызов. */
   readonly assistantShortcutSuspended: boolean[];
   readonly islandShortcutSuspended: boolean[];
-  /** Вызовы нейроголоса помощника (`app.assistantVoiceDownload` → `download` и т. д.) по порядку. */
+  /**
+   * Вызовы нейроголоса помощника по порядку: `voices`, `models` и `download:<id модели>`, `cancel:<id>`,
+   * `remove:<id>` — с id, который получил мост.
+   */
   readonly assistantVoiceCalls: string[];
+  /** Какие модели весов голоса «скачаны»: что отдаёт `app.assistantVoiceModels`; по умолчанию ни одной. */
+  setAssistantVoiceModels(ids: TtsModelId[]): void;
   /** Состояние движка голоса: что отдаёт `app.assistantVoiceState` и событие `onAssistantVoiceState`; по умолчанию `not-downloaded`. */
   setAssistantVoiceState(state: TtsEngineState): void;
   /** Прогресс скачивания весов голоса: событие слушателям `app.onAssistantVoiceProgress`. */
@@ -328,6 +333,7 @@ export function createFakeBridge(): FakeBridge {
   const assistantShortcutSuspended: boolean[] = [];
   const islandShortcutSuspended: boolean[] = [];
   const assistantVoiceCalls: string[] = [];
+  let assistantVoiceModelIds: TtsModelId[] = [];
   let assistantVoiceState: TtsEngineState = { state: 'not-downloaded' };
   const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
   const assistantVoiceProgressListeners = new Set<(progress: AssistantVoiceProgress) => void>();
@@ -628,6 +634,9 @@ export function createFakeBridge(): FakeBridge {
       for (const listener of voiceProgressListeners) listener(progress);
     },
     assistantVoiceCalls,
+    setAssistantVoiceModels: (ids) => {
+      assistantVoiceModelIds = [...ids];
+    },
     setAssistantVoiceState: (state) => {
       assistantVoiceState = state;
       for (const listener of assistantVoiceStateListeners) listener(state);
@@ -934,17 +943,21 @@ export function createFakeBridge(): FakeBridge {
       islandShortcutSuspend: (on) => { islandShortcutSuspended.push(on); },
       assistantVoices: async () => {
         assistantVoiceCalls.push('voices');
-        return TTS_VOICES.map((voice) => ({ ...voice, downloaded: assistantVoiceState.state !== 'not-downloaded' }));
+        return TTS_VOICES.map((voice) => ({ ...voice, downloaded: assistantVoiceModelIds.length > 0 }));
       },
-      assistantVoiceDownload: async () => {
-        assistantVoiceCalls.push('download');
+      assistantVoiceModels: async () => {
+        assistantVoiceCalls.push('models');
+        return [...assistantVoiceModelIds];
+      },
+      assistantVoiceDownload: async (id) => {
+        assistantVoiceCalls.push(`download:${id}`);
         return { ok: true };
       },
-      assistantVoiceCancel: async () => {
-        assistantVoiceCalls.push('cancel');
+      assistantVoiceCancel: async (id) => {
+        assistantVoiceCalls.push(`cancel:${id}`);
       },
-      assistantVoiceRemove: async () => {
-        assistantVoiceCalls.push('remove');
+      assistantVoiceRemove: async (id) => {
+        assistantVoiceCalls.push(`remove:${id}`);
       },
       assistantVoiceState: async () => assistantVoiceState,
       onAssistantVoiceState: (listener) => {

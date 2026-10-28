@@ -18,7 +18,7 @@ import type {
   SavedContext,
 } from '../shared/browser-types.js';
 import type { AssistantShortcutStatus, SessionVisibilityReport, TtsEngineState } from '../shared/island.js';
-import type { AssistantVoice } from '../shared/tts-types.js';
+import type { AssistantVoice, TtsModelId } from '../shared/tts-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -252,9 +252,10 @@ const bridge = {
     islandShortcut: () => ipcRenderer.invoke('app:island-shortcut') as Promise<AssistantShortcutStatus>,
     islandShortcutSuspend: (on: boolean) => ipcRenderer.send('app:island-shortcut-suspend', on),
     assistantVoices: () => ipcRenderer.invoke('app:assistant-voices') as Promise<AssistantVoice[]>,
-    assistantVoiceDownload: () => ipcRenderer.invoke('app:assistant-voice-download') as Promise<DownloadResult>,
-    assistantVoiceCancel: () => ipcRenderer.invoke('app:assistant-voice-cancel') as Promise<void>,
-    assistantVoiceRemove: () => ipcRenderer.invoke('app:assistant-voice-remove') as Promise<void>,
+    assistantVoiceModels: () => ipcRenderer.invoke('app:assistant-voice-models') as Promise<TtsModelId[]>,
+    assistantVoiceDownload: (id: TtsModelId) => ipcRenderer.invoke('app:assistant-voice-download', id) as Promise<DownloadResult>,
+    assistantVoiceCancel: (id: TtsModelId) => ipcRenderer.invoke('app:assistant-voice-cancel', id) as Promise<void>,
+    assistantVoiceRemove: (id: TtsModelId) => ipcRenderer.invoke('app:assistant-voice-remove', id) as Promise<void>,
     assistantVoiceState: () => ipcRenderer.invoke('app:assistant-voice-state') as Promise<TtsEngineState>,
     onAssistantVoiceState: (listener: (state: TtsEngineState) => void) => {
       assistantVoiceStateListeners.add(listener);

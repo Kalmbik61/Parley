@@ -12,8 +12,12 @@
  * не запустился или вышел до `ready`); чужой протокол, `fatal`, нет бинаря — голос недоступен (E6).
  *
  * Выгрузка (Р5): через 15 мин без синтеза worker закрывается; следующая нужда запускает его снова.
+ *
+ * Моделей весов две (0.6B и 1.7B), говорит одна — `activeTtsModel`: самая большая из скачанных. Worker один; когда
+ * активная модель сменилась (докачалась 1.7B, удалили 1.7B при скачанной 0.6B), старый останавливается, а следующий
+ * запускается с файлом новой.
  */
-import { TTS_VOICES, ttsModel, type AssistantVoice, type TtsModelId } from '../../shared/tts-types.js';
+import { activeTtsModel, TTS_MODELS, TTS_VOICES, ttsModel, type AssistantVoice, type TtsModelId } from '../../shared/tts-types.js';
 import type { DownloadResult } from '../../shared/voice-types.js';
 import type { ModelProgress, ModelStore } from '../voice/models.js';
 import type { SpeechWorker } from './speech-worker.js';
@@ -29,8 +33,6 @@ const FRAME_SECONDS = 0.02;
 const RELEASE_SECONDS = 0.05;
 /** Частота Qwen3-TTS, пока worker не сказал свою. */
 const DEFAULT_SAMPLE_RATE = 24_000;
-/** Один файл весов на пять голосов (Р6). */
-const MODEL_ID: TtsModelId = 'qwen3-tts-0.6b-q8_0';
 /** Временные отказы клиента B05: процесс не запустился или вышел до `ready`. Остальные причины — навсегда. */
 const TRANSIENT = /^(spawn failed|exited with .* before ready)/;
 const MAX_TRANSIENT_RETRIES = 1;
@@ -74,18 +76,26 @@ export interface TtsService {
   cancelAll(): void;
   /** `ready` — голос может звучать, в том числе когда worker выгружен: `speak` запустит его сам. */
   state(): TtsState;
+  /** Срабатывает при смене состояния и при смене набора скачанных моделей (состояние при этом может не меняться). */
   onState(listener: (state: TtsState) => void): () => void;
   warmup(): Promise<TtsState>;
   voices(): Promise<AssistantVoice[]>;
-  /** Качает веса (только по кнопке, E5); после успеха — новый клиент worker и прогрев. */
-  download(onProgress: (progress: ModelProgress<TtsModelId>) => void): Promise<DownloadResult>;
-  /** Отмена идущего скачивания весов (D5: как у моделей Whisper). */
-  cancelDownload(): void;
+  /** Скачанные модели весов (после перечитывания диска), в порядке каталога. */
+  models(): Promise<TtsModelId[]>;
   /**
-   * Удаление весов (D5): речь отменяется, worker останавливается, файл удаляется; дальше голоса `downloaded: false`,
-   * ответы — текстом (G3), само ничего не качается.
+   * Качает веса модели (только по кнопке, E5). Если она стала активной (или это перекачка активной) — новый клиент
+   * worker и прогрев; пока идёт предложение, worker не режем, а меняем перед следующим. Докачка неактивной модели речь
+   * и worker не трогает.
    */
-  remove(): Promise<void>;
+  download(id: TtsModelId, onProgress: (progress: ModelProgress<TtsModelId>) => void): Promise<DownloadResult>;
+  /** Отмена идущего скачивания весов модели (D5: как у моделей Whisper). */
+  cancelDownload(id: TtsModelId): void;
+  /**
+   * Удаление весов модели (D5). Если она активная — речь отменяется, worker останавливается; осталась другая модель —
+   * голос заговорит ею со следующего `speak`. Не осталась — голоса `downloaded: false`, ответы текстом (G3), само
+   * ничего не качается. Неактивную модель удаляет, не трогая ни речь, ни worker.
+   */
+  remove(id: TtsModelId): Promise<void>;
   /** Выход приложения: отмена всего и `SIGKILL` worker. */
   stop(): void;
 }
@@ -94,8 +104,8 @@ export interface TtsServiceDeps {
   /** Движок есть только на Apple Silicon: на x64 голос недоступен (Р8). */
   supported: boolean;
   models: ModelStore<TtsModelId>;
-  /** Новый клиент worker (`createSpeechWorker`). */
-  createWorker(): SpeechWorker;
+  /** Новый клиент worker (`createSpeechWorker`) для файла весов этой модели. */
+  createWorker(model: TtsModelId): SpeechWorker;
   log(message: string): void;
 }
 
@@ -144,8 +154,11 @@ interface Job {
 }
 
 export function createTtsService(deps: TtsServiceDeps): TtsService {
-  let downloaded = false;
+  /** Скачанные модели весов по последнему чтению диска и нашим скачиваниям/удалениям. */
+  let downloaded: TtsModelId[] = [];
   let worker: SpeechWorker | null = null;
+  /** Для какой модели создан `worker`: расхождение с активной моделью — повод его пересоздать. */
+  let workerModel: TtsModelId | null = null;
   /** Причина последнего отказа worker; сбрасывается с новым клиентом и с `ready`. */
   let failure: string | null = null;
   /**
@@ -153,7 +166,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
    * или перезапуска: каждый запуск грузит 1,2 ГБ, холодный — до 15 с (критик m-1457).
    */
   let transientRetries = 0;
-  let downloading: Promise<DownloadResult> | null = null;
+  const downloading = new Map<TtsModelId, Promise<DownloadResult>>();
   const queue: Job[] = [];
   let current: Job | null = null;
   let requests = 0;
@@ -163,22 +176,27 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
 
   function state(): TtsState {
     if (!deps.supported) return { state: 'unavailable', reason: 'the voice engine needs Apple Silicon' };
-    if (!downloaded) return { state: 'not-downloaded' };
+    if (activeTtsModel(downloaded) === null) return { state: 'not-downloaded' };
     if (failure !== null) return { state: 'unavailable', reason: failure };
     if (worker?.status().state === 'starting') return { state: 'warming' };
     return current === null ? { state: 'ready' } : { state: 'speaking' };
   }
 
+  /** Скачанные модели в порядке каталога: так их отдаёт `models()` и так строится ключ `notify`. */
+  const inCatalogOrder = (ids: readonly TtsModelId[]): TtsModelId[] =>
+    TTS_MODELS.map((model) => model.id).filter((id) => ids.includes(id));
+
   function notify(): void {
     const next = state();
-    const key = JSON.stringify(next);
+    // Окну настроек важен и набор скачанных моделей: докачали 0.6B при активной 1.7B — состояние то же, а событие нужно.
+    const key = JSON.stringify({ next, downloaded });
     if (key === reported) return;
     reported = key;
     for (const listener of listeners) listener(next);
   }
 
   async function refresh(): Promise<void> {
-    downloaded = (await deps.models.list()).includes(MODEL_ID);
+    downloaded = inCatalogOrder(await deps.models.list());
     notify();
   }
 
@@ -199,9 +217,18 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
 
   /** Запускает worker, если надо. Синхронно до `start()`: после возврата промиса состояние уже `warming`. */
   async function ensureWorker(): Promise<TtsState> {
-    if (!deps.supported || !downloaded) return state();
+    const model = activeTtsModel(downloaded);
+    if (!deps.supported || model === null) return state();
+    if (worker !== null && workerModel !== model) {
+      // Активная модель сменилась: у старого worker другой файл весов, отказ и повторы тоже были его.
+      worker.stop();
+      worker = null;
+      failure = null;
+      transientRetries = 0;
+    }
     if (worker === null) {
-      worker = deps.createWorker();
+      worker = deps.createWorker(model);
+      workerModel = model;
       failure = null;
     }
     const target = worker;
@@ -362,41 +389,58 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
     },
     async voices() {
       await refresh();
-      return TTS_VOICES.map((voice) => ({ ...voice, downloaded: downloaded && voice.modelId === MODEL_ID }));
+      return TTS_VOICES.map((voice) => ({ ...voice, downloaded: activeTtsModel(downloaded) !== null }));
     },
-    download(onProgress) {
-      // Второй запрос (Settings открыли заново) ждёт идущее скачивание: worker пересоздаётся один раз, не дважды.
-      downloading ??= (async () => {
-        const result = await deps.models.download(MODEL_ID, onProgress);
-        if (!('ok' in result)) return result;
-        downloaded = true;
+    async models() {
+      await refresh();
+      return [...downloaded];
+    },
+    download(id, onProgress) {
+      // Второй запрос той же модели (Settings открыли заново) ждёт идущее скачивание: worker пересоздаётся один раз,
+      // не дважды. Разные модели качаются независимо.
+      let running = downloading.get(id);
+      if (running === undefined) {
+        running = (async () => {
+          const result = await deps.models.download(id, onProgress);
+          if (!('ok' in result)) return result;
+          downloaded = inCatalogOrder([...downloaded, id]);
+          if (id !== activeTtsModel(downloaded) || current !== null) {
+            // Докачали неактивную модель (0.6B при скачанной 1.7B) — речь и worker не трогаем. Стала активной посреди
+            // предложения — его не режем: расхождение моделей `ensureWorker` заметит перед следующим.
+            notify();
+          } else {
+            worker?.stop();
+            worker = null;
+            failure = null;
+            transientRetries = 0;
+            void ensureWorker().then(() => {
+              if (!pumping) armIdle();
+            });
+          }
+          return result;
+        })().finally(() => {
+          downloading.delete(id);
+        });
+        downloading.set(id, running);
+      }
+      return running;
+    },
+    cancelDownload(id) {
+      deps.models.cancel(id);
+    },
+    async remove(id) {
+      if (id === activeTtsModel(downloaded)) {
+        clearIdle();
+        cancelQueued(() => true);
+        if (current !== null) current.cancelled = true;
         worker?.stop();
         worker = null;
         failure = null;
         transientRetries = 0;
-        void ensureWorker().then(() => {
-          if (!pumping) armIdle();
-        });
-        return result;
-      })().finally(() => {
-        downloading = null;
-      });
-      return downloading;
-    },
-    cancelDownload() {
-      deps.models.cancel(MODEL_ID);
-    },
-    async remove() {
-      clearIdle();
-      cancelQueued(() => true);
-      if (current !== null) current.cancelled = true;
-      worker?.stop();
-      worker = null;
-      failure = null;
-      transientRetries = 0;
-      downloaded = false;
+      }
+      downloaded = downloaded.filter((model) => model !== id);
       notify();
-      await deps.models.remove(MODEL_ID);
+      await deps.models.remove(id);
       await refresh();
     },
     stop() {
@@ -410,7 +454,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
 
 const FAKE_CHUNK_SAMPLES = Math.round(DEFAULT_SAMPLE_RATE * 0.2);
 
-/** Подмена для E2E (`PARLEY_TTS=fake`): веса «скачаны», `speak` отдаёт два куска тишины по 0,2 с. */
+/** Подмена для E2E (`PARLEY_TTS=fake`): обе модели «скачаны», `speak` отдаёт два куска тишины по 0,2 с. */
 export function createFakeTtsService(): TtsService {
   const ready: TtsState = { state: 'ready' };
   return {
@@ -434,9 +478,10 @@ export function createFakeTtsService(): TtsService {
     onState: () => () => undefined,
     warmup: async () => ready,
     voices: async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: true })),
-    download: async (onProgress) => {
-      const { bytes } = ttsModel(MODEL_ID);
-      onProgress({ id: MODEL_ID, receivedBytes: bytes, totalBytes: bytes });
+    models: async () => TTS_MODELS.map((model) => model.id),
+    download: async (id, onProgress) => {
+      const { bytes } = ttsModel(id);
+      onProgress({ id, receivedBytes: bytes, totalBytes: bytes });
       return { ok: true };
     },
     cancelDownload: () => undefined,

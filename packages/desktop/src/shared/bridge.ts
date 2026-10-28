@@ -154,12 +154,14 @@ export interface ParleyBridge {
     islandShortcutSuspend(on: boolean): void;
     /** Каталог нейроголосов помощника (план 3b, B15) с отметкой «скачан». */
     assistantVoices(): Promise<AssistantVoice[]>;
-    /** Качает веса голоса — только по кнопке (E5); прогресс — `onAssistantVoiceProgress`. */
-    assistantVoiceDownload(): Promise<DownloadResult>;
-    /** Отмена идущего скачивания весов (D5). */
-    assistantVoiceCancel(): Promise<void>;
-    /** Удаление весов (D5): дальше ответы текстом, само ничего не качается. */
-    assistantVoiceRemove(): Promise<void>;
+    /** Скачанные модели весов голоса: говорит самая большая из них (`activeTtsModel`). */
+    assistantVoiceModels(): Promise<TtsModelId[]>;
+    /** Качает веса модели — только по кнопке (E5); прогресс — `onAssistantVoiceProgress`. */
+    assistantVoiceDownload(id: TtsModelId): Promise<DownloadResult>;
+    /** Отмена идущего скачивания весов модели (D5). */
+    assistantVoiceCancel(id: TtsModelId): Promise<void>;
+    /** Удаление весов модели (D5): не осталось ни одной — ответы текстом, само ничего не качается. */
+    assistantVoiceRemove(id: TtsModelId): Promise<void>;
     /** Состояние движка: `warming` — «Preparing voice…» (Р7). */
     assistantVoiceState(): Promise<TtsEngineState>;
     onAssistantVoiceState(listener: (state: TtsEngineState) => void): () => void;

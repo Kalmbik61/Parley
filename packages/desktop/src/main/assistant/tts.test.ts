@@ -23,9 +23,11 @@ import {
   type TtsChunk,
   type TtsService,
   type TtsServiceDeps,
+  type TtsState,
 } from './tts.js';
 
-const MODEL: TtsModelId = 'qwen3-tts-0.6b-q8_0';
+const SMALL: TtsModelId = 'qwen3-tts-0.6b-q8_0';
+const LARGE: TtsModelId = 'qwen3-tts-1.7b-q8_0';
 const SERENA = TTS_VOICES.find((voice) => voice.id === 'qwen3-0.6b/serena')!;
 const RATE = 24_000;
 
@@ -119,19 +121,20 @@ function fakeWorker(options: { holdStart?: boolean } = {}) {
   };
 }
 
-function fakeModels(downloaded = true) {
-  const state = { downloaded };
+/** Хранилище весов: `initial` — какие модели уже скачаны (по умолчанию одна 0.6B). */
+function fakeModels(initial: TtsModelId[] = [SMALL]) {
+  const state = { ids: [...initial] };
   const store: ModelStore<TtsModelId> = {
-    list: async () => (state.downloaded ? [MODEL] : []),
+    list: async () => [...state.ids],
     path: () => '/tts/model.gguf',
     download: vi.fn(async (id: TtsModelId, onProgress) => {
       onProgress({ id, receivedBytes: 10, totalBytes: 10 });
-      state.downloaded = true;
+      if (!state.ids.includes(id)) state.ids.push(id);
       return { ok: true as const };
     }),
     cancel: vi.fn(),
-    remove: vi.fn(async () => {
-      state.downloaded = false;
+    remove: vi.fn(async (id: TtsModelId) => {
+      state.ids = state.ids.filter((entry) => entry !== id);
     }),
   };
   return { store, state };
@@ -141,7 +144,7 @@ function service(overrides: Partial<TtsServiceDeps> & { workers?: SpeechWorker[]
   const fake = fakeWorker();
   const workers = overrides.workers ?? [fake.worker];
   let created = 0;
-  const createWorker = vi.fn(() => workers[Math.min(created++, workers.length - 1)]!);
+  const createWorker = vi.fn<TtsServiceDeps['createWorker']>(() => workers[Math.min(created++, workers.length - 1)]!);
   const tts = createTtsService({
     supported: true,
     models: fakeModels().store,
@@ -400,7 +403,7 @@ describe('createTtsService: голоса нет (Р8)', () => {
   });
 
   it('веса не скачаны — not-downloaded, пустой final, ничего не качается само', async () => {
-    const models = fakeModels(false);
+    const models = fakeModels([]);
     const { tts, createWorker } = service({ models: models.store });
     const { sink, chunks } = collect();
     await expect(tts.speak(request(), sink)).resolves.toEqual({ state: 'not-downloaded' });
@@ -458,7 +461,7 @@ describe('createTtsService: выгрузка и прогрев', () => {
   });
 
   it('E5: после скачивания весов — клиент worker, warming, затем ready; onState сообщает смены', async () => {
-    const models = fakeModels(false);
+    const models = fakeModels([]);
     const fresh = fakeWorker({ holdStart: true });
     const { tts, createWorker } = service({ models: models.store, workers: [fresh.worker] });
     await tts.warmup();
@@ -467,8 +470,8 @@ describe('createTtsService: выгрузка и прогрев', () => {
     const states: string[] = [];
     tts.onState((next) => states.push(next.state));
     const progress = vi.fn();
-    await expect(tts.download(progress)).resolves.toEqual({ ok: true });
-    expect(progress).toHaveBeenCalledWith({ id: MODEL, receivedBytes: 10, totalBytes: 10 });
+    await expect(tts.download(SMALL, progress)).resolves.toEqual({ ok: true });
+    expect(progress).toHaveBeenCalledWith({ id: SMALL, receivedBytes: 10, totalBytes: 10 });
     await flush();
     expect(tts.state()).toEqual({ state: 'warming' });
     fresh.ready();
@@ -476,13 +479,14 @@ describe('createTtsService: выгрузка и прогрев', () => {
     expect(tts.state()).toEqual({ state: 'ready' });
     expect(states).toEqual(['warming', 'ready']);
     expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(createWorker).toHaveBeenCalledWith(SMALL);
     expect((await tts.voices()).every((voice) => voice.downloaded)).toBe(true);
   });
 
-  it('два запроса скачивания разом — одно скачивание и один новый клиент worker (критик m-1471)', async () => {
-    const models = fakeModels(false);
+  it('два запроса скачивания одной модели разом — одно скачивание и один новый клиент worker (критик m-1471)', async () => {
+    const models = fakeModels([]);
     const { tts, createWorker } = service({ models: models.store });
-    const [first, second] = await Promise.all([tts.download(() => undefined), tts.download(() => undefined)]);
+    const [first, second] = await Promise.all([tts.download(SMALL, () => undefined), tts.download(SMALL, () => undefined)]);
     expect(first).toEqual({ ok: true });
     expect(second).toEqual({ ok: true });
     await flush();
@@ -490,11 +494,12 @@ describe('createTtsService: выгрузка и прогрев', () => {
     expect(createWorker).toHaveBeenCalledTimes(1);
   });
 
-  it('D5: cancelDownload отменяет скачивание весов в хранилище', () => {
-    const models = fakeModels(false);
+  it('D5: cancelDownload отменяет скачивание весов именно этой модели в хранилище', () => {
+    const models = fakeModels([]);
     const { tts } = service({ models: models.store });
-    tts.cancelDownload();
-    expect(models.store.cancel).toHaveBeenCalledWith(MODEL);
+    tts.cancelDownload(LARGE);
+    expect(models.store.cancel).toHaveBeenCalledTimes(1);
+    expect(models.store.cancel).toHaveBeenCalledWith(LARGE);
   });
 
   it('D5: remove — речь снята, worker остановлен, файл удалён; дальше not-downloaded, текст, само не качается', async () => {
@@ -504,9 +509,9 @@ describe('createTtsService: выгрузка и прогрев', () => {
     const first = collect();
     const speaking = tts.speak(request('u1'), first.sink);
     await flush();
-    await tts.remove();
+    await tts.remove(SMALL);
     expect(fake.calls.stop).toBe(1);
-    expect(models.store.remove).toHaveBeenCalledWith(MODEL);
+    expect(models.store.remove).toHaveBeenCalledWith(SMALL);
     expect(tts.state()).toEqual({ state: 'not-downloaded' });
     expect((await tts.voices()).some((voice) => voice.downloaded)).toBe(false);
     fake.last().stream.end();
@@ -517,6 +522,278 @@ describe('createTtsService: выгрузка и прогрев', () => {
     expect(after.chunks.map((chunk) => chunk.final)).toEqual([true]);
     expect(models.store.download).not.toHaveBeenCalled();
     expect(createWorker).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createTtsService: две модели, говорит самая большая из скачанных', () => {
+  /** Идущее предложение: worker держит поток открытым, пока тест не закончит его сам. */
+  async function startSpeaking(tts: TtsService, fake: ReturnType<typeof fakeWorker>) {
+    const collected = collect();
+    const done = tts.speak(request('u1'), collected.sink);
+    await flush();
+    fake.last().stream.push(loud());
+    await flush();
+    return { ...collected, done };
+  }
+
+  it('скачана только 1.7B — worker создаётся для 1.7B', async () => {
+    const { tts, createWorker } = service({ models: fakeModels([LARGE]).store });
+    await tts.warmup();
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(createWorker).toHaveBeenCalledWith(LARGE);
+  });
+
+  it('скачаны обе — worker для 1.7B; только 0.6B — для 0.6B', async () => {
+    const both = service({ models: fakeModels([SMALL, LARGE]).store });
+    await both.tts.warmup();
+    expect(both.createWorker).toHaveBeenCalledWith(LARGE);
+    const small = service({ models: fakeModels([SMALL]).store });
+    await small.tts.warmup();
+    expect(small.createWorker).toHaveBeenCalledWith(SMALL);
+  });
+
+  it('голоса скачаны, если есть хоть одна модель; models() — скачанные id', async () => {
+    const large = service({ models: fakeModels([LARGE]).store });
+    expect((await large.tts.voices()).every((voice) => voice.downloaded)).toBe(true);
+    await expect(large.tts.models()).resolves.toEqual([LARGE]);
+    const none = service({ models: fakeModels([]).store });
+    expect((await none.tts.voices()).some((voice) => voice.downloaded)).toBe(false);
+    await expect(none.tts.models()).resolves.toEqual([]);
+  });
+
+  it('докачали 1.7B, пока работал worker 0.6B: старый остановлен, следующий создан для 1.7B', async () => {
+    const models = fakeModels([SMALL]);
+    const small = fakeWorker();
+    const large = fakeWorker();
+    const { tts, createWorker } = service({ models: models.store, workers: [small.worker, large.worker] });
+    await tts.warmup();
+    expect(createWorker).toHaveBeenLastCalledWith(SMALL);
+    await expect(tts.download(LARGE, () => undefined)).resolves.toEqual({ ok: true });
+    await flush();
+    expect(small.calls.stop).toBe(1);
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(createWorker).toHaveBeenLastCalledWith(LARGE);
+    expect(large.calls.start).toBe(1);
+    expect(tts.state()).toEqual({ state: 'ready' });
+    const { sink } = collect();
+    const next = tts.speak(request('u2'), sink);
+    await flush();
+    expect(small.requests).toHaveLength(0);
+    expect(large.requests).toHaveLength(1);
+    large.last().stream.end();
+    await next;
+    expect(createWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it('докачали 0.6B при активной 1.7B: worker не остановлен, речь не отменена, нового worker нет', async () => {
+    const models = fakeModels([LARGE]);
+    const { tts, fake, createWorker } = service({ models: models.store });
+    const speaking = await startSpeaking(tts, fake);
+    const states: string[] = [];
+    tts.onState((next) => states.push(next.state));
+    await expect(tts.download(SMALL, () => undefined)).resolves.toEqual({ ok: true });
+    await flush();
+    expect(fake.calls.stop).toBe(0);
+    expect(fake.calls.cancel).toEqual([]);
+    expect(tts.state()).toEqual({ state: 'speaking' });
+    fake.last().stream.push(loud());
+    fake.last().stream.end();
+    await expect(speaking.done).resolves.toEqual({ state: 'ready' });
+    expect(speaking.chunks.map((chunk) => [chunk.seq, chunk.final])).toEqual([
+      [0, false],
+      [1, false],
+      [2, true],
+    ]);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(createWorker).toHaveBeenCalledWith(LARGE);
+    // Порядок каталога, а не порядок скачивания: хранилище отдало [LARGE, SMALL], служба сортирует.
+    await expect(tts.models()).resolves.toEqual([SMALL, LARGE]);
+    expect(states).not.toContain('warming');
+  });
+
+  it('удалили активную 1.7B при скачанной 0.6B: речь отменена, worker остановлен, ready, следующий warmup — worker для 0.6B', async () => {
+    const models = fakeModels([SMALL, LARGE]);
+    const large = fakeWorker();
+    const small = fakeWorker();
+    const { tts, createWorker } = service({ models: models.store, workers: [large.worker, small.worker] });
+    const speaking = await startSpeaking(tts, large);
+    expect(createWorker).toHaveBeenLastCalledWith(LARGE);
+    await tts.remove(LARGE);
+    expect(large.calls.stop).toBe(1);
+    expect(models.store.remove).toHaveBeenCalledWith(LARGE);
+    // Поток отменённого предложения кончается — после него куски не уходят, даже final.
+    large.last().stream.push(loud());
+    large.last().stream.end();
+    await speaking.done;
+    expect(speaking.chunks).toHaveLength(1);
+    expect(tts.state()).toEqual({ state: 'ready' });
+    expect((await tts.voices()).every((voice) => voice.downloaded)).toBe(true);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    await tts.warmup();
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(createWorker).toHaveBeenLastCalledWith(SMALL);
+    expect(small.calls.start).toBe(1);
+    expect(tts.state()).toEqual({ state: 'ready' });
+  });
+
+  it('удалили неактивную 0.6B: worker не остановлен, речь не отменена, файл удалён', async () => {
+    const models = fakeModels([SMALL, LARGE]);
+    const { tts, fake, createWorker } = service({ models: models.store });
+    const speaking = await startSpeaking(tts, fake);
+    await tts.remove(SMALL);
+    expect(models.store.remove).toHaveBeenCalledTimes(1);
+    expect(models.store.remove).toHaveBeenCalledWith(SMALL);
+    expect(fake.calls.stop).toBe(0);
+    expect(fake.calls.cancel).toEqual([]);
+    expect(tts.state()).toEqual({ state: 'speaking' });
+    fake.last().stream.push(loud());
+    fake.last().stream.end();
+    await speaking.done;
+    expect(speaking.chunks.map((chunk) => [chunk.seq, chunk.final])).toEqual([
+      [0, false],
+      [1, false],
+      [2, true],
+    ]);
+    await expect(tts.models()).resolves.toEqual([LARGE]);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('удалили последнюю модель (1.7B при уже удалённой 0.6B) — not-downloaded, голоса не скачаны', async () => {
+    const models = fakeModels([LARGE]);
+    const { tts, fake } = service({ models: models.store });
+    await tts.warmup();
+    await tts.remove(LARGE);
+    expect(fake.calls.stop).toBe(1);
+    expect(tts.state()).toEqual({ state: 'not-downloaded' });
+    expect((await tts.voices()).some((voice) => voice.downloaded)).toBe(false);
+    await expect(tts.models()).resolves.toEqual([]);
+  });
+
+  it('два download одного id — один вызов models.download', async () => {
+    const models = fakeModels([]);
+    const { tts } = service({ models: models.store });
+    await Promise.all([tts.download(LARGE, () => undefined), tts.download(LARGE, () => undefined)]);
+    expect(models.store.download).toHaveBeenCalledTimes(1);
+    expect(models.store.download).toHaveBeenCalledWith(LARGE, expect.any(Function));
+  });
+
+  it('разные id — по одному вызову models.download на каждый (оба разом, обе модели не скачаны)', async () => {
+    const models = fakeModels([]);
+    const { tts } = service({ models: models.store });
+    const progress = vi.fn();
+    await Promise.all([tts.download(SMALL, progress), tts.download(LARGE, progress)]);
+    expect(models.store.download).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(models.store.download).mock.calls.map(([id]) => id)).toEqual([SMALL, LARGE]);
+  });
+
+  it('скачивание одной модели не мешает другой: обе качаются разом, у каждой свой результат', async () => {
+    const models = fakeModels([]);
+    const results: Record<string, (value: { ok: true } | { error: 'cancelled' }) => void> = {};
+    vi.mocked(models.store.download).mockImplementation(
+      (id) =>
+        new Promise((resolve) => {
+          results[id] = (value) => {
+            if ('ok' in value) models.state.ids.push(id);
+            resolve(value);
+          };
+        }),
+    );
+    const { tts } = service({ models: models.store });
+    const small = tts.download(SMALL, () => undefined);
+    const large = tts.download(LARGE, () => undefined);
+    expect(models.store.download).toHaveBeenCalledTimes(2);
+    results[LARGE]!({ error: 'cancelled' });
+    await expect(large).resolves.toEqual({ error: 'cancelled' });
+    expect(tts.state()).toEqual({ state: 'not-downloaded' });
+    results[SMALL]!({ ok: true });
+    await expect(small).resolves.toEqual({ ok: true });
+    await flush();
+    expect(tts.state()).toEqual({ state: 'ready' });
+  });
+
+  it('B1: докачали 0.6B при активной 1.7B — состояние то же (ready), но onState срабатывает один раз: набор моделей сменился', async () => {
+    const models = fakeModels([LARGE]);
+    const { tts } = service({ models: models.store });
+    await tts.warmup();
+    const states: TtsState[] = [];
+    tts.onState((next) => states.push(next));
+    await tts.download(SMALL, () => undefined);
+    await flush();
+    expect(states).toEqual([{ state: 'ready' }]);
+  });
+
+  it('B1: удалили неактивную модель — onState срабатывает, хотя состояние ready не изменилось', async () => {
+    const models = fakeModels([SMALL, LARGE]);
+    const { tts } = service({ models: models.store });
+    await tts.warmup();
+    const states: TtsState[] = [];
+    tts.onState((next) => states.push(next));
+    await tts.remove(SMALL);
+    await flush();
+    expect(states).toEqual([{ state: 'ready' }]);
+  });
+
+  it('B1: перечитывание без перемен (models, voices, warmup) onState не будит', async () => {
+    const models = fakeModels([SMALL, LARGE]);
+    const { tts } = service({ models: models.store });
+    await tts.warmup();
+    const states: TtsState[] = [];
+    tts.onState((next) => states.push(next));
+    await tts.models();
+    await tts.voices();
+    await tts.warmup();
+    await flush();
+    expect(states).toEqual([]);
+  });
+
+  it('B2: 1.7B докачалась посреди предложения 0.6B — предложение дозвучивает прежним worker, следующее идёт на 1.7B', async () => {
+    const models = fakeModels([SMALL]);
+    const small = fakeWorker();
+    const large = fakeWorker();
+    const { tts, createWorker } = service({ models: models.store, workers: [small.worker, large.worker] });
+    const speaking = await startSpeaking(tts, small);
+    await expect(tts.download(LARGE, () => undefined)).resolves.toEqual({ ok: true });
+    await flush();
+    expect(small.calls.stop).toBe(0);
+    expect(small.calls.cancel).toEqual([]);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(tts.state()).toEqual({ state: 'speaking' });
+    small.last().stream.push(loud());
+    small.last().stream.end();
+    await expect(speaking.done).resolves.toEqual({ state: 'ready' });
+    expect(speaking.chunks.map((chunk) => [chunk.seq, chunk.final])).toEqual([
+      [0, false],
+      [1, false],
+      [2, true],
+    ]);
+    expect(small.calls.stop).toBe(0);
+    // Следующее предложение: расхождение моделей замечено в ensureWorker — старый worker остановлен, новый для 1.7B.
+    const next = collect();
+    const second = tts.speak(request('u2'), next.sink);
+    await flush();
+    expect(small.calls.stop).toBe(1);
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(createWorker).toHaveBeenLastCalledWith(LARGE);
+    expect(small.requests).toHaveLength(1);
+    expect(large.requests).toHaveLength(1);
+    large.last().stream.push(loud());
+    large.last().stream.end();
+    await second;
+    expect(next.chunks.map((chunk) => chunk.final)).toEqual([false, true]);
+  });
+
+  it('набор скачанных сменился без нашего участия (файл появился): следующий прогрев останавливает старый worker и создаёт новый', async () => {
+    const models = fakeModels([SMALL]);
+    const small = fakeWorker();
+    const large = fakeWorker();
+    const { tts, createWorker } = service({ models: models.store, workers: [small.worker, large.worker] });
+    await tts.warmup();
+    models.state.ids.push(LARGE);
+    await tts.warmup();
+    expect(small.calls.stop).toBe(1);
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(createWorker).toHaveBeenLastCalledWith(LARGE);
+    expect(tts.state()).toEqual({ state: 'ready' });
   });
 });
 
@@ -548,7 +825,7 @@ type Launch = 'ready' | 'spawn-error' | 'exit' | 'protocol' | 'fatal';
 /** Служба на настоящем `createSpeechWorker`: каждый запуск процесса ведёт себя по очередному пункту `launches`. */
 function realService(launches: Launch[], models = fakeModels()) {
   let spawned = 0;
-  const createWorker = vi.fn(() =>
+  const createWorker = vi.fn<TtsServiceDeps['createWorker']>(() =>
     createSpeechWorker({
       bin: () => '/speech/bin/speech',
       model: () => '/tts/model.gguf',
@@ -600,7 +877,7 @@ describe('createTtsService: unavailable клиента B05 липкий — но
     await tts.warmup();
     expect(tts.state()).toMatchObject({ state: 'unavailable' });
     expect(createWorker).toHaveBeenCalledTimes(2);
-    await expect(tts.download(() => undefined)).resolves.toEqual({ ok: true });
+    await expect(tts.download(SMALL, () => undefined)).resolves.toEqual({ ok: true });
     await flush();
     expect(createWorker).toHaveBeenCalledTimes(3);
     tts.stop();
@@ -623,7 +900,7 @@ describe('createTtsService: unavailable клиента B05 липкий — но
     const { tts, createWorker } = realService(['fatal', 'ready']);
     await tts.warmup();
     expect(tts.state()).toMatchObject({ state: 'unavailable' });
-    await expect(tts.download(() => undefined)).resolves.toEqual({ ok: true });
+    await expect(tts.download(SMALL, () => undefined)).resolves.toEqual({ ok: true });
     await flush();
     expect(tts.state()).toEqual({ state: 'ready' });
     expect(createWorker).toHaveBeenCalledTimes(2);
@@ -643,6 +920,11 @@ describe('createFakeTtsService (PARLEY_TTS=fake)', () => {
     expect(peak(chunks[0]!.pcm)).toBe(0);
     expect(tts.state()).toEqual({ state: 'ready' });
     expect((await tts.voices()).every((voice) => voice.downloaded)).toBe(true);
-    await expect(tts.download(() => undefined)).resolves.toEqual({ ok: true });
+    await expect(tts.models()).resolves.toEqual([SMALL, LARGE]);
+    const progress = vi.fn();
+    await expect(tts.download(LARGE, progress)).resolves.toEqual({ ok: true });
+    expect(progress).toHaveBeenCalledWith({ id: LARGE, receivedBytes: 2_287_780_352, totalBytes: 2_287_780_352 });
+    await expect(tts.download(SMALL, progress)).resolves.toEqual({ ok: true });
+    expect(progress).toHaveBeenLastCalledWith({ id: SMALL, receivedBytes: 1_213_534_464, totalBytes: 1_213_534_464 });
   });
 });
