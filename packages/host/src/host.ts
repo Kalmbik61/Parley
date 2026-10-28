@@ -1,5 +1,6 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
+import { AGENT_SWARMS_PATH, createSwarmEndpoint } from './agent/swarm-endpoint.js';
 import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
 import { hostToolContext, mapChangeSignal, turnBoundarySource } from './agent/tool-context.js';
 import { createToolsEndpoint } from './agent/tools-endpoint.js';
@@ -86,6 +87,8 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { autonomousEngineIO, createAutonomousEngine } from './rooms/autonomous-engine.js';
+import { swarmMemberOf } from './swarms/spawn.js';
+import { createSwarmsService } from './swarms/swarms-service.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { addRoomMember, createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
@@ -391,6 +394,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
+  const swarmEndpoint = createSwarmEndpoint({
+    authenticate: (req) => browserEndpoint.authenticate(req),
+    create: (input) => sessionsService.create(input),
+    memberOf: swarmMemberOf,
+  });
   const autonomousEngine = createAutonomousEngine(autonomousEngineIO({
     create: input => sessionsService.create(input),
     launch: (ref, mode, choice) => sessionsService.launch(ref, mode, choice),
@@ -442,7 +450,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -527,6 +535,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
+  // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
+  const swarmsService = createSwarmsService(handle.context, worksService, sessionsService);
+  handle.context.onShutdown(() => swarmsService.stop());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
   handle.context.onShutdown(async () => {
@@ -743,6 +754,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
+    swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,
     compaction: compactionService,
@@ -860,6 +872,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await activityService.start();
   planEffects.start();
   autonomousEngine.start();
+  swarmsService.start();
   history.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся

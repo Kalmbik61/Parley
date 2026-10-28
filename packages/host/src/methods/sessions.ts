@@ -25,6 +25,7 @@ import { switchMode } from '../pty/mode-switch.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { atPrompt, busyError } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 
 export interface SessionMethodDeps {
@@ -40,6 +41,8 @@ export interface SessionMethodDeps {
   wake: Pick<WakeService, 'inFlight'>;
   /** Лента узнаёт сверенный режим; без неё метод только отвечает. */
   feed?: Pick<FeedService, 'noteMode'>;
+  /** Закрытие королевы роя человеком отменяет рой (спека роя v1, 3); без службы роёв оно роняет его. */
+  swarms?: Pick<SwarmsService, 'humanClosed'>;
 }
 
 export interface SessionHandlers {
@@ -92,6 +95,8 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     },
 
     sessionsClose: async (params) => {
+      // До закрытия: сверка роёв может прийти раньше, чем метод вернётся.
+      deps.swarms?.humanClosed(params.ref);
       await deps.sessions.close(params.ref);
       return { ok: true };
     },

@@ -1487,6 +1487,8 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
     ['без королевы среди участников', swarmOf({ queen: 's-09' })],
     ['королева с неизвестной ролью', swarmOf({ members: [{ sessionId: 's-01', role: 'boss', n: 1, addedAt: AT, handedAt: null } as never] })],
     ['участники не массив', { ...swarmOf(), members: 'x' }],
+    ['тег длиннее 24 знаков', swarmOf({ tag: 'x'.repeat(25) })],
+    ['тег с переводом строки', swarmOf({ tag: 'a\nb' })],
   ])('битая запись роя (%s) убирается, карта и соседний рой читаются', (_name, broken) => {
     const parsed = read(withSwarms(broken, swarmOf({ id: 'sw-02' })));
     expect(parsed.swarms?.map((swarm) => swarm.id)).toEqual(['sw-02']);

@@ -75,6 +75,7 @@ import {
   sessionTag,
   settleAttempt,
   startSession,
+  swarmOfSession,
   SYSTEM,
   ENGINE,
   transitionSession,
@@ -103,6 +104,8 @@ import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
+import { admitSwarmSession, swarmBudgetRefusal, swarmMemberRefusal } from '../swarms/spawn.js';
+import type { SwarmSpawn } from '../swarms/spawn.js';
 import { createSkillInstaller } from './agent-skills.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
@@ -119,6 +122,12 @@ export interface CreateSessionInput {
   requestedBy?: string;
   /** Только для движка: create_session канала агента этот флаг не передаёт. */
   deferLaunch?: boolean;
+  /**
+   * Сессия создаётся участником роя (спека роя v1, 4): королева нового роя или трутень/проверяющий в рой королевы-
+   * вызывающего. Только путь роя (`/agent/swarms`, `swarms.create`) ставит поле, `/agent/sessions` его не принимает.
+   * Для `create` `task` — задача роя (`objective`), для `add` — срез; хост дописывает свой шаблон (`swarms/briefs.ts`).
+   */
+  swarm?: SwarmSpawn;
   role?: SessionRole | null;
   agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
@@ -1055,7 +1064,8 @@ export function createSessionsService(
     if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
     if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
-    const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
+    if (input.swarm !== undefined && (input.requestedBy === ENGINE || workId === null || !task.trim() || input.swarm.kind === 'add' && input.requestedBy === undefined)) throw new HostError('bad_request', 'Swarm sessions require a workspace, a task and a human or agent caller.');
+    const agentConfig = input.requestedBy === undefined && input.swarm === undefined ? undefined : (await loadConfig()).config;
     if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
@@ -1120,17 +1130,33 @@ export function createSessionsService(
         task,
         parent,
         // Только для сайдбара: сессия встаёт под той, что её завела; движок — не сессия.
-        ...(input.requestedBy === undefined || input.requestedBy === ENGINE ? {} : { createdBy: input.requestedBy }),
+        ...(input.requestedBy === undefined || input.requestedBy === ENGINE || input.swarm !== undefined ? {} : { createdBy: input.requestedBy }),
         contextFrom: [],
         ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
+        const limits = limitsFromConfig(agentConfig);
+        if (input.swarm !== undefined) {
+          // Ветка роя (спека роя, 5): рой жив → пороги роёв → общий запуск, как у обычной сессии. `spawned` и `spawnedByRoom`
+          // она не читает и не увеличивает. Человек (`swarms.create`, `requestedBy` нет) вызывающего не имеет, пороги агентов
+          // не тратит и резерв не берёт: его запуск резервирует `launch()`.
+          const caller = input.requestedBy === undefined ? undefined : map.sessions.find(s => s.id === input.requestedBy);
+          if (input.requestedBy !== undefined && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', 'The caller session is no longer available.');
+          if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
+          admitSwarmSession(map, map.sessions.find(s => s.id === sessionId)!, { spawn: input.swarm, caller, limits, label, task });
+          if (input.requestedBy !== undefined && !awaitsConsent) {
+            const attempt = reserveAttempt(map, { kind: 'launch', actor: input.requestedBy, session: sessionId, owner: generation, limits });
+            admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
+          }
+          return;
+        }
         const caller = map.sessions.find(s => s.id === input.requestedBy);
         if (input.requestedBy !== ENGINE && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', 'The caller session is no longer available.');
         if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
-        const limits = limitsFromConfig(agentConfig);
+        // Участник роя сессий не создаёт (спека роя, 4): проверка на хосте по карте, текст роли её не заменяет.
+        if (input.requestedBy !== ENGINE && swarmOfSession(map, caller!.id) !== null) throw swarmMemberRefusal(caller!.id, 'create sessions');
         const room = input.requestedBy === ENGINE
           ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${plan.id}/${op.attemptId}/${op.payload.role}/${op.key}`))?.roomId ?? null
           : roomOfSession(map, caller!.id);
@@ -1158,6 +1184,7 @@ export function createSessionsService(
       if (created.held !== undefined && reserved !== undefined) await settleLaunch(reserved.ref, reserved.attemptId, 'released');
       return created;
     } catch (error) {
+      if (input.swarm !== undefined && error instanceof ResourceDeniedError) throw swarmBudgetRefusal(error);
       if (admitted !== undefined) {
         await settleLaunch(admitted.ref, admitted.attemptId, 'released');
         throw new HostError(
