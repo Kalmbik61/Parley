@@ -1821,7 +1821,7 @@ describe('бюджет работы при старте (P37)', () => {
     await screen.findByRole('button', { name: 'Retry' });
     await act(async () => {});
     // Свободен один слот из трёх (занято два: прежняя и запущенная), и нужен один — упавшей строке.
-    expect(budgetLine()).toBe('2 of 3 sessions running · 40 starts left this hour');
+    expect(budgetLine()).toBe(`2 of 3 sessions running · ${DEFAULT_RESOURCE_LIMITS.workLaunches} starts left this hour`);
     expect(blocked()).toBeNull();
     expect(button('Retry').disabled).toBe(false);
   });
