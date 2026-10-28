@@ -19,6 +19,7 @@ import {
   handleAgentOpenTab,
   moveTabToPanel,
   openAgentPage,
+  openLinkInPanel,
   openPageInPanel,
   resizePanel,
   togglePanel,
@@ -248,6 +249,30 @@ describe('openAgentPage — browser_open агента, повтор страни
   it('работа не прочитана — no-work; не http(s) — bad-url', () => {
     expect(openAgentPage('/tmp/other', CHAT, 'http://localhost:5173/')).toEqual({ ok: false, reason: 'no-work' });
     expect(openAgentPage(KEY, CHAT, 'file:///etc/hosts')).toEqual({ ok: false, reason: 'bad-url' });
+  });
+});
+
+describe('openLinkInPanel — клик человека по ссылке в ленте хозяина', () => {
+  it('закрытая или новая панель открывается со страницей; тот же адрес — переиспользуется; вкладки не трогаются', () => {
+    const before = layoutNow();
+    openLinkInPanel(KEY, CHAT, 'https://example.com/pr');
+    expect(panelNow()).toMatchObject({ open: true, pages: [{ url: 'https://example.com/pr' }] });
+    closePanel(KEY, CHAT);
+    openLinkInPanel(KEY, CHAT, 'https://example.com/pr#files');
+    expect(panelNow()).toMatchObject({ open: true });
+    expect(panelNow()?.pages).toHaveLength(1);
+    expect(layoutNow().root).toBe(before.root);
+    expect(layoutNow().activeGroupId).toBe(before.activeGroupId);
+  });
+
+  it('шестая новая страница — тост предела, раскладка прежняя; повтор адреса на полной панели работает', () => {
+    for (let i = 0; i < PANEL_LIMITS.pages; i += 1) openLinkInPanel(KEY, CHAT, `https://example.com/${i}`);
+    vi.mocked(toast).mockClear();
+    openLinkInPanel(KEY, CHAT, 'https://example.com/2');
+    expect(toast).not.toHaveBeenCalled();
+    openLinkInPanel(KEY, CHAT, 'https://example.com/new');
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(panelNow()?.pages).toHaveLength(PANEL_LIMITS.pages);
   });
 });
 

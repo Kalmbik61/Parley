@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
 import { S } from '../../../shared/strings.js';
+import { PanelLinkContext } from '../../browser/panel/link-context.js';
 import { openInBrowserTab } from '../../browser/store.js';
 import { COPIED_MS } from '../../chat/items/MessageActions.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
@@ -377,6 +378,37 @@ describe('RoomMarkdown — упоминание человека @human (Parley 
       );
       expect(parses()).toBe(first + 1);
     });
+  });
+});
+
+describe('RoomMarkdown — ссылки в виде с панелью браузера', () => {
+  function renderInPanelHost(text: string) {
+    const openInPanel = vi.fn();
+    const onOpenExternal = vi.fn();
+    render(
+      <PanelLinkContext.Provider value={openInPanel}>
+        <RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
+      </PanelLinkContext.Provider>,
+    );
+    return { openInPanel, onOpenExternal };
+  }
+
+  it('клик открывает панель хозяина, а не вкладку; окно не переходит', () => {
+    const { openInPanel } = renderInPanelHost('[доки](https://example.com/docs)');
+    expect(clickPrevented(screen.getByRole('link', { name: 'доки' }))).toBe(true);
+    expect(openInPanel.mock.calls).toEqual([['https://example.com/docs']]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it('меню: «браузер Parley» — панель, «системный браузер» — как раньше', async () => {
+    const { openInPanel, onOpenExternal } = renderInPanelHost('[доки](https://example.com/docs)');
+    fireEvent.contextMenu(screen.getByRole('link', { name: 'доки' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: S.links.openInBrowser }));
+    expect(openInPanel.mock.calls).toEqual([['https://example.com/docs']]);
+    expect(openTab).not.toHaveBeenCalled();
+    fireEvent.contextMenu(screen.getByRole('link', { name: 'доки' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: S.links.openInSystemBrowser }));
+    expect(onOpenExternal.mock.calls).toEqual([['https://example.com/docs']]);
   });
 });
 

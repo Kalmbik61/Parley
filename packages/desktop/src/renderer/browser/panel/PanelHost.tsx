@@ -11,14 +11,15 @@
  * нужно полоске панели.
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { BrowserOwner } from '../../../shared/layout-types.js';
 import { ownerKey } from '../../layout/ids.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { PANEL_LIMITS } from '../../layout/tree.js';
 import { Resizer } from '../../shell/Resizer.js';
-import { resizePanel } from './actions.js';
+import { openLinkInPanel, resizePanel } from './actions.js';
 import { panelAnchor } from './anchor.js';
+import { PanelLinkContext } from './link-context.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
 
 export interface PanelHostProps {
@@ -50,6 +51,9 @@ export function PanelHost({ workKey, owner, children }: PanelHostProps): JSX.Ele
     return () => observer.disconnect();
   }, []);
 
+  // Ссылки ленты хозяина открываются в его панели (`link-context.ts`).
+  const openLink = useCallback((url: string) => openLinkInPanel(workKey, owner, url), [workKey, key]);
+
   const narrow = width > 0 && width < PANEL_LIMITS.narrowBelow;
   const measured = width > 0;
   const maxWidth = Math.max(PANEL_LIMITS.minWidth, Math.min(Math.floor(width * PANEL_LIMITS.maxShare), width - PANEL_LIMITS.minView));
@@ -80,7 +84,7 @@ export function PanelHost({ workKey, owner, children }: PanelHostProps): JSX.Ele
   return (
     <div ref={hostRef} data-testid="panel-host" className="relative flex h-full min-h-0 w-full min-w-0">
       <div ref={viewRef} className="h-full min-h-0 min-w-0 flex-1">
-        {children}
+        <PanelLinkContext.Provider value={openLink}>{children}</PanelLinkContext.Provider>
       </div>
       {!open ? null : narrow ? (
         <div ref={areaRef} data-panel-area={key} data-panel-mode="covering" className="absolute inset-0" />
