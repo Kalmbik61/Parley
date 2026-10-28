@@ -44,13 +44,16 @@ export interface ResourceLimits {
   fanout: number;
 }
 
-/** Умолчания рассчитаны на команду до пяти-шести агентов; человек меняет их в настройках. */
+/**
+ * Умолчания рассчитаны на работу из двух-трёх команд по шесть-восемь агентов; человек меняет их в настройках.
+ * Пороги писем и адресатов остаются прежними — главная защита от разгона.
+ */
 export const DEFAULT_RESOURCE_LIMITS: Readonly<ResourceLimits> = {
-  workConcurrent: 10,
-  roomConcurrent: 6,
-  workNewSessions: 30,
+  workConcurrent: 24,
+  roomConcurrent: 12,
+  workNewSessions: 50,
   roomNewSessions: 12,
-  workLaunches: 40,
+  workLaunches: 60,
   roomLaunches: 20,
   workMessages: 200,
   roomMessages: 100,

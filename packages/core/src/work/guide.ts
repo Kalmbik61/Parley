@@ -130,7 +130,8 @@ to pass to neighbouring sessions and to the human gets there through the tools, 
 files dropped at random.
 
 New sessions have no Parley parent; older parent links remain historical. \`contextFrom\` is
-the list of sessions whose summaries and artifacts went into its brief.`,
+the list of sessions whose summaries and artifacts went into its brief. \`createdBy\` only shows
+which session called \`create_session\` (the window nests it there) and inherits nothing.`,
   },
   {
     topic: 'lifecycle',

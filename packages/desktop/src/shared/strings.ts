@@ -470,6 +470,8 @@ export const S = {
     /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
     archivedWorks: (n: number): string => `${n} archived`,
     hideArchivedWorks: 'Hide archived',
+    /** Подсказка к 💤 в слоте значка архивной работы. */
+    archivedWork: 'Archived',
     /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
     removeFromList: 'Remove from list…',
     /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */

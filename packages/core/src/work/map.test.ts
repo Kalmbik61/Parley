@@ -1318,6 +1318,31 @@ describe('removeSession', () => {
     expect(addSession(parsed, { provider: 'claude', label: 'ещё', task: 't' }).id).toBe('s-04');
   });
 
+  it('createdBy пишется только при создании агентом и ничего не наследует; удаление создателя ставит null', () => {
+    const map = emptyMap();
+    const lead = addSession(map, { provider: 'claude', label: 'лид', task: 't' });
+    const peer = addSession(map, { provider: 'claude', label: 'исполнитель', task: 't', createdBy: lead.id });
+
+    expect(lead).not.toHaveProperty('createdBy');
+    expect(peer).toMatchObject({ createdBy: lead.id, parent: null, contextFrom: [] });
+    expect(parseMap(JSON.stringify(map), 'map.json').sessions[1]?.createdBy).toBe(lead.id);
+
+    removeSession(map, lt(map), lead.id);
+    expect(map.sessions[0]?.createdBy).toBeNull();
+  });
+
+  it('карта без createdBy читается как раньше, битое значение отбрасывается', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'старая', task: 't' });
+    addSession(map, { provider: 'claude', label: 'битая', task: 't' });
+    const raw = JSON.parse(JSON.stringify(map)) as { sessions: Array<Record<string, unknown>> };
+    raw.sessions[1]!['createdBy'] = 42;
+
+    const parsed = parseMap(JSON.stringify(raw), 'map.json');
+    expect(parsed.sessions.map((session) => session.createdBy ?? null)).toEqual([null, null]);
+    expect(parsed.sessions[1]).not.toHaveProperty('createdBy');
+  });
+
   it('24: удаление несуществующего id — ошибка, карта не меняется', () => {
     const map = tree();
 
