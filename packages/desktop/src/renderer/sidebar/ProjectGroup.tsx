@@ -25,8 +25,10 @@
 import type { ReactNode } from 'react';
 import { ChevronDown, Plus } from 'lucide-react';
 import { S } from '../../shared/strings.js';
+import { SwarmIcon } from '../components/SwarmIcon.js';
 import { cn } from '../lib/cn.js';
 import { projectColor } from '../lib/project-color.js';
+import { swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
 import { useUiStore } from '../store/ui.js';
 import { SectionMenu } from './SectionMenu.js';
 import type { SidebarSection } from './sort.js';
@@ -62,7 +64,20 @@ export function ProjectArchivedLink({ section }: { section: SidebarSection }): J
   );
 }
 
+/** Сумма значков роёв по работам группы: у свёрнутой группы карточек не видно, и значок встаёт в её заголовок. */
+function groupSwarmBadge(section: SidebarSection): ReturnType<typeof swarmBadgeView> {
+  let active = 0;
+  let ready = 0;
+  for (const entry of section.works) {
+    const badge = swarmBadge(entry.map);
+    active += badge.active;
+    ready += badge.ready;
+  }
+  return swarmBadgeView({ active, ready });
+}
+
 export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly = false, children }: ProjectGroupProps): JSX.Element {
+  const swarmView = section.collapsed ? groupSwarmBadge(section) : null;
   return (
     <div data-section={section.key}>
       {section.kind === 'pinned' ? (
@@ -100,6 +115,18 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly
           />
           <span className="min-w-0 truncate font-heading text-[15px] leading-none">{section.title}</span>
           <span className="shrink-0 text-[11px] text-work-sidebar-muted-foreground">{section.works.length}</span>
+          {swarmView === null ? null : (
+            // Значок свёрнутой группы всегда статичный (спека роя, 7.5).
+            <span
+              data-swarm-badge={swarmView.status}
+              title={swarmView.title}
+              aria-label={swarmView.title}
+              className="inline-flex shrink-0 items-center gap-[3px] text-[11px] font-semibold tabular-nums text-work-sidebar-muted-foreground"
+            >
+              <SwarmIcon status={swarmView.status} size={14} still />
+              <span data-swarm-count="">{swarmView.count === null ? '✓' : swarmView.count}</span>
+            </span>
+          )}
           <ChevronDown
             aria-hidden="true"
             data-chevron

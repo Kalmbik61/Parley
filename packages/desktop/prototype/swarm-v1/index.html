@@ -60,8 +60,10 @@ button{cursor:pointer}
 .iear{position:relative;width:120px;height:32px;display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .igap{width:150px;display:flex;justify-content:center}.igap i{width:6px;height:6px;border-radius:50%;background:#1b222c;margin-top:-8px}
 .iear.l{font-size:15px}
-.bee{display:inline-block}.bee.act{animation:wob 1.6s ease-in-out infinite}
-@keyframes wob{0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-2px) rotate(6deg)}}
+/* живая иконка роя (canvas, настоящий движок острова; swarm-icon.entry.ts) */
+.sicon{display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:0;vertical-align:middle;padding:2px;border-radius:50%;background:#1b1612}
+.wbadge .sicon{padding:1px}
+.sicon canvas{display:block}
 .iprog{position:absolute;left:14px;right:14px;bottom:3px;height:2px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
 .iprog b{display:block;height:100%;background:#d67f48;transition:width .4s}
 .iprog.ok b{background:#9aad7b}.iprog.bad b{background:#eea373}
@@ -77,7 +79,8 @@ button{cursor:pointer}
 main{padding:38px 340px 12px 12px;height:100vh;min-height:640px}
 #app{height:100%;display:flex;border-radius:14px;overflow:hidden;background:var(--surface);color:var(--text);box-shadow:0 20px 60px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.08)}
 #sidebar{width:300px;flex:none;display:flex;flex-direction:column;padding:6px 8px 8px;overflow:auto;font-size:12px}
-.grp{display:flex;align-items:center;gap:6px;padding:8px 6px 0;font-weight:700;font-size:13px}
+.grp{display:flex;align-items:center;gap:6px;padding:8px 6px 0;font-weight:700;font-size:13px;cursor:default}
+.grp .wbadge{margin-left:auto}
 .grp small{font-weight:400;color:var(--n700);font-size:11px}
 
 /* карточка работы (WorkCard.tsx): радиус 16, отступ 8 8 8 10, активная — neutral-100 + shadow-sm */
@@ -98,7 +101,6 @@ main{padding:38px 340px 12px 12px;height:100vh;min-height:640px}
 /* бейдж роя на заголовке: виден и у свёрнутой карточки */
 .wbadge{display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 7px;border-radius:999px;font-size:11px;font-weight:600;flex:none;font-variant-numeric:tabular-nums;
  background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--a700)}
-.wbadge.on .bee{animation:wob 1.6s ease-in-out infinite}
 .wbadge.on{animation:bpulse 1.8s ease-in-out infinite}
 .wbadge.ok{background:var(--g200);color:var(--done)}.wbadge.bad{background:var(--a200);color:var(--warn)}.wbadge.off{background:var(--hov9);color:var(--n700)}
 @keyframes bpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--acc) 45%,transparent)}50%{box-shadow:0 0 0 4px transparent}}
@@ -132,7 +134,7 @@ main{padding:38px 340px 12px 12px;height:100vh;min-height:640px}
 .row.mem.wk .wd{color:var(--a800)}
 /* строка роя */
 .row.sw{gap:5px;padding-right:4px}
-.row.sw .bee{font-size:12px;flex:none;width:14px;text-align:center}
+.row.sw .sicon{flex:none}
 .row.sw .rl{flex:none;font-weight:500}
 .row.sw .tg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n800)}
 .row.sw .tg b{font-weight:500;color:var(--text)}
@@ -262,11 +264,16 @@ body.spots #ishape[data-spot]::after{top:7px;left:8px}
   <div class="opts">
    <label><input type="checkbox" id="cbIsl"> Остров развёрнут (иначе — по наведению)</label>
    <label><input type="checkbox" id="cbSpots"> Подсветить четыре места роя</label>
+   <label><input type="checkbox" id="cbRM"> Reduce motion (иконки роя статичны)</label>
   </div>
   <div class="pn">Клик по строке роя раскрывает его, клик по участнику открывает чат справа, клик по заголовку карточки сворачивает её. Остров раскрывается по наведению и по клику.</div>
  </div>
  <div id="p-lg" class="lg" hidden></div>
 </aside>
+
+<!-- swarm-icon:begin -->
+<script>(()=>{var Ce=Object.defineProperty;var Pe=(r,e,t)=>e in r?Ce(r,e,{enumerable:!0,configurable:!0,writable:!0,value:t}):r[e]=t;var i=(r,e,t)=>Pe(r,typeof e!="symbol"?e+"":e,t);var ee={amber:{colors:["#EFB05C","#F0DDA5","#F48A64","#FFC24D"],halo:"239,176,92"},coral:{colors:["#DC604C","#F8B287","#C43F40","#FFC24D"],halo:"220,96,76"},gray:{colors:["#9C948A","#C3BCB1","#6F665F","#9C948A"],halo:"156,148,138"}},q=[[-.34,-.06,.2,.12,1.2],[.3,.08,.22,.13,1],[0,.12,.26,.1,1.3],[-.05,-.16,.15,.1,.8],[.52,-.1,.13,.09,.5],[-.55,.1,.12,.1,.5],[0,0,.5,.26,.8]],be={cloudsphere:1.8,spherecloud:1.5,sphereface:.8,facesphere:.8,cloudface:1.4,facecloud:1.2},te={calm:{a:.095,b:.13,ey:.28,mw:.78,curl:.07,H0:.1,H1:.24,pw:.6},joy:{a:.115,b:.1,dome:!0,ey:.28,mw:1.04,curl:.18,H0:.14,H1:.3,pw:.55},sad:{a:.095,b:.125,cut:[-.3,.5],ey:.275,mw:.75,curl:-.06,H0:.09,H1:.19,pw:.65,dim:.92},surprise:{a:.11,b:.16,ey:.31,mo:!0,mw:.4,H0:.3,H1:.4,nb:!0},anger:{a:.1,b:.1,cut:[-.25,-.5],ey:.275,mw:.68,curl:-.03,H0:.12,H1:.24,pw:.45},error:{x:!0,len:.1,ey:.28,mw:.86,curl:0,wave:!0,H0:.05,H1:.05,pw:.1,nb:!0}},de={start:"breathe",tool:"glint",permission:"hop",question:"nod",plan:"hop",done:"spin",error:"shake",hover:"lean"};var y=Math.PI*2,v=(r,e=0,t=1)=>r<e?e:r>t?t:r,$=(r,e,t)=>r+(e-r)*t,oe=r=>r<.5?4*r*r*r:1-Math.pow(2-2*r,3)/2,ye=r=>{let e=r;return()=>{e|=0,e=e+1831565813|0;let t=Math.imul(e^e>>>15,1|e);return t=t+Math.imul(t^t>>>7,61|t)^t,((t^t>>>14)>>>0)/4294967296}},ne=r=>Math.sqrt(-2*Math.log(r()+1e-9))*Math.cos(y*r()),re=r=>{let e=Math.sin(r*127.1)*43758.5453;return e-Math.floor(e)},Te={out:r=>1-Math.pow(1-r,3),inOut:oe,back:r=>1+2.7*Math.pow(r-1,3)+1.7*Math.pow(r-1,2)},V=(r,e,t=0)=>{let a=t,c=e;for(let[l,s,n]of r){if(c<s)return a+(l-a)*Te[n](v(c/s));c-=s,a=l}return a},ae={breathe:{dur:700,pos:!1,f:r=>({sc:V([[.9,180,"out"],[1.05,220,"out"],[1,300,"back"]],r,1),br:1+.35*Math.sin(Math.PI*v(r/700))})},glint:{dur:450,pos:!1,f:r=>({wave:r/450})},hop:{dur:450,pos:!0,f:r=>({oy:V([[-.13,150,"out"],[0,300,"back"]],r)})},nod:{dur:700,pos:!0,f:r=>({oy:V([[-.07,110,"out"],[0,170,"back"],[-.05,110,"out"],[0,310,"back"]],r)})},shake:{dur:290,pos:!0,f:r=>({ox:V([[.07,50,"out"],[-.07,70,"inOut"],[.045,70,"inOut"],[0,100,"out"]],r)})},spin:{dur:1400,pos:!1,f:r=>({spin:r<950?y*oe(r/950):y,swirl:Math.sin(Math.PI*v(r/950)),spark:v((r-500)/900)})},lean:{dur:520,pos:!1,f:r=>({sc:V([[1.05,160,"out"],[1,360,"back"]],r,1),br:1+.25*Math.sin(Math.PI*v(r/520))})},flash:{dur:300,pos:!1,f:r=>({br:1+.7*Math.sin(Math.PI*v(r/300))})}},ge=Math.cos(16*Math.PI/180),xe=Math.sin(16*Math.PI/180);function ze(r){let e=document.createElement("canvas");e.width=e.height=48;let t=e.getContext("2d");if(t==null)return null;let a=parseInt(r.slice(1),16),c=a>>16,l=a>>8&255,s=a&255,n=t.createRadialGradient(24,24,0,24,24,24),o=(u,h)=>`rgba(${c+(255-c)*h|0},${l+(255-l)*h|0},${s+(255-s)*h|0},${u})`;return n.addColorStop(0,o(1,.55)),n.addColorStop(.12,o(.9,.2)),n.addColorStop(.35,o(.3,0)),n.addColorStop(1,o(0,0)),t.fillStyle=n,t.fillRect(0,0,48,48),e}var K=null;function Ae(){if(K!==null)return K;let r={};for(let e of Object.keys(ee)){let t=[];for(let a of ee[e].colors){let c=ze(a);if(c===null)return null;t.push(c)}r[e]=t}return K=r,K}var He=.07,we=r=>r==="dot"?"cloud":r,se=class{constructor(e,t){i(this,"souls",[]);i(this,"W");i(this,"H");i(this,"d");i(this,"cx");i(this,"cy");i(this,"k");i(this,"minPx");i(this,"mini");i(this,"voiceMode");i(this,"reacts",[]);i(this,"bd");i(this,"R2");i(this,"sp",null);i(this,"key",null);i(this,"dirty",!0);i(this,"trans",!1);i(this,"tr0",-1e9);i(this,"dur",1);i(this,"extra",0);i(this,"toFace",!1);i(this,"flash",0);i(this,"nb",0);i(this,"b0",0);i(this,"dbl",!1);i(this,"eyesUp",0);i(this,"pulse",0);i(this,"palTo","amber");i(this,"palFrom","amber");i(this,"palT",1);i(this,"T",0);i(this,"rot",.5);i(this,"rv",.35);i(this,"mic",.4);i(this,"gl",0);i(this,"last",0);i(this,"cr",1);i(this,"sr",0);i(this,"o",{x:0,y:0,z:0,m:1,sm:1,c:0});this.W=t.width,this.H=t.height,this.d=t.d,this.cx=t.width/2,this.cy=t.cy,this.k=t.k??.058,this.minPx=t.minPx??2.4,this.mini=Math.max(t.width,t.height)<=32,this.voiceMode=t.voiceMode??"full";let a=ye(t.seed??7);this.R2=ye((t.seed??7)^2654435769);let c=q.reduce((n,o)=>n+o[4],0),l=[];this.bd=q.map(()=>({ax:.04+.07*a(),ay:.03+.04*a(),per:8+12*a(),ph:y*a()}));for(let n=0;n<e;n++){let o={x:0,y:0,z:0,fx:0,fy:0,fz:0,v:1,rd:a(),sp:a()*2-1,sz:.7+.7*a(),ci:a()<.25?1:a()<.134?2:0,tw:y*a(),tp:2+8*a(),rk:a(),corona:a()<.17,gx:ne(a),gy:ne(a),gz:ne(a),ru:a(),rv:a(),fl:a()<.22,fph:a(),rc:.54+.14*a(),wc:(a()<.5?-1:1)*(.5+a()),ra:0,ux:0,uy:0,uz:0,b:0,role:0,sk:re(n+.5)},u=a()*c,h=0;for(;u>q[h][4]&&h<q.length-1;)u-=q[h][4],h++;o.b=h;let p=a();if(o.role=p<.24?0:p<.48?1:2,o.corona){let x=Math.hypot(o.gx,o.gy,o.gz)||1;o.ux=o.gx/x,o.uy=o.gy/x,o.uz=o.gz/x}else l.push(o);this.souls.push(o)}l.forEach((n,o)=>{let u=1-2*(o+.5)/l.length,h=Math.sqrt(1-u*u),p=o*2.39996;n.ux=Math.cos(p)*h,n.uy=u,n.uz=Math.sin(p)*h});let s=this.souls.filter(n=>n.corona);s.forEach((n,o)=>{n.ra=.18+o/s.length*(y-.36)})}get debug(){return{dur:this.dur,extra:this.extra,flash:this.flash,pal:this.palTo,reacts:this.reacts.map(e=>e.name)}}needsFrame(){return this.sp!==null&&(this.dirty||this.trans||this.palT<1||this.reacts.length>0)}react(e,t,a,c){let l=this.sp!==null&&this.sp.shape==="face",s=c||l||this.mini&&ae[e].pos?"flash":e;a-t>=ae[s].dur||(this.reacts=this.reacts.filter(n=>n.name!==s),this.reacts.push({name:s,t0:t}))}setSpec(e,t,a){let c=`${e.shape}|${e.fx??""}|${e.emo??""}`,l=this.sp;if(l===null&&(this.nb=t+1200),e.pal!==this.palTo&&(this.palFrom=this.palTo,this.palTo=e.pal,this.palT=a?1:0),c!==this.key){if(this.key=c,l!==null&&!a){for(let o of this.souls)o.fx=o.x,o.fy=o.y,o.fz=o.z;let s=we(l.shape),n=we(e.shape);this.tr0=t,this.dur=s===n?l.emo!==e.emo?.6:.7:be[`${s}${n}`],this.extra=n==="face"&&s!=="face"?.2:0,this.toFace=this.extra>0}else this.tr0=-1e9;e.emo==="surprise"&&!a&&(this.flash=1)}e.glitch&&!(l!==null&&l.glitch)&&(this.gl=t+280),this.sp=e,this.dirty=!0}tg(e,t,a,c,l){let s=this.sp,n=this.o,o=this.T;if(n.m=1,n.sm=1,n.c=e.ci,s.shape==="dot"){let u=.15*(1+(s.fx==="listen"?.7*this.mic:0));n.x=e.gx*u,n.y=e.gy*u,n.z=e.gz*.15}else if(s.shape==="cloud"){let u=q[e.b],h=this.bd[e.b],p=1+.04*Math.sin(y*o/7),x=s.fx==="listen"?.62+.5*this.mic:1;if(n.x=(u[0]+h.ax*Math.sin(y*o/h.per+h.ph)+e.gx*u[2]*p)*x,n.y=(u[1]+h.ay*Math.cos(y*o/h.per*1.3+h.ph)+e.gy*u[3]*p)*x,n.z=e.gz*.18,s.fx==="listen"){let f=Math.hypot(n.x,n.y),w=t/2400%1*.9,S=Math.exp(-Math.pow((f-w)/.08,2));n.x+=n.x/(f+.01)*.05*S,n.y+=n.y/(f+.01)*.05*S,n.m=1+.9*S}}else if(s.shape==="sphere"){if(e.corona&&s.fx==="ring"){n.x=Math.cos(e.ra)*.64,n.y=Math.sin(e.ra)*.64,n.z=.3,n.c=3,n.m=1.15;return}if(!e.corona&&s.fx==="flow"&&e.fl){let b=(o/2.4+e.fph)%1;n.x=(e.ru-.5)*.46*(1-.4*b),n.y=.12+.7*b,n.z=.4,n.m=Math.pow(Math.sin(Math.PI*b),.7)*1.15;return}let u=e.corona?e.rc:.5*(1+.02*Math.sin(y*o/2.4)),h=e.corona?this.rot*e.wc:this.rot,p=e.corona?Math.cos(h):this.cr,x=e.corona?Math.sin(h):this.sr,f=(e.ux*p+e.uz*x)*u,w=(-e.ux*x+e.uz*p)*u,S=e.uy*u;if(n.x=f,n.y=S*ge-w*xe,n.z=S*xe+w*ge,s.fx==="arc"&&!e.corona){let b=Math.atan2(n.y,n.x),M=((t/2e3*y-b)%y+y)%y/(y/3);if(M<1){let d=Math.pow(1-M,1.4);n.m=1+2.2*d,n.sm=1+.7*d,n.x*=1+.07*d,n.y*=1+.07*d}}}else this.face(e,te[s.emo??"calm"],a,c,t,l)}face(e,t,a,c,l,s){let n=this.o,o=e.role===0?-1:1;if(n.z=.35,e.role<2){let u=.41*o,h=-(t.ey+.03*this.eyesUp),p=t.a*(1+.12*this.eyesUp),x=t.b*(1+.25*this.eyesUp);if(t.x===!0){let f=(e.ru*2-1)*t.len,w=e.rv<.5?1:-1;n.x=u+f,n.y=h+w*f+(e.rv*4%1-.5)*.028}else{let f=Math.sqrt(e.ru),w=y*e.rv,S=f*Math.cos(w),b=f*Math.sin(w);if(t.dome===!0&&(b=-Math.abs(b)),t.cut!==void 0){let M=v(t.cut[0]+t.cut[1]*o*S,-1,.8);b=M+(b+1)/2*(1-M)}n.x=u+p*S,n.y=h+x*b*c}}else{let u=s?.u??0,h=s?.a??0,p=s?.i??0,x=s?.m??0,f=v(1+.45*h-.35*p,.6,1.45),w=$($(t.H0,t.H1,a)*f,0,x),S=(t.curl??0)+.06*p;if(t.mo===!0){let b=t.mw*v(1-.35*u+.2*p,.65,1.25),M=Math.max(.5*t.H0,w),d=Math.sqrt(e.ru),P=y*e.rv,R=Math.cos(P),T=Math.sin(P);n.x=Math.sign(R)*Math.pow(Math.abs(R),.8)*d*b/2*(.92+.16*a),n.y=.25+Math.sign(T)*Math.pow(Math.abs(T),.8)*d*M/2}else{let b=t.mw*v(1+.05*h+.2*p,1,1.25),M=$(b,.65*t.mw,u),d=e.ru*2-1,P=Math.pow(Math.max(0,1-d*d),t.pw),R=Math.max(w*P,He*(.55+.45*P)),T=Math.max(w,.45*M)*Math.sqrt(Math.max(0,1-d*d)),F=.25-S*d*d*(1-u);t.wave===!0&&(F+=.035*Math.sin(d*3.4*Math.PI)),n.x=d*M/2,n.y=F+(e.rv-.4)*$(R,Math.max(T,R),u),n.m=1.1}}e.corona&&(n.x+=e.gx*.045+.012*Math.sin(l/1e3*.8+e.tw),n.y+=e.gy*.045,n.m=.7),n.x*=1.2,n.y*=1.2,n.sm=1.15*(1+.1*this.pulse)}forceBlink(e){e-this.b0<=600||(this.b0=e,this.dbl=!1,this.nb=e+2400+this.R2()*2e3)}blink(e,t,a){if(t.nb===!0||a)return 1;e>this.nb&&(this.b0=e,this.dbl=this.R2()<.2,this.nb=e+2400+this.R2()*2e3);let c=(e-this.b0)/220,l=0;if(c>=0&&c<1)l=Math.sin(Math.PI*c);else if(this.dbl){let s=(e-this.b0-330)/180;s>=0&&s<1&&(l=Math.sin(Math.PI*s))}return 1-.94*l}frame(e,t,a,c,l=null){let s=this.sp;if(s===null)return;let n=a,o=Math.max(0,Math.min(.05,(e-this.last)/1e3));this.last=e,this.dirty=!1;let u=n?3200:e;n?(this.T=3.2,this.rot=.9,this.mic=.5):(this.T+=o*s.ts,this.rv+=(s.rot-this.rv)*Math.min(1,o*2),this.rot+=o*this.rv,s.fx==="listen"&&(this.mic+=(c-this.mic)*.3)),this.palT<1&&(this.palT=v(this.palT+o/.3)),this.flash=Math.max(0,this.flash-o/.6);let h=te[s.emo??"calm"],p=n?.3:s.shape==="face"?l?.amp??0:0,x=!n&&s.shape==="face"&&this.voiceMode==="full"?l?.visemes??null:null,f=x===null?null:l;this.eyesUp=f?.eyesUp??0,this.pulse=f?.pulse??0,f?.blink===!0&&this.forceBlink(e);let w=f===null?1:(.9+.25*f.loud)*(1+.45*f.pulse),S=s.shape==="face"?this.blink(e,h,n):1,b=1,M=1,d=0,P=0,R=0,T=0,F=0,X=-1;this.reacts=this.reacts.filter(m=>{let E=e-m.t0,C=ae[m.name];if(E>=C.dur)return!1;let g=C.f(E);return g.sc!==void 0&&(b*=g.sc),g.br!==void 0&&(M*=g.br),d+=g.ox??0,P+=g.oy??0,R+=g.spin??0,T=Math.max(T,g.swirl??0),g.spark!==void 0&&(F=g.spark),g.wave!==void 0&&(X=g.wave),!0}),(n||s.shape==="face")&&(b=1,d=0,P=0,R=0,T=0);let le=n?1e9:(e-this.tr0)/1e3,G=this.dur,Re=e<this.gl&&!n;this.trans=le<G+this.extra;let ce=this.rot+(s.shape==="sphere"?R:0),ue=s.shape==="sphere"?0:R;this.cr=Math.cos(ce),this.sr=Math.sin(ce);let N=t===null?null:Ae();t!==null&&(t.clearRect(0,0,this.W,this.H),t.globalCompositeOperation="lighter");let Y=N===null?null:N[this.palTo],he=N===null?null:N[this.palFrom],J=this.palT,O=this.o,Ee=s.dim*(1+.8*this.flash)*w;for(let m of this.souls){this.tg(m,u,p,S,x);let E=O.x,C=O.y,g=O.z,Q=v((le-m.rd*.33*G-(this.toFace&&m.role===2?.2:0))/(.67*G));if(Q<1){let z=oe(Q),U=E-m.fx,L=C-m.fy,fe=Math.sin(Math.PI*Q)*.3*m.sp;E=m.fx+U*z-L*fe,C=m.fy+L*z+U*fe,g=$(m.fz,g,z)}if(m.x=E,m.y=C,m.z=g,m.v+=((m.rk<s.vis?1:0)-m.v)*Math.min(1,o*5),t===null||Y===null||he===null)continue;let B=E,D=C,me=O.m;if(ue!==0){let z=ue+T*.9*(.45-Math.hypot(E,C)),U=Math.cos(z),L=Math.sin(z);B=E*U-C*L,D=E*L+C*U}B=B*b+d,D=D*b+P,X>=0&&(me*=1+1.6*Math.exp(-Math.pow((Math.hypot(B,D)-X*.75)/.07,2)));let pe=v(g+.5),H=(m.corona?.62:.85)*me*(.5+.5*pe)*m.v*Ee*M*(1+.2*Math.sin(y*u/1e3/m.tp+m.tw));F>0&&F<1&&m.sk<.16&&(H*=1+3*Math.sin(Math.PI*F));let k=Math.max(this.minPx,this.d*this.k*m.sz*O.sm*(.85+.3*pe)),W=this.cx+B*this.d,_=this.cy+D*this.d;if(Re){let z=Math.floor(_/6);z%3===0&&(W+=(re(z+Math.floor(e/70))-.5)*.14*this.d),re(m.rd*50)<.25&&(H*=.2)}if(H=v(H),H<.01)continue;let Z=O.c;J>=1?(t.globalAlpha=H,t.drawImage(Y[Z],W-k/2,_-k/2,k,k)):(t.globalAlpha=H*J,t.drawImage(Y[Z],W-k/2,_-k/2,k,k),t.globalAlpha=H*(1-J),t.drawImage(he[Z],W-k/2,_-k/2,k,k))}t!==null&&(t.globalAlpha=1)}};function ve(r,e){return new se(r,e)}var Ie=12,Fe=3,j={shape:"dot",fx:null,pal:"amber",rot:.25,vis:1,ts:1,dim:1,glitch:!1,emo:null},Se={running:j,collecting:{...j,shape:"sphere",rot:.35},done:{...j,shape:"sphere",rot:0},failed:{...j,pal:"gray",vis:.45,ts:.12,dim:.8},cancelled:{...j,pal:"gray",vis:.45,ts:.12,dim:.8}},A=new Map,qe=0,I=!1,ie=0,Oe=r=>r==="running"||r==="collecting";function Be(r,e,t){let a=document.createElement("canvas"),c=window.devicePixelRatio||1;a.width=t*c,a.height=t*c,a.style.width=`${t}px`,a.style.height=`${t}px`,a.setAttribute("aria-hidden","true");let l=a.getContext("2d");l?.setTransform(c,0,0,c,0,0);let s=ve(t>=20?150:110,{width:t,height:t,d:Math.round(t*.9),cy:t/2,k:.15,minPx:1.8,seed:5});return{key:r,seq:qe++,group:e,canvas:a,engine:s,ctx:l,size:t,status:null,handed:0,live:!1,last:0,seen:!0}}function Me(r,e){r.engine.frame(e,r.ctx,!0,0)}function ke(r){ie=requestAnimationFrame(ke);for(let e of A.values()){let t=e.live&&!I;(t||e.engine.needsFrame())&&r-e.last>=(t?1e3/Ie-2:14)&&(e.last=r,e.engine.frame(r,e.ctx,I,0))}}function De(r){let e=new Map;for(let t of[...A.values()].sort((a,c)=>a.seq-c.seq)){let a=e.get(t.group)??0;t.live=Oe(t.status)&&!r.has(t.key)&&a<Fe,t.live&&e.set(t.group,a+1)}}function Ue(){let r=performance.now(),e=new Set;for(let t of A.values())t.seen=!1;document.querySelectorAll(".sicon[data-key]").forEach(t=>{let a=t.dataset.key,c=Number(t.dataset.size)||16,l=t.dataset.status??"running",s=Number(t.dataset.handed)||0,n=A.get(a);(n===void 0||n.size!==c)&&(n=Be(a,t.dataset.group??"main",c),A.set(a,n)),n.seen=!0,t.dataset.static!==void 0&&e.add(a);let o=n.status===null;l!==n.status&&(n.engine.setSpec(Se[l],r,o||I),(o||I)&&Me(n,r),!o&&l==="done"&&n.engine.react(de.done,r,r,I),n.status=l),!o&&s>n.handed&&n.engine.react("glint",r,r,I),n.handed=s,t.replaceChildren(n.canvas)});for(let[t,a]of A)a.seen||A.delete(t);De(e),ie===0&&(ie=requestAnimationFrame(ke))}function Le(r){I=r;let e=performance.now();for(let t of A.values())t.status!==null&&(t.engine.setSpec(Se[t.status],e,!0),Me(t,e))}function $e(){let r={};for(let e of A.values())e.live&&!I&&(r[e.group]=(r[e.group]??0)+1);return r}window.SwarmIcons={sync:Ue,setReduced:Le,liveCount:$e};})();</script>
+<!-- swarm-icon:end -->
 
 <script>
 (()=>{
@@ -276,6 +283,8 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 const clock=()=>performance.now()/1000;
 const STATUS_RU={running:'идёт',collecting:'сводка',done:'готово',failed:'сбой',cancelled:'отменён'};
 const ACTIVE=['running','collecting'];
+// Живая иконка роя вместо 🐝 (см. swarm-icon.entry.ts): пустышку заполняет SwarmIcons.sync() после отрисовки.
+const sicon=(key,sw,size,o={})=>`<span class="sicon" data-key="${key}" data-sw="${sw.id}" data-status="${o.status||sw.status}" data-handed="${o.handed!==undefined?o.handed:handedN(sw)}" data-size="${size}" data-group="${o.group||'main'}"${o.stat?' data-static':''}></span>`;
 
 /* ================= модель ================= */
 function mkSwarm(id,tag,creator,topics,cfg){
@@ -408,7 +417,7 @@ function swarmRow(r,gs,first){
   const sw=S.sw[r.sw],exp=S.expanded[r.sw],end=!isActive(sw);
   const sig=({collecting:['col','✎','Королева пишет сводку'],done:['ok','✓','Готово'],failed:['bad','⚠','Сбой'],cancelled:['off','✕','Отменён']})[sw.status];
   return `<div class="row sw${end?' end':''}" role="treeitem" tabindex="0" aria-expanded="${exp}" data-act="swarm" data-sw="${sw.id}" data-row="sw-${sw.id}" ${first?'data-spot="1"':''} style="margin-left:${r.depth*20}px" title="Рой [${esc(sw.tag)}] · ${STATUS_RU[sw.status]}">
-   <span class="bee${isActive(sw)?' act':''}">🐝</span><span class="rl">Рой</span><span class="tg">[<b>${esc(sw.tag)}</b>]</span>
+   ${sicon('row:'+sw.id,sw,16)}<span class="rl">Рой</span><span class="tg">[<b>${esc(sw.tag)}</b>]</span>
    <span class="dots">${counted(sw).map(m=>`<i class="${m.st==='handed'?'f':m.st==='failed'?'x':''}"></i>`).join('')}</span>
    <span class="cn">${cnt(sw)}</span>${sig?`<span class="sg ${sig[0]}" title="${sig[2]}">${sig[1]}</span>`:''}
    <span class="tmr" data-timer="${sw.id}">${fmt(elapsed(sw))}</span><span class="cv">${exp?'⌄':'›'}</span>${guideHTML(gs,r.depth)}</div>`;
@@ -434,13 +443,13 @@ function roomRow(r,gs){
 // Бейдж роя на заголовке карточки: пульсирует, пока рои идут; после конца — след последнего итога.
 function cardBadge(){
   const l=onList(),act=l.filter(isActive);
-  if(act.length===1)return `<span class="wbadge on" data-spot="3" title="Рой [${esc(act[0].tag)}] идёт"><span class="bee">🐝</span>${cnt(act[0])}</span>`;
-  if(act.length>1)return `<span class="wbadge on" data-spot="3" title="Активных роёв: ${act.length}"><span class="bee">🐝</span>${act.length}</span>`;
+  if(act.length===1)return `<span class="wbadge on" data-spot="3" title="Рой [${esc(act[0].tag)}] идёт">${sicon('badge',act[0],14)}${cnt(act[0])}</span>`;
+  if(act.length>1)return `<span class="wbadge on" data-spot="3" title="Активных роёв: ${act.length}">${sicon('badge',act[0],14,{handed:act.reduce((a,x)=>a+handedN(x),0)})}${act.length}</span>`;
   const ended=l.filter(s=>!s.seen);
-  if(!ended.length)return l.length?`<span class="wbadge off" data-spot="3" title="Роёв нет в работе"><span class="bee">🐝</span></span>`:'';
+  if(!ended.length)return l.length?`<span class="wbadge off" data-spot="3" title="Роёв нет в работе">${sicon('badge',l[0],14,{status:'cancelled'})}</span>`:'';
   const last=ended[ended.length-1];
   const k=last.status==='done'?'ok':last.status==='failed'?'bad':'off';
-  return `<span class="wbadge ${k}" data-spot="3" title="Рой [${esc(last.tag)}]: ${STATUS_RU[last.status]}"><span class="bee">🐝</span>${last.status==='done'?'✓':last.status==='failed'?'⚠':'✕'}</span>`;
+  return `<span class="wbadge ${k}" data-spot="3" title="Рой [${esc(last.tag)}]: ${STATUS_RU[last.status]}">${sicon('badge',last,14)}${last.status==='done'?'✓':last.status==='failed'?'⚠':'✕'}</span>`;
 }
 function renderSidebar(){
   const rows=buildRows(),gs=treeGuides(rows);
@@ -451,9 +460,12 @@ function renderSidebar(){
   }).join('');
   const letters=onList().filter(s=>s.creator.k==='human'&&!isActive(s)&&!s.seen&&s.status==='done').length;
   const open=S.cardOpen;
+  // Свёрнутая группа проекта: карточек нет, в заголовке — статичный значок роя (спека 7.3, 7.5).
+  const grpShut=S.grpShut,gl=onList(),gact=gl.filter(isActive);
+  const grpBadge=grpShut&&gl.length?`<span class="wbadge ${gact.length?'on':'off'}" data-spot="3" title="Роёв в работе: ${gact.length}">${sicon('grp',gact[0]||gl[0],14,{stat:1,handed:0})}${gact.length||''}</span>`:'';
   $('#sidebar').innerHTML=`
-   <div class="grp">▾ parley <small>1 работа</small></div>
-   <div class="wc act${open?'':' shut'}" data-card="1">
+   <div class="grp" data-act="grp" role="button" aria-expanded="${!grpShut}">${grpShut?'▸':'▾'} parley <small>1 работа</small>${grpBadge}</div>
+   ${grpShut?'':`<div class="wc act${open?'':' shut'}" data-card="1">
     <div class="wh" data-act="card" role="button" aria-expanded="${open}">
      <span class="gl"><span class="spin"></span></span><span class="tt">Каталог</span>
      ${letters?`<span class="ct" title="Результат роя человека">✉ ${letters}</span>`:''}
@@ -466,7 +478,7 @@ function renderSidebar(){
     <div class="wh" role="button"><span class="gl"><span style="color:var(--done);font-size:11px">✓</span></span><span class="tt">Миграция БД</span><span class="hs">#2</span><span class="tm">2ч</span></div>
     <div class="wm"><span>parley</span><span>·</span><span>1 сессия</span><span>·</span><span class="br">chore/db</span></div>
    </div>
-   <div class="newwork">＋ Новая работа</div>`;
+   <div class="newwork">＋ Новая работа</div>`}`;
 }
 
 /* ================= чат ================= */
@@ -476,7 +488,7 @@ const typing='<div class="a"><span class="typing"><i></i><i></i><i></i></span></
 function dotsHTML(sw){return `<span class="dots">${counted(sw).map(m=>`<i class="${m.st==='handed'?'f':m.st==='failed'?'x':''}"></i>`).join('')}</span>`}
 function swarmCard(sw){
   const q=queen(sw);
-  return `<div class="card"><div class="hd"><span class="bee${isActive(sw)?' act':''}">🐝</span>Рой [${esc(sw.tag)}]<span class="sp"></span><span class="chip ${chipCls(sw)}">${STATUS_RU[sw.status]}</span></div>
+  return `<div class="card"><div class="hd">${sicon('res:'+sw.id,sw,16)}Рой [${esc(sw.tag)}]<span class="sp"></span><span class="chip ${chipCls(sw)}">${STATUS_RU[sw.status]}</span></div>
    <div class="kv">${dotsHTML(sw)}<b>${cnt(sw)}</b><span class="tmr" data-timer="${sw.id}">${fmt(elapsed(sw))}</span><span>Королева: ${word(sw,q)}</span></div>
    <div><button class="btn sm" data-act="sel" data-key="q:${sw.id}:q">Открыть королеву</button> <button class="btn sm" data-act="swarm-open" data-sw="${sw.id}">Показать в сайдбаре</button></div></div>`;
 }
@@ -531,11 +543,11 @@ function toolbar(key){
   const tail='<span class="btn">Авто ⌄</span><span class="btn">Opus · high ⌄</span>';
   if(p.k==='q'){
     const sw=S.sw[p.a];
-    return `<div class="tool-bar">${seg}<span class="chip ${chipCls(sw)}" data-spot="2" data-chip="${sw.id}" title="Статус роя: ${sw.status}">🐝 ${esc(sw.tag)} · <span data-cnt="${sw.id}">${cnt(sw)}</span><span class="sp" data-st="${sw.id}">${STATUS_RU[sw.status]}</span></span><span class="ttl">Королева · ${esc(sw.tag)}</span>${tail}</div>`;
+    return `<div class="tool-bar">${seg}<span class="chip ${chipCls(sw)}" data-spot="2" data-chip="${sw.id}"  title="Статус роя: ${sw.status}">${sicon('chip:'+sw.id,sw,14)}${esc(sw.tag)} · <span data-cnt="${sw.id}">${cnt(sw)}</span><span class="sp" data-st="${sw.id}">${STATUS_RU[sw.status]}</span></span><span class="ttl">Королева · ${esc(sw.tag)}</span>${tail}</div>`;
   }
   if(p.k==='m'){
     const sw=S.sw[p.a],m=sw.members.find(x=>x.id===p.b);
-    return `<div class="tool-bar">${seg}<button class="lnk" data-act="to-swarm" data-sw="${sw.id}" title="Показать рой в сайдбаре">🐝 в рое ${esc(sw.tag)}</button><span class="ttl">${label(m)}</span>${tail}</div>`;
+    return `<div class="tool-bar">${seg}<button class="lnk" data-act="to-swarm" data-sw="${sw.id}" title="Показать рой в сайдбаре">${sicon('mlink:'+sw.id,sw,14)}в рое ${esc(sw.tag)}</button><span class="ttl">${label(m)}</span>${tail}</div>`;
   }
   return `<div class="tool-bar">${seg}<span class="ttl">${esc(tabTitle(key))}</span>${tail}</div>`;
 }
@@ -566,31 +578,32 @@ function renderIsland(){
       if(s.status==='done'){pct=100;bad='ok'}else if(s.status==='failed')bad='bad';
     }else right=`<b>${items.length} ${items.length<5?'роя':'роёв'}</b> ${sumH}/${sumT}`;
   }
-  const bee=`<span class="bee${act.length?' act':''}">🐝</span>`;
+  const bee=items.length?sicon('cap',items[0],20,{group:'island',status:act.length?act[0].status:items[0].status,handed:items.reduce((a,x)=>a+handedN(x),0)}):'';
   const cap=items.length?`<div class="icap"><div class="iear l">${bee}</div><div class="igap"><i></i></div><div class="iear r">${right}<div class="iprog ${bad}"><b style="width:${pct}%"></b></div></div></div>`:`<div class="icap"><div class="igap" style="width:100%"><i></i></div></div>`;
   const list=`<div class="ilist"><div class="ihd">${act.length?'Активные рои':'Рои'}</div>${items.length?items.map(s=>`
-   <div class="irow" data-act="isl-open" data-sw="${s.id}"><span class="bee${isActive(s)?' act':''}">🐝</span><span class="nm">${esc(s.tag)} <small>${s.creator.k==='session'?'· S01 Фиче-лид':s.creator.k==='room'?'· # Review':'· человек'}</small></span>
+   <div class="irow" data-act="isl-open" data-sw="${s.id}">${sicon('irow:'+s.id,s,16,{group:'island'})}<span class="nm">${esc(s.tag)} <small>${s.creator.k==='session'?'· S01 Фиче-лид':s.creator.k==='room'?'· # Review':'· человек'}</small></span>
    ${dotsHTML(s)}<b>${cnt(s)}</b><span class="t" data-timer="${s.id}">${fmt(elapsed(s))}</span><span class="t">${STATUS_RU[s.status]}</span></div>`).join(''):'<div class="iempty">Активных роёв нет</div>'}</div>`;
   sh.innerHTML=`<div class="icapw">${cap}</div>${open?list:''}`;
   sh.classList.toggle('open',open);
   sh.style.setProperty('--w',(open?430:items.length?390:150)+'px');
   sh.style.height=(open?32+sh.querySelector('.ilist').offsetHeight:32)+'px';
+  SwarmIcons.sync();
 }
 
 /* ================= панель ================= */
 function renderPanel(){
-  const sw=S.sw[S.target];
+  const sw=S.sw[S.target],live=SwarmIcons.liveCount();
   $('#tgt').innerHTML=Object.keys(S.sw).filter(k=>S.on[k]).map(k=>`<button data-tgt="${k}" class="${k===S.target?'on':''}">${esc(S.sw[k].tag)}</button>`).join('');
-  $('#hud').innerHTML=`Рой <b>${esc(sw.tag)}</b>: статус <b>${sw.status}</b> (${STATUS_RU[sw.status]})<br>Счётчик <b>${cnt(sw)}</b> · таймер <b data-timer="${sw.id}">${fmt(elapsed(sw))}</b>${sw.since===null?' · остановлен':''}<br>Королева: <b>${word(sw,queen(sw))}</b>`;
+  $('#hud').innerHTML=`Рой <b>${esc(sw.tag)}</b>: статус <b>${sw.status}</b> (${STATUS_RU[sw.status]})<br>Счётчик <b>${cnt(sw)}</b> · таймер <b data-timer="${sw.id}">${fmt(elapsed(sw))}</b>${sw.since===null?' · остановлен':''}<br>Королева: <b>${word(sw,queen(sw))}</b><br>Живых иконок (не больше 3 на группу): окно <b>${live.main||0}</b>, остров <b>${live.island||0}</b>`;
   $$('#themes button').forEach(b=>b.classList.toggle('on',b.dataset.theme===S.theme));
 }
 const LEGEND=`
  <p><b>Четыре места, где виден рой</b> (включите «Подсветить четыре места»):</p>
  <ol>
   <li><span class="nb">1</span><b>Сайдбар.</b> Строка роя «отпочковывается» от создателя: сессии, комнаты или человека (тогда она на верхнем уровне карточки). Королева внутри роя рядом с трутнями. По умолчанию свёрнута, клик раскрывает (<code>›</code> / <code>⌄</code>).</li>
-  <li><span class="nb">2</span><b>Шапка чата королевы:</b> «🐝 Research · 3/5» и статус. В чате трутня — ссылка «в рое Research».</li>
-  <li><span class="nb">3</span><b>Бейдж на карточке работы</b> виден и у свёрнутой карточки: «🐝 2» — два активных роя, «🐝 3/5» — один; после конца остаётся ✓ или ⚠.</li>
-  <li><span class="nb">4</span><b>Остров:</b> капсула «🐝 Research 3/5» с полоской прогресса; по наведению или клику — список активных роёв. Гаснет, когда результат просмотрен.</li>
+  <li><span class="nb">2</span><b>Шапка чата королевы:</b> иконка роя, «Research · 3/5» и статус. В чате трутня — ссылка «в рое Research».</li>
+  <li><span class="nb">3</span><b>Бейдж на карточке работы</b> виден и у свёрнутой карточки: иконка и «2» — два активных роя, иконка и «3/5» — один; после конца остаётся ✓ или ⚠.</li>
+  <li><span class="nb">4</span><b>Остров:</b> капсула «иконка Research 3/5» с полоской прогресса; по наведению или клику — список активных роёв. Гаснет, когда результат просмотрен.</li>
  </ol>
  <p><b>Статус роя</b> (строка в сайдбаре, шапка, остров):</p>
  <ul>
@@ -612,7 +625,7 @@ const LEGEND=`
  <p><b>Таймер</b> <code>м:сс</code> идёт с создания и останавливается, когда рой закончился.</p>`;
 
 /* ================= отрисовка ================= */
-function render(){renderSidebar();renderChat();renderIsland();renderPanel()}
+function render(){renderSidebar();renderChat();renderIsland();SwarmIcons.sync();renderPanel()}
 function tick(){
   $$('[data-timer]').forEach(e=>{const sw=S.sw[e.dataset.timer];if(sw)e.textContent=fmt(elapsed(sw))});
 }
@@ -624,6 +637,7 @@ document.addEventListener('click',e=>{
   if(!t){return}
   const a=t.dataset.act;
   if(a==='card'){S.cardOpen=!S.cardOpen;render()}
+  else if(a==='grp'){S.grpShut=!S.grpShut;render()}
   else if(a==='swarm'){S.expanded[t.dataset.sw]=!S.expanded[t.dataset.sw];render()}
   else if(a==='sel')select(t.dataset.key);
   else if(a==='tab')select(t.dataset.key);
@@ -696,6 +710,7 @@ function toggleSwarm(id,on){
 $('#cbB').onchange=e=>toggleSwarm('B',e.target.checked);
 $('#cbC').onchange=e=>toggleSwarm('C',e.target.checked);
 $('#cbIsl').onchange=e=>{S.islPinned=e.target.checked;renderIsland()};
+$('#cbRM').onchange=e=>{SwarmIcons.setReduced(e.target.checked);document.body.classList.toggle('rm',e.target.checked);render()};
 $('#cbSpots').onchange=e=>document.body.classList.toggle('spots',e.target.checked);
 $$('[data-ptab]').forEach(b=>b.onclick=()=>{
   $$('[data-ptab]').forEach(x=>x.classList.toggle('on',x===b));
@@ -704,6 +719,8 @@ $$('[data-ptab]').forEach(b=>b.onclick=()=>{
 $('#p-lg').innerHTML=LEGEND;
 
 stage(S.sw.A,'work');stage(S.sw.B,'work');stage(S.sw.C,'work');
+// Системное «уменьшить движение» действует как переключатель панели.
+if(matchMedia('(prefers-reduced-motion: reduce)').matches){$('#cbRM').checked=true;SwarmIcons.setReduced(true)}
 render();
 setInterval(tick,500);
 })();

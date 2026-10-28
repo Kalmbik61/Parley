@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message, Proposal, Room, WindowWorkEntry, WindowWorkMap, WorkSession, WorkStatus } from '@parley/core';
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
-import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeRoom, makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, NO_GUIDES, neighborInOrder, treeGuides, visibleWorkOrder, type CardRow, type TreeGuide } from './sort.js';
 
 describe('room ownership layout', () => {
@@ -759,5 +759,73 @@ describe('treeGuides — линии дерева в карточке', () => {
     const guides = treeGuides(rows);
     expect(guides).toHaveLength(3);
     expect(guides.every((list) => list === NO_GUIDES)).toBe(true);
+  });
+});
+
+describe('cardRows — рой отпочковывается от создателя (спека роя, 7.1)', () => {
+  const label = (row: CardRow): string => (row.kind === 'session' ? row.session.id : row.kind === 'room' ? row.room.id : row.swarm.id);
+  const members = [makeSwarmMember('s-q', 'queen'), makeSwarmMember('s-d1', 'drone', 1), makeSwarmMember('s-v', 'verifier')];
+  const hive = [makeSession('s-q', 'queen'), makeSession('s-d1', 'drone'), makeSession('s-v', 'verifier')];
+
+  it('рой сессии стоит сразу под её строкой и комнатами, до сессий, заведённых ею', () => {
+    const lead = makeSession('s-lead', 'lead');
+    const child = makeSession('s-child', 'child', { createdBy: 's-lead' });
+    const room = { ...makeRoom('r-own', 'Own'), ownerId: lead.id };
+    const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'session', sessionId: 's-lead' }, members });
+    const rows = cardRows(makeWork('w-01', { sessions: [lead, child, ...hive], rooms: [room], swarms: [swarm] }).map, false);
+    expect(rows.map(label)).toEqual(['s-lead', 'r-own', 'sw-01', 's-child']);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 1]);
+    expect(rows[2]?.parent).toBe('s-lead');
+    expect(treeGuides(rows)[2]).toContainEqual({ kind: 'elbow', column: 0 });
+  });
+
+  it('рой комнаты стоит сразу под строкой комнаты, линия идёт к ней', () => {
+    const room = makeRoom('r-01', 'Review');
+    const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'room', roomId: 'r-01' }, members });
+    const rows = cardRows(makeWork('w-01', { sessions: hive, rooms: [room, makeRoom('r-02', 'Other')], swarms: [swarm] }).map, false);
+    expect(rows.map(label)).toEqual(['r-01', 'sw-01', 'r-02']);
+    expect(rows[1]).toMatchObject({ depth: 1, parent: 'r-01' });
+    expect(treeGuides(rows)[1]).toContainEqual({ kind: 'elbow', column: 0 });
+    expect(treeGuides(rows)[0]).toContainEqual({ kind: 'start', column: 0 });
+  });
+
+  it('рой человека и рой, чьего создателя не видно, — на верхнем уровне в конце', () => {
+    const closed = makeSession('s-closed', 'old', { lifecycle: 'closed' });
+    const archived = { ...makeRoom('r-arch', 'Old'), archivedAt: '2026-09-27T09:00:00.000Z' };
+    const swarms = [
+      makeSwarm('sw-01', 's-q', { members }),
+      makeSwarm('sw-02', 's-q2', { creator: { kind: 'session', sessionId: 's-closed' }, members: [makeSwarmMember('s-q2', 'queen')] }),
+      makeSwarm('sw-03', 's-q3', { creator: { kind: 'room', roomId: 'r-arch' }, members: [makeSwarmMember('s-q3', 'queen')] }),
+    ];
+    const sessions = [makeSession('s-top', 'top'), closed, ...hive, makeSession('s-q2', 'q2'), makeSession('s-q3', 'q3')];
+    const rows = cardRows(makeWork('w-01', { sessions, rooms: [archived], swarms }).map, false);
+    expect(rows.map(label)).toEqual(['s-top', 'sw-01', 'sw-02', 'sw-03']);
+    expect(rows.slice(1).map((row) => [row.depth, row.parent])).toEqual([[0, null], [0, null], [0, null]]);
+  });
+
+  it('сессии роя обычными строками не выводятся — ни королева, ни трутни, ни проверяющие', () => {
+    const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'session', sessionId: 's-lead' }, members });
+    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-lead', 'lead'), ...hive], swarms: [swarm] }).map, true);
+    expect(rows.filter((row) => row.kind === 'session').map(label)).toEqual(['s-lead']);
+    const swarmRow = rows.find((row) => row.kind === 'swarm');
+    expect(swarmRow?.kind === 'swarm' ? swarmRow.members.map((view) => view.member.sessionId) : []).toEqual(['s-q', 's-d1', 's-v']);
+  });
+
+  it('просмотренные и отменённые рои — только при раскрытых закрытых', () => {
+    const swarms = [
+      makeSwarm('sw-01', 's-q', { members }),
+      makeSwarm('sw-02', 's-q2', { status: 'cancelled', members: [makeSwarmMember('s-q2', 'queen')] }),
+      makeSwarm('sw-03', 's-q3', { status: 'done', seenAt: '2026-09-27T09:00:00.000Z', members: [makeSwarmMember('s-q3', 'queen')] }),
+      makeSwarm('sw-04', 's-q4', { status: 'done', members: [makeSwarmMember('s-q4', 'queen')] }),
+    ];
+    const sessions = [...hive, makeSession('s-q2', 'q2'), makeSession('s-q3', 'q3'), makeSession('s-q4', 'q4')];
+    const map = makeWork('w-01', { sessions, swarms }).map;
+    expect(cardRows(map, false).map(label)).toEqual(['sw-01', 'sw-04']);
+    expect(cardRows(map, true).map(label)).toEqual(['sw-01', 'sw-02', 'sw-03', 'sw-04']);
+  });
+
+  it('карта без роёв даёт прежние строки', () => {
+    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-01', 'a')] }).map, false);
+    expect(rows.map(label)).toEqual(['s-01']);
   });
 });

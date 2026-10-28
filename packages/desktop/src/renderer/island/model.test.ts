@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { refKey } from '@parley/protocol';
-import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeRoom, makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { islandModel, sessionLabels } from './model.js';
 
 const PROJECT = '/Users/me/Desktop/Доки ВК';
@@ -317,5 +317,42 @@ describe('модель острова', () => {
   it('sessionLabels — подписи сессий для шапки карточки', () => {
     const labels = sessionLabels([work()]);
     expect(labels.get(refKey(ref('s-02')))).toEqual({ session: 'S02 api', work: 'Backend', project: 'Доки ВК' });
+  });
+});
+
+describe('модель острова — рой работы (спека роя, 7.4)', () => {
+  const members = [makeSwarmMember('s-q', 'queen'), makeSwarmMember('s-d1', 'drone', 1, true), makeSwarmMember('s-d2', 'drone', 2)];
+  const hive = [makeSession('s-q', 'queen'), makeSession('s-d1', 'one'), makeSession('s-d2', 'two')];
+  const live = (ids: string[]) => activityMap(ids.map((id) => makeActivity(ref(id), 'working')));
+  const build = (swarms: ReturnType<typeof makeSwarm>[], sessions = hive) =>
+    islandModel([makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'lead'), ...sessions], swarms })], live(['s-01', 's-q', 's-d1', 's-d2']), NONE, NONE, NONE);
+
+  it('участники роя не стоят рядами и не считаются работающими; вместо них — один ряд роя со счётчиком', () => {
+    const model = build([makeSwarm('sw-01', 's-q', { members })]);
+    expect(model.working).toBe(1);
+    expect(model.groups[0]?.rows.map((row) => row.kind)).toEqual(['session', 'work-swarm']);
+    expect(model.groups[0]?.rows[1]).toMatchObject({ kind: 'work-swarm', swarmId: 'sw-01', queenId: 's-q', tag: 'Research', handed: 1, total: 2, state: 'running' });
+    expect(model.swarm).toEqual({ count: 1, handed: 1, total: 2 });
+    expect(model.active).toBe(true);
+  });
+
+  it('рой без работающих сессий всё равно делает остров активным', () => {
+    const model = islandModel([makeWork('w-1', { projectPath: PROJECT, sessions: hive, swarms: [makeSwarm('sw-01', 's-q', { members })] })], {}, NONE, NONE, NONE);
+    expect(model.working).toBe(0);
+    expect(model.active).toBe(true);
+    expect(model.groups[0]?.rows).toHaveLength(1);
+  });
+
+  it('готовый непросмотренный рой остаётся рядом, но в счётчик идущих не входит; просмотренный и отменённый уходят', () => {
+    const done = makeSwarm('sw-01', 's-q', { members, status: 'done' });
+    const model = build([done]);
+    expect(model.groups[0]?.rows.find((row) => row.kind === 'work-swarm')).toMatchObject({ state: 'done' });
+    expect(model.swarm).toBeUndefined();
+    const gone = build([{ ...done, seenAt: '2026-10-28T10:00:00.000Z' }, makeSwarm('sw-02', 's-q', { status: 'cancelled' })]);
+    expect(gone.groups[0]?.rows.some((row) => row.kind === 'work-swarm')).toBe(false);
+  });
+
+  it('карта без роёв — прежняя модель, без поля swarm', () => {
+    expect(build([]).swarm).toBeUndefined();
   });
 });

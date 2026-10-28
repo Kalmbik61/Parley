@@ -3,13 +3,16 @@ import { useProvidersStore } from '../store/providers.js';
 import { S } from '../../shared/strings.js';
 // packages/desktop/src/renderer/chat/ChatToolbar.test.tsx
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { useWorksStore } from '../store/works.js';
-import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { ChatToolbar } from './ChatToolbar.js';
+
+const applyFocusTarget = vi.hoisted(() => vi.fn());
+vi.mock('../attention/focus-target.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../attention/focus-target.js')>()), applyFocusTarget }));
 
 afterEach(() => {
   cleanup();
@@ -136,5 +139,41 @@ describe('ChatToolbar availability explanation', () => {
     render(<ChatToolbar workKey="k" tabId="t" view="terminal" available provider="codex" />);
     expect((screen.getByText('Chat') as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByText('Chat').closest('[title]')).toBeNull();
+  });
+});
+
+describe('ChatToolbar — чип роя (спека роя, 7.2)', () => {
+  const KEY = '/tmp/proj w-01';
+  const members = [makeSwarmMember('s-q', 'queen'), makeSwarmMember('s-d1', 'drone', 1, true), makeSwarmMember('s-d2', 'drone', 2)];
+
+  function setUp(sessionId: string, patch: Parameters<typeof makeSwarm>[2] = {}): void {
+    const sessions = [makeSession('s-q', 'queen'), makeSession('s-d1', 'one'), makeSession('s-d2', 'two'), makeSession('s-x', 'plain')];
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions, swarms: [makeSwarm('sw-01', 's-q', { members, ...patch })] })], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: `terminal:${sessionId}`, sessionId }, 'active');
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: layout }, hydrated: { [KEY]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  }
+
+  it('у королевы — «Research · 1/2», пока рой идёт; после конца — «✓ 1/2»', () => {
+    setUp('s-q');
+    const { rerender } = render(<ChatToolbar workKey={KEY} tabId="terminal:s-q" view="chat" available provider="claude" />);
+    expect(screen.getByTestId('chat-swarm-chip').textContent).toMatch(/Research · 1\/2$/);
+    setUp('s-q', { status: 'done' });
+    rerender(<ChatToolbar workKey={KEY} tabId="terminal:s-q" view="chat" available provider="claude" />);
+    expect(screen.getByTestId('chat-swarm-chip').textContent).toBe('✓1/2');
+  });
+
+  it('у трутня — ссылка «in swarm Research», клик открывает королеву', () => {
+    setUp('s-d2');
+    render(<ChatToolbar workKey={KEY} tabId="terminal:s-d2" view="chat" available provider="claude" />);
+    const link = screen.getByTestId('chat-swarm-chip');
+    expect(link.textContent).toMatch(/in swarm Research$/);
+    fireEvent.click(link);
+    expect(applyFocusTarget).toHaveBeenCalledWith({ kind: 'session', ref: { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-q' } }, expect.anything());
+  });
+
+  it('у сессии вне роя чипа нет', () => {
+    setUp('s-x');
+    render(<ChatToolbar workKey={KEY} tabId="terminal:s-x" view="chat" available provider="claude" />);
+    expect(screen.queryByTestId('chat-swarm-chip')).toBeNull();
   });
 });

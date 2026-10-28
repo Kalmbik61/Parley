@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { S } from '../../shared/strings.js';
 import { projectColor } from '../lib/project-color.js';
 import { useUiStore } from '../store/ui.js';
-import { makeWork } from '../test-utils/work-fixtures.js';
+import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { ProjectArchivedLink, ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
 
@@ -196,5 +196,31 @@ describe('ProjectGroup — ссылка «N archived» (спека архива,
     expect(button.className).toContain('w-full');
     expect(button.className).toContain('min-w-0');
     expect(button.firstElementChild?.className).toContain('truncate');
+  });
+});
+
+describe('ProjectGroup — значок роёв свёрнутой группы (спека роя, 7.3)', () => {
+  const hive = [makeSession('s-q', 'queen'), makeSession('s-d', 'drone')];
+  const withSwarms: SidebarSection = {
+    ...project,
+    works: [
+      makeWork('w-1', { sessions: hive, swarms: [makeSwarm('sw-01', 's-q', { members: [makeSwarmMember('s-q', 'queen'), makeSwarmMember('s-d', 'drone')] })] }),
+      makeWork('w-2', { sessions: hive, swarms: [makeSwarm('sw-01', 's-q'), makeSwarm('sw-02', 's-q')] }),
+    ],
+  };
+
+  it('свёрнутая группа — сумма идущих роёв по работам, значок статичный', () => {
+    render(<ProjectGroup section={{ ...withSwarms, collapsed: true }} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    const badge = header().querySelector<HTMLElement>('[data-swarm-badge]');
+    expect(badge?.querySelector('[data-swarm-count]')?.textContent).toBe('3');
+    expect(badge?.getAttribute('title')).toBe('3 swarms running');
+  });
+
+  it('развёрнутая группа значка не показывает — он на карточках; без роёв значка нет', () => {
+    render(<ProjectGroup section={withSwarms} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    expect(header().querySelector('[data-swarm-badge]')).toBeNull();
+    cleanup();
+    render(<ProjectGroup section={{ ...project, collapsed: true }} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    expect(header().querySelector('[data-swarm-badge]')).toBeNull();
   });
 });
