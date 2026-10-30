@@ -976,6 +976,14 @@ export const TOPOLOGY_FIELDS = ['sessions', 'rooms', 'plans', 'deletedSessions',
 export type TopologyField = typeof TOPOLOGY_FIELDS[number];
 type SummaryRow = Record<string, unknown>;
 
+/** Счётчики и поколение вычисляются один раз на запрос, в том числе для всех пяти частей обзора. */
+function topologySnapshot(map: WorkMap, caller: string | null, letters: LetterReader) {
+  const stats = letters.channelStats();
+  const unread = caller === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(caller);
+  return { stats, unread, generation: textHash(JSON.stringify([map, stats, unread])) };
+}
+type TopologySnapshot = ReturnType<typeof topologySnapshot>;
+
 /** Короткие строки считаются уже с экранированием; вложенные растущие данные в строки обзора не попадают. */
 function summaryText(value: string, max = 96): string {
   if (Buffer.byteLength(JSON.stringify(value), 'utf8') <= max) return value;
@@ -990,19 +998,20 @@ function summaryText(value: string, max = 96): string {
 }
 
 /** Номер id задаёт полный порядок; приоритет вызывающего/его комнаты сохраняется и при продолжении. */
-function topologyRows(map: WorkMap, caller: string | null, letters: LetterReader, field: TopologyField): SummaryRow[] {
+function topologyRows(map: WorkMap, caller: string | null, field: TopologyField, snapshot: TopologySnapshot): SummaryRow[] {
   const order = <T extends { id: string }>(rows: readonly T[], priority: (row: T) => boolean): T[] =>
     [...rows].sort((a, b) => Number(priority(b)) - Number(priority(a)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
   if (field === 'sessions') return order(map.sessions, (s) => s.id === caller).map((s) => ({
     id: s.id, label: summaryText(s.label), provider: summaryText(s.provider), lifecycle: s.lifecycle, result: s.result,
+    ...(s.model === undefined ? {} : { model: s.model === null ? null : summaryText(s.model) }),
+    ...(s.effort === undefined ? {} : { effort: s.effort === null ? null : summaryText(s.effort) }),
     status: reportedStatus(s), parent: s.parent, role: s.role == null ? null : summaryText(s.role.name),
     task: summaryText(s.task), summary: s.summary === null ? null : summaryText(s.summary),
     contextFromCount: s.contextFrom.length, historyCount: s.history.length, artifactCount: s.artifacts.length,
     stuck: s.stuck?.kind ?? null, hasWorktree: s.worktree != null,
   }));
   if (field === 'rooms') {
-    const stats = letters.channelStats();
-    const unread = caller === null ? {} : letters.unreadCount(caller).byRoom;
+    const { stats, unread: { byRoom: unread } } = snapshot;
     return order(map.rooms, (r) => caller !== null && r.members.includes(caller)).map((r) => ({
       id: r.id, title: summaryText(r.title), ownerId: r.ownerId, lead: r.lead ?? null, mode: r.mode ?? 'free',
       memberCount: r.members.length, ...(isRoomArchived(r) ? { archived: true } : {}),
@@ -1018,20 +1027,18 @@ function topologyRows(map: WorkMap, caller: string | null, letters: LetterReader
     id: p.id, rev: p.rev, status: p.status, roomId: p.roomId, mode: p.mode, goal: summaryText(p.goal), itemCount: p.items.length,
   }));
   if (field === 'deletedSessions') return [...(map.work.deletedSessions ?? [])].sort().map((id) => ({ id }));
-  const unread = caller === null ? {} : letters.unreadCount(caller).byRoom;
-  return Object.entries(unread).filter(([id]) => id !== '').sort(([a], [b]) => a.localeCompare(b)).map(([id, count]) => ({ id, count }));
+  return Object.entries(snapshot.unread.byRoom).filter(([id]) => id !== '').sort(([a], [b]) => a.localeCompare(b)).map(([id, count]) => ({ id, count }));
 }
 
 interface TopologyQuery { field: TopologyField; cursor?: string; maxBytes?: number }
 
 /** Собственная версия курсора списков: старые before/after и текстовые offset не меняются. */
-function topologySelection(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery) {
+function topologySelection(map: WorkMap, caller: string | null, query: TopologyQuery, snapshot: TopologySnapshot) {
   const maxBytes = Math.min(TOPOLOGY_MAX_BYTES, clampPageBytes(query.maxBytes));
   const binding = textHash(JSON.stringify([map.work.id, caller, query.field, maxBytes]));
   // updatedAt недостаточен: два изменения могут иметь одинаковую метку времени. Хеш охватывает и удаление.
-  const rows = topologyRows(map, caller, letters, query.field);
-  const source = query.field === 'sessions' ? map.sessions : query.field === 'rooms' ? map.rooms : query.field === 'plans' ? map.plans : rows;
-  const generation = textHash(JSON.stringify([source, rows]));
+  const rows = topologyRows(map, caller, query.field, snapshot);
+  const { generation } = snapshot;
   let offset = 0;
   if (query.cursor !== undefined) {
     try {
@@ -1053,8 +1060,8 @@ function topologySelection(map: WorkMap, caller: string | null, letters: LetterR
 }
 
 /** Страница новых списков ограничена всем MCP-ответом, а не суммой размеров строк. */
-export function topologyListPage(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery, budget?: number) {
-  const { rows, offset, maxBytes, next } = topologySelection(map, caller, letters, query);
+export function topologyListPage(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery, budget?: number, snapshot = topologySnapshot(map, caller, letters)) {
+  const { rows, offset, maxBytes, next } = topologySelection(map, caller, query, snapshot);
   const items: SummaryRow[] = [];
   const result = { field: query.field, items, page: { total: rows.length, returned: 0, complete: false, next: null as string | null, bytes: 0, cut: 0 } };
   const update = () => {
@@ -1080,9 +1087,9 @@ export function topologyListPage(map: WorkMap, caller: string | null, letters: L
 /** Обзор — пять ограниченных коллекций с точными итогами; полные данные остаются в адресных страницах. */
 export function mapOverview(map: WorkMap, caller: string | null, letters: LetterReader) {
   const cut: Cut = {};
-  const stats = letters.channelStats();
-  const unread = caller === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(caller);
-  const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field }, 6000)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
+  const snapshot = topologySnapshot(map, caller, letters);
+  const { stats, unread } = snapshot;
+  const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field }, 6000, snapshot)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
   const result = {
     sessionId: caller,
     map: {

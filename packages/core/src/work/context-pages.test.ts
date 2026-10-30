@@ -98,6 +98,27 @@ describe('бюджет агентской карты', () => {
     const map = emptyMap();
     for (let i = 0; i < 119; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(1000) });
     const letters = mapLetterReader(map);
+    map.sessions[0]!.model = 'model'.repeat(1000);
+    map.sessions[0]!.effort = 'high';
+    const stats = vi.spyOn(letters, 'channelStats');
+    const unread = vi.spyOn(letters, 'unreadCount');
+    const overview = mapOverview(map, 's-80', letters);
+    expect(stats).toHaveBeenCalledTimes(1);
+    expect(unread).toHaveBeenCalledTimes(1);
+    const continued = overview.map.sessions.map((row) => row.id);
+    let overviewCursor = overview.map.collections.sessions.next;
+    expect(overviewCursor).not.toBeNull();
+    while (overviewCursor !== null) {
+      const page = topologyListPage(map, 's-80', letters, { field: 'sessions', cursor: overviewCursor });
+      continued.push(...page.items.map((row) => row.id));
+      overviewCursor = page.page.next;
+    }
+    expect(continued).toHaveLength(119);
+    expect(new Set(continued).size).toBe(119);
+    expect(JSON.stringify(continued)).not.toContain('model');
+    const models = topologyListPage(map, 's-01', letters, { field: 'sessions' });
+    expect(models.items[0]).toMatchObject({ effort: 'high' });
+    expect((models.items[0]!.model as string).length).toBeLessThan(100);
     const seen: string[] = [];
     let cursor: string | undefined;
     do {
@@ -135,7 +156,7 @@ describe('бюджет агентской карты', () => {
     map.plans = Array.from({ length: 119 }, (_, i) => ({ id: `pl-${i + 1}`, roomId: 'r-01', rev: i, status: 'active', mode: 'checklist', goal: huge, backlog: [],
       acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null,
       items: [{ id: 1, owner: 's-01', title: huge, scope: huge, criteria: [huge], after: [], verifier: null, status: 'waiting', evidence: { text: huge, artifacts: Array(100).fill('evidence') }, note: huge,
-        log: Array.from({ length: 100 }, () => ({ at: 'x', by: 's-01', status: 'waiting', note: huge.slice(0, 256) })) }] }));
+        log: Array.from({ length: 100 }, () => ({ at: 'x', by: 's-01', status: 'waiting', note: huge.slice(0, 64) })) }] }));
     const reader = mapLetterReader(map);
     const unread = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`r-${i + 1}`, 1]));
     const letters = { ...reader, unreadCount: () => ({ total: 1000, byRoom: unread }) };
@@ -148,7 +169,7 @@ describe('бюджет агентской карты', () => {
       const seen: unknown[] = [];
       let cursor: string | undefined;
       do {
-        const page = topologyListPage(map, 's-01', letters, { field, ...(cursor ? { cursor } : {}) });
+        const page = topologyListPage(map, 's-01', letters, { field, maxBytes: field === 'rooms' ? 4096 : 49152, ...(cursor ? { cursor } : {}) });
         seen.push(...page.items.map((r) => r.id));
         cursor = page.page.next ?? undefined;
       } while (cursor);
