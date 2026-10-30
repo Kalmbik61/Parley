@@ -139,6 +139,24 @@ export type MailWait =
 export type CompactionPhase = 'pending' | 'running' | 'compacted';
 
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
+/**
+ * Отрезок расхода сессии (спека передачи сессии 5.9): от замены агента до следующей — смена провайдера, аккаунта или
+ * модели. Итог сессии (`LiveMetrics.usage`) — сумма отрезков без двойного счёта прежнего расхода в форке.
+ */
+export interface UsageSegment {
+  provider: string;
+  /** Имя провайдера для людей; удалённый из реестра — его id. */
+  providerLabel: string;
+  model: string | null;
+  /** Начало отрезка; `null` — неизвестно. */
+  from: string | null;
+  /** Конец отрезка; `null` — текущий. */
+  to: string | null;
+  usage: UsageSummary;
+  /** Стоимость по логу провайдера (цена по прайсу, не счёт подписки); `null` — лог её не сообщает. */
+  costUsd: number | null;
+}
+
 export interface LiveMetrics {
   /** План агента; `null` — плана нет. Поля нет у хоста более ранней версии. */
   plan?: AgentPlan | null;
@@ -148,6 +166,8 @@ export interface LiveMetrics {
    * показывает `tokensIn`/`tokensOut` как раньше. Это токены, а не деньги и не доля лимита подписки.
    */
   usage?: UsageSummary;
+  /** Расход по отрезкам, старые первыми, текущий последним (спека передачи сессии 5.9). Нет поля — хост старее или сессию не переводили. */
+  usageSegments?: UsageSegment[];
   /** Вход без кэша; `null` — не известен. */
   tokensIn: number | null;
   tokensOut: number | null;

@@ -14,6 +14,7 @@ export type {
   CompactionPhase,
   LimitWindow,
   LiveMetrics,
+  UsageSegment,
   LiveTask,
   MailWait,
   ModelOption,
