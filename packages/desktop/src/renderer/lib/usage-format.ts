@@ -3,6 +3,7 @@
  * а не деньги и не доля лимита подписки; неизвестное — `?`, а не `0`.
  */
 
+import type { UsageSegment } from '@parley/protocol';
 import type { RoomUsage, RoomUsageMember, UsageCounters, UsageSummary } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { formatTokens } from './metrics-line.js';
@@ -106,4 +107,16 @@ export function usageMarkdown(usage: RoomUsage, title: string, labels: UsageLabe
   lines.push('', `${U.footnote} ${U.legend}`);
   if (usage.reconstructed) lines.push(U.reconstructed);
   return lines.join('\n');
+}
+
+const clock = (iso: string | null): string => {
+  if (iso === null) return U.segmentUnknown;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? U.segmentUnknown : `${two(date.getHours())}:${two(date.getMinutes())}`;
+};
+
+/** Строка отрезка расхода: `Claude Code · opus · 09:00–10:05 — ↑1.2M ↓84k, ≈ $1.20 (list price)`; текущий отрезок кончается `now`. */
+export function segmentLine(segment: UsageSegment): string {
+  const head = [segment.providerLabel, segment.model].filter((part): part is string => part !== null && part !== '').join(' · ');
+  return U.segmentLine(head, clock(segment.from), segment.to === null ? U.segmentNow : clock(segment.to), usageChipText(segment.usage), segment.costUsd);
 }
