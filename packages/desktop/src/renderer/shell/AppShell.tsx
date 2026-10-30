@@ -68,6 +68,7 @@ import { useAttentionTotals } from '../attention/store.js';
 import { InterruptedBanner } from '../components/InterruptedBanner.js';
 import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { MergeRoomDialog } from '../components/dialogs/MergeRoomDialog.js';
+import { SwitchAgentDialogHost } from '../components/dialogs/SwitchAgentDialog.js';
 import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
@@ -810,6 +811,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           }}
         />
       ) : null}
+      <SwitchAgentDialogHost bridge={bridge} />
     </div>
   );
 

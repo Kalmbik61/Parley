@@ -595,6 +595,8 @@ export const S = {
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
       /** Участник развёрнутой комнаты, не ведущий и не закрытый: `rooms.setLead`. */
       makeLead: 'Make lead',
+      /** Диалог замены агента (`SwitchAgentDialog`); подсвечен у сессии в лимите, без входа или с удалённым провайдером. */
+      continueElsewhere: 'Continue on another provider…',
     },
     /** Меню строки комнаты по правой кнопке — `sidebar/RoomRowMenu.tsx`. */
     roomMenu: {
@@ -981,6 +983,39 @@ export const S = {
         `A room runs at most ${limit} sessions at once; this one has ${needed}. Remove an agent or raise the limit in Settings → Agents.`,
     },
     /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
+    /** Диалог замены агента сессии — `components/dialogs/SwitchAgentDialog.tsx` (спека 2026-10-30, 5.7). */
+    switchAgent: {
+      title: 'Continue on another provider',
+      description: (label: string): string => `${label} keeps its place in Parley; only the agent behind it changes.`,
+      loading: 'Loading providers…',
+      targetGroup: 'Provider',
+      modelField: 'Model',
+      modelDefault: 'Default',
+      effortField: 'Effort',
+      effortDefault: 'Default',
+      carryField: 'Carry',
+      carryHandover: 'Handover summary (any provider)',
+      carryTranscript: 'Continue the conversation (same Claude account family)',
+      transcriptHint: 'The first turn on the new account rewrites the whole context into its cache.',
+      /** `Keeps:` и части — `keeps` ответа `switchOptions`. */
+      keeps: 'Keeps',
+      lead: (rooms: readonly string[]): string => `lead of ${rooms.join(', ')}`,
+      owner: (rooms: readonly string[]): string => `owner of ${rooms.join(', ')}`,
+      children: (n: number): string => `${n} child ${n === 1 ? 'session' : 'sessions'}`,
+      worktree: (branch: string): string => `worktree ${branch}`,
+      unread: (n: number): string => `${n} unread`,
+      blockers: 'Cannot continue right now',
+      busyTitle: 'The agent is not at its prompt',
+      busyHint: 'Stopping it interrupts what it is doing now.',
+      continue: 'Continue',
+      stopAndContinue: 'Stop and continue',
+      held: 'Waiting for folder trust',
+      failed: 'Could not continue the session',
+      limitsFive: (percent: number): string => `5h ${Math.round(percent)}%`,
+      limitsWeek: (percent: number): string => `week ${Math.round(percent)}%`,
+      /** Цель, чей провайдер сейчас у сессии, и причина, почему текущий не годится. */
+      current: 'current',
+    },
     mergeRoom: {
       title: 'New room',
       /** `S02 бэкенд and S03 ревью move into the room.` — ярлыки сессий идут как есть. */
