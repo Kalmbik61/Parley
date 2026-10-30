@@ -173,6 +173,8 @@ export interface LaunchChoice {
   by?: string;
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
+  /** Пакет передачи при замене агента: первым сообщением `launch` после брифа. */
+  handover?: string;
   model?: string | null;
   effort?: EffortLevel | null;
 }
@@ -779,6 +781,7 @@ export function createSessionsService(
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
         ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
+        ...(options.handover === undefined ? {} : { handover: options.handover }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       }));
