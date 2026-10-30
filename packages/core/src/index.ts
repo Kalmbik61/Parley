@@ -631,6 +631,8 @@ export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';
 export type {
   Artifact,
+  AutoSleep,
+  AutoSleepReason,
   HistoryEntry,
   LaunchedBy,
   Message,

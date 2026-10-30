@@ -412,7 +412,8 @@ describe('transitionSession: сон по решению хоста', () => {
     const session = transitionSession(map, 's-01', 'sleeping', { at: T2, exitCode: 0 });
 
     expect(session.autoSleep).toEqual({ reason: 'idle', at: T, waitTarget: 's-07' });
-    expect(session.autoSleepPending).toBeNull();
+    expect(session.autoSleepPending).toBeUndefined();
+    expect('autoSleepPending' in session).toBe(false);
     expect(session.history.at(-1)).toEqual({ event: 'sleeping', at: T2, exitCode: 0, reason: 'idle' });
   });
 
@@ -428,31 +429,45 @@ describe('transitionSession: сон по решению хоста', () => {
     const map = mapWith('active');
     const session = transitionSession(map, 's-01', 'sleeping', { at: T2, exitCode: 0 });
 
-    expect(session.autoSleep ?? null).toBeNull();
-    expect(session.autoSleepPending ?? null).toBeNull();
+    expect(session.autoSleep).toBeUndefined();
+    expect(session.autoSleepPending).toBeUndefined();
     expect(session.history.at(-1)).toEqual({ event: 'sleeping', at: T2, exitCode: 0 });
     expect(session.history.at(-1)).not.toHaveProperty('reason');
   });
 
-  it('active снимает autoSleep и отметку', () => {
+  it('active снимает autoSleep и отметку: ключи уходят, null не пишется', () => {
     const map = mapWith('sleeping', { autoSleep: mark(), autoSleepPending: mark() });
     const session = transitionSession(map, 's-01', 'active', { at: T2 });
 
-    expect(session.autoSleep).toBeNull();
-    expect(session.autoSleepPending).toBeNull();
+    expect(session.autoSleep).toBeUndefined();
+    expect(session.autoSleepPending).toBeUndefined();
+    expect('autoSleep' in session).toBe(false);
+    expect('autoSleepPending' in session).toBe(false);
     expect(session.history.at(-1)).toEqual({ event: 'active', at: T2 });
   });
 
-  it('closed снимает autoSleep и отметку', () => {
-    // Закрыли спящую (есть autoSleep) и закрыли посреди остановки (есть только отметка): оба поля уходят.
+  it('closed снимает autoSleep и отметку: ключи уходят, null не пишется', () => {
+    // Закрыли спящую (есть autoSleep) и закрыли посреди остановки (есть только отметка): оба ключа уходят.
     for (const [lifecycle, fields] of [
       ['sleeping', { autoSleep: mark() }],
       ['active', { autoSleepPending: mark() }],
     ] as const) {
       const session = transitionSession(mapWith(lifecycle, fields), 's-01', 'closed', { at: T2 });
 
-      expect(session.autoSleep, lifecycle).toBeNull();
-      expect(session.autoSleepPending, lifecycle).toBeNull();
+      expect(session.autoSleep, lifecycle).toBeUndefined();
+      expect(session.autoSleepPending, lifecycle).toBeUndefined();
+      expect('autoSleep' in session, lifecycle).toBe(false);
+      expect('autoSleepPending' in session, lifecycle).toBe(false);
+    }
+  });
+
+  it('обычные переходы сессии, которая не спала, ключей сна не заводят', () => {
+    // Запуск и закрытие без сна: карта не обрастает парой пустых ключей на каждой сессии.
+    for (const to of ['active', 'closed'] as const) {
+      const session = transitionSession(mapWith('pending'), 's-01', to, { at: T2 });
+
+      expect('autoSleep' in session, to).toBe(false);
+      expect('autoSleepPending' in session, to).toBe(false);
     }
   });
 });
