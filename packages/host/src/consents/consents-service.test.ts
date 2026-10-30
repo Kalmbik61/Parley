@@ -272,12 +272,22 @@ describe('ConsentsService: карточка agent-switch', () => {
     const card = service.requestSwitch(ask);
     expect(await service.decide(card.id, 'allow', 'telegram')).toEqual({ applied: true, state: 'allowed' });
     await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
-    expect(switchAgent).toHaveBeenCalledWith(ref('s-03'), { requestId: card.id, provider: 'codex', model: 'gpt-6-astra', by: 's-01' });
+    expect(switchAgent).toHaveBeenCalledWith(ref('s-03'), { requestId: card.id, provider: 'codex', model: 'gpt-6-astra', force: true, by: 's-01' });
     expect(tellRequester).not.toHaveBeenCalled();
     expect(service.list()).toEqual([]);
     // Второе решение по той же карточке ничего не повторяет.
     expect((await service.decide(card.id, 'allow')).applied).toBe(false);
     expect(switchAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('карточка без модели: в switchAgent нет model (умолчание роли), force остаётся', async () => {
+    const { service, switchAgent } = build();
+    const card = service.requestSwitch({ ...ask, model: null });
+    await service.decide(card.id, 'allow');
+    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
+    const request = switchAgent.mock.calls[0]![1];
+    expect(request).not.toHaveProperty('model');
+    expect(request).toMatchObject({ force: true, provider: 'codex' });
   });
 
   it('deny: письмо просившему «@human declined», замены нет', async () => {

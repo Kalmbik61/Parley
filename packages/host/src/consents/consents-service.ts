@@ -65,7 +65,7 @@ export interface ConsentsDeps {
   /** Замена агента от имени человека: `allow` карточки `agent-switch` (`requestId` — id карточки). */
   switchAgent(
     ref: SessionRef,
-    request: { requestId: string; provider: string; model: string | null; by: string },
+    request: { requestId: string; provider: string; model?: string; force?: boolean; by: string },
   ): Promise<unknown>;
   /** Письмо `parley` просившему агенту: отказ человека или ошибка замены. */
   tellRequester(ref: SessionRef, to: string, text: string): Promise<void>;
@@ -265,7 +265,14 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       return;
     }
     try {
-      await deps.switchAgent(ref, { requestId: card.id, provider: card.provider, model: card.model, by: requestedBy.sessionId });
+      // `allow` — согласие остановить работающего агента (`force`); без модели в карточке умолчание роли не перебивается.
+      await deps.switchAgent(ref, {
+        requestId: card.id,
+        provider: card.provider,
+        ...(card.model === null ? {} : { model: card.model }),
+        force: true,
+        by: requestedBy.sessionId,
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       deps.host.log.warn('consents: замена агента не удалась', { ref, error: reason });

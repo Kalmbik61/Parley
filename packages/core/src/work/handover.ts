@@ -8,6 +8,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { unreadLetters } from './letter-store.js';
+import { liveLead } from './rooms.js';
 import { readMap, workPaths } from './store.js';
 import { readTranscript } from './summary.js';
 import type { WorkMap, WorkProvider } from './types.js';
@@ -149,7 +150,7 @@ function dutiesPart(input: HandoverInput): string {
   out.push(children.length === 0 ? 'Children: none.' : 'Children:', ...list(children, 'get_map {sessions}'));
 
   const proposals = map.rooms
-    .filter((r) => r.proposal !== null && (r.lead ?? r.members[0] ?? null) === sessionId)
+    .filter((r) => r.proposal !== null && liveLead(map, r) === sessionId)
     .map((r) => `- ${r.id} "${oneLine(r.title, 60)}": proposal ${r.proposal!.id} (rev ${r.proposal!.rev}) waits for the human`);
   out.push(...(proposals.length === 0 ? [] : ['Rooms you lead with a waiting proposal:', ...list(proposals, 'get_map {rooms}')]));
 

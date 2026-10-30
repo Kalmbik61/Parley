@@ -118,7 +118,7 @@ it('consents.decide: allow карточки agent-switch из окна дохо�
     const handlers = createConsentHandlers({ consents: service, home }) as unknown as Record<string, Call>;
     expect(switchAgent).not.toHaveBeenCalled();
     expect(await handlers['consents.decide']?.({ id: card.id, decision: 'allow' }, request)).toEqual({ applied: true, state: 'allowed' });
-    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledWith(target, { requestId: card.id, provider: 'codex', model: null, by: 's-01' }));
+    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledWith(target, { requestId: card.id, provider: 'codex', force: true, by: 's-01' }));
   } finally {
     service.stop();
   }

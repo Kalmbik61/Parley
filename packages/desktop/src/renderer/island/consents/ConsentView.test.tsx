@@ -134,7 +134,7 @@ describe('карточка согласия острова', () => {
     const p = props({ card });
     render(<ConsentView {...p} />);
     expect(screen.getByText('Continue on another provider?')).toBeTruthy();
-    expect(screen.getByTestId('island-consent-switch').textContent).toBe('@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near');
+    expect(screen.getByTestId('island-consent-switch').textContent).toBe('@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near. Allow stops @s03 now and continues it there.');
     arm();
     expect(screen.getByTestId('island-consent-trust').textContent).toBe('Allow');
     fireEvent.click(screen.getByTestId('island-consent-trust'));

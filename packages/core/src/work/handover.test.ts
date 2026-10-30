@@ -101,6 +101,17 @@ describe('formatHandover', () => {
     expect(text).toContain('No transcript of the previous agent is available');
   });
 
+  it('rooms you lead: by the live lead — a closed lead hands the proposal to the next live member', () => {
+    const map = fixture(0);
+    const closed = { ...map.sessions[0]!, id: 's-09', lifecycle: 'closed' as const };
+    map.sessions.push(closed);
+    Object.assign(map.rooms[0]!, { members: ['s-09', 's-01'], lead: 's-09' });
+    expect(formatHandover(input({ map }))).toContain('Rooms you lead with a waiting proposal:');
+    // Ведущий жив и это не s-01: комната в обязательства s-01 не попадает.
+    closed.lifecycle = 'active';
+    expect(formatHandover(input({ map }))).not.toContain('Rooms you lead with a waiting proposal:');
+  });
+
   it('keeps every part inside its budget and the total under 12 KB (50 letters, 30 children, long text)', () => {
     const noTail = formatHandover(
       input({ map: fixture(30), unread: Array.from({ length: 50 }, (_, i) => mail(i + 1)),

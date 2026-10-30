@@ -157,7 +157,7 @@ describe('ConsentPrompt', () => {
       act(() => bridge.emit('consents.changed', { upsert: [switchCard('c-05')], removed: [] }));
       const dialog = await screen.findByRole('dialog');
       expect(dialog.textContent).toContain('Continue on another provider?');
-      expect(dialog.textContent).toContain('@s11 asks to continue @s03 on Codex: the Claude limit is near');
+      expect(dialog.textContent).toContain('@s11 asks to continue @s03 on Codex: the Claude limit is near. Allow stops @s03 now and continues it there.');
       fireEvent.click(screen.getByRole('button', { name: S.dialogs.agentSwitch.allow }));
       await flush();
       expect(decideCalls()).toEqual([{ id: 'c-05', decision: 'allow' }]);
