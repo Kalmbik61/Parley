@@ -19,6 +19,7 @@ import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Input } from '../../ui/input.js';
+import { ProviderSessions } from './ProviderSessions.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { AccountPanel } from './AccountPanel.js';
 import { CheckLine, maskedHint, newerCheck } from './check-line.js';
@@ -426,9 +427,12 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
       )}
       {problem !== null && draft.label !== '' && draft.baseUrl !== '' ? <p className="text-xs text-muted-foreground">{problem}</p> : null}
 
+      {draft.id !== null && !confirmDelete ? <ProviderSessions providerId={draft.id} /> : null}
+
       {confirmDelete ? (
         <div className="space-y-2 rounded-xl border border-destructive/40 p-3" role="group" aria-label={S.customProviders.deleteProvider}>
           <p className="text-xs">{S.customProviders.deleteConfirm(draft.label)}</p>
+          <ProviderSessions providerId={draft.id ?? ''} />
           <label className="flex items-center gap-1.5 text-xs">
             <Checkbox
               aria-label={S.customProviders.deleteFolder}

@@ -17,6 +17,7 @@ import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Input } from '../../ui/input.js';
 import { accountOf, nextAccountNumber } from './custom-provider-draft.js';
+import { ProviderSessions } from './ProviderSessions.js';
 import { SignInTerminal } from './SignInTerminal.js';
 
 export interface AccountPanelProps {
@@ -249,6 +250,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
       {confirmDelete && provider !== null ? (
         <div className="space-y-2 rounded-xl border border-destructive/40 p-3" role="group" aria-label={S.accounts.delete}>
           <p className="text-xs">{S.customProviders.deleteConfirm(provider.label)}</p>
+          <ProviderSessions providerId={provider.id ?? ''} />
           <label className="flex items-center gap-1.5 text-xs">
             <Checkbox
               aria-label={S.accounts.deleteFolder}
@@ -292,6 +294,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
           )}
         </div>
       )}
+      {provider !== null && !confirmDelete ? <ProviderSessions providerId={provider.id} /> : null}
       <p className="text-xs text-muted-foreground">{S.accounts.signInCaption}</p>
 
       {showTerminal && provider !== null ? (
