@@ -10,7 +10,7 @@
 
 import { create } from 'zustand';
 import type { WindowWorkEntry } from '@parley/core';
-import type { ConsentCard } from '@parley/protocol';
+import type { AgentSwitchCard, ConsentCard, FolderTrustCard } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionRowLabel } from '../lib/participant.js';
@@ -95,16 +95,16 @@ export function trustCardFor(
   projectPath: string,
   lifecycle: string | undefined,
   provider: string,
-): ConsentCard | undefined {
+): FolderTrustCard | undefined {
   if (provider !== 'codex' || (lifecycle !== 'pending' && lifecycle !== 'sleeping')) return undefined;
-  return cards.find((card) => card.projectPath === projectPath);
+  return cards.find((card): card is FolderTrustCard => card.kind === 'folder-trust' && card.projectPath === projectPath);
 }
 
 /**
  * Кто просил, для диалога: «S03 Ruslan · create_session». Просившая сессия берётся из карты работы карточки, нет её
  * (человек, автозапуск, сессия уже ушла) — ярлык карточки, нет и его — один источник.
  */
-export function consentRequester(card: ConsentCard, entries: readonly WindowWorkEntry[]): string {
+export function consentRequester(card: FolderTrustCard, entries: readonly WindowWorkEntry[]): string {
   const { requestedBy } = card;
   const via = S.dialogs.trustFolder.via[requestedBy.source];
   const session =
@@ -115,4 +115,13 @@ export function consentRequester(card: ConsentCard, entries: readonly WindowWork
           ?.map.sessions.find((item) => item.id === requestedBy.sessionId);
   const who = session === undefined ? requestedBy.label : sessionRowLabel(session.id, session.label);
   return who === undefined || who === '' ? via : `${who} · ${via}`;
+}
+
+/** `s-03` → `@s03`: упоминание сессии, как в письмах агентов. */
+const mention = (sessionId: string): string => `@${sessionId.replace('-', '')}`;
+
+/** Просьба агента одной строкой: «@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near». */
+export function switchRequestText(card: AgentSwitchCard): string {
+  const model = card.model === null ? '' : ` (${card.model})`;
+  return S.dialogs.agentSwitch.asks(mention(card.requestedBy.sessionId), mention(card.ref.sessionId), `${card.providerLabel}${model}`, card.reason);
 }

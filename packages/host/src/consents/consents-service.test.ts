@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { refKey } from '@parley/protocol';
-import type { ConsentCard, SessionRef } from '@parley/protocol';
+import type { ConsentCard, FolderTrustCard, SessionRef } from '@parley/protocol';
 import { createConsentsService } from './consents-service.js';
 import type { ConsentsService, HeldLaunch } from './consents-service.js';
 
@@ -28,7 +28,7 @@ const hold = (sessionId: string, mode: HeldLaunch['mode'] = 'launch'): HeldLaunc
   mode,
   by: 'S01',
 });
-const requestedBy: ConsentCard['requestedBy'] = { source: 'agent', sessionId: 's-01', workId: 'w-01', label: 'Ruslan' };
+const requestedBy: FolderTrustCard['requestedBy'] = { source: 'agent', sessionId: 's-01', workId: 'w-01', label: 'Ruslan' };
 const input = { projectPath: '/p', folder: '/real/p', requestedBy };
 
 function build(overrides: Partial<Parameters<typeof createConsentsService>[0]> = {}) {
@@ -36,6 +36,9 @@ function build(overrides: Partial<Parameters<typeof createConsentsService>[0]> =
   const continueLaunch = vi.fn<(hold: HeldLaunch) => Promise<void>>(async () => {});
   const refuseLaunch = vi.fn<(hold: HeldLaunch) => Promise<void>>(async () => {});
   const isLive = vi.fn<(ref: SessionRef) => Promise<boolean>>(async () => false);
+  const switchAgent = vi.fn<(ref: SessionRef, request: { requestId: string; provider: string; model: string | null; by: string }) => Promise<unknown>>(async () => ({ outcome: 'started' }));
+  const tellRequester = vi.fn<(ref: SessionRef, to: string, text: string) => Promise<void>>(async () => {});
+  const noticeFailure = vi.fn<(ref: SessionRef, text: string) => void>();
   const service = createConsentsService({
     home,
     host: {
@@ -46,10 +49,13 @@ function build(overrides: Partial<Parameters<typeof createConsentsService>[0]> =
     continueLaunch,
     refuseLaunch,
     isLive,
+    switchAgent,
+    tellRequester,
+    noticeFailure,
     ...overrides,
   });
   services.push(service);
-  return { service, trust, continueLaunch, refuseLaunch, isLive };
+  return { service, trust, continueLaunch, refuseLaunch, isLive, switchAgent, tellRequester, noticeFailure };
 }
 
 describe('ConsentsService', () => {
@@ -237,5 +243,74 @@ describe('ConsentsService', () => {
 
     const second = build();
     expect(second.service.request(input, hold('s-05')).id).toBe('c-02');
+  });
+});
+
+describe('ConsentsService: карточка agent-switch', () => {
+  const ask = {
+    ref: ref('s-03'),
+    provider: 'codex',
+    providerLabel: 'Codex',
+    model: 'gpt-6-astra',
+    reason: 'the Claude limit is near',
+    requestedBy: { sessionId: 's-01', label: 'Lead' },
+  };
+
+  it('requestSwitch: карточка ждёт, ничего не меняет; повтор той же просьбы — та же карточка', () => {
+    const { service, switchAgent } = build();
+    const first = service.requestSwitch(ask);
+    expect(first).toMatchObject({ id: 'c-01', kind: 'agent-switch', state: 'pending', projectPath: '/p', ...ask });
+    expect(service.requestSwitch({ ...ask, reason: 'again' }).id).toBe(first.id);
+    expect(service.requestSwitch({ ...ask, provider: 'claude' }).id).not.toBe(first.id);
+    expect(service.list()).toHaveLength(2);
+    expect(switchAgent).not.toHaveBeenCalled();
+    expect(broadcasts.filter((item) => item.event === 'consents.changed')).toHaveLength(2);
+  });
+
+  it('allow из любого канала: switchAgent с id карточки как requestId, от имени просившего', async () => {
+    const { service, switchAgent, tellRequester } = build();
+    const card = service.requestSwitch(ask);
+    expect(await service.decide(card.id, 'allow', 'telegram')).toEqual({ applied: true, state: 'allowed' });
+    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
+    expect(switchAgent).toHaveBeenCalledWith(ref('s-03'), { requestId: card.id, provider: 'codex', model: 'gpt-6-astra', by: 's-01' });
+    expect(tellRequester).not.toHaveBeenCalled();
+    expect(service.list()).toEqual([]);
+    // Второе решение по той же карточке ничего не повторяет.
+    expect((await service.decide(card.id, 'allow')).applied).toBe(false);
+    expect(switchAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny: письмо просившему «@human declined», замены нет', async () => {
+    const { service, switchAgent, tellRequester } = build();
+    const card = service.requestSwitch(ask);
+    expect(await service.decide(card.id, 'deny')).toEqual({ applied: true, state: 'denied' });
+    await vi.waitFor(() => expect(tellRequester).toHaveBeenCalledTimes(1));
+    expect(tellRequester).toHaveBeenCalledWith(ref('s-03'), 's-01', '@human declined to continue @s03 on Codex. Nothing changed.');
+    expect(switchAgent).not.toHaveBeenCalled();
+  });
+
+  it('ошибка замены: письмо просившему и уведомление окну', async () => {
+    const { service, tellRequester, noticeFailure } = build({
+      switchAgent: async () => {
+        throw new Error('Wait until the agent is idle');
+      },
+    });
+    const card = service.requestSwitch(ask);
+    await service.decide(card.id, 'allow');
+    await vi.waitFor(() => expect(tellRequester).toHaveBeenCalledTimes(1));
+    expect(tellRequester.mock.calls[0]?.[2]).toBe('@human allowed continuing @s03 on Codex, but the switch failed: Wait until the agent is idle');
+    expect(noticeFailure).toHaveBeenCalledWith(ref('s-03'), 'continuing s-03 on Codex failed: Wait until the agent is idle');
+  });
+
+  it('карточка переживает перезапуск хоста, а карточка папки и карточка замены не смешиваются', async () => {
+    const first = build();
+    const card = first.service.requestSwitch(ask);
+    first.service.request(input, hold('s-02'));
+    first.service.stop();
+    const second = build();
+    expect(second.service.list().map((item) => [item.id, item.kind])).toEqual([[card.id, 'agent-switch'], ['c-02', 'folder-trust']]);
+    await second.service.decide(card.id, 'allow');
+    await vi.waitFor(() => expect(second.switchAgent).toHaveBeenCalledTimes(1));
+    expect(second.continueLaunch).not.toHaveBeenCalled();
   });
 });

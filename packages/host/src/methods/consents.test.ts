@@ -94,3 +94,32 @@ it('trust.check: доверена ли папка — по realpath, путь ч
     await rm(folder, { recursive: true, force: true });
   }
 });
+
+it('consents.decide: allow карточки agent-switch из окна доходит до сервиса, который вызывает switchAgent', async () => {
+  const { createConsentsService } = await import('../consents/consents-service.js');
+  const switchAgent = vi.fn(async () => ({ outcome: 'started' }));
+  const service = createConsentsService({
+    home,
+    host: { broadcast: () => {}, log: { info: () => {}, warn: () => {}, error: () => {} } },
+    trust: { grant: async () => undefined },
+    continueLaunch: async () => {},
+    refuseLaunch: async () => {},
+    isLive: async () => false,
+    switchAgent,
+    tellRequester: async () => {},
+    noticeFailure: () => {},
+  });
+  try {
+    const target = { projectPath: '/p', workId: 'w-01', sessionId: 's-03' };
+    const card = service.requestSwitch({
+      ref: target, provider: 'codex', providerLabel: 'Codex', model: null, reason: 'limit',
+      requestedBy: { sessionId: 's-01', label: 'Lead' },
+    });
+    const handlers = createConsentHandlers({ consents: service, home }) as unknown as Record<string, Call>;
+    expect(switchAgent).not.toHaveBeenCalled();
+    expect(await handlers['consents.decide']?.({ id: card.id, decision: 'allow' }, request)).toEqual({ applied: true, state: 'allowed' });
+    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledWith(target, { requestId: card.id, provider: 'codex', model: null, by: 's-01' }));
+  } finally {
+    service.stop();
+  }
+});

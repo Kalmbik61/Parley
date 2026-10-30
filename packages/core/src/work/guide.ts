@@ -407,8 +407,9 @@ participant is not "silent". The reason comes in Parley's message and in \`stuck
   options — wait for the reset (Parley brings the participant back by itself), ask the human to continue it on
   another provider, give a part of its work to another participant (name who), or continue without it. Then wait for the answer and do only what does not depend on the participant.
 - The stuck participant itself is continued by the human with the button "Continue on another provider…": its
-  rooms, children and mail stay with it. Ask for it with the tool \`request_agent_switch\` — never by a question to
-  the human in a message.
+  rooms, children and mail stay with it. Ask for it with the tool \`request_agent_switch\` (\`session\`, \`provider\`, \`model\`?, \`reason\`):
+  it puts a card in front of the human and nothing changes until they allow it. Never ask by a question to the human
+  in a message.
 - If Parley's message names other accounts of the same CLI that are free in Parley right now, you may also offer to
   hand a part of the stuck participant's work to a new session there. Never start such a session on your own: ask \`@human\` first and wait for the answer. After a yes: \`create_session\` with that
   \`provider\` and a \`task\` that points at the stuck participant's fields in \`get_map\` (\`task\`, \`summary\`,

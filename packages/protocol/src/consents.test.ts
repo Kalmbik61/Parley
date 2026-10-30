@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { ConsentCard, TrustRecord } from './consents.js';
+import type { AgentSwitchCard, ConsentCard, FolderTrustCard, TrustRecord } from './consents.js';
 import { consentMethodSchemas } from './consents.js';
 import type { EventData } from './events.js';
 import { METHODS } from './methods.js';
@@ -40,5 +40,12 @@ describe('согласия и доверие к папке: методы окн�
     expectTypeOf<Result<'trust.grant'>>().toEqualTypeOf<{ folder: TrustRecord }>();
     expectTypeOf<Result<'trust.revoke'>>().toEqualTypeOf<{ removed: boolean }>();
     expectTypeOf<EventData<'consents.changed'>>().toEqualTypeOf<{ upsert: ConsentCard[]; removed: string[] }>();
+  });
+
+  it('ConsentCard — объединение по kind: folder-trust и agent-switch', () => {
+    expectTypeOf<ConsentCard>().toEqualTypeOf<FolderTrustCard | AgentSwitchCard>();
+    expectTypeOf<AgentSwitchCard['kind']>().toEqualTypeOf<'agent-switch'>();
+    expectTypeOf<AgentSwitchCard['requestedBy']>().toEqualTypeOf<{ sessionId: string; label: string }>();
+    expectTypeOf<AgentSwitchCard['model']>().toEqualTypeOf<string | null>();
   });
 });

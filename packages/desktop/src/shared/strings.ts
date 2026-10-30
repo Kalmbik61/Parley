@@ -16,7 +16,7 @@
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 import type { TtsModelId } from './tts-types.js';
@@ -1075,6 +1075,13 @@ export const S = {
       confirm: 'Trust',
       /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
       via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
+    },
+    /** Просьба агента продолжить сессию на другом провайдере (`request_agent_switch`, карточка `agent-switch`). */
+    agentSwitch: {
+      title: 'Continue on another provider?',
+      asks: (who: string, target: string, provider: string, reason: string): string => `${who} asks to continue ${target} on ${provider}: ${reason}`,
+      allow: 'Allow',
+      deny: 'Deny',
     },
     /**
      * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
@@ -2328,7 +2335,8 @@ export const S = {
     consentTrust: 'Trust',
     consentRequestedBy: (who: string, source: string): string => `requested by ${who} · ${source}`,
     /** Откуда запрос (`requestedBy.source`): `agent` — `create_session` агента, `resume` — подъём сессии, `launch` — запуск. */
-    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<ConsentCard['requestedBy']['source'], string>,
+    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<FolderTrustCard['requestedBy']['source'], string>,
+    consentAllow: 'Allow',
     consentDone: 'Done ✓',
     consentAnswered: 'Already answered',
     consentFailed: "Couldn't decide",

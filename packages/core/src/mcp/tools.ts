@@ -70,7 +70,7 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
-import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
+import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
@@ -1830,7 +1830,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
+    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,
@@ -1844,6 +1844,11 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
         return sessionAgent === undefined
           ? { content: [{ type: 'text', text: SESSION_CREATION_UNAVAILABLE }], isError: true }
           : createSession(sessionAgent, args, extra.signal);
+      }
+      if (request.params.name === 'request_agent_switch') {
+        return sessionAgent === undefined
+          ? { content: [{ type: 'text', text: AGENT_SWITCH_UNAVAILABLE }], isError: true }
+          : requestAgentSwitch(sessionAgent, args, extra.signal);
       }
       if (request.params.name === 'create_swarm' || request.params.name === 'swarm_add') {
         return sessionAgent === undefined

@@ -90,7 +90,11 @@ export const T = {
   consentHeader: 'Trust folder',
   consentTitle: 'Trust folder for agents?',
   consentRequestedBy: (label: string, project: string): string => `Requested by ${label} · ${project}`,
+  switchTitle: 'Continue on another provider?',
+  switchAsks: (card: { ref: { sessionId: string }; providerLabel: string; model: string | null; reason: string; requestedBy: { sessionId: string } }): string =>
+    `@${card.requestedBy.sessionId.replace('-', '')} asks to continue @${card.ref.sessionId.replace('-', '')} on ${card.providerLabel}${card.model === null ? '' : ` (${card.model})`}: ${card.reason}`,
   trusted: 'Trusted ✓',
+  switchAllowed: 'Allowed ✓',
   denied: 'Denied',
 } as const;
 

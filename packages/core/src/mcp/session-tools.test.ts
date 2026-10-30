@@ -124,3 +124,38 @@ describe('create_session MCP', () => {
     expect(result.text).toContain('get_map');
   });
 });
+
+describe('request_agent_switch MCP', () => {
+  const args = { session: 's-03', provider: 'codex', model: 'gpt-6-astra', reason: 'its Claude limit is near' };
+  const callSwitch = async (client: Client) => {
+    const result = await client.callTool({ name: 'request_agent_switch', arguments: args });
+    const content = result.content as Array<{ type: string; text?: string }>;
+    return { isError: result.isError, text: content.map((item) => item.text).join('\n') };
+  };
+
+  it('is advertised only to an identified host-connected session, with a closed schema', async () => {
+    const url = await startEndpoint();
+    for (const client of [await connect(), await connect(url, null)]) {
+      expect((await client.listTools()).tools.some((tool) => tool.name === 'request_agent_switch')).toBe(false);
+    }
+    const tool = (await (await connect(url)).listTools()).tools.find((item) => item.name === 'request_agent_switch');
+    expect(tool).toMatchObject({ inputSchema: { required: ['session', 'provider', 'reason'], additionalProperties: false } });
+    expect(tool?.inputSchema.properties).not.toHaveProperty('workId');
+  });
+
+  it('forwards the request to /agent/switch and returns the host answer', async () => {
+    const client = await connect(await startEndpoint());
+    answer.body = { ok: true, result: { message: 'asked @human; the switch happens only after their answer' } };
+    expect(await callSwitch(client)).toEqual({ isError: undefined, text: 'asked @human; the switch happens only after their answer' });
+    expect(requests).toEqual([{ url: '/agent/switch', authorization: `Bearer ${TOKEN}`, body: args }]);
+  });
+
+  it('passes the host refusal through and explains a missing host connection', async () => {
+    const client = await connect(await startEndpoint());
+    answer.body = { ok: false, error: { code: 'forbidden', message: 'only the parent may ask' } };
+    expect(await callSwitch(client)).toEqual({ isError: true, text: 'forbidden: only the parent may ask' });
+    const result = await callSwitch(await connect());
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('host connection');
+  });
+});
