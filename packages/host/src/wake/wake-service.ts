@@ -102,6 +102,11 @@ export interface WakeService {
    * без процесса письма заново считаются неуказанными — и после перезапуска хоста тоже.
    */
   retry(ref: SessionRef): void;
+  /**
+   * Агента сессии заменили (спека замены агента, 5.3 шаг 8): прежний подъём забыт — недоступный resume, удержание
+   * согласия, пауза бюджета, эпизод лимита и указанные письма; ждавшие письма доставляются новому агенту заново.
+   */
+  switched(ref: SessionRef): void;
 }
 
 const DEFAULT_ENTER_DELAY_MS = 500;
@@ -914,6 +919,12 @@ export function createWakeService(
     ensureKnown(entry);
 
     const state = stateFor(refKey(ref));
+    // Идёт замена агента (спека замены агента, 6.3): ни подъёма, ни указателя, ни возврата после лимита — письма ждут
+    // нового агента, а путь resume будильника мимо замка замены прошёл бы. Снимает `switched` по концу замены.
+    if (session.switching !== null && session.switching !== undefined) {
+      publishWaiting(ref, state, hasUnread(entry, session.id) ? 'resuming' : null);
+      return;
+    }
     const handle = pty.get(ref);
     trackLimit(ref, state, entry, session, handle);
 
@@ -1173,6 +1184,24 @@ export function createWakeService(
       // подъёме. Без этого после перезапуска хоста старт (`ensureKnown`) уже записал бы такие письма как указанные, и
       // согласие ничего бы не подняло. У живого процесса `pointed` не трогаем: повторный указатель задвоил бы доставку.
       if (pty.get(ref) === undefined) state.pointed.clear();
+      recompute(ref);
+    },
+
+    switched(ref) {
+      const state = stateFor(refKey(ref));
+      clearTimers(state);
+      dropLimit(state);
+      state.inFlight = false;
+      state.pointed.clear();
+      state.pointerAfter = null;
+      state.resumedAt = null;
+      state.resumeLetters = [];
+      state.earlyExit = undefined;
+      state.resumeUnavailable = false;
+      state.trustHeld = false;
+      state.budgetDeniedAt = null;
+      state.returns = 0;
+      state.returnTurn = null;
       recompute(ref);
     },
 

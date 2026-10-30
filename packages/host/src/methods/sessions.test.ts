@@ -430,6 +430,30 @@ describe('sessions.setModel (спека нормалайзера, 5.8)', () => {
   });
 });
 
+describe('sessions.switchOptions / sessions.switchAgent (спека замены агента, 5.2)', () => {
+  it('обработчики отдают сервису ref и параметры без лишних ключей и возвращают ответ как есть', async () => {
+    const switchAgent = vi.fn(async () => ({ outcome: 'started' as const, carried: 'handover' as const }));
+    const switchOptions = vi.fn(async () => ({ suggested: null }));
+    const { sessionsSwitchAgent, sessionsSwitchOptions } = createSessionHandlers({
+      sessions: { switchAgent, switchOptions } as unknown as SessionsService,
+      pty: {} as unknown as SessionMethodDeps['pty'],
+      activity: {} as unknown as SessionMethodDeps['activity'],
+      wake: {} as unknown as SessionMethodDeps['wake'],
+    });
+    const requestId = '00000000-0000-4000-8000-000000000001';
+
+    await expect(sessionsSwitchAgent({ ref, requestId, provider: 'codex', carry: 'handover' }, request)).resolves.toEqual({
+      outcome: 'started',
+      carried: 'handover',
+    });
+    expect(switchAgent).toHaveBeenCalledWith(ref, { requestId, provider: 'codex', carry: 'handover' });
+    await sessionsSwitchAgent({ ref, requestId, provider: 'codex', carry: 'handover', model: null, force: true }, request);
+    expect(switchAgent).toHaveBeenLastCalledWith(ref, { requestId, provider: 'codex', carry: 'handover', model: null, force: true });
+    await expect(sessionsSwitchOptions({ ref }, request)).resolves.toEqual({ suggested: null });
+    expect(switchOptions).toHaveBeenCalledWith(ref);
+  });
+});
+
 describe('sessions.rename (часть 2 спеки архива комнат, 15)', () => {
   let project = '';
 

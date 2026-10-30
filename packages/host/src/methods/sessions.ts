@@ -56,6 +56,8 @@ export interface SessionHandlers {
   sessionsSetMode: Handler<'sessions.setMode'>;
   sessionsSetEffort: Handler<'sessions.setEffort'>;
   sessionsSetModel: Handler<'sessions.setModel'>;
+  sessionsSwitchOptions: Handler<'sessions.switchOptions'>;
+  sessionsSwitchAgent: Handler<'sessions.switchAgent'>;
   sessionsResumeInterrupted: Handler<'sessions.resumeInterrupted'>;
 }
 
@@ -181,6 +183,18 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Модель — перезапуском через resume с новым `--model` (спека нормалайзера, 5.8): правила и порядок — в сервисе.
     sessionsSetModel: async ({ ref, model }) => deps.sessions.setModel(ref, model),
+
+    // Замена агента на месте (спека 2026-10-30, 5.2–5.3): правила, порядок и восстановление — в сервисе.
+    sessionsSwitchOptions: async ({ ref }) => deps.sessions.switchOptions(ref),
+    sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force }) =>
+      deps.sessions.switchAgent(ref, {
+        requestId,
+        provider,
+        carry,
+        ...(model === undefined ? {} : { model }),
+        ...(effort === undefined ? {} : { effort }),
+        ...(force === undefined ? {} : { force }),
+      }),
 
     sessionsResumeInterrupted: async (params) => {
       await deps.sessions.resumeInterrupted(params.refs);

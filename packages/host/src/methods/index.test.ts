@@ -200,6 +200,8 @@ describe('методы на старте хоста ждут первого чт
         'sessions.compact',
         'sessions.cancelCompact',
         'sessions.setModel',
+        'sessions.switchOptions',
+        'sessions.switchAgent',
         'sessions.resumeInterrupted',
         'pty.attach',
         'pty.detach',

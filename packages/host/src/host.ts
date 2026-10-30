@@ -532,6 +532,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           toolsEndpoint.forget(ref);
         },
       },
+      // Замена агента (спека 2026-10-30): эпизод «застрял» закрывается молча, будильник (создан ниже) забывает прежний
+      // подъём, подсказка цели — те же вошедшие аккаунты и лимиты, что в письме о лимите.
+      takeover: {
+        stuck: stuckService,
+        wake: () => wakeService,
+        alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: (id) => authService.status(id) }),
+        limits: (provider) => limitsService.get(provider),
+      },
     },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
@@ -841,6 +849,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // посреди хода, прерваны падением прошлого хоста (спека 10).
     await sessionsService.collectInterrupted().catch((error: unknown) => {
       log.error('список прерванных сессий не собрался', { error: String(error) });
+    });
+    // Замена агента, оборванная прежним хостом: `switching` в карте снимается до того, как будильник начнёт будить.
+    await sessionsService.clearStaleSwitches().catch((error: unknown) => {
+      log.error('оборванные замены агента не снялись', { error: String(error) });
     });
     // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
     // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.

@@ -15,7 +15,23 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
+  addSystemMessage,
+  applyAgentSwitch,
   attemptKindFor,
+  collectHandover,
+  freezeUsage,
+  isRoomArchived,
+  liveLead,
+  PARLEY,
+  parleyNote,
+  providerLabel,
+  switchBlockers,
+  unreadLetters,
+  type AgentBinding,
+  type LetterTx,
+  type LimitAlternative,
+  type ProviderLimits,
+  type WorkMap,
   limitsFromConfig,
   prepareSessionRole,
   roleId,
@@ -72,6 +88,7 @@ import {
   reserveAttempt,
   roomOfSession,
   ResourceDeniedError,
+  sessionMention,
   sessionTag,
   settleAttempt,
   startSession,
@@ -90,9 +107,10 @@ import {
   type LaunchPlan,
   type SpawnLimits,
   type ProviderEntry,
+  type UsageSummary,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
-import type { SessionRef } from '@parley/protocol';
+import type { Result, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { HostContext } from '../context.js';
@@ -163,6 +181,37 @@ export type CreatedSession = SessionRef & { held?: 'folder-trust' };
  */
 const START_WRITE_ATTEMPTS = 3;
 
+/** Сколько исходов замен агента помнит хост для повторов того же `requestId`. */
+const SWITCH_RESULTS_KEPT = 100;
+
+/** Короткая причина замены в строке ленты: «(Claude Code 2: usage limit)». */
+const SWITCH_REASON: Record<AgentBinding['reason'], string> = {
+  limit: 'usage limit',
+  'sign-in': 'signed out',
+  'provider-missing': 'removed from Parley',
+  manual: 'replaced',
+  model: 'model changed',
+};
+
+/** Строка ленты каждой комнаты сессии (спека замены агента, 5.7, 6.5) — для человека. */
+export function switchLine(sessionId: string, target: string, model: string | null, previous: string, reason: AgentBinding['reason']): string {
+  return `${sessionMention(sessionId)} continues on ${target}${model === null ? '' : ` · ${model}`} (${previous}: ${SWITCH_REASON[reason]})`;
+}
+
+/** Письмо `parley` ведущему и ждущим ответа (спека 6.5): кто сменился и что с ждавшими письмами. */
+export function switchLetter(sessionId: string, target: string, model: string | null, previous: string, reason: AgentBinding['reason']): string {
+  const why =
+    reason === 'limit'
+      ? `${previous} hit its usage limit`
+      : reason === 'sign-in'
+        ? `${previous} was signed out`
+        : reason === 'provider-missing'
+          ? `${previous} was removed from Parley`
+          : `${previous} was replaced`;
+  const mention = sessionMention(sessionId);
+  return `${mention} continues on ${target}${model === null ? '' : ` (${model})`} after ${why}. Its rooms, children and mail stay with it; messages that waited are being delivered.`;
+}
+
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
   /**
@@ -215,6 +264,46 @@ export interface SessionsService {
    * модели такого уровня нет) или его не было. Та же модель — ни записи, ни перезапуска.
    */
   setModel(ref: SessionRef, model: string): Promise<{ model: string; effort: string | null; restarted: boolean }>;
+  /** Куда можно перевести сессию и что останется при ней (спека замены агента, 5.2, 6.10). */
+  switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>>;
+  /**
+   * Замена агента на месте (спека замены агента, 5.3): id, комнаты, дети, почта и worktree остаются, меняется
+   * провайдер процесса. Повтор того же `requestId` — тот же ответ (6.13).
+   */
+  switchAgent(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>>;
+  /**
+   * На старте хоста: `switching` в карте пережил прежний хост (замены живут только в его памяти) — снимается. Сессия
+   * спит; если прежний агент уже заменён, следующий запуск поднимет нового с пакетом передачи.
+   */
+  clearStaleSwitches(): Promise<void>;
+}
+
+/** Параметры `sessions.switchAgent` без `ref`; `by` — кто просил (`human` или id сессии, чей запрос одобрен). */
+export interface SwitchRequest {
+  requestId: string;
+  provider: string;
+  model?: string | null;
+  effort?: string | null;
+  carry?: 'handover' | 'transcript';
+  force?: boolean;
+  by?: string;
+}
+
+/**
+ * Связи замены агента со службами, которые заводятся после сессий (спека замены агента, 5.3, 6.3–6.5, 6.10). Без них
+ * замена идёт без снятия эпизода «застрял», без сброса будильника и без подсказки цели.
+ */
+export interface SessionsTakeoverOptions {
+  /** Эпизод лимита или входа закрывается молча — без «is back» (6.4). */
+  stuck?: { endBySwitch(ref: SessionRef): Promise<void> };
+  /** Будильник создаётся позже сервиса сессий: ссылка читается при замене. */
+  wake?: () => { switched(ref: SessionRef): void } | undefined;
+  /** Вошедшие аккаунты того же CLI — как в письме о лимите (`limitAlternatives`). */
+  alternatives?: (provider: string) => Promise<readonly LimitAlternative[]>;
+  /** Лимиты аккаунта; `null` — хост их не знает. */
+  limits?: (provider: string) => ProviderLimits | null;
+  /** Пакет передачи (`collectHandover` из core); подмена — для тестов. */
+  handover?: typeof collectHandover;
 }
 
 /**
@@ -250,6 +339,8 @@ export interface SessionsFeedOptions {
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
    */
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
+  /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
+  takeover?: SessionsTakeoverOptions;
 }
 
 
@@ -368,6 +459,14 @@ export function createSessionsService(
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
   // ручной `sessions.resume` одновременно с подъёмом той же сессии письмом.
   const launching = new Set<string>();
+
+  // Идущие замены агента (спека замены агента, 5.3, 6.13): по сессии — id запроса и его исход. Живут только в памяти
+  // этого хоста: `switching` в карте без записи здесь после перезапуска — оборванная замена (`clearStaleSwitches`).
+  const switches = new Map<string, { id: string; result: Promise<Result<'sessions.switchAgent'>> }>();
+  // Исходы законченных замен по `requestId`: повтор того же запроса — тот же ответ.
+  const switched = new Map<string, Result<'sessions.switchAgent'>>();
+  // Пакет передачи до первого старта нового агента: Codex, удержанный до согласия на папку, стартует позже.
+  const pendingHandovers = new Map<string, string>();
 
   // Запись карты по выходу процесса идёт асинхронно и без ожидания в самом
   // обработчике `exit` (его сигнатура синхронная) — но `stop()`/`delete()`
@@ -626,6 +725,26 @@ export function createSessionsService(
       return 'started';
     }
     launching.add(key);
+    try {
+      return await launchHeld(ref, mode, options);
+    } finally {
+      launching.delete(key);
+    }
+  }
+
+  /**
+   * Тело запуска под ключом `launching`, который держит вызывающий: `launch` — на один запуск, `switchAgent` — на всю
+   * замену агента (спека замены агента, 6.3). `notify: false` — об отказе скажет сам вызывающий.
+   */
+  async function launchHeld(
+    ref: SessionRef,
+    requested: LaunchMode,
+    choice: LaunchChoice = {},
+    notify = true,
+  ): Promise<LaunchOutcome> {
+    const key = refKey(ref);
+    let mode = requested;
+    let options = choice;
     const timer = createStepTimer();
     let failed = true;
     let held = false;
@@ -649,6 +768,12 @@ export function createSessionsService(
       // Архив освобождает процессы агентов: до Reopen сессии работы не поднимает ни письмо, ни человек.
       if (map.work.status === 'archived') {
         throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
+      }
+      // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
+      // самой замены, и у Resume после отказа, и после согласия на папку Codex.
+      if (options.handover === undefined && mode !== 'new' && awaitingAgent(session)) {
+        mode = 'launch';
+        options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
       }
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
@@ -946,9 +1071,11 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+      // Новый агент поднят: замена окончена — `switching` снят, письма ждавшим (спека замены агента, 5.3 шаг 8).
+      if (session.switching !== null && session.switching !== undefined) await finishSwitch(ref);
       return 'started';
     } catch (error) {
-      if (error instanceof HostError) host.broadcast('host.notice', {
+      if (notify && error instanceof HostError) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
         text: `session ${ref.sessionId} failed to launch: ${error.message}`,
         at: new Date().toISOString(),
@@ -959,7 +1086,6 @@ export function createSessionsService(
       if (agentChannel !== undefined && !processStarted) feed.agent?.unregister(ref);
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
-      launching.delete(key);
       host.log.info('запуск сессии: время шагов', {
         ref,
         mode,
@@ -1286,6 +1412,419 @@ export function createSessionsService(
     });
   }
 
+  /** Имя провайдера для людей и агентов; удалённый из реестра — своим id. */
+  const labelOf = (registry: Record<string, ProviderEntry>, id: string): string =>
+    providerLabel(registry[id] ?? { id, label: id });
+
+  /** Новый агент ещё не стартовал после замены: прежний агент записан, разговора у нового пока нет. */
+  const awaitingAgent = (session: WorkSession): boolean =>
+    (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
+
+  /** Пакет передачи по карте (`collectHandover`); подмена — `takeover.handover`. */
+  const handoverOf = (
+    ref: SessionRef,
+    previous: Parameters<typeof collectHandover>[3],
+    target: Parameters<typeof collectHandover>[4],
+  ): ReturnType<typeof collectHandover> =>
+    (feed.takeover?.handover ?? collectHandover)(ref.projectPath, ref.workId, ref.sessionId, previous, target);
+
+  /**
+   * Пакет для запуска нового агента, когда собранного в памяти нет (хост перезапущен, Resume после отказа): по
+   * последней привязке. Разговор прежнего агента в карте уже сброшен — пакет без хвоста; сбой — запуск без пакета.
+   */
+  async function recollectHandover(ref: SessionRef, session: WorkSession): Promise<string> {
+    const last = session.previousAgents?.at(-1);
+    if (last === undefined) return '';
+    try {
+      const registry = await loadProviders();
+      const { text } = await handoverOf(
+        ref,
+        {
+          provider: last.provider,
+          providerLabel: labelOf(registry, last.provider),
+          model: last.model,
+          reason: last.reason === 'model' ? 'manual' : last.reason,
+          endedAt: last.endedAt,
+          resetsAt: null,
+        },
+        { providerLabel: labelOf(registry, session.provider), model: session.model ?? null },
+      );
+      return text;
+    } catch (error) {
+      host.log.warn('пакет передачи не собрался — новый агент стартует по брифу', { ref, error: String(error) });
+      return '';
+    }
+  }
+
+  /** Комнаты сессии, куда пишутся строка и письма о замене: где она участник, кроме архивных (спека 6.5). */
+  const roomsOfSession = (map: WorkMap, sessionId: string) =>
+    map.rooms.filter((room) => room.members.includes(sessionId) && !isRoomArchived(room));
+
+  /**
+   * Письма `parley` о замене (спека 6.5): живым ведущим комнат сессии и отправителям непрочитанных писем к ней — тем
+   * же, кому ушло письмо о лимите. Детям — ничего: их родитель тот же. В общей комнате письмо идёт в неё, иначе прямое.
+   */
+  function notifyWaiting(map: WorkMap, letters: LetterTx, session: WorkSession, text: string, at: string): void {
+    const rooms = roomsOfSession(map, session.id);
+    const to = new Map<string, string | null>();
+    for (const room of rooms) {
+      const lead = liveLead(map, room);
+      if (lead !== null && !to.has(lead)) to.set(lead, room.id);
+    }
+    for (const message of letters.unreadFor(session.id)) {
+      if (to.has(message.from)) continue;
+      const shared = message.roomId !== null && rooms.some((room) => room.id === message.roomId) ? message.roomId : null;
+      to.set(message.from, shared);
+    }
+    to.delete(session.id);
+    for (const [id, roomId] of to) {
+      if (!map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed')) continue;
+      if (roomId !== null) parleyNote(map, letters, roomId, id, text, at);
+      else letters.add({ roomId: null, from: PARLEY, to: [id], text, kind: 'note', at });
+    }
+  }
+
+  /** Замена окончена (новый агент поднят): `switching` снят, письма ждавшим, будильник забывает прежний подъём. */
+  async function finishSwitch(ref: SessionRef): Promise<void> {
+    pendingHandovers.delete(refKey(ref));
+    try {
+      const registry = await loadProviders();
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (session?.switching === null || session?.switching === undefined) return;
+        session.switching = null;
+        const last = session.previousAgents?.at(-1);
+        if (last === undefined) return;
+        const text = switchLetter(session.id, labelOf(registry, session.provider), session.model ?? null, labelOf(registry, last.provider), last.reason);
+        notifyWaiting(map, letters, session, text, new Date().toISOString());
+      });
+    } catch (error) {
+      host.log.error('конец замены агента не записался', { ref, error: String(error) });
+    }
+    feed.takeover?.wake?.()?.switched(ref);
+  }
+
+  /** Снять `switching` без писем: замена не дошла до старта нового агента. */
+  async function dropSwitch(ref: SessionRef, requestId: string): Promise<void> {
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.switching?.id === requestId) session.switching = null;
+    }).catch((error: unknown) => {
+      host.log.error('switching не снялся после отказа замены', { ref, error: String(error) });
+    });
+  }
+
+  /**
+   * Снимок расхода закрываемого отрезка (спека 5.9): записи лога в окне `[начало отрезка, замена)`. Начало — конец
+   * прежней привязки или первый старт сессии. Нет индекса лога — снимок, который выход процесса записал в карту,
+   * если он того же разговора и отрезок первый (тогда он и есть весь разговор).
+   */
+  async function segmentUsage(session: WorkSession, endedAt: string): Promise<AgentBinding['usage']> {
+    const binding = session.providerSessionId;
+    if (binding === null) return undefined;
+    const from = session.previousAgents?.at(-1)?.endedAt ?? session.startedAt;
+    let usage: UsageSummary | null = null;
+    try {
+      const resolver = typeof activity.usageResolver === 'function' ? activity.usageResolver() : undefined;
+      if (resolver !== undefined) {
+        usage = from === null ? resolver.whole(session) : await resolver.slice(session, [{ from, to: endedAt }]);
+      }
+    } catch (error) {
+      host.log.warn('расход отрезка не посчитался', { sessionId: session.id, error: String(error) });
+    }
+    const frozen = session.metrics?.usage;
+    if (usage === null && frozen?.binding === binding && (session.previousAgents?.length ?? 0) === 0) usage = frozen;
+    return usage === null ? undefined : freezeUsage(usage, { binding, epoch: session.startedAtProcess, closed: true });
+  }
+
+  /** Почему прежний агент сменён: из застревания, отсутствия в реестре или по просьбе. */
+  function switchReason(session: WorkSession, registry: Record<string, ProviderEntry>): Exclude<AgentBinding['reason'], 'model'> {
+    if (registry[session.provider] === undefined) return 'provider-missing';
+    if (session.stuck?.kind === 'limit') return 'limit';
+    if (session.stuck?.kind === 'sign-in') return 'sign-in';
+    return 'manual';
+  }
+
+  async function switchAgent(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
+    const key = refKey(ref);
+    const running = switches.get(key);
+    if (running !== undefined) {
+      // Двойной клик, два окна, остров и Telegram (6.13): тот же запрос ждёт тот же исход, другой — `busy`.
+      if (running.id === request.requestId) return running.result;
+      throw busyError('The session is already continuing on another provider');
+    }
+    const done = switched.get(request.requestId);
+    if (done !== undefined) return done;
+    const result = exclusive(ref, () => runSwitch(ref, request));
+    switches.set(key, { id: request.requestId, result });
+    try {
+      const outcome = await result;
+      switched.set(request.requestId, outcome);
+      // Память ответов — на повторы одного запроса, а не журнал: старые уходят.
+      if (switched.size > SWITCH_RESULTS_KEPT) switched.delete(switched.keys().next().value as string);
+      return outcome;
+    } finally {
+      switches.delete(key);
+    }
+  }
+
+  /** Шаги 1–9 спеки 5.3 под замком `exclusive` и ключом `launching` на весь срок (6.3). */
+  async function runSwitch(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
+    const key = refKey(ref);
+    const carry = request.carry ?? 'handover';
+    const map = await readMap(ref.projectPath, ref.workId);
+    const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) {
+      throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+    }
+    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет.
+    if (session.switching?.id === request.requestId) return { outcome: 'held', carried: carry };
+    if (session.switching !== null && session.switching !== undefined) {
+      throw busyError('The session is already continuing on another provider');
+    }
+    const choice = await resolveModelChoice(request.provider, request.model ?? undefined, request.effort ?? undefined);
+    const target = {
+      provider: request.provider,
+      ...(request.model === undefined ? {} : { model: request.model === null ? null : (choice.model ?? null) }),
+      ...(request.effort === undefined ? {} : { effort: request.effort === null ? null : ((choice.effort as EffortLevel | undefined) ?? null) }),
+    };
+    const blockers = switchBlockers(map, ref.sessionId, target);
+    if (blockers.length > 0) throw new HostError('conflict', blockers.join('; '));
+    if (carry === 'transcript') {
+      throw new HostError('bad_request', 'Continuing the conversation is not available yet: use the handover summary');
+    }
+    // Готовность цели — до любых изменений: отказ не трогает прежнего агента.
+    const entry = await readyProvider(request.provider);
+    if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
+
+    // Живой агент: только у приглашения, без фоновых задач и черновика — как у `setModel`. Застрявший в лимите или
+    // на входе ход не продолжит и так. Процесс не от хоста гасить нечем — только с `force`.
+    const live = pty.get(ref);
+    const stuck = session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in';
+    if (live !== undefined && request.force !== true && !stuck) {
+      const state = activity.get(ref);
+      if (!atPrompt(state)) throw busyError('Wait until the agent is idle or stop it first');
+      if (state?.activity.tasks.some((task) => task.background) === true) {
+        throw busyError('Wait until background tasks finish');
+      }
+      if (live.hasDraft()) throw busyError('The input field has unsent text; send or clear it first');
+    }
+    if (live === undefined && session.lifecycle === 'active' && request.force !== true) {
+      throw busyError('The agent runs outside Parley: stop it first or continue with force');
+    }
+
+    const registry = await loadProviders();
+    const since = new Date().toISOString();
+    launching.add(key);
+    let applied = false;
+    try {
+      await updateMap(ref.projectPath, ref.workId, (current) => {
+        const record = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (record !== undefined) record.switching = { id: request.requestId, to: request.provider, since };
+      });
+      if (live !== undefined) await stop(ref);
+      if (pty.get(ref) !== undefined) throw new HostError('internal', 'the previous agent did not stop');
+      await feed.takeover?.stuck?.endBySwitch(ref);
+
+      // Карта после выхода процесса: итоговые метрики и разговор прежнего агента — для пакета и снимка расхода.
+      const stopped = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (stopped === undefined) throw new HostError('not_found', `session ${ref.sessionId} is gone`);
+      const endedAt = new Date().toISOString();
+      const reason = switchReason(stopped, registry);
+      const previousLabel = labelOf(registry, stopped.provider);
+      const targetLabel = providerLabel(entry);
+      // Пакет — после остановки (транскрипт и рабочая копия в конечном виде) и до `applyAgentSwitch` (он сбрасывает
+      // разговор, и хвоста не было бы). Сбой пакета замену не останавливает: бриф уйдёт всё равно.
+      let handover = '';
+      try {
+        handover = (
+          await handoverOf(
+            ref,
+            {
+              provider: stopped.provider,
+              providerLabel: previousLabel,
+              model: stopped.model ?? null,
+              reason,
+              endedAt,
+              resetsAt: stopped.stuck?.resetsAt ?? session.stuck?.resetsAt ?? null,
+            },
+            { providerLabel: targetLabel, model: target.model ?? null },
+          )
+        ).text;
+      } catch (error) {
+        host.log.warn('пакет передачи не собрался — новый агент стартует по брифу', { ref, error: String(error) });
+      }
+      const usage = await segmentUsage(stopped, endedAt);
+      const binding: AgentBinding = {
+        provider: stopped.provider,
+        model: stopped.model ?? null,
+        effort: stopped.effort ?? null,
+        providerSessionId: stopped.providerSessionId,
+        startedAt: stopped.previousAgents?.at(-1)?.endedAt ?? stopped.startedAt,
+        endedAt,
+        reason,
+        requestedBy: request.by ?? 'human',
+        carried: carry,
+        ...(usage === undefined ? {} : { usage }),
+      };
+      await updateMap(ref.projectPath, ref.workId, (current, letters) => {
+        const fresh = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (fresh?.switching?.id !== request.requestId) throw new HostError('conflict', 'the switch was cancelled');
+        current.sessions = applyAgentSwitch(current, ref.sessionId, target, binding, randomUUID()).sessions;
+        const line = switchLine(ref.sessionId, targetLabel, target.model ?? null, previousLabel, reason);
+        for (const room of roomsOfSession(current, ref.sessionId)) addSystemMessage(current, letters, room.id, line, endedAt);
+      });
+      applied = true;
+      pendingHandovers.set(key, handover);
+
+      let outcome: LaunchOutcome;
+      try {
+        outcome = await launchHeld(ref, 'launch', { by: request.by ?? 'human', handover }, false);
+      } catch (error) {
+        // Шаг 9: карта уже с новым провайдером, сессия спит; Resume повторит запуск, обратная замена — тот же метод.
+        await dropSwitch(ref, request.requestId);
+        host.broadcast('host.notice', {
+          kind: 'launch-failed',
+          ref,
+          text: `${sessionMention(ref.sessionId)} did not start on ${targetLabel}: ${(error as Error).message}. Resume to retry, or continue it on ${previousLabel} again.`,
+          at: new Date().toISOString(),
+        });
+        throw error;
+      }
+      // `held`: запуск Codex ждёт согласия на папку; `switching` остаётся до решения, снимет его запуск после согласия.
+      return { outcome, carried: carry };
+    } catch (error) {
+      if (!applied) {
+        pendingHandovers.delete(key);
+        await dropSwitch(ref, request.requestId);
+      }
+      throw error;
+    } finally {
+      launching.delete(key);
+    }
+  }
+
+  /** Запас лимита аккаунта: 100 минус наибольшая занятость окон; лимитов нет — ниже любого известного. */
+  const headroom = (limits: ProviderLimits | null): number =>
+    limits === null ? -1 : 100 - Math.max(limits.fiveHour?.usedPercent ?? 0, limits.week?.usedPercent ?? 0);
+
+  /** Аккаунт Anthropic: глобальный Claude Code или аккаунт подписки Claude (спека 5.4, перенос транскрипта). */
+  const claudeAccount = (entry: ProviderEntry | undefined): boolean =>
+    entry !== undefined && (entry.id === 'claude' || entry.account?.kind === 'claude-account');
+
+  async function switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>> {
+    const map = await readMap(ref.projectPath, ref.workId);
+    const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) {
+      throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+    }
+    const registry = await loadProviders();
+    const currentEntry = registry[session.provider];
+    const reason = currentEntry === undefined
+      ? 'provider-missing'
+      : session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in'
+        ? session.stuck.kind
+        : null;
+
+    const readiness = async (entry: ProviderEntry): Promise<{ needs: string | null }> => {
+      try {
+        const state = await providerReadiness(entry, {
+          ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
+          signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
+        });
+        return { needs: state.needs ?? (state.error === null ? null : 'error') };
+      } catch {
+        return { needs: 'error' };
+      }
+    };
+    const limitsOf = (id: string): ProviderLimits | null => feed.takeover?.limits?.(id) ?? null;
+
+    const targets: Result<'sessions.switchOptions'>['targets'] = [];
+    for (const entry of Object.values(registry)) {
+      if (entry.id === session.provider) continue;
+      const { needs } = await readiness(entry);
+      targets.push({
+        id: entry.id,
+        label: providerLabel(entry),
+        family: entry.family ?? null,
+        available: needs === null,
+        needs,
+        limits: limitsOf(entry.id),
+        transcript: claudeAccount(currentEntry) && claudeAccount(entry),
+      });
+    }
+
+    // Подсказка (6.10): вошедший аккаунт того же семейства с наибольшим запасом, иначе готовый другого семейства.
+    let alternatives: readonly LimitAlternative[] = [];
+    if (currentEntry !== undefined && feed.takeover?.alternatives !== undefined) {
+      try {
+        alternatives = await feed.takeover.alternatives(session.provider);
+      } catch (error) {
+        host.log.warn('альтернативы для замены агента не собрались', { ref, error: String(error) });
+      }
+    }
+    const ready = new Set(targets.filter((target) => target.available).map((target) => target.id));
+    const same = alternatives.filter((alternative) => ready.has(alternative.id));
+    const best = [...same].sort((a, b) => headroom(b.limits) - headroom(a.limits))[0];
+    const family = currentEntry?.family;
+    const other = targets.find((target) => target.available && (family === undefined || target.family !== family));
+    const suggested = best?.id ?? other?.id ?? null;
+
+    const rooms = map.rooms.filter((room) => room.members.includes(session.id));
+    let unread = 0;
+    try {
+      unread = unreadLetters(ref.projectPath, ref.workId, session.id).length;
+    } catch (error) {
+      host.log.warn('непрочитанное для замены агента не прочиталось', { ref, error: String(error) });
+    }
+    return {
+      current: { provider: session.provider, available: reason === null && currentEntry !== undefined, reason },
+      targets,
+      suggested,
+      keeps: {
+        rooms: rooms.length,
+        leads: rooms.filter((room) => liveLead(map, room) === session.id).map((room) => room.id),
+        owns: map.rooms.filter((room) => room.ownerId === session.id).map((room) => room.id),
+        children: map.sessions.filter((child) => child.parent === session.id && child.lifecycle !== 'closed').length,
+        unread,
+        worktree: session.worktree?.branch ?? null,
+      },
+      // Цель ещё не выбрана: проверки по самой сессии, без «та же цель».
+      blockers: switchBlockers(map, session.id, { provider: '' }),
+    };
+  }
+
+  /**
+   * `switching` в карте пережил прежний хост: замена в его памяти оборвалась. Снимается у всех: сессия спит. Прежний
+   * агент уже заменён — следующий запуск (Resume, письмо, согласие на папку Codex) поднимет нового с пакетом.
+   */
+  async function clearStaleSwitches(): Promise<void> {
+    let registry: Record<string, ProviderEntry> = {};
+    try {
+      registry = await loadProviders();
+    } catch (error) {
+      host.log.warn('реестр провайдеров не прочитался для оборванных замен', { error: String(error) });
+    }
+    for (const entry of works.snapshot().entries) {
+      for (const session of entry.map.sessions) {
+        if (session.switching === null || session.switching === undefined) continue;
+        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
+        if (switches.has(refKey(ref))) continue;
+        const stale = session.switching.id;
+        await dropSwitch(ref, stale);
+        host.log.warn('замена агента оборвалась вместе с прежним хостом — switching снят', { ref, to: session.switching.to });
+        if (awaitingAgent(session)) {
+          host.broadcast('host.notice', {
+            kind: 'launch-failed',
+            ref,
+            text: `${sessionMention(session.id)} did not finish continuing on ${labelOf(registry, session.provider)}: Resume starts it.`,
+            at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+  }
+
   async function close(ref: SessionRef): Promise<void> {
     const key = refKey(ref);
     closing.add(key);
@@ -1379,6 +1918,9 @@ export function createSessionsService(
     setChoice,
     exclusive,
     setModel,
+    switchOptions,
+    switchAgent,
+    clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
     async stopAll() {
       await Promise.all(
