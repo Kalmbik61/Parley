@@ -138,6 +138,32 @@ describe('rooms.create / rooms.send', () => {
     expect(invites.every((message) => message.from === HUMAN)).toBe(true);
   });
 
+  it('rooms.send replyTo: сохраняется у письма комнаты; чужой id, другая комната и прямое письмо — bad_request', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    const created = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Ответы', members: [a, b] });
+    expect(created.error).toBeUndefined();
+    const base = { projectPath: dir, workId, kind: 'note' as const };
+    const original = await call(client, 'rooms.send', { ...base, roomId: 'r-01', to: [a], text: 'исходное' });
+    const originalId = (original.result as { messageId: string }).messageId;
+
+    const ok = await call(client, 'rooms.send', { ...base, roomId: 'r-01', to: [a], text: 'ответ', replyTo: originalId });
+    expect(ok.error).toBeUndefined();
+    const stored = readStoredMap(dir, workId).messages.find((message) => message.id === (ok.result as { messageId: string }).messageId);
+    expect(stored?.replyTo).toBe(originalId);
+
+    const missing = await call(client, 'rooms.send', { ...base, roomId: 'r-01', to: [a], text: 'x', replyTo: 'm-9999' });
+    expect(missing.error).toMatchObject({ code: 'bad_request', message: 'message m-9999 is not in room r-01' });
+
+    const other = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Другая', members: [a] });
+    expect(other.error).toBeUndefined();
+    const foreign = await call(client, 'rooms.send', { ...base, roomId: 'r-02', to: [a], text: 'x', replyTo: originalId });
+    expect(foreign.error).toMatchObject({ code: 'bad_request' });
+
+    const direct = await call(client, 'rooms.send', { ...base, roomId: null, to: [a], text: 'x', replyTo: originalId });
+    expect(direct.error).toMatchObject({ code: 'bad_request', message: 'replyTo works only together with a room' });
+  });
+
   it('rooms.send: письмо от human, без лимита; без комнаты — ровно один адресат', async () => {
     const { client, dir, workId, ids } = await setup();
     const [a, b] = ids as [string, string];

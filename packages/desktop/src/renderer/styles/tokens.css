@@ -195,6 +195,9 @@
   --color-text: #201e1d;
   /* Терракотовый акцент. Одноимённая утилита `bg-accent` — выбранная строка shadcn (см. шапку). */
   --color-accent: #c67139;
+  /* Плашка заголовка сессии (`ChatToolbar`): заливка — акцент, текст — тёмный. */
+  --session-title-fill: var(--color-accent);
+  --session-title-ink: var(--color-text);
   --color-accent-2: #7a8a5e;
   --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
   --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
@@ -396,6 +399,8 @@
   --color-surface: #161513;
   --color-text: #ece6dc;
   --color-accent: #d67f48;
+  --session-title-fill: var(--color-accent);
+  --session-title-ink: var(--color-bg);
   --color-accent-2: #8fa073;
   --color-divider: color-mix(in srgb, #ece6dc 14%, transparent);
   --color-neutral-100: #23211e;

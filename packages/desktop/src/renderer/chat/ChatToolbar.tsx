@@ -48,6 +48,24 @@ import { SessionUsageChip } from './SessionUsageChip.js';
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
 
+// Плашка заголовка: крыло — левый край формы от x = -22 до 26 при высоте 36; правое — его зеркало.
+const PLATE_H = 36;
+const WING_PATH = `M 26 0 L -22 0 C -7.7 0, 0 ${0.15 * PLATE_H}, 6 ${0.55 * PLATE_H} C 10 ${0.9 * PLATE_H}, 16 ${PLATE_H}, 26 ${PLATE_H} Z`;
+
+function TitleWing({ mirrored = false }: { mirrored?: boolean }): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      width={48}
+      height={PLATE_H}
+      viewBox={`-22 0 48 ${PLATE_H}`}
+      className={mirrored ? 'shrink-0 -scale-x-100 fill-(--session-title-fill)' : 'shrink-0 fill-(--session-title-fill)'}
+    >
+      <path d={WING_PATH} />
+    </svg>
+  );
+}
+
 /**
  * Режимы меню: значения `sessions.setMode` и подписи. Auto — когда модель его даёт (у модели без auto
  * хост обойдёт круг и ответит `verified: false`); обход разрешений человек выбирает в терминале.
@@ -259,9 +277,19 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </ToggleGroup>
       </span>
       {session && entry ? <RoleChip cwd={session.worktree?.path ?? entry.projectPath} revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
-      <span data-testid="chat-toolbar-title" title={title ?? undefined} className="min-w-0 flex-1 truncate text-center text-xs font-medium">
-        {title}
-      </span>
+      <div className="flex min-w-0 flex-1 items-start justify-center self-start">
+        <div data-testid="chat-toolbar-plate" className="flex min-w-0 items-start" style={{ height: PLATE_H }}>
+          <TitleWing />
+          <span
+            data-testid="chat-toolbar-title"
+            title={title ?? undefined}
+            className="min-w-0 truncate bg-(--session-title-fill) px-2 pb-[9px] pt-[7px] font-sans text-[20px] font-semibold leading-none text-(--session-title-ink)"
+          >
+            {title}
+          </span>
+          <TitleWing mirrored />
+        </div>
+      </div>
       {inSwarm === null || entry === undefined ? null : <SwarmChip swarm={inSwarm.swarm} member={inSwarm.member} projectPath={entry.projectPath} workId={entry.map.work.id} />}
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}

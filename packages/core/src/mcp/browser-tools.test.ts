@@ -499,7 +499,7 @@ describe('скрипт, куки, хранилище, скачивания; ан
     const SECRETS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
     const expected: Record<string, object> = {
       browser_tabs: READ, browser_console: READ, browser_network: READ, browser_screenshot: READ, browser_snapshot: READ, browser_wait_for: READ, browser_downloads: READ,
-      browser_open: CONTROL, browser_navigate: CONTROL, browser_action: CONTROL, browser_resize: CONTROL, browser_cookies: SECRETS, browser_storage: SECRETS,
+      browser_open: CONTROL, browser_close: CONTROL, browser_navigate: CONTROL, browser_action: CONTROL, browser_resize: CONTROL, browser_cookies: SECRETS, browser_storage: SECRETS,
       browser_evaluate: SCRIPT,
     };
     expect(Object.fromEntries(BROWSER_TOOLS.map((t) => [t.name, t.annotations]))).toEqual(expected);
@@ -563,5 +563,16 @@ describe('скрипт, куки, хранилище, скачивания; ан
     );
     expect((await call(client, 'browser_storage', { tab: 't1', area: 'local', action: 'list' })).text).toContain('theme = dark');
     expect((await call(client, 'browser_downloads', {})).text).toContain('/h/.parley/desktop/agent-downloads/abc/s-02');
+  });
+
+  it('close: схема только с tab; описание — свои страницы, страница человека, предел; ответ с адресом в ограде', async () => {
+    const client = await connect(await startEndpoint());
+    expect(tool('browser_close')?.inputSchema).toMatchObject({ required: ['tab'], additionalProperties: false });
+    for (const phrase of ['you opened with browser_open', 'access_denied', 'human_busy', '5 pages']) expect(tool('browser_close')?.description, phrase).toContain(phrase);
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't2', url: 'http://localhost:5173/', done: 'Closed t2.' } } });
+    const closed = await call(client, 'browser_close', { tab: 't2' });
+    expect(closed.text).toContain('Closed t2.');
+    expect(closed.text).toContain('browser_tabs');
+    expect(closed.text).toContain('Page: http://localhost:5173/');
   });
 });

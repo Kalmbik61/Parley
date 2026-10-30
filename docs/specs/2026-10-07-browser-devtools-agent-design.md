@@ -13,6 +13,8 @@
 
 **2026-10-16:** ревизия по итогам реверс-проверки (отчёт `docs/audits/2026-10-16/Parley-rea-reverse-check-2026-10-16.md`, папка не в git) — заметки в 3.7, 5.1, 5.2, 12, 13: ввод агента через CDP `Input.*` в `<webview>` уходит в поле окна-хозяина (замер Orca), канал агента через хост нужно мерить, `Runtime.callFunctionOn` — единственное исключение из «без JS», планы C и D переписать под 3.10.
 
+**2026-10-30:** `browser_close` — агент закрывает страницы, которые открыл сам (решение человека, PR плашки заголовка); правки 5.1 (таблица, аннотации, число инструментов), 9. Предел 5 страниц не менялся.
+
 **2026-10-20:** решения владельца — полное управление, JS, любые сайты, файлы, куки и хранилище; план `2026-10-20-browser-agent-control-plan.md`. Правки: 1.5, 2 (п. 8–11, 14), 3.3, 3.7, 3.9, 4.8, 5.1–5.3, 6–10, 11, 12 («Этап D»), 13. Спайк ввода — `docs/research/2026-10-20-browser-agent-control-spike.md`.
 
 ## 1. Задача
@@ -560,10 +562,10 @@ HTML:
 
 - MCP-сервер Parley объявляет их, только когда есть `PARLEY_AGENT_URL` и токен.
 - Все, кроме `browser_tabs` и `browser_open`, принимают `tab` — id из `browser_tabs`.
-- Этап B2 выпускает из таблицы только `browser_open`, этап C — чтение, этап D — остальное (раздел 12). Всего 14 инструментов.
+- Этап B2 выпускает из таблицы только `browser_open`, этап C — чтение, этап D — остальное (раздел 12). Всего 15 инструментов (`browser_close` — 2026-10-30).
 - **Разрешения (решение владельца 2026-10-20).** Все `browser_*` разрешены заранее — правило `permissions.allow` в собственном файле `--settings` сессии Parley (в `~/.claude` ничего не пишется) — **кроме `browser_evaluate`, `browser_cookies` и `browser_storage`** (решение владельца 2026-10-21, п. 9): на них в `permissions.ask` стоят `mcp__parley__browser_evaluate`, `_cookies` и `_storage`, и Claude Code спрашивает человека (правила `ask` сильнее `allow`: вопрос будет и тогда, когда у человека в настройках есть `allow: ["mcp__parley"]`). У Codex то же задают `-c mcp_servers.parley.tools.<tool>.approval_mode="prompt"` для `BROWSER_TOOLS_ASK`; аннотации MCP согласованы с этим:
   - READ `{ readOnlyHint: true, openWorldHint: false }` — `tabs`, `console`, `network`, `screenshot`, `snapshot`, `wait_for`, `downloads`;
-  - CONTROL `{ readOnlyHint: false, destructiveHint: false, openWorldHint: false }` — `open`, `navigate`, `action`, `resize`; `openWorldHint: false` — политика одобрений Parley, а не описание мира;
+  - CONTROL `{ readOnlyHint: false, destructiveHint: false, openWorldHint: false }` — `open`, `close`, `navigate`, `action`, `resize`; `openWorldHint: false` — политика одобрений Parley, а не описание мира;
   - SCRIPT `{ readOnlyHint: false, destructiveHint: true, openWorldHint: true }` — `evaluate`;
   - SECRETS `{ readOnlyHint: false, destructiveHint: true, openWorldHint: false }` — `cookies`, `storage`: не readOnly (set, delete, clear), destructive (удаление куки разлогинивает), но внешний мир не затрагивают — только раздел браузера Parley.
   - Режим `bypassPermissions` у Claude Code и `approval_policy = never` у Codex не спрашивают ни про что, в том числе про `browser_evaluate`, `browser_cookies`, `browser_storage`; это сказано в README и скилле. У Codex есть одобрение по инструменту (`[mcp_servers.<id>.tools.<tool>] approval_mode`: `auto`, `prompt`, `writes`, `approve`); Parley ставит `prompt` инструментам из `BROWSER_TOOLS_ASK`, остальные Codex решает по аннотациям. Зачем спрашивать про куки и хранилище: не-httpOnly куки и JWT в localStorage — токены сессии, а агент, сбитый prompt-injection, вынес бы их через `browser_navigate` без вопроса.
@@ -584,6 +586,7 @@ HTML:
 | `browser_cookies` | `action`: `list`, `set` или `delete`; `name`, `value`, `path`, `secure`, `httpOnly`, `sameSite`, `expires`; `values?` у `list` | куки адреса текущей страницы агента (аргумента `url` или `domain` нет): имена и флаги; значения — только с `values: true` и только у кук без `httpOnly` (у httpOnly — `<httpOnly: hidden>`). `set` — host-only кука этого адреса, `delete` — `remove(url, name)`; httpOnly-имя менять и удалять можно, удаление может разлогинить человека |
 | `browser_storage` | `area`: `local` или `session`; `action`: `list`, `get`, `set`, `delete` или `clear`; `key`, `value` | хранилище origin текущей страницы; значение `get` до 8 КБ |
 | `browser_downloads` | — | файлы, полученные сессией: путь, имя, состояние; последние 20 |
+| `browser_close` | `tab` | страница закрыта: `tab`, `url` (с маской), `done`. Только страница, открытая агентом (`browser_open` ставит в `BrowserPanelPage` признак `openedBy: 'agent'`); страницы человека («+», адрес, «Move to browser of…») закрыть нельзя — `access_denied`. Как крестик человека (`closePanelPage`): активная уступает соседу, последняя страница уносит панель и её ширину; фокус клавиатуры и активная вкладка не меняются. Окно решает по раскладке, main до этого проверил доступ, паузу панели и `human_busy`. Id остальных страниц могут измениться — `browser_tabs` заново |
 
 **Поверхность снимка.** `Page.captureScreenshot` гостя `<webview>` читает поверхность композитора размером с элемент на экране; за её краем Chromium рисует повтор (плитка). Поэтому снимок идёт так:
 - окно на время снимка ставит `<webview>` страницы в размер снимка (невидимую страницу делает «видимой, но прозрачной»: `opacity: 0` кадр рисует, `hidden` — нет), показывает подпись «Agent capture W×H» и через несколько кадров подтверждает готовность; main снимает только после подтверждения, а не по тексту ошибки Chromium;
@@ -753,7 +756,10 @@ HTML:
 | `browser_open`: окно закрыто или его главный кадр грузится | Просьба окну не уходит: агенту сразу `window_not_connected`. Просьба ушла, а окно не ответило за 10 с — `timeout`; операция закрывается, поздний ответ не принимается |
 | `browser_open`: вид хозяина не смонтирован или работа не показывалась за этот запуск | Окно читает раскладку работы с диска и ставит страницу в панель хозяина без загрузки. Агенту `ok` с пояснением, что страница загрузится, когда человек откроет чат или комнату; тост «Show» переключает на неё |
 | `browser_open`: та же страница уже открыта в этой панели | Id той страницы и `reused: true`; новая не открывается — и на пределе в 5 страниц тоже. SPA-маршрут в #фрагменте и редирект сервера на другой путь повтор не распознают |
-| `browser_open`: в панели уже 5 страниц | `bad_request` с советом закрыть одну; раскладка и тост не трогаются |
+| `browser_open`: в панели уже 5 страниц | `bad_request` с советом закрыть свою страницу `browser_close` или попросить человека; раскладка и тост не трогаются |
+| `browser_close`: страница открыта человеком или переложена им («Move to browser of…»), либо старая раскладка без `openedBy` | `access_denied` «opened by the human»; страница остаётся |
+| `browser_close`: страницы нет (уже закрыта человеком) или такого `tab` не было | `no_tab` |
+| `browser_close`: человек в Select/Annotate на странице или печатает; панель на паузе | `human_busy`; `access_denied` |
 | `browser_open` с `room`, где агент не участник, или в панель на паузе | `access_denied` с причиной; панель не трогается |
 | Внешний сайт (не loopback) | Все операции работают; секреты в URL, консоли, сети и полях — `<redacted>` (раздел 6) |
 | Stop, «Pause agents» или выключатель посреди скрипта | `Runtime.terminateExecution`, агенту `access_denied`, результат не отдаётся. Таймеры и обработчики, оставленные скриптом, живут до перезагрузки страницы |

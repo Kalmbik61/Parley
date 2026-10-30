@@ -295,6 +295,58 @@ describe('handleAgentOpenTab — ответ окна на browser:agent-open-tab
   });
 });
 
+describe('browser_close — закрытие страницы агента через browser:agent-open-tab (closePage)', () => {
+  const event = (url: string) => ({ requestId: 'r1', workKey: KEY, url, sessionId: 's-01', session: 'S01', owner: CHAT });
+  const close = (pageId: string, owner: BrowserOwner = CHAT, workKey = KEY) => handleAgentOpenTab({ ...event(''), workKey, owner, closePage: pageId });
+
+  it('страница агента помечена openedBy; страница человека («+», ссылка ленты) — нет', () => {
+    const agent = handleAgentOpenTab(event('http://localhost:5173/')) as { tabId: string };
+    addBlankPage(KEY, CHAT);
+    openLinkInPanel(KEY, CHAT, 'http://localhost:5199/');
+    const pages = panelNow()?.pages ?? [];
+    expect(pages.find((page) => page.id === agent.tabId)?.openedBy).toBe('agent');
+    expect(pages.filter((page) => page.id !== agent.tabId).every((page) => page.openedBy === undefined)).toBe(true);
+  });
+
+  it('закрывает свою страницу: активная переходит к соседу, фокус и активная вкладка не меняются', () => {
+    const first = handleAgentOpenTab(event('http://localhost:5173/')) as { tabId: string };
+    const second = handleAgentOpenTab(event('http://localhost:5174/')) as { tabId: string };
+    expect(panelNow()?.active).toBe(second.tabId);
+    const before = layoutNow();
+    expect(close(second.tabId)).toEqual({ closed: true });
+    expect(panelNow()?.pages.map((page) => page.id)).toEqual([first.tabId]);
+    expect(panelNow()?.active).toBe(first.tabId);
+    expect(layoutNow().activeGroupId).toBe(before.activeGroupId);
+    expect(layoutNow().root).toEqual(before.root);
+  });
+
+  it('последняя страница уносит панель вместе с шириной', () => {
+    const only = handleAgentOpenTab(event('http://localhost:5173/')) as { tabId: string };
+    expect(close(only.tabId)).toEqual({ closed: true });
+    expect(panelNow()).toBeUndefined();
+  });
+
+  it('страница человека — not_agent и остаётся; старая раскладка без поля читается как страница человека', () => {
+    addBlankPage(KEY, CHAT);
+    const human = panelNow()?.pages[0]?.id ?? '';
+    expect(close(human)).toEqual({ error: 'not_agent' });
+    expect(panelNow()?.pages.map((page) => page.id)).toEqual([human]);
+  });
+
+  it('нет такой страницы — no_page, неизвестная работа — no_work', () => {
+    handleAgentOpenTab(event('http://localhost:5173/'));
+    expect(close('bp-nope')).toEqual({ error: 'no_page' });
+    expect(close('bp-nope', CHAT, '/tmp/other')).toEqual({ error: 'no_work' });
+  });
+
+  it('освободившееся место позволяет открыть шестую страницу', () => {
+    const ids = Array.from({ length: PANEL_LIMITS.pages }, (_, i) => (handleAgentOpenTab(event(`http://localhost:${3000 + i}/`)) as { tabId: string }).tabId);
+    expect(handleAgentOpenTab(event('http://localhost:4000/'))).toEqual({ error: 'limit' });
+    close(ids[0] ?? '');
+    expect(handleAgentOpenTab(event('http://localhost:4000/'))).toMatchObject({ reused: false });
+  });
+});
+
 describe('тост агента «Show» (спека браузера 5.1, 5.2)', () => {
   const event = (url: string, owner: BrowserOwner = CHAT) => ({ requestId: 'r1', workKey: KEY, url, sessionId: 's-01', session: 'S02', owner });
   const lastToast = (): [string, { action: { label: string; onClick: () => void } }] =>

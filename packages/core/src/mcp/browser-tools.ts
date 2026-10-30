@@ -15,7 +15,7 @@ import type { AgentChannel } from '../work/mcp-config.js';
 import { parleyHome } from '../work/store.js';
 
 /** Операции канала — по инструменту `browser_<op>` на каждую. */
-export const BROWSER_TOOL_OPS = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads'] as const;
+export const BROWSER_TOOL_OPS = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close'] as const;
 export type BrowserToolOp = (typeof BROWSER_TOOL_OPS)[number];
 
 /** Пределы — те же числа, что `AGENT_LIMITS` протокола (общие ключи). */
@@ -350,6 +350,16 @@ export const BROWSER_TOOLS: readonly Tool[] = [
     annotations: READ,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'browser_close',
+    description:
+      'Close a page that you opened with browser_open. Pages the human opened or moved to the panel cannot be closed: access_denied. ' +
+      'The human sees the page close like a tab closed with its cross; their focus and active tab do not change. Use it when a page is no longer needed, ' +
+      `and when a panel holds ${BROWSER_TOOL_LIMITS.panelPages} pages and you need room for a new one. Ids of the other pages can change: call browser_tabs again. ` +
+      'Fails with human_busy while the human selects or annotates in that page.',
+    annotations: CONTROL,
+    inputSchema: { type: 'object', properties: { tab: TAB }, required: ['tab'], additionalProperties: false },
+  },
 ];
 
 /** Подсказка агенту к коду ошибки окна; у `bad_request` текст окна и так говорит, что поправить. */
@@ -485,6 +495,16 @@ function formatResize(result: ResizeResult): string {
       ? `${result.tab} fits the size of its panel again.`
       : `${result.tab} is now ${result.viewport.width}×${result.viewport.height} CSS px${result.viewport.emulated ? ' (emulated)' : ''}.`;
   return `${head}\n${pageData(`Page: ${result.url}`)}`;
+}
+
+interface CloseResult {
+  tab: string;
+  url: string;
+  done: string;
+}
+
+function formatClose(result: CloseResult): string {
+  return `${result.done} Ids of the other pages can change: call browser_tabs.\n${pageData(`Page: ${result.url}`)}`;
 }
 
 interface EvaluateResult {
@@ -830,6 +850,8 @@ export function createBrowserTools(agent: AgentChannel, deps: BrowserToolDeps = 
             return text(formatStorage(answer.result as StorageResult));
           case 'downloads':
             return text(formatDownloads(answer.result as DownloadsResult));
+          case 'close':
+            return text(formatClose(answer.result as CloseResult));
         }
       } catch (error) {
         return text(`The window answered in an unexpected form: ${(error as Error).message}`, true);

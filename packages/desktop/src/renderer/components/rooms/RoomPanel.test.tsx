@@ -1607,7 +1607,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     document.getSelection()?.removeAllRanges();
     document.getSelection()?.addRange(range);
     fireEvent.click(within(messageRow('m-1')).getByRole('button', { name: S.chat.actions.reply }));
-    expect(screen.getByTestId('reply-plate').textContent).toBe('Второй абзац с деталями.');
+    expect(screen.getByTestId('reply-plate').textContent).toContain('Второй абзац с деталями.');
     document.getSelection()?.removeAllRanges();
     typeAndSend('Почему?');
     await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
@@ -1615,6 +1615,58 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
       '> Второй абзац с деталями.\n\nПочему?',
     );
     expect(screen.queryByTestId('reply-plate')).toBeNull();
+  });
+
+  const lastSend = (): { to: string[]; text: string; replyTo?: string } =>
+    bridge.calls.filter((call) => call.method === 'rooms.send').at(-1)?.params as { to: string[]; text: string; replyTo?: string };
+  const clickReply = (id: string): void => {
+    document.getSelection()?.removeAllRanges();
+    fireEvent.click(within(messageRow(id)).getByRole('button', { name: S.chat.actions.reply }));
+  };
+
+  it('Reply адресует автора без @ и шлёт replyTo; без выделения текст без markdown-цитаты', async () => {
+    renderPanel(entryOf({ messages: [message('m-1', { from: 's-01', text: 'Ответ агента' })] }));
+    clickReply('m-1');
+    expect(screen.getByTestId('reply-plate').textContent).toContain(S.rooms.replyTo('S01 архитектор'));
+    typeAndSend('Почему?');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    expect(lastSend()).toMatchObject({ to: ['s-01'], text: 'Почему?', replyTo: 'm-1' });
+  });
+
+  it('× на плашке снимает и адресата, и replyTo', async () => {
+    renderPanel(entryOf({ messages: [message('m-1', { from: 's-01', text: 'Ответ агента' })] }));
+    clickReply('m-1');
+    fireEvent.click(screen.getByRole('button', { name: S.chat.reply.remove }));
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+    typeAndSend('Всем');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    const sent = lastSend();
+    expect(sent.to).toEqual([]);
+    expect(sent).not.toHaveProperty('replyTo');
+  });
+
+  it('адресаты Reply и @-упоминания объединяются без дубля', async () => {
+    renderPanel(entryOf({ messages: [message('m-1', { from: 's-01', text: 'Ответ агента' })] }));
+    clickReply('m-1');
+    const node = document.createTextNode('@S03');
+    editor().append(node);
+    document.getSelection()?.collapse(node, node.data.length);
+    fireEvent.input(editor());
+    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByRole('option', { name: /S03/ }));
+    typeAndSend('ревью, пожалуйста');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    expect([...lastSend().to].sort()).toEqual(['s-01', 's-03']);
+  });
+
+  it('автор вышел из комнаты: пометка на плашке, адресата нет, replyTo остаётся', async () => {
+    const custom = sessions();
+    custom[0] = makeSession('s-01', 'архитектор', { lifecycle: 'closed' });
+    renderPanel(entryOf({ sessions: custom, messages: [message('m-1', { from: 's-01', text: 'Ответ агента' })] }));
+    clickReply('m-1');
+    expect(screen.getByTestId('reply-plate').textContent).toContain(S.rooms.replyAuthorGone);
+    typeAndSend('Привет');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    expect(lastSend()).toMatchObject({ to: [], replyTo: 'm-1' });
   });
 
   it('письмо без упоминаний уходит всем: rooms.send с to: [], kind note, roomId и работой', async () => {

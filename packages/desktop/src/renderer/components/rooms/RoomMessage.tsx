@@ -74,7 +74,16 @@ export interface RoomMessageProps {
   onJumpTo: (messageId: string) => void;
   observeRef?: (el: HTMLElement | null) => void;
   /** Reply у сообщения агента: цитата — над полем ввода комнаты (`chat/reply.ts`). Нет — кнопки нет. */
-  onReply?: (quote: string) => void;
+  onReply?: (target: ReplyTarget) => void;
+}
+
+/** К кому и на что Reply: сообщение, его автор, начало текста и выделенный фрагмент (пусто, если не выделяли). */
+export interface ReplyTarget {
+  messageId: string;
+  authorId: string;
+  label: string;
+  excerpt: string;
+  selected: string;
 }
 
 /**
@@ -198,7 +207,15 @@ export function RoomMessage({
               title={S.chat.actions.reply}
               // Нажатие не снимает выделение: выделенный в сообщении фрагмент и цитируется.
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onReply(replyQuote(message.text, selectedTextIn(textRef.current)))}
+              onClick={() =>
+                onReply({
+                  messageId: message.id,
+                  authorId: message.fromId,
+                  label: message.from,
+                  excerpt: replyQuote(message.text, ''),
+                  selected: selectedTextIn(textRef.current).trim(),
+                })
+              }
               className="flex size-5 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-foreground/12 hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
             >
               <Reply className="size-3.5" aria-hidden="true" />

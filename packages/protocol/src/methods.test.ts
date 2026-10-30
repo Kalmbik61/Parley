@@ -156,6 +156,17 @@ describe('activity.seen', () => {
   });
 });
 
+describe('rooms.send', () => {
+  const base = { projectPath: '/p', workId: 'w-0001', roomId: 'r-01', to: [], text: 'hi', kind: 'note' };
+
+  it('replyTo необязателен: со строкой и без поля схема проходит, пустая строка — нет', () => {
+    expect(METHODS['rooms.send'].safeParse(base).success).toBe(true);
+    const parsed = METHODS['rooms.send'].safeParse({ ...base, replyTo: 'm-1' });
+    expect(parsed.success && parsed.data.replyTo).toBe('m-1');
+    expect(METHODS['rooms.send'].safeParse({ ...base, replyTo: '' }).success).toBe(false);
+  });
+});
+
 describe('pty.send', () => {
   const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
 

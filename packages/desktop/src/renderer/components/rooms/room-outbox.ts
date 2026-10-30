@@ -21,14 +21,16 @@ export interface RoomOutboxPayload {
   /** Упомянутые сессии; пусто — всем участникам. */
   to: string[];
   text: string;
+  /** Ответ на сообщение комнаты (Reply): хост хранит связь, окно рисует нативную цитату. */
+  replyTo?: string;
   /** Момент нажатия Send (мс эпохи): ставится при постановке в очередь, автоповтор его не меняет, ручной Retry ставит заново; хост считает по нему `queueMs`. */
   requestedAt: number;
 }
 
 export async function attemptRoomSend(_key: string, item: OutboxItem<RoomOutboxPayload>): Promise<AttemptResult> {
-  const { bridge, projectPath, workId, roomId, to, text, requestedAt } = item.payload;
+  const { bridge, projectPath, workId, roomId, to, text, requestedAt, replyTo } = item.payload;
   try {
-    const { messageId } = await bridge.call('rooms.send', { projectPath, workId, roomId, to, text, kind: 'note', requestedAt });
+    const { messageId } = await bridge.call('rooms.send', { projectPath, workId, roomId, to, text, kind: 'note', requestedAt, ...(replyTo === undefined ? {} : { replyTo }) });
     return { kind: 'sent', keepAs: messageId };
   } catch (error) {
     // Не ушло (не участник, комната в архиве, база занята дольше таймаута, хост недоступен): человек узнаёт об этом тостом.

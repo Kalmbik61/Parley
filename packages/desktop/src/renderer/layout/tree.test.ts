@@ -1214,6 +1214,14 @@ describe('панели браузера хозяев в раскладке (эт
     expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
   });
 
+  it('openedBy: agent переживает диск; страница без поля или с мусором в нём читается как страница человека', () => {
+    const layout: WorkLayout = { ...base, panels: { 'session:s-01': { ...PANEL, pages: [{ id: 'bp-000001', url: 'http://localhost:3000/', openedBy: 'agent' }, { id: 'bp-000002', url: 'http://localhost:3001/' }], active: 'bp-000001' } } };
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+    const raw = withPanels({ 'session:s-01': { ...PANEL, pages: [{ id: 'bp-000001', url: 'http://localhost:3000/', openedBy: 'human' }, { id: 'bp-000002', url: 'http://localhost:3001/', openedBy: 5 }], active: 'bp-000001' } });
+    const pages = (parseWorkLayout(raw) as WorkLayout).panels?.['session:s-01']?.pages ?? [];
+    expect(pages.map((page) => 'openedBy' in page)).toEqual([false, false]);
+  });
+
   it('мусор панелей раскладку не бракует: чужой ключ, не-объект, панель без страниц, мусорная страница — пропускаются', () => {
     const raw = withPanels({
       'session:s-01': PANEL,

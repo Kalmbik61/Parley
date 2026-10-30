@@ -533,7 +533,7 @@ describe('токен хуков, заданный явно (спека подп�
 });
 
 describe('все инструменты браузера разрешены заранее, browser_evaluate, browser_cookies и browser_storage тоже (решение владельца 2026-10-21, 5.4)', () => {
-  const ALLOWED = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
+  const ALLOWED = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close'].map((op) => `mcp__parley__browser_${op}`);
 
   it('без канала агента правил нет', () => {
     expect(workSettings()).not.toHaveProperty('permissions');
