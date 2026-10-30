@@ -222,6 +222,7 @@ describe('activityOf: таблица переходов 4.2', () => {
       tasks: [],
       waitingFor: null,
       heldByBackground: false,
+      runningBackground: [],
       turnEndedAt: null,
       turnBoundaryAt: null,
       lastEventAt: null,
@@ -2887,5 +2888,92 @@ describe('activityOf: turnBoundaryAt — граница хода для брош
     expect(apiError.turnBoundaryAt).toBe(sec(1));
     // Без событий лог границу тоже не создаёт.
     expect(boundary([], apiErrorLog(5, 'rate_limit', SESSION_LIMIT))).toBeNull();
+  });
+});
+
+describe('activityOf: runningBackground — работающие задачи последнего снимка, любого вида', () => {
+  const HOUR = 60 * 60 * 1000;
+  /** Фоновая команда из снимка: сессию `working` не делает, но уснуть ей не даёт. */
+  const shell = (id: string, extra: Partial<BackgroundTask> = {}): BackgroundTask =>
+    task(id, { type: 'shell', agentType: null, description: 'npm run dev', ...extra });
+  const monitor = (id: string): BackgroundTask =>
+    task(id, { type: 'monitor', agentType: null, description: 'tail -f app.log' });
+  /** Ход окончен `Stop`, а в снимке этого хука — переданные задачи. */
+  const stoppedWith = (...tasks: BackgroundTask[]): EventRecord[] => [
+    event('UserPromptSubmit'),
+    hook('Stop', { backgroundTasks: tasks }),
+  ];
+
+  it('runningBackground: виды работающих задач последнего снимка', () => {
+    const result = activity(
+      stoppedWith(shell('sh-1'), monitor('mon-1'), shell('sh-0', { status: 'completed' })),
+    );
+
+    expect(result.runningBackground).toEqual(['shell', 'monitor']);
+  });
+
+  it('runningBackground: пустой снимок стирает', () => {
+    const parked = stoppedWith(shell('sh-1'));
+    expect(activity(parked).runningBackground).toEqual(['shell']);
+
+    const emptied = activity([
+      ...parked,
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [] }),
+    ]);
+    expect(emptied.runningBackground).toEqual([]);
+  });
+
+  it('runningBackground: событие без снимка прежний не трогает', () => {
+    const result = activity([
+      ...stoppedWith(shell('sh-1')),
+      hook('Notification', { notificationType: 'idle_prompt' }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: запуск процесса сбрасывает снимок, а снимок самого события остаётся', () => {
+    const parked = stoppedWith(shell('sh-1'));
+
+    expect(activity([...parked, hook('SessionStart', { source: 'resume' })]).runningBackground).toEqual([]);
+    expect(
+      activity([...parked, hook('SessionStart', { source: 'resume', backgroundTasks: [monitor('mon-1')] })])
+        .runningBackground,
+    ).toEqual(['monitor']);
+  });
+
+  it('runningBackground: зомби-правило не стирает shell', () => {
+    // Через два часа молчания зомби-субагент не держит сессию (`tasks` пуст, ход окончен), но срока давности у
+    // снимка нет: для сна в списке остаются задачи любого вида.
+    const parked = stoppedWith(shell('sh-1'), task('a'));
+    const later = activityOf({ events: parked, now: Date.parse(AT) + 2 * HOUR });
+
+    expect(later.activity).toBe('unseen');
+    expect(later.tasks).toEqual([]);
+    expect(later.runningBackground).toEqual(['shell', 'subagent']);
+  });
+
+  it('runningBackground: фоновая команда не делает сессию working', () => {
+    const result = activity(stoppedWith(shell('sh-1')), true);
+
+    expect(result.activity).toBe('idle');
+    expect(result.heldByBackground).toBe(false);
+    expect(result.tasks).toEqual([]);
+    expect(result.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: работающий субагент виден в списке и держит сессию, как раньше', () => {
+    const result = activity(stoppedWith(task('a')));
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: снимков не было или журнала нет — пусто', () => {
+    expect(activity([event('UserPromptSubmit'), event('Stop')]).runningBackground).toEqual([]);
+    expect(activity([]).runningBackground).toEqual([]);
+    expect(activityOf({ events: null, now: NOW }).runningBackground).toEqual([]);
   });
 });

@@ -108,6 +108,13 @@ export interface SessionActivity {
    * или о конце хода ничего не известно, либо сессия вовсе не `working`.
    */
   heldByBackground: boolean;
+  /**
+   * Виды (`type`: `shell`, `subagent`, `monitor`…) работающих задач последнего снимка `background_tasks` — любых, а не
+   * только субагентов, которых держит `heldByBackground`. Фоновая команда сессию `working` не делает, но уснуть ей не
+   * даёт (сон агентов, спека 4.1). Срока давности у снимка нет: предел `backgroundHoldMs` список не чистит, устаревший
+   * снимок только мешает уснуть — это безопасная сторона. Пустой снимок стирает, запуск процесса сбрасывает.
+   */
+  runningBackground: string[];
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
   /**
@@ -296,6 +303,9 @@ export function activityOf({
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
   // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
   let background: BackgroundTask[] = [];
+  // Виды всех работающих задач того же снимка (`runningBackground`), а не одних субагентов: сессию держит `background`,
+  // а фоновая команда или монитор — нет. Снимок и сброс те же, что у `background`; предел зомби список не трогает.
+  let runningBackground: string[] = [];
   // Остановленные субагенты: снимок следующего события может отстать и ещё числить их работающими,
   // а остановка уже была — таких в снимках не учитываем, пока субагент не стартует снова.
   const stopped = new Set<string>();
@@ -382,6 +392,7 @@ export function activityOf({
     if (event.name === 'SessionStart') {
       started.clear();
       background = [];
+      runningBackground = [];
       stopped.clear();
       waits = [];
     }
@@ -389,6 +400,9 @@ export function activityOf({
       background = event.backgroundTasks.filter(
         (task) => isRunningSubagent(task) && !stopped.has(task.id),
       );
+      runningBackground = event.backgroundTasks
+        .filter((task) => task.status === 'running')
+        .map((task) => task.type);
     }
     switch (event.name) {
       case 'UserPromptSubmit':
@@ -618,6 +632,7 @@ export function activityOf({
     // Последнее из идущих ожиданий.
     waitingFor: phase === 'ended' ? null : (waits.at(-1)?.target ?? null),
     heldByBackground,
+    runningBackground,
     turnEndedAt,
     turnBoundaryAt,
     lastEventAt,

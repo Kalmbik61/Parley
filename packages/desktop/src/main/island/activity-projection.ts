@@ -25,7 +25,7 @@ function label(value: unknown, limit: number): string | null {
 export function projectIslandActivity(entry: IslandActivityEntry): IslandActivityEntry {
   const activity = entry.activity;
   const projected: IslandActivityEntry = { ref: { projectPath: entry.ref.projectPath, workId: entry.ref.workId, sessionId: entry.ref.sessionId }, activity: {
-    activity: activity.activity, subagents: count(activity.subagents), tasks: [], waitingFor: null,
+    activity: activity.activity, subagents: count(activity.subagents), tasks: [], waitingFor: null, runningBackground: [],
     heldByBackground: activity.heldByBackground === true, turnEndedAt: activity.turnEndedAt, turnBoundaryAt: activity.turnBoundaryAt ?? null, lastEventAt: activity.lastEventAt,
     source: activity.source, hooksMissing: activity.hooksMissing,
     need: activity.need == null ? null : { kind: activity.need.kind, since: activity.need.since, detail: null,
