@@ -2892,7 +2892,8 @@ describe('activityOf: turnBoundaryAt — граница хода для брош
 });
 
 describe('activityOf: runningBackground — работающие задачи последнего снимка, любого вида', () => {
-  const HOUR = 60 * 60 * 1000;
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
   /** Фоновая команда из снимка: сессию `working` не делает, но уснуть ей не даёт. */
   const shell = (id: string, extra: Partial<BackgroundTask> = {}): BackgroundTask =>
     task(id, { type: 'shell', agentType: null, description: 'npm run dev', ...extra });
@@ -2943,14 +2944,66 @@ describe('activityOf: runningBackground — работающие задачи п
   });
 
   it('runningBackground: зомби-правило не стирает shell', () => {
-    // Через два часа молчания зомби-субагент не держит сессию (`tasks` пуст, ход окончен), но срока давности у
-    // снимка нет: для сна в списке остаются задачи любого вида.
-    const parked = stoppedWith(shell('sh-1'), task('a'));
-    const later = activityOf({ events: parked, now: Date.parse(AT) + 2 * HOUR });
+    // Через два часа молчания: у снимка фоновой команды срока давности нет.
+    const later = activityOf({ events: stoppedWith(shell('sh-1')), now: Date.parse(AT) + 2 * HOUR });
 
+    expect(later.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: зомби-правило снимает subagent, shell и monitor остаются', () => {
+    // Зомби-субагент не держит сессию (`tasks` пуст, ход окончен) и уходит из списка вместе с `background`;
+    // до предела удержания он в списке, у остальных видов срока давности нет.
+    const parked = stoppedWith(shell('sh-1'), task('a'), monitor('mon-1'));
+
+    const before = activityOf({ events: parked, now: Date.parse(AT) + 59 * MINUTE });
+    expect(before.runningBackground).toEqual(['shell', 'subagent', 'monitor']);
+
+    const later = activityOf({ events: parked, now: Date.parse(AT) + 2 * HOUR });
     expect(later.activity).toBe('unseen');
     expect(later.tasks).toEqual([]);
-    expect(later.runningBackground).toEqual(['shell', 'subagent']);
+    expect(later.runningBackground).toEqual(['shell', 'monitor']);
+  });
+
+  it('runningBackground: отставший снимок после SubagentStop не оставляет subagent', () => {
+    const lead = stoppedWith(shell('sh-1'), task('a'));
+    const lagging = [shell('sh-1'), task('a')];
+
+    // Снимок самого SubagentStop ещё числит `a` работающей.
+    expect(activity([...lead, stopOf('a', { backgroundTasks: lagging })]).runningBackground).toEqual(['shell']);
+    // И снимок следующего события — тоже: остановленный id вычищается из каждого, как у `background`.
+    const next = hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: lagging });
+    expect(activity([...lead, stopOf('a', { backgroundTasks: lagging }), next]).runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: новый SubagentStart того же id возвращает subagent', () => {
+    const result = activity([
+      ...stoppedWith(task('a')),
+      stopOf('a', { backgroundTasks: [task('a')] }),
+      startOf('a'),
+      hook('Notification', { backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: запуск процесса забывает остановленных, снимок самого события принимается', () => {
+    const result = activity([
+      ...stoppedWith(task('a')),
+      stopOf('a', { backgroundTasks: [task('a')] }),
+      hook('SessionStart', { source: 'resume', backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: остановка субагента не трогает задачу другого вида с тем же id', () => {
+    const result = activity([
+      ...stoppedWith(task('x')),
+      stopOf('x', { backgroundTasks: [shell('x')] }),
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [shell('x')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['shell']);
   });
 
   it('runningBackground: фоновая команда не делает сессию working', () => {
