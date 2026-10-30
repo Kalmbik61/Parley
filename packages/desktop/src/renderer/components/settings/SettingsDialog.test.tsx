@@ -24,6 +24,8 @@ const CONFIG = {
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
+  // Как у хоста по умолчанию: сон выключен.
+  sleepAfterMinutes: 0,
   autoLaunch: true,
   agentSkills: true,
   // Как у хоста по умолчанию (с 2026-10-06).
@@ -858,6 +860,66 @@ describe('SettingsDialog — Lean agent sessions', () => {
     await screen.findByText('Worktree root');
     expect(screen.queryByRole('switch', { name: 'Lean agent sessions' })).toBeNull();
     expect(screen.getByRole('switch', { name: 'Skill navigator' })).toBeTruthy();
+  });
+});
+
+// Сон простаивающих агентов (план сна, задача 3): минуты простоя, 0 — сон выключен.
+describe('SettingsDialog — Sleep idle agents after', () => {
+  const LABEL = 'Sleep idle agents after (min, 0 = off)';
+
+  it('поле стоит сразу после «Session wake-ups per hour» и показывает значение конфига', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: { ...CONFIG, sleepAfterMinutes: 45 }, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = (await screen.findByLabelText(LABEL)) as HTMLInputElement;
+    expect(input.value).toBe('45');
+    expect(input.disabled).toBe(false);
+
+    // Соседи по порядку полей: следующее за «Session wake-ups per hour» — это оно.
+    const wakeUps = screen.getByLabelText(/Session wake-ups per hour/) as HTMLInputElement;
+    const fields = Array.from(screen.getByTestId('settings-pane').querySelectorAll('input'));
+    expect(fields.indexOf(input)).toBe(fields.indexOf(wakeUps) + 1);
+  });
+
+  it('blur зовёт settings.set с ключом и текстом, ответ хоста применён', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, [key]: Number(value) } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = await screen.findByLabelText(LABEL);
+    fireEvent.change(input, { target: { value: '60' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'sleepAfterMinutes', value: '60' } }),
+    );
+  });
+
+  it('задано переменной окружения: неактивно и подписано именем переменной', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { sleepAfterMinutes: 'PARLEY_SLEEP_AFTER_MINUTES' });
+
+    switchTo('Agents');
+    await screen.findByText(/set by PARLEY_SLEEP_AFTER_MINUTES/);
+
+    expect((screen.getByLabelText(/Sleep idle agents after/) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('хост прежней версии ключа не знает — поля нет, соседние на месте', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.sleepAfterMinutes;
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByLabelText(/Sleep idle agents after/)).toBeNull();
+    expect(screen.getByLabelText(/Session wake-ups per hour/)).toBeTruthy();
   });
 });
 

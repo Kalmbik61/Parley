@@ -40,6 +40,7 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 20,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -81,6 +82,7 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -107,6 +109,7 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 7,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -365,6 +368,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['channelPush', 'CHANNEL_PUSH', '0', false],
     ['messageRate', 'MESSAGE_RATE', '9', 9],
     ['resumeRate', 'RESUME_RATE', '3', 3],
+    ['sleepAfterMinutes', 'SLEEP_AFTER_MINUTES', '30', 30],
     ['agentSkills', 'AGENT_SKILLS', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
@@ -631,6 +635,63 @@ describe('leanAgents setting', () => {
     const value = await loadConfig(file(), {});
     expect(value.config.leanAgents).toBe(true);
     expect(value.warning).toContain('leanAgents');
+  });
+});
+
+describe('sleepAfterMinutes setting', () => {
+  it('по умолчанию 0 — сон выключен; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepAfterMinutes).toBe(0);
+    expect((await loadConfig(file(), {})).config.sleepAfterMinutes).toBe(0);
+
+    // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
+    expect(parseSetting('sleepAfterMinutes', '60')).toEqual({ value: 60 });
+    await saveConfig({ sleepAfterMinutes: 60 }, file());
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.sleepAfterMinutes).toBe(60);
+    expect(fromFile.warning).toBeNull();
+    expect(fromFile.fromEnv).toEqual([]);
+
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '30' });
+    expect(fromEnv.config.sleepAfterMinutes).toBe(30);
+    // Ключ пришёл из окружения: файл его не перекроет, хост покажет замок с именем переменной.
+    expect(fromEnv.fromEnv).toEqual(['sleepAfterMinutes']);
+    expect(fromEnv.warning).toBeNull();
+  });
+
+  it('parseSetting: целое от 0 до 1440, ноль — своей веткой, остальное — ошибка с границами', () => {
+    expect(parseSetting('sleepAfterMinutes', '0')).toEqual({ value: 0 });
+    expect(parseSetting('sleepAfterMinutes', '1440')).toEqual({ value: 1440 });
+    for (const bad of ['1441', '-1', 'abc', '2.5']) {
+      expect(parseSetting('sleepAfterMinutes', bad)).toEqual({
+        error: 'sleepAfterMinutes: expected an integer from 0 to 1440',
+      });
+    }
+  });
+
+  it('вне границ в файле и в окружении — жалоба с именем и умолчание 0; ключ в окружении не запирается', async () => {
+    await write({ sleepAfterMinutes: 1441 });
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.sleepAfterMinutes).toBe(0);
+    expect(fromFile.warning).toBe('sleepAfterMinutes: expected an integer from 0 to 1440');
+
+    await write({});
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: 'abc' });
+    expect(fromEnv.config.sleepAfterMinutes).toBe(0);
+    expect(fromEnv.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(fromEnv.fromEnv).toEqual([]);
+  });
+
+  it('ноль разрешён и в файле, и в окружении: окружение выключает сон поверх файла', async () => {
+    await write({ sleepAfterMinutes: 0 });
+    const zeroFile = await loadConfig(file(), {});
+    expect(zeroFile.config.sleepAfterMinutes).toBe(0);
+    expect(zeroFile.warning).toBeNull();
+
+    await write({ sleepAfterMinutes: 60 });
+    const zeroEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '0' });
+    expect(zeroEnv.config.sleepAfterMinutes).toBe(0);
+    expect(zeroEnv.fromEnv).toEqual(['sleepAfterMinutes']);
+    expect(zeroEnv.warning).toBeNull();
   });
 });
 

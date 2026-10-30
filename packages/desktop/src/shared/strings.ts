@@ -1262,6 +1262,7 @@ export const S = {
     silenceThreshold: 'Silence threshold, ms',
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
+    sleepAfterMinutes: 'Sleep idle agents after (min, 0 = off)',
     /** Облегчённый запуск агентов комнат (спека «меньше ходов и легче контекст», C2.2). */
     leanAgents: 'Lean agent sessions',
     leanAgentsHint: 'Agents Parley starts for rooms run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',

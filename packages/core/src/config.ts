@@ -63,6 +63,11 @@ export interface ParleyConfig extends ResourceLimits {
    */
   resumeRate: number;
   /**
+   * Через сколько минут простоя хост усыпляет агента Claude Code без процесса: письмо будит его с той же историей
+   * (план сна агентов). 0 — сон выключен, это умолчание. 0…1440.
+   */
+  sleepAfterMinutes: number;
+  /**
    * Ставить ли скилл `parley` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
    * `.agents/skills/parley` и симлинк `.claude/skills/parley`. Выключено — хост скилл не ставит и не
    * обновляет; уже поставленное не удаляется.
@@ -108,6 +113,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
+  sleepAfterMinutes: 0,
   agentSkills: true,
   skillNavigator: true,
   codexWriteApprovals: 'auto',
@@ -133,6 +139,7 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   channelPush: 'CHANNEL_PUSH',
   messageRate: 'MESSAGE_RATE',
   resumeRate: 'RESUME_RATE',
+  sleepAfterMinutes: 'SLEEP_AFTER_MINUTES',
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
   codexWriteApprovals: 'CODEX_WRITE_APPROVALS',
@@ -212,6 +219,16 @@ const isResumeRate = (value: unknown): value is number =>
   value <= RESUME_RATE_MAX;
 const RESUME_RATE_EXPECTED = `an integer from ${RESUME_RATE_MIN} to ${RESUME_RATE_MAX}`;
 
+/** Ноль минут — сон выключен, поэтому, как у `resumeRate`, границы начинаются с нуля. */
+const SLEEP_AFTER_MINUTES_MIN = 0;
+const SLEEP_AFTER_MINUTES_MAX = 1440;
+const isSleepAfterMinutes = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= SLEEP_AFTER_MINUTES_MIN &&
+  value <= SLEEP_AFTER_MINUTES_MAX;
+const SLEEP_AFTER_MINUTES_EXPECTED = `an integer from ${SLEEP_AFTER_MINUTES_MIN} to ${SLEEP_AFTER_MINUTES_MAX}`;
+
 /** Порог бюджета — целое в границах своего ключа (`RESOURCE_LIMIT_BOUNDS`): ноль допустим не везде. */
 const isResourceLimit = (key: keyof ResourceLimits, value: unknown): value is number =>
   typeof value === 'number' &&
@@ -242,6 +259,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('channelPush', (value) => typeof value === 'boolean', 'true or false');
   take('messageRate', isPositiveInt, 'a positive integer');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
+  take('sleepAfterMinutes', isSleepAfterMinutes, SLEEP_AFTER_MINUTES_EXPECTED);
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
   take('codexWriteApprovals', isCodexWriteApprovals, CODEX_WRITE_APPROVALS_EXPECTED);
@@ -305,6 +323,12 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     const parsed = Number(resumeRate);
     if (isResumeRate(parsed)) patch.resumeRate = parsed;
     else complain(`${nameOf('resumeRate')}: expected ${RESUME_RATE_EXPECTED}`);
+  }
+  const sleepAfterMinutes = text('sleepAfterMinutes');
+  if (sleepAfterMinutes !== undefined) {
+    const parsed = Number(sleepAfterMinutes);
+    if (isSleepAfterMinutes(parsed)) patch.sleepAfterMinutes = parsed;
+    else complain(`${nameOf('sleepAfterMinutes')}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}`);
   }
   flag('agentSkills');
   flag('skillNavigator');
@@ -447,6 +471,12 @@ export function parseSetting<K extends keyof ParleyConfig>(
     const parsed = Number(text);
     if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: expected ${RESUME_RATE_EXPECTED}` };
+  }
+  if (key === 'sleepAfterMinutes') {
+    // Отдельная ветка, как у `resumeRate`: общая для чисел отвергла бы допустимый ноль — «сон выключен».
+    const parsed = Number(text);
+    if (isSleepAfterMinutes(parsed)) return { value: parsed as ParleyConfig[K] };
+    return { error: `${key}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}` };
   }
   if ((RESOURCE_LIMIT_KEYS as readonly string[]).includes(key)) {
     const limit = key as keyof ResourceLimits;
