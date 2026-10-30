@@ -942,8 +942,8 @@ export function createWakeService(
         void checkProvider(ref, state, session.provider);
         const known = state.providerCheck?.provider === session.provider ? state.providerCheck.present : null;
         if (known === null) {
-          // Ответа реестра ещё нет: подъём ждёт его, пересчёт придёт следом.
-          publishWaiting(ref, state, 'sleeping');
+          // Ответа реестра ещё нет: подъём ждёт его, пересчёт придёт следом. Ожидание не публикуется — иначе окно мигнуло
+          // бы промежуточным «sleeping» перед настоящим состоянием.
           return;
         }
         if (!known) {
