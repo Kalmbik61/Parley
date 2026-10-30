@@ -557,6 +557,10 @@ export function createWakeService(
         state.resumeUnavailable = true;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
         limiter.release(ref);
+        // Окно уже видит «resuming»: пересчёт покажет, что письма ждут (`sleeping`). `resuming` снимается до него, иначе
+        // пересчёт снова записал бы «resuming».
+        state.resuming = false;
+        recompute(ref);
         return;
       }
       const withPrompt = template.includes('{prompt}');

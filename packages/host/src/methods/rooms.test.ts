@@ -972,13 +972,17 @@ describe('rooms.rename / rooms.setLead / rooms.delete: управление ко
     const assigned = readStoredMap(dir, workId);
     expect(assigned.rooms[0]).toEqual({ ...before.rooms[0], ownerId: owner });
     expect(assigned.sessions).toEqual(before.sessions);
-    expect(assigned.messages).toEqual(before.messages);
+    // Смена владельца — строка в ленте и письмо новому владельцу (спека замены агента, T7); прежняя переписка цела.
+    expect(assigned.messages.slice(0, before.messages.length)).toEqual(before.messages);
+    expect(assigned.messages.slice(before.messages.length).map((message) => message.to)).toEqual([[HUMAN], [owner]]);
     expect((await call(client, 'rooms.setOwner', { ...base, sessionId: null })).result).toEqual({ ok: true });
-    expect((readStoredMap(dir, workId)).rooms).toEqual(before.rooms);
+    const cleared = readStoredMap(dir, workId);
+    expect(cleared.rooms).toEqual(before.rooms);
+    expect(cleared.messages.slice(assigned.messages.length).map((message) => message.to)).toEqual([[HUMAN], [owner]]);
     for (const extra of [{ sessionId: 's-99' }, { sessionId: owner, roomId: 'r-99' }]) {
       expect((await call(client, 'rooms.setOwner', { ...base, ...extra })).error?.code).toBe('bad_request');
     }
-    expect(readStoredMap(dir, workId)).toEqual(before);
+    expect(readStoredMap(dir, workId)).toEqual(cleared);
   });
 
   it('rooms.rename: края обрезаются, updatedAt работы стоит на месте; пустое, чужая комната и работа — bad_request', async () => {

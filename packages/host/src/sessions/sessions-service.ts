@@ -1595,6 +1595,9 @@ export function createSessionsService(
     }
     // Готовность цели — до любых изменений: отказ не трогает прежнего агента.
     const entry = await readyProvider(request.provider);
+    const registry = await loadProviders();
+    // От этой проверки до `launching.add` — ни одного `await`: иначе подъём письмом успел бы занять ключ, а `finally`
+    // замены снял бы чужой.
     if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
 
     // Живой агент: только у приглашения, без фоновых задач и черновика — как у `setModel`. Застрявший в лимите или
@@ -1613,7 +1616,6 @@ export function createSessionsService(
       throw busyError('The agent runs outside Parley: stop it first or continue with force');
     }
 
-    const registry = await loadProviders();
     const since = new Date().toISOString();
     launching.add(key);
     let applied = false;
