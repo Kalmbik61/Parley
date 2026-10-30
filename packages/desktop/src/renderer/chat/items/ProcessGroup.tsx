@@ -5,7 +5,7 @@
  * Открытая группа тени не держит — её элементы идут следом отдельными строками ленты.
  */
 
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { FeedItem } from '@parley/core';
 import { cn } from '../../lib/cn.js';
@@ -40,8 +40,9 @@ export function ProcessGroup({ title, open, items, onToggle }: ProcessGroupProps
   const shadow = useRef<HTMLDivElement | null>(null);
   const toggleRef = useRef(onToggle);
   toggleRef.current = onToggle;
-  // `hidden="until-found"` React 18 не принимает значением атрибута — ставим через ref.
-  useEffect(() => {
+  // В JSX тень скрыта булевым `hidden` (с первой отрисовки, без вспышки и ложного замера высоты), а значение
+  // `until-found` React 18 не принимает — переключаем через ref до кадра.
+  useLayoutEffect(() => {
     const node = shadow.current;
     if (open || node === null) return;
     node.setAttribute('hidden', 'until-found');
@@ -62,7 +63,7 @@ export function ProcessGroup({ title, open, items, onToggle }: ProcessGroupProps
         <span className="min-w-0 flex-1 truncate">{title}</span>
       </button>
       {open ? null : (
-        <div ref={shadow} data-testid="chat-process-shadow">
+        <div ref={shadow} hidden data-testid="chat-process-shadow">
           {items.map((item) => {
             const line = shadowLine(item);
             return line === null ? null : <p key={item.id} className="m-0">{line}</p>;

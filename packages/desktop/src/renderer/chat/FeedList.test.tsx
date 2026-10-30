@@ -379,6 +379,23 @@ describe('FeedList — свёртка законченного хода', () => 
     expect(screen.getByRole('button', { name: 'Read files' }).getAttribute('aria-expanded')).toBe('true');
   });
 
+  it('фокус ушёл без blur (строку убрал виртуализатор) — ход сворачивается строкой статуса', () => {
+    const running = [prompt('p1'), tool('t1'), text('a1', 'answer')];
+    const view = render(feed(running));
+    within(screen.getAllByTestId('chat-tool')[0]!).getByRole('button').focus();
+    view.rerender(feed([...running, turn('u1')]));
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(1);
+    // Фокус уходит на body, события blur строка не получает.
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.click(screen.getByTestId('chat-turn'));
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+  });
+
+  it('тень скрыта с первой отрисовки', () => {
+    render(feed(finished()));
+    expect(screen.getByTestId('chat-process-shadow').hasAttribute('hidden')).toBe(true);
+  });
+
   it('reveal элемента из свёрнутой группы раскрывает её и зовёт onRevealed', () => {
     const onRevealed = vi.fn();
     render(feed(finished(), undefined, { request: { itemId: 't2', nonce: 7 }, onRevealed }));

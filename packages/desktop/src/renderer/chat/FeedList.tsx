@@ -179,18 +179,19 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
       return next;
     });
   }, []);
-  /** Фокус внутри строки элемента ленты: группа с ним не сворачивается, когда ход заканчивается. */
-  const focusedRef = useRef<string | null>(null);
-
   const { foldRows, forcedKey } = useMemo(() => {
     const open = new Set<string>();
     for (const id of expanded) if (id.startsWith('group:')) open.add(id.slice('group:'.length));
     const first = foldFeed(items, fold, open);
-    const focused = focusedRef.current;
+    // Фокус читаем из DOM в момент расчёта: размонтированная строка blur не шлёт, и запомненный id устарел бы.
+    const active = document.activeElement;
+    const focused = scroller !== null && active !== null && scroller.contains(active)
+      ? active.closest('[data-feed-id]')?.getAttribute('data-feed-id') ?? null
+      : null;
     const hiding = focused === null ? undefined : first.find((row) => row.kind === 'group' && !row.open && row.items.some((item) => item.id === focused));
     if (hiding === undefined) return { foldRows: first, forcedKey: null };
     return { foldRows: foldFeed(items, fold, new Set([...open, hiding.key])), forcedKey: hiding.key };
-  }, [items, fold, expanded]);
+  }, [items, fold, expanded, scroller]);
   useLayoutEffect(() => {
     if (forcedKey !== null) setExpanded((was) => new Set(was).add(groupOpenKey(forcedKey)));
   }, [forcedKey]);
@@ -341,10 +342,6 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                 key={virtual.key}
                 data-index={virtual.index}
                 data-feed-id={'item' in row ? row.item.id : undefined}
-                onFocusCapture={'item' in row ? () => { focusedRef.current = row.item.id; } : undefined}
-                onBlurCapture={'item' in row ? (event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusedRef.current = null;
-                } : undefined}
                 ref={virtualizer.measureElement}
                 className={cn('absolute left-0 top-0 w-full px-4', stacked ? 'pt-1' : 'pt-3')}
                 style={{ transform: `translateY(${virtual.start}px)` }}
