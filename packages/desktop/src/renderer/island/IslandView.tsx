@@ -405,7 +405,7 @@ function useRequestFocus(identity: string | null, owned: boolean, takeKeyboard: 
 
 function ConsentRequest({ consent, showId, owned, selected, takeKeyboard }: { consent: IslandConsentProps; showId: number; owned: boolean; selected: boolean; takeKeyboard(): void }): JSX.Element {
   const { card } = consent;
-  const identity = JSON.stringify([showId, card.id, card.kind, card.folder, card.projectPath, card.requestedBy]);
+  const identity = JSON.stringify([showId, card.id, card.kind, card.kind === 'folder-trust' ? card.folder : card.ref, card.projectPath, card.requestedBy]);
   const focus = useRequestFocus(identity, owned, takeKeyboard);
   return <div {...focus} data-testid="island-consent-request" aria-current={selected ? 'true' : undefined} className={selected ? 'rounded ring-1 ring-ring' : undefined}><ConsentView key={identity} {...consent} /></div>;
 }

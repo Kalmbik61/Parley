@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { shortenMiddle } from '../../lib/shorten-middle.js';
+import { switchRequestText } from '../../store/consents.js';
 import { Button } from '../../ui/button.js';
 import { CARD_ARM_MS } from '../arm.js';
 
@@ -33,16 +34,28 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
     };
   }, [card.id]);
   const disabled = deciding || !armed;
-  const who = card.requestedBy.label ?? card.requestedBy.sessionId ?? '—';
+  const isSwitch = card.kind === 'agent-switch';
+  const who = isSwitch ? card.requestedBy.label : (card.requestedBy.label ?? card.requestedBy.sessionId ?? '—');
   return (
     <div data-testid="island-card" className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
-      <div className="font-semibold text-foreground">{S.island.consentTitle}</div>
-      <div data-testid="island-consent-folder" title={card.folder} className="font-mono text-sm [overflow-wrap:anywhere]">
-        {shortenMiddle(card.folder)}
-      </div>
-      <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]">
-        {S.island.consentRequestedBy(who, S.island.consentSource[card.requestedBy.source])}
-      </div>
+      <div className="font-semibold text-foreground">{isSwitch ? S.dialogs.agentSwitch.title : S.island.consentTitle}</div>
+      {card.kind === 'agent-switch' ? (
+        <>
+          <div data-testid="island-consent-switch" className="text-sm [overflow-wrap:anywhere]">
+            {switchRequestText(card)}
+          </div>
+          <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{S.island.consentRequestedBy(who, 'request_agent_switch')}</div>
+        </>
+      ) : (
+        <>
+          <div data-testid="island-consent-folder" title={card.folder} className="font-mono text-sm [overflow-wrap:anywhere]">
+            {shortenMiddle(card.folder)}
+          </div>
+          <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]">
+            {S.island.consentRequestedBy(who, S.island.consentSource[card.requestedBy.source])}
+          </div>
+        </>
+      )}
       {note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.consentAnswered}</div> : null}
       {note === 'failed' ? <div className="text-[var(--status-warning-text)]">{S.island.consentFailed}</div> : null}
       {note === 'done' ? (
@@ -52,7 +65,7 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
       ) : note === 'elsewhere' ? null : (
         <div className="flex flex-wrap gap-2">
           <Button data-testid="island-consent-trust" size="default" className="cursor-pointer text-sm" disabled={disabled} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow')}>
-            {S.island.consentTrust}
+            {isSwitch ? S.island.consentAllow : S.island.consentTrust}
           </Button>
           <Button data-testid="island-consent-deny" size="default" variant="outline" className="cursor-pointer text-sm" disabled={disabled} onClick={() => onDecide(card.id, 'deny')}>
             {S.island.deny}

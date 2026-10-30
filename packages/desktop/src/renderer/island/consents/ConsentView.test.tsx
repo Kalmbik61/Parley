@@ -124,4 +124,22 @@ describe('карточка согласия острова', () => {
     fireEvent.click(screen.getByTestId('island-consent-trust'));
     expect(p.onDecide).toHaveBeenCalledWith('c-01', 'allow');
   });
+
+  it('agent-switch: строка просьбы, Allow зовёт onDecide(id, "allow"), Deny — "deny"', () => {
+    const card: ConsentCard = {
+      id: 'c-07', kind: 'agent-switch', projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-03' },
+      provider: 'codex', providerLabel: 'Codex', model: 'gpt-6-astra', reason: 'the Claude limit is near',
+      requestedBy: { sessionId: 's-11', label: 'Greta' }, at: '2026-10-30T10:00:00.000Z', state: 'pending',
+    };
+    const p = props({ card });
+    render(<ConsentView {...p} />);
+    expect(screen.getByText('Continue on another provider?')).toBeTruthy();
+    expect(screen.getByTestId('island-consent-switch').textContent).toBe('@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near');
+    arm();
+    expect(screen.getByTestId('island-consent-trust').textContent).toBe('Allow');
+    fireEvent.click(screen.getByTestId('island-consent-trust'));
+    expect(p.onDecide).toHaveBeenLastCalledWith('c-07', 'allow');
+    fireEvent.click(screen.getByTestId('island-consent-deny'));
+    expect(p.onDecide).toHaveBeenLastCalledWith('c-07', 'deny');
+  });
 });

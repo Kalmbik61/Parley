@@ -15,8 +15,9 @@ import { toast } from 'sonner';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { isWindowActive } from '../../attention/notify.js';
-import { consentRequester, useConsentsStore } from '../../store/consents.js';
+import { consentRequester, switchRequestText, useConsentsStore } from '../../store/consents.js';
 import { useWorksStore } from '../../store/works.js';
+import { AgentSwitchDialog } from './AgentSwitchDialog.js';
 import { TrustFolderDialog } from './TrustFolderDialog.js';
 
 export function ConsentPrompt(): JSX.Element | null {
@@ -49,17 +50,30 @@ export function ConsentPrompt(): JSX.Element | null {
   const card = asking === null ? undefined : cards.find((item) => item.id === asking);
   if (card === undefined) return null;
 
-  const trust = (): void => {
+  const decide = (decision: 'allow' | 'deny'): void => {
     useConsentsStore.getState().stopAsking();
     useConsentsStore
       .getState()
-      .decide(card.id, 'allow')
+      .decide(card.id, decision)
       .catch((err: unknown) => {
         const info = decodeIpcError(err);
         console.warn('[parley] consents.decide', info.message);
         toast.error(errorText(info.code, S.errors.actions.grantTrust));
       });
   };
+  const trust = (): void => decide('allow');
+
+  if (card.kind === 'agent-switch') {
+    return (
+      <AgentSwitchDialog
+        open
+        request={switchRequestText(card)}
+        onAllow={() => decide('allow')}
+        onDeny={() => decide('deny')}
+        onCancel={() => useConsentsStore.getState().stopAsking()}
+      />
+    );
+  }
 
   return (
     <TrustFolderDialog
