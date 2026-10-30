@@ -88,7 +88,7 @@ import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel, type ParticipantModel } from './feed-model.js';
 import { RoomContextChip } from './RoomContextChip.js';
 import { RoomHeader } from './RoomHeader.js';
-import { RoomMessage } from './RoomMessage.js';
+import { RoomMessage, type ReplyTarget } from './RoomMessage.js';
 import { RoomRecipeChip } from './RoomRecipeChip.js';
 import { RoomUsageChip } from './RoomUsageChip.js';
 
@@ -192,7 +192,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Сколько пришло снизу, пока человек читал историю: сообщения и решения, при которых лента стояла не у низа (`↓N`).
   const [below, setBelow] = useState(0);
   // Цитата Reply (`chat/reply.ts`): у комнаты своя (по ключу черновика), уходит с ближайшим письмом.
-  const [replyTo, setReplyTo] = useState<{ draftKey: string; quote: string } | null>(null);
+  const [replyTo, setReplyTo] = useState<(ReplyTarget & { draftKey: string }) | null>(null);
   const onFeedScroll = useCallback((): void => {
     const feed = containerRef.current;
     if (feed === null) return;
@@ -422,7 +422,11 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   };
 
   // Письмо — в очередь комнаты (`room-outbox.ts`): серым сразу, уходит строго по одному; отказ — «Not sent» с Retry и ×.
-  const quote = replyTo?.draftKey === draftKey ? replyTo.quote : null;
+  const reply = replyTo?.draftKey === draftKey ? replyTo : null;
+  // Выделенный фрагмент уходит markdown-цитатой; начало сообщения показывает нативная цитата (`replyTo`).
+  const quote = reply === null || reply.selected === '' ? null : reply.selected;
+  // Автор вышел из комнаты или закрыт — адресата из него не делаем, письмо уходит как обычно.
+  const replyReachable = reply !== null && members.some((member) => member.id === reply.authorId);
 
   const handleSend = (submission: ComposerSubmission): void => {
     roomOutbox.enqueue(draftKey, {
@@ -430,11 +434,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       projectPath: entry.projectPath,
       workId: entry.map.work.id,
       roomId,
-      to: submission.to,
+      to: reply !== null && replyReachable && !submission.to.includes(reply.authorId) ? [...submission.to, reply.authorId] : submission.to,
       text: quote === null ? submission.text : withQuote(quote, submission.text),
+      ...(reply === null ? {} : { replyTo: reply.messageId }),
       requestedAt: Date.now(),
     });
-    if (quote !== null) setReplyTo(null);
+    if (reply !== null) setReplyTo(null);
   };
 
   const handleReopen = (): void => {
@@ -564,7 +569,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               onOpenExternal={onOpenExternal}
               onJumpTo={jumpTo}
               observeRef={markRead(message.id, message.needsRead)}
-              {...(archived ? {} : { onReply: (text: string) => setReplyTo({ draftKey, quote: text }) })}
+              {...(archived ? {} : { onReply: (target: ReplyTarget) => setReplyTo({ draftKey, ...target }) })}
             />
           ))}
           {shownPending.map((item) => (
@@ -648,7 +653,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         </div>
       ) : (
         <>
-          {quote === null ? null : <ReplyPlate quote={quote} onRemove={() => setReplyTo(null)} />}
+          {reply === null ? null : (
+            <ReplyPlate
+              quote={reply.selected === '' ? reply.excerpt : reply.selected}
+              target={{ label: reply.label, gone: !replyReachable }}
+              onRemove={() => setReplyTo(null)}
+            />
+          )}
           <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
         </>
       )}

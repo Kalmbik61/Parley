@@ -128,6 +128,8 @@ export interface MessageModel {
   sender: { kind: SenderKind; provider: string | null };
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
+  /** Id отправителя (`s-07`, `human`, …): адресат Reply. */
+  fromId: string;
   /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via assistant)» и знак помощника. */
   via: MessageVia | null;
   /** Отправитель — ведущий (`★`). */
@@ -408,6 +410,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
+        fromId: message.from,
         from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : message.from === HUMAN && message.via === 'telegram' ? S.participants.viaTelegram(S.participants.human) : labelOf(map, message.from),
         via: message.via ?? null,
         lead: message.from === lead,

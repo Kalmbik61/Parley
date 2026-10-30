@@ -1119,6 +1119,9 @@ export const S = {
     humanMentionTitle: 'Mentions you',
     /** Цитата ответа над текстом сообщения (Parley 0.3.0), когда сообщения, на которое ответили, нет в этой комнате. */
     replyMissing: 'Original message is not in this room',
+    /** Плашка Reply над полем комнаты: кому уйдёт ответ; автор вышел — письмо уйдёт без адресата. */
+    replyTo: (label: string): string => `Reply to ${label}`,
+    replyAuthorGone: 'left the room, sending as usual',
     /** Кнопка `↓N` над низом ленты (Parley 0.3.0): столько пришло снизу, пока человек читал историю; клик — к низу. */
     newBelow: (n: number): string => `${n} new below`,
     /** Кнопка над лентой: письма комнаты старше хвоста, который прислал хост (`context.messages`, P35). */

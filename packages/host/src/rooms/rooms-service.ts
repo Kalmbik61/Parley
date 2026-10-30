@@ -170,7 +170,7 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
  * должны быть её участниками, пустой `to` — рассылка всем (`recipientsOf`). Комната в архиве — отказ.
  */
 export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
-  const { projectPath, workId, roomId, to, text, kind } = input;
+  const { projectPath, workId, roomId, to, text, kind, replyTo } = input;
   assertWork(projectPath, workId);
   // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLetters` кладёт одну строку.
   return writeLetters(projectPath, workId, (letters, map) => {
@@ -181,16 +181,22 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
         if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
+      // Как у `send_message replyTo` агента: цитировать можно только сообщение этой же комнаты.
+      if (replyTo !== undefined && letters.byId(replyTo)?.roomId !== roomId) {
+        throw bad(`message ${replyTo} is not in room ${roomId}`);
+      }
       return letters.add({
         from: HUMAN,
         to,
         text,
         kind,
         roomId,
+        ...(replyTo === undefined ? {} : { replyTo }),
         ...(options.via === undefined ? {} : { via: options.via }),
       }).id;
     }
 
+    if (replyTo !== undefined) throw bad('replyTo works only together with a room');
     if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
     const target = to[0] as string;
     assertDeliverable(map, target);
