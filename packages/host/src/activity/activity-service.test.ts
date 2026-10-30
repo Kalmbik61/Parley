@@ -2140,6 +2140,93 @@ describe('токены сессии: свежесть и учёт кэша (P36)
     expect(a.get(ref)?.metrics?.usage).toMatchObject({ source: 'native-index', stale: false });
   }, 30_000);
 
+  it('сессия с двумя заменами: три отрезка, итог — сумма, копии форка и их стоимость второй раз не считаются (5.9)', async () => {
+    const T0 = '2026-10-04T12:00:00.000Z';
+    const T1 = '2026-10-04T12:10:00.000Z';
+    const T2 = '2026-10-04T12:20:00.000Z';
+    const reply = (id: string, at: string, input: number, output: number, thread = NATIVE) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: thread,
+        cwd: project,
+        timestamp: at,
+        message: {
+          role: 'assistant',
+          id,
+          model: 'claude-opus-5',
+          usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      });
+    const cost = (total: number) => JSON.stringify({ type: 'cost-state', sessionId: NATIVE, totalCostUSD: total, hasUnknownModelCost: false });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    // Разговор первого агента (другой аккаунт): два ответа в окне первого отрезка.
+    await writeFile(
+      path.join(claudeRoot, '-proj', 'old-thread.jsonl'),
+      `${reply('mm1', '2026-10-04T12:01:00.000Z', 100, 10, 'old-thread')}\n${reply('mm2', '2026-10-04T12:05:00.000Z', 200, 20, 'old-thread')}\n`,
+    );
+    // Форк: копия первого ответа со своим временем, копия второго с переписанным временем (внутри окна), затем новые
+    // ответы второго и третьего отрезков; `cost-state` — накопитель, копия несёт старый итог.
+    await writeFile(
+      path.join(claudeRoot, '-proj', `${NATIVE}.jsonl`),
+      [
+        reply('mm1', '2026-10-04T12:01:00.000Z', 100, 10),
+        cost(3),
+        reply('mm2', '2026-10-04T12:15:00.000Z', 200, 20),
+        reply('mm3', '2026-10-04T12:12:00.000Z', 300, 30),
+        cost(3.5),
+        reply('mm4', '2026-10-04T12:25:00.000Z', 400, 40),
+        cost(4.25),
+      ].join('\n') + '\n',
+    );
+    const ref = await session({ metrics: null });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await waitFor(() => a.get(ref)?.metrics?.model === 'claude-opus-5', 15_000);
+    const resolver = a.usageResolver();
+    const frozen = (input: number, output: number) =>
+      freezeUsage(
+        { input, output, cacheRead: 0, cacheWrite: 0, totalInput: input, source: 'native-index', observedAt: T1, stale: false, completeness: 'complete', coverage: 'conversation' },
+        { binding: 'old-thread', epoch: null, closed: true },
+      );
+    const first = {
+      provider: 'custom-claude-2', model: 'opus', effort: null, providerSessionId: 'old-thread', startedAt: T0, endedAt: T1,
+      reason: 'limit' as const, requestedBy: 'human', carried: 'transcript' as const, usage: frozen(300, 30), costUsd: 1,
+    };
+    // Второй отрезок закрывает `setModel`: срез форка за [T1, T2) без копий и стоимость по накопителю.
+    const base = (await core.readMap(project, ref.workId)).sessions.find((item) => item.id === ref.sessionId)!;
+    const closing = await core.currentSegmentUsage({ ...base, previousAgents: [first] }, resolver, [{ from: T1, to: T2 }]);
+    const secondCost = (await resolver.cost?.(base, { from: T1, to: T2 })) ?? null;
+    expect(closing).toMatchObject({ input: 300, output: 30 });
+    expect(secondCost).toBeCloseTo(0.5);
+    const second = {
+      provider: 'claude', model: 'opus', effort: null, providerSessionId: NATIVE, startedAt: T1, endedAt: T2,
+      reason: 'model' as const, requestedBy: 'human', carried: 'transcript' as const,
+      usage: freezeUsage(closing!, { binding: NATIVE, epoch: null, closed: true }), costUsd: secondCost,
+    };
+    await updateMap(project, ref.workId, (map) => {
+      const found = map.sessions.find((item) => item.id === ref.sessionId)!;
+      found.previousAgents = [first, second];
+      found.model = 'sonnet';
+    });
+    await w.refresh?.();
+    await waitFor(() => (a.get(ref)?.metrics?.usageSegments?.length ?? 0) === 3, 15_000);
+    await waitFor(() => a.get(ref)?.metrics?.usageSegments?.[2]?.costUsd != null, 15_000);
+
+    const metrics = a.get(ref)?.metrics;
+    const segments = metrics?.usageSegments ?? [];
+    expect(segments.map((segment) => [segment.provider, segment.model, segment.from, segment.to])).toEqual([
+      ['custom-claude-2', 'opus', T0, T1],
+      ['claude', 'opus', T1, T2],
+      ['claude', 'sonnet', T2, null],
+    ]);
+    expect(segments.map((segment) => [segment.usage.input, segment.usage.output])).toEqual([[300, 30], [300, 30], [400, 40]]);
+    expect(segments[0]!.costUsd).toBe(1);
+    expect(segments[1]!.costUsd).toBeCloseTo(0.5);
+    expect(segments[2]!.costUsd).toBeCloseTo(0.75);
+    expect(metrics?.usage).toMatchObject({ input: 1000, output: 100, completeness: 'complete' });
+  }, 40_000);
+
   it('Codex: ненаблюдаемая запись в кэш — null, а не измеренный ноль', async () => {
     const ref = await session({ provider: 'codex', metrics: null });
     const dir = path.join(codexRoot, '2026', '10', '04');

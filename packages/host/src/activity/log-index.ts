@@ -18,6 +18,8 @@ import {
   codexSource,
   defaultRoot,
   discoverSession,
+  claudeCostIn,
+  claudeDeltaIdsIn,
   claudeUsageFromTimelines,
   codexUsageFromTimeline,
   createSessionIndexer,
@@ -70,7 +72,11 @@ export interface LogIndex {
    * Claude и порождённые треды Codex режутся теми же окнами. `undefined` — лога нет. Срез кэшируется по окнам, размеру
    * и mtime всех прочитанных файлов: повтор без новых записей файлов не читает.
    */
-  usageIn(session: WorkSession, windows: readonly UsageWindow[]): Promise<UsageSummary | undefined>;
+  usageIn(session: WorkSession, windows: readonly UsageWindow[], excludeIds?: ReadonlySet<string>): Promise<UsageSummary | undefined>;
+  /** Стоимость Claude Code за окно по `cost-state` лога; `undefined` — лога нет, не Claude. */
+  costIn(session: WorkSession, window: UsageWindow): Promise<number | null | undefined>;
+  /** Нативные id ответов лога Claude внутри окон; `undefined` — лога нет, не Claude. */
+  idsIn(session: WorkSession, windows: readonly UsageWindow[]): Promise<Set<string> | undefined>;
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: (change?: LogChange) => void): () => void;
@@ -350,7 +356,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       if (found?.usage === undefined) return undefined;
       return found.provider === 'codex' ? withDescendants(found.usage, descendantsOf(found)) : found.usage;
     },
-    async usageIn(session, windows) {
+    async usageIn(session, windows, excludeIds) {
       const found = indexOf(session);
       if (found === undefined) return undefined;
       if (found.provider === 'codex') {
@@ -368,13 +374,29 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // Корень файла — тот из известных, внутри которого он лежит (у своего провайдера он свой).
       const root = [...claudeRoots].find((known) => found.file.startsWith(known + path.sep)) ?? mainRoot;
       const subagents = await subagentsOf(found.file, root);
-      const key = `claude\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...subagents.map((agent) => agent.file)])}`;
+      const excluded = excludeIds === undefined || excludeIds.size === 0 ? '' : [...excludeIds].sort().join(',');
+      const key = `claude\u0000${JSON.stringify(windows)}\u0000${excluded}\u0000${await signature([found.file, ...subagents.map((agent) => agent.file)])}`;
       const cached = slices.get(key);
       if (cached !== undefined) return remember(key, cached);
       const parent = await timelineOf(found.file, 'claude');
       const children: SubagentTimeline[] = [];
       for (const agent of subagents) children.push({ ...(await timelineOf(agent.file, 'claude')), agentId: agent.agentId });
-      return remember(key, claudeUsageFromTimelines(parent, children, windows));
+      return remember(key, claudeUsageFromTimelines(parent, children, windows, excludeIds));
+    },
+    async costIn(session, window) {
+      const found = indexOf(session);
+      if (found === undefined || found.provider === 'codex') return undefined;
+      return claudeCostIn(await timelineOf(found.file, 'claude'), window);
+    },
+    async idsIn(session, windows) {
+      const found = indexOf(session);
+      if (found === undefined || found.provider === 'codex') return undefined;
+      const root = [...claudeRoots].find((known) => found.file.startsWith(known + path.sep)) ?? mainRoot;
+      const subagents = await subagentsOf(found.file, root);
+      const parent = await timelineOf(found.file, 'claude');
+      const children: SubagentTimeline[] = [];
+      for (const agent of subagents) children.push({ ...(await timelineOf(agent.file, 'claude')), agentId: agent.agentId });
+      return claudeDeltaIdsIn(parent, children, windows);
     },
     log(session) {
       const found = indexOf(session);
