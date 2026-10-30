@@ -79,6 +79,9 @@ export interface AssistantUi {
   voice: AssistantVoiceId | null;
 }
 
+/** Свёртка законченных ходов в Chat (план 2026-10-30): `off` — лента как есть, `replies` — свёрнута работа, `final` — виден только последний ответ. */
+export type ChatFold = 'off' | 'replies' | 'final';
+
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
 
 export interface UiFile {
@@ -102,6 +105,8 @@ export interface UiFile {
    */
   notifications: { needsYou: boolean; finished: boolean; mail: boolean; sound: boolean; finishedSound: boolean };
   diffView: 'inline' | 'split';
+  /** «Finished turns» в Settings → Appearance. */
+  chatFold: ChatFold;
   filesShowIgnored: boolean;
   lastProvider: string | null;
   /**
@@ -136,6 +141,7 @@ export const DEFAULT_UI: UiFile = {
   showDoneWorks: true,
   notifications: { needsYou: true, finished: true, mail: true, sound: true, finishedSound: false },
   diffView: 'split',
+  chatFold: 'replies',
   filesShowIgnored: false,
   lastProvider: null,
   checkForUpdates: true,
@@ -368,6 +374,10 @@ export function normalizeUi(raw: unknown): UiFile {
       source.diffView === 'inline' || source.diffView === 'split'
         ? source.diffView
         : DEFAULT_UI.diffView,
+    chatFold:
+      source.chatFold === 'off' || source.chatFold === 'replies' || source.chatFold === 'final'
+        ? source.chatFold
+        : DEFAULT_UI.chatFold,
     filesShowIgnored:
       typeof source.filesShowIgnored === 'boolean'
         ? source.filesShowIgnored

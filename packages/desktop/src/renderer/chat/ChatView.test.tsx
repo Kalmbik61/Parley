@@ -273,6 +273,19 @@ describe('ChatView — лента', () => {
     expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.fold.completed('1s'));
   });
 
+  it('режим «Finished turns» из настроек доходит до ленты: Expanded показывает вызовы и черту, Fold work — свёртку', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    const call: FeedItem = { id: 'c1', at: AT, kind: 'tool', toolUseId: 'c1', name: 'Read', input: {}, status: 'done' };
+    const items = [prompt('p1', 'hi'), call, text('t1', 'hello there'), turn('u1')];
+    setFeed(items);
+    expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.fold.completed('1s'));
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    act(() => useUiStore.setState({ ui: { ...useUiStore.getState().ui, chatFold: 'off' } }));
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(1);
+    expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.turn('1s'));
+    act(() => useUiStore.setState({ ui: { ...useUiStore.getState().ui, chatFold: 'replies' } }));
+  });
+
   it('у низа — новое прижимается к низу; прокрутили вверх — не дёргаем, «Jump to latest» возвращает', () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'one')]);

@@ -1192,6 +1192,11 @@ export const S = {
     appearanceSystem: 'System',
     appearanceDark: 'Dark',
     appearanceLight: 'Light',
+    /** Свёртка законченных ходов в Chat (план 2026-10-30). */
+    finishedTurns: 'Finished turns',
+    finishedTurnsExpanded: 'Expanded',
+    finishedTurnsFold: 'Fold work',
+    finishedTurnsFinal: 'Final answer only',
     terminalFont: 'Terminal font',
     terminalFontSize: 'Terminal font size (8…32)',
     silenceThreshold: 'Silence threshold, ms',
