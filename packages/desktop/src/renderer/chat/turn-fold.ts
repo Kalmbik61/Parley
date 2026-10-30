@@ -174,7 +174,16 @@ export function foldFeed(items: readonly FeedItem[], mode: FoldMode, openKeys: R
     if (status !== null) rows.push({ kind: 'control', key: `control:${prompt.id}`, status, durationMs });
     if (status === 'completed' && previousClosed) rows.push(...foldBody(body, mode, openKeys));
     else for (const item of body) rows.push(itemRow(item));
-    if (tail !== null) rows.push(itemRow(tail));
+    if (tail !== null) {
+      rows.push(itemRow(tail));
+      // `StopFailure` пишет `error`, а следом `turn` (между ними бывают `notice`): это тот же ход, старая черта не нужна.
+      let next = end;
+      while (items[next]?.kind === 'notice') next += 1;
+      if (items[next]?.kind === 'turn') {
+        for (let notice = end; notice < next; notice += 1) rows.push(itemRow(items[notice]!));
+        end = next + 1;
+      }
+    }
 
     previousClosed = status !== null || quietSlash(prompt, body);
     at = end;

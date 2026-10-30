@@ -41,6 +41,22 @@ describe('foldFeed: границы хода', () => {
     expect(shape(foldFeed([prompt(), tool('Bash'), failure()], 'replies', none))).toEqual(['prompt', 'control:failed', 'tool', 'error']);
   });
 
+  it('error и следующий за ним turn (StopFailure) — один упавший ход, старая черта не выводится', () => {
+    expect(shape(foldFeed([prompt(), tool('Bash'), failure(), turn()], 'replies', none))).toEqual(['prompt', 'control:failed', 'tool', 'error']);
+  });
+
+  it('notice между error и turn остаются, turn поглощается', () => {
+    expect(shape(foldFeed([prompt(), failure(), notice(), turn(), prompt()], 'replies', none))).toEqual(['prompt', 'control:failed', 'error', 'notice', 'prompt']);
+  });
+
+  it('turn после error не поглощается, если между ними новый промпт', () => {
+    expect(shape(foldFeed([prompt(), failure(), prompt(), turn()], 'replies', none))).toEqual(['prompt', 'control:failed', 'error', 'prompt', 'control:completed']);
+  });
+
+  it('слеш-команда без ответа, за которой пришёл turn, — обычный завершённый ход с control', () => {
+    expect(shape(foldFeed([prompt('/model'), notice(), turn(10)], 'replies', none))).toEqual(['prompt', 'control:completed', 'notice']);
+  });
+
   it('идущий ход без control и не сворачивается', () => {
     expect(shape(foldFeed([prompt(), tool('Bash'), text()], 'replies', none))).toEqual(['prompt', 'tool', 'text']);
   });
