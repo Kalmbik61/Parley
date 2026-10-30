@@ -162,7 +162,10 @@ rooms, the engine creates and closes room sessions as part of the accepted plan.
 
 \`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
 plan revisions, unread counts and message cursors. Call it first: session and room ids come
-from here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
+from here. The overview has partial summary rows and a 48 KiB MCP-result ceiling.
+\`collections[field]\` gives total/returned/complete/next. Continue with \`{field: "sessions" | "rooms" | "plans" | "deletedSessions" | "unreadRooms", cursor: next}\`; responses contain \`items\` and \`page.next\`. Keep field/maxBytes unchanged; a stale cursor requires restarting without cursor.
+Narrow with session or room; \`{field: "plan", id: "pl-01", rev: 0}\` returns authorized full current plan JSON as text chunks. Concatenate the text chunks using next; the returned id/rev/status identify the revision.
+A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
 with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02"}\` — that session in detail (its last 20 history entries and first
 20 artifacts); \`{session: "s-02", field: "task" |
 "summary" | "history" | "artifacts"}\`; \`{room: "r-01"}\` (the room in full, with its whole
@@ -269,7 +272,7 @@ A room is a standing circle of conversation for several sessions. Call
 members and an explicit lead included in that list. You become its owner; you join the
 working membership only if explicitly included. Members leave their previous working room.
 A session can own several rooms and work in at most one; moving the owner does not move or
-reassign owned rooms. \`ownerId\` and \`members\` in \`get_map\` show these separate relations.
+reassign owned rooms. \`ownerId\` in the overview and \`members\` in \`get_map {room}\` show these separate relations.
 Ownership does not grant operational lead rights. Outside membership, an owner can read the
 room and send addressed messages only to its live lead, never broadcasts. The lead can reply
 explicitly to the owner with the room parameter. Ordinary member traffic is not automatically

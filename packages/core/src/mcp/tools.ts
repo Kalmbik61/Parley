@@ -44,6 +44,10 @@ import {
   parseCursor,
   seqOf,
   textPage,
+  mapOverview,
+  topologyListPage,
+  TOPOLOGY_FIELDS,
+  type TopologyField,
 } from '../work/context-pages.js';
 import { settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
@@ -388,7 +392,7 @@ export const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: sessions with statuses, rooms, plan revisions, unread counts, message cursors. Call it first. Long texts and history come as pages via the parameters. The provider catalog comes with field "providers", only before create_session. Details: read_guide.',
+      'The compact workspace map: partial summaries within 48 KiB. Call it first. Continue collections with field sessions|rooms|plans|deletedSessions|unreadRooms and page.next; narrow with session or room. Full plan: field plan, id, rev. Long texts and history come as pages via the parameters. The provider catalog comes with field "providers", only before create_session. Details: read_guide.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -396,10 +400,11 @@ export const TOOLS: Tool[] = [
         room: { type: 'string' },
         field: {
           type: 'string',
-          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers'],
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan'],
           description: 'task…contextFrom go with session; messages — room pages (no room: direct ones); message — one by id; archive — other workspaces.',
         },
         id: { type: 'string' },
+        rev: { type: 'integer', minimum: 0, description: 'Exact current plan revision; required with field plan.' },
         kind: { type: 'string', enum: [...MESSAGE_KINDS] },
         cursor: { type: 'string', description: '`next` of the previous page.' },
         maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size in bytes; default 65536.' },
@@ -599,7 +604,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
   if (Object.keys(args).length > 0) return mapPage(context, map, args, signal);
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
   // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
-  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)) };
+  return mapOverview(map, context.sessionId, storeLetterReader(context.projectPath, context.workId));
 }
 
 /**
@@ -655,16 +660,31 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
   const cursorRaw = optionalString(args, 'cursor');
   const letters = storeLetterReader(context.projectPath, context.workId);
   try {
+    if ((TOPOLOGY_FIELDS as readonly (string | undefined)[]).includes(field)) {
+      if (sessionId !== undefined || roomId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined)
+        throw new PageError('invalid-cursor', 'Collection pages accept only field, cursor and maxBytes; use session or room for detail.');
+      return topologyListPage(map, context.sessionId, letters, { field: field as TopologyField, ...(cursorRaw === undefined ? {} : { cursor: cursorRaw }), maxBytes });
+    }
+    if (field === 'plan') {
+      const id = stringArg(args, 'id');
+      const rev = args['rev'];
+      if (!Number.isSafeInteger(rev) || (rev as number) < 0) throw new PageError('unknown-target', 'field plan requires the exact numeric rev from a plan summary.');
+      const plan = map.plans?.find((p) => p.id === id && p.rev === rev);
+      if (plan === undefined) throw new PageError('unknown-target', 'Plan id/rev is no longer current; refresh field plans.');
+      if (context.sessionId === null || !canReadRoom(requireRoom(map, plan.roomId), context.sessionId))
+        throw new PageError('unknown-target', 'Plan detail is not available to this session.');
+      return { field, id: plan.id, rev: plan.rev, status: plan.status, format: 'json', ...textPage(JSON.stringify(plan), cursorRaw, maxBytes) };
+    }
     if (field === undefined) {
       if (sessionId !== undefined) {
         const session = requireSession(map, sessionId);
-        const entry = mapTopology(map, context.sessionId, letters).sessions.find((candidate) => candidate.id === sessionId);
+        const entry = mapTopology({ ...map, sessions: [session], rooms: [], plans: [] }, context.sessionId, letters).sessions[0];
         return { session: { ...entry, artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
       }
       if (roomId !== undefined) {
         const room = requireRoom(map, roomId);
         if (context.sessionId === null || !canReadRoom(room, context.sessionId)) throw new Error(`room ${roomId} is not available to this session`);
-        const topology = mapTopology(map, context.sessionId, letters).rooms.find((candidate) => candidate.id === roomId);
+        const topology = mapTopology({ ...map, sessions: [], rooms: [room], plans: [] }, context.sessionId, letters).rooms[0];
         const { recipe, recipeLeadNotified, ...rest } = room;
         void recipeLeadNotified;
         // Решение целиком (до 10000 знаков) — здесь, а не в общей топологии.

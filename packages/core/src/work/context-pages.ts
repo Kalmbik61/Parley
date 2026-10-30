@@ -829,10 +829,11 @@ const PLAN_LIVE = new Set<RoomPlan['status']>(['proposed', 'active', 'completing
 
 /** Страницы и поля `get_map` одной строкой: ссылка из ответа, а не пересказ правил. */
 export const TOPOLOGY_PAGES =
-  'get_map {field: goal|title} reads the workspace text; {session, field: task|summary|history|artifacts|contextFrom} one session field; {room} one room in full; {field: messages, room?, kind?, cursor?, maxBytes?} message pages (newest first, `next` continues); {field: message, id} one message text; {field: summaries} summaries of all sessions; {field: archive} other workspaces of this project. A cut field names its full size in `cut`.';
+  'Partial overview: collections[field] gives total/returned/complete/next. Continue with {field: sessions|rooms|plans|deletedSessions|unreadRooms, cursor: next}; lists use page.next, at most 48 KiB per MCP result. {session} gives detail; {room} gives authorized full room detail; {field: plan, id, rev} pages full current plan JSON as text (concatenate text chunks). {field: goal|title} reads workspace text; {session, field: task|summary|history|artifacts|contextFrom} reads one session field; {field: messages, room?, kind?, cursor?, maxBytes?} pages messages; {field: message, id} pages one message text; {field: summaries|archive|providers} reads other catalogs. Letter/text pages retain 64 KiB default/256 KiB maximum. A cut field names its full size in cut.';
 
 /**
- * Топология для агента: участники, статусы, комнаты, действующие ревизии планов, счётчики и курсоры. Размер
+ * Расширенная проекция для адресного чтения и прежних потребителей; бюджетный обзор строит `mapOverview`.
+ * Участники, статусы, комнаты, действующие ревизии планов, счётчики и курсоры. Размер
  * зависит от числа сессий и комнат, а не от длины переписки; письма, история и артефакты — страницами. Счётчики и
  * курсоры писем даёт `letters` (спека хранилища 6.2): итоги каналов и непрочитанное вызывающей сессии.
  */
@@ -963,4 +964,140 @@ export function listPage<T, V>(
     ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     ...(options.maxItems === undefined ? {} : { maxItems: options.maxItems }),
   });
+}
+
+/** Бюджет всего результата MCP, включая повторное экранирование content[].text. */
+export const TOPOLOGY_MAX_BYTES = 48 * 1024;
+export function mcpResultBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text: `${JSON.stringify(value, null, 2)}\n` }] }), 'utf8');
+}
+
+export const TOPOLOGY_FIELDS = ['sessions', 'rooms', 'plans', 'deletedSessions', 'unreadRooms'] as const;
+export type TopologyField = typeof TOPOLOGY_FIELDS[number];
+type SummaryRow = Record<string, unknown>;
+
+/** Короткие строки считаются уже с экранированием; вложенные растущие данные в строки обзора не попадают. */
+function summaryText(value: string, max = 96): string {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') <= max) return value;
+  let length = Math.min(value.length, max);
+  for (;;) {
+    let prefix = value.slice(0, length);
+    if (/[\uD800-\uDBFF]$/.test(prefix)) prefix = prefix.slice(0, -1);
+    const text = `${prefix}…`;
+    if (Buffer.byteLength(JSON.stringify(text), 'utf8') <= max) return text;
+    length = Math.floor(length / 2);
+  }
+}
+
+/** Номер id задаёт полный порядок; приоритет вызывающего/его комнаты сохраняется и при продолжении. */
+function topologyRows(map: WorkMap, caller: string | null, letters: LetterReader, field: TopologyField): SummaryRow[] {
+  const order = <T extends { id: string }>(rows: readonly T[], priority: (row: T) => boolean): T[] =>
+    [...rows].sort((a, b) => Number(priority(b)) - Number(priority(a)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
+  if (field === 'sessions') return order(map.sessions, (s) => s.id === caller).map((s) => ({
+    id: s.id, label: summaryText(s.label), provider: summaryText(s.provider), lifecycle: s.lifecycle, result: s.result,
+    status: reportedStatus(s), parent: s.parent, role: s.role == null ? null : summaryText(s.role.name),
+    task: summaryText(s.task), summary: s.summary === null ? null : summaryText(s.summary),
+    contextFromCount: s.contextFrom.length, historyCount: s.history.length, artifactCount: s.artifacts.length,
+    stuck: s.stuck?.kind ?? null, hasWorktree: s.worktree != null,
+  }));
+  if (field === 'rooms') {
+    const stats = letters.channelStats();
+    const unread = caller === null ? {} : letters.unreadCount(caller).byRoom;
+    return order(map.rooms, (r) => caller !== null && r.members.includes(caller)).map((r) => ({
+      id: r.id, title: summaryText(r.title), ownerId: r.ownerId, lead: r.lead ?? null, mode: r.mode ?? 'free',
+      memberCount: r.members.length, ...(isRoomArchived(r) ? { archived: true } : {}),
+      recipe: r.recipe == null ? null : { id: summaryText(r.recipe.id), name: summaryText(r.recipe.name) },
+      proposal: r.proposal === null || r.proposal === undefined ? null : {
+        id: r.proposal.id, rev: r.proposal.rev, kind: r.proposal.kind ?? 'decision',
+        ...(r.proposal.planId === undefined ? {} : { planId: r.proposal.planId, planRev: r.proposal.planRev }),
+      },
+      messages: { ...(stats[r.id] ?? { total: 0, latestId: null }), unreadForYou: unread[r.id] ?? 0 },
+    }));
+  }
+  if (field === 'plans') return order(map.plans ?? [], (p) => map.rooms.some((r) => r.id === p.roomId && caller !== null && r.members.includes(caller))).map((p) => ({
+    id: p.id, rev: p.rev, status: p.status, roomId: p.roomId, mode: p.mode, goal: summaryText(p.goal), itemCount: p.items.length,
+  }));
+  if (field === 'deletedSessions') return [...(map.work.deletedSessions ?? [])].sort().map((id) => ({ id }));
+  const unread = caller === null ? {} : letters.unreadCount(caller).byRoom;
+  return Object.entries(unread).filter(([id]) => id !== '').sort(([a], [b]) => a.localeCompare(b)).map(([id, count]) => ({ id, count }));
+}
+
+interface TopologyQuery { field: TopologyField; cursor?: string; maxBytes?: number }
+
+/** Собственная версия курсора списков: старые before/after и текстовые offset не меняются. */
+function topologySelection(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery) {
+  const maxBytes = Math.min(TOPOLOGY_MAX_BYTES, clampPageBytes(query.maxBytes));
+  const binding = textHash(JSON.stringify([map.work.id, caller, query.field, maxBytes]));
+  // updatedAt недостаточен: два изменения могут иметь одинаковую метку времени. Хеш охватывает и удаление.
+  const rows = topologyRows(map, caller, letters, query.field);
+  const source = query.field === 'sessions' ? map.sessions : query.field === 'rooms' ? map.rooms : query.field === 'plans' ? map.plans : rows;
+  const generation = textHash(JSON.stringify([source, rows]));
+  let offset = 0;
+  if (query.cursor !== undefined) {
+    try {
+      if (!/^topology:[A-Za-z0-9_-]{1,512}$/.test(query.cursor)) throw new Error();
+      const decoded = Buffer.from(query.cursor.slice(9), 'base64url').toString('utf8');
+      if (Buffer.from(decoded).toString('base64url') !== query.cursor.slice(9)) throw new Error();
+      const raw = JSON.parse(decoded) as unknown;
+      if (!Array.isArray(raw) || raw.length !== 3 || raw[0] !== binding || typeof raw[1] !== 'string' || !/^[0-9a-f]{12}$/.test(raw[1]) || !Number.isSafeInteger(raw[2]) || raw[2] <= 0) throw new Error();
+      if (raw[1] !== generation) throw new PageError('stale-cursor', 'stale-cursor: The map changed; restart this collection without a cursor.');
+      offset = raw[2] as number;
+      if (offset >= rows.length) throw new Error();
+    } catch (error) {
+      if (error instanceof PageError) throw error;
+      throw new PageError('invalid-cursor', 'invalid-cursor: Use page.next with the same workspace, caller, field and maxBytes.');
+    }
+  }
+  const next = (at: number) => `topology:${Buffer.from(JSON.stringify([binding, generation, at])).toString('base64url')}`;
+  return { rows, offset, maxBytes, next };
+}
+
+/** Страница новых списков ограничена всем MCP-ответом, а не суммой размеров строк. */
+export function topologyListPage(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery, budget?: number) {
+  const { rows, offset, maxBytes, next } = topologySelection(map, caller, letters, query);
+  const items: SummaryRow[] = [];
+  const result = { field: query.field, items, page: { total: rows.length, returned: 0, complete: false, next: null as string | null, bytes: 0, cut: 0 } };
+  const update = () => {
+    result.page.returned = items.length;
+    result.page.complete = offset + items.length >= rows.length;
+    result.page.next = result.page.complete ? null : next(offset + items.length);
+    result.page.bytes = Buffer.byteLength(JSON.stringify(items), 'utf8');
+  };
+  update();
+  for (const row of rows.slice(offset, offset + PAGE_MAX_ITEMS)) {
+    items.push(row);
+    update();
+    if (mcpResultBytes(result) > (budget ?? maxBytes)) {
+      items.pop();
+      update();
+      if (items.length === 0) throw new PageError('unknown-target', 'A summary row exceeds maxBytes; request a larger page.');
+      break;
+    }
+  }
+  return result;
+}
+
+/** Обзор — пять ограниченных коллекций с точными итогами; полные данные остаются в адресных страницах. */
+export function mapOverview(map: WorkMap, caller: string | null, letters: LetterReader) {
+  const cut: Cut = {};
+  const stats = letters.channelStats();
+  const unread = caller === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(caller);
+  const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field }, 6000)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
+  const result = {
+    sessionId: caller,
+    map: {
+      schemaVersion: 3,
+      work: { id: map.work.id, title: bounded(map.work.title, 256, 'title', cut), goal: bounded(map.work.goal, 256, 'goal', cut), status: map.work.status,
+        createdAt: summaryText(map.work.createdAt), updatedAt: summaryText(map.work.updatedAt), deletedSessions: pages.deletedSessions.items.map((r) => r.id),
+        ...(Object.keys(cut).length === 0 ? {} : { cut }) },
+      sessions: pages.sessions.items, rooms: pages.rooms.items, plans: pages.plans.items,
+      messages: { ...totalsOf(stats), direct: stats[''] ?? { total: 0, latestId: null },
+        unreadForYou: { total: unread.total, direct: unread.byRoom[''] ?? 0, rooms: Object.fromEntries(pages.unreadRooms.items.map((r) => [r.id, r.count])) } },
+      collections: Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, pages[field].page])) as Record<TopologyField, PageInfo>,
+      pages: TOPOLOGY_PAGES,
+      note: 'Partial summary rows. Continue sessions with get_map {field: "sessions", cursor: collections.sessions.next}; use rooms, plans, deletedSessions or unreadRooms for other collections. Omit cursor to restart. Narrow with {session}, {room}, or {field: "plan", id, rev}; long session fields use {session, field}.',
+    },
+  };
+  if (mcpResultBytes(result) > TOPOLOGY_MAX_BYTES) throw new PageError('unknown-target', 'Map metadata exceeds the overview budget; request a collection or target directly.');
+  return result;
 }

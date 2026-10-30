@@ -736,7 +736,7 @@ describe('бриф: бюджет и ссылки вместо обрезания
     }
     const brief = buildBrief(map, 's-02');
     expect(brief.match(/^- s-\d+ — /gm)).toHaveLength(12);
-    expect(brief).toContain('- … and 4 more: get_map');
+    expect(brief).toContain('- … and 4 more: get_map {field: "sessions"}');
   });
 
   it('сверх общего потолка — отказ, а не обрезанный бриф', () => {
