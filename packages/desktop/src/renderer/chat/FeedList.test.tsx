@@ -351,6 +351,13 @@ describe('FeedList — свёртка законченного хода', () => 
     expect(screen.getByTestId('chat-turn').tagName).toBe('DIV');
   });
 
+  it('раскрытие группы у низа не прилипает к новому дну: заголовок остаётся на месте, «Jump to latest» возвращает вниз', () => {
+    render(feed(finished()));
+    expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Read files, ran commands' }));
+    expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
+  });
+
   it('режим off — лента как раньше, черта «Turn finished»', () => {
     render(<ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}><FeedList items={finished()} queued={[]} note={null} fold="off" /></ChatEnvContext.Provider>);
     expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);

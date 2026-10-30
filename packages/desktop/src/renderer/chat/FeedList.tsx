@@ -218,7 +218,16 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
     ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
   ];
+  // «У низа» — по последнему `scroll`: после роста ленты по DOM уже не понять, где стоял человек.
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
   const toggleGroups = useCallback((keys: readonly string[], open: boolean): void => {
+    // Раскрытая группа добавляет строки ниже заголовка: у низа лента прилипла бы к новому дну и унесла заголовок с
+    // фокусом за экран — человек, раскрывший группу, остаётся на месте (под кнопкой фокус, виртуализатор её не снимет).
+    if (!open) {
+      atBottomRef.current = false;
+      setAtBottom(false);
+    }
     setExpanded((was) => {
       const next = new Set(was);
       for (const key of keys) {
@@ -253,9 +262,6 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     paddingEnd: 12,
   });
 
-  // «У низа» — по последнему `scroll`: после роста ленты по DOM уже не понять, где стоял человек.
-  const atBottomRef = useRef(true);
-  const [atBottom, setAtBottom] = useState(true);
   /** Ближайший `scroll` вызван нашей же прокруткой к низу — его не учитываем. */
   const ownScrollRef = useRef(false);
   const onScroll = useCallback((): void => {
