@@ -48,6 +48,7 @@ export interface ToolLaunch {
   skillNavigator?: boolean;
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  agentRevision?: string;
   toolProfile?: ToolProfile;
 }
 
@@ -57,6 +58,7 @@ export function launchOf(context: McpContext): ToolLaunch {
     ...(context.skillNavigator === undefined ? {} : { skillNavigator: context.skillNavigator }),
     ...(context.skillListReduced === undefined ? {} : { skillListReduced: context.skillListReduced }),
     ...(context.nativeContextRevision === undefined ? {} : { nativeContextRevision: context.nativeContextRevision }),
+    ...(context.agentRevision === undefined ? {} : { agentRevision: context.agentRevision }),
     ...(context.toolProfile === undefined ? {} : { toolProfile: context.toolProfile }),
   };
 }

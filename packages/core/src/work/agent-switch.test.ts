@@ -44,7 +44,7 @@ describe('applyAgentSwitch', () => {
   it('resets the conversation fields and leaves identity, rooms, plan and worktree alone', () => {
     const map = fixture();
     const before = structuredClone(map);
-    const next = applyAgentSwitch(map, 's-01', { provider: 'codex', model: 'gpt-6.1-sol' }, binding());
+    const next = applyAgentSwitch(map, 's-01', { provider: 'codex', model: 'gpt-6.1-sol' }, binding(), 'rev-1');
     const session = next.sessions[0]!;
     expect(session.provider).toBe('codex');
     expect(session.model).toBe('gpt-6.1-sol');
@@ -55,6 +55,7 @@ describe('applyAgentSwitch', () => {
     expect(session.stuck).toBeNull();
     expect(session).not.toHaveProperty('codexThreadBinding');
     expect(session.previousAgents).toEqual([binding()]);
+    expect(session.agentRevision).toBe('rev-1');
     for (const key of ['id', 'parent', 'role', 'worktree', 'agentPlan'] as const) {
       expect(session[key]).toEqual(before.sessions[0]![key]);
     }
@@ -71,7 +72,7 @@ describe('applyAgentSwitch', () => {
     let map: WorkMap = fixture();
     for (let n = 0; n < PREVIOUS_AGENTS_MAX + 1; n += 1) {
       map = applyAgentSwitch(map, 's-01', { provider: n % 2 === 0 ? 'codex' : 'claude' },
-        { ...binding(n), startedAt: `s${n}`, endedAt: `e${n}`, usage: usage(n + 1), costUsd: n === 0 ? null : 1 });
+        { ...binding(n), startedAt: `s${n}`, endedAt: `e${n}`, usage: usage(n + 1), costUsd: n === 0 ? null : 1 }, `rev-${n}`);
     }
     const list = map.sessions[0]!.previousAgents!;
     expect(list).toHaveLength(PREVIOUS_AGENTS_MAX);
@@ -81,7 +82,7 @@ describe('applyAgentSwitch', () => {
   });
 
   it('throws for an unknown session', () => {
-    expect(() => applyAgentSwitch(fixture(), 's-99', { provider: 'codex' }, binding())).toThrow('not found');
+    expect(() => applyAgentSwitch(fixture(), 's-99', { provider: 'codex' }, binding(), 'rev-1')).toThrow('not found');
   });
 });
 

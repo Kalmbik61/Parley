@@ -54,6 +54,11 @@ export interface McpConfigParams {
   /** Родной список скиллов этого запуска сокращён: сервер объявляет это в описании `find_skill`. Только `true` попадает в окружение. */
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  /**
+   * Ревизия агента сессии (`WorkSession.agentRevision`, спека передачи сессии 6.1): есть только у переведённой на другого
+   * агента. По ней сервер узнаёт, что его процесс остался от прежнего агента, и отказывает в записи.
+   */
+  agentRevision?: string;
   /** Профиль инструментов этого запуска: `PARLEY_TOOL_PROFILE` (и прежняя `HARNAS_TOOL_PROFILE`) в окружении сервера. */
   toolProfile?: ToolProfile;
   /**
@@ -107,6 +112,7 @@ export function mcpConfig({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
+  agentRevision,
   toolProfile,
   agent,
 }: McpConfigParams): McpConfigFile {
@@ -123,6 +129,7 @@ export function mcpConfig({
             ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
             ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
             ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+            ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
             ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
           }),
           ...agentEnv(agent),
@@ -169,7 +176,7 @@ const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_
  * агента — тоже только свой: хост, поднятый из сессии агента, унаследовал бы её адрес и токен.
  */
 const SESSION_VARIABLES = new Set([
-  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '', TOOL_PROFILE: '' })),
+  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '', AGENT_REVISION: '', TOOL_PROFILE: '' })),
   ...Object.keys(bothEnv({ AGENT_URL: '', AGENT_TOKEN: '' })),
 ]);
 
@@ -181,9 +188,10 @@ function codexServerEnv({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
+  agentRevision,
   toolProfile,
   agent,
-}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'toolProfile' | 'agent'>): Array<[string, string]> {
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'toolProfile' | 'agent'>): Array<[string, string]> {
   const inherited = Object.entries(env ?? {})
     .filter(
       (entry): entry is [string, string] =>
@@ -197,6 +205,7 @@ function codexServerEnv({
     ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
     ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
     ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+    ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
     ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
   })), ...Object.entries(agentEnv(agent)), ...inherited];
 }
@@ -247,7 +256,7 @@ export async function writeMcpConfig(
   sessionId: string,
   command?: string,
   channel = false,
-  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agent'> = {},
+  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'agent'> = {},
 ): Promise<string> {
   const paths = workPaths(projectPath, workId);
   const file = path.join(paths.mcp, `${sessionId}.json`);

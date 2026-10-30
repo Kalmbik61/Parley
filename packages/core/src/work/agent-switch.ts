@@ -52,10 +52,11 @@ function mergeOldest(list: AgentBinding[]): AgentBinding[] {
 
 /**
  * Карта с заменённым агентом сессии: `binding` дописан в `previousAgents`, провайдер и выбор модели — цели,
- * разговор у провайдера, процесс и застревание сброшены. Исходная карта не меняется. `switching` не трогает:
- * его снимает оркестратор после запуска.
+ * разговор у провайдера, процесс и застревание сброшены, `agentRevision` — новая ревизия агента (ограда записей
+ * прежнего MCP-процесса, спека 6.1; ревизию даёт оркестратор, на каждую замену своя). Исходная карта не меняется.
+ * `switching` не трогает: его снимает оркестратор после запуска.
  */
-export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentTarget, binding: AgentBinding): WorkMap {
+export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentTarget, binding: AgentBinding, agentRevision: string): WorkMap {
   const current = map.sessions.find((session) => session.id === sessionId);
   if (current === undefined) throw new Error(`session ${sessionId} not found`);
   let previous = [...(current.previousAgents ?? []), binding];
@@ -68,6 +69,7 @@ export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentT
     startedAtProcess: null,
     stuck: null,
     previousAgents: previous,
+    agentRevision,
   };
   delete next.codexThreadBinding;
   // Явный выбор прежнего провайдера цели не подходит; без выбора роль подставит умолчание при запуске.

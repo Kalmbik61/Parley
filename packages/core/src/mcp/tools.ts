@@ -112,9 +112,12 @@ const SETTLE_SLACK_MS = 20;
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
  * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
- * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает.
+ * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает. Идёт замена агента (спека
+ * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
+ * `stuck` снят, но работа у неё не кончилась.
  */
-function finishedState(session: WorkSession): string | null {
+export function finishedState(session: WorkSession): string | null {
+  if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
@@ -1731,6 +1734,26 @@ export interface ToolRunner {
  * вызова и ответ агенту — текстом, а ошибки результатом с `isError`. Браузерных инструментов и `create_session` здесь
  * нет: им нужен канал агента к окну, и они остаются за сервером (`createParleyServer`).
  */
+/**
+ * Инструменты, которые ничего не пишут от имени сессии: их ограда агента (спека передачи сессии 6.1) не касается.
+ * `check_inbox` и `wait_for` сюда не входят — они помечают письма прочитанными.
+ */
+const AGENT_FENCE_FREE = new Set(['get_map', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
+
+export const STALE_AGENT = 'This session now continues with another agent: this process belongs to the previous one. Stop working and do not call Parley tools again.';
+
+/**
+ * Ограда записей прежнего агента (спека передачи сессии 6.1): у сессии, переведённой на другого агента, в карте
+ * `agentRevision`, и процесс с другой ревизией (или без неё — запущен до замены) — осиротевший сервер прежнего агента.
+ * Сессия без ревизии в карте не переводилась: ограды нет. Нет сессии в карте — решают сами инструменты.
+ */
+export async function staleAgent(context: McpContext): Promise<boolean> {
+  if (context.sessionId === null) return false;
+  const map = await readMap(context.projectPath, context.workId);
+  const current = map.sessions.find((session) => session.id === context.sessionId)?.agentRevision ?? null;
+  return current !== null && current !== context.agentRevision;
+}
+
 export function createToolRunner(context: McpContext): ToolRunner {
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
@@ -1749,6 +1772,7 @@ export function createToolRunner(context: McpContext): ToolRunner {
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBinding.rawBound || !threadBinding.proofBound) await bindCodexThread(context, meta, threadBinding);
       try {
+        if (!AGENT_FENCE_FREE.has(name) && await staleAgent(context)) return { content: [{ type: 'text', text: STALE_AGENT }], isError: true };
         const result = name === 'find_skill' ? await navigator!.find(args)
           : await dispatch(context, name, args, signal);
         // Гид — готовый текст: заворачивать его в JSON-строку с экранированием

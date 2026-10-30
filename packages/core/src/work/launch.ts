@@ -225,6 +225,8 @@ async function plan(
   // Immutable for this launch and its MCP child, including resume.
   const { config: launchConfig } = await loadConfig();
   const nativeContextRevision = randomUUID();
+  // Ревизия агента — из карты, не на каждый запуск: меняет её только замена агента (спека передачи сессии 6.1).
+  const agentRevision = session.agentRevision ?? undefined;
   let entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
   // Режим одобрений пишущих ролей Codex: решение хоста (проба версии) важнее настройки; и политика, и хуки идут от него.
@@ -357,6 +359,7 @@ async function plan(
     skillNavigator,
     skillListReduced: skillList !== undefined,
     nativeContextRevision,
+    ...(agentRevision === undefined ? {} : { agentRevision }),
     // Короткий набор инструментов — только у Codex: Claude читает файл `--mcp-config` (он ниже, без профиля).
     ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
     env: process.env,
@@ -372,6 +375,7 @@ async function plan(
           skillNavigator,
           skillListReduced: skillList !== undefined,
           nativeContextRevision,
+          ...(agentRevision === undefined ? {} : { agentRevision }),
           ...(options.agent === undefined ? {} : { agent: options.agent }),
         })
       : null;
@@ -591,6 +595,7 @@ async function plan(
     env: {
       ...entry.runner.env,
       ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
+        ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
       ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),

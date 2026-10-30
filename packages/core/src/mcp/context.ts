@@ -23,6 +23,11 @@ export interface McpContext {
   /** Родной список скиллов этого запуска сокращён (снимок запуска, как и `skillNavigator`). */
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  /**
+   * Ревизия агента, с которой запущен процесс (`PARLEY_AGENT_REVISION`; спека передачи сессии 6.1). Не совпала с
+   * `WorkSession.agentRevision` в карте — процесс остался от прежнего агента, и пишущие инструменты ему отказывают.
+   */
+  agentRevision?: string;
   /** Профиль инструментов запуска (снимок окружения): `short` прячет три инструмента памяти; нет — полный набор. */
   toolProfile?: ToolProfile;
   /** Internal isolated adapter fixture; never protocol/environment input. */
@@ -147,6 +152,7 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
     ...(envValue(env, 'SKILL_LIST_REDUCED') === '1' ? { skillListReduced: true } : {}),
     ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
+    ...(envValue(env, 'AGENT_REVISION') === undefined ? {} : { agentRevision: envValue(env, 'AGENT_REVISION')! }),
     // Только точное `short`: чужое значение — не наша настройка, и сервер объявляет полный набор.
     ...(envValue(env, 'TOOL_PROFILE') === 'short' ? { toolProfile: 'short' as const } : {}),
     ...(agent === undefined ? {} : { agent }),

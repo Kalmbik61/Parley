@@ -3192,3 +3192,30 @@ it('refuses autonomous Claude roles that require native permission delivery', as
   const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
   await expect(planLaunch(project, workId, session, { roleCatalog })).rejects.toThrow('confinement-unavailable');
 });
+
+describe('ревизия агента в окружении запуска (спека передачи сессии 6.1)', () => {
+  it('переведённая сессия несёт ревизию из карты в окружение процесса и сервера MCP: Claude и Codex', async () => {
+    for (const provider of ['claude', 'codex'] as const) {
+      const { workId, sessionId } = await pending(provider);
+      await updateMap(project, workId, (map) => {
+        map.sessions.find((session) => session.id === sessionId)!.agentRevision = 'rev-switch';
+      });
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.env.PARLEY_AGENT_REVISION).toBe('rev-switch');
+      expect(plan.env.HARNAS_AGENT_REVISION).toBe('rev-switch');
+      const env =
+        provider === 'claude'
+          ? JSON.parse(await readFile(plan.args[plan.args.indexOf('--mcp-config') + 1] as string, 'utf8')).mcpServers.parley.env
+          : (parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> }).env;
+      expect(env.PARLEY_AGENT_REVISION).toBe('rev-switch');
+    }
+  });
+
+  it('сессия без замены — без переменной', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_REVISION');
+    const config = JSON.parse(await readFile(plan.args[plan.args.indexOf('--mcp-config') + 1] as string, 'utf8'));
+    expect(config.mcpServers.parley.env).not.toHaveProperty('PARLEY_AGENT_REVISION');
+  });
+});
