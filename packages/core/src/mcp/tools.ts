@@ -1109,6 +1109,10 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
+    // Ограда агента ещё раз — в той же записи, где письма помечаются: `wait_for`, начатый до замены агента, иначе забрал бы
+    // почту нового (спека передачи сессии 6.1). Отказ откатывает запись: письма остаются непрочитанными.
+    const revision = current.sessions.find((session) => session.id === sessionId)?.agentRevision ?? null;
+    if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
     const inbox = letters.unreadFor(sessionId);
     const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);

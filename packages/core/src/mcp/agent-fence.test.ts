@@ -94,6 +94,21 @@ describe('ограда агента', () => {
     expect(unread.map((message) => message.text)).toEqual(['новому агенту']);
   });
 
+  it('wait_for, начатый до замены агента, не забирает письмо, пришедшее после неё', async () => {
+    const old = runnerWith();
+    const waiting = old.call('wait_for', { target: 'inbox', timeoutSec: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await setRevision('rev-new');
+    await updateMap(project, workId, (_map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: 'после замены' });
+    });
+    const result = await waiting;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(STALE_AGENT);
+    const unread = readStoredMap(project, workId).messages.filter((message) => message.readBy['s-01'] === undefined);
+    expect(unread.map((message) => message.text)).toEqual(['после замены']);
+  });
+
   it('чтение не огорожено', async () => {
     await setRevision('rev-new');
     const result = await runnerWith('rev-old').call('get_map', {});
