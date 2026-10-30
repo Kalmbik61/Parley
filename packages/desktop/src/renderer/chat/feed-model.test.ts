@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { FeedItem } from '@parley/core';
 // Разбор журнала — из исходников ленты core (корневой `@parley/core` под jsdom не грузится, см. items.test.tsx).
 import { feedFromTranscript } from '../../../../core/src/feed/index.js';
-import { currentModel, firstLine, imagesExtraPx, runningAgents, toolHeadline, turnActive } from './feed-model.js';
+import { currentModel, firstLine, imagesExtraPx, runningAgents, switchDividers, toolHeadline, turnActive } from './feed-model.js';
 
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../core/src/feed/fixtures');
 
@@ -166,5 +166,36 @@ describe('imagesExtraPx — на сколько вызов с картинкам
   it('ряд из рамок 120 px с зазором 8: по 128 px на строку, в узком окне по две миниатюры в строке', () => {
     // 1–2 картинки — одна строка, 3–4 — две, 5–6 — три: в окне 800×500 ряд из шести так и переносится.
     expect([1, 2, 3, 4, 5, 6].map((count) => imagesExtraPx(withImages(count)))).toEqual([128, 128, 256, 256, 384, 384]);
+  });
+});
+
+describe('switchDividers', () => {
+  const binding = (provider: string, reason: 'limit' | 'sign-in' | 'provider-missing' | 'manual' | 'model', requestedBy = 'human') => ({
+    provider, model: null, effort: null, providerSessionId: null, startedAt: null,
+    endedAt: new Date(2026, 9, 30, 9, 5).toISOString(), reason, requestedBy, carried: 'handover' as const,
+  });
+  const label = (id: string): string => id.toUpperCase();
+
+  it('тексты причин; новый провайдер — следующая запись, у последней — текущий', () => {
+    const texts = switchDividers(
+      { provider: 'c', model: 'opus', previousAgents: [binding('a', 'limit'), binding('b', 'sign-in'), binding('x', 'provider-missing'), binding('y', 'model')] },
+      label,
+    ).map((item) => item.text);
+    expect(texts).toEqual([
+      'Continued on B · 09:05 (A: usage limit)',
+      'Continued on X · 09:05 (B: sign-in needed)',
+      'Continued on Y · 09:05 (X: provider removed)',
+      'Continued on C · opus · 09:05 (Y: model changed)',
+    ]);
+  });
+
+  it('manual: человек — «you», сессия — @sNN', () => {
+    const texts = switchDividers({ provider: 'c', model: null, previousAgents: [binding('a', 'manual'), binding('b', 'manual', 's-12')] }, label).map((item) => item.text);
+    expect(texts[0]).toContain('(A: switched by you)');
+    expect(texts[1]).toContain('(B: switched by @s12)');
+  });
+
+  it('сессию не переводили — разделителей нет', () => {
+    expect(switchDividers({ provider: 'c', model: null }, label)).toEqual([]);
   });
 });

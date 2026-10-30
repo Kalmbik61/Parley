@@ -26,6 +26,8 @@ export interface WindowNote {
   body: string;
   /** Что открывает `Open` — та же цель, что у клика по системному уведомлению. */
   target: FocusTarget;
+  /** Вторая кнопка рядом с `Open` (например, «Continue on…»): действие над сессией, а не переход. */
+  action?: { label: string; run: () => void };
 }
 
 export interface ShownWindowNote extends WindowNote {

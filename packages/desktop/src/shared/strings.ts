@@ -420,6 +420,8 @@ export const S = {
     },
     /** Хвост тела уведомления для сессии в комнате (спека застрявших 7.1): `· room Backend`. */
     inRoom: (room: string): string => `· room ${room}`,
+    /** Кнопка карточки уведомления о лимите: открывает диалог замены провайдера для сессии. */
+    continueOn: 'Continue on…',
     /** Текст строки доставки под сообщением, когда письмо не забрано из-за застрявшей сессии (`MailWait` `stuck`). */
     mail: {
       approval: (word: string): string => `waiting for your ${word}`,
@@ -537,6 +539,8 @@ export const S = {
     startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
     /** Тултип и `aria-label` мигающего значка письма в строке сессии: агенту пришли письма, он их ещё не прочёл. */
     agentUnread: 'Has new messages',
+    /** Значок у сессии, чьего провайдера нет в списке провайдеров окна. */
+    providerRemoved: 'Provider removed',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
@@ -1715,6 +1719,25 @@ export const S = {
     waitingBanner: {
       text: 'Claude Code is waiting in the terminal',
       open: 'Open terminal',
+    },
+    /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
+    switchBanner: {
+      limit: (provider: string, until: string | null): string => (until === null ? `Out of ${provider} usage` : `Out of ${provider} usage until ${until}`),
+      signIn: (provider: string): string => `${provider} needs a sign-in`,
+      removed: (provider: string): string => `${provider} was removed from Parley`,
+      switching: (to: string): string => `Switching to ${to}…`,
+      action: 'Continue on another provider…',
+    },
+    /** Разделитель ленты в момент замены агента: `Continued on Codex · gpt-5 · 14:05 (Claude: usage limit)`. */
+    switchDivider: {
+      text: (to: string, model: string | null, time: string, from: string, reason: string): string =>
+        `Continued on ${[to, model, time].filter((part) => part !== null && part !== '').join(' · ')} (${from}: ${reason})`,
+      limit: 'usage limit',
+      signIn: 'sign-in needed',
+      providerMissing: 'provider removed',
+      manual: (requestedBy: string): string => `switched by ${requestedBy}`,
+      model: 'model changed',
+      you: 'you',
     },
     stop: 'Stop',
     stopTitle: 'Interrupt the turn (Esc in the terminal)',

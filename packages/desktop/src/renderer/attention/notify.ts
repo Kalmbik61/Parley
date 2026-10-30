@@ -60,7 +60,13 @@ import {
 import { pendingAskOf, type PendingAsk } from './ask-summary.js';
 import { windowChime } from './chime.js';
 import { visibleSessions } from './seen.js';
+import { openSwitchAgent } from '../store/switch-agent.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
+
+/** Закрытым и сессиям движка autonomous замену не предлагают (спека 2026-10-30, 6.7). */
+function closedOrAutonomous(session: { lifecycle: string; workspace?: unknown }): boolean {
+  return session.lifecycle === 'closed' || (session.workspace ?? null) !== null;
+}
 
 export interface NotifyDeps {
   notify(note: AppNote): void;
@@ -96,6 +102,11 @@ export interface NotifyDeps {
   chime(): void;
   /** Имя провайдера для человека (аккаунты — по метке хоста): причина `need` и заголовок уведомления о лимите. */
   providerName(id: string): string;
+  /**
+   * Умеет ли хост заменить агента сессии (`sessions.switchAgent`). Нет поля или `false` — карточки с «Continue on…» нет.
+   * Кнопка живёт на карточке в окне: у системного баннера действий нет.
+   */
+  canContinueOn?(): boolean;
 }
 
 /** Пауза перед повторным запросом карточки: хук с ней может прийти чуть позже события активности. */
@@ -440,18 +451,26 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       const latest = group
         .flatMap((item) => (item.need.resetsAt !== null && !Number.isNaN(Date.parse(item.need.resetsAt)) ? [item.need.resetsAt] : []))
         .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
-      banner(
-        {
-          title: S.need.limitTitle(deps.providerName(session.provider)),
-          body: S.need.limitBody(
-            group.map((item) => sessionTag(item.id)),
-            latest === undefined ? null : localClock(latest, now),
-          ),
-          tag: `limit:${session.provider}`,
-          target,
-        },
-        true,
-      );
+      const limitNote = {
+        title: S.need.limitTitle(deps.providerName(session.provider)),
+        body: S.need.limitBody(
+          group.map((item) => sessionTag(item.id)),
+          latest === undefined ? null : localClock(latest, now),
+        ),
+        tag: `limit:${session.provider}`,
+        target,
+      };
+      // Окно в фокусе и замена возможна — карточка в окне с «Continue on…» для этой сессии; иначе баннер, как раньше.
+      if (deps.windowActive() && deps.canContinueOn?.() === true && closedOrAutonomous(session) === false) {
+        deps.showInWindow({
+          ...limitNote,
+          title: clampNoteText(limitNote.title),
+          body: clampNoteText(limitNote.body),
+          action: { label: S.need.continueOn, run: () => openSwitchAgent(ref) },
+        });
+        return;
+      }
+      banner(limitNote, true);
       return;
     }
     let more = 0;
@@ -690,7 +709,7 @@ export function isWindowActive(): boolean {
  */
 export function wireAttentionNotifications(
   bridge: ParleyBridge,
-  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'islandAudible' | 'chime' | 'providerName'>,
+  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn' | 'islandAudible' | 'chime' | 'providerName' | 'canContinueOn'>,
 ): () => void {
   const notifier = createAttentionNotifier({
     ...deps,
@@ -700,6 +719,7 @@ export function wireAttentionNotifications(
     // Аккаунты (`custom-claude-2`) называются меткой хоста из списка провайдеров; пока списка нет — id.
     providerName: (id) => providerName(id, useProvidersStore.getState().providers.find((provider) => provider.id === id)?.label ?? ''),
     windowActive: isWindowActive,
+    canContinueOn: () => hostMethods(useHostStore.getState().status).has('sessions.switchAgent'),
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
     islandOn: () => useUiStore.getState().ui.island.enabled && bridge.app.islandActive(),

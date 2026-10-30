@@ -3,7 +3,8 @@
  * назвать вызов инструмента одной строкой. Ни React, ни моста — только элементы ленты.
  */
 
-import type { FeedAgent, FeedItem } from '@parley/core';
+import type { FeedAgent, FeedItem, WorkSession } from '@parley/core';
+import { S } from '../../shared/strings.js';
 
 /**
  * Идёт ли ход — правило общее с хостом (сев закрывает ход, оборванный в журнале), поэтому живёт в core
@@ -79,4 +80,48 @@ export function imagesExtraPx(item: FeedItem): number {
 export function firstLine(text: string): string | null {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '');
   return line === undefined ? null : line.trim();
+}
+
+/** Разделитель ленты в момент замены агента сессии (спека 2026-10-30, 5.7). */
+export interface SwitchDivider {
+  id: string;
+  /** Момент замены — `endedAt` записи `previousAgents`. */
+  at: string;
+  text: string;
+}
+
+function clock(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * По разделителю на запись `previousAgents`. Новый провайдер записи i — провайдер записи i+1, у последней — текущий
+ * провайдер сессии; `label` даёт подпись провайдера по id.
+ */
+export function switchDividers(
+  session: Pick<WorkSession, 'provider' | 'model' | 'previousAgents'>,
+  label: (providerId: string) => string,
+): SwitchDivider[] {
+  const previous = session.previousAgents ?? [];
+  return previous.map((binding, index) => {
+    const next = previous[index + 1];
+    const to = next === undefined ? { provider: session.provider, model: session.model ?? null } : next;
+    const reason =
+      binding.reason === 'limit'
+        ? S.chat.switchDivider.limit
+        : binding.reason === 'sign-in'
+          ? S.chat.switchDivider.signIn
+          : binding.reason === 'provider-missing'
+            ? S.chat.switchDivider.providerMissing
+            : binding.reason === 'model'
+              ? S.chat.switchDivider.model
+              : S.chat.switchDivider.manual(binding.requestedBy === 'human' ? S.chat.switchDivider.you : `@${binding.requestedBy.replace('-', '')}`);
+    return {
+      id: `switch:${index}:${binding.endedAt}`,
+      at: binding.endedAt,
+      text: S.chat.switchDivider.text(label(to.provider), to.model, clock(binding.endedAt), label(binding.provider), reason),
+    };
+  });
 }

@@ -27,8 +27,11 @@ import { cn } from '../lib/cn.js';
 import { useNow } from '../lib/use-now.js';
 import { sessionRowLabel, workTitleText } from '../lib/participant.js';
 import { relativeTimeAgo } from '../lib/relative-time.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
+import { useProviderMissing } from '../store/provider-missing.js';
 import { useProvidersStore } from '../store/providers.js';
+import { openSwitchAgent } from '../store/switch-agent.js';
 import { useWorksStore } from '../store/works.js';
 import { Button } from '../ui/button.js';
 import { Card, CardKicker, CardTitle } from '../ui/card.js';
@@ -50,10 +53,17 @@ export function NotRunningCard({ sessionRef, onResume }: NotRunningCardProps): J
   const session = entry?.map.sessions.find((item) => item.id === sessionRef.sessionId);
   const live = useActivityStore((state) => state.byRef[refKey(sessionRef)]);
   const providerLabel = useProvidersStore((state) => state.providers.find((item) => item.id === session?.provider)?.label ?? '');
+  const providerMissing = useProviderMissing(session?.provider ?? '');
+  const canSwitch = useHostSupports('sessions.switchAgent');
   const now = useNow(NOW_PERIOD_MS);
   if (entry === undefined || session === undefined) return null;
 
   const pending = session.lifecycle === 'pending';
+  // Замена возможна, как у баннера чата: не у закрытой и не у сессии движка autonomous (спека 2026-10-30, 6.7).
+  const canContinue = canSwitch && session.lifecycle !== 'closed' && (session.workspace ?? null) === null;
+  // Провайдера нет в списке: Resume упадёт, главная кнопка — замена. Лимит или вход у спящей — замена рядом с Resume.
+  const removed = canContinue && providerMissing;
+  const stuckSwitch = canContinue && (session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in');
   const kicker = pending ? S.states.pending : session.lifecycle === 'closed' ? S.states.closed : S.states.asleep;
   const title = `${sessionRowLabel(session.id, session.label)} · ${workTitleText(entry.map.work.title)}`;
   // Последняя реплика агента — его резюме; нет резюме (сессия не отчиталась) — то, что ей поручили.
@@ -71,7 +81,7 @@ export function NotRunningCard({ sessionRef, onResume }: NotRunningCardProps): J
   return (
     <Card data-testid="terminal-not-running" className="mx-6 mt-6 max-w-[520px] shrink-0 gap-3 p-6 text-foreground">
       <CardKicker data-kicker className={pending ? undefined : 'text-neutral-700'}>
-        {kicker}
+        {removed ? S.chat.switchBanner.removed(session.provider) : kicker}
       </CardKicker>
       <CardTitle className="line-clamp-3 break-words text-xl">{title}</CardTitle>
       {body === '' ? null : (
@@ -80,11 +90,18 @@ export function NotRunningCard({ sessionRef, onResume }: NotRunningCardProps): J
         </p>
       )}
       <div className={cn('break-words text-[11px] leading-4 text-neutral-700', pending && 'font-mono')}>{meta}</div>
-      {canResume(session) ? (
+      {removed || canResume(session) || stuckSwitch ? (
         <div className="mt-1.5 flex gap-2">
-          <Button type="button" className="shrink-0" onClick={onResume}>
-            {S.sidebar.sessionMenu.resume}
-          </Button>
+          {removed ? null : canResume(session) ? (
+            <Button type="button" className="shrink-0" onClick={onResume}>
+              {S.sidebar.sessionMenu.resume}
+            </Button>
+          ) : null}
+          {removed || stuckSwitch ? (
+            <Button type="button" variant={removed ? 'default' : 'outline'} className="shrink-0" data-testid="not-running-switch" onClick={() => openSwitchAgent(sessionRef)}>
+              {S.chat.switchBanner.action}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </Card>
