@@ -50,6 +50,13 @@ function mergeOldest(list: AgentBinding[]): AgentBinding[] {
   return [merged, ...rest];
 }
 
+/** Прежние агенты с дописанным отрезком: предел `PREVIOUS_AGENTS_MAX` держится слиянием двух самых старых. */
+export function appendAgentBinding(previous: readonly AgentBinding[] | undefined, binding: AgentBinding): AgentBinding[] {
+  let list = [...(previous ?? []), binding];
+  while (list.length > PREVIOUS_AGENTS_MAX) list = mergeOldest(list);
+  return list;
+}
+
 /**
  * Карта с заменённым агентом сессии: `binding` дописан в `previousAgents`, провайдер и выбор модели — цели,
  * разговор у провайдера, процесс и застревание сброшены, `agentRevision` — новая ревизия агента (ограда записей
@@ -59,8 +66,7 @@ function mergeOldest(list: AgentBinding[]): AgentBinding[] {
 export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentTarget, binding: AgentBinding, agentRevision: string): WorkMap {
   const current = map.sessions.find((session) => session.id === sessionId);
   if (current === undefined) throw new Error(`session ${sessionId} not found`);
-  let previous = [...(current.previousAgents ?? []), binding];
-  while (previous.length > PREVIOUS_AGENTS_MAX) previous = mergeOldest(previous);
+  const previous = appendAgentBinding(current.previousAgents, binding);
   const next: WorkSession = {
     ...current,
     provider: target.provider,

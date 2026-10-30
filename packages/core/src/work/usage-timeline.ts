@@ -28,8 +28,22 @@ export interface UsageTimeline {
   observations: readonly UsageObservation[];
   /** Только у Claude. */
   sidechain?: ClaudeSidechain;
+  /** Только у Claude: накопитель стоимости (`cost-state`) в порядке файла. */
+  costs?: readonly CostPoint[];
+  /** Метка последней записи с временем: от неё берётся время следующего `cost-state`. */
+  lastStamp?: string | null;
   /** Последняя строка принята без `\n`: перевод строки, пришедший позже, не начинает новую пустую. */
   unterminated?: boolean;
+}
+
+/**
+ * Точка накопителя стоимости Claude Code: запись `cost-state` (`totalCostUSD` растёт через resume и форк). Времени у
+ * записи нет — берётся метка ближайшей предыдущей записи файла, у которой она есть. `unknown` — `hasUnknownModelCost`.
+ */
+export interface CostPoint {
+  at: string;
+  total: number;
+  unknown: boolean;
 }
 
 /** Подагент для среза: шкала его файла и id агента (по нему решается склейка с sidechain родителя). */
@@ -63,11 +77,18 @@ export async function extendUsageTimeline(
 ): Promise<UsageTimeline> {
   const prior = previous !== null && previous.family === family ? previous : null;
   // Черновик заводится только когда есть что менять; прежняя шкала не мутируется никогда.
-  type Draft = { observations: UsageObservation[]; sidechain: ClaudeSidechain | undefined };
+  type Draft = {
+    observations: UsageObservation[];
+    sidechain: ClaudeSidechain | undefined;
+    costs: CostPoint[];
+    lastStamp: string | null;
+  };
   let draft: Draft | null = null;
   const fresh = (): Draft => ({
     observations: [],
     sidechain: family === 'claude' ? { agents: new Set<string | null>(), unidentified: false } : undefined,
+    costs: [],
+    lastStamp: null,
   });
   const copyOfPrior = (): Draft => ({
     observations: [...(prior?.observations ?? [])],
@@ -75,6 +96,8 @@ export async function extendUsageTimeline(
       family === 'claude'
         ? { agents: new Set(prior?.sidechain?.agents), unidentified: prior?.sidechain?.unidentified ?? false }
         : undefined,
+    costs: [...(prior?.costs ?? [])],
+    lastStamp: prior?.lastStamp ?? null,
   });
 
   const cursor: TailCursor | null =
@@ -96,6 +119,15 @@ export async function extendUsageTimeline(
     record: (raw, lineNo) => {
       draft ??= copyOfPrior();
       if (family === 'claude') {
+        const stamp = typeof raw['timestamp'] === 'string' ? raw['timestamp'] : null;
+        if (raw['type'] === 'cost-state') {
+          const total = raw['totalCostUSD'];
+          if (draft.lastStamp !== null && typeof total === 'number' && Number.isFinite(total)) {
+            draft.costs.push({ at: draft.lastStamp, total, unknown: raw['hasUnknownModelCost'] === true });
+          }
+          return;
+        }
+        if (stamp !== null) draft.lastStamp = stamp;
         const record = adapter.toSessionRecord(raw);
         const observation = claudeUsageObservation(record, file, lineNo);
         if (observation !== null) {
@@ -113,6 +145,8 @@ export async function extendUsageTimeline(
   const kept = draft as Draft | null;
   const observations = kept?.observations ?? prior?.observations ?? [];
   const sidechain = kept === null ? prior?.sidechain : kept.sidechain;
+  const costs = kept === null ? prior?.costs : kept.costs;
+  const lastStamp = kept === null ? prior?.lastStamp : kept.lastStamp;
   const { cursor: next } = result;
   return {
     file,
@@ -123,6 +157,8 @@ export async function extendUsageTimeline(
     lineNo: next.lineNo,
     observations,
     ...(sidechain !== undefined ? { sidechain } : {}),
+    ...(family === 'claude' && costs !== undefined ? { costs } : {}),
+    ...(family === 'claude' && lastStamp !== undefined ? { lastStamp } : {}),
     ...(next.unterminated ? { unterminated: true } : {}),
   };
 }
@@ -132,8 +168,9 @@ export function claudeUsageFromTimelines(
   parent: UsageTimeline,
   subagents: readonly SubagentTimeline[],
   windows: readonly UsageWindow[],
+  excludeIds?: ReadonlySet<string>,
 ): UsageSummary {
-  const ledger = createUsageLedger({ windows });
+  const ledger = createUsageLedger({ windows, ...(excludeIds === undefined ? {} : { excludeIds }) });
   replayClaudeUsage(
     ledger,
     { observations: parent.observations, sidechain: parent.sidechain ?? { agents: new Set(), unidentified: false } },
@@ -147,4 +184,46 @@ export function codexUsageFromTimeline(timeline: UsageTimeline, windows: readonl
   const ledger = createUsageLedger({ windows });
   for (const observation of timeline.observations) ledger.observe(observation);
   return ledger.summary();
+}
+
+/**
+ * Нативные id ответов (`msg:…`) лога Claude внутри окон: по ним следующий отрезок отсекает копии прежних ответов,
+ * которые форк несёт в своём логе (спека передачи 5.9). Записи без нативного id (`line:…`) не в счёт.
+ */
+export function claudeDeltaIdsIn(
+  parent: UsageTimeline,
+  subagents: readonly SubagentTimeline[],
+  windows: readonly UsageWindow[],
+): Set<string> {
+  const from = windows.map((window) => ({ from: Date.parse(window.from), to: window.to === null ? Number.POSITIVE_INFINITY : Date.parse(window.to) }));
+  const ids = new Set<string>();
+  for (const timeline of [parent, ...subagents]) {
+    for (const observation of timeline.observations) {
+      if (observation.kind !== 'delta' || !observation.id.startsWith('msg:') || observation.at === null) continue;
+      const t = Date.parse(observation.at);
+      if (from.some((span) => t >= span.from && t < span.to)) ids.add(observation.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Стоимость Claude Code за окно `[from, to)`: последнее значение накопителя `cost-state` до конца окна минус последнее
+ * до начала. Нет записи до начала: отрезок с начала разговора (в логе нет наблюдений раньше окна) — база ноль, иначе
+ * `null`; `hasUnknownModelCost` на любом краю или нет записи в окне — `null`. Своих цен нет.
+ */
+export function claudeCostIn(timeline: UsageTimeline, window: UsageWindow): number | null {
+  const from = Date.parse(window.from);
+  const to = window.to === null ? Number.POSITIVE_INFINITY : Date.parse(window.to);
+  const costs = timeline.costs ?? [];
+  const lastBefore = (limit: number, inclusive: boolean): CostPoint | undefined =>
+    [...costs].reverse().find((point) => (inclusive ? Date.parse(point.at) <= limit : Date.parse(point.at) < limit));
+  const end = lastBefore(to, true);
+  if (end === undefined || end.unknown) return null;
+  const base = lastBefore(from, false);
+  if (base === undefined) {
+    const earlier = timeline.observations.some((observation) => observation.at !== null && Date.parse(observation.at) < from);
+    return earlier ? null : end.total;
+  }
+  return base.unknown ? null : Math.max(0, end.total - base.total);
 }

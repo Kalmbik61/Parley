@@ -16,7 +16,9 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   addSystemMessage,
+  appendAgentBinding,
   applyAgentSwitch,
+  currentSegmentUsage,
   attemptKindFor,
   collectHandover,
   freezeUsage,
@@ -1341,6 +1343,7 @@ export function createSessionsService(
   async function setChoice(
     ref: SessionRef,
     choice: { model?: string | null; effort?: string | null },
+    closed?: AgentBinding,
   ): Promise<void> {
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1351,6 +1354,8 @@ export function createSessionsService(
       // вернулось бы умолчание роли.
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
+      // Смена модели закрывает отрезок расхода (5.9): тот же разговор, новая модель.
+      if (closed !== undefined) session.previousAgents = appendAgentBinding(session.previousAgents, closed);
     });
   }
 
@@ -1404,7 +1409,26 @@ export function createSessionsService(
           throw busyError('The input field has unsent text; send or clear it first');
         }
       }
-      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) });
+      // Разговор уже был — прежняя модель закрывает отрезок расхода (5.9); без разговора считать нечего.
+      let closed: AgentBinding | undefined;
+      if (session.providerSessionId !== null) {
+        const endedAt = new Date().toISOString();
+        const usage = await segmentUsage(session, endedAt);
+        closed = {
+          provider: session.provider,
+          model: session.model ?? null,
+          effort: session.effort ?? null,
+          providerSessionId: session.providerSessionId,
+          startedAt: session.previousAgents?.at(-1)?.endedAt ?? session.startedAt,
+          endedAt,
+          reason: 'model',
+          requestedBy: 'human',
+          carried: 'transcript',
+          ...(usage === undefined ? {} : { usage }),
+          costUsd: await segmentCost(session, endedAt),
+        };
+      }
+      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) }, closed);
       if (!live) return { model: next, effort: effort ?? null, restarted: false };
       await stop(ref);
       await launch(ref, 'resume');
@@ -1527,7 +1551,12 @@ export function createSessionsService(
     try {
       const resolver = typeof activity.usageResolver === 'function' ? activity.usageResolver() : undefined;
       if (resolver !== undefined) {
-        usage = from === null ? resolver.whole(session) : await resolver.slice(session, [{ from, to: endedAt }]);
+        usage =
+          (session.previousAgents?.length ?? 0) > 0 && from !== null
+            ? await currentSegmentUsage(session, resolver, [{ from, to: endedAt }])
+            : from === null
+              ? resolver.whole(session)
+              : await resolver.slice(session, [{ from, to: endedAt }]);
       }
     } catch (error) {
       host.log.warn('расход отрезка не посчитался', { sessionId: session.id, error: String(error) });
@@ -1535,6 +1564,19 @@ export function createSessionsService(
     const frozen = session.metrics?.usage;
     if (usage === null && frozen?.binding === binding && (session.previousAgents?.length ?? 0) === 0) usage = frozen;
     return usage === null ? undefined : freezeUsage(usage, { binding, epoch: session.startedAtProcess, closed: true });
+  }
+
+  /** Стоимость закрываемого отрезка по `cost-state` лога (5.9); `null` — лог её не сообщает. */
+  async function segmentCost(session: WorkSession, endedAt: string): Promise<number | null> {
+    const from = session.previousAgents?.at(-1)?.endedAt ?? session.startedAt;
+    if (session.providerSessionId === null || from === null) return null;
+    try {
+      const resolver = typeof activity.usageResolver === 'function' ? activity.usageResolver() : undefined;
+      return (await resolver?.cost?.(session, { from, to: endedAt })) ?? null;
+    } catch (error) {
+      host.log.warn('стоимость отрезка не посчиталась', { sessionId: session.id, error: String(error) });
+      return null;
+    }
   }
 
   /** Почему прежний агент сменён: из застревания, отсутствия в реестре или по просьбе. */
@@ -1668,6 +1710,7 @@ export function createSessionsService(
         requestedBy: request.by ?? 'human',
         carried: carry,
         ...(usage === undefined ? {} : { usage }),
+        costUsd: await segmentCost(stopped, endedAt),
       };
       await updateMap(ref.projectPath, ref.workId, (current, letters) => {
         const fresh = current.sessions.find((candidate) => candidate.id === ref.sessionId);
