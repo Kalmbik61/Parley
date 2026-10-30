@@ -16,6 +16,8 @@ import { emptyLayout, groups, LIMITS, openTab, splitGroup } from '../layout/tree
 import { useReviewStore, bindReviewToLayout } from '../review/store.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
+import { useSwitchAgentStore } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession } from '../test-utils/work-fixtures.js';
@@ -336,5 +338,54 @@ describe('SessionRowMenu — Resume', () => {
       'Couldn\'t resume S02 Bruno: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.',
     );
     warn.mockRestore();
+  });
+});
+
+describe('SessionRowMenu — Continue on another provider…', () => {
+  const hostWith = (methods: string[]): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods } });
+  };
+  afterEach(() => {
+    useHostStore.setState({ status: { state: 'connecting' } });
+    useProvidersStore.setState({ providers: [], loaded: false });
+  });
+
+  it('есть у незакрытой сессии при sessions.switchAgent у хоста; без подсветки, пока всё в порядке', () => {
+    hostWith(['sessions.switchAgent']);
+    renderMenu(makeSession('s-01', 'plan'));
+    const item = screen.getByText('Continue on another provider…');
+    expect(item.getAttribute('data-highlight')).toBeNull();
+    fireEvent.click(item);
+    expect(useSwitchAgentStore.getState().ref).toEqual({ projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' });
+    useSwitchAgentStore.setState({ ref: null });
+  });
+
+  it('нет у старого хоста, закрытой сессии и сессии движка autonomous', () => {
+    renderMenu(makeSession('s-01', 'plan'));
+    expect(screen.queryByText('Continue on another provider…')).toBeNull();
+    cleanup();
+    hostWith(['sessions.switchAgent']);
+    renderMenu(makeSession('s-01', 'plan', { lifecycle: 'closed' }));
+    expect(screen.queryByText('Continue on another provider…')).toBeNull();
+    cleanup();
+    renderMenu(makeSession('s-01', 'plan', { workspace: { kind: 'clone', path: '/tmp/ws' } } as never));
+    expect(screen.queryByText('Continue on another provider…')).toBeNull();
+  });
+
+  it('подсвечен при stuck limit/sign-in и при провайдере, которого нет в списке; approval не подсвечивает', () => {
+    hostWith(['sessions.switchAgent']);
+    const need = (kind: string) => ({ stuck: { kind, since: '2026-10-30T10:00:00.000Z', detail: null, resetsAt: null, window: null, account: null } }) as never;
+    renderMenu(makeSession('s-01', 'plan', need('limit')));
+    expect(screen.getByText('Continue on another provider…').getAttribute('data-highlight')).toBe('true');
+    cleanup();
+    renderMenu(makeSession('s-01', 'plan', need('sign-in')));
+    expect(screen.getByText('Continue on another provider…').getAttribute('data-highlight')).toBe('true');
+    cleanup();
+    renderMenu(makeSession('s-01', 'plan', need('approval')));
+    expect(screen.getByText('Continue on another provider…').getAttribute('data-highlight')).toBeNull();
+    cleanup();
+    useProvidersStore.setState({ providers: [{ id: 'codex' }] as never, loaded: true });
+    renderMenu(makeSession('s-01', 'plan'));
+    expect(screen.getByText('Continue on another provider…').getAttribute('data-highlight')).toBe('true');
   });
 });
