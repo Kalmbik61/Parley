@@ -128,6 +128,7 @@ import { createSkillInstaller } from './agent-skills.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
 import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
+import { copyTranscript, discardCopy, isClaudeAccount, removeForkCopy, type CarriedTranscript } from './transcript-carry.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -181,6 +182,10 @@ export type CreatedSession = SessionRef & { held?: 'folder-trust' };
  */
 const START_WRITE_ATTEMPTS = 3;
 
+/** Сколько ждать файла форка, чтобы убрать копию транскрипта в папке цели, и как часто смотреть. */
+const FORK_WAIT_MS = 10 * 60_000;
+const FORK_POLL_MS = 1000;
+
 /** Сколько исходов замен агента помнит хост для повторов того же `requestId`. */
 const SWITCH_RESULTS_KEPT = 100;
 
@@ -198,16 +203,25 @@ export function switchLine(sessionId: string, target: string, model: string | nu
   return `${sessionMention(sessionId)} continues on ${target}${model === null ? '' : ` · ${model}`} (${previous}: ${SWITCH_REASON[reason]})`;
 }
 
+/** Почему прежний агент сменён — для писем и первого хода форка. */
+function switchWhy(previous: string, reason: AgentBinding['reason']): string {
+  return reason === 'limit'
+    ? `${previous} hit its usage limit`
+    : reason === 'sign-in'
+      ? `${previous} was signed out`
+      : reason === 'provider-missing'
+        ? `${previous} was removed from Parley`
+        : `${previous} was replaced`;
+}
+
+/** Первый ход форка (спека 5.4.1): разговор тот же, аккаунт другой — что проверить, прежде чем продолжать. */
+export function transcriptNote(sessionId: string, target: string, previous: string, reason: AgentBinding['reason']): string {
+  return `You continue this conversation as ${sessionMention(sessionId)} on ${target} after ${switchWhy(previous, reason)}. Same id, rooms, children, worktree and mail. Time has passed: check get_map and your inbox before redoing anything.`;
+}
+
 /** Письмо `parley` ведущему и ждущим ответа (спека 6.5): кто сменился и что с ждавшими письмами. */
 export function switchLetter(sessionId: string, target: string, model: string | null, previous: string, reason: AgentBinding['reason']): string {
-  const why =
-    reason === 'limit'
-      ? `${previous} hit its usage limit`
-      : reason === 'sign-in'
-        ? `${previous} was signed out`
-        : reason === 'provider-missing'
-          ? `${previous} was removed from Parley`
-          : `${previous} was replaced`;
+  const why = switchWhy(previous, reason);
   const mention = sessionMention(sessionId);
   return `${mention} continues on ${target}${model === null ? '' : ` (${model})`} after ${why}. Its rooms, children and mail stay with it; messages that waited are being delivered.`;
 }
@@ -224,6 +238,8 @@ export interface LaunchChoice {
   prompt?: string;
   /** Пакет передачи при замене агента: первым сообщением `launch` после брифа. */
   handover?: string;
+  /** Продолжение разговора форком: `resume` поднимает разговор с этим id как `--fork-session` (спека 5.4.1). */
+  forkFrom?: string;
   model?: string | null;
   effort?: EffortLevel | null;
 }
@@ -273,7 +289,8 @@ export interface SessionsService {
   switchAgent(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>>;
   /**
    * На старте хоста: `switching` в карте пережил прежний хост (замены живут только в его памяти) — снимается. Сессия
-   * спит; если прежний агент уже заменён, следующий запуск поднимет нового с пакетом передачи.
+   * спит; если прежний агент уже заменён, следующий запуск поднимет нового с пакетом передачи. Заодно убирает копии
+   * транскрипта в папке цели, оставшиеся после форка (спека 5.4.1).
    */
   clearStaleSwitches(): Promise<void>;
 }
@@ -771,7 +788,7 @@ export function createSessionsService(
       }
       // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
       // самой замены, и у Resume после отказа, и после согласия на папку Codex.
-      if (options.handover === undefined && mode !== 'new' && awaitingAgent(session)) {
+      if (options.handover === undefined && options.forkFrom === undefined && mode !== 'new' && awaitingAgent(session)) {
         mode = 'launch';
         options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
       }
@@ -912,6 +929,7 @@ export function createSessionsService(
         ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.handover === undefined ? {} : { handover: options.handover }),
+        ...(options.forkFrom === undefined ? {} : { forkFrom: options.forkFrom }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       }));
@@ -1590,12 +1608,13 @@ export function createSessionsService(
     };
     const blockers = switchBlockers(map, ref.sessionId, target);
     if (blockers.length > 0) throw new HostError('conflict', blockers.join('; '));
-    if (carry === 'transcript') {
-      throw new HostError('bad_request', 'Continuing the conversation is not available yet: use the handover summary');
-    }
     // Готовность цели — до любых изменений: отказ не трогает прежнего агента.
     const entry = await readyProvider(request.provider);
     const registry = await loadProviders();
+    // Продолжение разговора — только между аккаунтами Anthropic (5.4): иначе отказ, тоже до любых изменений.
+    if (carry === 'transcript' && !(isClaudeAccount(session.provider, registry[session.provider]) && isClaudeAccount(entry.id, entry))) {
+      throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
+    }
     // От этой проверки до `launching.add` — ни одного `await`: иначе подъём письмом успел бы занять ключ, а `finally`
     // замены снял бы чужой.
     if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
@@ -1656,6 +1675,16 @@ export function createSessionsService(
       } catch (error) {
         host.log.warn('пакет передачи не собрался — новый агент стартует по брифу', { ref, error: String(error) });
       }
+      // Перенос разговора (5.4.1): копия транскрипта в папку цели — до замены в карте, пока id прежнего разговора на
+      // месте. Сбой или транскрипта нет — откат к пакету передачи, сессия не теряется.
+      let transcript: CarriedTranscript | null = null;
+      if (carry === 'transcript' && stopped.providerSessionId !== null) {
+        try {
+          transcript = await copyTranscript(stopped.provider, request.provider, stopped.providerSessionId);
+        } catch (error) {
+          host.log.warn('транскрипт не скопировался — замена с пакетом передачи', { ref, error: String(error) });
+        }
+      }
       const usage = await segmentUsage(stopped, endedAt);
       const binding: AgentBinding = {
         provider: stopped.provider,
@@ -1666,7 +1695,7 @@ export function createSessionsService(
         endedAt,
         reason,
         requestedBy: request.by ?? 'human',
-        carried: carry,
+        carried: transcript === null ? 'handover' : 'transcript',
         ...(usage === undefined ? {} : { usage }),
       };
       await updateMap(ref.projectPath, ref.workId, (current, letters) => {
@@ -1679,9 +1708,29 @@ export function createSessionsService(
       applied = true;
       pendingHandovers.set(key, handover);
 
+      const by = request.by ?? 'human';
       let outcome: LaunchOutcome;
       try {
-        outcome = await launchHeld(ref, 'launch', { by: request.by ?? 'human', handover }, false);
+        if (transcript === null) outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+        else {
+          try {
+            const prompt = transcriptNote(ref.sessionId, targetLabel, previousLabel, reason);
+            outcome = await launchHeld(ref, 'resume', { by, forkFrom: transcript.from, prompt }, false);
+            watchFork(ref, stopped.provider, request.provider, transcript.from);
+          } catch (error) {
+            // Форк не поднялся: копия убрана, новый агент стартует с пакетом передачи (5.4.1), и ответ это называет.
+            host.log.warn('форк разговора не поднялся — запуск с пакетом передачи', { ref, error: String(error) });
+            await discardCopy(transcript).catch((cleanup: unknown) => {
+              host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
+            });
+            transcript = null;
+            await updateMap(ref.projectPath, ref.workId, (current) => {
+              const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+              if (last !== undefined) last.carried = 'handover';
+            });
+            outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+          }
+        }
       } catch (error) {
         // Шаг 9: карта уже с новым провайдером, сессия спит; Resume повторит запуск, обратная замена — тот же метод.
         await dropSwitch(ref, request.requestId);
@@ -1694,7 +1743,7 @@ export function createSessionsService(
         throw error;
       }
       // `held`: запуск Codex ждёт согласия на папку; `switching` остаётся до решения, снимет его запуск после согласия.
-      return { outcome, carried: carry };
+      return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
     } catch (error) {
       if (!applied) {
         pendingHandovers.delete(key);
@@ -1706,13 +1755,28 @@ export function createSessionsService(
     }
   }
 
+  /**
+   * Копия транскрипта в папке цели удаляется, как только рядом появился файл форка (5.4.1, п. 1): Claude Code пишет
+   * его с первым ходом. Ждём в фоне до `FORK_WAIT_MS`; не дождались или хост перезапущен — копию уберёт
+   * `clearStaleSwitches` на следующем старте.
+   */
+  function watchFork(ref: SessionRef, previous: string, target: string, from: string): void {
+    const deadline = Date.now() + FORK_WAIT_MS;
+    const check = async (): Promise<void> => {
+      const fork = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)
+        ?.providerSessionId;
+      if (fork === null || fork === undefined || fork === from) return;
+      if (await removeForkCopy(previous, target, from, fork)) return;
+      if (Date.now() < deadline) setTimeout(() => void check().catch(() => {}), FORK_POLL_MS).unref?.();
+    };
+    setTimeout(() => void check().catch((error: unknown) => {
+      host.log.warn('копия транскрипта после форка не убралась', { ref, error: String(error) });
+    }), FORK_POLL_MS).unref?.();
+  }
+
   /** Запас лимита аккаунта: 100 минус наибольшая занятость окон; лимитов нет — ниже любого известного. */
   const headroom = (limits: ProviderLimits | null): number =>
     limits === null ? -1 : 100 - Math.max(limits.fiveHour?.usedPercent ?? 0, limits.week?.usedPercent ?? 0);
-
-  /** Аккаунт Anthropic: глобальный Claude Code или аккаунт подписки Claude (спека 5.4, перенос транскрипта). */
-  const claudeAccount = (entry: ProviderEntry | undefined): boolean =>
-    entry !== undefined && (entry.id === 'claude' || entry.account?.kind === 'claude-account');
 
   async function switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>> {
     const map = await readMap(ref.projectPath, ref.workId);
@@ -1752,7 +1816,7 @@ export function createSessionsService(
         available: needs === null,
         needs,
         limits: limitsOf(entry.id),
-        transcript: claudeAccount(currentEntry) && claudeAccount(entry),
+        transcript: isClaudeAccount(session.provider, currentEntry) && isClaudeAccount(entry.id, entry),
       });
     }
 
@@ -1809,6 +1873,14 @@ export function createSessionsService(
     }
     for (const entry of works.snapshot().entries) {
       for (const session of entry.map.sessions) {
+        // Копия транскрипта, которую прежний хост не успел убрать после форка (5.4.1): форк уже есть — копия лишняя.
+        const last = session.previousAgents?.at(-1);
+        if (last?.carried === 'transcript' && last.providerSessionId !== null && session.providerSessionId !== null &&
+          session.providerSessionId !== last.providerSessionId) {
+          await removeForkCopy(last.provider, session.provider, last.providerSessionId, session.providerSessionId).catch((error: unknown) => {
+            host.log.warn('копия транскрипта после форка не убралась', { sessionId: session.id, error: String(error) });
+          });
+        }
         if (session.switching === null || session.switching === undefined) continue;
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
         if (switches.has(refKey(ref))) continue;

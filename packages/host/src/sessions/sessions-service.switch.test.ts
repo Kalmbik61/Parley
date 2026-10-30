@@ -4,7 +4,9 @@
  * идёт обычным событием `exit`, как у настоящего менеджера.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,8 +31,10 @@ import type { HostContext } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
 import type { WorksService } from '../works/works-service.js';
+import { createPtyManager } from '../pty/pty-manager.js';
+import { fileURLToPath } from 'node:url';
 import { createHeldLaunchActions } from '../consents/held-launches.js';
-import { createSessionsService, switchLetter, switchLine } from './sessions-service.js';
+import { createSessionsService, switchLetter, switchLine, transcriptNote } from './sessions-service.js';
 import type { SessionsFeedOptions } from './sessions-service.js';
 
 const accountRecord: CustomProviderRecord = { kind: 'claude-account', id: 'custom-claude-2', label: '', link: false };
@@ -292,11 +296,11 @@ describe('switchAgent: замена агента на месте (спека 5.3
     expect((await sessionOf(second)).previousAgents?.[0]?.reason).toBe('limit');
   });
 
-  it('carry: transcript — понятный отказ «not available yet», ничего не тронуто', async () => {
+  it('carry: transcript не между аккаунтами Claude — отказ до любых изменений', async () => {
     const r = rig();
     const { ref } = await liveClaude(r);
     const before = await sessionOf(ref);
-    await expect(r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).rejects.toThrow(/not available yet/);
+    await expect(r.sessions.switchAgent(ref, request('codex', { carry: 'transcript' }))).rejects.toThrow(/only between Claude accounts/);
     expect(await sessionOf(ref)).toEqual(before);
     expect(r.pty.get(ref)).toBeDefined();
   });
@@ -518,5 +522,170 @@ describe('switchOptions (спека 5.2, 6.10)', () => {
     expect((await r.sessions.switchOptions(ref)).current).toEqual({ provider: 'custom-claude-2', available: false, reason: 'provider-missing' });
     await r.sessions.close(ref);
     expect((await r.sessions.switchOptions(ref)).blockers).toContain('session is closed');
+  });
+});
+
+describe('carry: transcript — продолжение разговора на другом аккаунте Claude (спека 5.4, 5.4.1)', () => {
+  const slug = '-tmp-parley-switch-project';
+  const sourceRoot = () => path.join(home, 'claude-projects');
+  const targetRoot = () => path.join(customProviderDir('custom-claude-2', home), 'projects');
+  const sha = async (file: string) => createHash('sha256').update(await readFile(file)).digest('hex');
+
+  /** Транскрипт прежнего агента в корне глобального Claude Code: `<slug>/<id>.jsonl` и каталог `<id>/`. */
+  async function transcriptOf(id: string): Promise<string> {
+    const file = path.join(sourceRoot(), slug, `${id}.jsonl`);
+    await mkdir(path.join(sourceRoot(), slug, id, 'subagents'), { recursive: true });
+    await writeFile(file, '{"type":"user","sessionId":"' + id + '"}\n');
+    await writeFile(path.join(sourceRoot(), slug, id, 'subagents', 'agent-1.jsonl'), '{}\n');
+    return file;
+  }
+
+  it('копия в папку цели, --resume <id> --fork-session --session-id <новый>; копия уходит после файла форка, источник цел', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    const old = (await sessionOf(ref)).providerSessionId!;
+    const source = await transcriptOf(old);
+    const before = await sha(source);
+
+    expect(await r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).toEqual({
+      outcome: 'started',
+      carried: 'transcript',
+    });
+    const after = await sessionOf(ref);
+    const fork = after.providerSessionId!;
+    expect(fork).not.toBe(old);
+    expect(after).toMatchObject({ provider: 'custom-claude-2', lifecycle: 'active', switching: null });
+    expect(after.previousAgents?.[0]).toMatchObject({ providerSessionId: old, carried: 'transcript' });
+    const { launch } = launches.at(-1)!;
+    const at = launch.args.indexOf('--resume');
+    expect(launch.args.slice(at, at + 5)).toEqual(['--resume', old, '--fork-session', '--session-id', fork]);
+    expect(launch.env.CLAUDE_CONFIG_DIR).toBe(customProviderDir('custom-claude-2', home));
+    expect(launch.args.at(-1)).toContain(transcriptNote(ref.sessionId, 'Claude Code 2', 'Claude Code', 'manual'));
+    // Пакет передачи всё равно собран (на случай отката), но первым ходом форка не уходит.
+    expect(launch.args.join('\n')).not.toContain('HANDOVER-PACKAGE');
+    const copy = path.join(targetRoot(), slug, `${old}.jsonl`);
+    expect(existsSync(copy)).toBe(true);
+    expect(existsSync(path.join(targetRoot(), slug, old, 'subagents', 'agent-1.jsonl'))).toBe(true);
+
+    // Claude Code записал форк с первым ходом: копия в папке цели больше не нужна.
+    await writeFile(path.join(targetRoot(), slug, `${fork}.jsonl`), '{}\n');
+    const started = Date.now();
+    while (existsSync(copy) && Date.now() - started < 5000) await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(existsSync(copy)).toBe(false);
+    expect(existsSync(path.join(targetRoot(), slug, `${fork}.jsonl`))).toBe(true);
+    expect(await sha(source)).toBe(before);
+    expect(existsSync(path.join(sourceRoot(), slug, old, 'subagents', 'agent-1.jsonl'))).toBe(true);
+  });
+
+  it('фейковый CLI (настоящий процесс): argv форка и папка аккаунта цели доходят до процесса', async () => {
+    const stub = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
+    process.env.PARLEY_CLAUDE_BIN = stub;
+    const argsFile = path.join(home, 'args.json');
+    process.env.STUB_ARGS_FILE = argsFile;
+    const host = {
+      version: '0.0.0', startedAt: new Date().toISOString(), paths: { dir: '', socket: '', token: '', pid: '', log: '' },
+      log: { info() {}, warn() {}, error() {} }, clients: () => [], liveSessions: () => 0, broadcast() {},
+      onShutdown() {}, shutdown: async () => {}, busy() {},
+    } as unknown as HostContext;
+    const pty = createPtyManager(host);
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity(), {
+      providerVersions: { ready: Promise.resolve(), get: () => '2.1.314', fresh: async () => '2.1.314' },
+      signedIn: () => true,
+      spawnLimits: async () => ({ argMax: 1_000_000, pointerSize: 8 }),
+      takeover: { handover: async () => ({ text: 'HANDOVER-PACKAGE', tailFile: null }) },
+    });
+    const waitArgs = async (): Promise<{ argv: string[]; env: Record<string, string | null> }> => {
+      const started = Date.now();
+      while (!existsSync(argsFile)) {
+        if (Date.now() - started > 10_000) throw new Error('stub did not start');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return JSON.parse(await readFile(argsFile, 'utf8'));
+    };
+    try {
+      const ref = await sessions.create({ projectPath: project, workId, provider: 'claude', label: '', task: 'x', parent: null });
+      await waitArgs();
+      const old = (await sessionOf(ref)).providerSessionId!;
+      await transcriptOf(old);
+      await rm(argsFile);
+
+      expect(await sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).toMatchObject({ carried: 'transcript' });
+      const { argv } = await waitArgs();
+      const fork = (await sessionOf(ref)).providerSessionId!;
+      const at = argv.indexOf('--resume');
+      expect(argv.slice(at, at + 5)).toEqual(['--resume', old, '--fork-session', '--session-id', fork]);
+      expect(pty.get(ref)?.pid).toEqual(expect.any(Number));
+    } finally {
+      await sessions.stopAll();
+    }
+  }, 30_000);
+
+  it('транскрипта прежнего агента нет — откат к пакету передачи, ответ называет это', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    expect(await r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).toEqual({
+      outcome: 'started',
+      carried: 'handover',
+    });
+    const { launch } = launches.at(-1)!;
+    expect(launch.args).not.toContain('--fork-session');
+    expect(launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
+    expect((await sessionOf(ref)).previousAgents?.[0]?.carried).toBe('handover');
+  });
+
+  it('форк не поднялся — копия убрана, запуск с пакетом передачи; сессия жива на новом аккаунте', async () => {
+    const r = rig();
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'custom-claude-2', label: '', task: 'x', parent: null });
+    const old = (await sessionOf(ref)).providerSessionId!;
+    await mkdir(path.join(targetRoot(), slug), { recursive: true });
+    const source = path.join(targetRoot(), slug, `${old}.jsonl`);
+    await writeFile(source, '{}\n');
+    // Шаблон resume глобального Claude Code без `--resume <id>`: форк план не соберёт.
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--continue', '--', '{prompt}'] } }));
+
+    expect(await r.sessions.switchAgent(ref, request('claude', { carry: 'transcript' }))).toEqual({
+      outcome: 'started',
+      carried: 'handover',
+    });
+    expect(launches.at(-1)!.launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
+    expect(existsSync(path.join(sourceRoot(), slug, `${old}.jsonl`))).toBe(false);
+    expect(existsSync(source)).toBe(true);
+    expect(await sessionOf(ref)).toMatchObject({ provider: 'claude', lifecycle: 'active', switching: null });
+    expect((await sessionOf(ref)).previousAgents?.[0]?.carried).toBe('handover');
+  });
+
+  it('удалённый аккаунт Claude: перенос из его оставшейся папки; switchOptions предлагает transcript', async () => {
+    const r = rig();
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'custom-claude-2', label: '', task: 'x', parent: null });
+    await r.sessions.stop(ref);
+    const old = (await sessionOf(ref)).providerSessionId!;
+    await mkdir(path.join(targetRoot(), slug), { recursive: true });
+    await writeFile(path.join(targetRoot(), slug, `${old}.jsonl`), '{}\n');
+    await writeCustomProviders([], customProvidersFile(home));
+
+    const options = await r.sessions.switchOptions(ref);
+    expect(options.targets.find((target) => target.id === 'claude')?.transcript).toBe(true);
+    expect(await r.sessions.switchAgent(ref, request('claude', { carry: 'transcript' }))).toMatchObject({ carried: 'transcript' });
+    expect(existsSync(path.join(sourceRoot(), slug, `${old}.jsonl`))).toBe(true);
+  });
+
+  it('копию, которую прежний хост не убрал после форка, снимает старт хоста; без форка — оставляет', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    const old = (await sessionOf(ref)).providerSessionId!;
+    await transcriptOf(old);
+    await r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }));
+    const fork = (await sessionOf(ref)).providerSessionId!;
+    const copy = path.join(targetRoot(), slug, `${old}.jsonl`);
+
+    const restarted = rig();
+    await restarted.works.refresh();
+    await restarted.sessions.clearStaleSwitches();
+    expect(existsSync(copy)).toBe(true);
+
+    await writeFile(path.join(targetRoot(), slug, `${fork}.jsonl`), '{}\n');
+    await restarted.sessions.clearStaleSwitches();
+    expect(existsSync(copy)).toBe(false);
+    expect(existsSync(path.join(sourceRoot(), slug, `${old}.jsonl`))).toBe(true);
   });
 });

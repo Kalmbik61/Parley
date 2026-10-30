@@ -3278,3 +3278,26 @@ describe('launch с пакетом передачи', () => {
     expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe(plan.providerSessionId);
   });
 });
+
+describe('resume форком чужого разговора (спека передачи сессии, 5.4.1)', () => {
+  const source = '11111111-2222-4333-8444-555555555555';
+
+  it('forkFrom: --resume <источник> --fork-session --session-id <новый>, новый id в плане, указатель первым ходом', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), { forkFrom: source, prompt: 'You continue here.' });
+    const at = plan.args.indexOf('--resume');
+    expect(plan.args.slice(at, at + 5)).toEqual(['--resume', source, '--fork-session', '--session-id', plan.providerSessionId]);
+    expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(plan.providerSessionId).not.toBe(source);
+    expect(plan.args.at(-1)).toBe('You continue here.');
+  });
+
+  it('forkFrom не у Claude Code и не в resume — обычный запуск', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const launched = await planLaunch(project, workId, await sessionOf(workId, sessionId), { forkFrom: source });
+    expect(launched.args).not.toContain('--fork-session');
+    const codex = await pending('codex');
+    const resumed = await planResume(project, codex.workId, await sessionOf(codex.workId, codex.sessionId), { forkFrom: source });
+    expect(resumed.args).not.toContain('--fork-session');
+  });
+});

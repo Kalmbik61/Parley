@@ -80,6 +80,12 @@ export interface LaunchOptions {
    */
   handover?: string;
   /**
+   * Продолжение чужого разговора форком (спека передачи сессии, 5.4, 5.4.1): `resume` поднимает разговор с этим id
+   * (его транскрипт хост уже скопировал в папку провайдера) как `--resume <id> --fork-session --session-id <новый>`.
+   * Новый id — в `providerSessionId` плана. Только Claude Code и только в `resume`; шаблон без `--resume` — ошибка.
+   */
+  forkFrom?: string;
+  /**
    * Явный выбор модели и усилия для запуска перекрывает выбор, записанный в карте
    * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`. Нет выбора — умолчание
    * текущей роли, без роли — умолчание CLI; `null` — явный «Default»: снимает умолчание роли, флага
@@ -280,10 +286,12 @@ async function plan(
   // новый процесс по тому же брифу, запись в карте остаётся прежней. Id Claude Code харнесс выдаёт
   // сам (`--session-id`) ещё на запуске, а транскрипт появляется с первым сообщением: сессию, уснувшую
   // раньше, `--resume` не поднимет («No conversation found»), и её тоже запускаем заново — с тем же id.
+  const forkFrom = mode === 'resume' && isClaudeCode(entry) ? options.forkFrom : undefined;
   const resuming =
-    mode === 'resume' &&
-    session.providerSessionId !== null &&
-    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry))));
+    forkFrom !== undefined ||
+    (mode === 'resume' &&
+      session.providerSessionId !== null &&
+      (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry)))));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -562,7 +570,7 @@ async function plan(
   }
 
   if (resuming) {
-    subs.providerSessionId = session.providerSessionId as string;
+    subs.providerSessionId = forkFrom ?? (session.providerSessionId as string);
     // Бриф возобновлённой сессии заново не посылается: разговор помнит старый. Изменился он с тех пор (задача,
     // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
     // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
@@ -593,6 +601,13 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  if (forkFrom !== undefined) {
+    // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
+    const at = args.findIndex((arg, index) => arg === '--resume' && args[index + 1] === forkFrom);
+    if (at === -1) throw new Error('fork-unsupported: the resume template of this provider has no --resume <id>');
+    providerSessionId = randomUUID();
+    args.splice(at + 2, 0, '--fork-session', '--session-id', providerSessionId);
+  }
   if (workspace && entry.id === 'claude') args.unshift('--permission-mode', 'auto');
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
   if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
