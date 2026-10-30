@@ -990,6 +990,40 @@ describe('WakeService: подъём спящей письмом', () => {
     await waitFor(() => launch.mock.calls.length > 0, 5000);
   }, 20_000);
 
+  it('5-sw3: письмо поднимает сессию, ждущую нового агента после отказа замены (ревью №8) — подъём без указателя в argv', async () => {
+    const { workId, target, providerSessionId } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session === undefined) return;
+      session.previousAgents = [{
+        provider: 'claude', model: null, effort: null, providerSessionId, startedAt: null, endedAt: new Date().toISOString(),
+        reason: 'limit', requestedBy: 'human', carried: 'handover',
+      }];
+      session.providerSessionId = null;
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+    await sendLetter(workId, target);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    // `launch` сессий сам переведёт подъём в запуск с пакетом; указатель уйдёт после первого простоя, не в argv.
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake' });
+  }, 20_000);
+
+  it('5-pm2: битый providers.json не роняет хост (ревью №3): провайдер считается на месте, подъём отчитывается сбоем', async () => {
+    const { workId, target } = await sleepingPair();
+    await writeFile(path.join(home, 'providers.json'), '{ not json');
+    const ref = { projectPath: project, workId, sessionId: target };
+    const { activity } = await resumeRig();
+    await sendLetter(workId, target);
+    await waitFor(() => notices('resume-failed').length > 0, 8000);
+    expect(activity.get(ref)?.metrics?.mailWaiting).not.toBe('provider-missing');
+  }, 20_000);
+
   it('5: седьмой подъём за час — письмо ждёт, приходит resume-limit один раз', async () => {
     const { workId, target } = await sleepingPair();
     const ref = { projectPath: project, workId, sessionId: target };

@@ -110,6 +110,8 @@ export interface WakeService {
 }
 
 const DEFAULT_ENTER_DELAY_MS = 500;
+/** Сколько будильник верит прочитанному реестру провайдеров. */
+const REGISTRY_TTL_MS = 2000;
 const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
@@ -552,8 +554,11 @@ export function createWakeService(
     try {
       const registry = await loadProviders();
       const template = registry[session.provider]?.runner.resumeArgs;
+      // Новый агент после замены ещё не стартовал (спека замены агента, 5.3 шаг 9): письмо поднимает его — `launch`
+      // сессий сам переведёт подъём в запуск с пакетом передачи, указатель уйдёт после первого простоя.
+      const awaiting = (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
       // Без id у провайдера core запустил бы новый процесс по брифу, а не `resume`.
-      if (template === undefined || session.providerSessionId === null) {
+      if (template === undefined || (session.providerSessionId === null && !awaiting)) {
         state.resumeUnavailable = true;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
         limiter.release(ref);
@@ -563,7 +568,7 @@ export function createWakeService(
         recompute(ref);
         return;
       }
-      const withPrompt = template.includes('{prompt}');
+      const withPrompt = template.includes('{prompt}') && !awaiting;
 
       state.journalBase = await journalLength(ref);
       state.resumeLetters = [...action.letterIds];
@@ -906,9 +911,26 @@ export function createWakeService(
     host.log.info('будильник: возврат после сброса лимита', { ref, returns: state.returns, letters: letterIds.length });
   }
 
-  /** Спрашивает реестр о провайдере сессии; ответ изменился — пересчёт. */
+  // Реестр провайдеров на короткий срок: пересчёт каждой спящей сессии с письмами иначе читал бы три файла каждый раз.
+  let registryCache: { at: number; value: Promise<Record<string, unknown>> } | undefined;
+  const registryNow = (): Promise<Record<string, unknown>> => {
+    if (registryCache === undefined || Date.now() - registryCache.at > REGISTRY_TTL_MS) {
+      registryCache = { at: Date.now(), value: loadProviders() };
+    }
+    return registryCache.value;
+  };
+
+  /**
+   * Спрашивает реестр о провайдере сессии; ответ изменился — пересчёт. Реестр не прочитался (битый `providers.json`) —
+   * провайдер считается на месте, как до проверки: подъём сам отчитается сбоем, а хост не падает.
+   */
   async function checkProvider(ref: SessionRef, state: AttemptState, provider: string): Promise<void> {
-    const present = provider in (await loadProviders());
+    let present = true;
+    try {
+      present = provider in (await registryNow());
+    } catch (error) {
+      host.log.warn('будильник: реестр провайдеров не прочитался', { ref, error: String(error) });
+    }
     const before = state.providerCheck;
     state.providerCheck = { provider, present };
     if (before?.provider !== provider || before.present !== present) recompute(ref);
@@ -954,7 +976,9 @@ export function createWakeService(
       }
       // Провайдера нет в реестре: сессия ждёт человека. До лимита часа — слот под подъём, которого не будет, не берём.
       if (letters) {
-        void checkProvider(ref, state, session.provider);
+        void checkProvider(ref, state, session.provider).catch((error: unknown) => {
+          host.log.warn('будильник: проверка провайдера упала', { ref, error: String(error) });
+        });
         const known = state.providerCheck?.provider === session.provider ? state.providerCheck.present : null;
         if (known === null) {
           // Ответа реестра ещё нет: подъём ждёт его, пересчёт придёт следом. Ожидание не публикуется — иначе окно мигнуло

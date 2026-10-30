@@ -268,6 +268,11 @@ interface TerminalState {
   turnSeen: boolean;
   /** Когда запущен этот процесс, мс: ошибка хода в rollout старше него — прошлого процесса того же разговора. */
   startedAt: number;
+  /**
+   * Строк журнала хуков сессии на запуске: они — прошлых процессов (resume, прежний агент до замены). За ними
+   * ставится граница нового процесса, как у Claude (`withLaunchBoundary`): лимит или вопрос прошлого `need` не дают.
+   */
+  journalLength: number;
 }
 
 /**
@@ -583,7 +588,13 @@ export function createActivityService(
     if (terminal === undefined && session.provider !== 'codex') {
       return withLaunchBoundary(journal, launchBoundaryOf(session, key));
     }
-    let base = journal ?? [];
+    // Строки до запуска процесса Codex — прошлых процессов (прежний агент до замены, прошлый запуск): за ними граница
+    // нового процесса, как у Claude. Журнал короче записанного (переписан) — позиции не доверяем, границы нет.
+    const launch =
+      terminal !== undefined && terminal.journalLength > 0 && (journal?.length ?? 0) >= terminal.journalLength
+        ? { at: terminal.startedAt, journalLength: terminal.journalLength }
+        : null;
+    let base = withLaunchBoundary(journal, launch) ?? [];
     const last = terminal?.last;
     if (terminal === undefined || last === null || last === undefined) return base;
     // События ожидания человека идущего эпизода идут раньше последнего сигнала (`TerminalState.waiting`).
@@ -1689,6 +1700,7 @@ export function createActivityService(
         startupTimer: undefined,
         turnSeen: false,
         startedAt: nowFn(),
+        journalLength: journals.get(key)?.length ?? 0,
       };
       state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
       terminals.set(key, state);

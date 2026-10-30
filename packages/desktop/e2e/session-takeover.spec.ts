@@ -167,6 +167,11 @@ test.describe('замена агента сессии (спека 2026-10-30, р
 
       // Разделитель в ленте чата.
       await expect(window.getByTestId('chat-switch-divider').first()).toContainText(/^Continued on /, { timeout: 20_000 });
+      // Лимит прежнего агента к новому не переходит: журнал хуков общий у сессии, но его строки — прошлого процесса.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const settled = await mapOf(workId);
+      expect(settled.sessions.find((s) => s.id === leadId)?.stuck ?? null).toBeNull();
+      expect(settled.messages.some((m) => /hit its Codex usage limit/.test(m.text))).toBe(false);
       expect(errors).toEqual([]);
     } finally {
       await stopApp(app);

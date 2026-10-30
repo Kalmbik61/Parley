@@ -58,6 +58,11 @@ async function slugOf(root: string, id: string): Promise<string | null> {
   return null;
 }
 
+/** Есть ли разговор `<id>.jsonl` в корне истории аккаунта: Claude Code пишет его с первым ходом. */
+export async function hasConversation(provider: string, id: string): Promise<boolean> {
+  return (await slugOf(historyRoot(provider), id)) !== null;
+}
+
 /** Что скопировано в папку цели; `copy: null` — корни совпадают, копировать и удалять нечего. */
 export interface CarriedTranscript {
   /** Id разговора прежнего агента: им `--resume` поднимает форк. */
