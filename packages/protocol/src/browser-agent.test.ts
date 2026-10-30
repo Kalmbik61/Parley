@@ -26,7 +26,7 @@ import { parseIncoming } from './framing.js';
 describe('канал агента к браузеру: константы (спека 3.7, 5.1, раздел 8; этап B2)', () => {
   it('возможность окна и операции: чтения C, open, управление D', () => {
     expect(BROWSER_AGENT_FEATURE).toBe('browser-agent');
-    expect(BROWSER_AGENT_OPS).toEqual(['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads']);
+    expect(BROWSER_AGENT_OPS).toEqual(['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close']);
   });
 
   it('одиннадцать кодов: девять прежних, human_busy и stale_ref (спека 5.1)', () => {
@@ -334,13 +334,18 @@ describe('операции управления (этап D)', () => {
     bad('storage', [{ tab: 't1', action: 'list' }, { tab: 't1', area: 'indexeddb', action: 'list' }, { tab: 't1', area: 'local', action: 'get' }, { tab: 't1', area: 'local', action: 'set', key: 'a' }, { tab: 't1', area: 'local', action: 'clear', key: 'a' }, { tab: 't1', area: 'local', action: 'list', origin: 'https://github.com' }]);
   });
 
+  it('close — только tab', () => {
+    expect(ok('close', { tab: 't1' })).toBe(true);
+    bad('close', [{}, { tab: 'x' }, { tab: 't1', force: true }]);
+  });
+
   it('downloads — пустой объект', () => {
     expect(ok('downloads', {})).toBe(true);
     bad('downloads', [{ tab: 't1' }]);
   });
 
   it('запрос агента принимает все операции этапа D', () => {
-    for (const op of ['navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads']) {
+    for (const op of ['navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close']) {
       expect(browserAgentRequest.safeParse({ op, args: {} }).success, op).toBe(true);
     }
   });

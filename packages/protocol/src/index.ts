@@ -167,6 +167,7 @@ export type {
   BrowserAgentOwner,
   BrowserAgentRequestDetail,
   BrowserAgentRequestSummary,
+  BrowserAgentCloseResult,
   BrowserAgentResizeResult,
   BrowserAgentResult,
   BrowserAgentScreenshotResult,

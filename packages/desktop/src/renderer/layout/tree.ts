@@ -603,7 +603,7 @@ function parseBrowserTarget(value: unknown): BrowserTarget | null {
 function parseBrowserPanelPage(value: unknown): BrowserPanelPage | null {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id === '' || typeof value.url !== 'string') return null;
   const viewport = parseViewport(value.viewport);
-  return { id: value.id, url: value.url, ...(viewport === null ? {} : { viewport }) };
+  return { id: value.id, url: value.url, ...(viewport === null ? {} : { viewport }), ...(value.openedBy === 'agent' ? { openedBy: 'agent' as const } : {}) };
 }
 
 /**

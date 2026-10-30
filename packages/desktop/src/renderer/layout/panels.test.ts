@@ -138,6 +138,13 @@ describe('closePanelPage', () => {
     expect('panels' in none).toBe(false);
   });
 
+  it('openedBy остаётся у страниц, которые не закрывали, и у страницы после смены адреса', () => {
+    const agent = { ...page(1), openedBy: 'agent' as const };
+    const layout = addPanelPage(addPanelPage(EMPTY, CHAT, agent).layout, CHAT, page(2)).layout;
+    expect(panelOf(closePanelPage(layout, CHAT, 'bp-000002'), CHAT)?.pages).toEqual([agent]);
+    expect(panelOf(updatePanelPage(layout, CHAT, 'bp-000001', { url: 'http://localhost:3999/' }), CHAT)?.pages[0]).toEqual({ ...agent, url: 'http://localhost:3999/' });
+  });
+
   it('нет такой страницы или панели — та же ссылка', () => {
     const layout = withPages(1);
     expect(closePanelPage(layout, CHAT, 'bp-nope')).toBe(layout);

@@ -1737,7 +1737,14 @@ describe('канал агента — только для main (этап B2, с�
     expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r2', { error: 'limit' });
     await ipcMain.invoke('browser:agent-open-tab-result', 'r3', { error: 'no_work' });
     expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r3', { error: 'no_work' });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r3c', { closed: true });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r3c', { closed: true });
+    for (const error of ['not_agent', 'no_page']) {
+      await ipcMain.invoke('browser:agent-open-tab-result', 'r3d', { error });
+      expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r3d', { error });
+    }
     const bad: Array<[unknown, unknown]> = [
+      ['r4', { closed: false }],
       ['r4', { tabId: 'terminal:s-01', reused: false, mounted: true }],
       ['r4', { tabId: 'browser:abc123', reused: 'yes', mounted: true }],
       ['r4', { tabId: 'browser:abc123', reused: false }],
@@ -1751,7 +1758,7 @@ describe('канал агента — только для main (этап B2, с�
     for (const [requestId, raw] of bad) {
       expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
     }
-    expect(agentOps.openTabResult).toHaveBeenCalledTimes(4);
+    expect(agentOps.openTabResult).toHaveBeenCalledTimes(7);
   });
 
   it('agent-capture-ready: id поверхности снимка — в main; не строка, пустой и длиннее 64 — bad_request', async () => {

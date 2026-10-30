@@ -68,6 +68,8 @@ export interface BrowserPanelPage {
   id: string;
   url: string;
   viewport?: ViewportSpec;
+  /** Страницу открыл агент (`browser_open`): только такую `browser_close` закрывает. Нет поля — открыл человек (так читаются и старые раскладки). */
+  openedBy?: 'agent';
 }
 
 /**

@@ -203,7 +203,8 @@ export function parseAgentRegistration(raw: unknown): AgentPageRegistration | nu
 
 export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
   if (!isRecord(raw)) return null;
-  if (raw.error === 'limit' || raw.error === 'no_work') return { error: raw.error };
+  if (raw.error === 'limit' || raw.error === 'no_work' || raw.error === 'not_agent' || raw.error === 'no_page') return { error: raw.error };
+  if (raw.closed === true) return { closed: true };
   const { tabId, reused, mounted } = raw;
   // Вкладка раскладки (`browser:…`) или страница панели хозяина (`bp-…`, `panelPageId`).
   if (typeof tabId !== 'string' || !(tabId.startsWith('browser:') || tabId.startsWith('bp-')) || tabId.length > 200) return null;

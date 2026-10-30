@@ -9,6 +9,7 @@ All notable changes to Parley are documented in this file.
 ### Changed
 
 - The session title in the chat toolbar is a plate hanging from the top edge of the panel, like a notch: the title is shown as written (no capitals, no letter spacing) in the app font, on an accent fill with smooth curved sides. Colours come from the new `--session-title-fill` / `--session-title-ink` tokens in both themes.
+- An agent can close the pages it opened in the browser panel with the new `browser_close` tool, so it can free a slot at the limit of 5 pages instead of asking the human. Pages the human opened or moved into the panel cannot be closed this way. Closing works like the cross on a page tab: the active page moves to a neighbour, the last page removes the panel, and keyboard focus and the active tab do not change.
 - An agent can close the sessions it created with `create_session`, and the sessions those created in turn, with `close_session` — without asking the human, once their work is accepted or no longer needed. Closing its own session still needs the human's consent. Sessions made by the human, by a colleague, or by a swarm, and swarm members, cannot be closed this way; the system insert, `read_guide` and the skill stub say so.
 
 ## 0.25.0

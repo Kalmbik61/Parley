@@ -1206,7 +1206,7 @@ describe('правило приоритета браузера Parley в зап�
   });
 
   it('Claude и GLM с каналом: в файле --settings заранее разрешены все четырнадцать browser_*, спрашивать нечего; без канала правил нет', async () => {
-    const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
+    const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close'].map((op) => `mcp__parley__browser_${op}`);
     for (const provider of ['claude', 'glm']) {
       const { workId, sessionId } = await pending('claude');
       const session = { ...(await sessionOf(workId, sessionId)), provider };

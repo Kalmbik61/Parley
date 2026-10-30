@@ -34,6 +34,7 @@ export const BROWSER_AGENT_OPS = [
   'cookies',
   'storage',
   'downloads',
+  'close',
 ] as const;
 export type BrowserAgentOp = (typeof BROWSER_AGENT_OPS)[number];
 
@@ -351,6 +352,7 @@ export const browserAgentArgs = {
     })
     .refine((args) => args.value === undefined || args.action === 'set', { message: 'value goes only with set.' }),
   downloads: z.strictObject({}),
+  close: z.strictObject({ tab }),
 } satisfies Record<BrowserAgentOp, z.ZodType>;
 
 export type BrowserAgentArgs<O extends BrowserAgentOp> = z.infer<(typeof browserAgentArgs)[O]>;
@@ -532,6 +534,13 @@ export interface BrowserAgentResizeResult {
   tab: string;
   url: string;
   viewport: { width: number; height: number; emulated: boolean } | null;
+}
+
+/** `close`: страница закрыта; `url` — её адрес с маской (страницы уже нет). */
+export interface BrowserAgentCloseResult {
+  tab: string;
+  url: string;
+  done: string;
 }
 
 export interface BrowserAgentEvaluateResult {

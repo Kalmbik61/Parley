@@ -83,7 +83,7 @@ export type OpenPageResult =
  * строке, как новая вкладка. Адрес в раскладку идёт как у вкладки (`layoutUrl`: http(s) без user:pass@), пустой — страница
  * без адреса. Активная вкладка, группа и работа окна не меняются ни при каком `focus`.
  */
-export function openPageInPanel(workKey: string, owner: BrowserOwner, url: string, options: { focus: boolean }): OpenPageResult {
+export function openPageInPanel(workKey: string, owner: BrowserOwner, url: string, options: { focus: boolean; openedBy?: 'agent' }): OpenPageResult {
   const layout = useLayoutStore.getState().layouts[workKey];
   if (layout === undefined) return { ok: false, reason: 'no-work' };
   const safe = url === '' ? '' : layoutUrl(url);
@@ -91,7 +91,7 @@ export function openPageInPanel(workKey: string, owner: BrowserOwner, url: strin
   const pageId = panelPageId();
   const opened = panelOf(layout, owner)?.open !== true;
   if (options.focus && safe === '') requestAddressFocus(pageId);
-  const error = run(workKey, (current) => addPanelPage(current, owner, { id: pageId, url: safe }));
+  const error = run(workKey, (current) => addPanelPage(current, owner, { id: pageId, url: safe, ...(options.openedBy === undefined ? {} : { openedBy: options.openedBy }) }));
   return error === 'too-many-pages' ? { ok: false, reason: 'limit' } : { ok: true, pageId, opened };
 }
 
@@ -116,7 +116,7 @@ function withoutFragment(url: string): string {
  * становится активной, панель открывается, новая не добавляется (`reused`); иначе `openPageInPanel` с `focus: false`. Фокус
  * клавиатуры, активная вкладка, группа и работа окна не меняются.
  */
-export function openAgentPage(workKey: string, owner: BrowserOwner, url: string): OpenAgentPageResult {
+export function openAgentPage(workKey: string, owner: BrowserOwner, url: string, openedBy?: 'agent'): OpenAgentPageResult {
   const layout = useLayoutStore.getState().layouts[workKey];
   if (layout === undefined) return { ok: false, reason: 'no-work' };
   const safe = layoutUrl(url);
@@ -124,7 +124,7 @@ export function openAgentPage(workKey: string, owner: BrowserOwner, url: string)
   const panel = panelOf(layout, owner);
   const same = panel?.pages.find((page) => page.url !== '' && withoutFragment(page.url) === withoutFragment(safe));
   if (same === undefined) {
-    const opened = openPageInPanel(workKey, owner, url, { focus: false });
+    const opened = openPageInPanel(workKey, owner, url, { focus: false, ...(openedBy === undefined ? {} : { openedBy }) });
     return opened.ok ? { ...opened, reused: false } : opened;
   }
   run(workKey, (current) => setPanelOpen(activatePanelPage(current, owner, same.id), owner, true));
@@ -147,7 +147,8 @@ export function openLinkInPanel(workKey: string, owner: BrowserOwner, url: strin
  * раскладки — `no_work` (main переводит его в «окно работы не знает»).
  */
 export function handleAgentOpenTab(event: AgentOpenTab): AgentOpenTabResult {
-  const result = openAgentPage(event.workKey, event.owner, event.url);
+  if (event.closePage !== undefined) return closeAgentPage(event.workKey, event.owner, event.closePage);
+  const result = openAgentPage(event.workKey, event.owner, event.url, 'agent');
   if (!result.ok) return { error: result.reason === 'limit' ? 'limit' : 'no_work' };
   const key = panelRuntimeKey(event.workKey, event.owner);
   const runtime = usePanelRuntime.getState();
@@ -161,6 +162,21 @@ export function handleAgentOpenTab(event: AgentOpenTab): AgentOpenTabResult {
     });
   }
   return { tabId: result.pageId, reused: result.reused, mounted };
+}
+
+/**
+ * `browser_close` (тот же канал, `closePage`): закрывает страницу, которую открыл агент, как крестик человека на вкладке
+ * страницы (`closePanelPage`: активной становится сосед, последняя уносит панель). Страница человека (нет `openedBy`) —
+ * `not_agent`; такой страницы в панели нет — `no_page`. Фокус, активная вкладка и работа окна не меняются.
+ */
+export function closeAgentPage(workKey: string, owner: BrowserOwner, pageId: string): AgentOpenTabResult {
+  const layout = useLayoutStore.getState().layouts[workKey];
+  if (layout === undefined) return { error: 'no_work' };
+  const page = panelOf(layout, owner)?.pages.find((candidate) => candidate.id === pageId);
+  if (page === undefined) return { error: 'no_page' };
+  if (page.openedBy !== 'agent') return { error: 'not_agent' };
+  closePage(workKey, owner, pageId);
+  return { closed: true };
 }
 
 /** Адрес для тоста: хост с портом, без схемы, пути и параметров (`http://localhost:5173/app?x=1` → `localhost:5173`). */

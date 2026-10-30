@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { DownloadItem, WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
-import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentDownloadsResult, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
+import type { BrowserAgentArgs, BrowserAgentCloseResult, BrowserAgentErrorCode, BrowserAgentDownloadsResult, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
 import { presetSpec, viewportSize } from '../../shared/browser-devtools.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
@@ -661,9 +661,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     if (answer === 'timeout') throw new AgentOpError('timeout', `The window did not place the tab within ${Math.round(openMs / 1000)} s.`);
     if ('error' in answer) {
       throw answer.error === 'limit'
-        ? new AgentOpError('bad_request', `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Ask the human to close one.`)
+        ? new AgentOpError('bad_request', `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Close one of your pages with browser_close, or ask the human to close one.`)
         : new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
     }
+    if ('closed' in answer) throw new AgentOpError('unsupported', 'The window answered the open request as a close.');
     const agentId = registry.agentIdFor(workKey, answer.tabId);
     const base = { tab: agentId, owner, url: clipUrl(url), reused: answer.reused };
     if (!answer.mounted) return { ...base, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] };
@@ -678,6 +679,23 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal);
       return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.agentWindow.take(`${record.workKey}\n${record.pageId}`) };
     }, { window: true });
+  }
+
+  /**
+   * `close`: окно закрывает страницу как крестик человека (тот же канал, что `open`, `closePage`); решает окно — у него раскладка
+   * и признак «открыта агентом». Доступ, паузу и `human_busy` проверил `runner.run` до этого.
+   */
+  async function closeOf(request: BrowserAgentOpEvent, contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'close'>): Promise<BrowserAgentCloseResult> {
+    const url = urlForAgent(contents.getURL());
+    const answer = await askWindow({ requestId: randomUUID(), workKey: record.workKey, url: '', sessionId: request.ref.sessionId, session: request.label, owner: record.owner, closePage: record.pageId });
+    if (answer === 'no_window') throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
+    if (answer === 'timeout') throw new AgentOpError('timeout', `The window did not close the page within ${Math.round(openMs / 1000)} s.`);
+    if ('error' in answer) {
+      if (answer.error === 'not_agent') throw new AgentOpError('access_denied', `Page ${args.tab} was opened by the human, not by an agent: only the human can close it. Close pages that you opened with browser_open.`);
+      if (answer.error === 'no_page') throw new AgentOpError('no_tab', `Page ${args.tab} is already closed: call browser_tabs.`);
+      throw new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
+    }
+    return { tab: args.tab, url, done: `Closed ${args.tab}.` };
   }
 
   /** Страница агента уже в реестре и у неё есть живой гость. Пауза и чужой хозяин — отказ, как у прочих операций. */
@@ -824,6 +842,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
           case 'storage': {
             const args = parsed.data as BrowserAgentArgs<'storage'>;
             return ok(await runner.run(request, args.tab, (contents, record) => deps.storage.storageOf(contents, record.agentId, args)));
+          }
+          case 'close': {
+            const args = parsed.data as BrowserAgentArgs<'close'>;
+            return ok(await runner.run(request, args.tab, (contents, record) => closeOf(request, contents, record, args), { changes: true }));
           }
           case 'downloads': {
             // Без страницы, как `tabs`: список и папка сессии запроса.

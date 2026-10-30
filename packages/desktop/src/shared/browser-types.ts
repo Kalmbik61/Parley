@@ -148,6 +148,8 @@ export interface AgentOpenTab {
   session: string;
   /** Чей браузер получает страницу: выбран по правилу 5.1 и входит в `owners` операции (спека 3.10). */
   owner: BrowserOwner;
+  /** `browser_close`: вместо открытия окно закрывает страницу панели с этим id (она открыта агентом); `url` пуст. Ответ — `AgentOpenTabResult`. */
+  closePage?: string;
 }
 
 /**
@@ -157,7 +159,8 @@ export interface AgentOpenTab {
  */
 export type AgentOpenTabResult =
   | { tabId: string; reused: boolean; mounted: boolean }
-  | { error: 'limit' | 'no_work' };
+  | { closed: true }
+  | { error: 'limit' | 'no_work' | 'not_agent' | 'no_page' };
 
 /**
  * Запись реестра страниц панелей для агента (спека браузера 3.5, 3.7, 3.10). Вкладки человека не регистрируются.

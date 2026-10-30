@@ -1,6 +1,6 @@
 /**
  * Скилл `parley-browser` (спека браузера, 5.3; этап D): frontmatter по спецификации Agent Skills, английский текст до
- * 220 строк, все 14 инструментов `browser_*` на месте, выдуманных нет, разделы и фразы, которые нельзя потерять.
+ * 220 строк, все 15 инструментов `browser_*` на месте, выдуманных нет, разделы и фразы, которые нельзя потерять.
  * Коды ошибок канала сверяет контрактный тест протокола (core протокол не импортирует).
  */
 import { describe, expect, it } from 'vitest';
@@ -42,7 +42,7 @@ describe('скилл parley-browser: тело', () => {
 
   it('называет каждый инструмент browser_* и только существующие', () => {
     const names = BROWSER_TOOLS.map((tool) => tool.name);
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(15);
     for (const name of names) expect(body, name).toContain(`\`${name}\``);
     const mentioned = new Set([...body.matchAll(/`(browser_[a-z_]+)`/g)].map((match) => match[1] ?? ''));
     for (const name of mentioned) expect(names, name).toContain(name);

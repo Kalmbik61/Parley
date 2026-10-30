@@ -572,6 +572,66 @@ function networkEntry(patch: Partial<NetworkEntry>): NetworkEntry {
   };
 }
 
+describe('close (browser_close)', () => {
+  /** Страница t1 зарегистрирована (гость 7); окно отвечает на просьбу закрыть своим ответом. */
+  async function ready(reply: AgentOpenTabResult | null) {
+    const kit = setup();
+    kit.state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    await kit.runOp('open', { url: 'http://localhost:5173/' });
+    register(kit.ops, {});
+    kit.guests.set(7, fakeGuest(7, 'https://example.test/a?sid=SECRET9'));
+    kit.asked.length = 0;
+    kit.state.reply = reply;
+    return kit;
+  }
+
+  it('закрывает страницу агента: окну уходит closePage с id страницы раскладки; ответ — адрес с маской', async () => {
+    const { runOp, asked } = await ready({ closed: true });
+    const result = okResult<{ tab: string; url: string; done: string }>(await runOp('close', { tab: 't1' }));
+    expect(result).toEqual({ tab: 't1', url: 'https://example.test/a?sid=<redacted>', done: 'Closed t1.' });
+    expect(asked).toEqual([{ requestId: expect.any(String) as unknown as string, workKey: WORK, url: '', sessionId: 's-02', session: 'S02', owner: OWN, closePage: 'bp-aaaaaa' }]);
+  });
+
+  it('страница человека (окно: not_agent) — access_denied с понятным текстом', async () => {
+    const { runOp } = await ready({ error: 'not_agent' });
+    const result = await runOp('close', { tab: 't1' });
+    expect(codeOf(result)).toBe('access_denied');
+    expect(messageOf(result)).toContain('opened by the human');
+  });
+
+  it('страницы уже нет в раскладке — no_tab; нет такой t9 — no_tab, окну ничего', async () => {
+    const { runOp, asked } = await ready({ error: 'no_page' });
+    expect(codeOf(await runOp('close', { tab: 't1' }))).toBe('no_tab');
+    asked.length = 0;
+    expect(codeOf(await runOp('close', { tab: 't9' }))).toBe('no_tab');
+    expect(asked).toEqual([]);
+  });
+
+  it('человек занят Select/Annotate — human_busy, окну ничего; пауза панели — access_denied', async () => {
+    const { ops, runOp, asked } = await ready({ closed: true });
+    register(ops, { humanBusy: true });
+    expect(codeOf(await runOp('close', { tab: 't1' }))).toBe('human_busy');
+    register(ops, { humanBusy: false });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    expect(codeOf(await runOp('close', { tab: 't1' }))).toBe('access_denied');
+    expect(asked).toEqual([]);
+  });
+
+  it('окна нет или молчит; лишние поля и нет tab — bad_request', async () => {
+    const quiet = await ready(null);
+    expect(codeOf(await quiet.runOp('close', { tab: 't1' }))).toBe('timeout');
+    const bad = await ready({ closed: true });
+    expect(codeOf(await bad.runOp('close', {}))).toBe('bad_request');
+    expect(codeOf(await bad.runOp('close', { tab: 't1', force: true }))).toBe('bad_request');
+  });
+
+  it('предел страниц у open называет browser_close', async () => {
+    const { runOp, state } = setup();
+    state.reply = { error: 'limit' };
+    expect(messageOf(await runOp('open', { url: PAGE }))).toContain('Close one of your pages with browser_close');
+  });
+});
+
 describe('проверки страницы (спека 5.2)', () => {
   it('внешняя страница читается; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
     const { ops, guests, runOp: run } = setup();

@@ -5,7 +5,7 @@
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS } from '@parley/protocol';
 import type { BrowserAgentOpEvent, EventMessage, ResponseMessage, SessionRef } from '@parley/protocol';
 import { silentLog } from '../../test/feed-fakes.js';
 import type { Client } from '../client.js';
@@ -217,6 +217,25 @@ describe('операция до окна и ответ', () => {
     expect(op.op).toBe('screenshot');
     endpoint.resolve(op.opId, OPENED, window);
     await reply;
+  });
+
+  it('close: аргументы — только tab; операция уходит окну с browser-agent:close, окну без неё — unsupported сразу', async () => {
+    const window = fakeWindow([BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
+    const { endpoint, url, token } = await boot([window]);
+    for (const args of [{}, { tab: 't1', force: true }, { tab: 'x' }]) {
+      const reply = await post(url, { op: 'close', args }, token);
+      expect(reply.body, JSON.stringify(args)).toContain('bad_request');
+    }
+    expect(window.sent).toEqual([]);
+    const reply = post(url, { op: 'close', args: { tab: 't2' } }, token);
+    const op = await nextOp(window);
+    expect(op).toMatchObject({ op: 'close', args: { tab: 't2' } });
+    endpoint.resolve(op.opId, { ok: true, result: { tab: 't2', url: 'http://localhost:5173/', done: 'Closed t2.' } }, window);
+    expect(json(await reply)).toMatchObject({ ok: true, result: { tab: 't2', done: 'Closed t2.' } });
+    const old = fakeWindow([BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE('tabs')]);
+    const older = await boot([old]);
+    expect(json(await post(older.url, { op: 'close', args: { tab: 't1' } }, older.token))).toMatchObject({ ok: false, error: { code: 'unsupported' } });
+    expect(old.sent).toEqual([]);
   });
 
   it('схема: неизвестная операция, неверные аргументы, не JSON — bad_request, окну ничего', async () => {
