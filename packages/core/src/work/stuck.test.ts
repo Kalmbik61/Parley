@@ -995,7 +995,7 @@ describe('тексты о застрявшей сессии', () => {
     });
 
     it('ведущий: хвост «leads this room» только у limit и sign-in', () => {
-      const tail = ' @s03 leads this room: you can make another participant the lead.';
+      const tail = ' @s03 leads this room: you can make another participant the lead or continue it on another provider.';
       expect(stuckLine(S03, limit, NOW, true)).toBe(`@s03 hit its Codex usage limit; it resets at 19:27.${tail}`);
       expect(stuckLine(S03, need({ kind: 'sign-in', account: 'auth' }), NOW, true)).toBe(
         `@s03 is signed out of Codex.${tail}`,
@@ -1094,10 +1094,10 @@ describe('тексты о застрявшей сессии', () => {
 
     it('без альтернатив — письмо спеки застрявших 5.2 дословно, абзаца о других аккаунтах нет', () => {
       expect(base()).toBe(
-        `@s03 hit its Codex usage limit; it resets at ${when}. Messages to @s03 wait; after the reset Parley delivers them and asks @s03 to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, give its part to another participant (name who), or continue without it. Then wait for the answer (read_guide topic: stuck).`,
+        `@s03 hit its Codex usage limit; it resets at ${when}. Messages to @s03 wait; after the reset Parley delivers them and asks @s03 to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, ask @human to continue @s03 on another provider (Continue on another provider; its rooms, children and mail stay with it), hand a part of the work to another participant (name who), or continue without it. Then wait for the answer (read_guide topic: stuck).`,
       );
       expect(base()).not.toContain('Other Codex accounts');
-      expect(base()).not.toContain('replacement');
+      expect(base()).not.toContain('create_session');
     });
 
     it('время сброса неизвестно — «the reset time is unknown» вместо часов', () => {
@@ -1116,7 +1116,8 @@ describe('тексты о застрявшей сессии', () => {
         `Other Claude Code accounts in Parley right now: Claude Code (weekly 31 % used, resets ${agentClock(nextMonday, NOW)}).`,
       );
       expect(text).toContain('create_session (provider: "claude") — but only after @human agrees.');
-      expect(text).toContain("(name who), start a replacement on Claude Code and hand it @s03's part, or continue without it.");
+      expect(text).toContain("(name who), or continue without it.");
+      expect(text).toContain('ask @human to continue @s03 on Claude Code (Continue on another provider;');;
       // Абзац стоит перед последним предложением, а не после него.
       expect(text.endsWith('Then wait for the answer (read_guide topic: stuck).')).toBe(true);
       expect(text.indexOf('Other Claude Code accounts')).toBeLessThan(text.indexOf('Then wait for the answer'));
@@ -1144,7 +1145,7 @@ describe('тексты о застрявшей сессии', () => {
       expect(text).toContain('Claude Code (weekly 31 % used, resets');
       expect(text).toContain('; Claude Code 3 — no limits known.');
       expect(text).toContain('create_session (provider: "claude" for Claude Code, "custom-claude-3" for Claude Code 3)');
-      expect(text).toContain("start a replacement on Claude Code or Claude Code 3 and hand it @s03's part");
+      expect(text).toContain("ask @human to continue @s03 on Claude Code or Claude Code 3");
     });
 
     it('stuckLetter для limit — то же письмо; альтернативы приходят четвёртым аргументом', () => {

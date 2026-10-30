@@ -47,9 +47,10 @@ describe('темы гида', () => {
     const text = (guideTopic('stuck') ?? '').replace(/\s+/g, ' ');
     // Одно сообщение с вариантами, включая замену на названном свободном аккаунте.
     expect(text).toContain('write one message to `@human`');
-    expect(text).toContain('start a replacement on the named account');
+    expect(text).toContain('hand a part of the stuck participant\'s work to a new session there');
+    expect(text).toContain('request_agent_switch');
     // Ответ человека обязателен до `create_session`.
-    expect(text).toContain('Never start a replacement on your own: ask `@human` first and wait for the answer.');
+    expect(text).toContain('Never start such a session on your own: ask `@human` first and wait for the answer.');
     // После «да»: create_session (task обязателен — с указателем на поля застрявшего в карте), потом add_to_room,
     // потом письмо застрявшему (решение 10 итогового ревью).
     expect(text).toContain(

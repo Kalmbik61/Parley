@@ -567,7 +567,7 @@ export function stuckLine(who: StuckWho, need: SessionNeed, now: Date, isLead: b
   if (!isLead || !mayHandOver) return line;
   // Подсказка — отдельное предложение: строка кончается без точки, а `detail` ошибки может кончаться ею сам.
   const stop = /[.!?]$/.test(line) ? '' : '.';
-  return `${line}${stop} ${mentionOf(who.id)} leads this room: you can make another participant the lead.`;
+  return `${line}${stop} ${mentionOf(who.id)} leads this room: you can make another participant the lead or continue it on another provider.`;
 }
 
 /** Пометка «вернулась» у строки: лимит сброшен, вход выполнен; у остальных видов — без пометки. */
@@ -613,7 +613,7 @@ function alternativeText(item: LimitAlternative, now: Date): string {
 /**
  * Письмо Parley о лимите (спека застрявших 5.2; спека подписок 4.4, 5.8), которое получает ведущий. Когда есть другие
  * вошедшие аккаунты того же CLI, в вариантах для `@human` добавляется замена, а перед последним предложением —
- * абзац о них: что замену ведущий заводит `create_session` только после согласия `@human`, сам — нет (решение 6).
+ * абзац о них: что часть работы новой сессии `create_session` ведущий отдаёт только после согласия `@human`, сам — нет (решение 6); саму застрявшую сессию продолжает человек.
  * `provider` — имя для людей (`providerLabel`), `mention` — `@s03`; `family` — имя семейства CLI для заголовка
  * «Other <family> accounts» (у аккаунта `provider` — «Claude Code 2», а замену ищут среди «Claude Code»).
  */
@@ -630,10 +630,9 @@ export function limitLetter(input: {
   const resets = readableTime(resetsAt);
   const when = resets === null ? 'the reset time is unknown' : `it resets at ${agentClock(resets, now)}`;
   const after = resets === null ? 'when the limit lifts' : 'after the reset';
-  const replacement =
-    alternatives.length === 0
-      ? ''
-      : `start a replacement on ${alternatives.map((item) => item.label).join(' or ')} and hand it ${mention}'s part, `;
+  // Застрявшую сессию продолжает человек кнопкой «Continue on another provider…»; `create_session` — лишь для передачи части работы.
+  const target = alternatives.length === 0 ? 'another provider' : alternatives.map((item) => item.label).join(' or ');
+  const takeover = `ask @human to continue ${mention} on ${target} (Continue on another provider; its rooms, children and mail stay with it), `;
   // Один аккаунт — просто его id; несколько — id с именем, чтобы ведущий не гадал, какой id чей.
   const ids = alternatives
     .map((item) => (alternatives.length === 1 ? `"${item.id}"` : `"${item.id}" for ${item.label}`))
@@ -641,8 +640,8 @@ export function limitLetter(input: {
   const others =
     alternatives.length === 0
       ? ''
-      : ` Other ${family} accounts in Parley right now: ${alternatives.map((item) => alternativeText(item, now)).join('; ')}. A replacement can be started on a free one with create_session (provider: ${ids}) — but only after @human agrees.`;
-  return `${mention} hit its ${provider} usage limit; ${when}. Messages to ${mention} wait; ${after} Parley delivers them and asks ${mention} to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, give its part to another participant (name who), ${replacement}or continue without it.${others} Then wait for the answer (read_guide topic: stuck).`;
+      : ` Other ${family} accounts in Parley right now: ${alternatives.map((item) => alternativeText(item, now)).join('; ')}. A part of the work can be handed to a new session on a free one with create_session (provider: ${ids}) — but only after @human agrees.`;
+  return `${mention} hit its ${provider} usage limit; ${when}. Messages to ${mention} wait; ${after} Parley delivers them and asks ${mention} to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, ${takeover}hand a part of the work to another participant (name who), or continue without it.${others} Then wait for the answer (read_guide topic: stuck).`;
 }
 
 /**
