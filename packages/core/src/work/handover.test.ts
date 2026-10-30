@@ -101,6 +101,12 @@ describe('formatHandover', () => {
     expect(text).toContain('No transcript of the previous agent is available');
   });
 
+  it('children: both parent and createdBy (create_session sets createdBy)', () => {
+    const map = fixture(1);
+    Object.assign(map.sessions[1]!, { parent: null, createdBy: 's-01' });
+    expect(formatHandover(input({ map }))).toContain('- s-02 ');
+  });
+
   it('rooms you lead: by the live lead — a closed lead hands the proposal to the next live member', () => {
     const map = fixture(0);
     const closed = { ...map.sessions[0]!, id: 's-09', lifecycle: 'closed' as const };

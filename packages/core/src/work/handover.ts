@@ -142,7 +142,7 @@ function dutiesPart(input: HandoverInput): string {
   const out = ['## Obligations'];
 
   const children = map.sessions
-    .filter((s) => s.parent === sessionId)
+    .filter((s) => s.parent === sessionId || s.createdBy === sessionId)
     .map((s) => {
       const state = [s.lifecycle, s.result, s.stuck ? `stuck:${s.stuck.kind}` : null].filter((x) => x != null).join('/');
       return `- ${s.id} "${oneLine(s.label, 60)}" ${state}`;
