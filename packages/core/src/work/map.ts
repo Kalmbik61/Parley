@@ -762,6 +762,7 @@ function migrateSession(session: Record<string, unknown>): void {
   if (session['createdBy'] !== undefined && session['createdBy'] !== null && typeof session['createdBy'] !== 'string') delete session['createdBy'];
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
+  normalizeAgentFields(session);
   // Effort уходит в команду, у Codex — в кавычки TOML: значение, не прошедшее токен, не уходит никуда.
   // Ключ убирается из прочитанной карты, и следующая её запись его уже не несёт. `null` — явный
   // «Default» (снимает умолчание роли) — остаётся.
@@ -773,4 +774,35 @@ function migrateSession(session: Record<string, unknown>): void {
   ) {
     delete session['effort'];
   }
+}
+
+const AGENT_REASONS = ['limit', 'sign-in', 'provider-missing', 'manual', 'model'];
+const nullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
+
+/** Запись `previousAgents` неверной формы убирается, битый `usage` снимается; запись остаётся читаемой. */
+function normalizeBinding(entry: unknown): Record<string, unknown> | null {
+  if (!isRecord(entry) || typeof entry['provider'] !== 'string' || entry['provider'] === '' ||
+    typeof entry['endedAt'] !== 'string' || typeof entry['requestedBy'] !== 'string' ||
+    !AGENT_REASONS.includes(String(entry['reason'])) || !['handover', 'transcript'].includes(String(entry['carried']))) return null;
+  for (const key of ['model', 'effort', 'providerSessionId', 'startedAt']) if (!nullableString(entry[key])) entry[key] = null;
+  if (entry['usage'] !== undefined && !isRecord(entry['usage'])) delete entry['usage'];
+  if (entry['costUsd'] !== undefined && entry['costUsd'] !== null && !(typeof entry['costUsd'] === 'number' && Number.isFinite(entry['costUsd']) && entry['costUsd'] >= 0)) delete entry['costUsd'];
+  return entry;
+}
+
+/** Поля замены агента (спека 2026-10-30, 5.1): старые карты без них читаются как есть, кривые значения убираются. */
+function normalizeAgentFields(session: Record<string, unknown>): void {
+  const previous = session['previousAgents'];
+  if (previous !== undefined) {
+    const kept = Array.isArray(previous)
+      ? previous.map(normalizeBinding).filter((entry): entry is Record<string, unknown> => entry !== null).slice(-20) : [];
+    if (kept.length === 0) delete session['previousAgents'];
+    else session['previousAgents'] = kept;
+  }
+  const switching = session['switching'];
+  if (switching !== undefined && switching !== null &&
+    !(isRecord(switching) && typeof switching['id'] === 'string' && typeof switching['to'] === 'string' && typeof switching['since'] === 'string')) {
+    delete session['switching'];
+  }
+  if (session['agentRevision'] !== undefined && !nullableString(session['agentRevision'])) delete session['agentRevision'];
 }

@@ -369,6 +369,8 @@ export type { HostLease } from './work/lease.js';
 export { decisionsOf, participantLabel, sessionMention, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export { applyAgentSwitch, PREVIOUS_AGENTS_MAX, switchBlockers } from './work/agent-switch.js';
+export type { AgentTarget } from './work/agent-switch.js';
 export {
   applyAutoTitle,
   autoTitleOf,
@@ -646,6 +648,7 @@ export type {
   WorkMap,
   WorkProvider,
   WorkSession,
+  AgentBinding,
   CodexThreadBinding,
   WorkStatus,
   WorksIndex,

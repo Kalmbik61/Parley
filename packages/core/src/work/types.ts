@@ -99,6 +99,26 @@ export interface CodexThreadBinding {
   threadId: string | null;
 }
 
+/** Прежний агент сессии: что был за провайдер и разговор, почему сменён (спека 2026-10-30, 5.1). */
+export interface AgentBinding {
+  provider: string;
+  model: string | null;
+  effort: string | null;
+  providerSessionId: string | null;
+  /** Первый старт этого агента. */
+  startedAt: string | null;
+  /** Момент замены. */
+  endedAt: string;
+  reason: 'limit' | 'sign-in' | 'provider-missing' | 'manual' | 'model';
+  /** `human` или id сессии, чей запрос одобрен. */
+  requestedBy: string;
+  carried: 'handover' | 'transcript';
+  /** Снимок расхода отрезка `[startedAt, endedAt)`. */
+  usage?: FrozenUsage;
+  /** Стоимость отрезка по данным лога провайдера; `null` или нет поля — лог её не сообщает. */
+  costUsd?: number | null;
+}
+
 export interface WorkSession {
   id: string;
   /** Explicit personal steps, published by this session; separate from accepted room assignments. */
@@ -184,6 +204,12 @@ export interface WorkSession {
    * Нет поля — то же, что `null`: миграции карты не нужно.
    */
   stuck?: SessionNeed | null;
+  /** Прежние агенты, новые в конце, не больше 20. Нет поля — сессию не переводили. */
+  previousAgents?: AgentBinding[];
+  /** Идёт замена агента: `wait_for` не считает сессию уснувшей, будильник её не поднимает. Снимает оркестратор. */
+  switching?: { id: string; to: string; since: string } | null;
+  /** Ревизия текущего запуска (= `NATIVE_CONTEXT_REVISION`): ограда записей MCP от прежнего процесса. */
+  agentRevision?: string | null;
 }
 
 /**
