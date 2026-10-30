@@ -246,6 +246,12 @@ export const S = {
     title: 'Token usage',
     since: 'Since each member joined',
     sessionScope: 'This session, all time',
+    /** Строка отрезка расхода сессии, которую переводили на другого агента (спека 2026-10-30, 5.9). */
+    segmentLine: (head: string, from: string, to: string, tokens: string, cost: number | null): string =>
+      `${head} · ${from}–${to} — ${tokens}${cost === null ? '' : `, ≈ $${cost.toFixed(2)} (list price)`}`,
+    segmentNow: 'now',
+    segmentUnknown: '?',
+    segments: (n: number): string => `${n} segments`,
     columns: ['In', 'Out', 'Cache read', 'Cache write'],
     total: 'Total',
     lead: 'lead',

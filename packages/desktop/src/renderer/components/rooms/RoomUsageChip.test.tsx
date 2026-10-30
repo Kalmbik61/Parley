@@ -225,4 +225,15 @@ describe('RoomUsageChip (спека расхода токенов, 3.1–3.3)', 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]?.[0]).toContain('**Room “Payments” (r-01) — token usage**');
   });
+
+  it('у переведённой на другого агента сессии — пометка «N segments», у прочих нет', async () => {
+    bridge.setHandler('rooms.usage', () => USAGE);
+    const binding = { provider: 'codex', model: null, effort: null, providerSessionId: null, startedAt: null, endedAt: T0, reason: 'manual' as const, requestedBy: 'human', carried: 'handover' as const };
+    const switched = { ...entry, map: { ...entry.map, sessions: [makeSession('s-01', 'Planner', { previousAgents: [binding, binding] }), makeSession('s-02', 'Backend')] } };
+    render(<RoomUsageChip bridge={bridge} entry={switched} roomId="r-01" active providers={PROVIDERS} />);
+    fireEvent.click(await screen.findByText('↑1.2M ↓84k'));
+    const popover = await screen.findByTestId('room-usage-popover');
+    const details = [...popover.querySelectorAll('[data-usage-detail]')].map((node) => node.textContent ?? '');
+    expect(details.filter((text) => text.includes('3 segments'))).toHaveLength(1);
+  });
 });
