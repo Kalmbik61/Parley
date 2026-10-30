@@ -42,6 +42,12 @@ export function createHeldLaunchActions(deps: HeldLaunchDeps): {
         const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
         // Сессии уже нет или её закрыли за время ожидания: отказывать нечему.
         if (session === undefined || session.lifecycle === 'closed') return;
+        // Новый агент после замены (спека замены агента, 5.3): отказ в папке не закрывает сессию — она спит с новым
+        // провайдером, замена окончена, и человек продолжит её на другом провайдере или поднимет позже.
+        if (session.switching !== null && session.switching !== undefined) {
+          session.switching = null;
+          return;
+        }
         open = true;
         setResult(map, ref.sessionId, 'failed');
         // Создатель — родитель записи или тот, чей id пришёл как `by` (`create_session` ставит его); у запуска человека
