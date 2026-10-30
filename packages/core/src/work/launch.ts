@@ -20,9 +20,9 @@ import { prepareWorktreeGitWrites } from './worktree.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
-import { claudeProjectRoots } from '../discover.js';
+import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
-import { bothEnv } from '../names.js';
+import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
@@ -74,6 +74,11 @@ export interface LaunchOptions {
    * печатает указатель сам после первого простоя.
    */
   prompt?: string;
+  /**
+   * Пакет передачи при замене агента (спека передачи сессии, 5.4): уходит первым сообщением после брифа
+   * (у тихой сессии — единственным). Только в режиме `launch`; в `resume` и `new` игнорируется.
+   */
+  handover?: string;
   /**
    * Явный выбор модели и усилия для запуска перекрывает выбор, записанный в карте
    * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`. Нет выбора — умолчание
@@ -186,9 +191,9 @@ async function writtenBrief(
  * (их нет, нет доступа) — разговор считается, и остаётся прежний `--resume`: новый процесс с занятым id
  * Claude Code не запустит («Session ID … is already in use»), а это хуже, чем «No conversation found».
  */
-async function claudeConversationExists(id: string): Promise<boolean> {
+async function claudeConversationExists(id: string, roots: string[] = claudeProjectRoots()): Promise<boolean> {
   let readAny = false;
-  for (const root of claudeProjectRoots()) {
+  for (const root of roots) {
     let projects: Dirent[];
     try {
       projects = await readdir(root, { withFileTypes: true });
@@ -206,6 +211,16 @@ async function claudeConversationExists(id: string): Promise<boolean> {
     }
   }
   return !readAny;
+}
+
+/**
+ * Корни, где искать разговор записи провайдера: известна своя папка конфигурации (аккаунт Claude, свой провайдер) —
+ * только её `projects`, чтобы транскрипт чужого аккаунта не сошёл за свой. Подмена тестов и записи без своей
+ * папки — все корни, как раньше.
+ */
+function conversationRoots(entry: ProviderEntry): string[] {
+  if (envValue(process.env, CLAUDE_PROJECTS_DIR_KEY) !== undefined) return claudeProjectRoots();
+  return entry.runner.configDir === undefined ? claudeProjectRoots() : [path.join(entry.runner.configDir, 'projects')];
 }
 
 /**
@@ -268,7 +283,7 @@ async function plan(
   const resuming =
     mode === 'resume' &&
     session.providerSessionId !== null &&
-    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId)));
+    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry))));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -568,7 +583,8 @@ async function plan(
     // Сессию без разговора, поднятую письмом, указатель догоняет её первым сообщением: будильник уже
     // счёл письма указанными (`{prompt}` в `resumeArgs`) и второй раз их не напечатает.
     const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
-    const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
+    const handover = mode === 'launch' ? (options.handover ?? '') : '';
+    const first = [brief, handover, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
