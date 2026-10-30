@@ -78,7 +78,15 @@ describe('ChatToolbar — где человек: тег и ярлык сесси
     // Обрезка многоточием и только свободное место: соседей подпись не теснит.
     expect(title.className).toContain('truncate');
     expect(title.className).toContain('min-w-0');
-    expect(title.className).toContain('flex-1');
+    // Плашка: без капса и разрядки, токены заливки и текста, шрифт приложения.
+    expect(title.className).not.toContain('uppercase');
+    expect(title.className).not.toContain('tracking');
+    expect(title.className).toContain('bg-(--session-title-fill)');
+    expect(title.className).toContain('text-(--session-title-ink)');
+    expect(title.className).toContain('font-sans');
+    expect(title.className).toContain('text-[20px]');
+    expect(title.className).toContain('font-semibold');
+    expect(screen.getByTestId('chat-toolbar-plate').querySelectorAll('svg')).toHaveLength(2);
     rerender(<ChatToolbar workKey={KEY} tabId="terminal:s-38" view="terminal" available provider="claude" />);
     expect(screen.getByTestId('chat-toolbar-title').textContent).toBe('S38 УЛУЧШАЙЗИНГ-ЛИД');
 
