@@ -368,7 +368,7 @@ describe('telegram: карточка agent-switch', () => {
     await bootLinked();
     const message = await sendCard(SWITCH);
     expect(message.params.text).toBe(
-      '<b>Continue on another provider?</b>\n@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near\nRequested by Greta · my_harnas',
+      '<b>Continue on another provider?</b>\n@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near. Allow stops @s03 now and continues it there.\nRequested by Greta · my_harnas',
     );
     const shortId = shortIdOf(message);
     expect(buttons(message).map((b) => [b.text, b.callback_data])).toEqual([['Allow', `pc1:${shortId}:a`], ['Deny', `pc1:${shortId}:d`]]);

@@ -114,6 +114,8 @@ export function SwitchAgentDialog({ bridge, sessionRef, onClose }: SwitchAgentDi
 
   const submit = async (force: boolean): Promise<void> => {
     if (busy || target === null) return;
+    // «Default» — умолчание роли: поля не шлются, иначе `null` перебил бы модель и effort роли (как в «New session»).
+    const sentEffort = chosenEffort({ model: shownModel, effort }, info);
     setBusy(true);
     setError(null);
     try {
@@ -121,8 +123,8 @@ export function SwitchAgentDialog({ bridge, sessionRef, onClose }: SwitchAgentDi
         ref: sessionRef,
         requestId,
         provider: target.id,
-        model: shownModel,
-        effort: chosenEffort({ model: shownModel, effort }, info),
+        ...(shownModel === null ? {} : { model: shownModel }),
+        ...(sentEffort === null ? {} : { effort: sentEffort }),
         carry: effectiveCarry,
         ...(force ? { force: true } : {}),
       });

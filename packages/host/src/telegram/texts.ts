@@ -92,7 +92,7 @@ export const T = {
   consentRequestedBy: (label: string, project: string): string => `Requested by ${label} · ${project}`,
   switchTitle: 'Continue on another provider?',
   switchAsks: (card: { ref: { sessionId: string }; providerLabel: string; model: string | null; reason: string; requestedBy: { sessionId: string } }): string =>
-    `@${card.requestedBy.sessionId.replace('-', '')} asks to continue @${card.ref.sessionId.replace('-', '')} on ${card.providerLabel}${card.model === null ? '' : ` (${card.model})`}: ${card.reason}`,
+    `@${card.requestedBy.sessionId.replace('-', '')} asks to continue @${card.ref.sessionId.replace('-', '')} on ${card.providerLabel}${card.model === null ? '' : ` (${card.model})`}: ${card.reason}${/[.!?]$/.test(card.reason) ? '' : '.'} Allow stops @${card.ref.sessionId.replace('-', '')} now and continues it there.`,
   trusted: 'Trusted ✓',
   switchAllowed: 'Allowed ✓',
   denied: 'Denied',

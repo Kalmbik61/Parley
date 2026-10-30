@@ -82,6 +82,15 @@ describe('SwitchAgentDialog', () => {
     expect(calls()[0]?.['force']).toBeUndefined();
   });
 
+  it('без выбора модели и effort в вызове нет полей model и effort (умолчание роли не перебивается)', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('radio', { name: /Codex/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(calls()).toHaveLength(1));
+    expect(calls()[0]).not.toHaveProperty('model');
+    expect(calls()[0]).not.toHaveProperty('effort');
+  });
+
   it('blockers — список, кнопка недоступна, вызова нет', async () => {
     await open(options({ blockers: ['The session is closed'] }));
     expect(screen.getByText('The session is closed')).toBeTruthy();

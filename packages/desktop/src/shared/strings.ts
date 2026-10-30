@@ -1085,7 +1085,7 @@ export const S = {
     /** Просьба агента продолжить сессию на другом провайдере (`request_agent_switch`, карточка `agent-switch`). */
     agentSwitch: {
       title: 'Continue on another provider?',
-      asks: (who: string, target: string, provider: string, reason: string): string => `${who} asks to continue ${target} on ${provider}: ${reason}`,
+      asks: (who: string, target: string, provider: string, reason: string): string => `${who} asks to continue ${target} on ${provider}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'} Allow stops ${target} now and continues it there.`,
       allow: 'Allow',
       deny: 'Deny',
     },
