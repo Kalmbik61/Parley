@@ -183,7 +183,7 @@ export function installKeyHandler(input: {
       // Сочетание окна не нашлось: печатный символ вне полей уходит в поле сообщения. Без
       // preventDefault — браузер доставит символ уже в сфокусированное поле.
       const hasOpenDialog = document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
-      if (shouldTypeToFocus(event, context, paletteOpen(), hasOpenDialog)) focusComposer();
+      if (shouldTypeToFocus(event, context, paletteOpen(), hasOpenDialog, document.activeElement)) focusComposer();
       return;
     }
     if (typeof resolved !== 'string') {
