@@ -48,6 +48,8 @@ describe('switchRequestDenial (права на просьбу, спека зам
     const closed = mapOf((m) => { m.sessions[1]!.lifecycle = 'closed'; });
     expect(switchRequestDenial(closed, 's-02', 's-02')).toMatch(/closed/);
     expect(switchRequestDenial(mapOf(), 's-01', 's-99')).toMatch(/not in this workspace/);
+    const engine = mapOf((m) => { m.sessions[1]!.workspace = { kind: 'clone', path: '/tmp/attempt', branch: 'attempt', sha: 'abc' }; });
+    expect(switchRequestDenial(engine, 's-02', 's-02')).toMatch(/autonomous engine/);
   });
 });
 

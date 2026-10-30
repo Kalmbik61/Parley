@@ -17,6 +17,8 @@ export function switchRequestDenial(map: WorkMap, requester: string, targetId: s
   const target = map.sessions.find((session) => session.id === targetId);
   if (target === undefined) return `session ${targetId} is not in this workspace`;
   if (target.lifecycle === 'closed') return `session ${targetId} is closed`;
+  // Сессии движка autonomous агента не меняют (спека 6.7): отказ сразу, а не после `allow` человека.
+  if ((target.workspace ?? null) !== null) return `session ${targetId} belongs to the autonomous engine and cannot change agent`;
   if (requester === targetId || target.parent === requester || target.createdBy === requester) return null;
   for (const room of map.rooms) {
     if (!isMember(room, targetId)) continue;
