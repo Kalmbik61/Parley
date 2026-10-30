@@ -77,6 +77,7 @@ import {
   userClaudeConfigDir,
   userClaudeJsonPath,
   readSecret,
+  noteCreation,
   openEvents,
   planLaunch,
   planNew,
@@ -87,6 +88,7 @@ import {
   validateSpawnBudget,
   SpawnBudgetError,
   readMap,
+  recentCreations,
   reserveAttempt,
   roomOfSession,
   ResourceDeniedError,
@@ -1336,8 +1338,10 @@ export function createSessionsService(
         const room = input.requestedBy === ENGINE
           ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${plan.id}/${op.attemptId}/${op.payload.role}/${op.key}`))?.roomId ?? null
           : roomOfSession(map, caller!.id);
-        const used = map.resources?.spawned ?? 0;
-        const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
+        // Пороги считают создания за последние сутки (журнал `recent`); пожизненные `spawned` и `spawnedByRoom` — только история.
+        const now = Date.now();
+        const used = recentCreations(map, 'session', now);
+        const roomUsed = room === null ? 0 : recentCreations(map, 'session', now, room);
         if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
         if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
         if (!awaitsConsent && !input.deferLaunch) {
@@ -1348,7 +1352,8 @@ export function createSessionsService(
           map.resources ??= { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [] };
         }
         map.resources!.spawned += 1;
-        if (room !== null) map.resources!.spawnedByRoom[room] = roomUsed + 1;
+        if (room !== null) map.resources!.spawnedByRoom[room] = (map.resources!.spawnedByRoom[room] ?? 0) + 1;
+        noteCreation(map, 'session', room, now);
       }));
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
