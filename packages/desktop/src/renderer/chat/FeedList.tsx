@@ -24,7 +24,7 @@
  * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
  */
 
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FeedError, FeedItem } from '@parley/core';
@@ -40,8 +40,11 @@ import { ErrorItem } from './items/ErrorItem.js';
 import { NoticeItem } from './items/NoticeItem.js';
 import { PromptItem } from './items/PromptItem.js';
 import { TextItem } from './items/TextItem.js';
+import { ProcessGroup } from './items/ProcessGroup.js';
 import { ToolItem } from './items/ToolItem.js';
+import { TurnControl } from './items/TurnControl.js';
 import { TurnItem } from './items/TurnItem.js';
+import { foldFeed, type FoldMode, type FoldRow, type TurnStatus } from './turn-fold.js';
 
 /** Лента «у низа», если до дна не больше стольких px — как у комнаты. */
 const AT_BOTTOM_PX = 48;
@@ -66,7 +69,15 @@ export interface OutboxPrompt {
 
 const NO_OUTBOX: readonly OutboxPrompt[] = [];
 
-type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt } | { key: string; outbox: OutboxPrompt };
+/** Ключ раскрытия группы в `expanded`: ключ группы — `id` её первого элемента, а у вызова тот же `id` занят его собственным раскрытием. */
+const groupOpenKey = (key: string): string => `group:${key}`;
+
+type Row =
+  | { key: string; item: FeedItem }
+  | { key: string; queued: QueuedPrompt }
+  | { key: string; outbox: OutboxPrompt }
+  | { key: string; control: { status: TurnStatus; durationMs: number | null; groupKeys: string[] } }
+  | { key: string; group: Extract<FoldRow, { kind: 'group' }> };
 
 export interface FeedListProps {
   items: readonly FeedItem[];
@@ -90,6 +101,8 @@ export interface FeedListProps {
   onRevealed?: (nonce: number) => void;
   /** Id промптов, которые отправил помощник (`viaAssistantIds`): над пузырём «via assistant». */
   viaIds?: ReadonlySet<string>;
+  /** Свёртка законченных ходов (настройка «Finished turns»); по умолчанию — `replies`. */
+  fold?: FoldMode;
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
@@ -153,14 +166,9 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds, fold = 'replies' }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
-  const rows: Row[] = [
-    ...items.map((item) => ({ key: item.id, item })),
-    ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
-    ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
-  ];
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -168,6 +176,54 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     setExpanded((was) => {
       const next = new Set(was);
       if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
+  /** Фокус внутри строки элемента ленты: группа с ним не сворачивается, когда ход заканчивается. */
+  const focusedRef = useRef<string | null>(null);
+
+  const { foldRows, forcedKey } = useMemo(() => {
+    const open = new Set<string>();
+    for (const id of expanded) if (id.startsWith('group:')) open.add(id.slice('group:'.length));
+    const first = foldFeed(items, fold, open);
+    const focused = focusedRef.current;
+    const hiding = focused === null ? undefined : first.find((row) => row.kind === 'group' && !row.open && row.items.some((item) => item.id === focused));
+    if (hiding === undefined) return { foldRows: first, forcedKey: null };
+    return { foldRows: foldFeed(items, fold, new Set([...open, hiding.key])), forcedKey: hiding.key };
+  }, [items, fold, expanded]);
+  useLayoutEffect(() => {
+    if (forcedKey !== null) setExpanded((was) => new Set(was).add(groupOpenKey(forcedKey)));
+  }, [forcedKey]);
+
+  const rows: Row[] = useMemo(() => {
+    const out: Row[] = [];
+    let control: Extract<Row, { control: unknown }> | null = null;
+    for (const row of foldRows) {
+      if (row.kind === 'item') {
+        if (row.item.kind === 'prompt') control = null;
+        out.push({ key: row.key, item: row.item });
+      } else if (row.kind === 'control') {
+        control = { key: row.key, control: { status: row.status, durationMs: row.durationMs, groupKeys: [] } };
+        out.push(control);
+      } else {
+        control?.control.groupKeys.push(row.key);
+        out.push({ key: `group:${row.key}`, group: row });
+      }
+    }
+    return out;
+  }, [foldRows]);
+  const allRows: Row[] = [
+    ...rows,
+    ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
+    ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
+  ];
+  const toggleGroups = useCallback((keys: readonly string[], open: boolean): void => {
+    setExpanded((was) => {
+      const next = new Set(was);
+      for (const key of keys) {
+        if (open) next.delete(groupOpenKey(key));
+        else next.add(groupOpenKey(key));
+      }
       return next;
     });
   }, []);
@@ -184,13 +240,13 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
   }, []);
 
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: allRows.length,
     getScrollElement: () => scroller,
     estimateSize: (index) => {
-      const row = rows[index];
+      const row = allRows[index];
       return ESTIMATE_PX + (row !== undefined && 'item' in row ? imagesExtraPx(row.item) : 0);
     },
-    getItemKey: (index) => rows[index]?.key ?? index,
+    getItemKey: (index) => allRows[index]?.key ?? index,
     initialRect: INITIAL_RECT,
     overscan: 6,
     paddingEnd: 12,
@@ -228,7 +284,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
   // Новый элемент, выросший текст, замер высоты — у низа лента остаётся у низа.
   useLayoutEffect(() => {
     if (atBottomRef.current) pinToBottom();
-  }, [pinToBottom, total, rows.length, last, working !== undefined]);
+  }, [pinToBottom, total, allRows.length, last, working !== undefined]);
 
   // Просьба показать карточку агента (`agentId`) или любой элемент по `id` (`itemId`, например ждущая карточка
   // разрешения из уведомления). Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
@@ -236,16 +292,20 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
   // ленту обратно к низу; доехала лента до дна сама — `scroll` вернёт его. Просьба гаснет, когда карточка найдена.
   useLayoutEffect(() => {
     if (reveal === undefined) return;
-    const at = rows.findIndex((row) => {
-      if (!('item' in row)) return false;
-      return 'agentId' in reveal ? row.item.kind === 'agent' && row.item.agentId === reveal.agentId : row.item.id === reveal.itemId;
-    });
-    if (at === -1) return;
+    const matches = (item: FeedItem): boolean =>
+      'agentId' in reveal ? item.kind === 'agent' && item.agentId === reveal.agentId : item.id === reveal.itemId;
+    const at = allRows.findIndex((row) => 'item' in row && matches(row.item));
+    if (at === -1) {
+      // Элемент может лежать в свёрнутой группе: раскрываем её, просьба сработает на следующей отрисовке.
+      const hiding = foldRows.find((row) => row.kind === 'group' && !row.open && row.items.some(matches));
+      if (hiding !== undefined) setExpanded((was) => new Set(was).add(groupOpenKey(hiding.key)));
+      return;
+    }
     atBottomRef.current = false;
     setAtBottom(false);
     virtualizer.scrollToIndex(at, { align: 'start' });
     onRevealed?.(reveal.nonce);
-  }, [reveal, items, onRevealed]);
+  }, [reveal, items, foldRows, onRevealed]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -259,7 +319,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
         tabIndex={-1}
         className="min-h-0 flex-1 overflow-y-auto outline-none"
       >
-        {note === null || rows.length > 0 ? null : (
+        {note === null || allRows.length > 0 ? null : (
           <div className="flex items-center gap-2 px-4 py-3">
             <p className="m-0 text-sm text-muted-foreground">{note}</p>
             {onRetry === undefined ? null : (
@@ -271,9 +331,9 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
         )}
         <div className="relative w-full" style={{ height: total }}>
           {virtualizer.getVirtualItems().map((virtual) => {
-            const row = rows[virtual.index];
+            const row = allRows[virtual.index];
             if (row === undefined) return null;
-            const previous = rows[virtual.index - 1];
+            const previous = allRows[virtual.index - 1];
             const stacked =
               'item' in row && row.item.kind === 'agent' && previous !== undefined && 'item' in previous && previous.item.kind === 'agent';
             return (
@@ -281,6 +341,10 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                 key={virtual.key}
                 data-index={virtual.index}
                 data-feed-id={'item' in row ? row.item.id : undefined}
+                onFocusCapture={'item' in row ? () => { focusedRef.current = row.item.id; } : undefined}
+                onBlurCapture={'item' in row ? (event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusedRef.current = null;
+                } : undefined}
                 ref={virtualizer.measureElement}
                 className={cn('absolute left-0 top-0 w-full px-4', stacked ? 'pt-1' : 'pt-3')}
                 style={{ transform: `translateY(${virtual.start}px)` }}
@@ -294,6 +358,24 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                       onToggle={toggle}
                       onTranscript={updateTranscript}
                       via={viaIds?.has(row.item.id) === true}
+                    />
+                  ) : 'control' in row ? (
+                    <TurnControl
+                      status={row.control.status}
+                      durationMs={row.control.durationMs}
+                      hasGroups={row.control.groupKeys.length > 0}
+                      open={row.control.groupKeys.length > 0 && row.control.groupKeys.every((key) => expanded.has(groupOpenKey(key)))}
+                      onToggle={() => {
+                        const keys = row.control.groupKeys;
+                        toggleGroups(keys, keys.every((key) => expanded.has(groupOpenKey(key))));
+                      }}
+                    />
+                  ) : 'group' in row ? (
+                    <ProcessGroup
+                      title={row.group.title}
+                      open={row.group.open}
+                      items={row.group.items}
+                      onToggle={() => toggleGroups([row.group.key], row.group.open)}
                     />
                   ) : 'queued' in row ? (
                     <PromptItem text={row.queued.text} state="queued" />

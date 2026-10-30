@@ -18,6 +18,7 @@ import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.
 import { ChatEnvContext } from '../chat-env.js';
 import { FeedList } from '../FeedList.js';
 import { ImagePreviewHost } from '../ImagePreview.js';
+import type { FoldMode } from '../turn-fold.js';
 import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { AgentItem, type Transcript } from './AgentItem.js';
 import { PromptItem } from './PromptItem.js';
@@ -57,10 +58,10 @@ function renderWithEnv(node: JSX.Element): ReturnType<typeof render> {
   return render(<ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}>{node}</ChatEnvContext.Provider>);
 }
 
-function renderFeed(items: readonly FeedItem[]): ReturnType<typeof render> {
+function renderFeed(items: readonly FeedItem[], fold?: FoldMode): ReturnType<typeof render> {
   return renderWithEnv(
     <div style={{ height: 600 }}>
-      <FeedList items={items} queued={[]} note={null} />
+      <FeedList items={items} queued={[]} note={null} {...(fold === undefined ? {} : { fold })} />
     </div>,
   );
 }
@@ -151,7 +152,7 @@ describe('лента на фикстурах core', () => {
 
   it('p5b журнал: вызов Edit с диффом -beta/+gamma, номера строк и цвета ревью', () => {
     const { items } = transcript('transcript-p5b-write');
-    renderFeed(items);
+    renderFeed(items, 'off');
     const edits = screen.getAllByTestId('chat-tool').filter((row) => row.querySelector('[data-tool-name]')?.textContent === 'Edit');
     expect(edits).toHaveLength(1);
     const edit = edits[0]!;
@@ -170,7 +171,7 @@ describe('лента на фикстурах core', () => {
 
   it('p6b: карточка агента Explore, «agent reported» — служебная строка, а не промпт', () => {
     const { items } = replay('p6b-subagents');
-    renderFeed(items);
+    renderFeed(items, 'off');
     const card = screen.getByTestId('chat-agent');
     expect(card.textContent).toContain('List project files');
     expect(card.getAttribute('data-agent-status')).toBe('done');
@@ -221,7 +222,8 @@ describe('лента на фикстурах core', () => {
       'Session ended · exit',
     ]);
     expect(screen.getByRole('alert').textContent).toContain('Too many requests');
-    expect(screen.getByTestId('chat-turn').textContent).toBe('Turn finished · 5s');
+    // Упавший ход (error без retry) — строка «Failed» вместо черты; сама черта «Turn finished» — в режиме off.
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Failed');
   });
 
   it('codex-history-in-terminal — строка окна и кнопка «Open terminal»', () => {

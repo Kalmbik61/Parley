@@ -29,6 +29,8 @@ export type FoldRow =
       title: string;
       /** Сколько элементов ленты в группе. */
       count: number;
+      /** Элементы группы: из них строится текстовая тень свёрнутой группы и ищется скрытый элемент. */
+      items: FeedItem[];
     };
 
 const READ = new Set(['Read', 'NotebookRead', 'ViewImage']);
@@ -122,7 +124,7 @@ function foldBody(body: readonly FeedItem[], mode: 'replies' | 'final', openKeys
     if (run.length === 0) return;
     const key = run[0]!.id;
     const open = openKeys.has(key);
-    rows.push({ kind: 'group', key, open, count: run.length, ...groupTitle(run) });
+    rows.push({ kind: 'group', key, open, count: run.length, items: run, ...groupTitle(run) });
     if (open) for (const item of run) rows.push(itemRow(item));
     run = [];
   };

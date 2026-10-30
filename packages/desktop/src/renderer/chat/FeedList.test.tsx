@@ -305,3 +305,84 @@ describe('FeedList — просьба показать карточку аген
     expect(scroller.scrollTo).not.toHaveBeenCalled();
   });
 });
+
+
+describe('FeedList — свёртка законченного хода', () => {
+  const prompt = (id: string): FeedItem => ({ id, at: AT, kind: 'prompt', text: 'go', images: 0 });
+  const tool = (id: string, name = 'Read'): FeedItem => ({ id, at: AT, kind: 'tool', toolUseId: id, name, input: { file_path: `/src/${id}.ts` }, status: 'done' });
+  const turn = (id: string): FeedItem => ({ id, at: AT, kind: 'turn', durationMs: 151_000 });
+  const finished = (): FeedItem[] => [prompt('p1'), tool('t1'), tool('t2', 'Bash'), text('a1', 'answer'), turn('u1')];
+
+  it('законченный ход: строка статуса, заголовок группы, ответ; вызовов в DOM нет', () => {
+    render(feed(finished()));
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Completed in 2m 31s');
+    const header = screen.getByRole('button', { name: 'Read files, ran commands' });
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(header.getAttribute('title')).toBe('Read files, ran commands');
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    expect(screen.getByTestId('chat-text').textContent).toBe('answer');
+  });
+
+  it('заголовок раскрывает группу кликом и клавишей; фокус остаётся на кнопке', () => {
+    render(feed(finished()));
+    const header = screen.getByRole('button', { name: 'Read files, ran commands' });
+    header.focus();
+    fireEvent.click(header);
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(document.activeElement).toBe(header);
+    fireEvent.click(header);
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    expect(document.activeElement).toBe(header);
+  });
+
+  it('строка статуса хода раскрывает и сворачивает все его группы', () => {
+    render(feed(finished()));
+    const control = screen.getByTestId('chat-turn');
+    expect(control.tagName).toBe('BUTTON');
+    fireEvent.click(control);
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(control.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(control);
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+  });
+
+  it('ход без групп — статичная строка, не кнопка', () => {
+    render(feed([prompt('p1'), text('a1', 'answer'), turn('u1')]));
+    expect(screen.getByTestId('chat-turn').tagName).toBe('DIV');
+  });
+
+  it('режим off — лента как раньше, черта «Turn finished»', () => {
+    render(<ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}><FeedList items={finished()} queued={[]} note={null} fold="off" /></ChatEnvContext.Provider>);
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Turn finished · 3m');
+  });
+
+  it('свёрнутая группа держит тень под hidden=until-found; beforematch раскрывает группу', () => {
+    render(feed(finished()));
+    const shadow = screen.getByTestId('chat-process-shadow');
+    expect(shadow.getAttribute('hidden')).toBe('until-found');
+    expect(shadow.textContent).toContain('/src/t1.ts');
+    expect(shadow.querySelector('button, a, img, input')).toBeNull();
+    act(() => { shadow.dispatchEvent(new Event('beforematch')); });
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(screen.queryByTestId('chat-process-shadow')).toBeNull();
+  });
+
+  it('фокус внутри вызова, когда ход заканчивается, — группа остаётся открытой', () => {
+    const running = [prompt('p1'), tool('t1'), text('a1', 'answer')];
+    const view = render(feed(running));
+    const button = within(screen.getAllByTestId('chat-tool')[0]!).getByRole('button');
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    view.rerender(feed([...running, turn('u1')]));
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Read files' }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('reveal элемента из свёрнутой группы раскрывает её и зовёт onRevealed', () => {
+    const onRevealed = vi.fn();
+    render(feed(finished(), undefined, { request: { itemId: 't2', nonce: 7 }, onRevealed }));
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(onRevealed).toHaveBeenCalledWith(7);
+  });
+});
