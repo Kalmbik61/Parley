@@ -6,8 +6,18 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- A session can continue on another provider: "Continue on another provider…" in the session menu, in the banner above the chat composer ("Out of … usage until …"), on the card of a session that is not running, and in the usage-limit notification opens a dialog to pick the provider, model and effort. The session keeps its id, rooms, leadership, child sessions, mail and worktree; only the agent behind it changes. The new agent gets a handover package as its first message (a brief from the map, the state of its obligations, the working copy and the tail of the previous conversation), the feed shows a "Continued on …" divider, and the room lead gets a letter from `parley`. The conversation itself can also be carried over between Claude accounts.
+- An agent can ask for such a switch with `request_agent_switch`: the request arrives as a consent card in the window, the island and Telegram, and nothing happens without the human's answer.
+- Session usage is split into segments by agent: the usage popover lists each provider, account and model the session ran on with its own tokens and cost, and the room total sums the segments.
+
 ### Changed
 
+- Letters to agents about a usage limit now suggest continuing the session on another provider.
+- A change of a room's owner writes a line into the room feed and sends letters to the new and the previous owner.
+- Sessions of a removed provider now sleep safely: mail waits (`provider-missing`) instead of failing a resume, and the not-running card offers "Continue on another provider…" instead of Resume.
+- Confirming the removal of your own provider account lists the sessions that run on it, each with "Continue on…".
 - Reply on an agent's message in a room now addresses that agent: the letter goes to them without a hand-typed `@`, joined with any mentions you add. The plate above the composer reads "Reply to S07 …" (and notes when the author has left the room); × removes both the quote and the addressee. `rooms.send` takes an optional `replyTo`, so the host stores the link like an agent's `send_message replyTo` and the feed shows a native quote instead of a Markdown copy; a selected fragment still travels as a `>` quote.
 - The session title in the chat toolbar is a plate hanging from the top edge of the panel, like a notch: the title is shown as written (no capitals, no letter spacing) in the app font, on an accent fill with smooth curved sides. Colours come from the new `--session-title-fill` / `--session-title-ink` tokens in both themes.
 - An agent can close the pages it opened in the browser panel with the new `browser_close` tool, so it can free a slot at the limit of 5 pages instead of asking the human. Pages the human opened or moved into the panel cannot be closed this way. Closing works like the cross on a page tab: the active page moves to a neighbour, the last page removes the panel, and keyboard focus and the active tab do not change.
