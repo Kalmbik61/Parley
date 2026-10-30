@@ -16,6 +16,7 @@ import { makeMailEvent, makeMailRoom, makeNeed } from '../test-utils/work-fixtur
 import { useActivityStore } from '../store/activity.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { useSwitchAgentStore } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import type { PendingAsk } from './ask-summary.js';
@@ -87,6 +88,7 @@ interface Harness {
   /** Громкость звуков острова выше 0. */
   audible: boolean;
   windowNotes: WindowNote[];
+  canContinueOn: boolean;
   hidden: string[];
   /** Сколько раз окно позвонило своим сигналом «нужно действие» (спека застрявших 7.2). */
   chimes: number;
@@ -106,6 +108,7 @@ function harness(entries: WindowWorkEntry[]): Harness {
     island: false,
     audible: true,
     windowNotes: [],
+    canContinueOn: false,
     hidden: [],
     chimes: 0,
     asks: [null],
@@ -120,6 +123,7 @@ function harness(entries: WindowWorkEntry[]): Harness {
     isTargetVisible: (target: FocusTarget) => h.visible.has(JSON.stringify(target)),
     entries: () => h.entries,
     windowActive: () => h.active,
+    canContinueOn: () => h.canContinueOn,
     showInWindow: (note) => h.windowNotes.push(note),
     hideInWindow: (tag) => h.hidden.push(tag),
     pendingAsk: h.pendingAsk,
@@ -1994,6 +1998,30 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     expect(h.notes.map((note) => note.tag)).toEqual(['limit:codex', 'limit:codex']);
     expect(h.notes[1]).toMatchObject({ title: 'Codex usage limit reached', body: 'S02, S03 wait until 16:27' });
     expect(h.chimes).toBe(2);
+  });
+
+  it('лимит при окне в фокусе и sessions.switchAgent — карточка в окне с «Continue on…», действие открывает диалог', async () => {
+    const h = harness([codexPair()]);
+    h.active = true;
+    h.canContinueOn = true;
+    hit(h, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(h.notes).toEqual([]);
+    expect(h.windowNotes).toHaveLength(1);
+    const action = h.windowNotes[0]?.action;
+    expect(action?.label).toBe('Continue on…');
+    action?.run();
+    expect(useSwitchAgentStore.getState().ref).toEqual(ref2);
+    useSwitchAgentStore.setState({ ref: null });
+  });
+
+  it('лимит при окне в фокусе, но без sessions.switchAgent — прежний баннер', async () => {
+    const h = harness([codexPair()]);
+    h.active = true;
+    hit(h, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(h.windowNotes).toEqual([]);
+    expect(h.notes).toHaveLength(1);
   });
 
   it('лимит без времени сброса — «time unknown»; аккаунт называется именем, которое отдаёт providerName', async () => {

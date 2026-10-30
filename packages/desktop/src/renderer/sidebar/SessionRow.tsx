@@ -65,6 +65,7 @@ import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { relativeTime } from '../lib/relative-time.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
+import { useProviderMissing } from '../store/provider-missing.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
 import { SessionInlineRename } from './InlineRename.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
@@ -226,6 +227,7 @@ export const SessionRow = memo(function SessionRow({
   // Живые субагенты — бейдж с поповером (кусок 4b); хост прежней версии списка не присылает, и счётчик `▤N` остаётся в
   // тултипе. Метрики спящей и закрытой сессии — след прошлого процесса: у них агентов нет, как и на карточке участника комнаты.
   const agents = session.lifecycle === 'active' ? (activity?.metrics?.tasks ?? []) : [];
+  const providerMissing = useProviderMissing(session.provider);
   const unreadMail = !closed && (activity?.metrics?.unread ?? 0) > 0;
   // Последний агент закончил при открытом поповере — бейдж ушёл вместе с ним и «закрыто» не сообщил: без сброса тултип
   // строки остался бы спрятан насовсем.
@@ -333,6 +335,11 @@ export const SessionRow = memo(function SessionRow({
               className="inline-flex shrink-0 animate-pulse text-accent-700 motion-reduce:animate-none"
             >
               <Mail className="size-[11px]" aria-hidden="true" />
+            </span>
+          ) : null}
+          {providerMissing && !closed ? (
+            <span data-provider-missing role="img" title={S.sidebar.providerRemoved} aria-label={S.sidebar.providerRemoved} className="shrink-0 text-status-warning-text">
+              ⚠
             </span>
           ) : null}
           {trustWait ? (

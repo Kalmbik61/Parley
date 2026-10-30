@@ -33,7 +33,7 @@ import { cn } from '../lib/cn.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { useReviewStore } from '../review/store.js';
-import { useProvidersStore } from '../store/providers.js';
+import { useProviderMissing } from '../store/provider-missing.js';
 import { openSwitchAgent } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import {
@@ -78,7 +78,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
   const canSetLead = useHostSupports('rooms.setLead');
   const canSwitch = useHostSupports('sessions.switchAgent');
   // Провайдера сессии нет в списке окна (удалён): пункт подсвечен. Пока список не пришёл, судить рано.
-  const providerMissing = useProvidersStore((state) => state.loaded && state.providers.length > 0 && !state.providers.some((item) => item.id === session.provider));
+  const providerMissing = useProviderMissing(session.provider);
   const status = liveStatus(session);
   const closed = session.lifecycle === 'closed';
   // Сессии движка autonomous заменять нельзя (спека 6.7); подсвечены те, кому нужен другой аккаунт.
