@@ -257,6 +257,11 @@ export async function collectHandover(
   sessionId: string,
   previous: HandoverInput['previous'],
   target: HandoverInput['target'],
+  /**
+   * Разговор прежнего агента, чей хвост уходит в пакет. Не задан — из карты; задают, когда карта уже заменена
+   * (`applyAgentSwitch` сбросил id) и пакет собирается заново по привязке.
+   */
+  conversation?: string | null,
 ): Promise<{ text: string; tailFile: string | null }> {
   const map = await readMap(projectPath, workId);
   const session = map.sessions.find((s) => s.id === sessionId);
@@ -266,7 +271,7 @@ export async function collectHandover(
   const worktree = await readWorktree(session?.worktree?.path ?? projectPath, session?.worktree?.base ?? null);
 
   let tail: HandoverInput['tail'] = null;
-  const providerSessionId = session?.providerSessionId ?? null;
+  const providerSessionId = conversation === undefined ? (session?.providerSessionId ?? null) : conversation;
   if (providerSessionId !== null) {
     try {
       const transcript = await readTranscript(previous.provider as WorkProvider, providerSessionId);

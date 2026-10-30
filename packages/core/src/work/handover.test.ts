@@ -172,6 +172,21 @@ describe('collectHandover', () => {
     expect((await readMap(project, workId)).sessions).toHaveLength(1);
   });
 
+  it('explicit conversation: the tail comes from the previous agent although the map no longer names it', async () => {
+    const created = await createWork(project, { title: 'w' });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, { provider: 'claude', label: 'a', task: 't' });
+    const uuid = '22222222-2222-4222-8222-222222222222';
+    const dir = path.join(logs, '-tmp-project');
+    await mkdir(dir, { recursive: true });
+    const say = (role: string, text: string) => JSON.stringify({ type: role, timestamp: '2026-10-30T10:00:00.000Z', message: { role, content: [{ type: 'text', text }] } });
+    await writeFile(path.join(dir, `${uuid}.jsonl`), [say('user', 'ship it'), say('assistant', 'shipping')].join('\n'));
+
+    expect((await collectHandover(project, workId, sessionId, previous, target)).tailFile).toBeNull();
+    const result = await collectHandover(project, workId, sessionId, previous, target, uuid);
+    expect(await readFile(result.tailFile!, 'utf8')).toContain('agent: shipping');
+  });
+
   it('assembles the package without a transcript or a git repository', async () => {
     const created = await createWork(project, { title: 'w' });
     const sessionId = await createPendingSession(project, created.work.id, { provider: 'claude', label: 'a', task: 't' });

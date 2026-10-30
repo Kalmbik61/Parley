@@ -76,6 +76,8 @@ function fakePty(): PtyManager {
 }
 
 let draft = false;
+/** Что случается, пока хост пробует версию CLI цели (ревью №11): мир меняется между снимком и проверками. */
+let duringProbe: () => Promise<void> = async () => {};
 let argMax = 1_000_000;
 let activityState = 'idle';
 let tasks: Array<{ background: boolean }> = [];
@@ -139,8 +141,13 @@ function rig(options: Partial<SessionsFeedOptions> = {}, signedIn: (id: string) 
     events.push(`handover:${session?.provider}:${session?.lifecycle}:${session?.switching?.id ?? 'none'}`);
     return { text: 'HANDOVER-PACKAGE', tailFile: null };
   });
-  const endBySwitch = vi.fn(async () => {
+  // Как настоящая служба: эпизод кончается, `stuck` в карте снят (ревью №2 — иначе мок прятал причину замены).
+  const endBySwitch = vi.fn(async (ref: SessionRef) => {
     events.push('endBySwitch');
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session !== undefined) session.stuck = null;
+    });
   });
   const switched = vi.fn(() => {
     events.push('switched');
@@ -149,7 +156,7 @@ function rig(options: Partial<SessionsFeedOptions> = {}, signedIn: (id: string) 
   const register = vi.fn(() => `token-${(token += 1)}`);
   const unregister = vi.fn();
   const sessions = createSessionsService(host, works, pty, fakeActivity(), {
-    providerVersions: { ready: Promise.resolve(), get: () => '2.1.314', fresh: async () => '2.1.314' },
+    providerVersions: { ready: Promise.resolve(), get: () => '2.1.314', fresh: async () => { await duringProbe(); return '2.1.314'; } },
     hooks: { url: () => 'http://127.0.0.1:1/hooks', register, unregister },
     signedIn,
     spawnLimits: async () => ({ argMax, pointerSize: 8 }),
@@ -199,6 +206,7 @@ beforeEach(async () => {
   notices = [];
   events = [];
   draft = false;
+  duringProbe = async () => {};
   sliced = [];
   argMax = 1_000_000;
   activityState = 'idle';
@@ -337,7 +345,9 @@ describe('switchAgent: замена агента на месте (спека 5.3
     expect(after.previousAgents).toHaveLength(1);
     const notice = notices.find((candidate) => candidate.kind === 'launch-failed' && candidate.text.includes('Resume to retry'));
     expect(notice?.text).toContain('continue it on Claude Code again');
-    expect(r.switched).not.toHaveBeenCalled();
+    // Будильник забыл подъём прежнего агента и на отказе (ревью №7).
+    expect(r.switched).toHaveBeenCalledWith(ref);
+
 
     // Retry (Resume): новый агент поднимается новым разговором с пакетом, собранным заново, и замена кончается.
     argMax = 1_000_000;
@@ -442,6 +452,7 @@ describe('clearStaleSwitches: замена, оборванная прежним 
     await r.sessions.stop(plain);
     await r.sessions.stop(ref);
     // Прежний хост упал: у `plain` — до замены в карте, у `ref` — после неё, но до запуска.
+    const previousConversation = (await sessionOf(ref)).providerSessionId;
     await updateMap(project, workId, (map) => {
       const since = new Date().toISOString();
       const a = map.sessions.find((candidate) => candidate.id === plain.sessionId)!;
@@ -468,7 +479,8 @@ describe('clearStaleSwitches: замена, оборванная прежним 
     await restarted.sessions.launch(ref, 'resume');
     expect(launches.at(-1)?.launch.provider).toBe('codex');
     expect(launches.at(-1)?.launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
-    expect(restarted.handover).toHaveBeenCalled();
+    // Пакет собран заново, и хвост — по разговору прежнего агента из привязки (ревью №9).
+    expect(restarted.handover.mock.calls[0]?.[5]).toBe(previousConversation);
   });
 });
 
@@ -495,6 +507,11 @@ describe('switchOptions (спека 5.2, 6.10)', () => {
     await updateMap(project, workId, (map) => {
       const child = addSession(map, { provider: 'claude', label: 'child', task: '' });
       child.parent = ref.sessionId;
+      // Заведённая через create_session: родителя в записи нет, есть `createdBy` (как в E2E T12).
+      addSession(map, { provider: 'claude', label: 'peer child', task: '' }).createdBy = ref.sessionId;
+      const closed = addSession(map, { provider: 'claude', label: 'closed child', task: '' });
+      closed.createdBy = ref.sessionId;
+      closed.lifecycle = 'closed';
       map.rooms.find((room) => room.id === roomId)!.ownerId = ref.sessionId;
       map.sessions.find((candidate) => candidate.id === ref.sessionId)!.stuck = {
         kind: 'limit', since: new Date().toISOString(), detail: null, resetsAt: null, window: null, account: null,
@@ -509,7 +526,7 @@ describe('switchOptions (спека 5.2, 6.10)', () => {
     expect(byId.get('codex')).toMatchObject({ transcript: false });
     expect(byId.get('glm')).toMatchObject({ transcript: false });
     expect(result.suggested).toBe('custom-claude-2');
-    expect(result.keeps).toMatchObject({ rooms: 1, leads: [], owns: [roomId], children: 1, unread: 1, worktree: null });
+    expect(result.keeps).toMatchObject({ rooms: 1, leads: [], owns: [roomId], children: 2, unread: 1, worktree: null });
     expect(result.blockers).toEqual([]);
     expect(leadId).toBeDefined();
   });
@@ -687,5 +704,115 @@ describe('carry: transcript — продолжение разговора на �
     await restarted.sessions.clearStaleSwitches();
     expect(existsSync(copy)).toBe(false);
     expect(existsSync(path.join(sourceRoot(), slug, `${old}.jsonl`))).toBe(true);
+  });
+});
+
+describe('ревью критика: восстановление и гонки (2026-10-31)', () => {
+  const limitNeed = (): SessionNeed =>
+    ({ kind: 'limit', since: new Date().toISOString(), detail: null, resetsAt: '2026-10-31T19:27:00.000Z', window: null, account: null }) as SessionNeed;
+
+  it('№2: причина — по снимку до остановки: лимит остаётся limit в привязке, строке и письме', async () => {
+    const r = rig();
+    const { ref, roomId, leadId } = await liveClaude(r);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((candidate) => candidate.id === ref.sessionId)!.stuck = limitNeed();
+    });
+    await r.sessions.switchAgent(ref, request('custom-claude-2'));
+    const after = await sessionOf(ref);
+    expect(after.stuck).toBeNull();
+    expect(after.previousAgents?.[0]?.reason).toBe('limit');
+    const feed = readLetters(project, workId, { roomId, limit: 50 });
+    expect(feed.some((message) => message.text === switchLine(ref.sessionId, 'Claude Code 2', null, 'Claude Code', 'limit'))).toBe(true);
+    expect(feed.find((message) => message.from === 'parley' && message.to.includes(leadId))?.text).toContain('hit its usage limit');
+  });
+
+  it('№11: лимит сбросился и агент работает, пока пробовалась цель — busy без force, процесс жив', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((candidate) => candidate.id === ref.sessionId)!.stuck = limitNeed();
+    });
+    duringProbe = async () => {
+      await updateMap(project, workId, (map) => {
+        map.sessions.find((candidate) => candidate.id === ref.sessionId)!.stuck = null;
+      });
+      activityState = 'working';
+    };
+    await expect(r.sessions.switchAgent(ref, request('custom-claude-2'))).rejects.toMatchObject({ data: { reason: 'busy' } });
+    expect(r.pty.get(ref)).toBeDefined();
+    expect((await sessionOf(ref)).provider).toBe('claude');
+  });
+
+  it('№1: held Codex → перезапуск хоста снял switching → Deny не закрывает заменённую сессию', async () => {
+    const r = rig({ consents: { request: vi.fn() } as never });
+    const { ref } = await liveClaude(r);
+    expect(await r.sessions.switchAgent(ref, request('codex'))).toMatchObject({ outcome: 'held' });
+    const restarted = rig({ consents: { request: vi.fn() } as never });
+    await restarted.works.refresh();
+    await restarted.sessions.clearStaleSwitches();
+    expect((await sessionOf(ref)).switching).toBeNull();
+
+    const close = vi.fn(async () => {});
+    const switched = vi.fn();
+    const actions = createHeldLaunchActions({ launch: restarted.sessions.launch, close, retry: () => {}, switched });
+    await actions.refuseLaunch({ ref, mode: 'launch', by: 'human' });
+    expect(close).not.toHaveBeenCalled();
+    expect(switched).toHaveBeenCalledWith(ref);
+    expect(await sessionOf(ref)).toMatchObject({ provider: 'codex', lifecycle: 'sleeping', result: null });
+  });
+
+  it('№5: согласие на папку есть, а запуск отказал — switching снят, будильник сброшен', async () => {
+    const r = rig({ consents: { request: vi.fn() } as never });
+    const { ref } = await liveClaude(r);
+    expect(await r.sessions.switchAgent(ref, request('codex'))).toMatchObject({ outcome: 'held' });
+    r.switched.mockClear();
+    await grantTrust(project, 'window');
+    argMax = 10;
+    const actions = createHeldLaunchActions({ launch: (target, mode, choice) => r.sessions.launch(target, mode, choice), close: vi.fn(), retry: () => {} });
+    await expect(actions.continueLaunch({ ref, mode: 'launch', by: 'human' })).rejects.toThrow(/spawn/);
+    expect(await sessionOf(ref)).toMatchObject({ provider: 'codex', lifecycle: 'sleeping', switching: null });
+    expect(r.switched).toHaveBeenCalledWith(ref);
+  });
+});
+
+describe('ревью №10: форк вышел, не записав разговор', () => {
+  const slug = '-tmp-parley-switch-project';
+  const sourceRoot = () => path.join(home, 'claude-projects');
+  const targetRoot = () => path.join(customProviderDir('custom-claude-2', home), 'projects');
+
+  async function forked(r: Rig): Promise<{ ref: SessionRef; old: string; fork: string }> {
+    const { ref } = await liveClaude(r);
+    const old = (await sessionOf(ref)).providerSessionId!;
+    await mkdir(path.join(sourceRoot(), slug), { recursive: true });
+    await writeFile(path.join(sourceRoot(), slug, `${old}.jsonl`), '{}\n');
+    expect(await r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).toMatchObject({ carried: 'transcript' });
+    await r.sessions.stop(ref);
+    return { ref, old, fork: (await sessionOf(ref)).providerSessionId! };
+  }
+
+  it('следующий подъём повторяет форк от прежнего разговора, а не стартует голым брифом под id форка', async () => {
+    const r = rig();
+    const { ref, old, fork } = await forked(r);
+    await r.sessions.launch(ref, 'resume');
+    const { launch } = launches.at(-1)!;
+    const at = launch.args.indexOf('--resume');
+    expect(launch.args.slice(at, at + 3)).toEqual(['--resume', old, '--fork-session']);
+    const next = (await sessionOf(ref)).providerSessionId!;
+    expect(next).not.toBe(fork);
+    expect(launch.args[at + 4]).toBe(next);
+  });
+
+  it('прежнего разговора больше нет — запуск с пакетом передачи, привязка помечена handover', async () => {
+    const r = rig();
+    const { ref, old } = await forked(r);
+    await rm(path.join(sourceRoot(), slug, `${old}.jsonl`));
+    await rm(path.join(targetRoot(), slug, `${old}.jsonl`));
+    r.handover.mockClear();
+    await r.sessions.launch(ref, 'resume');
+    const { launch } = launches.at(-1)!;
+    expect(launch.args).not.toContain('--fork-session');
+    expect(launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
+    expect(r.handover.mock.calls[0]?.[5]).toBe(old);
+    expect((await sessionOf(ref)).previousAgents?.at(-1)?.carried).toBe('handover');
   });
 });

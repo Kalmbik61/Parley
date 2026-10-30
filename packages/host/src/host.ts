@@ -512,6 +512,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launch: (ref, mode, launchOptions) => sessionsService.launch(ref, mode, launchOptions),
       close: (ref) => sessionsService.close(ref),
       retry: (ref) => wakeService.retry(ref),
+      switched: (ref) => wakeService.switched(ref),
     }),
     // `allow` карточки `agent-switch`: замена от имени человека; ошибка уходит просившему письмом и окну уведомлением.
     switchAgent: (ref, request) => sessionsService.switchAgent(ref, request),

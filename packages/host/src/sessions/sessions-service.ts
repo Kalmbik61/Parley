@@ -130,7 +130,7 @@ import { createSkillInstaller } from './agent-skills.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
 import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
-import { copyTranscript, discardCopy, isClaudeAccount, removeForkCopy, type CarriedTranscript } from './transcript-carry.js';
+import { copyTranscript, discardCopy, hasConversation, isClaudeAccount, removeForkCopy, type CarriedTranscript } from './transcript-carry.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -764,6 +764,8 @@ export function createSessionsService(
     const key = refKey(ref);
     let mode = requested;
     let options = choice;
+    // Замена, чей запуск это: отказ запуска её снимает (5.3 шаг 9).
+    let switchingId: string | undefined;
     const timer = createStepTimer();
     let failed = true;
     let held = false;
@@ -790,10 +792,23 @@ export function createSessionsService(
       }
       // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
       // самой замены, и у Resume после отказа, и после согласия на папку Codex.
-      if (options.handover === undefined && options.forkFrom === undefined && mode !== 'new' && awaitingAgent(session)) {
-        mode = 'launch';
-        options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
+      if (options.handover === undefined && options.forkFrom === undefined && mode !== 'new') {
+        if (awaitingAgent(session)) {
+          mode = 'launch';
+          options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
+        } else if (await forkWithoutFile(session)) {
+          // Форк стартовал и вышел, не записав разговор (5.4.1): тот же форк заново, а не голый бриф под его id.
+          const retry = await reforkOf(ref, session);
+          if (retry === null) {
+            mode = 'launch';
+            options = { ...options, handover: await recollectHandover(ref, session) };
+          } else {
+            mode = 'resume';
+            options = { ...options, forkFrom: retry.from, prompt: [retry.note, options.prompt ?? ''].filter((part) => part !== '').join('\n\n') };
+          }
+        }
       }
+      switchingId = session.switching?.id;
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
@@ -1091,6 +1106,10 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+      // Форк записывает разговор с первым ходом: копия транскрипта в папке цели уберётся, как только он появится.
+      if (options.forkFrom !== undefined) {
+        watchFork(ref, session.previousAgents?.at(-1)?.provider ?? session.provider, session.provider, options.forkFrom);
+      }
       // Новый агент поднят: замена окончена — `switching` снят, письма ждавшим (спека замены агента, 5.3 шаг 8).
       if (session.switching !== null && session.switching !== undefined) await finishSwitch(ref);
       return 'started';
@@ -1100,6 +1119,9 @@ export function createSessionsService(
         text: `session ${ref.sessionId} failed to launch: ${error.message}`,
         at: new Date().toISOString(),
       });
+      // Запуск нового агента вне оркестратора (после согласия на папку Codex) отказал: замена окончена, сессия спит с
+      // новым провайдером (5.3 шаг 9). Оркестратор снимает `switching` сам.
+      if (switchingId !== undefined && !switches.has(key)) await dropSwitch(ref, switchingId);
       throw error;
     } finally {
       // Процесс не стартовал — токен канала никому не нужен.
@@ -1462,17 +1484,52 @@ export function createSessionsService(
   const awaitingAgent = (session: WorkSession): boolean =>
     (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
 
+  /** Агент продолжал разговор форком, а файла форка в папке его аккаунта нет: форк вышел до первой записи. */
+  async function forkWithoutFile(session: WorkSession): Promise<boolean> {
+    const last = session.previousAgents?.at(-1);
+    if (last?.carried !== 'transcript' || last.providerSessionId === null || session.providerSessionId === null) return false;
+    if (session.providerSessionId === last.providerSessionId) return false;
+    try {
+      return !(await hasConversation(session.provider, session.providerSessionId));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Повтор форка от разговора прежнего агента: копия в папке цели обновляется из источника. Не вышло — `null`, и
+   * привязка помечается пакетом передачи: новый агент стартует с ним, а следующий запуск форк уже не повторяет.
+   */
+  async function reforkOf(ref: SessionRef, session: WorkSession): Promise<{ from: string; note: string } | null> {
+    const last = session.previousAgents?.at(-1);
+    if (last === undefined || last.providerSessionId === null) return null;
+    try {
+      const carried = await copyTranscript(last.provider, session.provider, last.providerSessionId);
+      const registry = await loadProviders();
+      return { from: carried.from, note: transcriptNote(session.id, labelOf(registry, session.provider), labelOf(registry, last.provider), last.reason) };
+    } catch (error) {
+      host.log.warn('форк не повторить — новый агент стартует с пакетом передачи', { ref, error: String(error) });
+      await updateMap(ref.projectPath, ref.workId, (map) => {
+        const record = map.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+        if (record !== undefined) record.carried = 'handover';
+      }).catch(() => {});
+      return null;
+    }
+  }
+
   /** Пакет передачи по карте (`collectHandover`); подмена — `takeover.handover`. */
   const handoverOf = (
     ref: SessionRef,
     previous: Parameters<typeof collectHandover>[3],
     target: Parameters<typeof collectHandover>[4],
+    conversation?: string | null,
   ): ReturnType<typeof collectHandover> =>
-    (feed.takeover?.handover ?? collectHandover)(ref.projectPath, ref.workId, ref.sessionId, previous, target);
+    (feed.takeover?.handover ?? collectHandover)(ref.projectPath, ref.workId, ref.sessionId, previous, target, conversation);
 
   /**
    * Пакет для запуска нового агента, когда собранного в памяти нет (хост перезапущен, Resume после отказа): по
-   * последней привязке. Разговор прежнего агента в карте уже сброшен — пакет без хвоста; сбой — запуск без пакета.
+   * последней привязке. В карте разговор прежнего агента уже сброшен — хвост берётся по id из привязки; сбой — запуск
+   * без пакета.
    */
   async function recollectHandover(ref: SessionRef, session: WorkSession): Promise<string> {
     const last = session.previousAgents?.at(-1);
@@ -1490,6 +1547,7 @@ export function createSessionsService(
           resetsAt: null,
         },
         { providerLabel: labelOf(registry, session.provider), model: session.model ?? null },
+        last.providerSessionId,
       );
       return text;
     } catch (error) {
@@ -1546,7 +1604,10 @@ export function createSessionsService(
     feed.takeover?.wake?.()?.switched(ref);
   }
 
-  /** Снять `switching` без писем: замена не дошла до старта нового агента. */
+  /**
+   * Снять `switching` без писем: замена не дошла до старта нового агента. Будильник забывает подъём прежнего агента
+   * (указанные письма, удержания): иначе письма, указанные за время замены, больше не указывались бы.
+   */
   async function dropSwitch(ref: SessionRef, requestId: string): Promise<void> {
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1554,6 +1615,7 @@ export function createSessionsService(
     }).catch((error: unknown) => {
       host.log.error('switching не снялся после отказа замены', { ref, error: String(error) });
     });
+    feed.takeover?.wake?.()?.switched(ref);
   }
 
   /**
@@ -1657,14 +1719,23 @@ export function createSessionsService(
     if (carry === 'transcript' && !(isClaudeAccount(session.provider, registry[session.provider]) && isClaudeAccount(entry.id, entry))) {
       throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
     }
+    // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
+    // к работе — по старому снимку его погасили бы посреди хода без `force`.
+    const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (current === undefined) throw new HostError('not_found', `session ${ref.sessionId} is gone`);
     // От этой проверки до `launching.add` — ни одного `await`: иначе подъём письмом успел бы занять ключ, а `finally`
     // замены снял бы чужой.
+    if (current.switching !== null && current.switching !== undefined) {
+      throw busyError('The session is already continuing on another provider');
+    }
     if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
+    // Причина — по снимку до остановки: выход процесса и `endBySwitch` снимают `stuck`.
+    const reason = switchReason(current, registry);
 
     // Живой агент: только у приглашения, без фоновых задач и черновика — как у `setModel`. Застрявший в лимите или
     // на входе ход не продолжит и так. Процесс не от хоста гасить нечем — только с `force`.
     const live = pty.get(ref);
-    const stuck = session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in';
+    const stuck = current.stuck?.kind === 'limit' || current.stuck?.kind === 'sign-in';
     if (live !== undefined && request.force !== true && !stuck) {
       const state = activity.get(ref);
       if (!atPrompt(state)) throw busyError('Wait until the agent is idle or stop it first');
@@ -1673,7 +1744,7 @@ export function createSessionsService(
       }
       if (live.hasDraft()) throw busyError('The input field has unsent text; send or clear it first');
     }
-    if (live === undefined && session.lifecycle === 'active' && request.force !== true) {
+    if (live === undefined && current.lifecycle === 'active' && request.force !== true) {
       throw busyError('The agent runs outside Parley: stop it first or continue with force');
     }
 
@@ -1693,7 +1764,6 @@ export function createSessionsService(
       const stopped = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
       if (stopped === undefined) throw new HostError('not_found', `session ${ref.sessionId} is gone`);
       const endedAt = new Date().toISOString();
-      const reason = switchReason(stopped, registry);
       const previousLabel = labelOf(registry, stopped.provider);
       const targetLabel = providerLabel(entry);
       // Пакет — после остановки (транскрипт и рабочая копия в конечном виде) и до `applyAgentSwitch` (он сбрасывает
@@ -1709,7 +1779,7 @@ export function createSessionsService(
               model: stopped.model ?? null,
               reason,
               endedAt,
-              resetsAt: stopped.stuck?.resetsAt ?? session.stuck?.resetsAt ?? null,
+              resetsAt: stopped.stuck?.resetsAt ?? current.stuck?.resetsAt ?? null,
             },
             { providerLabel: targetLabel, model: target.model ?? null },
           )
@@ -1759,7 +1829,6 @@ export function createSessionsService(
           try {
             const prompt = transcriptNote(ref.sessionId, targetLabel, previousLabel, reason);
             outcome = await launchHeld(ref, 'resume', { by, forkFrom: transcript.from, prompt }, false);
-            watchFork(ref, stopped.provider, request.provider, transcript.from);
           } catch (error) {
             // Форк не поднялся: копия убрана, новый агент стартует с пакетом передачи (5.4.1), и ответ это называет.
             host.log.warn('форк разговора не поднялся — запуск с пакетом передачи', { ref, error: String(error) });
@@ -1894,7 +1963,10 @@ export function createSessionsService(
         rooms: rooms.length,
         leads: rooms.filter((room) => liveLead(map, room) === session.id).map((room) => room.id),
         owns: map.rooms.filter((room) => room.ownerId === session.id).map((room) => room.id),
-        children: map.sessions.filter((child) => child.parent === session.id && child.lifecycle !== 'closed').length,
+        // Дети — и записанные родителем, и заведённые этой сессией через `create_session` (`createdBy`).
+        children: map.sessions.filter(
+          (child) => child.id !== session.id && (child.parent === session.id || child.createdBy === session.id) && child.lifecycle !== 'closed',
+        ).length,
         unread,
         worktree: session.worktree?.branch ?? null,
       },
