@@ -420,6 +420,8 @@ export {
   summaryPrompt,
 } from './work/summary.js';
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
+export { collectHandover, formatHandover, HANDOVER_BUDGET } from './work/handover.js';
+export type { HandoverInput } from './work/handover.js';
 export { readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
