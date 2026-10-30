@@ -672,8 +672,8 @@ describe('create(): модель и усилие из диалога (дизай
     const sessionId = await createPendingSession(project, work.work.id, { provider: 'gone', label: '', task: '' });
     await expect(service.launch({ projectPath: project, workId: work.work.id, sessionId }, 'launch')).rejects.toMatchObject({
       name: 'HostError',
-      code: 'bad_request',
-      message,
+      code: 'conflict',
+      message: 'gone is not in Parley: continue the session on another provider',
     });
 
     expect(existsSync(argsFile)).toBe(false);
