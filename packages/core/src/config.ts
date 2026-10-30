@@ -327,7 +327,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const sleepAfterMinutes = text('sleepAfterMinutes');
   if (sleepAfterMinutes !== undefined) {
     const parsed = Number(sleepAfterMinutes);
-    if (isSleepAfterMinutes(parsed)) patch.sleepAfterMinutes = parsed;
+    // Пробелы вместо числа — не ноль (`Number('  ') === 0`): сон не выключается молча, ключ не запирается.
+    if (sleepAfterMinutes.trim() !== '' && isSleepAfterMinutes(parsed)) patch.sleepAfterMinutes = parsed;
     else complain(`${nameOf('sleepAfterMinutes')}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}`);
   }
   flag('agentSkills');
@@ -474,8 +475,9 @@ export function parseSetting<K extends keyof ParleyConfig>(
   }
   if (key === 'sleepAfterMinutes') {
     // Отдельная ветка, как у `resumeRate`: общая для чисел отвергла бы допустимый ноль — «сон выключен».
+    // Пустая строка — не ноль (`Number('') === 0`): очищенное поле не должно молча выключать сон.
     const parsed = Number(text);
-    if (isSleepAfterMinutes(parsed)) return { value: parsed as ParleyConfig[K] };
+    if (text.trim() !== '' && isSleepAfterMinutes(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}` };
   }
   if ((RESOURCE_LIMIT_KEYS as readonly string[]).includes(key)) {

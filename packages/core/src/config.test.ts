@@ -668,6 +668,37 @@ describe('sleepAfterMinutes setting', () => {
     }
   });
 
+  it('parseSetting: пустая строка и пробелы — ошибка, а не молчаливый ноль (Number("") === 0)', () => {
+    for (const blank of ['', '  ']) {
+      expect(parseSetting('sleepAfterMinutes', blank)).toEqual({
+        error: 'sleepAfterMinutes: expected an integer from 0 to 1440',
+      });
+    }
+  });
+
+  it('пробелы вместо числа в окружении — жалоба с именем, значение без переменной, ключ не заперт', async () => {
+    // Number('  ') === 0: без проверки такая переменная молча заперла бы сон на «выключен».
+    const noFile = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '  ' });
+    expect(noFile.config.sleepAfterMinutes).toBe(0);
+    expect(noFile.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(noFile.fromEnv).toEqual([]);
+
+    // Порог из файла переменная с пробелами не сбрасывает в ноль.
+    await write({ sleepAfterMinutes: 60 });
+    const withFile = await loadConfig(file(), { HARNAS_SLEEP_AFTER_MINUTES: '  ' });
+    expect(withFile.config.sleepAfterMinutes).toBe(60);
+    expect(withFile.warning).toBe('HARNAS_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(withFile.fromEnv).toEqual([]);
+  });
+
+  it('переменная нулевой длины — то же, что незаданная, как у всех настроек (envValue): без жалобы и замка', async () => {
+    await write({ sleepAfterMinutes: 60 });
+    const empty = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '' });
+    expect(empty.config.sleepAfterMinutes).toBe(60);
+    expect(empty.warning).toBeNull();
+    expect(empty.fromEnv).toEqual([]);
+  });
+
   it('вне границ в файле и в окружении — жалоба с именем и умолчание 0; ключ в окружении не запирается', async () => {
     await write({ sleepAfterMinutes: 1441 });
     const fromFile = await loadConfig(file(), {});
