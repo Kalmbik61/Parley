@@ -8,7 +8,10 @@ import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { useHostStore } from '../../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../../store/providers.js';
+import { useSwitchAgentStore } from '../../store/switch-agent.js';
 import { useUiStore } from '../../store/ui.js';
+import { useWorksStore } from '../../store/works.js';
+import { makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { CustomProviderPanel } from './CustomProviderPanel.js';
 import { ACCOUNT_TILES } from './custom-presets.js';
 
@@ -321,5 +324,59 @@ describe('CustomProviderPanel: аккаунты подписки (спека п�
     render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
     expect(document.querySelector('[data-custom-provider-form="custom-kimi"]')).toBeTruthy();
     expect(document.querySelector('[data-account-form]')).toBeNull();
+  });
+});
+
+describe('CustomProviderPanel: сессии удаляемого провайдера', () => {
+  const seed = (count: number): void =>
+    useWorksStore.setState({
+      entries: [
+        makeWork('w-0054', {
+          title: 'Улучшайзинг',
+          sessions: Array.from({ length: count }, (_, i) => makeSession(`s-${i + 1}`, `agent ${i + 1}`, { provider: 'custom-kimi', lifecycle: 'sleeping' })),
+        }),
+      ],
+    });
+  afterEach(() => {
+    useWorksStore.setState({ entries: [] });
+    useSwitchAgentStore.setState({ ref: null });
+  });
+
+  it('подтверждение удаления показывает 8 спящих сессий аккаунта; удаление не заблокировано', () => {
+    seed(8);
+    render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.deleteProvider }));
+    const group = screen.getByRole('group', { name: S.customProviders.deleteProvider });
+    expect(group.textContent).toContain('8 sessions use this account. They will wait; continue them on another provider.');
+    expect(group.querySelectorAll('li')).toHaveLength(8);
+    expect(group.textContent).not.toContain('and');
+    expect((screen.getByRole('button', { name: S.customProviders.deleteConfirmButton }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('больше 10 сессий — первые 10 и «… and N more»', () => {
+    seed(13);
+    render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.deleteProvider }));
+    const group = screen.getByRole('group', { name: S.customProviders.deleteProvider });
+    expect(group.querySelectorAll('li')).toHaveLength(10);
+    expect(group.textContent).toContain('… and 3 more');
+  });
+
+  it('«Continue on…» зовёт открыватель диалога замены; закрытые и чужие сессии не считаются', () => {
+    useWorksStore.setState({
+      entries: [
+        makeWork('w-0054', {
+          sessions: [
+            makeSession('s-1', 'one', { provider: 'custom-kimi', lifecycle: 'sleeping' }),
+            makeSession('s-2', 'gone', { provider: 'custom-kimi', lifecycle: 'closed' }),
+            makeSession('s-3', 'other', { provider: 'claude' }),
+          ],
+        }),
+      ],
+    });
+    render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.continueOn }));
+    expect(useSwitchAgentStore.getState().ref).toEqual({ projectPath: '/tmp/proj', workId: 'w-0054', sessionId: 's-1' });
   });
 });

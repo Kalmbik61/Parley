@@ -815,6 +815,13 @@ export const S = {
     deleteConfirm: (name: string): string => `Delete ${name}? Its sessions in history stay, but cannot be resumed.`,
     deleteFolder: 'Also delete its folder (history)',
     deleteConfirmButton: 'Delete',
+    /** Сессии удаляемого провайдера (спека 2026-10-30, 5.8): они не закрываются и ждут, пока их продолжат на другом. */
+    sessionsUse: (total: number, live: number): string =>
+      `${total} ${total === 1 ? 'session uses' : 'sessions use'} this account${live > 0 ? ` (${live} running)` : ''}. ${
+        total === 1 ? 'It will wait' : 'They will wait'
+      }; continue ${total === 1 ? 'it' : 'them'} on another provider.`,
+    sessionsMore: (n: number): string => `… and ${n} more`,
+    continueOn: 'Continue on…',
     cancel: 'Cancel',
     restartRequired: 'This host is too old to manage providers. Restart the host to update it.',
     restartHost: 'Restart host',
