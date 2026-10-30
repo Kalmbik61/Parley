@@ -899,6 +899,35 @@ describe('WakeService: подъём спящей письмом', () => {
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
   }, 20_000);
 
+  it('5-pm: провайдера сессии нет в реестре — письмо ждёт provider-missing: ни запуска, ни слота часа, ни resume-failed, ни писем отправителям', async () => {
+    const { workId, target } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.provider = 'custom-claude-2';
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const limiter = new ResumeLimiter(() => 6);
+    const launch = vi.fn();
+    const { sessions, activity } = await resumeRig({ limiter }, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+
+    await sendLetter(workId, target);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'provider-missing', 5000);
+    await settle(300);
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(sessions.live(ref)).toBe(false);
+    expect(notices('resume-failed')).toHaveLength(0);
+    expect(notices('resume-limit')).toHaveLength(0);
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const map = readStoredMap(project, workId);
+    expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+    expect(JSON.stringify(map)).not.toContain('did not resume');
+  }, 20_000);
+
   it('5: седьмой подъём за час — письмо ждёт, приходит resume-limit один раз', async () => {
     const { workId, target } = await sleepingPair();
     const ref = { projectPath: project, workId, sessionId: target };

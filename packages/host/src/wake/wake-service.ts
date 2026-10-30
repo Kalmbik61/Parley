@@ -205,6 +205,11 @@ interface AttemptState {
    */
   resumeUnavailable: boolean;
   /**
+   * Есть ли провайдер сессии в реестре (`loadProviders` асинхронен, пересчёт — нет): последний ответ проверки.
+   * Нет провайдера — сессия не поднимается и ждёт человека (`provider-missing`), слот часа не берётся.
+   */
+  providerCheck: { provider: string; present: boolean } | null;
+  /**
    * Когда бюджет работы отказал в подъёме (P37): письма ждут, а не считаются указанными. Новую попытку не начинаем
    * `BUDGET_RETRY_MS` — иначе каждое событие карты заново стучалось бы за слотом. Это пауза между просьбами, а не
    * снятие чьего-то резерва.
@@ -327,6 +332,7 @@ export function createWakeService(
         earlyExit: undefined,
         pointerAfter: null,
         resumeUnavailable: false,
+        providerCheck: null,
         budgetDeniedAt: null,
         trustHeld: false,
         pasteRetry: undefined,
@@ -891,6 +897,14 @@ export function createWakeService(
     host.log.info('будильник: возврат после сброса лимита', { ref, returns: state.returns, letters: letterIds.length });
   }
 
+  /** Спрашивает реестр о провайдере сессии; ответ изменился — пересчёт. */
+  async function checkProvider(ref: SessionRef, state: AttemptState, provider: string): Promise<void> {
+    const present = provider in (await loadProviders());
+    const before = state.providerCheck;
+    state.providerCheck = { provider, present };
+    if (before?.provider !== provider || before.present !== present) recompute(ref);
+  }
+
   function recompute(ref: SessionRef): void {
     if (!started) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -922,6 +936,20 @@ export function createWakeService(
                 : 'sleeping';
         publishWaiting(ref, state, reason);
         return;
+      }
+      // Провайдера нет в реестре: сессия ждёт человека. До лимита часа — слот под подъём, которого не будет, не берём.
+      if (letters) {
+        void checkProvider(ref, state, session.provider);
+        const known = state.providerCheck?.provider === session.provider ? state.providerCheck.present : null;
+        if (known === null) {
+          // Ответа реестра ещё нет: подъём ждёт его, пересчёт придёт следом.
+          publishWaiting(ref, state, 'sleeping');
+          return;
+        }
+        if (!known) {
+          publishWaiting(ref, state, 'provider-missing');
+          return;
+        }
       }
       const input: DeliveryInput = {
         session,

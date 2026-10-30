@@ -567,8 +567,13 @@ export function createSessionsService(
     return mode;
   }
 
-  async function readyProvider(provider: string): Promise<ProviderEntry> {
+  async function readyProvider(provider: string, recorded = false): Promise<ProviderEntry> {
     const entry = (await loadProviders())[provider];
+    // Записанная сессия удалённого провайдера — не ошибка ввода: она цела и ждёт, пока человек продолжит её на другом
+    // провайдере. `conflict`: состояние сессии не даёт запуск, а не запрос сломан.
+    if (entry === undefined && recorded) {
+      throw new HostError('conflict', `${provider} is not in Parley: continue the session on another provider`);
+    }
     if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
@@ -648,7 +653,7 @@ export function createSessionsService(
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
-      const entry = await timer.step('provider', () => readyProvider(session.provider));
+      const entry = await timer.step('provider', () => readyProvider(session.provider, true));
 
       // Согласие человека на папку (спека 2026-10-21, 4.2) — до бюджета, worktree, скилла и PARLEY.md: удержанный запуск
       // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.

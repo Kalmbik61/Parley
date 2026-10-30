@@ -1109,6 +1109,7 @@ export const S = {
       pending: 'not launched',
       'folder-trust': 'waiting for folder trust',
       settling: 'batched, waits for a quiet room',
+      'provider-missing': 'Provider removed — continue the session on another provider',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
