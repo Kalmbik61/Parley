@@ -303,9 +303,9 @@ export async function renameHumanRoom(input: Params<'rooms.rename'>): Promise<vo
 export async function setHumanRoomOwner(input: Params<'rooms.setOwner'>): Promise<void> {
   const { projectPath, workId, roomId, sessionId } = input;
   assertWork(projectPath, workId);
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      setRoomOwner(map, roomId, sessionId);
+      setRoomOwner(map, roomId, sessionId, letters);
     } catch (error) {
       throw asHostError(error);
     }

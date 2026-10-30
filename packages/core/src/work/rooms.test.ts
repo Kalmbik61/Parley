@@ -703,6 +703,24 @@ describe('renameSession', () => {
   });
 });
 
+describe('setRoomOwner letters', () => {
+  it('новому владельцу и прежнему живому — письма parley, в ленте — строка', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    const map = emptyMap();
+    const first = addSession(map, { provider: 'claude', label: 'first', task: '' });
+    const second = addSession(map, { provider: 'codex', label: 'second', task: '' });
+    const room = addRoom(map, { title: 'one', creator: first.id, ownerId: first.id, members: [] });
+    const { line, letters } = setRoomOwner(map, room.id, second.id, lt(map), at)!;
+    expect(line.text).toBe(`@${second.id.replace('-', '')} is now the owner`);
+    expect(letters.map((letter) => letter.to)).toEqual([[second.id], [first.id]]);
+    expect(letters[0]?.text).toContain('You now own');
+    expect(letters[1]?.text).toContain('now owns');
+    expect(room.ownerId).toBe(second.id);
+    // Тот же владелец — ни строки, ни писем.
+    expect(setRoomOwner(map, room.id, second.id, lt(map), at)).toBeNull();
+  });
+});
+
 describe('setRoomLead', () => {
   const NOW = '2026-10-07T12:00:00.000Z';
 
