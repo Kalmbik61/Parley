@@ -16,6 +16,18 @@ export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: str
 
 export type WorkStatus = 'active' | 'done' | 'archived';
 
+/** Почему хост усыпил сессию: простой или конец роя (спека сна агентов 2026-10-30, 4.1). */
+export type AutoSleepReason = 'idle' | 'swarm-done';
+
+/** Сон по решению хоста: что и когда решено. Поле `autoSleep` сессии; тот же вид у отметки `autoSleepPending`. */
+export interface AutoSleep {
+  reason: AutoSleepReason;
+  /** Когда хост решил усыпить (ISO). */
+  at: string;
+  /** Цель `wait_for(<id>)` в момент сна; `null` — ждала письма или не ждала. */
+  waitTarget: string | null;
+}
+
 /**
  * Одна ступень жизни сессии: переход по оси процесса или поставленный итог.
  * Код выхода и сигнал есть только у ухода в `sleeping` по выходу процесса;
@@ -27,6 +39,8 @@ export interface HistoryEntry {
   /** Код выхода; `null` — процесс завершился без нас и код неизвестен. */
   exitCode?: number | null;
   signal?: number;
+  /** Причина сна: только у записи `sleeping`, если сессию усыпил хост (`AutoSleep.reason`). */
+  reason?: AutoSleepReason;
 }
 
 /**
@@ -210,6 +224,19 @@ export interface WorkSession {
   switching?: { id: string; to: string; since: string } | null;
   /** Ревизия текущего запуска (= `NATIVE_CONTEXT_REVISION`): ограда записей MCP от прежнего процесса. */
   agentRevision?: string | null;
+  /**
+   * Сессию усыпил хост (простой, конец роя): процесса нет, письмо поднимает её обычным путём будильника, а подъём не
+   * тратит лимиты запусков. Пишет `transitionSession` из отметки `autoSleepPending` при уходе в `sleeping`; подъём и
+   * закрытие снимают. Нет поля — то же, что `null`: сессию остановил человек или она не спала, миграции карты не нужно.
+   */
+  autoSleep?: AutoSleep | null;
+  /**
+   * Отметка «засыпает»: хост ставит её под замком карты перед остановкой процесса, и пока она есть, `check_inbox` и
+   * `wait_for` этой сессии писем не выдают. Нет поля — то же, что `null`.
+   */
+  autoSleepPending?: AutoSleep | null;
+  /** Человек запретил сон («Keep awake»); агент этот флаг не ставит. Нет поля — то же, что `false`. */
+  keepAwake?: boolean;
 }
 
 /**
