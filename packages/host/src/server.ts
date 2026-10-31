@@ -32,6 +32,16 @@ export interface ServerOptions {
   unregisterClient: (client: Client) => void;
   /** Часы для замера запросов (мс); по умолчанию `performance.now`. */
   now?: () => number;
+  /** Запуск с телефона (спека мобильного приложения 4.2). Нет — методы запуска клиенту `remote` закрыты. */
+  remoteLaunch?: RemoteLaunchPolicy;
+}
+
+/** Власть хоста над запуском с телефона (спека 4.2, «Хост — власть»). */
+export interface RemoteLaunchPolicy {
+  /** Настройка `remoteCreate`: спрашивается на каждом `hello` и на каждом вызове. */
+  enabled(): boolean;
+  /** `projectPath` — известный хосту проект, `workId` — существующая неархивная работа этого проекта. */
+  workOpen(projectPath: string, workId: string): boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -52,6 +62,14 @@ const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEA
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
+/** Методы запуска с телефона за одним переключателем `remoteCreate` (спека 4.2); `providers.list` и `roles.list` — чтение. */
+const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
+
+/** Метод белого списка, открытый клиенту `remote` сейчас: методы запуска — только при включённом `remoteCreate`. */
+function remoteMethodOpen(name: string, options: ServerOptions): boolean {
+  if (!REMOTE_METHOD_SET.has(name)) return false;
+  return !REMOTE_LAUNCH_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
+}
 /**
  * Что хост принимает из `hello.features` клиента `remote` (спека мобильного приложения 4.4: мост заявляет ровно их).
  * Прочие признаки меняют поведение хоста для других клиентов: с `browser-agent` мост стал бы «окном» для операций
@@ -167,7 +185,7 @@ function handleHello(
       protocol: PROTOCOL_VERSION,
       pid: process.pid,
       methods: remote
-        ? methods.filter((name) => name === 'hello' || REMOTE_METHOD_SET.has(name) || REMOTE_NOTIFICATION_SET.has(name))
+        ? methods.filter((name) => name === 'hello' || remoteMethodOpen(name, options) || REMOTE_NOTIFICATION_SET.has(name))
         : methods,
       features: HOST_FEATURES,
     },
@@ -200,13 +218,21 @@ function rejectedForRemote(raw: unknown, client: Client, options: ServerOptions)
   // Без имени метода `parseIncoming` вернёт invalid, и до обработчика кадр не дойдёт.
   if (typeof method !== 'string') return false;
   if (typeof id === 'number') {
-    if (REMOTE_METHOD_SET.has(method)) return false;
+    if (remoteMethodOpen(method, options)) return false;
     client.send({ id, error: { code: 'unknown_method', message: `unknown method: ${method}` } });
     return true;
   }
   if (REMOTE_NOTIFICATION_SET.has(method)) return false;
   options.context.log.warn('уведомление клиента remote вне белого списка отброшено', { method, client: client.name });
   return true;
+}
+
+/** Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2). */
+function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
+  if (typeof params !== 'object' || params === null) return false;
+  const { projectPath, workId } = params as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string') return false;
+  return options.remoteLaunch?.workOpen(projectPath, workId) === true;
 }
 
 function handleMessage(raw: unknown, client: Client, options: ServerOptions): void {
@@ -240,6 +266,10 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   const { id, method } = parsed.message;
   if (client.role === 'remote' && !checkRemoteParams(method, parsed.params)) {
     client.send({ id, error: { code: 'bad_request', message: `params are not allowed for remote clients: ${method}` } });
+    return;
+  }
+  if (client.role === 'remote' && REMOTE_LAUNCH_METHODS.has(method) && !remoteWorkOpen(parsed.params, options)) {
+    client.send({ id, error: { code: 'bad_request', message: 'unknown project or work' } });
     return;
   }
   const handler = options.methodHandlers[method];

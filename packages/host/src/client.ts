@@ -29,13 +29,16 @@ const REMOTE_EVENT_SET: ReadonlySet<string> = new Set(REMOTE_EVENTS);
 
 /**
  * Пропускает ли граница кадр к клиенту `remote` (спека 4.1, точка «отправка»): событие — только из `REMOTE_EVENTS`,
- * ответ — кадр с числовым `id` без `event`. Всё прочее не уходит.
+ * ответ — кадр с числовым `id`, ровно одним из `result` / `error` и без `event` и `method` (запросов хоста к клиенту
+ * нет, и кадр, похожий на запрос, не уходит). Всё прочее не уходит.
  */
 export function remoteMayReceive(frame: unknown): boolean {
   if (typeof frame !== 'object' || frame === null || Array.isArray(frame)) return false;
   const fields = frame as Record<string, unknown>;
   if (fields.event !== undefined) return typeof fields.event === 'string' && REMOTE_EVENT_SET.has(fields.event);
-  return typeof fields.id === 'number';
+  if (typeof fields.id !== 'number' || fields.method !== undefined) return false;
+  // Своё поле, а не значение: `{id, result: undefined}` — законный ответ обработчика без результата.
+  return Object.prototype.hasOwnProperty.call(fields, 'result') !== Object.prototype.hasOwnProperty.call(fields, 'error');
 }
 
 /**
