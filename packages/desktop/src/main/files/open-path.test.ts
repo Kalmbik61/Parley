@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { OPENABLE_EXTENSIONS, openVerdict } from './open-path.js';
+import { describe, expect, it, vi } from 'vitest';
+import { FilesDeniedError, type RootsRegistry } from '../roots.js';
+import { OPENABLE_EXTENSIONS, openOrReveal, openVerdict, revealInFinder } from './open-path.js';
 
 const file = (name: string, mode = 0o100644): { name: string; isDirectory: boolean; mode: number } => ({
   name,
@@ -81,5 +82,34 @@ describe('openVerdict (кусок 5.2, тест 12)', () => {
     for (const name of ['X.app', 'x.workflow', 'x.action', 'x.pkg']) {
       expect(openVerdict([folder(name), folder(name)]), name).toBe('reveal');
     }
+  });
+});
+
+describe('revealInFinder (⌘-клик по пути вне корней, 2026-10-31)', () => {
+  const deps = (): { roots: RootsRegistry; showItemInFolder: ReturnType<typeof vi.fn> } => ({
+    roots: { expandHome: (p: string) => p, insideAnyRoot: vi.fn().mockResolvedValue(null) } as unknown as RootsRegistry,
+    showItemInFolder: vi.fn(),
+  });
+
+  it('существующий путь вне корней доходит до showItemInFolder', async () => {
+    const d = deps();
+    await revealInFinder('/etc/hosts', d);
+    expect(d.showItemInFolder).toHaveBeenCalledWith('/etc/hosts');
+  });
+
+  it('несуществующий, относительный и с NUL — files:denied', async () => {
+    const d = deps();
+    for (const p of ['/no/such/file-xyz', 'relative.md', '/etc/ho\0sts']) {
+      await expect(revealInFinder(p, d)).rejects.toBeInstanceOf(FilesDeniedError);
+    }
+    expect(d.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it('openOrReveal вне корней по-прежнему отказ, openPath не зовётся', async () => {
+    const openPath = vi.fn();
+    const d = { ...deps(), openPath };
+    await expect(openOrReveal('/etc/hosts', d)).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(openPath).not.toHaveBeenCalled();
+    expect(d.showItemInFolder).not.toHaveBeenCalled();
   });
 });

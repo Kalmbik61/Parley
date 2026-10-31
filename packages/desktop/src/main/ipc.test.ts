@@ -808,15 +808,17 @@ describe('app:save-diagnostics', () => {
     expect(insideAnyRoot).not.toHaveBeenCalled();
   });
 
-  it('чужой путь вне корней по-прежнему отказ files:denied, даже после сохранения архива', async () => {
+  it('несуществующий путь по-прежнему отказ files:denied, даже после сохранения архива; существующий вне корней показывается', async () => {
     const { roots } = deniedRoots();
     const { ipcMain, showItemInFolder } = setup({ roots });
     await ipcMain.invoke('app:save-diagnostics', { profile: false });
     showItemInFolder.mockClear();
 
     expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/h/Downloads/other.zip'))).toBe('files:denied');
-    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/etc/hosts'))).toBe('files:denied');
     expect(showItemInFolder).not.toHaveBeenCalled();
+    // ⌘-клик по пути вне корней, 2026-10-31: показ в Finder ничего не запускает.
+    expect(await ipcMain.invoke('app:show-in-finder', '/etc/hosts')).toBeUndefined();
+    expect(showItemInFolder).toHaveBeenCalledWith('/etc/hosts');
   });
 });
 
@@ -1398,15 +1400,18 @@ describe('app:open-path и app:show-in-finder (кусок 5.2, тест 13)', ()
     expect(await codeOf(ipcMain.invoke('app:open-path', path.join(project, 'a.txt')))).toBe('failed');
   });
 
-  it('путь вне корней — files:denied; showInFinder — то же, а внутри корня зовёт showItemInFolder с раскрытым путём', async () => {
+  it('openPath вне корней — files:denied; showInFinder вне корней (2026-10-31) показывает существующий путь, внутри корня — с раскрытым', async () => {
     await writeFile(path.join(dir, 'outside.txt'), '');
     await writeFile(path.join(project, 'a.txt'), '');
     const { ipcMain, openPath, showItemInFolder } = setup({ roots });
     expect(await codeOf(ipcMain.invoke('app:open-path', path.join(dir, 'outside.txt')))).toBe('files:denied');
     expect(await codeOf(ipcMain.invoke('app:open-path', '/etc/hosts'))).toBe('files:denied');
-    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/etc/hosts'))).toBe('files:denied');
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', path.join(dir, 'missing.txt')))).toBe('files:denied');
     expect(openPath).not.toHaveBeenCalled();
     expect(showItemInFolder).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('app:show-in-finder', path.join(dir, 'outside.txt'))).toBeUndefined();
+    expect(showItemInFolder).toHaveBeenCalledWith(path.join(dir, 'outside.txt'));
+    showItemInFolder.mockClear();
 
     expect(await ipcMain.invoke('app:show-in-finder', '~/proj/a.txt')).toBeUndefined();
     expect(showItemInFolder).toHaveBeenCalledWith(path.join(project, 'a.txt'));

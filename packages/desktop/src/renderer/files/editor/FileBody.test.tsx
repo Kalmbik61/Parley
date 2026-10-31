@@ -207,6 +207,16 @@ describe('тела по коду (тест 4)', () => {
     await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith("This file type doesn't open here — revealed in Finder"));
   });
 
+  it('вкладка вне корней: у двоичного файла нет Open in default app, Reveal in Finder остаётся', async () => {
+    const tab = fileTab('/etc/blob.bin', { kind: 'external' });
+    useLayoutStore.setState({ layouts: { [W]: layoutWith(tab) } });
+    bridge.setFile({ workKey: W, spec: tab.root }, '/etc/blob.bin', textFile('\0', { binary: true }));
+    renderBody(tab);
+    expect(await screen.findByText('Binary file')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open in default app' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reveal in Finder' })).toBeTruthy();
+  });
+
   it('путь файла worktree — абсолютный путь от папки worktree', async () => {
     const tab = fileTab('b.bin', { kind: 'worktree', sessionId: 's-02' });
     useLayoutStore.setState({ layouts: { [W]: layoutWith(tab) } });

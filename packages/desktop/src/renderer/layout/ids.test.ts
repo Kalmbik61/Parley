@@ -38,6 +38,10 @@ describe('tabId', () => {
     expect(tabId.file(worktree, 'src/a.ts')).toBe('file:w:s-01:src/a.ts');
   });
 
+  it('file: внешний корень (2026-10-31) — свой префикс и абсолютный путь', () => {
+    expect(tabId.file({ kind: 'external' }, '/tmp/a.md')).toBe('file:x:/tmp/a.md');
+  });
+
   it('browser с подставным random детерминирован и не пересекается с другим random', () => {
     expect(tabId.browser(stubRandom())).toBe('browser:012345');
     // другая последовательность — другой id, но тот же формат.

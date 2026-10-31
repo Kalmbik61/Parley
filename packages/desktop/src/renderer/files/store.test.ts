@@ -15,7 +15,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { bufferKey } from './buffer.js';
 import { useNotesStore } from '../review/notes/store.js';
-import { bindBuffersToLayouts, bufferName, defaultRoot, filesRootSpec, useFilesStore } from './store.js';
+import { absPathOf, bindBuffersToLayouts, bufferName, defaultRoot, filesRootSpec, rootDirOf, useFilesStore } from './store.js';
 
 const worktree = (createdAt: string | null) => ({ path: '/wt/s02', branch: 'harnas/w-0003/s02', base: 'main', createdAt });
 
@@ -289,6 +289,32 @@ describe('save (тест 4)', () => {
     const failing = { ...bridge, files: { ...bridge.files, write: async () => Promise.reject({ code: 'files:denied', message: 'x' }) } };
     expect(await useFilesStore.getState().save(failing, W, tab)).toBe('failed');
     expect(useFilesStore.getState().buffers[key]?.model.status).toBe('dirty');
+  });
+});
+
+describe('внешний файл: только чтение (2026-10-31)', () => {
+  const W = '/tmp/proj w-01';
+  const root = { workKey: W, spec: { kind: 'external' as const } };
+  const abs = '/tmp/other/a.md';
+  const tab = tabId.file({ kind: 'external' }, abs);
+  const key = bufferKey(W, tab);
+
+  it('буфер получает readOnlyReason external, правка не принимается, write не зовётся', async () => {
+    const bridge = createFakeBridge();
+    bridge.setFile(root, abs, { text: 'a', mtimeMs: 1, size: 1, binary: false, utf8: true, readOnlyReason: 'external' });
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+    useFilesStore.getState().openBuffer(bridge, W, tab, root, abs);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(useFilesStore.getState().buffers[key]?.model.readOnlyReason).toBe('external');
+    useFilesStore.getState().dispatch(key, { type: 'edited', text: 'ab' });
+    expect(useFilesStore.getState().buffers[key]?.model.text).toBe('a');
+    expect(await useFilesStore.getState().save(bridge, W, tab)).toBe('failed');
+    expect(bridge.writes).toEqual([]);
+  });
+
+  it('absPathOf внешнего корня — сам путь, rootDirOf — null', () => {
+    expect(absPathOf(entry, { kind: 'external' }, abs)).toBe(abs);
+    expect(rootDirOf(entry, { kind: 'external' })).toBeNull();
   });
 });
 

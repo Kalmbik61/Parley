@@ -131,7 +131,7 @@ function isFileRoot(value: unknown): value is FileRoot {
   const { workKey, spec } = value as { workKey?: unknown; spec?: unknown };
   if (typeof workKey !== 'string' || typeof spec !== 'object' || spec === null) return false;
   const { kind, sessionId } = spec as { kind?: unknown; sessionId?: unknown };
-  return kind === 'project' || (kind === 'worktree' && typeof sessionId === 'string');
+  return kind === 'project' || kind === 'external' || (kind === 'worktree' && typeof sessionId === 'string');
 }
 
 function isDragItem(value: unknown): value is DragItem {

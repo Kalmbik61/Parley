@@ -73,7 +73,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../ui/dropdown-menu.js';
-import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
+import { parseFilePathHref, resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
 import { MarkdownBoundary } from '../MarkdownBoundary.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
@@ -289,12 +289,25 @@ function RoomImage({
   );
 }
 
-function markdownComponents(openExternal: (url: string) => void): Components {
+function markdownComponents(openExternal: (url: string) => void, inline: boolean): Components {
   return {
     a: ({ href, children }) => {
       const url = externalUrl(href);
       // Ссылка без подписи называется своим адресом, как и картинка без `alt`.
       const label = isBlank(children) ? (href ?? '') : children;
+      // Адрес-путь `[имя](путь)` (⌘-клик по пути вне корней, 2026-10-31): подпись открывает файл по ⌘, как путь в тексте;
+      // в строчном виде (превью) — текст.
+      const filePath = url === null && !inline ? parseFilePathHref(href ?? '') : null;
+      if (filePath !== null)
+        return (
+          <FilePathText
+            path={filePath.path}
+            {...(filePath.line === undefined ? {} : { line: filePath.line })}
+            {...(filePath.col === undefined ? {} : { col: filePath.col })}
+          >
+            {label}
+          </FilePathText>
+        );
       return url === null ? (
         <>{label}</>
       ) : (
@@ -379,7 +392,7 @@ export function RoomMarkdown({
   // таблицы при каждой перерисовке ленты — выделение текста в них сбрасывалось бы. Колбэк читается из ref.
   const openRef = useRef(onOpenExternal);
   openRef.current = onOpenExternal;
-  const components = useMemo(() => markdownComponents((url) => openRef.current(url)), []);
+  const components = useMemo(() => markdownComponents((url) => openRef.current(url), inline), [inline]);
 
   // Разбор Markdown — ~0.5 мс на сообщение, а лента перерисовывается на каждое событие активности (`RoomBody`
   // подписан на всю карту) и каждый раз зовёт со свежими `labelOf` и `onOpenExternal`. Дерево от них не зависит

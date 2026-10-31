@@ -123,7 +123,7 @@ export interface FakeBridge extends ParleyBridge {
   /** Ответ `files.stat` для пути в корне; по умолчанию `null`. */
   setFileStat(root: FileRoot, path: string, stat: FileStat | null): void;
   /** Вызовы `files.locate` — пачки путей, как их отправил рендерер. */
-  readonly locateCalls: Array<{ workKey: string; absPaths: string[] }>;
+  readonly locateCalls: Array<{ workKey: string; absPaths: string[]; options?: { external?: boolean } }>;
   /** Чем ответит `app.openPath`: `'opened'` (по умолчанию), `'revealed'` или ошибка — отказ. */
   setOpenPathResult(result: 'opened' | 'revealed' | { error: unknown }): void;
   /** Вызовы `app.saveRecipe` и ответ на них (по умолчанию — `saved`). */
@@ -325,7 +325,7 @@ export function createFakeBridge(): FakeBridge {
   let revealWorkError: unknown = null;
   const located = new Map<string, Located | null>();
   const fileStats = new Map<string, FileStat | null>();
-  const locateCalls: Array<{ workKey: string; absPaths: string[] }> = [];
+  const locateCalls: Array<{ workKey: string; absPaths: string[]; options?: { external?: boolean } }> = [];
   const saveRecipeCalls: RecipeSaveRequest[] = [];
   let saveRecipeAnswer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult> = (request) => ({ status: 'saved', id: `project:${request.file}`, opened: true });
   const saveDiagnosticsCalls: Array<{ profile: boolean }> = [];
@@ -767,8 +767,8 @@ export function createFakeBridge(): FakeBridge {
     },
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),
-      locate: async (workKey, absPaths) => {
-        locateCalls.push({ workKey, absPaths: [...absPaths] });
+      locate: async (workKey, absPaths, options) => {
+        locateCalls.push({ workKey, absPaths: [...absPaths], ...(options === undefined ? {} : { options }) });
         return absPaths.map((absPath) => located.get(`${workKey}\n${absPath}`) ?? null);
       },
       list: async (root, dir) => {

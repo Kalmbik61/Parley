@@ -2499,6 +2499,8 @@ export const S = {
     /** Вкладка правого сайдбара и её дерево (кусок 7.2, спека 10.1). */
     panel: 'Files',
     project: 'Project',
+    /** Метка корня вкладки с файлом вне корней работы (⌘-клик по пути вне корней, 2026-10-31). */
+    external: 'External',
     /** Корень-worktree в `RootPicker`: ярлык сессии и ветка — данные, идут как есть. */
     worktreeRoot: (tag: string, branch: string): string => `⎇ ${tag} · ${branch}`,
     rootGone: 'Session folder no longer exists',
@@ -2530,6 +2532,7 @@ export const S = {
      */
     readOnlyTooLarge: 'Large file — editing disabled',
     readOnlyNotUtf8: 'Not UTF-8 — editing disabled',
+    readOnlyExternal: 'Read-only: this file is outside the workspace',
     tooLarge: 'File is larger than 20 MB',
     binary: 'Binary file',
     notFound: 'File not found',
