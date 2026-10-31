@@ -318,6 +318,21 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4
 
+  packages/remote-client:
+    dependencies:
+      '@parley/core':
+        specifier: workspace:*
+        version: link:../core
+      '@parley/noise':
+        specifier: workspace:*
+        version: link:../noise
+      '@parley/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
+
 packages:
 
   '@ampproject/remapping@2.3.0':
