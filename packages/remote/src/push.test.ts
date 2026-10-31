@@ -316,6 +316,22 @@ describe('A9: клиент шлюза', () => {
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ v: 1, token: 'ab'.repeat(32), env: 'production', count: 3, route: ROUTE });
   });
 
+  it('шлюз под путём получает запросы под этим путём; тело ответа отменяется', async () => {
+    let cancelled = 0;
+    const calls: string[] = [];
+    const client = createPushGatewayClient({
+      url: 'https://push.example.com/parley',
+      log,
+      fetch: (async (url: string) => {
+        calls.push(url);
+        return { status: 200, body: { cancel: async () => void cancelled++ } } as unknown as Response;
+      }) as unknown as typeof fetch,
+    });
+    expect(await client.send(req)).toBe('sent');
+    expect(calls).toEqual(['https://push.example.com/parley/v1/push']);
+    expect(cancelled).toBe(1);
+  });
+
   it('статусы: 410 → invalid-token, 400 и 429 → rejected, 5xx и обрыв → unavailable; count режется до 9999', async () => {
     expect(await mk(410).client.send(req)).toBe('invalid-token');
     expect(await mk(400).client.send(req)).toBe('rejected');
@@ -330,10 +346,12 @@ describe('A9: клиент шлюза', () => {
 
   it('адрес шлюза: переопределение из remote.json, иначе сборка; только https (и петля)', () => {
     expect(resolvePushGatewayUrl(undefined, null)).toBeNull();
-    expect(resolvePushGatewayUrl(undefined, 'https://build.example.com/x')).toBe('https://build.example.com');
+    expect(resolvePushGatewayUrl(undefined, 'https://build.example.com/x/')).toBe('https://build.example.com/x');
     expect(resolvePushGatewayUrl('https://mine.example.com', 'https://build.example.com')).toBe('https://mine.example.com');
     expect(resolvePushGatewayUrl('http://push.example.com', null)).toBeNull();
     expect(resolvePushGatewayUrl('http://127.0.0.1:8080', null)).toBe('http://127.0.0.1:8080');
     expect(resolvePushGatewayUrl('nonsense', null)).toBeNull();
+    expect(resolvePushGatewayUrl('https://u:p@push.example.com', null)).toBeNull();
+    expect(resolvePushGatewayUrl('https://push.example.com/?a=1', null)).toBeNull();
   });
 });

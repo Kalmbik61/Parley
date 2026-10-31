@@ -370,6 +370,16 @@ describe('A22: the bridge as one process', () => {
     }
   }, 40_000);
 
+  it('SIGTERM while the bridge is still starting: the handler is already there, the bridge stops cleanly (exit 0, no leftovers)', async () => {
+    startBridge();
+    // bridge.pid появляется внутри startBridge: сигнал приходит посреди запуска, а не до обработчиков.
+    await until(() => existsSync(path.join(home, 'remote', 'bridge.pid')), 5000);
+    child!.kill('SIGTERM');
+    expect(await exit).toBe(0);
+    expect(existsSync(path.join(home, 'remote', 'bridge.pid'))).toBe(false);
+    expect(existsSync(path.join(home, 'remote', 'control.sock'))).toBe(false);
+  }, 30_000);
+
   it('a second bridge on the same home refuses to start and does not touch the first', async () => {
     const c = await running();
     const second = spawn(process.execPath, [MAIN], { env: { ...process.env, PARLEY_HOME: home, PARLEY_REMOTE_DEV_LOOPBACK: '1' }, stdio: 'ignore' });

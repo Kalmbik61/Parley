@@ -19,3 +19,4 @@ export * from './config.js';
 export * from './push.js';
 export * from './push-gateway-client.js';
 export * from './bridge.js';
+export * from './pid-lock.js';
