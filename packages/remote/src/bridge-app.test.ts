@@ -418,14 +418,25 @@ describe('A8b: host methods of the epoch', () => {
   });
 
   it('launch methods are mutating: limited and audited with the work or room as target', async () => {
-    host.hostMethodSet = [...REMOTE_METHODS, 'rooms.send'];
+    // A1c: `rooms.send` is a stage A mutating method — it reaches the host, counts against the mutating limit and
+    // is audited with the room as target and without the message text.
+    expect(REMOTE_METHODS).toContain('rooms.send');
+    host.hostMethodSet = [...REMOTE_METHODS];
     online();
     dispatcher.onOpen('d1');
-    // `rooms.send` ещё не в белом списке этапа A (A1c): мост не пропускает его, даже если хост предложил.
     call('d1', 'a', 'rooms.send', { roomId: 'r-1', kind: 'note', text: 'secret words' });
     await flush();
-    expect(host.calls).toEqual([]);
+    expect(host.calls).toEqual([{ method: 'rooms.send', params: { roomId: 'r-1', kind: 'note', text: 'secret words' } }]);
+    expect(audits).toEqual([expect.objectContaining({ kind: 'call', method: 'rooms.send', target: 'r-1', outcome: 'ok' })]);
     expect(JSON.stringify(audits)).not.toContain('secret words');
+    for (let i = 0; i < 29; i++) {
+      call('d1', `m${i}`, 'rooms.send', { roomId: 'r-1', kind: 'note', text: `t${i}` });
+      await flush();
+    }
+    call('d1', 'over', 'rooms.send', { roomId: 'r-1', kind: 'note', text: 'one too many' });
+    await flush();
+    expect(host.calls.filter((c) => c.method === 'rooms.send')).toHaveLength(30);
+    expect(sessions.of('d1').find((f) => f.id === 'over')).toMatchObject({ error: { code: 'rate_limited' } });
   });
 });
 

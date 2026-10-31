@@ -311,12 +311,25 @@ importers:
       '@parley/core':
         specifier: workspace:*
         version: link:../core
+      '@parley/noise':
+        specifier: workspace:*
+        version: link:../noise
       '@parley/protocol':
         specifier: workspace:*
         version: link:../protocol
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.1
       zod:
         specifier: ^4.5.4
         version: 4.5.4
+    devDependencies:
+      '@parley/relay':
+        specifier: workspace:*
+        version: link:../relay
+      '@types/ws':
+        specifier: ^8.5.12
+        version: 8.18.2
 
   packages/remote-client:
     dependencies:
