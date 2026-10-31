@@ -469,7 +469,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
               machine: (await capacityFeed.snapshot()).machine,
               activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
             };
-          } catch {
+          } catch (error) {
+            log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
             return null;
           }
         },
