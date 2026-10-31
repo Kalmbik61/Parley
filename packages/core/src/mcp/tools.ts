@@ -1154,7 +1154,8 @@ async function sendMessage(
         throw new Error('without room, exactly one addressee in to is required');
       }
       const target = to[0] as string;
-      assertDeliverable(current, target);
+      // Человек — не сессия: прямое письмо ему (ответ на его письмо) проверки доставки не проходит, его читает окно.
+      if (target !== HUMAN) assertDeliverable(current, target);
       assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       sent = letters.add({ roomId: null, from: sessionId, to: [target], text, kind });
     }

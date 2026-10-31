@@ -291,8 +291,9 @@ When you answer a particular message in a room — above all a question from the
 \`replyTo\` with that message's id (the \`id\` field in what \`check_inbox\` and \`read_room\`
 return). The window draws a quote of it above your answer, so the human sees what you are
 answering. \`replyTo\` works only together with \`room\`, and the message must be from that
-same room: otherwise it is an error, and nothing is sent. The human is not a session: answer
-the human in the room without \`to\` and with \`replyTo\`; \`to: "human"\` is an error.
+same room: otherwise it is an error, and nothing is sent. The human is not a session: in a
+room, answer the human without \`to\` and with \`replyTo\` (\`to: "human"\` is an error there).
+Outside a room, answer a direct letter from the human with \`send_message(to: "human")\`.
 
 To address the human in a room, write \`@human\` in the text. The window highlights the
 mention and notifies the human, so write it only when you need the human's answer or

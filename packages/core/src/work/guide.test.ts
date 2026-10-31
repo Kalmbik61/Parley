@@ -281,6 +281,13 @@ describe('ссылки между темами гида', () => {
     expect(flat('rooms')).toContain('`add_to_room(room, session)` (topic `lead`).');
   });
 
+  it('«Комнаты» называют ответ на прямое письмо человека: send_message(to: "human") вне комнаты, в комнате — по-прежнему ошибка', () => {
+    const rooms = flat('rooms');
+    expect(rooms).toContain(
+      'The human is not a session: in a room, answer the human without `to` and with `replyTo` (`to: "human"` is an error there). Outside a room, answer a direct letter from the human with `send_message(to: "human")`.',
+    );
+  });
+
   it('«Инструменты» отсылают за правилами worktree к теме `worktrees`, а та лежит отдельно от `window`', () => {
     expect(flat('tools')).toContain('The rules for working in it are in topic `worktrees`.');
     expect(guideTopic('worktrees')).toContain('do not switch the branch');

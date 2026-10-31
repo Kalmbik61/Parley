@@ -502,12 +502,13 @@ describe('подробный гид', () => {
     );
   });
 
-  it('комнаты: человек не сессия — отвечать ему рассылкой в комнату с replyTo, to: "human" — ошибка (ревью 0.3.0)', () => {
+  it('комнаты: человек не сессия — в комнате отвечать с replyTo, to: "human" там ошибка; вне комнаты — send_message(to: "human") (ревью 0.3.0, b-014)', () => {
     const rooms = sectionOf('## Rooms', '### The lead and the decision');
 
     expect(rooms).toMatch(
-      /The human is not a session: answer the human in the room without `to` and with `replyTo`; `to: "human"` is an error/,
+      /The human is not a session: in a room, answer the human without `to` and with `replyTo` \(`to: "human"` is an error there\)/,
     );
+    expect(rooms).toMatch(/Outside a room, answer a direct letter from the human with `send_message\(to: "human"\)`/);
   });
 
   it('комнаты, участнику: отвечая на задачу человека, передать replyTo с id его сообщения', () => {
