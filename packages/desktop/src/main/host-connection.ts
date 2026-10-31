@@ -152,6 +152,13 @@ export class HostConnection {
   private candidate: Socket | null = null;
   /** Единственная петля подключения: `connect`, переподключение и `restartHost` делят её. */
   private loop: Promise<void> | null = null;
+  /** Закрытие и restart отменяют продолжения старой петли, включая незавершённый hello. */
+  private connectionEpoch = 0;
+  private restartOperation: Promise<void> | null = null;
+  /** При неподтверждённой остановке автоповтор запрещён до следующего явного restart. */
+  private teardownPending = false;
+  /** После отказа сохраняем проверенный старый pid: следующий restart не должен забыть живой хост. */
+  private teardownPid: number | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   /** Последние вызовы окна к хосту — для архива диагностики (`recentCalls`). */
@@ -201,18 +208,21 @@ export class HostConnection {
     return this.spawning || (this.spawnedHost?.isRunning() ?? false);
   }
 
-  private startHostProcess(): void {
+  private startHostProcess(epoch: number): void {
     this.spawning = true;
     this.spawnedHost = null;
     this.spawnedAt = Date.now();
     void Promise.resolve()
-      .then(() => this.spawnHostProcess())
+      .then(() => {
+        this.checkEpoch(epoch);
+        return this.spawnHostProcess();
+      })
       .then(
         (spawned) => {
           this.spawnedHost = spawned;
         },
         (error: unknown) => {
-          console.error('[parley] failed to start host', error);
+          if (epoch === this.connectionEpoch) console.error('[parley] failed to start host', error);
         },
       )
       .finally(() => {
@@ -252,6 +262,8 @@ export class HostConnection {
    * петлю переподключения (fix-final-b, M4): без неё окно так и стояло бы на экране отказа.
    */
   async connect(): Promise<void> {
+    if (this.restartOperation !== null) return this.restartOperation;
+    if (this.teardownPending) throw new Error('host teardown is unresolved; retry Restart Host');
     this.oversized?.destroy();
     this.oversized = null;
     this.closed = false;
@@ -265,10 +277,11 @@ export class HostConnection {
 
   /** Петля подключения; её отказ — повтор по таймеру с нарастающей паузой. */
   private async connectOrRetry(): Promise<void> {
+    const epoch = this.connectionEpoch;
     try {
       await this.connectLoop();
     } catch (err) {
-      this.scheduleReconnect();
+      if (epoch === this.connectionEpoch) this.scheduleReconnect();
       throw err;
     }
   }
@@ -286,7 +299,7 @@ export class HostConnection {
    */
   private connectLoop(): Promise<void> {
     if (this.loop !== null) return this.loop;
-    const loop = this.connectOnce().finally(() => {
+    const loop = this.connectOnce(this.connectionEpoch).finally(() => {
       if (this.loop === loop) this.loop = null;
     });
     this.loop = loop;
@@ -303,20 +316,30 @@ export class HostConnection {
     this.setStatus({ state: 'disconnected', reason });
   }
 
-  private async connectOnce(): Promise<void> {
+  private checkEpoch(epoch: number): void {
+    if (this.closed || epoch !== this.connectionEpoch) throw new Error(S.connection.reasonClosed);
+  }
+
+  private async connectOnce(epoch: number): Promise<void> {
     const deadline = Date.now() + this.connectTimeoutMs;
     let spawned = false;
     for (;;) {
       try {
+        this.checkEpoch(epoch);
         // Токен — до сокета (раунд lane-r3, п. 2): хост закрывает соединение без `hello`
         // через 5 с после accept, и чтение файла под нагрузкой не должно тратить этот срок.
         // Нет файла — хост ещё не поднят: та же ветка повтора, что и отказ сокета.
         const token = (await readFile(this.paths.token, 'utf8')).trim();
+        this.checkEpoch(epoch);
         const socket = await this.tryConnectSocket();
-        await this.handshake(socket, token);
+        if (this.closed || epoch !== this.connectionEpoch) {
+          socket.destroy();
+          this.checkEpoch(epoch);
+        }
+        await this.handshake(socket, token, epoch);
         return;
       } catch (err) {
-        if (this.closed) throw err instanceof Error ? err : new Error(String(err));
+        if (this.closed || epoch !== this.connectionEpoch) throw err instanceof Error ? err : new Error(String(err));
         if (this.spawnFailure !== null) {
           throw new Error(this.spawnFailure);
         }
@@ -336,7 +359,7 @@ export class HostConnection {
         // второй не запускается; вышел — запуск на следующем круге.
         if (!spawned && !this.hostStarting()) {
           spawned = true;
-          this.startHostProcess();
+          this.startHostProcess(epoch);
         }
         await delay(150);
       }
@@ -346,19 +369,22 @@ export class HostConnection {
   private tryConnectSocket(): Promise<Socket> {
     return new Promise((resolve, reject) => {
       const socket = createConnection(this.paths.socket);
+      const timer = setTimeout(() => onError(new Error('host socket connect timeout')), this.connectTimeoutMs);
       const onError = (err: Error): void => {
+        clearTimeout(timer);
         socket.destroy();
         reject(err);
       };
       socket.once('error', onError);
       socket.once('connect', () => {
+        clearTimeout(timer);
         socket.off('error', onError);
         resolve(socket);
       });
     });
   }
 
-  private async handshake(socket: Socket, token: string): Promise<void> {
+  private async handshake(socket: Socket, token: string, epoch: number): Promise<void> {
     this.candidate = socket;
     // Разбор строк — свой у каждого сокета: хвост прежнего не смешается с новым.
     const decoder = new LineDecoder();
@@ -397,8 +423,11 @@ export class HostConnection {
       }),
     );
 
+    // Зависшее hello тоже ограничено сроком подключения; общий timeout для RPC не вводим.
+    const timer = setTimeout(() => this.pending.get(id)?.reject(new Error('host hello timeout')), this.connectTimeoutMs);
     try {
       const result = (await pendingPromise) as Result<'hello'>;
+      this.checkEpoch(epoch);
       this.adopt(socket);
       this.hostPid = result.pid;
       this.reconnectDelayMs = 500;
@@ -409,6 +438,8 @@ export class HostConnection {
         features: result.features ?? null,
       });
     } catch (err) {
+      // Restart забирает старый сокет для shutdown: отменённое hello его не закрывает.
+      if (epoch !== this.connectionEpoch) throw err;
       if (err instanceof HostError && err.code === 'protocol_mismatch') {
         // Текущим — и после mismatch: «Restart» шлёт по нему host.shutdown.
         this.adopt(socket);
@@ -423,12 +454,16 @@ export class HostConnection {
       if (this.candidate === socket) this.candidate = null;
       socket.destroy();
       throw err;
+    } finally {
+      clearTimeout(timer);
+      this.pending.delete(id);
     }
   }
 
   private adopt(socket: Socket): void {
     if (this.candidate === socket) this.candidate = null;
     this.socket = socket;
+    this.hostPid = null;
   }
 
   private handleChunk(socket: Socket, decoder: LineDecoder, chunk: Buffer): void {
@@ -521,15 +556,15 @@ export class HostConnection {
    * петля не запускает (`connectOnce`, lane-r4): запуск — только когда прошлого процесса нет.
    */
   private scheduleReconnect(): void {
-    if (this.closed) return;
+    if (this.closed || this.teardownPending) return;
     // Петля уже идёт (restartHost, первое подключение) — она и подключит; вторую не заводим.
     if (this.reconnectTimer || this.loop !== null) return;
     const delayMs = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 5000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.closed) return;
-      this.connectLoop().catch(() => this.scheduleReconnect());
+      if (this.closed || this.teardownPending) return;
+      void this.connectOrRetry().catch(() => {});
     }, delayMs);
   }
 
@@ -598,29 +633,121 @@ export class HostConnection {
     this.socket.write(encodeLine({ method, params }));
   }
 
-  /** `host.shutdown` → новый процесс хоста → новое подключение. */
-  async restartHost(): Promise<void> {
-    // Запуск хоста — заново: прошлая причина отказа (нет node) могла уйти (fix-final-b, M4).
-    this.spawnFailure = null;
-    // Подключаться — после того как уходящий хост закрыл наш сокет (он закрывает клиентов в конце
-    // остановки, до этого ещё слушает): иначе петля успела бы подключиться к нему же (lane-r4, п. 3).
-    const old = this.socket;
-    const oldClosed =
-      old === null || old.destroyed ? Promise.resolve() : new Promise<void>((resolve) => old.once('close', () => resolve()));
-    try {
-      await this.call('host.shutdown', {});
-    } catch {
-      // Хост мог закрыть соединение раньше, чем пришёл ответ, — это ожидаемо.
-    }
-    // Хост завис на остановке — не ждём вечно: срок подключения, затем рвём сами.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([oldClosed, new Promise<void>((resolve) => (timer = setTimeout(resolve, this.connectTimeoutMs)))]);
-    clearTimeout(timer);
-    if (old !== null && this.socket === old) old.destroy();
-    this.reconnectDelayMs = 500;
+  /** `host.shutdown` → подтверждённый выход старого хоста → новое подключение. */
+  restartHost(options: { timeoutMs?: number; killGraceMs?: number; killWaitMs?: number } = {}): Promise<void> {
+    if (this.restartOperation !== null) return this.restartOperation;
+    if (this.closed) return Promise.reject(new Error(S.connection.reasonClosed));
+    const unresolved = this.teardownPending;
+    this.teardownPending = true;
     this.clearReconnectTimer();
-    // Отказ — переподключение по таймеру (fix-final-b, M4): терминалы пишут «reconnecting…».
+    const operation = this.restartOnce(options, unresolved).finally(() => {
+      if (this.restartOperation === operation) this.restartOperation = null;
+    });
+    this.restartOperation = operation;
+    return operation;
+  }
+
+  /** Ждёт только до срока; close/stop немедленно отменяют дальнейшие сигналы и запуск. */
+  private async waitRestart(predicate: () => boolean, timeoutMs: number, epoch: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      this.checkEpoch(epoch);
+      if (predicate()) return true;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await delay(Math.min(25, remaining));
+    }
+  }
+
+  private rejectPending(): void {
+    const error = new Error(S.connection.reasonClosed);
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+
+  private async restartOnce(
+    options: { timeoutMs?: number; killGraceMs?: number; killWaitMs?: number },
+    unresolved: boolean,
+  ): Promise<void> {
+    const epoch = ++this.connectionEpoch;
+    const old = this.socket ?? this.candidate;
+    const helloPid = this.teardownPid ?? (this.socket === old ? this.hostPid : null);
+    const previousLoop = this.loop;
+    let oldClosed = old === null || old.closed;
+    const onClose = (): void => { oldClosed = true; };
+    old?.once('close', onClose);
+    this.spawnFailure = null;
+    // Отменяем hello и остальные RPC до shutdown: их ответы уже не нужны. Сокет остаётся для остановки.
+    this.rejectPending();
+    this.candidate = null;
+    try {
+      if (old !== null && !old.destroyed) {
+        // Ответ не участвует в остановке; pending текущего сокета очищается в finally даже у молчащего хоста.
+        if (old === this.socket) void this.call('host.shutdown', {}).catch(() => {});
+        else old.write(encodeLine({ id: this.nextId++, method: 'host.shutdown', params: {} }));
+      }
+      if (previousLoop !== null && !(await this.waitRestart(() => this.loop !== previousLoop, this.connectTimeoutMs, epoch))) {
+        throw new Error('host teardown could not cancel the previous connection');
+      }
+      // Уже вызванный async spawn отменить нельзя: ждём его результат до срока и не запускаем второй.
+      if (!(await this.waitRestart(() => !this.spawning, this.connectTimeoutMs, epoch))) {
+        throw new Error('host teardown could not confirm a pending spawn');
+      }
+      let pid: number | null = null;
+      if (helloPid !== null && Number.isInteger(helloPid) && helloPid > 0 &&
+          (!this.processes.isAlive(helloPid) || this.processes.isHost(helloPid))) {
+        pid = helloPid;
+      } else {
+        pid = await this.livePidFromFile();
+      }
+      this.checkEpoch(epoch);
+      this.teardownPid = pid;
+      if (pid === null) {
+        if ((old === null && (unresolved || previousLoop !== null || this.hostStarting())) ||
+            !(await this.waitRestart(() => oldClosed, options.timeoutMs ?? 10_000, epoch))) {
+          throw new Error('host teardown could not be confirmed without a host PID');
+        }
+      } else {
+        const oldPid = pid;
+        const exited = (): boolean => !this.processes.isAlive(oldPid);
+        if (!(await this.waitRestart(exited, options.timeoutMs ?? 10_000, epoch))) {
+          // isHost различает команду, но не поколение процесса: повторный pid другого Parley-хоста не отличим.
+          for (const [signal, grace] of [
+            ['SIGTERM', options.killGraceMs ?? 3000],
+            ['SIGKILL', options.killWaitMs ?? 3000],
+          ] as const) {
+            this.checkEpoch(epoch);
+            // Перед каждым сигналом снова проверяем: pid уже мог выйти или перейти чужому процессу.
+            if (exited() || !this.processes.isHost(oldPid)) break;
+            this.processes.kill(oldPid, signal);
+            if (await this.waitRestart(exited, grace, epoch)) break;
+          }
+          if (!exited() && this.processes.isHost(oldPid)) throw new Error('old host did not exit after SIGKILL');
+        }
+      }
+    } catch (error) {
+      if (!this.closed && epoch === this.connectionEpoch) {
+        this.setStatus({ state: 'disconnected', reason: error instanceof Error ? error.message : String(error) });
+      }
+      throw error;
+    } finally {
+      old?.off('close', onClose);
+      old?.destroy();
+      if (this.socket === old) {
+        this.socket = null;
+        this.hostPid = null;
+      }
+      if (this.oversized === old) this.oversized = null;
+      this.rejectPending();
+    }
+    this.checkEpoch(epoch);
+    this.teardownPid = null;
+    this.teardownPending = false;
+    this.reconnectDelayMs = 500;
+    this.setStatus({ state: 'connecting' });
+    // После подтверждённой остановки прежнее поведение сохраняется: отказ подключения заводит автоповтор.
     await this.connectOrRetry();
+    this.checkEpoch(epoch);
   }
 
   /** pid живого процесса хоста по `host.pid` (первая строка), если он ещё жив и это хост Parley. */
@@ -676,7 +803,11 @@ export class HostConnection {
     const killGraceMs = options.killGraceMs ?? 3000;
     // Насовсем: ни петля, ни `spawn` после этого не оживают.
     this.closed = true;
+    this.connectionEpoch += 1;
     this.clearReconnectTimer();
+    this.rejectPending();
+    this.candidate?.destroy();
+    this.candidate = null;
 
     let pid: number | null;
     const socket = this.socket;
@@ -691,6 +822,7 @@ export class HostConnection {
       await Promise.race([closed, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
       clearTimeout(timer);
       socket.destroy();
+      this.rejectPending();
       this.socket = null;
       if (pid === null || (await this.waitExit(pid, killGraceMs))) return 'shutdown';
     } else {
@@ -705,6 +837,8 @@ export class HostConnection {
 
   close(): void {
     this.closed = true;
+    this.connectionEpoch += 1;
+    this.rejectPending();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
