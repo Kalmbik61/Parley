@@ -372,6 +372,22 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   />
                 </FieldRow>
 
+                {/* Ключа нет у хоста, оставшегося от прежней версии: поле показало бы «undefined», а `settings.set` такой
+                    хост отклонил бы. */}
+                {config.sleepAfterMinutes !== undefined ? (
+                  <FieldRow
+                    label={S.settings.sleepAfterMinutes}
+                    lockedBy={locked.sleepAfterMinutes ?? null}
+                    error={errors.sleepAfterMinutes}
+                  >
+                    <Input
+                      defaultValue={String(config.sleepAfterMinutes)}
+                      disabled={locked.sleepAfterMinutes !== undefined}
+                      onBlur={(event) => void save('sleepAfterMinutes', event.target.value)}
+                    />
+                  </FieldRow>
+                ) : null}
+
                 {/* Ключа нет у хоста, оставшегося от прежней версии: он lean-запуск не знает, переключатель врал бы. */}
                 {config.leanAgents !== undefined ? (
                   <>

@@ -29,6 +29,7 @@ import {
   supportsEffort,
 } from '../providers.js';
 import { roleSummaries, sessionRoleCatalog } from '../work/agents.js';
+import { inboxFenced } from '../work/auto-sleep.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
@@ -78,10 +79,10 @@ import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOO
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
-import { reportedStatus } from '../work/session-state.js';
+import { agentStatus, asleepHint } from '../work/session-state.js';
 import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
-import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
 import {
   HUMAN,
@@ -116,7 +117,8 @@ const SETTLE_SLACK_MS = 20;
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
  * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
- * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает. Идёт замена агента (спека
+ * процесса больше нет — ушла в `sleeping` или `closed`. Усыплённая хостом (`autoSleep`) — `asleep`: она не кончила
+ * и не умерла, письмо её поднимет (спека сна агентов 4.1). `null` — цель ещё работает. Идёт замена агента (спека
  * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
  * `stuck` снят, но работа у неё не кончилась.
  */
@@ -124,6 +126,7 @@ export function finishedState(session: WorkSession): string | null {
   if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
+  if (session.lifecycle === 'sleeping' && session.autoSleep != null) return 'asleep';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
     ? session.lifecycle
     : null;
@@ -712,7 +715,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       const withSummary = map.sessions.filter((session) => session.summary !== null);
       const { items, page } = pageBySeq(withSummary, {
         seq: (session) => seqOf(session.id, 's-'),
-        view: (session) => ({ id: session.id, label: session.label, status: reportedStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        view: (session) => ({ id: session.id, label: session.label, status: agentStatus(session), source: session.summarySource, text: session.summary ?? '' }),
         shrink: (view, limit) => shrinkSummary(view, limit),
         cursor: parseCursor(cursorRaw),
         maxBytes,
@@ -805,7 +808,7 @@ async function report(
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
     // харнесс ещё не отметил запущенной.
-    status: session.result ?? reportedStatus(session),
+    status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
   };
@@ -866,6 +869,15 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  /**
+   * Хост усыпляет эту сессию или уже усыпил (`inboxFenced`): письма ей не выдаются, ожидание отвечает `running`. Синхронно
+   * и без копии карты: от проверки отмены до ответа ниже `await` быть не должно.
+   */
+  const fenced = (): boolean =>
+    viewMap(context.projectPath, context.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      return session !== undefined && inboxFenced(session);
+    });
   /** Сколько ещё ждать тишины по этим письмам, мс; 0 — доставлять сейчас (окно и потолок — из контекста, для тестов). */
   const settleDelay = (unread: readonly Message[]): number =>
     settleDelayMs(unread, sessionId, Date.now(), context.settleMs, context.settleMaxMs);
@@ -914,6 +926,9 @@ async function waitFor(
           hint: stuckHint(target, session.stuck, new Date()),
         };
       }
+      // Усыплённая хостом: итога не будет, пока её не разбудит письмо, а ждать её до таймаута впустую. Отвечаем сразу и вместо
+      // резюме и артефактов даём подсказку, что делать: писать ей или ждать почту.
+      if (state === 'asleep') return { state, sessionId: target, hint: asleepHint(target) };
       return state !== null
         ? {
             state,
@@ -970,6 +985,8 @@ async function waitFor(
   // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
   const cancelled = (): boolean => signal?.aborted === true;
   for (;;) {
+    // Отметка «засыпает»: письма остаются непрочитанными, ждать их незачем — сессию остановят. Ни одной строки журнала.
+    if (fenced()) return { state: 'running' };
     const timeLeftMs = Math.max(endsAt - Date.now(), 0);
     // Письма лежат, но пачка не устоялась: проба из-за этого не сработает до смены карты, а срок идёт по часам. Поэтому ждём
     // не дольше срока и пересчитываем (не раньше, чем кончится таймаут вызова).
@@ -994,6 +1011,8 @@ async function waitFor(
     // Брошенный вызов: ход сессии кончился или начался заново после старта вызова (человек прервал ход, а клиент отмену не
     // прислал — Codex). Агент ответа не увидит; письмо остаётся непрочитанным, и хост напечатает на него указатель.
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
+    // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
+    if (fenced()) return { state: 'running' };
     const messages = takeInbox(context, sessionId);
     if (messages.length > 0) return { state: 'message', messages };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
@@ -1133,6 +1152,9 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
     // почту нового (спека передачи сессии 6.1). Отказ откатывает запись: письма остаются непрочитанными.
     const revision = current.sessions.find((session) => session.id === sessionId)?.agentRevision ?? null;
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
+    // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
+    // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
+    if (inboxFenced(requireSession(current, sessionId))) return [];
     const inbox = letters.unreadFor(sessionId);
     const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);

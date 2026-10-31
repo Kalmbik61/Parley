@@ -77,6 +77,15 @@ describe('темы гида', () => {
     expect(text).toContain('do not call `wait_for` for it again, see topic `stuck`');
   });
 
+  it('темы tools и lifecycle: wait_for отвечает asleep на цель, которую усыпил Parley, — письмо её будит', () => {
+    const tools = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
+    expect(tools).toContain(
+      'The answer `state: "asleep"` means Parley put the session to sleep: mail wakes it, so write to it or wait for mail via `"inbox"`.',
+    );
+    const lifecycle = (guideTopic('lifecycle') ?? '').replace(/\s+/g, ' ');
+    expect(lifecycle).toContain('A session Parley put to sleep is `sleeping` too: `wait_for` on it answers `asleep`, and mail wakes it.');
+  });
+
   it('тема tools: wait_for("inbox") отдаёт письма прочитанными, ждать одним вызовом на 1500 с, check_inbox после него не нужен', () => {
     const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
 

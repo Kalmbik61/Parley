@@ -24,7 +24,7 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
+import type { ProviderLimits, SessionActivity, SessionNeed, WorkSession } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
@@ -1304,6 +1304,186 @@ describe('WakeService: подъём спящей письмом', () => {
   }, 20_000);
 });
 
+/**
+ * Сон агентов (спека 2026-10-30, 4.1): сессию, которую усыпил хост, письмо поднимает и после перезапуска хоста, и сверх
+ * `resumeRate`, не тратя слот часа; остановленную человеком будильник считает по-прежнему.
+ */
+describe('WakeService: усыплённая хостом сессия (сон агентов, 4.1)', () => {
+  /** Помечает спящую сессию усыплённой хостом: `autoSleep` лежит в карте так, как его оставляет `transitionSession`. */
+  async function sleptByHost(workId: string, sessionId: string): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session !== undefined) session.autoSleep = { reason: 'idle', at: new Date().toISOString(), waitTarget: null };
+    });
+  }
+  /** Сервис сессий, у которого `launch` — подделка: настоящий подъём не нужен, важно лишь, что будильник его потребовал. */
+  const withLaunch = (launch: SessionsService['launch']) => (real: SessionsService): SessionsService => {
+    const spy = Object.create(real) as SessionsService;
+    spy.launch = launch;
+    return spy;
+  };
+
+  it('10: после старта хоста письмо поднимает усыплённую хостом сессию', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    // Письмо легло, пока будильника не было: на старте он встречает его как лежавшее (`ensureKnown`).
+    await sendLetter(workId, target, 'проснись', sender);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, withLaunch(launch));
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1) });
+  }, 20_000);
+
+  it('11: после старта хоста остановленную человеком письмо не поднимает, как и раньше; новое письмо поднимает', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    await sendLetter(workId, target, 'лежало до старта', sender);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, withLaunch(launch));
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+
+    // Контроль: стенд исправен, подъём не заперт навсегда.
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 20_000);
+
+  it('12: усыплённую хостом поднимают семь писем за час: лимитер на шесть не мешает, слот часа не берётся', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    const limiter = new ResumeLimiter(() => 6);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({ limiter }, withLaunch(launch));
+
+    for (let i = 1; i <= 7; i += 1) {
+      await sendLetter(workId, target, `письмо ${i}`, sender);
+      await waitFor(() => launch.mock.calls.length === i, 5000);
+    }
+
+    expect(notices('resume-limit')).toEqual([]);
+    // Слот часа не взят ни разу: все шесть подъёмов по-прежнему доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 30_000);
+
+  it('13: поднять нечем (нет id разговора) — у усыплённой хостом слот не взят, и чужой не возвращается', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === target);
+      if (session !== undefined) session.providerSessionId = null;
+    });
+    await sleptByHost(workId, target);
+    // Пять подъёмов за этот час уже сделаны: возврат без своего слота вернул бы один из них.
+    const limiter = new ResumeLimiter(() => 6);
+    for (let i = 0; i < 5; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const launch = vi.fn(async () => 'started' as const);
+    const { activity } = await resumeRig({ limiter }, withLaunch(launch));
+
+    await sendLetter(workId, target, 'проснись', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(200);
+
+    expect(launch).not.toHaveBeenCalled();
+    // Пять взятых на месте: шестой есть, седьмого нет.
+    expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  it('14: запуск удержан (held) — у усыплённой хостом слот не взят, и чужой не возвращается', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    const limiter = new ResumeLimiter(() => 6);
+    for (let i = 0; i < 5; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const launch = vi.fn(async () => 'held' as const);
+    const { activity } = await resumeRig({ limiter }, withLaunch(launch));
+
+    await sendLetter(workId, target, 'проснись', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'folder-trust', 5000);
+    await settle(200);
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  /**
+   * Живая сессия получает письмо, и её процесс останавливают: настоящий `sessions.stop`, выход процесса и запись `sleeping` в карту.
+   * `mark` — хост уже поставил отметку «засыпает» (`autoSleepPending`), письмо ограда не выдаёт, и оно остаётся непрочитанным;
+   * иначе остановка — как кнопка Stop человека. `hooks` — хуки доходят, и будильник успевает напечатать указатель в умирающий
+   * процесс: письмо уже «указано», но агент его так и не прочёл.
+   */
+  async function stoppedWithLetter(options: { mark: boolean; hooks: boolean }) {
+    if (options.hooks) setEnv('STUB_READY_HOOK', '1');
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const session = (): WorkSession | undefined => readStoredMap(project, workId).sessions.find((candidate) => candidate.id === target);
+    const launch = vi.fn(async () => 'started' as const);
+    const { sessions, stream } = await resumeRig({}, withLaunch(launch));
+    await sessions.launch(ref, 'resume', { by: 'human' });
+    await waitFor(() => sessions.live(ref) && stream().includes('STUB READY') && session()?.lifecycle === 'active', 5000);
+
+    if (options.mark) {
+      await updateMap(project, workId, (map) => {
+        const found = map.sessions.find((candidate) => candidate.id === target);
+        if (found !== undefined) found.autoSleepPending = { reason: 'idle', at: new Date().toISOString(), waitTarget: null };
+      });
+    }
+    await sendLetter(workId, target, 'пришло перед остановкой', sender);
+    if (options.hooks) await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
+    else await settle(200);
+    // До остановки подъёма нет: живую письмо не поднимает.
+    expect(launch).not.toHaveBeenCalled();
+
+    await sessions.stop(ref);
+    return { launch, ref, workId, target, sender, session };
+  }
+
+  it('15: письмо пришло, пока стояла отметка «засыпает»: процесс вышел, карта стала sleeping и autoSleep — сессию поднимает указатель', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: false });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1) });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+    expect(session()).not.toHaveProperty('autoSleepPending');
+  }, 30_000);
+
+  it('16: то же, но указатель успел уйти в умирающий процесс: письмо снова указывается, сессию поднимает', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: true });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1) });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+  }, 30_000);
+
+  it('17: то же без отметки (Stop человека): письмо, лежавшее при выходе, сессию не поднимает, как и раньше; новое письмо поднимает', async () => {
+    const { launch, workId, target, sender, session } = await stoppedWithLetter({ mark: false, hooks: false });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+    expect(session()?.lifecycle).toBe('sleeping');
+    expect(session()?.autoSleep ?? null).toBeNull();
+
+    // Контроль: стенд исправен, подъём не заперт навсегда.
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
+
+  it('18: Stop человека после того, как указатель ушёл в процесс: письмо считается указанным, подъёма нет', async () => {
+    const { launch, workId, target, sender } = await stoppedWithLetter({ mark: false, hooks: true });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
+});
+
 /** Работа с тремя живыми сессиями хоста; `events/` заведён, как при настоящем запуске. */
 async function trio(): Promise<{ workId: string; ids: [string, string, string] }> {
   const map = await createWork(project, { title: 'Работа' });
@@ -1569,6 +1749,7 @@ describe('возврат после сброса лимита', () => {
     tasks: [],
     waitingFor: null,
     heldByBackground: false,
+    runningBackground: [],
     turnEndedAt: null,
     turnBoundaryAt: null,
     lastEventAt: new Date(Date.now()).toISOString(),

@@ -222,6 +222,7 @@ describe('activityOf: таблица переходов 4.2', () => {
       tasks: [],
       waitingFor: null,
       heldByBackground: false,
+      runningBackground: [],
       turnEndedAt: null,
       turnBoundaryAt: null,
       lastEventAt: null,
@@ -2887,5 +2888,145 @@ describe('activityOf: turnBoundaryAt — граница хода для брош
     expect(apiError.turnBoundaryAt).toBe(sec(1));
     // Без событий лог границу тоже не создаёт.
     expect(boundary([], apiErrorLog(5, 'rate_limit', SESSION_LIMIT))).toBeNull();
+  });
+});
+
+describe('activityOf: runningBackground — работающие задачи последнего снимка, любого вида', () => {
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
+  /** Фоновая команда из снимка: сессию `working` не делает, но уснуть ей не даёт. */
+  const shell = (id: string, extra: Partial<BackgroundTask> = {}): BackgroundTask =>
+    task(id, { type: 'shell', agentType: null, description: 'npm run dev', ...extra });
+  const monitor = (id: string): BackgroundTask =>
+    task(id, { type: 'monitor', agentType: null, description: 'tail -f app.log' });
+  /** Ход окончен `Stop`, а в снимке этого хука — переданные задачи. */
+  const stoppedWith = (...tasks: BackgroundTask[]): EventRecord[] => [
+    event('UserPromptSubmit'),
+    hook('Stop', { backgroundTasks: tasks }),
+  ];
+
+  it('runningBackground: виды работающих задач последнего снимка', () => {
+    const result = activity(
+      stoppedWith(shell('sh-1'), monitor('mon-1'), shell('sh-0', { status: 'completed' })),
+    );
+
+    expect(result.runningBackground).toEqual(['shell', 'monitor']);
+  });
+
+  it('runningBackground: пустой снимок стирает', () => {
+    const parked = stoppedWith(shell('sh-1'));
+    expect(activity(parked).runningBackground).toEqual(['shell']);
+
+    const emptied = activity([
+      ...parked,
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [] }),
+    ]);
+    expect(emptied.runningBackground).toEqual([]);
+  });
+
+  it('runningBackground: событие без снимка прежний не трогает', () => {
+    const result = activity([
+      ...stoppedWith(shell('sh-1')),
+      hook('Notification', { notificationType: 'idle_prompt' }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: запуск процесса сбрасывает снимок, а снимок самого события остаётся', () => {
+    const parked = stoppedWith(shell('sh-1'));
+
+    expect(activity([...parked, hook('SessionStart', { source: 'resume' })]).runningBackground).toEqual([]);
+    expect(
+      activity([...parked, hook('SessionStart', { source: 'resume', backgroundTasks: [monitor('mon-1')] })])
+        .runningBackground,
+    ).toEqual(['monitor']);
+  });
+
+  it('runningBackground: зомби-правило не стирает shell', () => {
+    // Через два часа молчания: у снимка фоновой команды срока давности нет.
+    const later = activityOf({ events: stoppedWith(shell('sh-1')), now: Date.parse(AT) + 2 * HOUR });
+
+    expect(later.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: зомби-правило снимает subagent, shell и monitor остаются', () => {
+    // Зомби-субагент не держит сессию (`tasks` пуст, ход окончен) и уходит из списка вместе с `background`;
+    // до предела удержания он в списке, у остальных видов срока давности нет.
+    const parked = stoppedWith(shell('sh-1'), task('a'), monitor('mon-1'));
+
+    const before = activityOf({ events: parked, now: Date.parse(AT) + 59 * MINUTE });
+    expect(before.runningBackground).toEqual(['shell', 'subagent', 'monitor']);
+
+    const later = activityOf({ events: parked, now: Date.parse(AT) + 2 * HOUR });
+    expect(later.activity).toBe('unseen');
+    expect(later.tasks).toEqual([]);
+    expect(later.runningBackground).toEqual(['shell', 'monitor']);
+  });
+
+  it('runningBackground: отставший снимок после SubagentStop не оставляет subagent', () => {
+    const lead = stoppedWith(shell('sh-1'), task('a'));
+    const lagging = [shell('sh-1'), task('a')];
+
+    // Снимок самого SubagentStop ещё числит `a` работающей.
+    expect(activity([...lead, stopOf('a', { backgroundTasks: lagging })]).runningBackground).toEqual(['shell']);
+    // И снимок следующего события — тоже: остановленный id вычищается из каждого, как у `background`.
+    const next = hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: lagging });
+    expect(activity([...lead, stopOf('a', { backgroundTasks: lagging }), next]).runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: новый SubagentStart того же id возвращает subagent', () => {
+    const result = activity([
+      ...stoppedWith(task('a')),
+      stopOf('a', { backgroundTasks: [task('a')] }),
+      startOf('a'),
+      hook('Notification', { backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: запуск процесса забывает остановленных, снимок самого события принимается', () => {
+    const result = activity([
+      ...stoppedWith(task('a')),
+      stopOf('a', { backgroundTasks: [task('a')] }),
+      hook('SessionStart', { source: 'resume', backgroundTasks: [task('a')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: остановка субагента не трогает задачу другого вида с тем же id', () => {
+    const result = activity([
+      ...stoppedWith(task('x')),
+      stopOf('x', { backgroundTasks: [shell('x')] }),
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [shell('x')] }),
+    ]);
+
+    expect(result.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: фоновая команда не делает сессию working', () => {
+    const result = activity(stoppedWith(shell('sh-1')), true);
+
+    expect(result.activity).toBe('idle');
+    expect(result.heldByBackground).toBe(false);
+    expect(result.tasks).toEqual([]);
+    expect(result.runningBackground).toEqual(['shell']);
+  });
+
+  it('runningBackground: работающий субагент виден в списке и держит сессию, как раньше', () => {
+    const result = activity(stoppedWith(task('a')));
+
+    expect(result.activity).toBe('working');
+    expect(result.heldByBackground).toBe(true);
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+    expect(result.runningBackground).toEqual(['subagent']);
+  });
+
+  it('runningBackground: снимков не было или журнала нет — пусто', () => {
+    expect(activity([event('UserPromptSubmit'), event('Stop')]).runningBackground).toEqual([]);
+    expect(activity([]).runningBackground).toEqual([]);
+    expect(activityOf({ events: null, now: NOW }).runningBackground).toEqual([]);
   });
 });

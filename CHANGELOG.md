@@ -6,9 +6,14 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Parley can put idle Claude Code agents to sleep to free memory. It is off by default: turn it on with Settings → Agents → "Sleep idle agents after (min, 0 = off)". An agent falls asleep once its turn has been over for that many minutes and nothing is pending: no background task, approval, human draft or unread mail. Its process stops, and the next letter wakes it with its history. Other agents see it as `asleep`, and `wait_for` on it answers at once with a hint. Such wakes do not spend the resume or launch limits, and a sleeping agent's mail still wakes it after a host restart. "Keep awake" in a session's menu exempts that session. Codex sessions, and agents waiting in `wait_for`, stay awake for now.
+
 ### Changed
 
 - The limits on what agents create — new sessions per workspace and per room, swarm sessions and swarms per workspace — now count the last 24 hours (a sliding window) instead of all time. Before, the counters only grew, so in a long-running workspace agents hit a limit for good and the only way on was to raise it again; now a creation stops counting after a day. Settings → Limits names them "… per day", the defaults stay 50, 12, 64 and 6, and a refusal says how many agents created in the last 24 hours and that waiting also helps. The count starts from zero after the update.
+- The host no longer runs `ps` for its own agent processes when it checks whether sessions are alive, so the check is lighter.
 
 ## 0.26.0
 

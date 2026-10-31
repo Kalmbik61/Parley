@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUTO_SLEEP_WORDS,
   NEED_WORDS,
   STATE_WORDS,
+  agentStatus,
+  asleepHint,
+  autoSleepWord,
   dotState,
   liveStatus,
   needWord,
@@ -16,6 +20,7 @@ import {
   type SessionStatus,
 } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
+import type { AutoSleep } from './types.js';
 
 describe('reportedStatus и liveStatus', () => {
   // Таблица двух осей (план этапа 3, 3.1): бриф и MCP ставят итог выше процесса, окно и помощник у живой — нет.
@@ -47,6 +52,53 @@ describe('reportedStatus и liveStatus', () => {
   it('ось итога можно не передавать', () => {
     expect(reportedStatus({ lifecycle: 'active' })).toBe('active');
     expect(liveStatus({ lifecycle: 'sleeping' })).toBe('exited');
+  });
+});
+
+describe('agentStatus: сон по решению хоста', () => {
+  const slept: AutoSleep = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+
+  it('усыплённая хостом сессия без итога — asleep, а не exited', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: null, autoSleep: slept })).toBe('asleep');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept })).toBe('asleep');
+  });
+
+  it('остановленная человеком (autoSleep пуст или нет) — exited, как у reportedStatus', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: null, autoSleep: null })).toBe('exited');
+    expect(agentStatus({ lifecycle: 'sleeping', result: null })).toBe('exited');
+  });
+
+  it('итог важнее сна: усыплённая хостом с итогом показывает итог', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'done', autoSleep: slept })).toBe('done');
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'failed', autoSleep: slept })).toBe('failed');
+  });
+
+  it('отметка сна решает только у sleeping: у остальных осей статус как у reportedStatus', () => {
+    for (const lifecycle of ['pending', 'active', 'closed'] as const) {
+      for (const result of [null, 'done', 'failed'] as const) {
+        expect(agentStatus({ lifecycle, result, autoSleep: slept })).toBe(reportedStatus({ lifecycle, result }));
+      }
+    }
+  });
+
+  it('без сна всё как у reportedStatus', () => {
+    for (const lifecycle of ['pending', 'active', 'sleeping', 'closed'] as const) {
+      for (const result of [null, 'done', 'failed'] as const) {
+        expect(agentStatus({ lifecycle, result })).toBe(reportedStatus({ lifecycle, result }));
+      }
+    }
+  });
+});
+
+describe('слова сна по решению хоста', () => {
+  it('AUTO_SLEEP_WORDS: слово на каждую причину, autoSleepWord берёт из таблицы', () => {
+    expect(AUTO_SLEEP_WORDS).toEqual({ idle: 'asleep · idle', 'swarm-done': 'asleep · swarm done' });
+    expect(autoSleepWord('idle')).toBe('asleep · idle');
+    expect(autoSleepWord('swarm-done')).toBe('asleep · swarm done');
+  });
+
+  it('asleepHint: подсказка тому, кто ждёт усыплённую цель', () => {
+    expect(asleepHint('s-07')).toBe('s-07 is asleep until mail arrives: write to it, or wait for mail via inbox.');
   });
 });
 

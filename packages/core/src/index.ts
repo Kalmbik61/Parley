@@ -184,8 +184,12 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export {
+  AUTO_SLEEP_WORDS,
   NEED_WORDS,
   STATE_WORDS,
+  agentStatus,
+  asleepHint,
+  autoSleepWord,
   dotState,
   liveStatus,
   needWord,
@@ -540,6 +544,8 @@ export {
   wakesAtOnce,
 } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
+export { autoSleepVerdict, deliveredSince, inboxFenced } from './work/auto-sleep.js';
+export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict } from './work/auto-sleep.js';
 export {
   START_TOLERANCE_MS,
   checkSession,
@@ -631,6 +637,8 @@ export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';
 export type {
   Artifact,
+  AutoSleep,
+  AutoSleepReason,
   HistoryEntry,
   LaunchedBy,
   Message,

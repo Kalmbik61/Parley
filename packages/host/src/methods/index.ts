@@ -151,7 +151,7 @@ const knownAgentCode = (code: string): BrowserAgentErrorCode =>
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, sessions.rename, rooms.create/addMember/rename/setLead/delete/send,
+ * карт с диска (works.create/delete/rename/setStatus, sessions.rename/setKeepAwake, rooms.create/addMember/rename/setLead/delete/send,
  * rooms.archive/reopen, mail.*, swarms.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
@@ -282,6 +282,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.delete': sessions.sessionsDelete as AnyHandler,
     'sessions.close': sessions.sessionsClose as AnyHandler,
     'sessions.rename': sessions.sessionsRename as AnyHandler,
+    'sessions.setKeepAwake': sessions.sessionsSetKeepAwake as AnyHandler,
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,

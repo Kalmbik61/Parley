@@ -61,6 +61,9 @@ export async function findInterrupted(
     for (const session of entry.map.sessions) {
       // Живые и закрытые не прерваны; `pending` ещё не начинала.
       if (session.lifecycle !== 'sleeping') continue;
+      // Усыпил хост (спека сна агентов 4.1): процесс остановлен намеренно, пусть и посреди ожидания в wait_for, — это не
+      // обрыв. Человеку поднимать её не предлагают: поднимет письмо.
+      if (session.autoSleep != null) continue;
       const ref: SessionRef = {
         projectPath: entry.projectPath,
         workId: entry.map.work.id,

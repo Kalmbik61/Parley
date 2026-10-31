@@ -184,6 +184,10 @@ export const METHODS = {
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
+  // «Keep awake» из меню строки сессии (спека сна агентов, 4.1): человек запрещает хосту усыплять сессию, флаг лежит в
+  // карте. Закрытая сессия — `conflict`, нет сессии или работы — `not_found`. Агент флаг не ставит. Старый хост метода не
+  // знает — окно прячет пункт.
+  'sessions.setKeepAwake': z.object({ ref: sessionRef, keepAwake: z.boolean() }),
   // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
   // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
   'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
@@ -452,6 +456,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
   'sessions.setMode': { mode: string | null; verified: boolean };
+  /** `keepAwake` — значение, записанное в карту: `false` — флага в карте больше нет. */
+  'sessions.setKeepAwake': { keepAwake: boolean };
   /**
    * Смена effort ползунком `/effort` (нормалайзер модели и effort, 5.7). `effort` — уровень, который
    * показал подвал CLI (`null` — подвала не нашли); `verified` — он совпал с целью, и хост записал его в
