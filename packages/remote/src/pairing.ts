@@ -7,7 +7,10 @@ import {
   pairMsg1Payload,
   pairPairedFrame,
   PAIR_STALE_REQUEST,
+  type PAIR_FAILED_REASONS,
 } from '@parley/protocol/remote';
+
+type PairFailedReason = (typeof PAIR_FAILED_REASONS)[number];
 import type { AuditLog } from './audit.js';
 import { ControlError, type ControlEvents } from './control.js';
 import type { DeviceStore } from './devices.js';
@@ -77,6 +80,27 @@ export interface PairingOptions {
   removeDevice(deviceId: string): Promise<void>;
   timing?: Partial<PairingTiming>;
   now?: () => number;
+}
+
+/**
+ * Why a request ended, as the window hears it (`PAIR_FAILED_REASONS`). Requests closed by the window itself, a
+ * reissue, a reset, a revoke, shutdown or the phone hanging up are `offer_closed`; the device limit reads as
+ * `denied`. The finer reason stays in the audit `detail`.
+ */
+function windowReason(reason: string): PairFailedReason {
+  switch (reason) {
+    case 'denied':
+    case 'limit':
+      return 'denied';
+    case 'timeout':
+      return 'timeout';
+    case 'no-ack':
+      return 'no-ack';
+    case 'bad-psk':
+      return 'bad-psk';
+    default:
+      return 'offer_closed';
+  }
 }
 
 // A function, so TypeScript does not narrow `phase` across awaits.
@@ -376,7 +400,7 @@ export class Pairing {
     r.phase = 'done';
     this.#clear(r);
     r.channel.end();
-    this.#o.emit('pair.failed', { requestId: r.requestId, reason });
+    this.#o.emit('pair.failed', { requestId: r.requestId, reason: windowReason(reason) });
   }
 
   #clear(r: PairRequest): void {

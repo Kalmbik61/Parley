@@ -11,6 +11,9 @@ import type { Events, SessionRef, WorksSnapshot } from '@parley/protocol';
 import { REMOTE_POLICY_FEATURE } from '@parley/protocol/remote';
 import type { BridgeLog } from './log.js';
 
+/** Причина, по которой связь не доходит до `online`, если известна. */
+export type HostLinkFailure = 'line_too_long';
+
 export type HostLinkStatus = 'offline' | 'incompatible' | 'starting' | 'online';
 
 /** Последнее `activity.changed` по сессии: ровно то, что пришло от хоста. */
@@ -30,6 +33,8 @@ export class HostCallError extends Error {
   constructor(
     readonly code: string,
     message: string = code,
+    /** `error.data` хоста как есть; наружу к телефону идёт только при известном `reason` (A8). */
+    readonly data?: unknown,
   ) {
     super(message);
     this.name = 'HostCallError';
@@ -55,6 +60,10 @@ export interface HostLink {
   readonly status: HostLinkStatus;
   /** `<bootId>:<n>`; `null` — соединения ещё не было. Растёт на каждое соединение с хостом. */
   readonly epoch: string | null;
+  /** `hello.methods` хоста текущей эпохи (проверенный ответ); `null` — эпохи нет или хост несовместим. */
+  readonly methods: readonly string[] | null;
+  /** Почему мост не может загрузить эпоху (например, строка хоста длиннее предела); `null` — причин нет. */
+  readonly failure: HostLinkFailure | null;
   /** Полный снимок текущей эпохи; `null` до ответа `works.list`. */
   readonly snapshot: WorksSnapshot | null;
   /** Последнее `activity.changed` на каждую сессию текущей эпохи. */
@@ -82,6 +91,8 @@ export function createHostLink(options: HostLinkOptions): HostLink {
   let status: HostLinkStatus = 'offline';
   let epochCounter = 0;
   let epoch: string | null = null;
+  let hostMethods: string[] | null = null;
+  let failure: HostLinkFailure | null = null;
   let snapshot: WorksSnapshot | null = null;
   let activity = new Map<string, ActivityEntry>();
   let socket: net.Socket | null = null;
@@ -167,6 +178,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         if (socket !== sock) return;
         applySnapshot(reply);
         retryDelay = backoff.initialMs;
+        failure = null;
         setStatus('online');
         return;
       } catch (error) {
@@ -178,33 +190,52 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     }
   }
 
+  /** Сокет в пути (до `connect`) и поколение попытки: `stop()` и новый `start()` обесценивают старую. */
+  let connecting: net.Socket | null = null;
+  let generation = 0;
+
   async function connect(): Promise<void> {
     if (stopped) return;
+    const gen = ++generation;
     let token: string;
     try {
       // Токен читается заново на каждое подключение (хост мог перезапуститься).
       token = (await readFile(options.tokenPath, 'utf8')).trim();
     } catch (error) {
+      if (gen !== generation) return;
       log.warn('host.token_unreadable', { error });
       setStatus('offline');
       scheduleReconnect();
       return;
     }
-    if (stopped) return;
+    if (stopped || gen !== generation) return;
     log.addSecret(token);
 
     const sock = net.connect(options.socketPath);
+    connecting = sock;
     const decoder = new LineDecoder();
     let closed = false;
+    /** Ответ на `hello` разобран и признак политики подтверждён: до этого события хоста отбрасываются. */
+    let verified = false;
 
     function onClose(): void {
       if (closed) return;
       closed = true;
+      if (connecting === sock) {
+        // Не дошли до `connect` (хост недоступен): повтор с отступом.
+        connecting = null;
+        if (!stopped && gen === generation) {
+          setStatus('offline');
+          scheduleReconnect();
+        }
+        return;
+      }
       if (socket === sock) {
         socket = null;
         failPending();
         snapshot = null;
         activity = new Map();
+        hostMethods = null;
         if (status !== 'incompatible') setStatus('offline');
         scheduleReconnect();
       }
@@ -213,39 +244,48 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     sock.on('close', onClose);
 
     sock.on('connect', () => {
+      if (stopped || connecting !== sock) {
+        sock.destroy();
+        return;
+      }
+      connecting = null;
       // Новая эпоха: кэши прошлой не переживают переподключение.
       failPending();
       epoch = `${bootId}:${++epochCounter}`;
       snapshot = null;
       activity = new Map();
+      hostMethods = null;
       socket = sock;
       emit({ type: 'status', status, epoch });
-      void request(sock, 'hello', {
-        token,
-        protocol: PROTOCOL_VERSION,
-        client: 'remote',
-        features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE],
-      }).then(
-        (result) => {
-          if (socket !== sock) return;
-          const features = (result as { features?: unknown })?.features;
-          if (!Array.isArray(features) || !features.includes(REMOTE_POLICY_FEATURE)) {
-            // Fail closed: хост без политики — ни одного вызова.
-            log.warn('host.incompatible');
-            setStatus('incompatible');
-            sock.destroy();
-            return;
-          }
-          log.info('host.connected', { epoch });
-          setStatus('starting');
-          void loadWorks(sock);
-        },
-        (error: unknown) => {
-          log.warn('host.hello_failed', { error });
-          sock.destroy();
-        },
-      );
+      sendHello(sock, token, onHelloReply);
     });
+
+    /** Вызывается синхронно из разбора кадров: следующий кадр того же куска уже видит `verified`. */
+    function onHelloReply(result: unknown, error: Error | null): void {
+      if (socket !== sock) {
+        sock.destroy();
+        return;
+      }
+      if (error) {
+        log.warn('host.hello_failed', { error });
+        sock.destroy();
+        return;
+      }
+      const reply = result as { features?: unknown; methods?: unknown } | null;
+      const features = reply?.features;
+      if (!Array.isArray(features) || !features.includes(REMOTE_POLICY_FEATURE)) {
+        // Fail closed: хост без политики — ни одного вызова и ни одного события.
+        log.warn('host.incompatible');
+        setStatus('incompatible');
+        sock.destroy();
+        return;
+      }
+      verified = true;
+      hostMethods = Array.isArray(reply?.methods) ? reply.methods.filter((m): m is string => typeof m === 'string') : [];
+      log.info('host.connected', { epoch });
+      setStatus('starting');
+      void loadWorks(sock);
+    }
 
     sock.on('data', (chunk: Buffer) => {
       if (socket !== sock) return;
@@ -253,24 +293,47 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       try {
         messages = decoder.push(chunk);
       } catch {
+        // Строка длиннее предела (например, огромный `works.list`): причина в логе и в `failure`.
+        failure = 'line_too_long';
+        log.warn('host.line_too_long', { epoch });
         sock.destroy();
         return;
       }
       for (const raw of messages) {
-        const msg = raw as { id?: unknown; result?: unknown; error?: { code?: string; message?: string }; event?: unknown; data?: unknown };
+        if (socket !== sock || sock.destroyed) return;
+        const msg = raw as { id?: unknown; result?: unknown; error?: { code?: string; message?: string; data?: unknown }; event?: unknown; data?: unknown };
         if (typeof msg !== 'object' || msg === null) continue;
         if (typeof msg.id === 'number') {
           const entry = pending.get(msg.id);
           if (!entry) continue;
           pending.delete(msg.id);
           if (entry.timer) clearTimeout(entry.timer);
-          if (msg.error) entry.reject(new HostCallError(msg.error.code ?? 'host_error', msg.error.message));
+          if (msg.error) entry.reject(new HostCallError(msg.error.code ?? 'host_error', msg.error.message, msg.error.data));
           else entry.resolve(msg.result);
         } else if (typeof msg.event === 'string') {
-          handleEvent(msg.event, msg.data);
+          // До подтверждения политики события не доходят ни до кэша, ни до подписчиков.
+          if (verified) handleEvent(msg.event, msg.data);
         }
       }
     });
+  }
+
+  /** `hello` без Promise: ответ обрабатывается в том же такте, что и разбор кадра. */
+  function sendHello(sock: net.Socket, token: string, done: (result: unknown, error: Error | null) => void): void {
+    const id = nextId++;
+    const entry: Pending = { resolve: (v) => done(v, null), reject: (e) => done(null, e) };
+    entry.timer = setTimeout(() => {
+      pending.delete(id);
+      done(null, new HostCallError('timeout'));
+    }, replyTimeoutMs);
+    pending.set(id, entry);
+    sock.write(
+      `${JSON.stringify({
+        id,
+        method: 'hello',
+        params: { token, protocol: PROTOCOL_VERSION, client: 'remote', features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE] },
+      })}\n`,
+    );
   }
 
   return {
@@ -282,13 +345,18 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     },
     async stop() {
       stopped = true;
+      generation++;
       if (retryTimer) clearTimeout(retryTimer);
       retryTimer = undefined;
       const sock = socket;
       socket = null;
+      const inPath = connecting;
+      connecting = null;
       failPending();
       sock?.destroy();
+      inPath?.destroy();
       snapshot = null;
+      hostMethods = null;
       activity = new Map();
       setStatus('offline');
     },
@@ -297,6 +365,12 @@ export function createHostLink(options: HostLinkOptions): HostLink {
     },
     get epoch() {
       return epoch;
+    },
+    get methods() {
+      return hostMethods;
+    },
+    get failure() {
+      return failure;
     },
     get snapshot() {
       return snapshot;

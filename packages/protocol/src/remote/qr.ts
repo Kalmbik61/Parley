@@ -1,4 +1,5 @@
 // Оффер и QR паринга (спека 7.3): parley://pair?v=1&k=<b64url HS_pub>&s=<b64url s>&r=<host[:port]>
+import { z } from 'zod';
 import { b64urlDecode, b64urlEncode, b64urlLength } from './b64url.js';
 
 export const PAIR_URL_PREFIX = 'parley://pair?';
@@ -27,6 +28,16 @@ export function isValidRelayHost(r: string): boolean {
     if (port < 1 || port > 65535) return false;
   }
   return true;
+}
+
+const UNSAFE_TEXT_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Строка от телефона, которую показывает диалог Мака: пробелы по краям срезаются, управляющие, форматные (bidi,
+ * U+202E) и разделители строк и абзацев не допускаются.
+ */
+export function plainText(max: number) {
+  return z.string().trim().min(1).max(max).refine(v => !UNSAFE_TEXT_RE.test(v), 'control or bidi characters');
 }
 
 export function buildPairUrl(offer: PairOffer): string {

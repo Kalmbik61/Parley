@@ -21,12 +21,15 @@ import {
 import {
   b64urlDecode,
   b64urlEncode,
+  bridgeHelloSchema,
   parsePairUrl,
   type BridgeHello,
 } from '@parley/protocol/remote';
 import { createAuditLog, type AuditLog, type AuditRecord } from './audit.js';
 import type { ControlEvents } from './control.js';
 import { openRemoteAccess, type RemoteAccess, type RemoteAccessOptions } from './access.js';
+import { createSessionHandler } from './dispatch.js';
+import { HostCallError, type HostLink, type HostLinkEvent } from './host-link.js';
 import { createLog } from './log.js';
 import { connectPrologue } from './sessions.js';
 import type { SessionHandler } from './session-contract.js';
@@ -475,7 +478,7 @@ describe('pairing', () => {
     const a = await startPairing(first.qr);
     const second = await f.access.handlers['pair.start'](); // reissue: request A is gone
     expect(eventsOf('pair.failed')).toEqual([
-      { requestId: a.request.requestId, reason: 'cancelled' },
+      { requestId: a.request.requestId, reason: 'offer_closed' },
     ]);
     const b = await startPairing(second.qr);
     expect(b.request.requestId).not.toBe(a.request.requestId);
@@ -816,5 +819,79 @@ describe('logs', () => {
     };
     for (const [name, value] of Object.entries(secrets))
       expect(text.includes(value), name).toBe(false);
+  });
+});
+
+describe('A7 ↔ A8 through session-contract', () => {
+  it('the real dispatcher answers over a real Noise session: hello, initial state, ping', async () => {
+    const listeners = new Set<(e: HostLinkEvent) => void>();
+    const host: HostLink = {
+      start() {},
+      async stop() {},
+      status: 'offline',
+      epoch: null,
+      methods: null,
+      snapshot: null,
+      activity: new Map(),
+      async call() {
+        throw new HostCallError('host_offline');
+      },
+      subscribe(l) {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+    } as unknown as HostLink;
+    const dispatcher = createSessionHandler({
+      host,
+      sessions: f.access.sessions,
+      audit: f.audit,
+      log: createLog({ file: f.logFile }),
+      info: {
+        hostId: f.access.hostId,
+        hostName: 'Test Mac',
+        bridgeVersion: '0.0.0',
+        minClient: '1.0.0',
+        relays: [f.relayHost],
+      },
+      deviceName: (id) => f.access.devices.get(id)?.name ?? '',
+    });
+    f.access.setSessionHandler(dispatcher);
+    try {
+      const d = await pairDevice();
+      const made = connectMsg1(d, f.access.keys().hsPub);
+      const { wire, status } = await dial(f.relayUrl, {
+        v: 1,
+        t: 'connect',
+        route: d.routeId,
+        device: d.deviceId,
+        token: d.relayToken,
+      });
+      expect(status).toBe('ready');
+      wire.send(made.msg1);
+      const msg2 = await wire.next();
+      const hello = json(made.hs.readMessage(msg2!.data));
+      expect(bridgeHelloSchema.safeParse(hello).success).toBe(true);
+      const channel = new PhoneChannel(wire, made.hs.split());
+      channel.send({
+        id: 'c1',
+        method: 'client.info',
+        params: { app: 'parley', version: '1.0.0', platform: 'ios' },
+      });
+      channel.send({ id: 'p1', method: 'ping', params: {} });
+      const seen: unknown[] = [];
+      for (let n = 0; n < 6; n++) {
+        const frame = (await channel.recv()) as { id?: string };
+        seen.push(frame);
+        if (frame?.id === 'p1') break;
+      }
+      expect(seen).toContainEqual(expect.objectContaining({ id: 'c1' }));
+      expect(seen).toContainEqual(expect.objectContaining({ id: 'p1', result: expect.anything() }));
+      expect(seen).toContainEqual({
+        event: 'bridge.status',
+        data: { host: 'offline', epoch: null },
+      });
+    } finally {
+      dispatcher.stop();
+    }
   });
 });

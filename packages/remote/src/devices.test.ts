@@ -18,7 +18,7 @@ const record = (n: number): DeviceRecord => ({
   pairedAt: 1,
   lastSeen: null,
   lastTs: 0,
-  relayTokenHash: 'C'.repeat(43),
+  relayTokenHash: 'A'.repeat(43),
   state: 'active',
 });
 const onDisk = (): string[] =>

@@ -150,8 +150,12 @@ export function createRelayLink(options: RelayLinkOptions): RelayLink {
       }
       const incoming = relayIncomingFrame.safeParse(json);
       if (incoming.success) {
-        const { stream, kind, device } = incoming.data;
-        options.onIncoming(device === undefined ? { stream, kind } : { stream, kind, device });
+        const frame = incoming.data;
+        options.onIncoming(
+          frame.kind === 'connect'
+            ? { stream: frame.stream, kind: 'connect', device: frame.device }
+            : { stream: frame.stream, kind: 'pair' },
+        );
         return;
       }
       const error = relayErrorFrame.safeParse(json);

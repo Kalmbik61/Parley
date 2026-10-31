@@ -1,6 +1,7 @@
 // Кадры приложения поверх Noise (спека 8), методы и события моста.
 import { z } from 'zod';
 import { REMOTE_PROTOCOL } from './allowlist.js';
+import { isValidRelayHost, plainText } from './qr.js';
 
 /** `id` телефона — строка до 32 знаков; мост подменяет её своей для хоста. */
 export const frameIdSchema = z.string().min(1).max(32);
@@ -38,7 +39,7 @@ export const bridgeHelloSchema = z.object({
   stage: stageSchema,
   methods: z.array(z.string().max(128)).max(512),
   events: z.array(z.string().max(128)).max(512),
-  relays: z.array(z.string().max(64)).max(16),
+  relays: z.array(z.string().refine(isValidRelayHost, 'invalid relay address')).max(16),
   serverTime: z.number().int().nonnegative(),
 });
 export type BridgeHello = z.infer<typeof bridgeHelloSchema>;
@@ -60,9 +61,9 @@ export const pushEnvSchema = z.enum(['sandbox', 'production']);
 export const bridgeMethodSchemas = {
   ping: z.strictObject({}),
   'client.info': z.strictObject({
-    app: z.string().min(1).max(64),
-    version: z.string().min(1).max(32),
-    platform: z.string().min(1).max(32),
+    app: plainText(64),
+    version: plainText(32),
+    platform: plainText(32),
   }),
   'push.register': z.strictObject({
     apnsToken: z.string().regex(APNS_TOKEN_RE).nullable(),

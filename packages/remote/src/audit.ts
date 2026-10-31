@@ -2,6 +2,11 @@ import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSyn
 import { z } from 'zod';
 import { ensureDirSync } from './files-sync.js';
 
+/** Предел `detail` и `target`: полный текст случайно не попадёт в журнал. */
+export const AUDIT_FIELD_MAX = 256;
+const clip = (text: string | undefined): string | undefined =>
+  text !== undefined && text.length > AUDIT_FIELD_MAX ? `${text.slice(0, AUDIT_FIELD_MAX)}…` : text;
+
 export const AUDIT_MAX_BYTES = 5 * 1024 * 1024;
 
 /** Виды записей — спека 5.8. */
@@ -75,6 +80,8 @@ export function createAuditLog(options: AuditOptions): AuditLog {
     append(input) {
       const record: AuditRecord = {
         ...input,
+        ...(input.target === undefined ? {} : { target: clip(input.target) as string }),
+        ...(input.detail === undefined ? {} : { detail: clip(input.detail) as string }),
         at: input.at ?? now().toISOString(),
         deviceId: input.deviceId ?? '',
         deviceName: input.deviceName ?? '',
