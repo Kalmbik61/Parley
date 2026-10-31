@@ -1718,6 +1718,14 @@ export const S = {
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
+    /** Серое письмо в очереди: сессия его ещё не забрала (`metrics.pendingLetters`); `room` — название комнаты, `null` — прямое. */
+    letter: {
+      from: (sender: string, room: string | null): string => (room === null ? `Message from ${sender}` : `Message from ${sender} in ${room}`),
+      you: 'you',
+      /** Строка под письмом; `reason` — почему ждёт (`mailWaitText` или сжатие), `null` — причина не известна. */
+      waiting: (reason: string | null): string => (reason === null ? 'Not picked up yet' : `Not picked up yet (${reason})`),
+      compacting: 'compacting context',
+    },
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
     actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again', reply: 'Reply' },
     /** Плашка цитаты над полем ввода (Reply): подпись и крестик «убрать». */
