@@ -395,7 +395,7 @@ export const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: partial summaries within 48 KiB. Call it first. Continue collections with field sessions|rooms|plans|deletedSessions|unreadRooms and page.next; narrow with session or room. Full plan: field plan, id, rev. Long texts and history come as pages via the parameters. The provider catalog comes with field "providers", only before create_session. Details: read_guide.',
+      'The compact workspace map: partial summaries within 48 KiB. Call it first. Lists: field, page.next. The provider catalog comes with field "providers", only before create_session. Details: read_guide.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -404,13 +404,13 @@ export const TOOLS: Tool[] = [
         field: {
           type: 'string',
           enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan'],
-          description: 'task…contextFrom go with session; messages — room pages (no room: direct ones); message — one by id; archive — other workspaces.',
+          description: 'task…contextFrom: with session; messages: room pages (no room: direct); message: by id; archive: other workspaces.',
         },
         id: { type: 'string' },
-        rev: { type: 'integer', minimum: 0, description: 'Exact current plan revision; required with field plan.' },
+        rev: { type: 'integer', minimum: 0 },
         kind: { type: 'string', enum: [...MESSAGE_KINDS] },
         cursor: { type: 'string', description: '`next` of the previous page.' },
-        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size in bytes; default 65536.' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page bytes; default 65536.' },
       },
       additionalProperties: false,
     },
