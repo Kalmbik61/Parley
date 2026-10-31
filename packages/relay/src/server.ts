@@ -181,8 +181,8 @@ export function createRelay(opts: RelayOptions): Relay {
         if (!limiter.hit('newRoute', ip)) return fail(ws, 'rate_limited');
         if (store.routeCount() >= MAX_ROUTES) gc();
         if (store.routeCount() >= MAX_ROUTES) {
-          // Полная таблица не отказывает владельцу: уходит самый старый пустой маршрут без моста (M2).
-          if (!store.evictEmpty(attached)) return fail(ws, 'rate_limited');
+          // Полная таблица не отказывает владельцу: уходит самый старый маршрут без моста, пустые первыми (M2).
+          if (!store.evict(attached)) return fail(ws, 'rate_limited');
           log('routes_gc', { removed: 1, reason: 'full' });
         }
         store.createRoute(route, b64urlEncode(presented));

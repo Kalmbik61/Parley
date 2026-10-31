@@ -161,18 +161,25 @@ export class Store {
   }
 
   /**
-   * Полная таблица (ревью волны 3, M2): вытесняет самый давно виденный маршрут без устройств и без подключённого
-   * моста. Маршрут с устройствами или с мостом не вытесняется никогда. `false` — вытеснять нечего.
+   * Полная таблица (ревью волны 3, M2): вытесняет самый давно виденный маршрут без подключённого моста — сначала
+   * среди пустых, затем среди маршрутов с устройствами: один фальшивый `devices` не должен делать маршрут
+   * вечным. Маршрут с устройствами оставляет надгробие — настоящий мост пересоздаст его тем же секретом и заново
+   * пришлёт `devices`. Маршрут с подключённым мостом не вытесняется никогда. `false` — вытеснять нечего.
    */
-  evictEmpty(attached: (routeId: string) => boolean): boolean {
-    let victim: string | null = null;
-    let oldest = Infinity;
+  evict(attached: (routeId: string) => boolean): boolean {
+    let empty: [string, number] | null = null;
+    let used: [string, number] | null = null;
     for (const [id, r] of this.routes) {
-      if (r.lastSeen >= oldest || attached(id) || (this.devices.get(id)?.length ?? 0) > 0) continue;
-      victim = id;
-      oldest = r.lastSeen;
+      if (attached(id)) continue;
+      if ((this.devices.get(id)?.length ?? 0) === 0) {
+        if (empty === null || r.lastSeen < empty[1]) empty = [id, r.lastSeen];
+      } else if (used === null || r.lastSeen < used[1]) {
+        used = [id, r.lastSeen];
+      }
     }
-    if (victim === null) return false;
+    const victim = empty?.[0] ?? used?.[0];
+    if (victim === undefined) return false;
+    if (empty === null) this.bury(victim, this.routes.get(victim)!.secretHash, this.now());
     this.routes.delete(victim);
     this.devices.delete(victim);
     this.persist();
