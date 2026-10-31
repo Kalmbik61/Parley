@@ -41,6 +41,31 @@ export default tseslint.config(
     files: ['packages/desktop/src/renderer/**', 'packages/desktop/src/preload/**'],
     languageOptions: { globals: browserGlobals },
   },
+  // Код входа `@parley/protocol/remote` исполняется в Hermes и браузере: без Node (спека 3.1).
+  {
+    files: ['packages/protocol/src/remote/**'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        { name: 'Buffer', message: 'Hermes and browsers have no Buffer; use Uint8Array.' },
+        { name: 'process', message: 'Hermes and browsers have no process.' },
+      ],
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { group: ['node:*'], message: 'No Node built-ins in the remote entry.' },
+            { group: ['../framing.js', '../index.js'], message: 'The protocol root pulls Buffer; use import type only.' },
+          ],
+        },
+      ],
+    },
+  },
+  // Тесты входа проверяют его в процессе Node (сборка, импорт без Buffer) и сверяют списки с корнем протокола.
+  {
+    files: ['packages/protocol/src/remote/**/*.test.ts'],
+    rules: { 'no-restricted-globals': 'off', 'no-restricted-imports': 'off' },
+  },
   // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
     files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],

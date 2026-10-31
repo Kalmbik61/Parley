@@ -6,7 +6,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./remote": {
+      "types": "./dist/remote/index.d.ts",
+      "default": "./dist/remote/index.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
