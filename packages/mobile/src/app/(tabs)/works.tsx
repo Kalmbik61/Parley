@@ -7,6 +7,7 @@ import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { useRemoteState } from '../../hooks/use-remote';
 import { workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
+import { NewButton } from '../../launch/NewButton';
 import { spacing, typography, useColors } from '../../theme';
 import { attentionColor, CountPill, Dot, EmptyState, Skeleton } from '../../ui/parts';
 import { projectColor, worksSummary } from '../../works/summary';
@@ -71,9 +72,12 @@ export default function WorksScreen() {
           />
         }
       >
-        <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, { color: c.label, marginBottom: 12 }]}>
-          Works
-        </Text>
+        <View style={styles.titleRow}>
+          <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, styles.flex, { color: c.label }]}>
+            Works
+          </Text>
+          <NewButton />
+        </View>
         {state === null || state.snapshot === null ? (
           <Skeleton />
         ) : groups.length === 0 ? (
@@ -122,6 +126,7 @@ const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
   list: { padding: 16, paddingBottom: 32 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   project: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6, marginLeft: 4 },
   projectDot: { width: 10, height: 10, borderRadius: 5 },
   card: { borderRadius: spacing.cardRadius, overflow: 'hidden' },
