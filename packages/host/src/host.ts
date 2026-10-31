@@ -269,7 +269,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   // Счётчики окна строки состояния: сервисы пишут, health читает и обнуляет.
   const windowCounters = createWindowCounters();
-  const worksService = createWorksService(handle.context, { windowCounters });
+  const worksService = createWorksService(handle.context, {
+    windowCounters,
+    // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
+    ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
+  });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();

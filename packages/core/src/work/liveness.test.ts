@@ -27,6 +27,25 @@ vi.mock('./store.js', async (importOriginal) => {
   };
 });
 
+/**
+ * Счётчик вызовов `ps`: сверка своих процессов хоста (`ownedPids`) их делать не должна. Подмена тонкая: `liveness.ts`
+ * берёт `promisify(execFile)`, а ответ `{ stdout, stderr }` у настоящего `execFile` лежит под `promisify.custom` —
+ * обёртка зовёт настоящий и только считает.
+ */
+const psCalls = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const { promisify } = await import('node:util');
+  const execFile = Object.assign(actual.execFile.bind(actual), {
+    [promisify.custom]: (file: string, ...rest: unknown[]) => {
+      if (file === 'ps') psCalls.count += 1;
+      return (promisify(actual.execFile) as (...args: unknown[]) => Promise<unknown>)(file, ...rest);
+    },
+  });
+  return { ...actual, execFile };
+});
+
 /** Сколько живёт сессия без pid после последнего признака жизни (спецификация, 5.4). */
 const DEAD_MS = DEFAULT_CONFIG.silenceThresholdMs * 10;
 
@@ -147,6 +166,21 @@ describe('checkSession (чек-лист 15)', () => {
     const child = start();
 
     expect(await checkSession(sessionOf({ pid: child.pid ?? 0 }))).toEqual({ alive: true });
+  });
+
+  it('owned: свой процесс хоста жив без времени старта у ОС, мёртвый всё равно мёртв', async () => {
+    const child = start();
+    const pid = child.pid ?? 0;
+    // Записанное время старта заведомо не сходится: чужой процесс по нему признали бы переиспользованным pid.
+    const session = sessionOf({ pid, startedAtProcess: '2020-01-01T00:00:00.000Z' });
+    const psBefore = psCalls.count;
+
+    expect(await checkSession(session, { owned: true })).toEqual({ alive: true });
+    expect(psCalls.count).toBe(psBefore);
+    expect(await checkSession(session)).toEqual({ alive: false });
+
+    await stop(child);
+    expect(await checkSession(session, { owned: true })).toEqual({ alive: false });
   });
 
   it('pid: null — живость по тишине лога', async () => {
@@ -368,5 +402,36 @@ describe('reconcileMap (чек-лист 15)', () => {
     expect(own?.history.at(-1)).toMatchObject({ event: 'active' });
     expect(map.sessions.find((session) => session.id === reusedId)?.lifecycle).toBe('sleeping');
     expect(map.sessions.find((session) => session.id === unknownId)?.lifecycle).toBe('sleeping');
+  });
+
+  // Свои процессы хоста держит его PTY, поэтому их pid переиспользован быть не может, а `ps` на каждую сессию при каждом
+  // обновлении карты стоил заметно (спека сна агентов, раздел 5). Время старта в записи тут заведомо неверное: проверь
+  // его `ps`, сессию признали бы мёртвой.
+  it('ownedPids: pid своего процесса — ps не вызывается, сессия остаётся active', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const child = start();
+    const pid = child.pid ?? 0;
+    const id = await seed(work.id, { pid, startedAtProcess: '2020-01-01T00:00:00.000Z' });
+    const psBefore = psCalls.count;
+
+    expect(await reconcileMap(project, work.id, { ownedPids: new Set([pid]) })).toEqual([]);
+
+    expect(psCalls.count).toBe(psBefore);
+    expect((await readMap(project, work.id)).sessions.find((session) => session.id === id)?.lifecycle).toBe('active');
+  });
+
+  it('ownedPids: pid вне набора проверяется по времени старта, как раньше', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const child = start();
+    const pid = child.pid ?? 0;
+    const id = await seed(work.id, { pid, startedAtProcess: '2020-01-01T00:00:00.000Z' });
+    const psBefore = psCalls.count;
+
+    // В наборе другой pid: этот процесс не свой, и несовпавшее время старта выдаёт переиспользованный pid.
+    expect(await reconcileMap(project, work.id, { ownedPids: new Set([pid + 1]) })).toEqual([id]);
+
+    expect((await readMap(project, work.id)).sessions.find((session) => session.id === id)?.lifecycle).toBe('sleeping');
+    // На macOS время старта спрашивают у `ps` (на Linux читают /proc): заодно видно, что счётчик вызовов не пустой.
+    if (process.platform === 'darwin') expect(psCalls.count).toBeGreaterThan(psBefore);
   });
 });
