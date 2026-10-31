@@ -33,6 +33,7 @@ import {
   type FeedDecision,
   type FeedItem,
   type ProviderEntry,
+  type QueueReason,
   type RoleSummary,
   type SessionLifecycle,
   type WorkMap,
@@ -83,7 +84,7 @@ export interface AssistantServiceDeps {
   resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string>;
   /** Шаги плана карточки `actions` (спека 2026-10-28, 6.1): функции хоста, что и у окна; возвращают id созданного. */
   createWork(input: Params<'works.create'>): Promise<string>;
-  createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust' }>;
+  createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust'; queued?: QueueReason }>;
   resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held' | 'queued'>;
   interrupt(ref: SessionRef): void;
   stopSession(ref: SessionRef): Promise<void>;
@@ -990,8 +991,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     createSession: async ({ projectPath, workId, provider, label, task, role, model, lean }) => {
       // `requestedBy` не передаётся: помощник действует от имени человека, лимиты агентов на него не распространяются, как у окна.
       // `model` — только когда названа: явный `null` стёр бы умолчание роли.
-      const { held, ...ref } = await deps.createSession({ projectPath, workId, provider, label, task, parent: null, lean, ...(role === null ? {} : { role }), ...(model === null ? {} : { model }) });
-      return { ref, held: held !== undefined };
+      const { held, queued, ...ref } = await deps.createSession({ projectPath, workId, provider, label, task, parent: null, lean, ...(role === null ? {} : { role }), ...(model === null ? {} : { model }) });
+      return { ref, held: held !== undefined, ...(queued === undefined ? {} : { queued }) };
     },
     resume: (ref, prompt) => deps.resume(ref, prompt),
     interrupt: async (ref) => deps.interrupt(ref),

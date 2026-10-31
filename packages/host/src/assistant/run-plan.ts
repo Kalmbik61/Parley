@@ -7,7 +7,7 @@
  * (проводит их задача 7); модуль не лезет ни в диск, ни в процессы.
  */
 
-import { defaultSessionName, participantLabel, type SessionRole } from '@parley/core';
+import { defaultSessionName, participantLabel, type QueueReason, type SessionRole } from '@parley/core';
 import type { ActionsReport, SessionRef } from '@parley/protocol';
 import { stateRefusal, type PreparedPlan, type PreparedStep, type RoomRef, type SessionPick, type WorkRef } from './actions.js';
 import type { OverviewSource } from './overview.js';
@@ -16,7 +16,7 @@ export interface PlanExecutors {
   /** Свежий снимок для сверки перед шагом. */
   source(): OverviewSource;
   createWork(input: { projectPath: string; title: string; goal: string }): Promise<string>;
-  createSession(input: { projectPath: string; workId: string; provider: string; label: string; task: string; role: SessionRole | null; model: string | null; lean: boolean }): Promise<{ ref: SessionRef; held: boolean }>;
+  createSession(input: { projectPath: string; workId: string; provider: string; label: string; task: string; role: SessionRole | null; model: string | null; lean: boolean }): Promise<{ ref: SessionRef; held: boolean; queued?: QueueReason }>;
   resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held' | 'queued'>;
   interrupt(ref: SessionRef): Promise<void>;
   sleep(ref: SessionRef): Promise<void>;
@@ -52,6 +52,8 @@ interface ResolvedSession {
 }
 
 const HELD_NOTE = 'waits for you to trust the folder';
+// Машине тесно (спека ёмкости 2026-10-30, 4.2): запуск стоит в очереди и стартует сам, когда освободится слот.
+const QUEUED_NOTE = 'is queued for a free agent slot';
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 function entryOf(source: OverviewSource, projectPath: string, workId: string) {
@@ -147,7 +149,7 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
       case 'create_session': {
         const work = workOf(step.work, source);
         const before = sessionIdsOf(source, work.projectPath, work.workId);
-        let created: { ref: SessionRef; held: boolean };
+        let created: { ref: SessionRef; held: boolean; queued?: QueueReason };
         try {
           created = await exec.createSession({
             projectPath: work.projectPath,
@@ -172,11 +174,14 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         const name = fresh?.sessions.some((candidate) => candidate.id === created.ref.sessionId) === true ? participantLabel(fresh, created.ref.sessionId) : step.label || defaultSessionName(created.ref.sessionId);
         outputs.set(n, { kind: 'session', ref: created.ref, name });
         if (created.held) report.notes.push(`${name} ${HELD_NOTE}`);
+        if (created.queued !== undefined) report.notes.push(`${name} ${QUEUED_NOTE}; it starts by itself`);
         return;
       }
       case 'wake': {
         const target = checked(step.session, 'wake', source);
-        if ((await exec.resume(target.ref, step.text)) === 'held') report.notes.push(`${target.name} ${HELD_NOTE}`);
+        const outcome = await exec.resume(target.ref, step.text);
+        if (outcome === 'held') report.notes.push(`${target.name} ${HELD_NOTE}`);
+        if (outcome === 'queued') report.notes.push(`${target.name} ${QUEUED_NOTE}; send the text again after it starts`);
         return;
       }
       case 'interrupt': {
