@@ -31,6 +31,8 @@ let lives = new Map<string, SessionLive>();
 let listeners: Array<(ref: SessionRef, value: SessionLive) => void> = [];
 /** Вызовы `sessions.stop` и то, какая отметка стояла в карте в этот миг. */
 let stops: Array<{ sessionId: string; pending: AutoSleep | null }> = [];
+/** Вызовы `wake.retry` и то, в каком состоянии была сессия в карте в этот миг. */
+let retries: Array<{ ref: SessionRef; lifecycle: WorkSession['lifecycle'] }> = [];
 let drafts = new Set<string>();
 let pointers = new Set<string>();
 let compacting = new Set<string>();
@@ -48,6 +50,7 @@ beforeEach(async () => {
   lives = new Map();
   listeners = [];
   stops = [];
+  retries = [];
   drafts = new Set();
   pointers = new Set();
   compacting = new Set();
@@ -141,7 +144,12 @@ function boot(over: Partial<AutoSleepServiceDeps> = {}): AutoSleepService {
     activity,
     pty,
     sessions,
-    wake: { inFlight: (ref) => pointers.has(ref.sessionId) },
+    wake: {
+      inFlight: (ref) => pointers.has(ref.sessionId),
+      retry: (ref) => {
+        retries.push({ ref, lifecycle: sessionOf(ref).lifecycle });
+      },
+    },
     compacting: (ref) => compacting.has(ref.sessionId),
     config: async () => ({ sleepAfterMinutes }),
     now: () => clock,
@@ -261,6 +269,17 @@ describe('сервис сна агентов', () => {
     expect(logs).toContainEqual({ level: 'info', msg: 'агент усыплён', data: { ref, reason: 'idle', idleMin: 61 } });
   });
 
+  it('после сна будильнику велено перепроверить письма сессии: retry зван один раз, когда она уже спит', async () => {
+    const ref = await startSession();
+    boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(slept()).toEqual([ref.sessionId]);
+    // Не до остановки и не раньше записи перехода: будильник пересчитывает уже спящую сессию.
+    expect(retries).toEqual([{ ref, lifecycle: 'sleeping' }]);
+  });
+
   it('порог 0 в настройке — никто не засыпает', async () => {
     sleepAfterMinutes = 0;
     const ref = await startSession();
@@ -324,6 +343,7 @@ describe('сервис сна агентов', () => {
     await advance(AUTO_SLEEP_TICK_MS);
 
     expect(stops).toEqual([]);
+    expect(retries).toEqual([]);
     expect(sessionOf(ref).lifecycle).toBe('active');
     expect(hasMarkKey(ref)).toBe(false);
     expect(logs).toContainEqual({
@@ -355,6 +375,7 @@ describe('сервис сна агентов', () => {
     await advance(AUTO_SLEEP_TICK_MS);
 
     expect(stops).toEqual([]);
+    expect(retries).toEqual([]);
     expect(hasMarkKey(ref)).toBe(false);
     expect(logs).toContainEqual({
       level: 'info',
@@ -419,6 +440,7 @@ describe('сервис сна агентов', () => {
     await quiet();
     expect(slept()).toEqual([queen.sessionId]);
     expect(sessionOf(queen).autoSleep).toEqual({ reason: 'swarm-done', at: iso(clock), waitTarget: null });
+    expect(retries).toEqual([{ ref: queen, lifecycle: 'sleeping' }]);
     expect(sessionOf(other).lifecycle).toBe('active');
 
     // Спящую повтор не трогает.
@@ -511,6 +533,7 @@ describe('сервис сна агентов', () => {
     await advance(AUTO_SLEEP_TICK_MS);
 
     expect(stops).toEqual([]);
+    expect(retries).toEqual([]);
     expect(sessionOf(ref).lifecycle).toBe('active');
     expect(hasMarkKey(ref)).toBe(false);
   });
@@ -573,6 +596,7 @@ describe('сервис сна агентов', () => {
     await advance(AUTO_SLEEP_TICK_MS);
 
     expect(slept()).toEqual([ref.sessionId]);
+    expect(retries).toEqual([]);
     expect(sessionOf(ref).lifecycle).toBe('active');
     // Письма сессии за оградой больше не застрянут: ключ удалён.
     expect(hasMarkKey(ref)).toBe(false);
@@ -621,9 +645,11 @@ describe('сервис сна агентов', () => {
     service.requestSleep(ref, 'swarm-done');
     await advance(AUTO_SLEEP_TICK_MS);
     expect(slept()).toEqual([ref.sessionId]);
+    expect(retries).toEqual([]);
 
     release();
     await quiet();
+    expect(retries).toEqual([{ ref, lifecycle: 'sleeping' }]);
     expect(sessionOf(ref).lifecycle).toBe('sleeping');
     expect(sessionOf(ref).autoSleep).toMatchObject({ reason: 'idle' });
   });

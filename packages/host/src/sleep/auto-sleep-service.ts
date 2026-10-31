@@ -10,7 +10,7 @@
  * 2. обычный `stop` — тот же, что у кнопки Stop;
  * 3. при выходе процесса `transitionSession` превращает отметку в `autoSleep` (core); если сессия всё же осталась `active`,
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
- * 4. запись в журнал хоста.
+ * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
  */
 
 import {
@@ -50,8 +50,11 @@ export interface AutoSleepServiceDeps {
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   pty: Pick<PtyManager, 'list' | 'get'>;
   sessions: Pick<SessionsService, 'stop'>;
-  /** Указатель на письма набирается в терминал сессии (`WakeService.inFlight`). */
-  wake: Pick<WakeService, 'inFlight'>;
+  /**
+   * Будильник: указатель на письма набирается в терминал сессии (`inFlight`); `retry` — перепроверить письма сессии,
+   * которую только что усыпили.
+   */
+  wake: Pick<WakeService, 'inFlight' | 'retry'>;
   /** Идёт или ждёт сжатие контекста (`CompactionService.holds`). */
   compacting: (ref: SessionRef) => boolean;
   /** Настройки читаются на каждой проверке: человек меняет `sleepAfterMinutes` на ходу. */
@@ -228,7 +231,10 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       return false;
     }
 
-    // 4.
+    // 4. Письма, пришедшие, пока стояла отметка, ждали за оградой, а будильник при выходе процесса мог записать их как
+    // уже указанные (`markUnreadPointed`): сами они сессию не поднимут. `retry` забывает указанное у сессии без процесса
+    // и пересчитывает её — письма поднимут её обычным путём, как бы поздно ни обновился снимок работ.
+    deps.wake.retry(ref);
     host.log.info('агент усыплён', {
       ref,
       reason: plan.reason,
