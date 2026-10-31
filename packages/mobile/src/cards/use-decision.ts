@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Haptics from 'expo-haptics';
+import { haptic } from '../haptics';
 import type { FeedDecision } from '@parley/core';
 import type { SessionRef } from '@parley/remote-client';
 import { useClient } from '../hooks/use-remote';
 import { useApprove } from './approve-context';
+import { hapticFor } from './haptics-map';
 import { DECISION_TEXT, runDecision, type DecisionUi } from './model';
 
 export interface DecisionState {
@@ -32,7 +33,10 @@ export function useDecision(ref: SessionRef, cardId: string): DecisionState {
       setMessage(null);
       const ui = await runDecision(decision, approve, (d) => client.decide(ref, cardId, d));
       setBusy(false);
-      void (ui.kind === 'done' ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success) : Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning));
+      const kind = hapticFor(ui, decision);
+      if (kind === 'success') haptic.success();
+      else if (kind === 'warning') haptic.warning();
+      else if (kind === 'error') haptic.error();
       const text = DECISION_TEXT[ui.kind];
       setMessage(text);
       if (text !== null && ui.kind !== 'unconfirmed') {

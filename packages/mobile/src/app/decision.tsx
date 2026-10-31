@@ -11,7 +11,7 @@ import { parseWorkParam } from '../nav/refs';
 import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
 import { haptic } from '../haptics';
 import { RETURN_NOTE_MAX, canSendReturn, hapticFor, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
-import { useRemoteState } from '../runtime/use-remote';
+import { useRemoteState } from '../hooks/use-remote';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { spacing, typography, useColors } from '../theme';
 

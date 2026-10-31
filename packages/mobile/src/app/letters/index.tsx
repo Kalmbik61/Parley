@@ -7,7 +7,7 @@ import { workParam } from '../../nav/refs';
 import { plainPreview, selectLetters, timeLabel } from '../../letters/letters-model';
 import { useLoadLetters } from '../../letters/load-letters';
 import { openedLetters } from '../../letters/opened';
-import { useRemoteState } from '../../runtime/use-remote';
+import { useRemoteState } from '../../hooks/use-remote';
 import { spacing, typography, useColors } from '../../theme';
 
 export default function LettersScreen() {

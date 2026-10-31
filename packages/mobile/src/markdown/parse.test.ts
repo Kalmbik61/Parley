@@ -42,6 +42,20 @@ describe('markdown: no remote images, no HTML', () => {
   });
 });
 
+describe('link host spoofing', () => {
+  it('refuses backslash, userinfo and whitespace forms; they stay text', () => {
+    for (const bad of ['https://evil.com\\@good.com/x', 'https://user@good.com/', 'https://good.com\\x', 'https://good .com']) {
+      expect(isOpenableUrl(bad)).toBe(false);
+    }
+    expect(parseInline('[x](https://evil.com\\@good.com/x)').some((n) => n.t === 'link')).toBe(false);
+    expect(parseInline('see https://evil.com\\@good.com/x now').some((n) => n.t === 'link')).toBe(false);
+  });
+  it('plain https links and ports are fine, and the dialog host is the real host', () => {
+    expect(isOpenableUrl('https://example.com:8443/a?b=1#c')).toBe(true);
+    expect(hostOf('https://Example.com/a')).toBe('example.com');
+  });
+});
+
 describe('markdown blocks', () => {
   it('parses headings, lists, code fences, quotes and rules', () => {
     const md = '# T\n\nPara **b** `c` *i*\nsecond line\n\n- one\n- two\n\n1. a\n2. b\n\n```ts\nconst x = 1;\n```\n\n> quoted\n\n---';

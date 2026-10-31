@@ -8,7 +8,8 @@ import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
 import { openedLetters } from '../letters/opened';
 import { timeLabel } from '../letters/letters-model';
-import { runtime, useRemoteState } from '../runtime/use-remote';
+import { useRemoteState } from '../hooks/use-remote';
+import { runtime } from '../runtime/instance';
 import { spacing, typography, useColors } from '../theme';
 import { View } from 'react-native';
 

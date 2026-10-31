@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { attentionOfSession, selectWorks, sessionKey, type RemoteState, type SessionRef } from '@parley/remote-client';
 import { ActiveCard, InfoCard } from '../../cards/CardViews';
+import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { capsuleOf, needReason } from '../../cards/status';
 import { timeAgo } from '../../cards/model';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { DEMO } from '../../dev/flags';
+import { haptic } from '../../haptics';
 import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-remote';
 import { Markdown } from '../../markdown/Markdown';
 import { parseSessionParam, sessionParam, workParam } from '../../nav/refs';
@@ -65,6 +67,18 @@ export default function SessionScreen() {
     return () => client.refresher.setScreen({ kind: 'other' });
   }, [client, ref?.projectPath, ref?.workId, ref?.sessionId]);
 
+  const goneHere = useMemo(() => (state === null || ref === null ? [] : goneEntries(state).filter((g) => g.gone.sessionKey === sessionKey(ref))), [state, ref?.projectPath, ref?.workId, ref?.sessionId]);
+  useGoneDismiss(client, goneHere);
+
+  // A card that appears while the screen is open: a light selection tick (D1 §16); the first load is not "new".
+  const cardCount = state !== null && ref !== null ? (state.cards[sessionKey(ref)]?.cards.length ?? 0) : 0;
+  const seenCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    if (seenCount.current !== null && cardCount > seenCount.current) haptic.selection();
+    seenCount.current = cardCount;
+  }, [cardCount, loading]);
+
   const found = useMemo(() => {
     if (state === null || ref === null) return null;
     const work = state.snapshot?.works.find((w) => w.projectPath === ref.projectPath && w.id === ref.workId);
@@ -85,8 +99,12 @@ export default function SessionScreen() {
     return (
       <View style={[styles.page, { backgroundColor: c.bg }]}>
         <Stack.Screen options={{ title: 'Session' }} />
-        <ConnectionBanner />
-        <View style={styles.pad}>{ref === null ? <EmptyState icon="questionmark.circle" title="This session link is not valid" /> : <Skeleton />}</View>
+        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.pad}>
+          <View style={styles.banner}>
+            <ConnectionBanner />
+          </View>
+          {ref === null ? <EmptyState icon="questionmark.circle" title="This session link is not valid" /> : <Skeleton />}
+        </ScrollView>
       </View>
     );
   }
@@ -94,8 +112,12 @@ export default function SessionScreen() {
     return (
       <View style={[styles.page, { backgroundColor: c.bg }]}>
         <Stack.Screen options={{ title: 'Session' }} />
-        <ConnectionBanner />
-        <EmptyState icon="questionmark.circle" title="This session is no longer on your Mac" />
+        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.pad}>
+          <View style={styles.banner}>
+            <ConnectionBanner />
+          </View>
+          <EmptyState icon="questionmark.circle" title="This session is no longer on your Mac" />
+        </ScrollView>
       </View>
     );
   }
@@ -145,6 +167,11 @@ export default function SessionScreen() {
           </View>
         )}
         <StatusCapsule capsule={capsule} />
+        {goneHere.length > 0 && (
+          <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center' }]}>
+            Answered at your Mac
+          </Text>
+        )}
         {loading && entry === undefined && <Skeleton rows={1} />}
         {loadFailed && first === undefined && (
           <View style={{ gap: 8, alignItems: 'center', paddingVertical: 8 }}>

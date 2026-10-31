@@ -1,12 +1,15 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import * as Haptics from 'expo-haptics';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { haptic } from '../haptics';
 import { SymbolView } from 'expo-symbols';
 import type { RemoteSession } from '@parley/protocol/remote';
-import { attentionOfSession, sessionKey, workKeyOf, type RemoteState, type WorkRow, type WorkView } from '@parley/remote-client';
+import { attentionOfSession, sessionKey, type RemoteState, type RemoteSwarm, type WorkRow, type WorkView } from '@parley/remote-client';
 import { capsuleOf } from '../cards/status';
 import { spacing, typography, useColors } from '../theme';
 import { attentionColor, attentionWord, CountPill, Dot } from '../ui/parts';
+import { computeGuides, contentLeft, indentFor, STUB, trunkX, type GuideSpec } from './guides';
+import { useNow } from '../hooks/use-remote';
+import { elapsed } from './summary';
 import { teamLine, teamOpenByDefault, type Team } from './teams';
 
 export interface TreeActions {
@@ -20,20 +23,42 @@ export interface TreeEnv {
   actions: TreeActions;
 }
 
-const INDENT = 28;
-
 const refOf = (view: WorkView, id: string) => ({ projectPath: view.work.projectPath, workId: view.work.id, sessionId: id });
 export const attentionOf = (env: TreeEnv, s: RemoteSession) => attentionOfSession(env.state, refOf(env.view, s.id), s);
 
-function Guide({ depth }: { depth: number }) {
+const LINE = 1.5;
+const RADIUS = 10;
+
+/**
+ * Trunks of the ancestors, plus this row's own: from the top to the middle of the row with a rounded corner towards the
+ * icon or the container edge; a tee (the trunk goes on) unless it is the last child. Hidden from VoiceOver (D1 §18).
+ */
+function Guides({ spec, indent, mid }: { spec: GuideSpec; indent: number; mid: number }) {
   const c = useColors();
-  if (depth <= 0) return null;
   return (
-    <View pointerEvents="none" style={[styles.guide, { left: (depth - 1) * INDENT + 18, backgroundColor: c.separator }]} />
+    <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+      {spec.continues.map((on, i) =>
+        on ? <View key={i} style={{ position: 'absolute', top: 0, bottom: 0, left: trunkX(i + 1, indent), width: LINE, backgroundColor: c.treeLine }} /> : null,
+      )}
+      <View
+        style={{
+          position: 'absolute',
+          top: 0,
+          height: mid,
+          left: trunkX(spec.depth, indent),
+          width: STUB,
+          borderLeftWidth: LINE,
+          borderBottomWidth: LINE,
+          borderBottomLeftRadius: RADIUS,
+          borderColor: c.treeLine,
+        }}
+      />
+      {!spec.last && <View style={{ position: 'absolute', top: mid, bottom: 0, left: trunkX(spec.depth, indent), width: LINE, backgroundColor: c.treeLine }} />}
+    </View>
   );
 }
 
-function SessionLine({ session, depth, env }: { session: RemoteSession; depth: number; env: TreeEnv }) {
+function SessionLine({ session, depth, env, spec, indent }: { session: RemoteSession; depth: number; env: TreeEnv; spec?: GuideSpec; indent?: number }) {
   const c = useColors();
   const a = attentionOf(env, session);
   const live = env.state.activity[sessionKey(refOf(env.view, session.id))];
@@ -43,9 +68,9 @@ function SessionLine({ session, depth, env }: { session: RemoteSession; depth: n
       accessibilityRole="button"
       accessibilityLabel={`${session.label}. ${attentionWord(a)}`}
       onPress={() => env.actions.openSession(session.id)}
-      style={[styles.line, { paddingLeft: 12 + depth * INDENT }]}
+      style={[styles.line, { paddingLeft: depth === 0 || indent === undefined ? 12 : contentLeft(depth, indent) }]}
     >
-      <Guide depth={depth} />
+      {spec !== undefined && indent !== undefined && <Guides spec={spec} indent={indent} mid={24} />}
       <Dot color={attentionColor(c, a)} ring={a === 'unseen'} />
       <View style={styles.flex}>
         <Text numberOfLines={1} allowFontScaling style={[typography.body, { color: session.lifecycle === 'closed' ? c.label2 : c.label }]}>
@@ -61,15 +86,16 @@ function SessionLine({ session, depth, env }: { session: RemoteSession; depth: n
   );
 }
 
-function RoomBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'room' }>; depth: number; env: TreeEnv }) {
+function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'room' }>; depth: number; env: TreeEnv; spec: GuideSpec; indent: number }) {
   const c = useColors();
   const p = row.room.proposal;
   const memberWaits = row.members.some((m) => attentionOf(env, m) === 'needs-you');
   const [open, setOpen] = useState(p !== null || memberWaits);
   return (
-    <View style={[styles.block, { marginLeft: 8 + depth * INDENT, backgroundColor: p !== null ? c.warningBg : c.surface2, borderColor: p !== null ? c.tint : 'transparent' }]}>
-      <Guide depth={0} />
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); void Haptics.selectionAsync(); }} style={styles.blockHead}>
+    <View>
+      <Guides spec={spec} indent={indent} mid={28} />
+      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: p !== null ? c.warningBg : c.surface2, borderColor: p !== null ? c.tint : 'transparent' }]}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); haptic.selection(); }} style={styles.blockHead}>
         <SymbolView name={p !== null ? 'checkmark.seal' : 'number'} size={18} tintColor={c.tint} />
         <View style={styles.flex}>
           <Text numberOfLines={2} allowFontScaling style={[typography.headline, { color: c.label }]}>
@@ -101,13 +127,25 @@ function RoomBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'room' }
             {row.room.lead === m.id && <SymbolView name="star.fill" size={12} tintColor={c.tint} />}
           </Pressable>
         ))}
+      </View>
     </View>
+  );
+}
+
+function SwarmTimer({ swarm }: { swarm: RemoteSwarm }) {
+  const c = useColors();
+  const running = swarm.endedAt === null && (swarm.status === 'running' || swarm.status === 'collecting');
+  const now = useNow(running ? 1000 : 3_600_000);
+  return (
+    <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2, fontVariant: ['tabular-nums'] }]}>
+      {elapsed(swarm.createdAt, swarm.endedAt, now)}
+    </Text>
   );
 }
 
 const SWARM_WORD = { queen: 'Queen', drone: 'Drone', verifier: 'Verifier' } as const;
 
-function SwarmBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'swarm' }>; depth: number; env: TreeEnv }) {
+function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'swarm' }>; depth: number; env: TreeEnv; spec: GuideSpec; indent: number }) {
   const c = useColors();
   const waits = row.members.some((m) => m.session !== null && attentionOf(env, m.session) === 'needs-you');
   const [open, setOpen] = useState(waits);
@@ -115,8 +153,10 @@ function SwarmBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'swarm'
   const handed = workers.filter((m) => m.member.handedAt !== null).length;
   const end = row.swarm.status === 'done' ? '✓' : row.swarm.status === 'failed' ? '⚠' : row.swarm.status === 'cancelled' ? '✕' : '';
   return (
-    <View style={[styles.block, { marginLeft: 8 + depth * INDENT, backgroundColor: c.surface2, borderColor: 'transparent' }]}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); void Haptics.selectionAsync(); }} style={styles.blockHead}>
+    <View>
+      <Guides spec={spec} indent={indent} mid={28} />
+      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: c.surface2, borderColor: 'transparent' }]}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); haptic.selection(); }} style={styles.blockHead}>
         <SymbolView name="hexagon.fill" size={20} tintColor={row.swarm.status === 'failed' || row.swarm.status === 'cancelled' ? c.off : c.tint} />
         <View style={styles.flex}>
           <Text numberOfLines={1} allowFontScaling style={[typography.headline, { color: c.label }]}>
@@ -129,6 +169,7 @@ function SwarmBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'swarm'
             <Text allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
               {workers.length > 0 ? `${handed}/${workers.length}` : '…'} {end}
             </Text>
+            <SwarmTimer swarm={row.swarm} />
           </View>
         </View>
         <SymbolView name={open ? 'chevron.up' : 'chevron.down'} size={12} tintColor={c.label3} />
@@ -153,21 +194,25 @@ function SwarmBlock({ row, depth, env }: { row: Extract<WorkRow, { kind: 'swarm'
           )}
         </>
       )}
+      </View>
     </View>
   );
 }
 
-/** Rows of a tree (descendants of one head), depth relative to it. */
+/** Rows of a tree (descendants of one head), depth relative to it, joined by trunks and corners (D1 §8.2). */
 export function TreeRows({ rows, env }: { rows: Array<{ row: WorkRow; depth: number }>; env: TreeEnv }) {
+  const { fontScale } = useWindowDimensions();
+  const indent = indentFor(fontScale);
+  const guides = computeGuides(rows.map((r) => r.depth));
   return (
     <View>
-      {rows.map(({ row, depth }) =>
+      {rows.map(({ row, depth }, i) =>
         row.kind === 'session' ? (
-          <SessionLine key={row.session.id} session={row.session} depth={depth} env={env} />
+          <SessionLine key={row.session.id} session={row.session} depth={depth} env={env} spec={guides[i]!} indent={indent} />
         ) : row.kind === 'room' ? (
-          <RoomBlock key={row.room.id} row={row} depth={depth} env={env} />
+          <RoomBlock key={row.room.id} row={row} depth={depth} env={env} spec={guides[i]!} indent={indent} />
         ) : (
-          <SwarmBlock key={row.swarm.id} row={row} depth={depth} env={env} />
+          <SwarmBlock key={row.swarm.id} row={row} depth={depth} env={env} spec={guides[i]!} indent={indent} />
         ),
       )}
     </View>
@@ -182,11 +227,14 @@ export function TeamCard({ team, env }: { team: Team; env: TreeEnv }) {
   const [open, setOpen] = useState(teamOpenByDefault(waits.map((s) => attentionOf(env, s))));
   const name = headSession?.label ?? (team.head.kind === 'room' ? team.head.room.title : team.head.kind === 'swarm' ? `Swarm [${team.head.swarm.tag}]` : '');
   const a = headSession !== null ? attentionOf(env, headSession) : 'idle';
-  const toggle = (): void => { setOpen((o) => !o); void Haptics.selectionAsync(); };
+  const toggle = (): void => { setOpen((o) => !o); haptic.selection(); };
   return (
     <View style={[styles.card, { backgroundColor: c.surface }]}>
       <View style={styles.teamHead}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${attentionWord(a)}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex]}>
+        {open && team.children.length > 0 && (
+          <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ position: 'absolute', left: trunkX(1, 28), top: 48, bottom: 0, width: LINE, backgroundColor: c.treeLine }} />
+        )}
+        <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${attentionWord(a)}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex, { alignItems: 'flex-start' }]}>
           <View style={[styles.avatar, { backgroundColor: c.tint }]}>
             <Text style={[typography.headline, { color: c.onTint }]}>{name.slice(0, 1).toUpperCase()}</Text>
           </View>
@@ -233,7 +281,6 @@ export function SingleGroup({ teams, env }: { teams: Team[]; env: TreeEnv }) {
   );
 }
 
-export { workKeyOf };
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -243,7 +290,6 @@ const styles = StyleSheet.create({
   avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   chevron: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   line: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingRight: 12 },
-  guide: { position: 'absolute', top: 0, bottom: 0, width: 1.5 },
   block: { marginRight: 8, marginVertical: 4, borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
   blockHead: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minHeight: 48 },
   decision: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10, minHeight: 44 },

@@ -4,6 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import type { FeedCard, FeedPermissionCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { cardGist } from '@parley/core/card-gist';
 import type { SessionRef } from '@parley/remote-client';
+import { haptic } from '../haptics';
 import { Markdown } from '../markdown/Markdown';
 import { spacing, typography, useColors } from '../theme';
 import { Button } from '../ui/Button';
@@ -138,7 +139,7 @@ export function QuestionCardView({ card, sessionRef, canAct, children }: CardPro
                   accessibilityRole={q.multiSelect ? 'checkbox' : 'radio'}
                   accessibilityState={{ checked: on, disabled: off }}
                   disabled={off}
-                  onPress={() => setDraft((x) => togglePick(x, at, q, o.label))}
+                  onPress={() => { haptic.selection(); setDraft((x) => togglePick(x, at, q, o.label)); }}
                   style={styles.option}
                 >
                   <View style={{ flex: 1 }}>
@@ -155,11 +156,11 @@ export function QuestionCardView({ card, sessionRef, canAct, children }: CardPro
                 </Pressable>
               );
             })}
-            <Pressable accessibilityRole={q.multiSelect ? 'checkbox' : 'radio'} accessibilityState={{ checked: otherOn }} disabled={off} onPress={() => setDraft((x) => toggleOther(x, at, q))} style={styles.option}>
+            <Pressable accessibilityRole={q.multiSelect ? 'checkbox' : 'radio'} accessibilityState={{ checked: otherOn }} disabled={off} onPress={() => { haptic.selection(); setDraft((x) => toggleOther(x, at, q)); }} style={styles.option}>
               <Text allowFontScaling style={[typography.body, { color: c.label, flex: 1 }]}>
                 Other
               </Text>
-              <SymbolView name={otherOn ? 'checkmark.circle.fill' : 'circle'} size={20} tintColor={otherOn ? c.tint : c.label3} />
+              <SymbolView name={q.multiSelect ? (otherOn ? 'checkmark.circle.fill' : 'circle') : 'checkmark'} size={20} tintColor={otherOn ? c.tint : q.multiSelect ? c.label3 : 'transparent'} />
             </Pressable>
             {otherOn && (
               <TextInput

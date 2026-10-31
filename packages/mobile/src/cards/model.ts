@@ -218,3 +218,12 @@ export function timeAgo(iso: string | null, now: number): string | null {
   if (h < 24) return `${h} h`;
   return `${Math.round(h / 24)} d`;
 }
+
+/** The whole command of a Bash-like permission card (for "Copy command"); `null` for any other card. */
+export function fullCommand(card: FeedCard): string | null {
+  if (card.kind !== 'permission') return null;
+  const command = card.toolInput.command;
+  if (typeof command === 'string') return command;
+  if (Array.isArray(command) && command.every((p) => typeof p === 'string')) return command.join(' ');
+  return null;
+}

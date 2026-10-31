@@ -17,14 +17,24 @@ export type Block =
   | { t: 'list'; ordered: boolean; items: Inline[][] }
   | { t: 'rule' };
 
+/**
+ * Strict shape of a link we will open: `http(s)://host[:port][/path…]` with no userinfo, no backslash and no whitespace.
+ * `https://evil.com\@good.com/` is read differently by the dialog and by Safari (WHATWG treats `\` as `/`), so such
+ * links are refused outright and shown as text.
+ */
+const SAFE_URL = /^https?:\/\/([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:.]+\])(?::\d{1,5})?(?:[/?#][^\s\\]*)?$/i;
+
 export function hostOf(url: string): string | null {
-  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(url.trim());
-  return m?.[1]?.toLowerCase() ?? null;
+  const m = SAFE_URL.exec(url.trim());
+  if (m !== null) return m[1]!.toLowerCase();
+  // Placeholder text for an image: the host of any URL-looking string, same rules.
+  const loose = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/?#\\\s]*@)?([^/?#@\\\s:]+)/i.exec(url.trim());
+  return loose?.[1]?.toLowerCase() ?? null;
 }
 
-/** Only `http(s)` links open (after a confirmation); anything else renders as plain text. */
+/** Only strict `http(s)` links open (after a confirmation); anything else renders as plain text. */
 export function isOpenableUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url.trim());
+  return SAFE_URL.test(url.trim());
 }
 
 const stripTags = (s: string): string => s.replace(/<\/?[a-zA-Z][^>]*>/g, '').replace(/<!--[\s\S]*?-->/g, '');
@@ -66,7 +76,8 @@ export function parseInline(src: string): Inline[] {
       out.push({ t: 'italic', children: parseInline(m[2]!) });
       i += m[0].length;
     } else if ((m = /^https?:\/\/[^\s<>)]+/i.exec(rest))) {
-      out.push({ t: 'link', url: m[0], children: [{ t: 'text', text: m[0] }] });
+      if (isOpenableUrl(m[0])) out.push({ t: 'link', url: m[0], children: [{ t: 'text', text: m[0] }] });
+      else pushText(out, m[0]);
       i += m[0].length;
     } else {
       pushText(out, s[i]!);

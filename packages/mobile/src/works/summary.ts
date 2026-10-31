@@ -26,3 +26,15 @@ function fnv1a(text: string): number {
 }
 
 export const projectColor = (projectPath: string): string => PALETTE[fnv1a(projectPath) % PALETTE.length] as string;
+
+/** `12:07` (or `1:02:03`) from `createdAt` to `endedAt` or now: the swarm timer of D1 §8.2. */
+export function elapsed(createdAt: string, endedAt: string | null, now: number): string {
+  const start = Date.parse(createdAt);
+  const end = endedAt === null ? now : Date.parse(endedAt);
+  if (Number.isNaN(start) || Number.isNaN(end)) return '';
+  const total = Math.max(0, Math.floor((end - start) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+}
