@@ -1,22 +1,22 @@
 import { readFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parleyHome } from '@parley/core';
+import { parleyHome } from '@parley/core/home';
 import { relayUrlFor } from '@parley/protocol/remote';
 import { createAuditLog } from './audit.js';
 import type { AuditLog } from './audit.js';
 import { openRemoteAccess } from './access.js';
 import type { RemoteAccess } from './access.js';
-import { loadRemoteConfig, saveRemoteConfig } from './config.js';
+import { RemoteConfigError, loadRemoteConfig, saveRemoteConfig } from './config.js';
 import { ControlError, createControlServer } from './control.js';
 import { createSessionHandler } from './dispatch.js';
-import { ensureDir, writeFileAtomic } from './files.js';
+import { ensureDir } from './files.js';
 import { createHostLink } from './host-link.js';
 import type { HostLink } from './host-link.js';
 import { createLog } from './log.js';
 import type { BridgeLog } from './log.js';
+import { BridgeAlreadyRunning, acquirePidLock, releasePidLock } from './pid-lock.js';
 import { createPushNotifier } from './push.js';
 import { createPushGatewayClient, resolvePushGatewayUrl } from './push-gateway-client.js';
 import { remotePaths } from './paths.js';
@@ -63,7 +63,27 @@ const hostNameOf = (override: string | undefined): string => (override ?? os.hos
 export async function startBridge(options: BridgeProcessOptions = {}): Promise<RunningBridge> {
   const paths = remotePaths(options.home ?? parleyHome());
   await ensureDir(paths.dir);
-  const log: BridgeLog = createLog({ file: paths.log });
+  const log: BridgeLog = createLog({ file: paths.log, archive: paths.logArchive });
+  // Единственный экземпляр на дом: замок берётся раньше всего, остальные запуски отказывают.
+  try {
+    await acquirePidLock(paths.pid);
+  } catch (error) {
+    if (error instanceof BridgeAlreadyRunning) log.warn('bridge.already_running', { pid: error.pid });
+    throw error;
+  }
+  const undo: Array<() => Promise<void> | void> = [];
+  try {
+    return await assemble(options, paths, log, undo);
+  } catch (error) {
+    // Запуск не удался: что успело подняться, закрываем в обратном порядке, замок отдаём.
+    log.error('bridge.start-failed', { error });
+    for (const step of undo.reverse()) await Promise.resolve(step()).catch(() => undefined);
+    await releasePidLock(paths.pid);
+    throw error;
+  }
+}
+
+async function assemble(options: BridgeProcessOptions, paths: RemotePaths, log: BridgeLog, undo: Array<() => Promise<void> | void>): Promise<RunningBridge> {
   const audit: AuditLog = createAuditLog({ file: paths.audit, archive: paths.auditArchive });
   const version = bridgeVersion();
   const hostName = hostNameOf(options.hostName);
@@ -72,7 +92,14 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
     loopback && /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(relay) ? `ws://${relay}` : relayUrlFor(relay, { allowLocal: true });
 
   // 1. Настройки, ключи и устройства — с диска, до всего остального.
-  const config = await loadRemoteConfig(paths.remoteJson);
+  let config: Awaited<ReturnType<typeof loadRemoteConfig>>;
+  try {
+    config = await loadRemoteConfig(paths.remoteJson);
+  } catch (error) {
+    // Неверный `remote.json` — отказ запуска с понятной строкой: какие поля, а не молчаливое отключение push.
+    if (error instanceof RemoteConfigError) log.error('remote_json.invalid', { fields: error.fields.join(',') });
+    throw error;
+  }
   const homeDir = options.home ?? parleyHome();
   const hostPaths = options.host ?? { socketPath: path.join(homeDir, 'host', 'host.sock'), tokenPath: path.join(homeDir, 'host', 'host.token') };
 
@@ -133,6 +160,7 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
     resolveRelayUrl,
     ...(options.relayBackoff ? { relayBackoff: options.relayBackoff } : {}),
   });
+  undo.push(() => access.stop());
   control.register(access.handlers);
 
   hostLink = createHostLink({
@@ -158,6 +186,7 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
       deviceName: (deviceId) => access.devices.get(deviceId)?.name ?? '',
     }),
   );
+  undo.push(() => hostLink.stop());
   const gatewayUrl = resolvePushGatewayUrl(config.pushGatewayUrl);
   notifier = createPushNotifier({
     host: hostLink,
@@ -166,6 +195,8 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
     routeId: () => access.keys().routeId,
     log,
   });
+
+  undo.push(() => notifier.stop());
 
   async function stop(): Promise<void> {
     stopped ??= (async () => {
@@ -183,7 +214,7 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
       } catch (error) {
         log.error('bridge.control-close-failed', { error });
       }
-      await rm(paths.pid, { force: true });
+      await releasePidLock(paths.pid);
       log.info('bridge.stopped');
       resolveClosed();
     })();
@@ -192,7 +223,7 @@ export async function startBridge(options: BridgeProcessOptions = {}): Promise<R
 
   // 2. Сокет управления (обработчики A7 уже зарегистрированы), затем хост и relay.
   await control.start();
-  await writeFileAtomic(paths.pid, String(process.pid));
+  undo.push(() => control.close());
   log.info('bridge.started', { version });
   hostLink.start();
   access.start();

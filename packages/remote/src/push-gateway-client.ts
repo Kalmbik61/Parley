@@ -19,7 +19,9 @@ export function resolvePushGatewayUrl(override: string | null | undefined, fallb
   }
   const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return null;
-  return url.origin;
+  // Учётные данные, запрос и фрагмент в адресе шлюза не нужны; путь сохраняется (шлюз может стоять под префиксом).
+  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') return null;
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
 }
 
 /**
@@ -74,6 +76,8 @@ export function createPushGatewayClient(options: PushGatewayClientOptions): Push
           body: JSON.stringify(body.data),
           signal: controller.signal,
         });
+        // Тело не нужно, но непрочитанное держит соединение до сборщика мусора.
+        void res.body?.cancel().catch(() => undefined);
         if (res.status === 200) return 'sent';
         if (res.status === 410) return 'invalid-token';
         if (res.status === 400 || res.status === 429) {

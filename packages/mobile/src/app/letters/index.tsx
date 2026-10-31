@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
+import { workParam } from '../../nav/refs';
 import { selectLetters, timeLabel } from '../../letters/letters-model';
 import { openedLetters } from '../../letters/opened';
 import { useRemoteState } from '../../runtime/use-remote';
@@ -33,7 +34,7 @@ export default function LettersScreen() {
         renderItem={({ item }) => (
           <Pressable
             accessibilityRole="button"
-            onPress={() => router.push({ pathname: '/letter', params: { id: item.message.id, projectPath: item.projectPath, workId: item.workId } })}
+            onPress={() => router.push({ pathname: '/letter', params: { id: item.message.id, ref: workParam({ projectPath: item.projectPath, workId: item.workId }) } })}
             style={[styles.row, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}
           >
             <View style={[styles.dot, { backgroundColor: item.unread ? colors.tint : 'transparent' }]} />

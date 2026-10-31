@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text } from 'react-native';
 import { workKeyOf } from '@parley/remote-client';
 import { ConnectionBanner } from '../components/ConnectionBanner';
-import { MarkdownText } from '../components/MarkdownText';
+import { Markdown } from '../markdown/Markdown';
+import { parseWorkParam } from '../nav/refs';
 import { openedLetters } from '../letters/opened';
 import { timeLabel } from '../letters/letters-model';
 import { runtime, useRemoteState } from '../runtime/use-remote';
@@ -15,11 +16,12 @@ const str = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v
 
 export default function LetterScreen() {
   const colors = useColors();
-  const p = useLocalSearchParams<{ id: string; projectPath: string; workId: string }>();
+  const p = useLocalSearchParams<{ id: string; ref: string }>();
   const id = str(p.id);
+  const { projectPath, workId } = parseWorkParam(str(p.ref)) ?? { projectPath: '', workId: '' };
   const remote = useRemoteState();
-  const message = remote?.letters[workKeyOf(str(p.projectPath), str(p.workId))]?.[id];
-  const work = remote?.snapshot?.works.find((w) => w.projectPath === str(p.projectPath) && w.id === str(p.workId));
+  const message = remote?.letters[workKeyOf(projectPath, workId)]?.[id];
+  const work = remote?.snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
   const [full, setFull] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const cut = message?.textBytes !== undefined;
@@ -31,11 +33,11 @@ export default function LetterScreen() {
     if (!cut) return;
     let live = true;
     runtime
-      .call('context.letter', { projectPath: str(p.projectPath), workId: str(p.workId), id })
+      .call('context.letter', { projectPath: projectPath, workId: workId, id })
       .then((res) => live && setFull((res as { message?: { text?: string } } | null)?.message?.text ?? null))
       .catch(() => live && setFailed(true));
     return () => void (live = false);
-  }, [cut, id, p.projectPath, p.workId]);
+  }, [cut, id, projectPath, workId]);
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
@@ -48,7 +50,7 @@ export default function LetterScreen() {
             <Text accessibilityRole="header" allowFontScaling style={[typography.title3, { color: colors.label }]}>{message.from} → you</Text>
             <Text allowFontScaling style={[typography.footnote, { color: colors.label2 }]}>{work?.title ?? ''} · {timeLabel(message.at)} · Opened on this phone</Text>
             <View style={[styles.card, { backgroundColor: colors.surface }]}>
-              <MarkdownText text={full ?? message.text} />
+              <Markdown text={full ?? message.text} />
               {cut && full === null && !failed ? <ActivityIndicator /> : null}
               {failed ? <Text allowFontScaling style={[typography.footnote, { color: colors.danger }]}>Couldn't load the full letter</Text> : null}
             </View>

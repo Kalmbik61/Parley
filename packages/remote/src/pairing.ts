@@ -135,7 +135,7 @@ export class Pairing {
     const relay = this.#o.relay();
     if (relay === null) throw new ControlError('no_relay', 'relay is not configured');
     this.#closeOffer();
-    this.#abortRequest('cancelled');
+    this.#abortUnapproved('cancelled');
     const s = new Uint8Array(randomBytes(16));
     const { psk, lookup } = derivePairKeys(s);
     const exp = this.#now() + this.#t.offerMs;
@@ -153,7 +153,7 @@ export class Pairing {
   /** `pair.cancel`: closes the offer and any unanswered request. */
   async cancel(): Promise<void> {
     this.#closeOffer();
-    this.#abortRequest('cancelled');
+    this.#abortUnapproved('cancelled');
   }
 
   /** `pair.answer`: the check and the state change happen before any await, so two answers cannot both pass. */
@@ -428,6 +428,17 @@ export class Pairing {
     for (const t of r.timers) clearTimeout(t);
     r.timers = [];
     if (this.#request === r) this.#request = null;
+  }
+
+  /**
+   * `pair.start` и `pair.cancel` обрывают только запрос, который человек ещё не одобрил. Запрос с устройством
+   * («Allow» нажат, `credentials` ушли) живёт до `paired` или срока ack: иначе новый QR удалил бы только что
+   * одобренное устройство, пока кадр `paired` в пути (критик волны 4, m6). Сброс и остановка (`abort`) обрывают всё.
+   */
+  #abortUnapproved(reason: string): void {
+    const r = this.#request;
+    if (r && r.deviceId !== null && r.phase !== 'done') return;
+    this.#abortRequest(reason);
   }
 
   #abortRequest(reason: string): void {

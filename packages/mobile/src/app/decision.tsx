@@ -5,7 +5,8 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 import { SymbolView } from 'expo-symbols';
 import { approve } from '../auth/instance';
 import { ConnectionBanner } from '../components/ConnectionBanner';
-import { MarkdownText } from '../components/MarkdownText';
+import { Markdown } from '../markdown/Markdown';
+import { parseWorkParam } from '../nav/refs';
 import { FACE_ID_CANCELLED, Toast, useToast } from '../components/Toast';
 import { RETURN_NOTE_MAX, canSendReturn, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
 import { useRemoteState } from '../runtime/use-remote';
@@ -17,10 +18,9 @@ const str = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v
 export default function DecisionScreen() {
   const colors = useColors();
   const router = useRouter();
-  const params = useLocalSearchParams<{ room: string; projectPath: string; workId: string; proposal?: string }>();
+  const params = useLocalSearchParams<{ ref: string; room: string; proposal?: string }>();
   const roomId = str(params.room);
-  const projectPath = str(params.projectPath);
-  const workId = str(params.workId);
+  const { projectPath, workId } = parseWorkParam(str(params.ref)) ?? { projectPath: '', workId: '' };
   const remote = useRemoteState();
   const { client, supervisor } = useRuntimeState();
   const toast = useToast();
@@ -101,7 +101,7 @@ export default function DecisionScreen() {
               <Text style={view?.kind === 'pending' && view.conflict ? { color: colors.needsYou, fontWeight: '700' } : undefined}>rev {shown.rev}</Text> · from {shown.from}
             </Text>
             <View style={[styles.card, { backgroundColor: colors.surface }]}>
-              <MarkdownText text={shown.text} />
+              <Markdown text={shown.text} />
             </View>
           </>
         ) : null}

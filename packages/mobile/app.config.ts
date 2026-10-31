@@ -27,7 +27,9 @@ const config: ExpoConfig = {
   slug: 'parley-mobile',
   version: '0.1.0',
   scheme: 'parley',
-  extra: dev ? { devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null } : {},
+  extra: dev
+    ? { devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devApprove: process.env.PARLEY_MOBILE_DEV_APPROVE === '1', devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null }
+    : {},
   platforms: ['ios'],
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',

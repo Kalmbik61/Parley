@@ -1,10 +1,12 @@
 // The app's single runtime. Built from the real platform adapters; tests build `AppRuntime` with fakes.
 import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
 import { registerPush } from '../push/register';
 import { seedHostFromEnv } from '../dev/seed-host';
 import { createPlatform } from '../platform';
+import { LocalSettings } from '../settings/local-settings';
 import { AppRuntime } from './runtime';
 
 const version = Constants.expoConfig?.version ?? '0.0.0';
@@ -24,6 +26,7 @@ export const runtime = new AppRuntime({
     exists: () => markerFile.exists,
     create: () => markerFile.create({ intermediates: true, overwrite: true }),
   },
+  settings: new LocalSettings(SecureStore, { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY }),
   client: { app: 'parley-mobile', version, platform: 'ios' },
   registerPush: (call) => registerPush({ getToken: () => Notifications.getDevicePushTokenAsync(), call, env: __DEV__ ? 'sandbox' : 'production' }),
   seedHost: __DEV__ && typeof devRelay === 'string' ? seedHostFromEnv(devRelay, platform.random) : null,

@@ -144,6 +144,8 @@ export function humanDecisionOutcome(text: string): 'accepted' | 'returned' | nu
 export interface NeedsYouWork {
   projectPath: string;
   workId: string;
+  /** Архивная работа в счёт не входит (как в бейдже окна, `attentionTotals`). */
+  archived: boolean;
   sessions: ReadonlyArray<{ id: string; lifecycle: WorkSession['lifecycle'] }>;
   rooms: ReadonlyArray<{ id: string; archived: boolean; proposal: { id: string; rev: number } | null }>;
   /** Непрочитанные человеком прямые письма работы (`rooms[''].unread` карты v2; у v1 — `unread.letters`). */
@@ -166,6 +168,7 @@ export type NeedsYouItem =
 export function needsYouItems(works: readonly NeedsYouWork[], activityOf: NeedsYouActivity): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const work of works) {
+    if (work.archived) continue;
     const { projectPath, workId } = work;
     for (const session of work.sessions) {
       if (sessionAttention(session, activityOf(projectPath, workId, session.id)) === 'needs-you') {
@@ -176,7 +179,7 @@ export function needsYouItems(works: readonly NeedsYouWork[], activityOf: NeedsY
       if (room.archived || room.proposal === null) continue;
       items.push({
         kind: 'room',
-        key: `room:${projectPath}/${workId}/${room.id}:${room.proposal.id}:${room.proposal.rev}`,
+        key: `room:${projectPath}\u0000${workId}\u0000${room.id}:${room.proposal.id}:${room.proposal.rev}`,
         projectPath,
         workId,
         roomId: room.id,
@@ -184,7 +187,7 @@ export function needsYouItems(works: readonly NeedsYouWork[], activityOf: NeedsY
         rev: room.proposal.rev,
       });
     }
-    if (work.unreadLetters > 0) items.push({ kind: 'letters', key: `letters:${projectPath}/${workId}`, projectPath, workId, unread: work.unreadLetters });
+    if (work.unreadLetters > 0) items.push({ kind: 'letters', key: `letters:${projectPath}\u0000${workId}`, projectPath, workId, unread: work.unreadLetters });
   }
   return items;
 }
@@ -208,6 +211,7 @@ export function needsYouWorkOfMap(projectPath: string, map: WindowWorkMap): Need
   return {
     projectPath,
     workId: map.work.id,
+    archived: map.work.status === 'archived',
     sessions: map.sessions,
     rooms: map.rooms.map((room) => ({
       id: room.id,

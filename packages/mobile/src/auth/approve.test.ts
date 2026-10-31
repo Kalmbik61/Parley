@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RemoteClient } from '@parley/remote-client';
 import { createApprove, type LocalAuth } from './approve';
-import { createFaceIdSetting, toggleFaceId } from './face-id-setting';
 import { gatedDecide, gatedResolve } from './gated-actions';
 
 const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
@@ -106,31 +105,13 @@ describe('Face ID gate on rooms.resolveProposal', () => {
   });
 });
 
-describe('Require Face ID setting', () => {
-  const memory = () => {
-    const m = new Map<string, string>();
-    return { getItemAsync: async (k: string) => m.get(k) ?? null, setItemAsync: async (k: string, v: string) => void m.set(k, v) };
-  };
-  it('defaults to on and survives a read error as on', async () => {
-    expect(await createFaceIdSetting(memory()).get()).toBe(true);
-    const broken = createFaceIdSetting({ getItemAsync: async () => { throw new Error('x'); }, setItemAsync: async () => undefined });
-    expect(await broken.get()).toBe(true);
+describe('turning the setting off', () => {
+  it('always asks Face ID, even when the setting is on or off', async () => {
+    const a = auth(true);
+    await gate(a, false)('disable');
+    expect(a.authenticateAsync).toHaveBeenCalledWith(expect.objectContaining({ promptMessage: 'Confirm to turn off Face ID for approvals', disableDeviceFallback: false }));
   });
-  it('turning off asks Face ID itself (even though the setting is on); cancel keeps it on', async () => {
-    const s = createFaceIdSetting(memory());
-    const denied = auth(false);
-    expect(await toggleFaceId(s, gate(denied), false)).toBe(true);
-    expect(await s.get()).toBe(true);
-    const ok = auth(true);
-    expect(await toggleFaceId(s, gate(ok), false)).toBe(false);
-    expect(ok.authenticateAsync.mock.calls[0]![0].promptMessage).toBe('Confirm to turn off Face ID for approvals');
-    expect(await s.get()).toBe(false);
-  });
-  it('turning on is immediate', async () => {
-    const s = createFaceIdSetting(memory());
-    await s.set(false);
-    const a = auth(false);
-    expect(await toggleFaceId(s, gate(a), true)).toBe(true);
-    expect(a.authenticateAsync).not.toHaveBeenCalled();
+  it('cancel keeps it', async () => {
+    expect(await gate(auth(false))('disable')).toBe('cancelled');
   });
 });

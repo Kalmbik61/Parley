@@ -14,10 +14,16 @@ import {
 import { withSeedHost } from '../dev/seed-host';
 import { wipeOnFirstRun, type InstallMarker } from '../platform/first-run';
 import type { PushAvailability } from '../push/register';
+import type { LocalSettings } from '../settings/local-settings';
 
 export interface RuntimeState {
   phase: 'booting' | 'ready';
+  /** The current Mac. */
   host: HostRecord | null;
+  /** Every paired Mac (the dev seed only while no real record exists). */
+  hosts: HostRecord[];
+  /** Names the person gave to Macs on this phone, by host id. */
+  hostNames: Record<string, string>;
   supervisor: SupervisorStatus | null;
   client: RemoteClient | null;
   /** Entered `waiting`/`idle` after a failure, ms; `null` while connected or connecting for the first time. */
@@ -34,6 +40,7 @@ export interface RuntimeDeps {
   platform: Platform;
   marker: InstallMarker;
   client: ClientInfo;
+  settings: LocalSettings;
   /**
    * Developer build only: a host record that exists in memory only and is hidden as soon as a real record exists
    * (`withSeedHost` in `src/dev/seed-host.ts`). It is never written to the Keychain.
@@ -45,11 +52,16 @@ export interface RuntimeDeps {
 
 export class AppRuntime {
   readonly hostStore: HostStore;
+  get platform(): Platform {
+    return this.#deps.platform;
+  }
   readonly #deps: RuntimeDeps;
   readonly #listeners = new Set<() => void>();
   #state: RuntimeState = {
     phase: 'booting',
     host: null,
+    hosts: [],
+    hostNames: {},
     supervisor: null,
     client: null,
     waitingSince: null,
@@ -88,10 +100,103 @@ export class AppRuntime {
 
   async #start(): Promise<void> {
     await wipeOnFirstRun(this.hostStore, this.#deps.marker);
-    // A14 adds host selection; until then the current host is the first record (the seed is hidden once a real one exists).
-    const host = (await this.hostStore.list())[0] ?? null;
+    const [hosts, hostNames, currentId] = await Promise.all([
+      this.hostStore.list(),
+      this.#deps.settings.hostNames(),
+      this.#deps.settings.currentHostId(),
+    ]);
+    // The remembered Mac, else the first record (the dev seed is hidden once a real record exists).
+    const host = hosts.find((h) => h.hostId === currentId) ?? hosts[0] ?? null;
+    this.#set({ hosts, hostNames });
     if (host === null) return this.#set({ phase: 'ready' });
     this.#connect(host);
+  }
+
+  /** Make a paired Mac the current one and reconnect (Settings → Macs). */
+  async selectHost(hostId: string): Promise<void> {
+    const host = this.#state.hosts.find((h) => h.hostId === hostId);
+    if (!host || host.hostId === this.#state.host?.hostId) return;
+    await this.#deps.settings.setCurrentHostId(hostId);
+    this.#disconnect();
+    this.#connect(host);
+  }
+
+  /** A pairing just finished: the new record becomes the current Mac. */
+  async adoptPaired(record: HostRecord): Promise<void> {
+    const hosts = await this.hostStore.list();
+    await this.#deps.settings.setCurrentHostId(record.hostId);
+    this.#disconnect();
+    this.#set({ hosts });
+    this.#connect(hosts.find((h) => h.hostId === record.hostId) ?? record);
+  }
+
+  /** Erase a Mac's keys from this phone. The Mac still lists the phone until it is revoked there (spec §7.9). */
+  async removeHost(hostId: string): Promise<void> {
+    await this.hostStore.remove(hostId);
+    await this.#deps.settings.forgetHost(hostId);
+    const hosts = await this.hostStore.list();
+    const hostNames = await this.#deps.settings.hostNames();
+    if (this.#state.host?.hostId !== hostId) return this.#set({ hosts, hostNames });
+    this.#disconnect();
+    this.#set({ hosts, hostNames });
+    const next = hosts[0] ?? null;
+    if (next === null) return;
+    await this.#deps.settings.setCurrentHostId(next.hostId);
+    this.#connect(next);
+  }
+
+  /** The name only this phone shows; empty — back to the Mac's own name. */
+  async renameHost(hostId: string, name: string): Promise<void> {
+    await this.#deps.settings.setHostName(hostId, name);
+    this.#set({ hostNames: await this.#deps.settings.hostNames() });
+  }
+
+  /** Round trip of one `ping`, ms; `null` when not connected or the call failed. */
+  async measureRtt(): Promise<number | null> {
+    const supervisor = this.#supervisor;
+    if (supervisor === null || supervisor.status.state !== 'ready') return null;
+    const started = this.#deps.platform.now();
+    try {
+      await supervisor.call('ping', {}, 5000);
+      return this.#deps.platform.now() - started;
+    } catch {
+      return null;
+    }
+  }
+
+  requireBiometric(): Promise<boolean> {
+    return this.#deps.settings.requireBiometric();
+  }
+
+  setRequireBiometric(on: boolean): Promise<void> {
+    return this.#deps.settings.setRequireBiometric(on);
+  }
+
+  notificationsEnabled(): Promise<boolean> {
+    return this.#deps.settings.notificationsEnabled();
+  }
+
+  setNotificationsEnabled(on: boolean): Promise<void> {
+    return this.#deps.settings.setNotificationsEnabled(on);
+  }
+
+  /** "Reconnect" in Diagnostics. */
+  reconnect(): void {
+    this.#supervisor?.refresh();
+  }
+
+  #disconnect(): void {
+    this.#supervisor?.stop();
+    this.#supervisor = null;
+    for (const off of this.#teardown.splice(0)) off();
+    this.#set({
+      host: null,
+      supervisor: null,
+      client: null,
+      waitingSince: null,
+      lastUpdatedAt: null,
+      hostStatus: null,
+    });
   }
 
   #connect(host: HostRecord): void {
@@ -130,20 +235,6 @@ export class AppRuntime {
     );
     this.#set({ phase: 'ready', host, supervisor: supervisor.status, client });
     supervisor.start();
-  }
-
-  /** Make `hostId` the current host (push tap, host switcher). No-op if it already is; `false` if unknown. */
-  async selectHost(hostId: string): Promise<boolean> {
-    await this.start();
-    if (this.#state.host?.hostId === hostId) return true;
-    const host = (await this.hostStore.list()).find((h) => h.hostId === hostId);
-    if (!host) return false;
-    this.#supervisor?.stop();
-    this.#supervisor = null;
-    for (const off of this.#teardown.splice(0)) off();
-    this.#set({ supervisor: null, waitingSince: null, lastUpdatedAt: null, hostStatus: null, pushAvailability: 'unknown' });
-    this.#connect(host);
-    return true;
   }
 
   /** A later `start()` begins again (remounting the root, Fast Refresh). */
