@@ -259,17 +259,67 @@ textarea.field { min-height: 160px; resize: none; }
 .ax .cell .val, .ax .cell .trail { width: 100%; text-align: left; }
 .ic { flex: none; display: inline-block; vertical-align: middle; }
 
-/* works grouped by project, work screen grouped by rooms and the parent tree */
+/* works grouped by project */
 .projhead { display: flex; align-items: center; gap: 6px; text-transform: none; font-weight: 600; color: var(--label); margin-left: 20px; }
 .projhead .l3 { font-weight: 400; }
 .pdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; margin-right: 4px; vertical-align: middle; }
-.cell.inroom { background: var(--surface2); }
-.dark .cell.inroom { background: #242426; }
-.cell.roomhead.dec, .cell.inroom.dec { background: var(--tintSoft); }
-.mdots { display: flex; gap: 4px; align-items: center; margin-top: 4px; }
+.star { color: var(--tint); font-size: .8em; }
+.mdots { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
 .mdots .dot { width: 8px; height: 8px; }
 .mdots .t-foot { margin-left: 4px; }
-.star { color: var(--tint); font-size: .8em; }
+.mini { display: inline-flex; }
+
+/* teams: the main session with everything it runs (sessions it created, rooms it owns, swarms it started) */
+:root { --line: rgba(60,60,67,.30); }
+.dark { --line: rgba(235,235,245,.26); }
+.teamcard { margin: 0 16px 12px; background: var(--surface); border-radius: 16px; overflow: hidden; }
+.trow { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer;
+  padding: 10px 12px 10px calc(16px + var(--d) * 28px); }
+.trow + .trow::before, .teamcard > * + .cell::before { content: ""; position: absolute; top: 0; right: 0; left: calc(16px + var(--d, 0) * 28px + 44px); border-top: .5px solid var(--sep); }
+.teamcard > .cell { position: relative; }
+.teamcard > .cell + .cell::before { left: 16px; }
+.trow.bubblerow { cursor: default; padding-top: 6px; padding-bottom: 6px; }
+.trow.bubblerow + .trow::before, .trow + .trow.bubblerow::before { display: none; }
+.trow .grow, .mrow .grow, .bhead .grow { flex: 1; min-width: 0; }
+.trow .chev, .mrow .chev, .bhead .chev { color: var(--label3); flex: none; }
+.ibox { width: 36px; flex: none; display: flex; justify-content: center; align-items: center; }
+.ibox.sm { width: 24px; }
+.g { position: absolute; pointer-events: none; border-left: 1.5px solid var(--line); margin-left: -.75px; }
+.g.pass { top: 0; bottom: 0; }
+.g.start { top: calc(50% + 13px); bottom: 0; }
+.g.start.head { top: calc(50% + 21px); }
+.g.elbow { top: 0; height: 50%; border-bottom: 1.5px solid var(--line); border-bottom-left-radius: 10px; }
+.bubblerow .g.elbow { height: 32px; }
+.bubblerow .g.start { top: 52px; }
+.bubble { flex: 1; min-width: 0; border-radius: 14px; background: var(--surface2); overflow: hidden; }
+.dark .bubble { background: #242426; }
+.bubble.dec { background: var(--tintSoft); box-shadow: inset 0 0 0 1px rgba(168,83,30,.25); }
+.dark .bubble.dec { box-shadow: inset 0 0 0 1px rgba(224,138,82,.3); }
+.bhead { display: flex; gap: 8px; align-items: center; padding: 10px 10px 10px 12px; cursor: pointer; }
+.bicon { display: flex; width: 22px; justify-content: center; flex: none; }
+.mrow { display: flex; gap: 6px; align-items: center; padding: 8px 10px 8px 10px; border-top: .5px solid var(--sep); cursor: pointer; }
+.rolechip { display: inline-block; border-radius: 6px; padding: 0 5px; margin-right: 6px; background: var(--tintSoft); color: var(--tint); font-weight: 600; }
+.avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--tint); color: var(--onTint); display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 16px; position: relative; }
+.avatar .abadge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50%; background: var(--surface);
+  display: flex; align-items: center; justify-content: center; }
+.avatar .abadge .dot { width: 8px; height: 8px; }
+.trow.thead { padding-top: 14px; padding-bottom: 14px; }
+.teamline { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--tint); font-weight: 600; }
+.tgl { border: 0; background: none; color: var(--label3); width: 44px; height: 44px; margin: -10px -8px -10px 0; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.morelink { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--tint); font-weight: 600; }
+.hxrow { display: inline-flex; gap: 3px; }
+.hx { width: 10px; height: 11px; background: var(--idle); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.hx.working { background: var(--tint); } .hx.done { background: var(--ok); } .hx.failed { background: var(--danger); } .hx.needs { background: var(--needsDot); }
+.crumb { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; color: var(--label2); margin-top: 4px; }
+.crumb .csep { color: var(--label3); }
+.crumb .clink { color: var(--tint); font-weight: 600; cursor: pointer; }
+.navcrumb { margin: -2px 16px 10px; }
+.trow.top::before, .trow + .trow.bubblerow.top::before { display: block; left: 0; border-top: 8px solid var(--bg); }
+.teamcard.bare { background: transparent; margin: 0 0 12px; overflow: visible; }
+.teamcard.bare .trow.bubblerow { padding: 0 16px; }
+.teamcard.bare .bubble { background: var(--surface); }
+.ax .trow { padding-left: calc(16px + var(--d) * 16px); }
 </style>
 </head>
 <body>
@@ -329,6 +379,10 @@ const P = {
   battery: '<rect x="2" y="7" width="18" height="10" rx="3"/><rect x="4" y="9" width="12" height="6" rx="1.5" fill="currentColor"/><path d="M22 10.5v3"/>',
   signal: '<path d="M4 18v-2M9 18v-5M14 18V9M19 18V5" stroke-width="2.6"/>',
   zzz: '<path d="M4 6h5l-5 6h5M13 11h4l-4 5h4"/>',
+  hash: '<path d="M10 3 8 21M16 3l-2 18M4.5 8.5h16M3.5 15.5h16"/>',
+  hexgrid: '<path d="M12 2.5 20.5 7.3v9.4L12 21.5 3.5 16.7V7.3z"/><circle cx="12" cy="9" r="1.6"/><circle cx="8.8" cy="14.2" r="1.6"/><circle cx="15.2" cy="14.2" r="1.6"/>',
+  teamDown: '<path d="M6 4v8a4 4 0 0 0 4 4h9"/><path d="m15 12 4 4-4 4"/>',
+  teamUp: '<path d="M18 20v-8a4 4 0 0 0-4-4H6"/><path d="m10 4-4 4 4 4"/>',
 };
 const SF = { tray: 'tray.fill', stack: 'square.stack.3d.up.fill', gear: 'gearshape.fill', envelope: 'envelope',
   envelopeOpen: 'envelope.open', terminal: 'terminal', doc: 'doc.text', wrench: 'wrench.and.screwdriver', globe: 'globe',
@@ -340,7 +394,8 @@ const SF = { tray: 'tray.fill', stack: 'square.stack.3d.up.fill', gear: 'gearsha
   triangle: 'exclamationmark.triangle', shield: 'exclamationmark.shield', octagon: 'xmark.octagon', clock: 'clock.badge.exclamationmark',
   question: 'questionmark.circle', photo: 'photo', flashlight: 'flashlight.off.fill', videoSlash: 'video.slash',
   uturn: 'arrow.uturn.backward.circle', ellipsis: 'ellipsis', appDown: 'arrow.down.app', conflict: 'exclamationmark.arrow.triangle.2.circlepath',
-  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz' };
+  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz', hash: 'number', hexgrid: 'circle.hexagongrid',
+  teamDown: 'arrow.turn.down.right', teamUp: 'arrow.turn.left.up' };
 function ic(name, size, extra) {
   const s = size || 20;
   return '<svg class="ic ' + (extra || '') + '" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><title>' + (SF[name] || name) + '</title>' + (P[name] || '') + '</svg>';
@@ -377,37 +432,54 @@ const LETTERS = [
   { id: 'l2', from: 's-174', work: 'Improvements', age: 'Yesterday', at: 'Yesterday', unread: false,
     text: 'The S7 draft is committed on `feat/mobile-stage-a`. It needs your confirmation of the cipher suite.' },
 ];
-// Sessions are listed in creation order (as in the projection); `parent` builds the tree, room `members` the groups.
+// Sessions in creation order (as in the projection). `createdBy` puts a session under its creator, room `ownerId`
+// puts a room under its owner, swarm `creator` puts a swarm under its creator — the window sidebar tree (sort.ts#cardRows).
 const PROJECTS = [
   { id: 'parley', name: 'parley', color: '#C67139', done: 3 },
   { id: 'codex-bridge', name: 'codex-bridge', color: '#4F8A6B', done: 2 },
 ];
 const WORKS = [
   { id: 'w1', project: 'parley', title: 'Improvements', status: 'active', letters: 1, closed: 31, sessions: [
-      { id: 's-05', parent: null, label: 'Task1-types', role: 'executor', model: 'sonnet', att: 'needs', card: 'c6', since: '2 h' },
-      { id: 's-09', parent: 's-05', label: 'Task5-check-runner', role: 'executor', model: 'sonnet', att: 'done', line: 'Done · 1 h ago', since: '4 h' },
-      { id: 's-10', parent: 's-05', label: 'Task6-engine', role: 'executor', model: 'sonnet', att: 'failed', line: 'Failed · 2 h ago', since: '6 h' },
-      { id: 's-11', parent: null, label: 'Greta', role: 'feature-lead', model: 'fable', att: 'unseen', line: 'Finished a turn · 3 min ago', since: '3 h' },
-      { id: 's-12', parent: null, label: 'Astra-browser', role: 'architect', model: 'gpt-6-astra', att: 'idle', line: 'Idle · 20 min ago', since: '5 h' },
-      { id: 's-13', parent: null, label: 'Opus-browser', role: 'critic', model: 'opus', att: 'idle', line: 'Idle · 25 min ago', since: '5 h' },
-      { id: 's-174', parent: 's-11', label: 'Mobile-stage-A-lead', role: 'lead', model: 'opus', att: 'working', line: 'Waiting for s-175', since: '1 h' },
-      { id: 's-175', parent: 's-174', label: 'Mobile-A1-protocol', role: 'executor', model: 'sonnet', att: 'needs', card: 'c2', since: '40 min' },
-      { id: 's-176', parent: 's-174', label: 'Mobile-D1-designer', role: 'designer', model: 'opus', att: 'needs', card: 'c1', since: '42 min' },
-      { id: 's-177', parent: 's-174', label: 'Critic-A1', role: 'critic', model: 'opus', att: 'working', line: 'Working · 2 subagents', since: '15 min' },
-      { id: 's-181', parent: 's-11', label: 'Push-planner', role: 'planner', model: 'opus', att: 'needs', card: 'c3', since: '20 min' },
+      { id: 's-05', createdBy: null, label: 'Task1-types', role: 'executor', model: 'sonnet', att: 'needs', card: 'c6', since: '2 h' },
+      { id: 's-09', createdBy: 's-05', label: 'Task5-check-runner', role: 'executor', model: 'sonnet', att: 'done', line: 'Done · 1 h ago', since: '4 h' },
+      { id: 's-10', createdBy: 's-05', label: 'Task6-engine', role: 'executor', model: 'sonnet', att: 'failed', line: 'Failed · 2 h ago', since: '6 h' },
+      { id: 's-11', createdBy: null, label: 'Greta', role: 'feature-lead', model: 'fable', att: 'unseen', line: 'Finished a turn · 3 min ago', since: '3 h' },
+      { id: 's-12', createdBy: null, label: 'Astra-browser', role: 'architect', model: 'gpt-6-astra', att: 'idle', line: 'Idle · 20 min ago', since: '5 h' },
+      { id: 's-13', createdBy: null, label: 'Opus-browser', role: 'critic', model: 'opus', att: 'idle', line: 'Idle · 25 min ago', since: '5 h' },
+      { id: 's-40', createdBy: null, label: 'Changelog-writer', role: 'writer', model: 'haiku', att: 'idle', line: 'Idle · 1 h ago', since: '3 h' },
+      { id: 's-174', createdBy: 's-11', label: 'Mobile-stage-A-lead', role: 'lead', model: 'opus', att: 'working', line: 'Waiting for s-175', since: '1 h' },
+      { id: 's-175', createdBy: 's-174', label: 'Mobile-A1-protocol', role: 'executor', model: 'sonnet', att: 'needs', card: 'c2', since: '40 min' },
+      { id: 's-176', createdBy: 's-174', label: 'Mobile-D1-designer', role: 'designer', model: 'opus', att: 'needs', card: 'c1', since: '42 min' },
+      { id: 's-177', createdBy: 's-174', label: 'Critic-A1', role: 'critic', model: 'opus', att: 'working', line: 'Working · 2 subagents', since: '15 min' },
+      { id: 's-181', createdBy: 's-11', label: 'Push-planner', role: 'planner', model: 'opus', att: 'needs', card: 'c3', since: '20 min' },
+      { id: 's-182', createdBy: 's-181', label: 'Push-tests', role: 'executor', model: 'sonnet', att: 'working', line: 'Working', since: '10 min' },
+      { id: 's-183', createdBy: 's-182', label: 'Push-fixtures', role: 'executor', model: 'haiku', att: 'working', line: 'Working', since: '4 min' },
+      { id: 's-201', createdBy: 's-11', label: 'Queen-research', role: 'queen', model: 'opus', att: 'working', line: 'Collecting drone reports', since: '12 min' },
+      { id: 's-202', createdBy: 's-201', label: 'Drone 1', role: 'drone', model: 'sonnet', att: 'done', line: 'Handed in · 2 min ago', since: '12 min' },
+      { id: 's-203', createdBy: 's-201', label: 'Drone 2', role: 'drone', model: 'sonnet', att: 'done', line: 'Handed in · 1 min ago', since: '12 min' },
+      { id: 's-204', createdBy: 's-201', label: 'Drone 3', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
+      { id: 's-205', createdBy: 's-201', label: 'Drone 4', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
+      { id: 's-206', createdBy: 's-201', label: 'Drone 5', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
+      { id: 's-207', createdBy: 's-201', label: 'Verifier 1', role: 'verifier', model: 'opus', att: 'idle', line: 'Waiting for the drones', since: '12 min' },
     ], rooms: [
-      { id: 'r-12', title: 'Browser', members: ['s-12', 's-13'], lead: 's-12', unread: 0 },
-      { id: 'r-18', title: 'iOS app: stage A (no device)', members: ['s-174', 's-175', 's-176', 's-177'], lead: 's-174', decision: 'd1', unread: 3 },
+      { id: 'r-12', title: 'Browser', members: ['s-12', 's-13'], lead: 's-12', ownerId: null, unread: 0 },
+      { id: 'r-18', title: 'iOS app: stage A (no device)', members: ['s-174', 's-175', 's-176', 's-177'], lead: 's-174', ownerId: 's-11', decision: 'd1', unread: 3 },
+    ], swarms: [
+      { id: 'sw-02', tag: 'Research', creator: { kind: 'session', sessionId: 's-11' }, queen: 's-201', status: 'running', age: '12 min', members: [
+        { sessionId: 's-201', role: 'queen', n: 1 }, { sessionId: 's-202', role: 'drone', n: 1, handed: true }, { sessionId: 's-203', role: 'drone', n: 2, handed: true },
+        { sessionId: 's-204', role: 'drone', n: 3 }, { sessionId: 's-205', role: 'drone', n: 4 }, { sessionId: 's-206', role: 'drone', n: 5 },
+        { sessionId: 's-207', role: 'verifier', n: 1 } ] },
     ] },
   { id: 'w2', project: 'codex-bridge', title: 'Codex bridge', status: 'active', letters: 0, closed: 2, sessions: [
-      { id: 's-190', parent: null, label: 'Codex-reviewer', role: 'reviewer', model: 'gpt-6-astra', att: 'needs', card: 'c4', since: '30 min' },
-      { id: 's-191', parent: 's-190', label: 'Claude-helper', role: null, model: 'sonnet', att: 'needs', card: 'c5', since: '1 h' },
-      { id: 's-192', parent: null, label: 'Bridge-docs', role: 'writer', model: 'haiku', att: 'sleeping', line: 'Sleeping · last active 1 h ago', since: '1 d' },
-    ], rooms: [] },
+      { id: 's-190', createdBy: null, label: 'Codex-reviewer', role: 'reviewer', model: 'gpt-6-astra', att: 'needs', card: 'c4', since: '30 min' },
+      { id: 's-191', createdBy: 's-190', label: 'Claude-helper', role: null, model: 'sonnet', att: 'needs', card: 'c5', since: '1 h' },
+      { id: 's-192', createdBy: null, label: 'Bridge-docs', role: 'writer', model: 'haiku', att: 'sleeping', line: 'Sleeping · last active 1 h ago', since: '1 d' },
+    ], rooms: [], swarms: [] },
   { id: 'w3', project: 'parley', title: 'Rooms organic', status: 'active', letters: 0, closed: 9, sessions: [
-      { id: 's-60', parent: null, label: 'Organic-lead', role: 'lead', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
-      { id: 's-61', parent: 's-60', label: 'Organic-designer', role: 'designer', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
-    ], rooms: [ { id: 'r-03', title: 'Design review', members: ['s-60', 's-61'], lead: 's-60', unread: 0 } ] },
+      { id: 's-60', createdBy: null, label: 'Organic-lead', role: 'lead', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
+      { id: 's-61', createdBy: 's-60', label: 'Organic-designer', role: 'designer', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
+      { id: 's-62', createdBy: 's-60', label: 'Organic-critic', role: 'critic', model: 'opus', att: 'done', line: 'Done · 3 h ago', since: '2 d' },
+    ], rooms: [ { id: 'r-03', title: 'Design review', members: ['s-61', 's-62'], lead: 's-61', ownerId: 's-60', unread: 0 } ], swarms: [] },
 ];
 const LAST_REPLY = "I'll run the linter and the full build before committing, so the prototype folder doesn't break the workspace. If `pnpm lint` passes, the next step is the commit.";
 
@@ -418,7 +490,7 @@ function findSession(id) { return allSessions().find(function (x) { return x.s.i
 const S = {
   theme: 'light', conn: 'ready', scenario: 'normal', fs: 1, rm: false, hostCount: 2, cur: 0,
   flow: null, tab: 'inbox', stacks: { inbox: [{ s: 'inbox' }], works: [{ s: 'works' }], settings: [{ s: 'settings' }] },
-  gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, roomOpen: {},
+  gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, open: {}, hier: 'cards',
   sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120,
   pairName: 'iPhone 16 Pro', retryIn: 12, scrollTop: 0,
 };
@@ -620,7 +692,7 @@ function inboxRow(it) {
     }
     return '<div class="' + cls + ' needs" data-act="openSession" data-id="' + it.s.id + '" role="button" aria-label="' + h(KIND[c.kind] + '. ' + it.s.label + ', ' + it.w.title + '. ' + (g.code || g.text) + '. ' + c.age + ' ago') + '">' +
       '<div class="khead t-foot">' + ic(g.icon, 16) + '<span class="kind">' + KIND[c.kind] + '</span><span>· ' + c.age + '</span></div>' +
-      '<div class="who t-head">' + h(it.s.label) + '</div><div class="t-sub l2">' + h(it.w.title) + '</div>' + body + acts + note + '</div>';
+      '<div class="who t-head">' + h(it.s.label) + '</div><div class="t-sub l2">' + h(it.w.title) + '</div>' + crumbs(ancestry(it.s.id), false) + body + acts + note + '</div>';
   }
   if (it.type === 'decision') {
     const d = it.d;
@@ -655,24 +727,270 @@ function sessionLine(s) {
 }
 /* Attention rank as in the window sidebar (@parley/core/attention): needs-you 4, unseen 3, working 2, idle 1, finished 0. */
 const RANK = { needs: 4, unseen: 3, working: 2, idle: 1, sleeping: 1, done: 0, failed: 0 };
+const MAX_DEPTH = 2;   // levels shown on the work screen; deeper rows fold into "N more under …" (drill-down)
 function sessAtt(s) { const pending = s.card && !S.gone[s.card]; return s.att === 'needs' && !pending ? 'working' : s.att; }
 function roomDecision(room) { return room.decision && !S.gone[room.decision] ? DECISIONS[room.decision] : null; }
-function workRank(w) {
-  let r = 0;
-  w.sessions.forEach(function (s) { r = Math.max(r, RANK[sessAtt(s)]); });
-  w.rooms.forEach(function (room) { if (roomDecision(room)) r = 4; });
-  return r;
-}
 function sortByRank(items, rankOf) {
   return items.map(function (it, i) { return { it: it, i: i, r: rankOf(it) }; })
     .sort(function (a, b) { return b.r - a.r || a.i - b.i; }).map(function (x) { return x.it; });
 }
+function workOf(sessionId) { return WORKS.find(function (w) { return w.sessions.some(function (s) { return s.id === sessionId; }); }); }
+function byIdOf(w) { const m = {}; w.sessions.forEach(function (s) { m[s.id] = s; }); return m; }
+function swarmOfMember(w, id) { return (w.swarms || []).find(function (sw) { return sw.members.some(function (m) { return m.sessionId === id; }); }) || null; }
+function homeRoom(w, id) { return w.rooms.find(function (r) { return r.members.indexOf(id) >= 0; }) || null; }
+
+/*
+ * Rows of a work in sidebar order (the window's sort.ts#cardRows, simplified): an anchor session, then the rooms it
+ * owns, the swarms it created and the sessions it created, recursively. Room members and swarm members are shown
+ * inside their room or swarm, not as rows. Rooms without an owner and swarms without a shown creator go to the top level.
+ * With `rootId` only that session's subtree is built (the Team section of the session screen).
+ */
+function buildRows(w, rootId) {
+  const byId = byIdOf(w);
+  const inSwarm = {}; (w.swarms || []).forEach(function (sw) { sw.members.forEach(function (m) { inSwarm[m.sessionId] = sw; }); });
+  const home = {}; w.rooms.forEach(function (r) { r.members.forEach(function (m) { if (byId[m] && !home[m]) home[m] = r; }); });
+  const owners = {}; w.rooms.forEach(function (r) { if (r.ownerId) owners[r.ownerId] = true; });
+  const shown = w.sessions.filter(function (s) { return !inSwarm[s.id] && (owners[s.id] || !home[s.id]); });
+  const shownIds = {}; shown.forEach(function (s) { shownIds[s.id] = true; });
+  const children = {}, placed = {};
+  shown.forEach(function (s) {
+    const c = s.createdBy;
+    if (c && shownIds[c] && c !== s.id) { (children[c] = children[c] || []).push(s); placed[s.id] = true; }
+  });
+  const rows = [], swPlaced = {};
+  function pushSwarms(match, depth, parent) {
+    (w.swarms || []).forEach(function (sw) {
+      if (swPlaced[sw.id] || !match(sw)) return;
+      swPlaced[sw.id] = true;
+      rows.push({ kind: 'swarm', id: sw.id, sw: sw, depth: depth, parent: parent, members: sw.members.map(function (m) { return { m: m, s: byId[m.sessionId] }; }).filter(function (x) { return x.s; }) });
+    });
+  }
+  function pushRoom(room, depth, parent) {
+    rows.push({ kind: 'room', id: room.id, room: room, depth: depth, parent: parent,
+      members: room.members.map(function (m) { return byId[m]; }).filter(function (m) { return m && home[m.id] === room; }) });
+    pushSwarms(function (sw) { return sw.creator.kind === 'room' && sw.creator.roomId === room.id; }, depth + 1, room.id);
+  }
+  function push(s, depth, parent) {
+    rows.push({ kind: 'session', id: s.id, s: s, depth: depth, parent: parent });
+    w.rooms.filter(function (r) { return r.ownerId === s.id; }).forEach(function (r) { pushRoom(r, depth + 1, s.id); });
+    pushSwarms(function (sw) { return sw.creator.kind === 'session' && sw.creator.sessionId === s.id; }, depth + 1, s.id);
+    (children[s.id] || []).forEach(function (c) { push(c, depth + 1, s.id); });
+  }
+  if (rootId) { push(byId[rootId], 0, null); return rows; }
+  shown.forEach(function (s) { if (!placed[s.id]) push(s, 0, null); });
+  w.rooms.forEach(function (r) { if (!r.ownerId || !byId[r.ownerId]) pushRoom(r, 0, null); });
+  pushSwarms(function () { return true; }, 0, null);
+  return rows;
+}
+function rowRank(row) {
+  if (row.kind === 'session') return RANK[sessAtt(row.s)];
+  if (row.kind === 'room') return Math.max(roomDecision(row.room) ? 4 : 0, Math.max.apply(null, row.members.map(function (m) { return RANK[sessAtt(m)]; }).concat([0])));
+  return Math.max.apply(null, row.members.map(function (x) { return RANK[sessAtt(x.s)]; }).concat([0]));
+}
+function rowNeeds(row) {
+  if (row.kind === 'session') return sessAtt(row.s) === 'needs' ? 1 : 0;
+  if (row.kind === 'room') return (roomDecision(row.room) ? 1 : 0) + row.members.filter(function (m) { return sessAtt(m) === 'needs'; }).length;
+  return row.members.filter(function (x) { return sessAtt(x.s) === 'needs'; }).length;
+}
+/* Teams: each top-level row with everything under it. Ordered by the most urgent row inside, ties keep sidebar order. */
+function teamsOf(w) {
+  const teams = [];
+  buildRows(w).forEach(function (row) { if (row.depth === 0) teams.push({ rows: [row] }); else teams[teams.length - 1].rows.push(row); });
+  teams.forEach(function (t) { t.root = t.rows[0]; t.rank = Math.max.apply(null, t.rows.map(rowRank)); t.needs = t.rows.reduce(function (n, r) { return n + rowNeeds(r); }, 0); });
+  return sortByRank(teams, function (t) { return t.rank; });
+}
+function teamCounts(rows) {
+  let agents = 0, rooms = 0, swarms = 0;
+  rows.slice(1).forEach(function (r) {
+    if (r.kind === 'session') agents += 1;
+    if (r.kind === 'room') { rooms += 1; agents += r.members.length; }
+    if (r.kind === 'swarm') { swarms += 1; agents += r.members.length; }
+  });
+  return [agents ? agents + (agents === 1 ? ' agent' : ' agents') : '', rooms ? rooms + (rooms === 1 ? ' room' : ' rooms') : '', swarms ? swarms + (swarms === 1 ? ' swarm' : ' swarms') : '']
+    .filter(Boolean).join(' · ');
+}
+function workRank(w) { return Math.max.apply(null, teamsOf(w).map(function (t) { return t.rank; }).concat([0])); }
+function workNeeds(w) { return teamsOf(w).reduce(function (n, t) { return n + t.needs; }, 0); }
+
+/* Where a session belongs, from the top: "Greta › # iOS app: stage A". Parts are {label, act, id}. */
+function ancestry(sessionId) {
+  const w = workOf(sessionId); if (!w) return [];
+  const byId = byIdOf(w), parts = [];
+  let cur = byId[sessionId], guard = 0;
+  while (cur && guard++ < 12) {
+    let up = null;
+    const sw = swarmOfMember(w, cur.id);
+    const room = homeRoom(w, cur.id);
+    if (sw) {
+      parts.unshift({ label: 'Swarm · ' + sw.tag, kind: 'swarm' });
+      if (sw.creator.kind === 'session') up = sw.creator.sessionId;
+      else if (sw.creator.kind === 'room') {
+        const cr = w.rooms.find(function (x) { return x.id === sw.creator.roomId; });
+        if (cr) { parts.unshift({ label: '# ' + cr.title, kind: 'room', id: roomDecision(cr) ? cr.decision : null }); up = cr.ownerId; }
+      }
+    } else if (room && room.ownerId !== cur.id) {
+      parts.unshift({ label: '# ' + room.title, kind: 'room', id: roomDecision(room) ? room.decision : null });
+      up = room.ownerId;
+    } else up = cur.createdBy;
+    if (!up || !byId[up]) break;
+    parts.unshift({ label: byId[up].label, kind: 'session', id: up });
+    cur = byId[up];
+  }
+  return parts;
+}
+function crumbs(parts, linked) {
+  if (!parts.length) return '';
+  return '<div class="crumb t-foot">' + ic('teamUp', 14) + parts.map(function (p) {
+    const act = linked && p.kind === 'session' ? ' data-act="openSession" data-id="' + p.id + '"' : linked && p.kind === 'room' && p.id ? ' data-act="openDecision" data-id="' + p.id + '"' : '';
+    return '<span class="' + (act ? 'clink' : '') + '"' + act + '>' + h(p.label) + '</span>';
+  }).join('<span class="csep">›</span>') + '</div>';
+}
+
+/* ---------- tree lines (the window's TreeGuides: start under the parent, pass through rows between, elbow into the child) ---------- */
+function guidesFor(rows) {
+  const g = rows.map(function () { return []; });
+  rows.forEach(function (row, i) {
+    if (row.parent === null || row.hidden) return;
+    let j = i - 1;
+    while (j >= 0 && !(rows[j].id === row.parent)) j -= 1;
+    if (j < 0) return;
+    const col = rows[j].depth;
+    g[j].push({ k: 'start', c: col });
+    for (let k = j + 1; k < i; k += 1) if (!rows[k].hidden) g[k].push({ k: 'pass', c: col });
+    g[i].push({ k: 'elbow', c: col });
+  });
+  return g.map(function (list) { const seen = {}; return list.filter(function (x) { const key = x.k + x.c; if (seen[key]) return false; seen[key] = true; return true; }); });
+}
+function guidesHtml(list, depth) {
+  return list.map(function (x) {
+    const left = 34 + x.c * 28;   // trunk under the parent's icon: 16 gutter + 18 (centre of the 36 icon column) + 28 per level
+    if (x.k === 'elbow') return '<span class="g elbow" style="left:' + left + 'px;width:' + ((depth - x.c) * 28 - 18 + 6) + 'px" aria-hidden="true"></span>';
+    return '<span class="g ' + x.k + '" style="left:' + left + 'px" aria-hidden="true"></span>';
+  }).join('');
+}
+
+/* ---------- rows ---------- */
+function statusIcon(att, size) {
+  const z = size || 18;
+  if (att === 'needs') return '<span style="color:var(--needs);display:flex">' + ic('hand', z) + '</span>';
+  if (att === 'done') return '<span style="color:var(--ok);display:flex">' + ic('checkCircle', z) + '</span>';
+  if (att === 'failed') return '<span style="color:var(--danger);display:flex">' + ic('xCircle', z) + '</span>';
+  return attDot(att);
+}
+const ATT_WORD = { needs: 'Needs you', working: 'Working', unseen: 'Finished a turn', idle: 'Idle', sleeping: 'Sleeping', done: 'Done', failed: 'Failed' };
+function isOpen(key, def) { return S.open[key] !== undefined ? S.open[key] : def; }
+function toggleBtn(key, open, label) {
+  return '<button class="tgl" data-act="toggle" data-k="' + key + '" data-open="' + open + '" aria-expanded="' + open + '" aria-label="' + h((open ? 'Collapse ' : 'Expand ') + label) + '">' +
+    '<span style="display:flex;transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></button>';
+}
+function sessionRow(row, guides, opts) {
+  const s = row.s, att = sessAtt(s), o = opts || {};
+  const more = row.more ? '<div class="morelink t-foot" data-act="openSession" data-id="' + s.id + '">' + ic('teamDown', 14) + row.more + ' more under ' + h(s.label) + ' ›</div>' : '';
+  return '<div class="trow" style="--d:' + row.depth + '" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' + h(s.label + '. ' + ATT_WORD[att] + '. ' + sessionLine(s)) + '">' +
+    guidesHtml(guides, row.depth) + '<span class="ibox">' + statusIcon(att) + '</span>' +
+    '<div class="grow"><div class="t-head ellips">' + h(s.label) + '</div>' +
+    '<div class="t-sub l2 clamp2"' + (att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(sessionLine(s)) + '</div>' +
+    '<div class="t-cap l2" style="margin-top:2px">' + h((s.role ? s.role + ' · ' : '') + s.model) + '</div>' + more + '</div><span class="chev">' + ic('chevR', 16) + '</span></div>';
+}
+function memberRow(s, extra) {
+  const att = sessAtt(s), x = extra || {};
+  return '<div class="mrow" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' + h((x.role ? x.role + ' ' : '') + s.label + (x.lead ? ', room lead' : '') + '. ' + ATT_WORD[att] + '. ' + sessionLine(s)) + '">' +
+    '<span class="ibox sm">' + statusIcon(att, 16) + '</span><div class="grow"><div class="t-sub ellips" style="font-weight:600">' + (x.role ? '<span class="rolechip t-cap">' + h(x.role) + '</span>' : '') + h(s.label) +
+    (x.lead ? ' <span class="star" title="Lead">★</span>' : '') + '</div><div class="t-foot l2 ellips"' + (att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(sessionLine(s)) + '</div></div><span class="chev">' + ic('chevR', 14) + '</span></div>';
+}
+function roomRow(row, guides) {
+  const room = row.room, d = roomDecision(room);
+  const open = isOpen('room:' + room.id, !!d || row.members.some(function (m) { return sessAtt(m) === 'needs'; }));
+  const lead = row.members.find(function (m) { return m.id === room.lead; }) || row.members[0];
+  const word = d ? '<span class="pill tint t-cap">Decision</span>' : room.unread ? '<span class="pill t-cap" style="background:var(--neutralBg)">' + room.unread + ' new</span>' : '';
+  let html = '<div class="trow bubblerow" style="--d:' + row.depth + '">' + guidesHtml(guides, row.depth) +
+    '<div class="bubble' + (d ? ' dec' : '') + '"><div class="bhead" data-act="toggle" data-k="room:' + room.id + '" data-open="' + open + '" role="button" aria-expanded="' + open + '" aria-label="' +
+    h('Room ' + room.title + (d ? ', decision waiting' : '') + ', ' + row.members.length + ' agents' + (lead ? ', lead ' + lead.label : '')) + '">' +
+    '<span class="bicon" style="color:' + (d ? 'var(--tint)' : 'var(--label2)') + '">' + (d ? ic('seal', 20) : ic('hash', 20)) + '</span>' +
+    '<div class="grow"><div class="t-sub clamp2" style="font-weight:600">' + h(room.title) + '</div>' +
+    '<div class="mdots">' + word + (open ? '' : row.members.map(function (m) { return attDot(sessAtt(m)); }).join('')) + '<span class="t-foot l2">Room · ' + row.members.length + ' agents' + (open && lead ? ' · lead ' + h(lead.label) : '') + '</span></div></div>' +
+    '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
+  if (d) html += '<div class="mrow" data-act="openDecision" data-id="' + room.decision + '" role="button"><div class="grow t-foot"><b>' + d.pid + ' · rev ' +
+    (S.dec[room.decision] && S.dec[room.decision].rev || d.rev) + '</b> <span class="l2">' + h(d.text.split('\n')[0].replace(/^#+ /, '')) + '</span></div><span class="link t-foot">Review' + ic('chevR', 14) + '</span></div>';
+  if (open) html += row.members.map(function (m) { return memberRow(m, { lead: m.id === room.lead }); }).join('');
+  return html + '</div></div>';
+}
+function swarmRow(row, guides) {
+  const sw = row.sw;
+  const open = isOpen('swarm:' + sw.id, row.members.some(function (x) { return sessAtt(x.s) === 'needs'; }));
+  const queen = row.members.find(function (x) { return x.m.role === 'queen'; });
+  const drones = row.members.filter(function (x) { return x.m.role === 'drone'; });
+  const verifiers = row.members.filter(function (x) { return x.m.role === 'verifier'; });
+  const handed = drones.filter(function (x) { return x.m.handed; }).length;
+  const working = drones.filter(function (x) { return !x.m.handed && sessAtt(x.s) === 'working'; }).length;
+  const droneMarks = drones.map(function (x) { return x.m.handed ? '<span class="hx done" title="Drone ' + x.m.n + ' handed in"></span>' : '<span class="hx ' + sessAtt(x.s) + '" title="Drone ' + x.m.n + '"></span>'; }).join('');
+  let html = '<div class="trow bubblerow" style="--d:' + row.depth + '">' + guidesHtml(guides, row.depth) +
+    '<div class="bubble swarm"><div class="bhead" data-act="toggle" data-k="swarm:' + sw.id + '" data-open="' + open + '" role="button" aria-expanded="' + open + '" aria-label="' +
+    h('Swarm ' + sw.tag + ', ' + sw.status + ', ' + drones.length + ' drones, ' + working + ' working, ' + handed + ' handed in') + '">' +
+    '<span class="bicon" style="color:var(--tint)">' + ic('hexgrid', 20) + '</span>' +
+    '<div class="grow"><div class="t-sub" style="font-weight:600">Swarm · ' + h(sw.tag) + '</div>' +
+    '<div class="mdots"><span class="hxrow">' + droneMarks + '</span><span class="t-foot l2">' + drones.length + ' drones · ' + working + ' working · ' + handed + ' handed in</span></div>' +
+    '<div class="t-foot l2" style="margin-top:2px">' + (sw.status === 'running' ? 'Running' : sw.status) + ' · ' + sw.age + (verifiers.length ? ' · ' + verifiers.length + ' verifier' : '') + '</div></div>' +
+    '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
+  if (queen) html += memberRow(queen.s, { role: 'Queen' });
+  if (open) html += drones.concat(verifiers).map(function (x) { return memberRow(x.s, { role: x.m.role === 'drone' ? 'Drone ' + x.m.n : 'Verifier' }); }).join('');
+  return html + '</div></div>';
+}
+function rowHtml(row, guides) {
+  const html = row.kind === 'session' ? sessionRow(row, guides) : row.kind === 'room' ? roomRow(row, guides) : swarmRow(row, guides);
+  // "Tree lines only": a band between top-level rows marks where one main session's tree ends.
+  return row.top ? html.replace('class="trow', 'class="trow top') : html;
+}
+/* Fold rows deeper than MAX_DEPTH into the last visible session row ("N more under …"). */
+function capDepth(rows, base) {
+  let holder = null;
+  rows.forEach(function (row) {
+    row.more = 0;
+    if (row.depth - base > MAX_DEPTH) { row.hidden = true; if (holder) holder.more += 1 + (row.kind === 'room' || row.kind === 'swarm' ? row.members.length : 0); }
+    else { row.hidden = false; if (row.depth - base === MAX_DEPTH && row.kind === 'session') holder = row; else if (row.depth - base < MAX_DEPTH) holder = null; }
+  });
+  return rows;
+}
+function treeHtml(rows) {
+  const vis = rows.filter(function (r) { return !r.hidden; });
+  const g = guidesFor(vis);
+  return vis.map(function (row, i) { return rowHtml(row, g[i]); }).join('');
+}
+/* Team header (variant "Team cards"): the main session, bigger, with an avatar and what it runs. */
+function teamHeader(team, open) {
+  const s = team.root.s, att = sessAtt(s), counts = teamCounts(team.rows);
+  const letter = s.label.replace(/[^A-Za-z0-9]/g, '').charAt(0).toUpperCase() || '?';
+  const g = open && team.rows.length > 1 ? '<span class="g start head" style="left:34px" aria-hidden="true"></span>' : '';
+  const dots = open ? '' : '<div class="mdots">' + team.rows.slice(1).map(function (r) {
+    if (r.kind === 'session') return attDot(sessAtt(r.s));
+    if (r.kind === 'room') return '<span class="mini" style="color:' + (roomDecision(r.room) ? 'var(--tint)' : 'var(--label2)') + '">' + ic(roomDecision(r.room) ? 'seal' : 'hash', 12) + '</span>';
+    return '<span class="mini" style="color:var(--tint)">' + ic('hexgrid', 12) + '</span>';
+  }).join('') + '</div>';
+  return '<div class="trow thead" style="--d:0" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' +
+    h(s.label + ', main session. ' + ATT_WORD[att] + '. Team: ' + counts + (team.needs ? ', ' + team.needs + ' need you' : '') + (open ? ', expanded' : ', collapsed')) + '">' + g +
+    '<span class="ibox"><span class="avatar">' + letter + '<span class="abadge">' + statusIcon(att, 12) + '</span></span></span>' +
+    '<div class="grow"><div class="t-head ellips" style="font-size:calc(18px * var(--fs))">' + h(s.label) + '</div>' +
+    '<div class="t-sub l2 clamp2"' + (att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(sessionLine(s)) + '</div>' +
+    '<div class="teamline t-foot">' + ic('teamDown', 14) + 'Team · ' + counts + '</div>' + dots + '</div>' +
+    (team.needs ? '<span class="pill count t-cap">' + team.needs + '</span>' : '') + toggleBtn('team:' + s.id, open, s.label + "'s team") + '</div>';
+}
+function teamCard(team) {
+  if (team.root.kind !== 'session') return '<div class="teamcard bare">' + treeHtml(capDepth(team.rows, 0)) + '</div>';
+  const open = isOpen('team:' + team.root.id, team.rank >= 2);
+  const rest = capDepth(team.rows, 0).slice(1);
+  const vis = [team.root].concat(rest.filter(function (r) { return !r.hidden; }));
+  const g = guidesFor(vis);
+  return '<div class="teamcard">' + teamHeader(team, open) + (open ? vis.slice(1).map(function (row, i) { return rowHtml(row, g[i + 1].filter(function (x) { return x.k !== 'start' || row !== team.root; })); }).join('') : '') + '</div>';
+}
+
+/* ---------- screens ---------- */
 function workCell(w) {
   const live = w.sessions.filter(function (s) { return s.att !== 'done' && s.att !== 'failed'; });
-  const needs = w.sessions.filter(function (s) { return sessAtt(s) === 'needs'; }).length + w.rooms.filter(roomDecision).length;
+  const needs = workNeeds(w);
   const working = w.sessions.filter(function (s) { return sessAtt(s) === 'working'; }).length;
+  const extra = (w.rooms.length ? w.rooms.length + (w.rooms.length === 1 ? ' room · ' : ' rooms · ') : '') + ((w.swarms || []).length ? w.swarms.length + ' swarm · ' : '');
   return '<div class="cell ind" data-act="openWork" data-id="' + w.id + '" role="button" aria-label="' + h(w.title + (needs ? ', ' + needs + ' need you' : '')) + '">' + attDot(needs ? 'needs' : working ? 'working' : 'idle') +
-    '<div class="grow"><div class="t-head ellips">' + h(w.title) + '</div><div class="t-foot l2">' + live.length + ' sessions · ' + (w.rooms.length ? w.rooms.length + (w.rooms.length === 1 ? ' room · ' : ' rooms · ') : '') + (working ? working + ' working' : 'idle') + '</div></div>' +
+    '<div class="grow"><div class="t-head ellips">' + h(w.title) + '</div><div class="t-foot l2">' + live.length + ' sessions · ' + extra + (working ? working + ' working' : 'idle') + '</div></div>' +
     '<div class="trail" style="display:flex;gap:6px;align-items:center">' + (w.letters ? '<span class="t-foot l2" style="display:flex;gap:2px;align-items:center">' + ic('envelope', 15) + w.letters + '</span>' : '') +
     (needs ? '<span class="pill count t-cap">' + needs + '</span>' : '') + '</div><span class="chev">' + ic('chevR', 16) + '</span></div>';
 }
@@ -692,82 +1010,37 @@ function worksScreen() {
   });
   return { body: body };
 }
-function sessionCell(s, depth, opts) {
-  const o = opts || {};
-  const att = sessAtt(s);
-  let lead = attDot(att);
-  if (att === 'needs') lead = '<span style="color:var(--needs);display:flex">' + ic('hand', 18) + '</span>';
-  if (att === 'done') lead = '<span style="color:var(--ok);display:flex">' + ic('checkCircle', 18) + '</span>';
-  if (att === 'failed') lead = '<span style="color:var(--danger);display:flex">' + ic('xCircle', 18) + '</span>';
-  const label = { needs: 'Needs you', working: 'Working', unseen: 'Finished a turn', idle: 'Idle', sleeping: 'Sleeping', done: 'Done', failed: 'Failed' }[att];
-  const d = Math.min(depth || 0, 2);
-  return '<div class="cell ind' + (o.inRoom ? ' inroom' : '') + '" style="padding-left:' + (16 + d * 20) + 'px" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' +
-    h(s.label + (o.lead ? ', room lead' : '') + '. ' + label + '. ' + sessionLine(s)) + '">' +
-    '<span style="width:20px;display:flex;justify-content:center">' + lead + '</span><div class="grow"><div class="t-head ellips">' + h(s.label) +
-    (o.lead ? ' <span class="star" title="Lead">★</span>' : '') + '</div>' +
-    '<div class="t-sub l2 clamp2"' + (att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(sessionLine(s)) + '</div>' +
-    '<div class="t-cap l2" style="margin-top:2px">' + h((s.role ? s.role + ' · ' : '') + s.model) + '</div></div><span class="chev">' + ic('chevR', 16) + '</span></div>';
-}
-/* The work screen as the sidebar card: a room takes the place of its first member and holds all members; other sessions form a tree by `parent`. */
-function workGroups(w) {
-  const byId = {}, inRoom = {}, children = {};
-  w.sessions.forEach(function (s) { byId[s.id] = s; });
-  w.rooms.forEach(function (room) { room.members.forEach(function (m) { if (byId[m]) inRoom[m] = room; }); });
-  const roots = [];
-  w.sessions.forEach(function (s) {
-    if (inRoom[s.id]) return;
-    if (s.parent && byId[s.parent] && !inRoom[s.parent]) (children[s.parent] = children[s.parent] || []).push(s);
-    else roots.push(s);
-  });
-  const items = [], placed = {};
-  w.sessions.forEach(function (s) {
-    const room = inRoom[s.id];
-    if (room) { if (!placed[room.id]) { placed[room.id] = true; items.push({ room: room }); } }
-    else if (roots.indexOf(s) >= 0) items.push({ root: s });
-  });
-  w.rooms.forEach(function (room) { if (!placed[room.id]) items.push({ room: room }); });
-  function walk(s, depth, out) { out.push({ s: s, depth: depth }); (children[s.id] || []).forEach(function (c) { walk(c, depth + 1, out); }); return out; }
-  items.forEach(function (it) {
-    if (it.room) {
-      it.members = it.room.members.map(function (m) { return byId[m]; }).filter(Boolean);
-      it.rank = Math.max(roomDecision(it.room) ? 4 : 0, Math.max.apply(null, it.members.map(function (m) { return RANK[sessAtt(m)]; }).concat([0])));
-    } else {
-      it.rows = walk(it.root, 0, []);
-      it.rank = Math.max.apply(null, it.rows.map(function (x) { return RANK[sessAtt(x.s)]; }));
-    }
-  });
-  return sortByRank(items, function (it) { return it.rank; });
-}
-function roomOpen(it) {
-  if (S.roomOpen[it.room.id] !== undefined) return S.roomOpen[it.room.id];
-  return !!roomDecision(it.room) || it.members.some(function (m) { return sessAtt(m) === 'needs'; });
-}
-function roomBlock(it) {
-  const room = it.room, d = roomDecision(room), open = roomOpen(it);
-  const leadS = it.members.find(function (m) { return m.id === room.lead; });
-  const word = d ? '<span class="pill tint t-cap">Decision</span>' : room.unread ? '<span class="t-foot l2">' + room.unread + ' new</span>' : '';
-  let html = '<div class="cell ind roomhead' + (d ? ' dec' : '') + '" data-act="toggleRoom" data-id="' + room.id + '" role="button" aria-expanded="' + open + '" aria-label="' +
-    h('Room ' + room.title + (d ? ', decision waiting' : '') + ', ' + it.members.length + ' agents' + (leadS ? ', lead ' + leadS.label : '')) + '">' +
-    '<span style="width:20px;display:flex;justify-content:center;color:' + (d ? 'var(--tint)' : 'var(--label2)') + '">' + (d ? ic('seal', 20) : '<span class="t-head">#</span>') + '</span>' +
-    '<div class="grow"><div class="t-head clamp2">' + h(room.title) + '</div>' +
-    (open ? '<div class="mdots">' + word + '<span class="t-foot l2">' + it.members.length + ' agents' + (leadS ? ' · lead ' + h(leadS.label) : '') + '</span></div>'
-      : '<div class="mdots">' + word + it.members.map(function (m) { return attDot(sessAtt(m)); }).join('') + '<span class="t-foot l2">' + it.members.length + ' agents</span></div>') + '</div>' +
-    '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
-  if (d) html += '<div class="cell ind inroom" style="padding-left:68px" data-act="openDecision" data-id="' + room.decision + '" role="button"><div class="grow t-sub"><b>' + d.pid + ' · rev ' +
-    (S.dec[room.decision] && S.dec[room.decision].rev || d.rev) + '</b> <span class="l2">' + h(d.text.split('\n')[0].replace(/^#+ /, '')) + '</span></div><span class="link t-sub">Review' + ic('chevR', 16) + '</span></div>';
-  if (open) html += it.members.map(function (m) { return sessionCell(m, 1, { inRoom: true, lead: m.id === room.lead }); }).join('');
-  return html;
-}
 function workScreen(r) {
   const w = WORKS.find(function (x) { return x.id === r.id; });
   const p = PROJECTS.find(function (x) { return x.id === w.project; });
   let body = navbar({ back: 'Works', title: w.title, sub: '<span class="pdot" style="background:' + p.color + '"></span>' + h(p.name) }) + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(2) };
   if (S.scenario === 'empty') return { body: body + empty('stack', 'No sessions in this work', 'Start a session on your Mac.') };
-  body += '<div class="group" style="margin-top:8px">' + workGroups(w).map(function (it) {
-    return it.room ? roomBlock(it) : it.rows.map(function (x) { return sessionCell(x.s, x.depth); }).join('');
-  }).join('') + '<div class="cell"><div class="grow t-sub l2">Closed (' + w.closed + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div></div>';
-  return { body: body };
+  const teams = teamsOf(w);
+  const closed = '<div class="cell"><div class="grow t-sub l2">Closed (' + w.closed + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div>';
+  if (S.hier === 'lines') {
+    // One list like the sidebar card: the same tree, lines only.
+    const rows = []; teams.forEach(function (t, i) { capDepth(t.rows, 0).forEach(function (row) { row.top = i > 0 && row.depth === 0; rows.push(row); }); });
+    return { body: body + '<div class="teamcard" style="margin-top:8px">' + treeHtml(rows) + closed + '</div>' };
+  }
+  // Team cards: a team per card; solo sessions next to each other share one card.
+  let html = '', solos = [];
+  const flush = function () { if (solos.length) { html += '<div class="teamcard">' + solos.map(function (t) { return sessionRow(t.root, []); }).join('') + '</div>'; solos = []; } };
+  teams.forEach(function (t) {
+    if (t.rows.length === 1 && t.root.kind === 'session') { solos.push(t); return; }
+    flush(); html += teamCard(t);
+  });
+  flush();
+  return { body: body + '<div style="height:8px"></div>' + html + '<div class="teamcard">' + closed + '</div>' };
+}
+/* Session screen: where it belongs (breadcrumb) and what it runs (Team), so deep trees continue here. */
+function teamSection(s) {
+  const w = workOf(s.id);
+  const rows = buildRows(w, s.id);
+  if (rows.length < 2) return '';
+  const sub = rows.slice(1).map(function (row) { const c = Object.assign({}, row); c.depth = row.depth - 1; c.parent = row.parent === s.id ? null : row.parent; return c; });
+  capDepth(sub, 0);
+  return sec('Team · ' + teamCounts(rows)) + '<div class="teamcard">' + treeHtml(sub) + '</div>';
 }
 
 function statusCapsule(s) {
@@ -810,7 +1083,7 @@ function sessionScreen(r) {
   const x = findSession(r.id); const s = x.s, w = x.w;
   const back = S.tab === 'inbox' ? 'Inbox' : w.title;
   let body = navbar({ back: back, right: '<button class="navbtn glass" aria-label="More">' + ic('ellipsis', 20) + '</button>', title: s.label,
-    sub: h((s.role ? s.role + ' · ' : '') + s.model + ' · ' + s.since) }) + banner();
+    sub: h((s.role ? s.role + ' · ' : '') + s.model + ' · ' + s.since) }) + (ancestry(s.id).length ? '<div class="navcrumb">' + crumbs(ancestry(s.id), true) + '</div>' : '') + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(2) };
   body += statusCapsule(s);
   if (S.scenario === 'error') return { body: body + empty('triangle', "Couldn't load the session", 'The Mac did not answer in 15 seconds.', '<button class="btn pri full" data-act="noop">Try again</button>') };
@@ -837,7 +1110,7 @@ function sessionScreen(r) {
   } else if (note) {
     body += '<div style="margin:0 16px">' + note + '</div>';
   }
-  body += sec('Last reply') + '<div class="card static">' + md(LAST_REPLY) + '</div>';
+  body += sec('Last reply') + '<div class="card static">' + md(LAST_REPLY) + '</div>' + teamSection(s);
   return { body: body, bottom: bottom };
 }
 
@@ -1034,11 +1307,7 @@ function act(el, e) {
     case 'back': pop(); break;
     case 'openSession': push({ s: 'session', id: id }); break;
     case 'openWork': push({ s: 'work', id: id }); break;
-    case 'toggleRoom': {
-      const w = WORKS.find(function (x) { return x.id === topRoute().id; });
-      const it = workGroups(w).find(function (x) { return x.room && x.room.id === id; });
-      S.roomOpen[id] = !roomOpen(it); haptic('selection'); break;
-    }
+    case 'toggle': S.open[el.dataset.k] = el.dataset.open !== 'true'; haptic('selection'); break;
     case 'openDecision': push({ s: 'decision', id: id }); break;
     case 'openLetters': push({ s: 'letters' }); break;
     case 'openLetter': push({ s: 'letter', id: id }); S.letterOpened[id] = true; break;
@@ -1157,8 +1426,11 @@ const JUMPS = [
   ['Letters', function () { go('inbox', [{ s: 'letters' }]); }],
   ['Letter', function () { go('inbox', [{ s: 'letters' }, { s: 'letter', id: 'l1' }]); }],
   ['Works', function () { go('works', []); }],
-  ['Work: rooms and session tree', function () { go('works', [{ s: 'work', id: 'w1' }]); }],
+  ['Work: teams, rooms, swarm, tree', function () { go('works', [{ s: 'work', id: 'w1' }]); }],
   ['Work: tree without rooms', function () { go('works', [{ s: 'work', id: 'w2' }]); }],
+  ['Work: owner with a room (Rooms organic)', function () { go('works', [{ s: 'work', id: 'w3' }]); }],
+  ['Session: main session with its team (Greta)', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'session', id: 's-11' }]); }],
+  ['Session: swarm drone (breadcrumb)', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'session', id: 's-204' }]); }],
   ['Settings', function () { go('settings', []); }],
   ['Settings: Host', function () { go('settings', [{ s: 'host', i: 0 }]); }],
   ['Settings: Remove alert', function () { go('settings', [{ s: 'host', i: 0 }]); S.alert = { title: 'Remove ' + HOSTS[0].name + '?', text: 'The keys on this phone are erased. Your Mac keeps listing this phone until you revoke it there.', ok: 'Remove', destr: true, i: 0 }; }],
@@ -1181,6 +1453,7 @@ function renderPanel() {
     '<label>Data</label>' + seg('scenario', [['normal', 'Normal'], ['empty', 'Empty'], ['loading', 'Loading'], ['error', 'Error']], S.scenario) +
     '<label>Text size (Dynamic Type)</label>' + seg('fs', [[1, 'Default'], [1.24, 'XXL'], [1.65, 'AX3']], S.fs) +
     '<label class="flag"><input type="checkbox" id="pRm"' + (S.rm ? ' checked' : '') + '> Reduce Motion</label>' +
+    '<label>Work screen hierarchy</label>' + seg('hier', [['cards', 'Team cards'], ['lines', 'Tree lines only']], S.hier) +
     '<label>Paired Macs</label>' + seg('hostCount', [[1, 'One'], [2, 'Two']], S.hostCount) +
     '<label>Notifications</label>' + seg('notif', [['on', 'On'], ['denied', 'Off in iOS'], ['unavailable', 'No push build']], S.notif) +
     '<label for="pNext">Next answer result</label><select id="pNext">' + opt([['applied', 'applied: true'], ['already', 'applied: false (already answered)'], ['lost', 'connection_lost → re-read'], ['conflict', 'conflict (decisions only)']], S.next) + '</select>' +
