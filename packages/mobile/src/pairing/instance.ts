@@ -14,6 +14,7 @@ export const pairing = new PairingSession({
   haptic: { sasShown: haptic.sasShown, paired: haptic.paired },
   app: `parley-mobile/${version}`,
   platformName: 'ios',
+  allowLocalRelay: runtime.platform.allowLocalRelay,
 });
 
 export const defaultDeviceName = (): string => Device.deviceName ?? Device.modelName ?? 'iPhone';

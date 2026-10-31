@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HostStore, PairError, pair, type HostRecord, type KeyStore, type PairOptions, type Platform } from '@parley/remote-client';
-import { PairingSession, describeFailure, linkFromParams, type PairDeps } from './session';
+import { LINK_MESSAGES, PairingSession, describeFailure, linkFromParams, type PairDeps } from './session';
 import { countdown, groupSas, isLastSeconds, sasLabel } from './sas';
 
 const b64 = (n: number, c: string) => c.repeat(n);
@@ -19,6 +19,7 @@ function makeDeps(impl: PairDeps['pair']) {
     haptic: { sasShown: () => void events.push('haptic:sas'), paired: () => void events.push('haptic:paired') },
     app: 'parley-mobile/0.1.0',
     platformName: 'ios',
+    allowLocalRelay: false,
   };
   return { deps, events };
 }
@@ -35,7 +36,7 @@ describe('SAS screen model', () => {
       });
     });
     const session = new PairingSession(deps);
-    expect(session.fromScan(URL_OK)).toBe(true);
+    expect(session.fromScan(URL_OK)).toBe('ok');
     const running = session.start('Phone');
     expect(sasSeenBefore).toBe(true);
     const s = session.getState();
@@ -74,7 +75,7 @@ describe('Confirm link screen cannot be skipped', () => {
     let called = 0;
     const { deps } = makeDeps(async () => (called++, record));
     const session = new PairingSession(deps);
-    expect(session.fromLink(URL_OK)).toBe(true);
+    expect(session.fromLink(URL_OK)).toBe('ok');
     expect(session.getState()).toEqual({ step: 'confirm-link', url: URL_OK });
     await session.start('Phone');
     session.retry();
@@ -100,8 +101,8 @@ describe('Confirm link screen cannot be skipped', () => {
   it('rejects links that are not a Parley pairing link and rebuilds the link from router params', () => {
     const { deps } = makeDeps(async () => record);
     const session = new PairingSession(deps);
-    expect(session.fromLink('https://example.com/?x=1')).toBe(false);
-    expect(session.fromScan('parley://pair?v=1&k=short')).toBe(false);
+    expect(session.fromLink('https://example.com/?x=1')).toBe('not-parley');
+    expect(session.fromScan('parley://pair?v=1&k=short')).toBe('not-parley');
     expect(session.getState().step).toBe('idle');
     expect(linkFromParams({ v: '1', k: K, s: S, r: 'relay.example.com' })).toBe(URL_OK);
     expect(linkFromParams({ v: '1', k: K })).toBeNull();
@@ -123,6 +124,36 @@ describe('Confirm link screen cannot be skipped', () => {
     await running;
     expect(session.getState().step).toBe('idle');
     expect(events).toEqual([]);
+  });
+});
+
+describe('private relay and a link during a pairing', () => {
+  it('a release build refuses a private relay with its own message, before any step', () => {
+    const { deps } = makeDeps(async () => record);
+    const session = new PairingSession(deps);
+    expect(session.fromScan(URL_PRIVATE)).toBe('private-relay');
+    expect(session.fromLink(URL_PRIVATE)).toBe('private-relay');
+    expect(session.getState().step).toBe('idle');
+    expect(LINK_MESSAGES['private-relay']).toMatch(/private network/);
+    const dev = new PairingSession({ ...deps, allowLocalRelay: true });
+    expect(dev.fromScan(URL_PRIVATE)).toBe('ok');
+    expect(describeFailure(new PairError('bad_qr'), null).body).toMatch(/private network/);
+  });
+
+  it('is busy while a pairing is under way, and a new link leaves it untouched until accepted', async () => {
+    let finish!: (r: HostRecord) => void;
+    const { deps } = makeDeps((_u, o) => new Promise<HostRecord>((resolve) => ((finish = resolve), o.onSas('654321'))));
+    const session = new PairingSession(deps);
+    expect(session.isBusy()).toBe(false);
+    session.fromScan(URL_OK);
+    expect(session.isBusy()).toBe(true);
+    const running = session.start('Phone');
+    expect(session.isBusy()).toBe(true);
+    // The screen asks before calling fromLink; until then the state is the SAS step.
+    expect(session.getState()).toMatchObject({ step: 'sas', code: '654321' });
+    finish(record);
+    await running;
+    expect(session.isBusy()).toBe(false);
   });
 });
 
