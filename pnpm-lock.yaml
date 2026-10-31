@@ -266,6 +266,15 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4
 
+  packages/push-gateway:
+    dependencies:
+      '@parley/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
+
 packages:
 
   '@ampproject/remapping@2.3.0':
