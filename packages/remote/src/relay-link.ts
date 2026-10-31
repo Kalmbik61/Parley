@@ -28,6 +28,10 @@ export interface RelayLinkOptions {
   backoff?: { initialMs: number; maxMs: number };
   /** No `ok` within this time → reconnect. */
   helloTimeoutMs?: number;
+  /** WS ping on the authenticated control socket (spec §6.4); default 25 s. */
+  pingIntervalMs?: number;
+  /** No pong within this time → the socket is cut and the link reconnects; default 60 s. */
+  pongTimeoutMs?: number;
 }
 
 export interface RelayLink {
@@ -65,13 +69,14 @@ export function createRelayLink(options: RelayLinkOptions): RelayLink {
   const { log } = options;
   const backoff = options.backoff ?? { initialMs: 1_000, maxMs: 30_000 };
   const helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
+  const pingIntervalMs = options.pingIntervalMs ?? 25_000;
+  const pongTimeoutMs = options.pongTimeoutMs ?? 60_000;
   const base = options.relayUrl.replace(/\/+$/, '');
   let ws: WebSocket | null = null;
   let state: RelayState = 'stopped';
   let authed = false;
   let attempt = 0;
   let retry: NodeJS.Timeout | null = null;
-  let helloTimer: NodeJS.Timeout | null = null;
   let offer: { lookup: string; exp: number } | null = null;
   let running = false;
 
@@ -119,7 +124,31 @@ export function createRelayLink(options: RelayLinkOptions): RelayLink {
     const { routeId, routeSecret } = options.route();
     const socket = new WebSocket(`${base}/v1/host`, { perMessageDeflate: false });
     ws = socket;
+    // Timers belong to this socket (critic m6): a late `close` of an older socket cannot clear a newer one's.
+    let helloTimer: NodeJS.Timeout | null = null;
+    let pingTimer: NodeJS.Timeout | null = null;
+    let pongDeadline: NodeJS.Timeout | null = null;
+    const clearTimers = (): void => {
+      if (helloTimer) clearTimeout(helloTimer);
+      if (pingTimer) clearInterval(pingTimer);
+      if (pongDeadline) clearTimeout(pongDeadline);
+      helloTimer = pingTimer = pongDeadline = null;
+    };
+    // Liveness (critic M1): after a sleep or a network change the relay's FIN may never arrive, and a bridge that
+    // only writes on changes would think itself connected forever. No pong for `pongTimeoutMs` → cut and reconnect.
+    const armPongDeadline = (): void => {
+      if (pongDeadline) clearTimeout(pongDeadline);
+      pongDeadline = setTimeout(() => {
+        log.warn('relay.pong-timeout');
+        socket.terminate();
+      }, pongTimeoutMs);
+      pongDeadline.unref();
+    };
     socket.on('error', () => {});
+    socket.on('upgrade', (response) => response.socket.setKeepAlive(true, 30_000));
+    socket.on('pong', () => {
+      if (pongDeadline) armPongDeadline();
+    });
     socket.on('open', () => {
       socket.send(JSON.stringify({ v: 1, t: 'hello', route: routeId, secret: routeSecret }));
       helloTimer = setTimeout(() => {
@@ -134,6 +163,12 @@ export function createRelayLink(options: RelayLinkOptions): RelayLink {
       if (!authed) {
         if (relayOkFrame.safeParse(json).success) {
           if (helloTimer) clearTimeout(helloTimer);
+          helloTimer = null;
+          armPongDeadline();
+          pingTimer = setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) socket.ping();
+          }, pingIntervalMs);
+          pingTimer.unref();
           authed = true;
           attempt = 0;
           setState('connected');
@@ -162,7 +197,7 @@ export function createRelayLink(options: RelayLinkOptions): RelayLink {
       log.warn('relay.error', { code: error.success ? error.data.code : 'malformed' });
     });
     socket.on('close', (code) => {
-      if (helloTimer) clearTimeout(helloTimer);
+      clearTimers();
       if (ws !== socket) return;
       ws = null;
       authed = false;
