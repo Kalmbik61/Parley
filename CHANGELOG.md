@@ -12,6 +12,7 @@ All notable changes to Parley are documented in this file.
 
 ### Changed
 
+- The limits on what agents create — new sessions per workspace and per room, swarm sessions and swarms per workspace — now count the last 24 hours (a sliding window) instead of all time. Before, the counters only grew, so in a long-running workspace agents hit a limit for good and the only way on was to raise it again; now a creation stops counting after a day. Settings → Limits names them "… per day", the defaults stay 50, 12, 64 and 6, and a refusal says how many agents created in the last 24 hours and that waiting also helps. The count starts from zero after the update.
 - The host no longer runs `ps` for its own agent processes when it checks whether sessions are alive, so the check is lighter.
 
 ## 0.26.0

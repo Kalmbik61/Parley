@@ -5,10 +5,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addSession, transitionSession } from '../work/map.js';
-import { DEFAULT_RESOURCE_LIMITS, type ResourceLimits } from '../work/resource-policy.js';
+import {
+  CREATION_WINDOW_MS,
+  DEFAULT_RESOURCE_LIMITS,
+  checkSwarmSpawn,
+  noteCreation,
+  type ResourceLimits,
+} from '../work/resource-policy.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { HUMAN } from '../work/types.js';
@@ -96,6 +102,28 @@ describe('removed session creation', () => {
     expect((await lead.listTools()).tools.some(tool => tool.name === 'spawn_session')).toBe(false);
     expect((await call(lead, 'spawn_session', spawnArgs)).isError).toBe(true);
     expect(await readMap(project, workId)).toEqual(before);
+  });
+});
+
+describe('рои: порог роёв считает сутки, а не всё время', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('седьмой рой за сутки — отказ swarms; через сутки — проходит', async () => {
+    const at = Date.now();
+    await updateMap(project, workId, (map) => {
+      for (let i = 0; i < 6; i += 1) noteCreation(map, 'swarm', null, at);
+    });
+    const create = { swarm: null, creatingSwarm: true, byAgent: true } as const;
+
+    // Журнал прошёл через хранилище: шесть роёв за сутки — седьмой отказан.
+    const stored = await readMap(project, workId);
+    expect(checkSwarmSpawn(stored, limits(), create)).toMatchObject({ code: 'swarms', scope: 'swarm', used: 6, limit: 6 });
+
+    // Часы сдвигаются только у `Date`, а проверка чистая: та же карта спустя сутки и минуту отказа не даёт.
+    vi.useFakeTimers({ toFake: ['Date'], now: at + CREATION_WINDOW_MS + 60_000 });
+    expect(checkSwarmSpawn(stored, limits(), create)).toBeNull();
   });
 });
 
