@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isSwarmTag, loadConfig, roleFromId, SWARM_OBJECTIVE_MAX } from '@parley/core';
 import type { SwarmRole } from '@parley/core';
 import { AGENT_LIMITS, type SessionRef } from '@parley/protocol';
-import type { CreateSessionInput } from '../sessions/sessions-service.js';
+import type { CreatedSession, CreateSessionInput } from '../sessions/sessions-service.js';
 import { memberName } from '../swarms/spawn.js';
 
 export const AGENT_SWARMS_PATH = '/agent/swarms';
@@ -15,7 +15,7 @@ export const AGENT_SWARMS_PATH = '/agent/swarms';
  */
 export function createSwarmEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
-  create(input: CreateSessionInput): Promise<SessionRef & { held?: 'folder-trust' }>;
+  create(input: CreateSessionInput): Promise<CreatedSession>;
   /** Рой и номер созданного участника — по карте, которую только что записала та же операция. */
   memberOf(ref: SessionRef): Promise<{ swarmId: string; role: SwarmRole; n: number } | undefined>;
 }) {
@@ -77,11 +77,12 @@ export function createSwarmEndpoint(options: {
             const member = await options.memberOf(created);
             if (member === undefined) throw new Error(`Session ${created.sessionId} was created but is not in a swarm. Check get_map.`);
             const held = created.held === undefined ? {} : { held: created.held };
+            const queued = created.queued === undefined ? {} : { queued: created.queued };
             reply({
               ok: true,
               result: op === 'create'
-                ? { swarmId: member.swarmId, queenSessionId: created.sessionId, ...held }
-                : { sessionId: created.sessionId, member: memberName(member.role, member.n), ...held },
+                ? { swarmId: member.swarmId, queenSessionId: created.sessionId, ...held, ...queued }
+                : { sessionId: created.sessionId, member: memberName(member.role, member.n), ...held, ...queued },
             });
           } catch (error) {
             const data = error instanceof Error && 'data' in error && typeof error.data === 'object' && error.data !== null ? error.data as Record<string, unknown> : {};

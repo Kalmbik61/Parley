@@ -17,7 +17,7 @@ export interface PlanExecutors {
   source(): OverviewSource;
   createWork(input: { projectPath: string; title: string; goal: string }): Promise<string>;
   createSession(input: { projectPath: string; workId: string; provider: string; label: string; task: string; role: SessionRole | null; model: string | null; lean: boolean }): Promise<{ ref: SessionRef; held: boolean }>;
-  resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held'>;
+  resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held' | 'queued'>;
   interrupt(ref: SessionRef): Promise<void>;
   sleep(ref: SessionRef): Promise<void>;
   close(ref: SessionRef): Promise<void>;

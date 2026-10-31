@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadConfig, roleFromId } from '@parley/core';
 import { AGENT_LIMITS, type SessionRef } from '@parley/protocol';
-import type { CreateSessionInput } from '../sessions/sessions-service.js';
+import type { CreatedSession, CreateSessionInput } from '../sessions/sessions-service.js';
 
 export const AGENT_SESSIONS_PATH = '/agent/sessions';
 
 export function createSessionEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
-  create(input: CreateSessionInput): Promise<SessionRef & { held?: 'folder-trust' }>;
+  create(input: CreateSessionInput): Promise<CreatedSession>;
 }) {
   return {
     handle(req: IncomingMessage, res: ServerResponse): void {
@@ -55,7 +55,7 @@ export function createSessionEndpoint(options: {
               ...(args['effort'] === undefined ? {} : { effort: args['effort'] as string | null }),
               ...(args['worktree'] === undefined ? {} : { worktree: args['worktree'] as boolean }),
             });
-            reply({ ok: true, result: { sessionId: created.sessionId, provider: args['provider'], ...(created.held === undefined ? {} : { held: created.held }) } });
+            reply({ ok: true, result: { sessionId: created.sessionId, provider: args['provider'], ...(created.held === undefined ? {} : { held: created.held }), ...(created.queued === undefined ? {} : { queued: created.queued }) } });
           } catch (error) {
             reply({ ok: false, error: { code: error instanceof Error && 'code' in error ? String(error.code) : 'bad_request', message: error instanceof Error ? error.message : String(error) } });
           }

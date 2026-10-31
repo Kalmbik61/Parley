@@ -942,7 +942,7 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
     expect(parse({ ref, requestId, provider: 'codex', effort: 'High!' }).success).toBe(false);
   });
   it('результат switchAgent и тип лимитов цели', () => {
-    expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held'>();
+    expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held' | 'queued'>();
     expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['limits']>().toEqualTypeOf<ProviderLimits | null>();
   });
 });

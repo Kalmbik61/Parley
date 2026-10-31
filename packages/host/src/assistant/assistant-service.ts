@@ -84,7 +84,7 @@ export interface AssistantServiceDeps {
   /** Шаги плана карточки `actions` (спека 2026-10-28, 6.1): функции хоста, что и у окна; возвращают id созданного. */
   createWork(input: Params<'works.create'>): Promise<string>;
   createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust' }>;
-  resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held'>;
+  resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held' | 'queued'>;
   interrupt(ref: SessionRef): void;
   stopSession(ref: SessionRef): Promise<void>;
   closeSession(ref: SessionRef): Promise<void>;
