@@ -43,7 +43,7 @@
 
 | Источник | Что даёт экрану |
 |---|---|
-| Проекция снимка работ (S7 §7.3, V1 + A1b) | снимок: `revision`, работы в порядке сайдбара; работа: `projectPath`, `id`, `title`, `status`, счётчики писем, **`swarms`**; сессия: `id`, `label`, `provider`, `model`, `role`, `parent`, **`createdBy`**, `lifecycle`, `result`, `stuck`, последнее событие `{event, at}`, `startedAt`, `resultAt`; комната: `id`, `title`, `members`, `lead`, **`ownerId`**, `mode`, `archived`, `proposal` (`id`, `kind`, `from`, `text`, `rev`, `at`), счётчики `{total, unread}`; рой: `id`, `tag`, `creator`, `queen`, `members [{sessionId, role, n, handedAt}]`, `status`, `createdAt`, `endedAt` |
+| Проекция снимка работ (S7 §7.3, V1 + A1b) | снимок: `revision`, работы в порядке сайдбара; работа: `projectPath`, `id`, `title`, `status`, счётчики писем, **`swarms`**; сессия: `id`, `label`, `provider`, `model`, `role`, `parent`, **`createdBy`**, `lifecycle`, `result`, `stuck`, последнее событие `{event, at}`, `startedAt`, `resultAt`; комната: `id`, `title`, `members`, `lead`, **`ownerId`**, `mode`, `archived`, `proposal` (`id`, `kind`, `from`, `text`, `rev`, `at`), счётчики `{total, unread}`; рой: `id`, `tag`, `creator`, `queen`, `members [{sessionId, role, n, handedAt}]`, `status`, `createdAt`, `endedAt`, `seenAt` |
 | `activity.snapshot` / `activity.changed` | `activity` (`working` / `blocked` / `unseen` / `idle`), `need` (`approval` / `question` / `limit` / вход и др., `detail`, `resetsAt`), `subagents`, `waitingFor`, `turnEndedAt`, `lastEventAt` |
 | `feed.snapshot {ref, scope:'attention'}` | ждущие карточки `permission` / `question` / `plan` и последний ответ модели |
 | `@parley/core/card-gist` | краткое описание карточки: `run` (команда), `tool` (инструмент и путь), `fetch` (URL), `question` (первая строка), `plan` |
@@ -58,8 +58,8 @@
 (вопрос В1 закрыт) и на секции проектов.
 
 **Обязательные поля для команд** (раздел 8.2; решение ведущего s-174, m-2034, в задаче A1b): у сессии
-`createdBy`, у комнаты `ownerId`, у работы `swarms` без текстов (`objective`, `result`, `failure`, `seenAt`,
-`expiredAt`, `addedAt` не передаются). Без них телефон не может построить дерево, как окно: по одному `parent` комнаты
+`createdBy`, у комнаты `ownerId`, у работы `swarms` без текстов (`objective`, `result`, `failure`, `expiredAt`,
+`addedAt` не передаются; `seenAt` передаётся — m-2038). Без них телефон не может построить дерево, как окно: по одному `parent` комнаты
 и рои не встают под своего владельца.
 
 ---
@@ -465,8 +465,10 @@ Welcome · Scanner (нет разрешения / запрещено / не то
   состояния, как в окне: у королевы `cutting the task…` / `waiting for hand-ins…` / `collecting…` / `handed in ✓`, у
   трутня `reading…`, у проверяющего `verifying…`, у всех `waiting`, `handed in ✓`, `failed`, `closed`. Сдавшие и
   закрытые — приглушены, у работающего точка пульсирует. Тап по участнику — его экран Session;
-- **законченный рой** — в раскрытом виде блок **Result**. Текста итога в проекции нет (A1b не передаёт `result`),
-  поэтому на телефоне — «The queen's summary is on your Mac» (вопрос В11);
+- **законченный рой** — в раскрытом виде блок **Result**. Текста итога и причины сбоя в проекции нет (тексты — этап
+  B, В11), поэтому на телефоне — «The queen's summary is on your Mac»;
+- **видимость** — как в окне (`isSwarmShown`): идущий рой виден всегда, законченный `done` / `failed` — пока человек не
+  посмотрел итог (`seenAt` в проекции), отменённый и просмотренные — только при раскрытом «Closed (N)»;
 - **по умолчанию свёрнут**, как в окне; раскрывается сам, только если участник роя ждёт человека.
 
 Иконка роя — не SF Symbol: в приложении это порт `swarm-comb.ts` (поле расстояний и свет по пикселям). Для React
@@ -893,10 +895,9 @@ Haptic `notification(error)` один раз при появлении.
 - **В10. Вид команд на экране работы.** Макет по умолчанию — **Team cards**: карточка на главную сессию, шапка с
   аватаром, линии и контейнеры комнат и роёв. Альтернатива **Tree lines only** — то же одним списком, как карточка
   сайдбара (переключатель в прототипе). По умолчанию — Team cards: граница команды видна без чтения линий.
-- **В11. Итог и видимость законченного роя.** A1b не передаёт `result`, `failure` и `seenAt`. Без `result`
-  раскрытый законченный рой говорит «The queen's summary is on your Mac»; без `seenAt` телефон не может прятать
-  просмотренные рои, как окно (`isSwarmShown`), и показывает законченные рои всегда. Предложение: добавить `seenAt`
-  (одна дата на рой) и `failure` (короткая причина); текст итога (до 4 КБ) — по `context.*` в этапе B.
+- **В11. Итог и видимость законченного роя** — решено ведущим (m-2038): `seenAt` роя входит в проекцию, телефон
+  прячет просмотренные законченные рои по правилу окна `isSwarmShown`; `failure` и `result` — тексты, остаются на
+  этап B (статус и так говорит `failed` / `cancelled`).
 - **В12. Иконка роя в React Native.** Порт `swarm-comb.ts` требует рисования по пикселям: `react-native-skia`
   (новая зависимость, шейдер SkSL) или статичные кадры без анимации. Решение — за A15 и ведущим.
 
