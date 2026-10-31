@@ -18,6 +18,12 @@
  * входит в `ahead` чужих запусков; а та, чей запуск уже идёт (резерв или процесс есть, снимок работ ещё несёт `queued`),
  * не продвигается второй раз.
  *
+ * Запись, которую насос продвинул, а допуск вернул в очередь (ответ `queue`), «отскочила». Пока слот на деле не освободился
+ * (процесс вышел, `settle` без процесса, датчик сообщил другой уровень давления), насос не берёт её `BOUNCE_MS`: иначе слот,
+ * который проверка насоса видит свободным, а допуск нет (давление сменилось, сон никого не усыпил под замком карты),
+ * крутил бы запуск по кругу, с записями в карту на каждом обороте. В `ahead` чужих запусков отскочившая запись входит: она
+ * ждёт по-настоящему, и новые запуски её не обгоняют.
+ *
  * Работающих агентов сервис не трогает: слот ради запуска освобождает сервис сна (`freeSlot`), и только простаивающих.
  */
 
@@ -54,6 +60,9 @@ export const BUDGET_BACKOFF_MS = 30_000;
  */
 export const IN_FLIGHT_MS = 60_000;
 
+/** Сколько насос не берёт «отскочившую» запись (допуск вернул её в очередь): столько же, как между чтениями датчика памяти. */
+export const BOUNCE_MS = 10_000;
+
 export interface CapacityDeps {
   pty: Pick<PtyManager, 'list' | 'get' | 'on'>;
   works: Pick<WorksService, 'snapshot' | 'onChange'>;
@@ -64,8 +73,15 @@ export interface CapacityDeps {
   };
   /** Настройки читаются на каждом допуске и проходе насоса: человек меняет потолок на ходу. */
   config: () => Promise<Pick<ParleyConfig, 'machineConcurrent' | 'sleepAfterMinutes'>>;
-  /** Поздняя привязка: `SessionsService.launch` для записей, кроме подъёма письмом. */
-  launch: (ref: SessionRef, mode: QueuedLaunch['mode'], choice: { by: string }) => Promise<unknown>;
+  /**
+   * Поздняя привязка: `SessionsService.launch` для записей, кроме подъёма письмом. Исход `held` — запуск Codex ждёт согласия
+   * человека на папку: дальше его ведёт путь согласия.
+   */
+  launch: (
+    ref: SessionRef,
+    mode: QueuedLaunch['mode'],
+    choice: { by: string },
+  ) => Promise<'started' | 'held' | 'queued'>;
   /** Поздняя привязка: `WakeService.retry` для подъёма письмом. */
   retry: (ref: SessionRef) => void;
   /** Поздняя привязка: сервис сна; нет — освобождать слоты нечем. */
@@ -96,11 +112,12 @@ interface Entry {
 }
 
 /**
- * Положение записи очереди: `waiting` — ждёт и держит очередь; остальное очередь не держит. `starting` — запуск уже идёт
+ * Положение записи очереди: `waiting` и `bounced` ждут по-настоящему и держат очередь, остальные — нет. `waiting` насос
+ * продвигает, `bounced` (допуск вернул её в очередь меньше `BOUNCE_MS` назад) — пока нет. `starting` — запуск уже идёт
  * (резерв или процесс есть, а снимок работ ещё несёт `queued`); `in-flight` — продвигается сейчас; `paused` — пауза после
  * отказа бюджета работы; `stale` — подъём письмом, который будильник не принял в срок.
  */
-type Standing = 'waiting' | 'starting' | 'in-flight' | 'paused' | 'stale';
+type Standing = 'waiting' | 'bounced' | 'starting' | 'in-flight' | 'paused' | 'stale';
 
 /**
  * Продвигаемая запись. Срок `deadline` есть только у подъёма письмом (его `retry` ничего не обещает): запуск через `launch`
@@ -114,6 +131,8 @@ interface Flight {
 /** Отказ бюджета работы из `sessions.launch`: код ошибки хоста несёт `data.code` (как в будильнике). */
 const isResourceDenial = (error: unknown): boolean =>
   error instanceof HostError && error.data?.['code'] === 'resource-budget';
+
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export function createCapacityService(host: HostContext, deps: CapacityDeps): CapacityService {
   const now = deps.now ?? Date.now;
@@ -129,6 +148,10 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
   const stale = new Set<string>();
   /** Пауза после отказа бюджета работы: до какого момента (мс часов сервиса) запись не продвигают. */
   const backoff = new Map<string, number>();
+  /** Записи, которые насос продвинул, а допуск вернул в очередь: до какого момента насос их не берёт (`BOUNCE_MS`). */
+  const bounced = new Map<string, number>();
+  /** Когда `stale` подъёму письмом в последний раз звали `retry`: чаще раза в `BUDGET_BACKOFF_MS` не зовём. */
+  const staleRetriedAt = new Map<string, number>();
 
   /**
    * Допуски, которые сейчас усыпляют сессию ради слота. Освободившееся место принадлежит им: пока усыпление идёт, насос
@@ -140,6 +163,8 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
   let pumping = false;
   let pumpAgain = false;
   let unsubscribes: Array<() => void> = [];
+  /** Уровень давления в предыдущем чтении датчика: другой уровень снимает отметки «отскочила». */
+  let lastLevel: MemoryPressure = 'unknown';
 
   function queue(): Array<{ ref: SessionRef; queued: QueuedLaunch }> {
     const found: Array<{ ref: SessionRef; queued: QueuedLaunch }> = [];
@@ -188,6 +213,7 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
       else if (inFlight.has(key)) standing = 'in-flight';
       else if ((backoff.get(key) ?? 0) > t) standing = 'paused';
       else if (stale.has(key)) standing = 'stale';
+      else if ((bounced.get(key) ?? 0) > t) standing = 'bounced';
       return { ...entry, key, standing };
     });
   }
@@ -207,7 +233,7 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
       launchClass === 'engine'
         ? 0
         : queuedAhead(
-            entries.filter((entry) => entry.standing === 'waiting'),
+            entries.filter((entry) => entry.standing === 'waiting' || entry.standing === 'bounced'),
             { key, class: launchClass, at },
           );
     const taken = occupiedKeys();
@@ -227,6 +253,7 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     // Допуск этой сессии начался: подъём письмом дошёл до `launch` — по сроку он `stale` уже не станет, а запись,
     // застрявшую раньше, допуск возвращает в очередь.
     stale.delete(key);
+    staleRetriedAt.delete(key);
     const flight = inFlight.get(key);
     if (flight !== undefined) flight.admitted = true;
 
@@ -259,6 +286,8 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     }
 
     if (decision.kind === 'queue') {
+      // Запись, которую насос только что продвинул, вернулась: до освобождения слота или `BOUNCE_MS` её не берут заново.
+      if (inFlight.has(key)) bounced.set(key, now() + BOUNCE_MS);
       // Запись снова ждёт своей очереди.
       releaseMail(key);
     } else {
@@ -278,12 +307,11 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
   }
 
   /**
-   * Продолжение из очереди отказало насовсем: запись снимается (иначе очередь крутилась бы вечно), а создатель-агент,
-   * который ещё в карте и не закрыт, получает системное письмо. Одна запись карты. Не бросает; `false` — запись не удалось
-   * снять (карта недоступна).
+   * Снимает запись очереди. `message` — почему запуск отказал насовсем (иначе очередь крутилась бы вечно): тогда создатель-
+   * агент, который ещё в карте и не закрыт, получает системное письмо. `null` — запуск не отказан, а передан пути согласия
+   * на папку: письма нет. Одна запись карты. Не бросает; `false` — запись не удалось снять (карта недоступна).
    */
-  async function dropQueued(ref: SessionRef, error: unknown): Promise<boolean> {
-    const message = error instanceof Error ? error.message : String(error);
+  async function dropQueued(ref: SessionRef, message: string | null): Promise<boolean> {
     const result: { dropped: boolean; notified: string | null } = { dropped: false, notified: null };
     try {
       await updateMap(
@@ -298,7 +326,7 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
           delete session.queued;
           result.dropped = true;
           const creator = session.createdBy;
-          if (queued.class !== 'agent' || creator == null) return;
+          if (message === null || queued.class !== 'agent' || creator == null) return;
           if (!map.sessions.some((candidate) => candidate.id === creator && candidate.lifecycle !== 'closed')) return;
           letters.add({
             roomId: null,
@@ -313,33 +341,44 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
         { touch: false },
       );
     } catch (mapError) {
-      host.log.error('очередь машины: запись очереди не снялась после отказа', { ref, error: String(mapError) });
+      host.log.error('очередь машины: запись очереди не снялась', { ref, error: String(mapError) });
       return false;
     }
     if (result.dropped) {
-      host.log.warn('очередь машины: запуск из очереди отказал насовсем, запись снята', {
-        ref,
-        error: message,
-        notified: result.notified,
-      });
+      if (message === null) {
+        host.log.info('очередь машины: запуск ждёт согласия на папку, запись очереди снята', { ref });
+      } else {
+        host.log.warn('очередь машины: запуск из очереди отказал насовсем, запись снята', {
+          ref,
+          error: message,
+          notified: result.notified,
+        });
+      }
     }
     return true;
+  }
+
+  /** Запись остаётся в очереди, но насос не берёт её `BUDGET_BACKOFF_MS`. */
+  function pause(key: string): void {
+    backoff.set(key, now() + BUDGET_BACKOFF_MS);
   }
 
   /** Продолжает запись через `launch`: по исходу снимает продвижение и зовёт насос. */
   async function launchFromQueue({ ref, key, queued }: Entry): Promise<void> {
     try {
-      await deps.launch(ref, queued.mode, { by: queued.by });
+      const outcome = await deps.launch(ref, queued.mode, { by: queued.by });
       backoff.delete(key);
+      // Codex ждёт согласия человека на папку: запуск ведёт путь согласия и сам продолжит его после решения, запись очереди
+      // ему не нужна. Письма нет — запуск не отказан, а отложен. Отметка продвижения стоит, пока запись снимают.
+      if (outcome === 'held' && !(await dropQueued(ref, null))) pause(key);
     } catch (error) {
       if (isResourceDenial(error)) {
         // Запись остаётся: бюджет работы освободится сам, повтор не раньше чем через `BUDGET_BACKOFF_MS`.
-        backoff.set(key, now() + BUDGET_BACKOFF_MS);
+        pause(key);
         host.log.info('очередь машины: бюджет работы отказал, запись ждёт', { ref, pauseMs: BUDGET_BACKOFF_MS });
-      } else if (!(await dropQueued(ref, error))) {
-        // Запись не снялась: повтор не сразу, иначе отказ и неудачная запись крутились бы без пауз. Отметка продвижения
-        // стоит, пока запись снимают: насос не возьмёт её второй раз.
-        backoff.set(key, now() + BUDGET_BACKOFF_MS);
+      } else if (!(await dropQueued(ref, messageOf(error)))) {
+        // Запись не снялась: повтор не сразу, иначе отказ и неудачная запись крутились бы без пауз.
+        pause(key);
       }
     } finally {
       inFlight.delete(key);
@@ -366,9 +405,20 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     const present = new Set(entries.map((entry) => entry.key));
     for (const key of stale) if (!present.has(key)) stale.delete(key);
     for (const key of backoff.keys()) if (!present.has(key)) backoff.delete(key);
+    for (const key of bounced.keys()) if (!present.has(key)) bounced.delete(key);
+    for (const key of staleRetriedAt.keys()) if (!stale.has(key)) staleRetriedAt.delete(key);
 
-    // Подъёму письмом, которого будильник не принял в срок, условия могли смениться: `retry` дёшев, он только в памяти.
-    for (const entry of entries) if (entry.standing === 'stale') retryMail(entry.ref);
+    // Подъёму письмом, которого будильник не принял в срок, условия могли смениться. Но `retry` снимает у будильника его
+    // паузу бюджета: на каждом проходе отказанный запуск шёл бы заново и писал бы отказ в журнал, поэтому — раз в
+    // `BUDGET_BACKOFF_MS` на запись.
+    const t = now();
+    for (const entry of entries) {
+      if (entry.standing !== 'stale') continue;
+      const last = staleRetriedAt.get(entry.key);
+      if (last !== undefined && t - last < BUDGET_BACKOFF_MS) continue;
+      staleRetriedAt.set(entry.key, t);
+      retryMail(entry.ref);
+    }
 
     const waiting = entries.filter((entry) => entry.standing === 'waiting');
     if (waiting.length === 0) return;
@@ -390,6 +440,8 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     if (queue().length === 0) {
       stale.clear();
       backoff.clear();
+      bounced.clear();
+      staleRetriedAt.clear();
       return;
     }
     const config = await deps.config();
@@ -422,15 +474,22 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     start() {
       if (!stopped) return;
       stopped = false;
+      lastLevel = deps.pressure.current().level;
       unsubscribes = [
-        // Процесс вышел: слот свободен, а «сверх потолка» этой сессии больше нет.
+        // Процесс вышел: слот свободен, «сверх потолка» этой сессии больше нет, а отскочившие записи могут идти.
         deps.pty.on('exit', (ref) => {
           overflow.delete(refKey(ref));
+          bounced.clear();
           pump();
         }),
         deps.works.onChange(() => pump()),
-        // Раз в 10 с, пока очередь не пуста: давление могло спасть, а настройки — смениться (потолок выключили).
-        deps.pressure.onReading(() => pump()),
+        // Раз в 10 с, пока очередь не пуста: давление могло спасть, а настройки — смениться (потолок выключили). Другой
+        // уровень давления, чем в прошлом чтении, меняет и решение допуска: отскочившие записи могут идти.
+        deps.pressure.onReading((reading) => {
+          if (reading.level !== lastLevel) bounced.clear();
+          lastLevel = reading.level;
+          pump();
+        }),
       ];
       // Старт хоста: очередь собирается из карт заново.
       pump();
@@ -445,6 +504,8 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
       inFlight.clear();
       stale.clear();
       backoff.clear();
+      bounced.clear();
+      staleRetriedAt.clear();
       pumpAgain = false;
     },
 
@@ -452,10 +513,17 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
 
     settle(ref) {
       const key = refKey(ref);
-      reserved.delete(key);
+      const released = reserved.delete(key);
       releaseMail(key);
       // Процесса нет — запуск отказал до старта, и места «сверх потолка» он не занимает.
-      if (deps.pty.get(ref) === undefined) overflow.delete(key);
+      if (deps.pty.get(ref) === undefined) {
+        overflow.delete(key);
+        // Резерв снят, а процесса нет: слот на деле освободился, отскочившие записи могут идти — насос зовём сразу.
+        if (released) {
+          bounced.clear();
+          pump();
+        }
+      }
     },
 
     pump,

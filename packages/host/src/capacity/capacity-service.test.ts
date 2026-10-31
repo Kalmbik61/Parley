@@ -18,7 +18,7 @@ import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyHandle } from '../pty/pty-manager.js';
-import { BUDGET_BACKOFF_MS, IN_FLIGHT_MS, createCapacityService } from './capacity-service.js';
+import { BOUNCE_MS, BUDGET_BACKOFF_MS, IN_FLIGHT_MS, createCapacityService } from './capacity-service.js';
 import type { CapacityDeps, CapacityService } from './capacity-service.js';
 
 const MIN = 60_000;
@@ -29,6 +29,8 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 
 type LogLevel = 'info' | 'warn' | 'error';
 type Sleeper = ReturnType<CapacityDeps['sleep']>;
+/** Исход `launch()` хоста: запуск идёт, ждёт согласия человека на папку или встал в очередь. */
+type Outcome = 'started' | 'held' | 'queued';
 
 let home = '';
 let project = '';
@@ -51,7 +53,7 @@ let retries: SessionRef[] = [];
 /** Те же вызовы в порядке обращения: `launch:<id>` и `retry:<id>`. */
 let calls: string[] = [];
 /** Что делает `launch` хоста: по умолчанию запуск удаётся. */
-let launchImpl: (ref: SessionRef) => Promise<unknown> = startedLaunch;
+let launchImpl: (ref: SessionRef) => Promise<Outcome> = startedLaunch;
 let sleeper: Sleeper;
 let logs: Array<{ level: LogLevel; msg: string; data: Record<string, unknown> }> = [];
 let stoppers: Array<() => void> = [];
@@ -160,7 +162,7 @@ function handleOf(ref: SessionRef): PtyHandle {
 }
 
 /** Запуск удался: процесс есть, сессия `active`, запись очереди снята — как после `launchHeld`. */
-async function startedLaunch(ref: SessionRef): Promise<string> {
+async function startedLaunch(ref: SessionRef): Promise<'started'> {
   live.push(handleOf(ref));
   await updateMap(
     ref.projectPath,
@@ -185,6 +187,8 @@ function boot(over: Partial<CapacityDeps> = {}): CapacityService {
     launch: async (ref, mode, choice) => {
       calls.push(`launch:${ref.sessionId}`);
       launches.push({ ref, mode, by: choice.by });
+      // Предохранитель: насос, который крутит запуск без конца, падает в тесте на счёте запусков, а не вешает прогон.
+      if (launches.length > 20) return new Promise<never>(() => {});
       return launchImpl(ref);
     },
     retry: (ref) => {
@@ -311,6 +315,40 @@ function sleeperFreeing(): { freeCalls: () => number } & NonNullable<Sleeper> {
     },
     slotCandidate: () => live.length > 0,
   };
+}
+
+/**
+ * Как `launchHeld`: допуск, затем старт процесса и settle; при ответе `queue` запись очереди переписывается в карте, то есть
+ * работы изменились.
+ */
+function admittingLaunch(serviceOf: () => CapacityService): typeof launchImpl {
+  return async (ref) => {
+    const service = serviceOf();
+    const ticket = await service.admit({ ref, launchClass: 'agent' });
+    if (ticket.kind === 'queue') {
+      worksChanged();
+      return 'queued';
+    }
+    await startedLaunch(ref);
+    service.settle(ref);
+    return 'started';
+  };
+}
+
+/**
+ * Запись, которую насос продвинул, а допуск вернул в очередь: потолок 1 занят, `slotCandidate()` обещает кандидата, а
+ * `freeSlot()` под замком карты никого усыпить не может. Возвращается, когда первый запуск уже вернулся с `queued`.
+ */
+async function bouncedEntry(): Promise<{ service: CapacityService; entry: SessionRef; busy: PtyHandle }> {
+  machineConcurrent = 1;
+  const [busy] = startLive(1);
+  const entry = await enqueue({ class: 'agent', by: 's-01' });
+  sleeper = { freeSlot: async () => false, slotCandidate: () => true };
+  launchImpl = admittingLaunch(() => service);
+  const service = boot();
+  await vi.waitFor(() => expect(launches).toHaveLength(1));
+  await quiet();
+  return { service, entry, busy: busy! };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -770,7 +808,7 @@ describe('сервис ёмкости: продвижение очереди', (
     let candidate = false;
     sleeper = { freeSlot: async () => false, slotCandidate: () => candidate };
     // Запуск не заканчивается: первая запись остаётся в продвижении.
-    launchImpl = () => new Promise(() => {});
+    launchImpl = () => new Promise<never>(() => {});
     boot();
     await quiet();
     expect(launches).toEqual([]);
@@ -931,13 +969,10 @@ describe('сервис ёмкости: запись, которая не дер�
     const service = boot();
     await vi.waitFor(() => expect(retries).toEqual([mail]));
 
-    // За срок будильник так и не поднял сессию (лимит часа, пауза, нет провайдера): запись `stale`.
+    // За срок будильник так и не поднял сессию (лимит часа, пауза, нет провайдера): запись `stale`, ей сразу повтор.
     clock = START + IN_FLIGHT_MS;
     reading();
-    // Записи `stale` продвигаются на каждом проходе: `retry` дёшев.
     await vi.waitFor(() => expect(retries).toEqual([mail, mail]));
-    worksChanged();
-    await vi.waitFor(() => expect(retries).toHaveLength(3));
     expect(launches).toEqual([]);
 
     // Она больше не стоит впереди: агент стартует, хотя письмо старше.
@@ -970,6 +1005,36 @@ describe('сервис ёмкости: запись, которая не дер�
     service.settle(mail);
   });
 
+  it('stale-запись получает retry не чаще раза в BUDGET_BACKOFF_MS', async () => {
+    machineConcurrent = 3;
+    startLive(1);
+    const mail = await enqueue({ class: 'mail', mode: 'resume', by: 'wake', at: T0 });
+    boot();
+    await vi.waitFor(() => expect(retries).toEqual([mail]));
+
+    // Срок вышел: запись `stale`, первый повтор — сразу.
+    clock = START + IN_FLIGHT_MS;
+    reading();
+    await vi.waitFor(() => expect(retries).toHaveLength(2));
+
+    // Проходы через 10 с повтора не дают: `retry` снимает у будильника паузу бюджета, и отказанный запуск шёл бы заново.
+    clock += 10_000;
+    reading();
+    worksChanged();
+    clock += 10_000;
+    reading();
+    await quiet();
+    expect(retries).toHaveLength(2);
+
+    // Через BUDGET_BACKOFF_MS после прошлого повтора — даёт.
+    clock = START + IN_FLIGHT_MS + BUDGET_BACKOFF_MS - 1;
+    reading();
+    await quiet();
+    expect(retries).toHaveLength(2);
+    clock = START + IN_FLIGHT_MS + BUDGET_BACKOFF_MS;
+    reading();
+    await vi.waitFor(() => expect(retries).toHaveLength(3));
+  });
 });
 
 describe('сервис ёмкости: отказ продвижения (Review Focus 3)', () => {
@@ -1088,16 +1153,44 @@ describe('сервис ёмкости: отказ продвижения (Review
     expect(systemLetters(closed.workId)).toEqual([]);
   });
 
-  it('отказ насовсем, а запись не снялась (карта недоступна): повтор не сразу, запуск не крутится', async () => {
+  it('launch вернул held (Codex ждёт согласия на папку): запись снята без письма, насос её больше не берёт', async () => {
+    machineConcurrent = 1;
+    const creator = await startCreator();
+    // Класс агента и живой создатель: при отказе письмо ушло бы, но запуск не отказан, а передан пути согласия.
+    const queued = await enqueue({ class: 'agent', by: creator.sessionId, createdBy: creator.sessionId });
+    launchImpl = async () => 'held';
+    boot();
+
+    await vi.waitFor(() => expect(isQueued(queued)).toBe(false));
+    expect('queued' in sessionOf(queued)).toBe(false);
+    for (let index = 0; index < 3; index += 1) {
+      reading();
+      worksChanged();
+    }
+    clock = START + 10 * MIN;
+    reading();
+    await quiet();
+    expect(launches).toHaveLength(1);
+    expect(systemLetters(queued.workId)).toEqual([]);
+    expect(messagesOf('error')).toEqual([]);
+  });
+
+  it.each([
+    [
+      'отказ насовсем',
+      async (): Promise<Outcome> => {
+        throw new Error('session is closed');
+      },
+    ],
+    ['held', async (): Promise<Outcome> => 'held'],
+  ])('%s, а запись не снялась (карта недоступна): повтор не сразу, запуск не крутится', async (_name, impl) => {
     machineConcurrent = 'off';
     const real = await enqueue({ class: 'agent' });
     // Снимок работ несёт работу, которой в базе уже нет: `updateMap` ей откажет.
     const map = readStoredMap(project, real.workId);
     const ghostMap = { ...map, work: { ...map.work, id: 'w-9999' } };
     const ghost = { ...real, workId: 'w-9999' };
-    launchImpl = async () => {
-      throw new Error('session is closed');
-    };
+    launchImpl = impl;
     boot({
       works: {
         snapshot: () => ({ entries: [{ projectPath: project, map: ghostMap }], branches: {} }),
@@ -1120,6 +1213,83 @@ describe('сервис ёмкости: отказ продвижения (Review
     clock = START + BUDGET_BACKOFF_MS;
     reading();
     await vi.waitFor(() => expect(launches).toHaveLength(2));
+  });
+});
+
+describe('сервис ёмкости: запись, которую допуск вернул в очередь', () => {
+  it('насос не берёт её заново ни по записи, которую запуск сам переписал, ни по чтению датчика того же уровня', async () => {
+    const { entry } = await bouncedEntry();
+
+    // Запись очереди переписана (`worksChanged()` в запуске), а чтения датчика идут с прежним уровнем.
+    for (let index = 0; index < 3; index += 1) {
+      worksChanged();
+      reading();
+    }
+    await quiet();
+    expect(launches).toEqual([{ ref: entry, mode: 'launch', by: 's-01' }]);
+    expect(isQueued(entry)).toBe(true);
+  });
+
+  it('берёт её снова, когда прошло BOUNCE_MS', async () => {
+    await bouncedEntry();
+
+    clock = START + BOUNCE_MS - 1;
+    reading();
+    await quiet();
+    expect(launches).toHaveLength(1);
+
+    clock = START + BOUNCE_MS;
+    reading();
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+  });
+
+  it('берёт её сразу после выхода процесса: слот освободился на самом деле', async () => {
+    const { entry, busy } = await bouncedEntry();
+
+    exitPty(busy);
+    await vi.waitFor(() => expect(isQueued(entry)).toBe(false));
+    expect(launches).toHaveLength(2);
+  });
+
+  it('берёт её сразу, когда датчик сообщил другой уровень давления; тот же уровень отметок не снимает', async () => {
+    await bouncedEntry();
+
+    level = 'warn';
+    reading();
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+
+    // Запись отскочила снова; чтения того же уровня её не будят.
+    reading();
+    reading();
+    await quiet();
+    expect(launches).toHaveLength(2);
+  });
+
+  it('settle без процесса снимает отметки: слот освободился; settle без резерва их не трогает', async () => {
+    const { service } = await bouncedEntry();
+
+    // За этим ключом резерва не было: ничего не освободилось.
+    service.settle(fresh(7));
+    worksChanged();
+    await quiet();
+    expect(launches).toHaveLength(1);
+
+    // Потолок подняли (события нет). Человек встаёт впереди ждущего агента и берёт резерв, но запуск отказал до старта
+    // процесса: резерв снят, место свободно.
+    machineConcurrent = 3;
+    const human = fresh(8);
+    expect(await service.admit({ ref: human, launchClass: 'human' })).toMatchObject({ kind: 'start' });
+    service.settle(human);
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+  });
+
+  it('пока запись отскочила, она держит запуски позади себя: новый агент её не обгоняет', async () => {
+    const { service } = await bouncedEntry();
+
+    // Место появилось (потолок подняли), а событий нет и отметка стоит: запись ждёт по-настоящему.
+    machineConcurrent = 3;
+    expect(await service.admit({ ref: fresh(1), launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
+    expect(await service.admit({ ref: fresh(2), launchClass: 'human' })).toMatchObject({ kind: 'start' });
   });
 });
 
