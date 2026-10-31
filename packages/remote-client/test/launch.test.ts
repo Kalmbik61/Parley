@@ -1,14 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRemoteClient, roomKey, selectLaunchCapabilities, type Clock, type Rpc } from '../src/index.js';
 import { PROJECT, room, session, snap, work } from './fixtures.js';
 
 const clock: Clock = {
-  now: () => 1000,
+  now: () => Date.now(),
   setTimeout: (f, ms) => setTimeout(f, ms),
   clearTimeout: (h) => clearTimeout(h as never),
   setInterval: (f, ms) => setInterval(f, ms),
   clearInterval: (h) => clearInterval(h as never),
 };
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(Date.parse('2026-10-31T12:00:00.000Z'));
+});
+afterEach(() => vi.useRealTimers());
+
 const err = (code: string) => Object.assign(new Error(code), { code });
 
 function setup(handler: (method: string, params: unknown) => Promise<unknown>) {
@@ -107,11 +113,15 @@ describe('createSession', () => {
       return same;
     });
     unknown.client.handleEvent('works.changed', snap(1, [work('w-1', { sessions: [session('s-1', { label: 'New one' })] })]));
-    expect(await unknown.client.createSession(sessionParams)).toEqual({ outcome: 'unknown' });
+    const pendingUnknown = unknown.client.createSession(sessionParams);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pendingUnknown).toEqual({ outcome: 'unknown' });
     const lost = setup(async () => {
       throw err('connection_lost');
     });
-    expect(await lost.client.createSession(sessionParams)).toEqual({ outcome: 'lost' });
+    const pendingLost = lost.client.createSession(sessionParams);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pendingLost).toEqual({ outcome: 'lost' });
   });
 
   it('an answer that arrives in another epoch is not trusted: re-read decides', async () => {
@@ -127,6 +137,7 @@ describe('createSession', () => {
     const pending = client.createSession(sessionParams);
     client.handleEvent('bridge.status', { host: 'online', epoch: 'e2' });
     release();
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(await pending).toEqual({ outcome: 'unknown' });
   });
 });
@@ -139,7 +150,7 @@ describe('createRoom', () => {
       throw err('bad_request');
     });
     expect(await bad.client.createRoom(roomParams)).toMatchObject({ outcome: 'rejected', code: 'bad_request' });
-    const after = snap(2, [work('w-1', { sessions: [session('s-1')], rooms: [room('r-1'), room('r-6', { title: 'Fresh room' })] })]);
+    const after = snap(2, [work('w-1', { sessions: [session('s-1')], rooms: [room('r-1'), room('r-6', { title: 'Fresh room', members: ['s-1'] })] })]);
     const lost = setup(async (m) => {
       if (m === 'rooms.create') throw err('connection_lost');
       return after;
@@ -150,7 +161,9 @@ describe('createRoom', () => {
       if (m === 'rooms.create') throw err('connection_lost');
       return snap(2, [work('w-1', { rooms: [room('r-1')] })]);
     });
-    expect(await nothing.client.createRoom(roomParams)).toEqual({ outcome: 'unknown' });
+    const pendingNothing = nothing.client.createRoom(roomParams);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pendingNothing).toEqual({ outcome: 'unknown' });
   });
 });
 
@@ -183,5 +196,73 @@ describe('sendRoomMessage', () => {
       throw new Error('boom');
     });
     await expect(client.sendRoomMessage(msg)).rejects.toThrow('boom');
+  });
+});
+
+describe('wave 3 fixes', () => {
+  it('W1: after connection_lost the snapshot is re-read with backoff until the bridge call deadline; the session that appears at 20 s is found', async () => {
+    let created = false;
+    let revision = 1;
+    const { client, rpc } = setup(async (method) => {
+      if (method === 'sessions.create') throw err('connection_lost');
+      return snap(++revision, [work('w-1', { sessions: [session('s-1'), ...(created ? [session('s-2', { label: 'New one', startedAt: new Date().toISOString() })] : [])] })]);
+    });
+    const pending = client.createSession(sessionParams);
+    await vi.advanceTimersByTimeAsync(19_000);
+    created = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toEqual({ outcome: 'created', ref: { projectPath: PROJECT, workId: 'w-1', sessionId: 's-2' } });
+    expect(calls(rpc, 'sessions.create')).toHaveLength(1);
+    expect(calls(rpc, 'works.list').length).toBeGreaterThan(3);
+    expect(calls(rpc, 'works.list').length).toBeLessThan(15);
+  });
+
+  it('W9: a same-name session of another provider, or one started long before the call, is not taken for ours', async () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { client } = setup(async (method) => {
+      if (method === 'sessions.create') throw err('connection_lost');
+      return snap(2, [
+        work('w-1', {
+          sessions: [
+            session('s-1'),
+            session('s-2', { label: 'New one', provider: 'codex' }),
+            session('s-3', { label: 'New one', provider: 'claude', startedAt: old }),
+          ],
+        }),
+      ]);
+    });
+    const pending = client.createSession(sessionParams);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pending).toEqual({ outcome: 'unknown' });
+  });
+
+  it('W9: a room with the same title but another mode or members is not ours', async () => {
+    const { client } = setup(async (method) => {
+      if (method === 'rooms.create') throw err('timeout');
+      return snap(2, [work('w-1', { rooms: [room('r-1'), room('r-2', { title: 'Fresh room', members: ['s-9'], mode: 'free' })] })]);
+    });
+    const pending = client.createRoom(roomParams);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pending).toEqual({ outcome: 'unknown' });
+  });
+
+  it('W8: after a lost rooms.send the room feed is checked: the human letter is there → sent, draft cleared', async () => {
+    const letter = { id: 'm-9', roomId: 'r-1', from: 'human', to: [], at: new Date().toISOString(), text: 'hello room', kind: 'note', readBy: {} };
+    const { client } = setup(async (method) => {
+      if (method === 'rooms.send') throw err('connection_lost');
+      return { messages: [{ ...letter, id: 'm-1', text: 'other' }, letter], page: {} };
+    });
+    expect(await client.sendRoomMessage(msg)).toEqual({ outcome: 'sent', messageId: 'm-9' });
+    expect(client.store.getState().drafts[roomKey({ projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' })]).toBeUndefined();
+  });
+
+  it('W8: an older identical letter does not count; feed unreadable → lost, draft stays', async () => {
+    const stale = { id: 'm-3', roomId: 'r-1', from: 'human', to: [], at: new Date(Date.now() - 3600_000).toISOString(), text: 'hello room', kind: 'note', readBy: {} };
+    const { client } = setup(async (method) => {
+      if (method === 'rooms.send') throw err('timeout');
+      return { messages: [stale], page: {} };
+    });
+    expect(await client.sendRoomMessage(msg)).toEqual({ outcome: 'lost' });
+    expect(client.store.getState().drafts[roomKey({ projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' })]).toBe('hello room');
   });
 });
