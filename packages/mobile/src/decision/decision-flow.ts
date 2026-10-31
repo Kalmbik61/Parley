@@ -2,7 +2,7 @@
 // with that `rev`. A `conflict` swaps in the new text and does NOT re-apply the tap; the human decides again.
 import type { RemoteRoom } from '@parley/protocol/remote';
 import type { RemoteClient, ResolveProposalParams } from '@parley/remote-client';
-import type { Approve } from '../auth/approve';
+import type { Approve, NotSent } from '../auth/approve';
 import { gatedResolve } from '../auth/gated-actions';
 
 export type Proposal = NonNullable<RemoteRoom['proposal']>;
@@ -18,7 +18,7 @@ export type DecisionView =
   | { kind: 'unconfirmed'; shown: Proposal };
 
 export type SubmitResult =
-  | { kind: 'cancelled' }
+  | { kind: 'cancelled'; reason: NotSent }
   | { kind: 'view'; view: DecisionView }
   | { kind: 'rejected'; message: string };
 
@@ -55,7 +55,7 @@ export async function submitDecision(
   } catch (error) {
     return { kind: 'rejected', message: error instanceof Error ? error.message : 'request failed' };
   }
-  if (res.cancelled) return { kind: 'cancelled' };
+  if (res.cancelled) return { kind: 'cancelled', reason: res.reason };
   const o = res.outcome;
   switch (o.outcome) {
     case 'applied':
@@ -69,5 +69,17 @@ export async function submitDecision(
       };
     case 'lost':
       return { kind: 'view', view: o.stillPending === false ? { kind: 'gone' } : { kind: 'unconfirmed', shown } };
+  }
+}
+
+/** Haptic of D1 §16 for the result of a tap; `null` — none (a cancelled Face ID already vibrated the system way). */
+export function hapticFor(result: SubmitResult): 'success' | 'warning' | null {
+  if (result.kind === 'cancelled') return null;
+  if (result.kind === 'rejected') return 'warning';
+  switch (result.view.kind) {
+    case 'accepted':
+      return 'success';
+    default:
+      return 'warning';
   }
 }

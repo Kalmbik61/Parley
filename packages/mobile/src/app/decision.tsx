@@ -8,8 +8,9 @@ import { DEMO } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
-import { FACE_ID_CANCELLED, Toast, useToast } from '../components/Toast';
-import { RETURN_NOTE_MAX, canSendReturn, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
+import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
+import { haptic } from '../haptics';
+import { RETURN_NOTE_MAX, canSendReturn, hapticFor, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
 import { useRemoteState } from '../runtime/use-remote';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { spacing, typography, useColors } from '../theme';
@@ -59,7 +60,9 @@ export default function DecisionScreen() {
     setBusy(action);
     try {
       const res = await submitDecision(client, approve, { projectPath, workId, roomId, shown, action, note: action === 'return' ? note : undefined });
-      if (res.kind === 'cancelled') toast.show(FACE_ID_CANCELLED);
+      const h = hapticFor(res);
+      if (h !== null) haptic[h]();
+      if (res.kind === 'cancelled') toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
       else if (res.kind === 'rejected') toast.show(res.message);
       else {
         setView(res.view);
@@ -77,8 +80,8 @@ export default function DecisionScreen() {
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
       <Stack.Screen options={{ title: done ? '' : title, headerBackTitle: 'Inbox' }} />
-      <ConnectionBanner />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
+        <ConnectionBanner />
         {room && work ? (
           <Text allowFontScaling style={[typography.subheadline, { color: colors.label2 }]}>
             {room.title} · {work.title}

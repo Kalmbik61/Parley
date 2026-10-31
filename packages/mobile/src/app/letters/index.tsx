@@ -4,7 +4,8 @@ import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { workParam } from '../../nav/refs';
-import { selectLetters, timeLabel } from '../../letters/letters-model';
+import { plainPreview, selectLetters, timeLabel } from '../../letters/letters-model';
+import { useLoadLetters } from '../../letters/load-letters';
 import { openedLetters } from '../../letters/opened';
 import { useRemoteState } from '../../runtime/use-remote';
 import { spacing, typography, useColors } from '../../theme';
@@ -13,15 +14,16 @@ export default function LettersScreen() {
   const colors = useColors();
   const router = useRouter();
   const remote = useRemoteState();
+  useLoadLetters();
   const rows = remote ? selectLetters(remote, openedLetters.snapshot()) : [];
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
       <Stack.Screen options={{ title: 'Letters', headerBackTitle: 'Inbox' }} />
-      <ConnectionBanner />
       <FlatList
         data={rows}
         keyExtractor={(r) => r.key}
         contentInsetAdjustmentBehavior="automatic"
+        ListHeaderComponent={<ConnectionBanner />}
         ListEmptyComponent={
           <View style={styles.empty}>
             <SymbolView name="envelope.open" tintColor={colors.idle} size={48} />
@@ -42,7 +44,7 @@ export default function LettersScreen() {
                 <Text allowFontScaling style={[typography.footnote, { color: colors.label2 }]}>{timeLabel(item.message.at)}</Text>
               </View>
               <Text numberOfLines={1} allowFontScaling style={[typography.footnote, { color: colors.label2 }]}>{item.workTitle}</Text>
-              <Text numberOfLines={2} allowFontScaling style={[typography.subheadline, { color: colors.label }]}>{item.message.text}</Text>
+              <Text numberOfLines={2} allowFontScaling style={[typography.subheadline, { color: colors.label }]}>{plainPreview(item.message.text)}</Text>
             </View>
           </Pressable>
         )}

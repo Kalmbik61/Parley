@@ -42,3 +42,13 @@ export function timeLabel(iso: string, now = new Date()): string {
   const yesterday = new Date(now.getTime() - 86_400_000);
   return d.toDateString() === yesterday.toDateString() ? 'Yesterday' : d.toLocaleDateString();
 }
+
+/** One flat line for the list preview: no heading marks, emphasis, code ticks or link syntax. */
+export function plainPreview(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*(#{1,6}\s+|[-*+]\s+|>\s+)/gm, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/\s*\n\s*/g, ' ')
+    .trim();
+}

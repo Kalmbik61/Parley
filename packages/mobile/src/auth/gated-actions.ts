@@ -1,9 +1,9 @@
 // Actions behind the gate. Cancel or failure sends nothing: the card stays as it was.
 import type { FeedDecision } from '@parley/core';
 import type { DecideOutcome, RemoteClient, ResolveOutcome, ResolveProposalParams, SessionRef } from '@parley/remote-client';
-import { approvalFor, type Approve } from './approve';
+import { approvalFor, type Approve, type NotSent } from './approve';
 
-export type Gated<T> = { cancelled: true } | { cancelled: false; outcome: T };
+export type Gated<T> = { cancelled: true; reason: NotSent } | { cancelled: false; outcome: T };
 
 /** `feed.decide`: Face ID only for Allow (also "Always") and plan approval; Deny, answers, plan rejection do not ask. */
 export async function gatedDecide(
@@ -14,7 +14,10 @@ export async function gatedDecide(
   decision: FeedDecision,
 ): Promise<Gated<DecideOutcome>> {
   const kind = approvalFor(decision);
-  if (kind !== null && (await approve(kind)) !== 'ok') return { cancelled: true };
+  if (kind !== null) {
+    const asked = await approve(kind);
+    if (asked !== 'ok') return { cancelled: true, reason: asked };
+  }
   return { cancelled: false, outcome: await client.decide(ref, cardId, decision) };
 }
 
@@ -24,6 +27,9 @@ export async function gatedResolve(
   approve: Approve,
   params: ResolveProposalParams,
 ): Promise<Gated<ResolveOutcome>> {
-  if (params.action === 'accept' && (await approve('accept')) !== 'ok') return { cancelled: true };
+  if (params.action === 'accept') {
+    const asked = await approve('accept');
+    if (asked !== 'ok') return { cancelled: true, reason: asked };
+  }
   return { cancelled: false, outcome: await client.resolveProposal(params) };
 }

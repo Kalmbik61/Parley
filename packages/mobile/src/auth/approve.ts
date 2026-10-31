@@ -30,8 +30,13 @@ export interface ApproveDeps {
   isRequired(): boolean | Promise<boolean>;
 }
 
-/** `ok`: send the call. `cancelled`: send nothing; the card stays (toast "Face ID cancelled — nothing was sent"). */
-export type ApproveResult = 'ok' | 'cancelled';
+/**
+ * `ok`: send the call. `cancelled`: send nothing; the card stays (toast "Face ID cancelled — nothing was sent").
+ * `no-passcode`: nothing was sent either, but the phone has no passcode, so the toast says how to fix it.
+ */
+export type ApproveResult = 'ok' | 'cancelled' | 'no-passcode';
+/** Why nothing was sent. */
+export type NotSent = Exclude<ApproveResult, 'ok'>;
 export type Approve = (kind: ApproveKind) => Promise<ApproveResult>;
 
 /**
@@ -44,7 +49,8 @@ export function createApprove({ auth, isRequired }: ApproveDeps): Approve {
     if (kind !== 'disable' && !(await isRequired())) return 'ok';
     try {
       const res = await auth.authenticateAsync({ promptMessage: PROMPTS[kind], disableDeviceFallback: false });
-      return res.success ? 'ok' : 'cancelled';
+      if (res.success) return 'ok';
+      return res.error === 'passcode_not_set' || res.error === 'not_available' ? 'no-passcode' : 'cancelled';
     } catch {
       return 'cancelled';
     }

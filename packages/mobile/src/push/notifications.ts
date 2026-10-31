@@ -32,14 +32,23 @@ export async function openFromPush(data: unknown, router: Navigator): Promise<vo
   }
 }
 
+const handled = new Set<string>();
+/** A notification response is acted on once per launch: the start response comes from both the listener and `getLast…`. */
+const once = (r: Notifications.NotificationResponse): boolean => {
+  const id = `${r.notification.request.identifier}\u0000${r.actionIdentifier}`;
+  if (handled.has(id)) return false;
+  handled.add(id);
+  return true;
+};
+
 /** Mount once in the root layout. */
 export function usePushTaps(router: Navigator): void {
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((r) => {
-      void openFromPush(r.notification.request.content.data, router);
+      if (once(r)) void openFromPush(r.notification.request.content.data, router);
     });
     void Notifications.getLastNotificationResponseAsync().then((r) => {
-      if (r) void openFromPush(r.notification.request.content.data, router);
+      if (r && once(r)) void openFromPush(r.notification.request.content.data, router);
     });
     return () => sub.remove();
   }, [router]);
