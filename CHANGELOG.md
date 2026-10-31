@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- The limits on what agents create — new sessions per workspace and per room, swarm sessions and swarms per workspace — now count the last 24 hours (a sliding window) instead of all time. Before, the counters only grew, so in a long-running workspace agents hit a limit for good and the only way on was to raise it again; now a creation stops counting after a day. Settings → Limits names them "… per day", the defaults stay 50, 12, 64 and 6, and a refusal says how many agents created in the last 24 hours and that waiting also helps. The count starts from zero after the update.
+
 ## 0.26.0
 
 A session can continue on another provider, finished turns in Chat fold their work into a header, `get_map` fits in an agent's answer, and Restart Host no longer hangs on a stuck host.

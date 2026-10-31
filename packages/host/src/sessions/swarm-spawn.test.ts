@@ -116,6 +116,7 @@ describe('create_swarm', () => {
     expect(session.task).toContain('90 minutes');
     expect(session.task).toContain('Wait for the Parley letter that all members have handed in');
     expect(after.resources).toMatchObject({ swarmsCreated: 1, swarmSpawned: 1, spawned: 0 });
+    expect(after.resources?.recent?.map((entry) => [entry.kind, entry.room])).toEqual([['swarm', null], ['swarm-session', null]]);
   });
 
   it('id не переиспользуется: второй рой — sw-02', async () => {
@@ -140,6 +141,7 @@ describe('create_swarm', () => {
     expect(after.resources?.swarmsCreated ?? 0).toBe(0);
     expect(after.resources?.swarmSpawned ?? 0).toBe(0);
     expect(after.resources?.spawned ?? 0).toBe(0);
+    expect(after.resources?.recent ?? []).toEqual([]);
     expect(after.resources?.attempts[0]).toMatchObject({ actor: 'human', session: queen.sessionId });
   });
 
@@ -169,6 +171,8 @@ describe('swarm_add', () => {
     expect(member.task).toContain('Read only');
     expect(member.task).toContain('report done');
     expect(after.resources).toMatchObject({ swarmSpawned: 5, swarmsCreated: 1 });
+    expect(after.resources?.recent?.filter((entry) => entry.kind === 'swarm-session')).toHaveLength(5);
+    expect(after.resources?.recent?.filter((entry) => entry.kind === 'swarm')).toHaveLength(1);
   });
 
   it('не королева (посторонний, трутень) — not-queen, ничего не пишется', async () => {
@@ -221,7 +225,10 @@ describe('пределы: ветка роя обходит workNewSessions и ro
     let roomId = '';
     await updateMap(project, workId, (current) => {
       roomId = addRoom(current, { title: 'Team', creator: caller, ownerId: caller, members: [caller] }).id;
-      current.resources = { seq: 0, spawned: 1, spawnedByRoom: { [roomId]: 1 }, attempts: [] };
+      current.resources = {
+        seq: 0, spawned: 1, spawnedByRoom: { [roomId]: 1 }, attempts: [],
+        recent: [{ kind: 'session', at: new Date().toISOString(), room: roomId }],
+      };
     });
     // Обычная сессия отказана: бюджет исчерпан.
     await expect(sessions.create({ projectPath: project, workId, ...base, label: 'Peer', task: 'x', requestedBy: caller })).rejects.toThrow();
@@ -229,6 +236,8 @@ describe('пределы: ветка роя обходит workNewSessions и ro
     await addMember(queen.sessionId);
     const after = await map();
     expect(after.resources).toMatchObject({ spawned: 1, spawnedByRoom: { [roomId]: 1 }, swarmSpawned: 2, swarmsCreated: 1 });
+    // Журнал обычных сессий ветка роя тоже не трогает: пишет только свои виды.
+    expect(after.resources?.recent?.filter((entry) => entry.kind === 'session')).toHaveLength(1);
     expect(after.swarms![0]!.members).toHaveLength(2);
   });
 

@@ -709,6 +709,7 @@ export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 
 export {
+  CREATION_WINDOW_MS,
   DEFAULT_RESOURCE_LIMITS,
   REQUEST_BUDGET_EXTENSION,
   RESOURCE_COVERAGE,
@@ -722,6 +723,8 @@ export {
   countRecipients,
   deniedForAgent,
   limitsFromConfig,
+  noteCreation,
+  recentCreations,
   reserveAttempt,
   resourceStatus,
   roomOfSession,
@@ -740,7 +743,7 @@ export type {
   ScopeStatus,
   SwarmSpawnRequest,
 } from './work/resource-policy.js';
-export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+export type { CreationKind, ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
 
 export {
   SWARM_OBJECTIVE_MAX,

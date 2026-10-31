@@ -672,7 +672,7 @@ describe('SettingsDialog — пороги бюджета работы (P37)', ()
     expect(section.querySelectorAll('input')).toHaveLength(14);
     expect(section.textContent).toContain('Swarm lifetime, minutes (0 = no limit) (0…1440)');
     expect(section.textContent).toContain('Running sessions, workspace (1…64)');
-    expect(section.textContent).toContain('Agent-created sessions, room (0…1000)');
+    expect(section.textContent).toContain('Agent-created sessions per day, room (0…1000)');
     expect(section.textContent).toContain('not tokens or money');
     expect(section.textContent).toContain('Subagents a CLI starts inside its own session are not counted');
     expect(screen.queryByLabelText(/Spawn depth/)).toBeNull();
