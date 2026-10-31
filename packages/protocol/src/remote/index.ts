@@ -6,3 +6,4 @@ export * from './relay.js';
 export * from './pairing.js';
 export * from './push.js';
 export * from './qr.js';
+export * from './projection.js';
