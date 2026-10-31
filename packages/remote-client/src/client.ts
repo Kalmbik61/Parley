@@ -1,6 +1,25 @@
 // Сборка ядра клиента: стор + перечитыватель карточек + действия + подтягивание писем. UI берёт отсюда стор и методы.
 import type { FeedDecision } from '@parley/core';
-import { decide, readCards, resolveProposal, type DecideOutcome, type ResolveOutcome, type ResolveProposalParams, type Rpc } from './actions.js';
+import {
+  createRoom,
+  createSession,
+  decide,
+  loadProviders,
+  loadRoles,
+  readCards,
+  resolveProposal,
+  sendRoomMessage,
+  type CreateRoomOutcome,
+  type CreateRoomParams,
+  type CreateSessionOutcome,
+  type CreateSessionParams,
+  type DecideOutcome,
+  type ResolveOutcome,
+  type ResolveProposalParams,
+  type Rpc,
+  type SendRoomMessageOutcome,
+  type SendRoomMessageParams,
+} from './actions.js';
 import { createRefresher, type Clock, type Refresher } from './refresh.js';
 import { createRemoteStore, type RemoteStore } from './store.js';
 import { workKeyOf, type SessionRef } from './state.js';
@@ -18,6 +37,13 @@ export interface RemoteClient {
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Promise<DecideOutcome>;
   resolveProposal(params: ResolveProposalParams): Promise<ResolveOutcome>;
   readCards(ref: SessionRef): ReturnType<typeof readCards>;
+  /** Методы из hello моста (`hello.methods`); `null` — соединение потеряно. */
+  setBridgeMethods(methods: string[] | null): void;
+  createSession(params: CreateSessionParams): Promise<CreateSessionOutcome>;
+  createRoom(params: CreateRoomParams): Promise<CreateRoomOutcome>;
+  sendRoomMessage(params: SendRoomMessageParams): Promise<SendRoomMessageOutcome>;
+  loadProviders(): Promise<boolean>;
+  loadRoles(projectPath: string): Promise<boolean>;
   dispose(): void;
 }
 
@@ -62,6 +88,12 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     decide: (ref, cardId, decision) => decide(store, rpc, now, ref, cardId, decision),
     resolveProposal: (params) => resolveProposal(store, rpc, params),
     readCards: (ref) => readCards(store, rpc, now, ref),
+    setBridgeMethods: (methods) => store.dispatch({ t: 'hello', methods }),
+    createSession: (params) => createSession(store, rpc, params),
+    createRoom: (params) => createRoom(store, rpc, params),
+    sendRoomMessage: (params) => sendRoomMessage(store, rpc, params),
+    loadProviders: () => loadProviders(store, rpc),
+    loadRoles: (projectPath) => loadRoles(store, rpc, projectPath),
     dispose: () => {
       unsubscribe();
       refresher.dispose();

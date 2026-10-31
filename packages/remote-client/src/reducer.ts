@@ -1,5 +1,5 @@
 // Редьюсер состояния телефона (спека §10.1, §8.3). Чистый: часы и RPC сюда не входят, время приходит в действии.
-import type { FeedItem, Message, SessionActivity } from '@parley/core';
+import type { FeedItem, Message, RoleList, SessionActivity } from '@parley/core';
 import { pendingCards } from '@parley/core/card-gist';
 import type { RoomsMailEvent } from '@parley/protocol';
 import { bridgeEventSchemas, remoteWorksSnapshotSchema, type RemoteWorksSnapshot } from '@parley/protocol/remote';
@@ -11,6 +11,7 @@ import {
   type ActivityEntry,
   type CardsEntry,
   type HostStatus,
+  type ProviderCatalog,
   type RemoteState,
   type SessionRef,
 } from './state.js';
@@ -27,7 +28,13 @@ export type RemoteAction =
   | { t: 'cards.failed'; ref: SessionRef; epoch: string | null; at: number }
   /** Карточку решили мы сами: она уходит без «Answered at your Mac». */
   | { t: 'cards.resolved'; ref: SessionRef; cardId: string }
-  | { t: 'gone.dismiss'; key: string };
+  | { t: 'gone.dismiss'; key: string }
+  /** Методы из hello моста; `null` — соединение потеряно, hello устарел. */
+  | { t: 'hello'; methods: string[] | null }
+  | { t: 'catalog.providers'; epoch: string | null; providers: ProviderCatalog }
+  | { t: 'catalog.roles'; epoch: string | null; projectPath: string; roles: RoleList }
+  /** `text: ''` убирает черновик. */
+  | { t: 'draft'; key: string; text: string };
 
 const isRef = (value: unknown): value is SessionRef => {
   if (typeof value !== 'object' || value === null) return false;
@@ -104,7 +111,10 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
   switch (action.t) {
     case 'bridge.status':
       // Другая эпоха сбрасывает снимок, активность, карточки и письма: защита по `revision` начинается заново.
-      if (action.epoch !== state.epoch) return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch };
+      // `methods` (hello моста) и черновики пишет не эпоха хоста: они живут до своего события.
+      if (action.epoch !== state.epoch) {
+        return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch, methods: state.methods, drafts: state.drafts };
+      }
       return state.hostStatus === action.host ? state : { ...state, hostStatus: action.host };
     case 'snapshot':
       if (action.epoch !== undefined && action.epoch !== state.epoch) return state;
@@ -149,6 +159,21 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
         ...state,
         cards: { ...state.cards, [key]: { ...entry, cards: entry.cards.filter((c) => c.cardId !== action.cardId) } },
       };
+    }
+    case 'hello':
+      return { ...state, methods: action.methods };
+    case 'catalog.providers':
+      return action.epoch === state.epoch ? { ...state, providers: action.providers } : state;
+    case 'catalog.roles':
+      return action.epoch === state.epoch ? { ...state, roles: { ...state.roles, [action.projectPath]: action.roles } } : state;
+    case 'draft': {
+      if (action.text === '') {
+        if (!(action.key in state.drafts)) return state;
+        const drafts = { ...state.drafts };
+        delete drafts[action.key];
+        return { ...state, drafts };
+      }
+      return state.drafts[action.key] === action.text ? state : { ...state, drafts: { ...state.drafts, [action.key]: action.text } };
     }
     case 'gone.dismiss': {
       if (!(action.key in state.gone)) return state;
