@@ -6,10 +6,12 @@ import {
   createRemoteClient,
   type ClientInfo,
   type HostRecord,
+  type HostStatus,
   type Platform,
   type RemoteClient,
   type SupervisorStatus,
 } from '@parley/remote-client';
+import { withSeedHost } from '../dev/seed-host';
 import { wipeOnFirstRun, type InstallMarker } from '../platform/first-run';
 
 export interface RuntimeState {
@@ -21,14 +23,19 @@ export interface RuntimeState {
   waitingSince: number | null;
   /** Last time the snapshot changed, ms. */
   lastUpdatedAt: number | null;
+  /** Host status from the bridge (`bridge.status`), mirrored so the banner re-renders on change. */
+  hostStatus: HostStatus | null;
 }
 
 export interface RuntimeDeps {
   platform: Platform;
   marker: InstallMarker;
   client: ClientInfo;
-  /** Developer build only: a host record to use when none is paired (see `src/dev/seed-host.ts`). */
-  seedHost?: () => HostRecord | null;
+  /**
+   * Developer build only: a host record that exists in memory only and is hidden as soon as a real record exists
+   * (`withSeedHost` in `src/dev/seed-host.ts`). It is never written to the Keychain.
+   */
+  seedHost?: HostRecord | null;
 }
 
 export class AppRuntime {
@@ -42,6 +49,7 @@ export class AppRuntime {
     client: null,
     waitingSince: null,
     lastUpdatedAt: null,
+    hostStatus: null,
   };
   #started: Promise<void> | null = null;
   #supervisor: Supervisor | null = null;
@@ -49,7 +57,9 @@ export class AppRuntime {
 
   constructor(deps: RuntimeDeps) {
     this.#deps = deps;
-    this.hostStore = new HostStore(deps.platform.keyStore);
+    this.hostStore = new HostStore(
+      deps.seedHost ? withSeedHost(deps.platform.keyStore, deps.seedHost) : deps.platform.keyStore,
+    );
   }
 
   /** Relay of the current host for the reachability probe; `null` before a host is known. */
@@ -72,15 +82,8 @@ export class AppRuntime {
 
   async #start(): Promise<void> {
     await wipeOnFirstRun(this.hostStore, this.#deps.marker);
-    let hosts = await this.hostStore.list();
-    if (hosts.length === 0) {
-      const seed = this.#deps.seedHost?.() ?? null;
-      if (seed !== null) {
-        await this.hostStore.put(seed);
-        hosts = await this.hostStore.list();
-      }
-    }
-    const host = hosts[0] ?? null;
+    // A14 adds host selection; until then the current host is the first record (the seed is hidden once a real one exists).
+    const host = (await this.hostStore.list())[0] ?? null;
     if (host === null) return this.#set({ phase: 'ready' });
     this.#connect(host);
   }
@@ -103,6 +106,7 @@ export class AppRuntime {
       supervisor.onEvent((event, data) => client.handleEvent(event, data)),
       client.store.subscribe((next, prev) => {
         if (next.snapshot !== prev.snapshot) this.#set({ lastUpdatedAt: platform.now() });
+        if (next.hostStatus !== prev.hostStatus) this.#set({ hostStatus: next.hostStatus });
       }),
       platform.appState.subscribe((s) => client.refresher.setForeground(s === 'active')),
       supervisor.subscribe((status) => {
@@ -121,7 +125,9 @@ export class AppRuntime {
     supervisor.start();
   }
 
+  /** A later `start()` begins again (remounting the root, Fast Refresh). */
   stop(): void {
+    this.#started = null;
     this.#supervisor?.stop();
     this.#supervisor = null;
     for (const off of this.#teardown.splice(0)) off();

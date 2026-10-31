@@ -4,7 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import { runtime } from '../runtime/instance';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { typography, useColors } from '../theme';
-import { bannerFor, type Banner, type BannerAction } from './banner-model';
+import { bannerFor, needsClock, type Banner, type BannerAction, type BannerInput } from './banner-model';
 
 const LABELS: Record<BannerAction, string> = { retry: 'Retry', 'pair-again': 'Pair again', remove: 'Remove' };
 
@@ -20,20 +20,33 @@ function useNow(active: boolean): number {
   return now;
 }
 
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduce);
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduce);
+    return () => sub.remove();
+  }, []);
+  return reduce;
+}
+
 /** One line under the navigation bar (D1 §4). A14 wires "Pair again"/"Remove" and the tap to Diagnostics. */
 export function ConnectionBanner({ onAction }: { onAction?: (action: BannerAction) => void }) {
   const colors = useColors();
   const state = useRuntimeState();
-  const now = useNow(state.supervisor !== null);
-  const banner = bannerFor({
+  const base: Omit<BannerInput, 'now'> = {
     supervisor: state.supervisor,
-    hostStatus: state.client?.store.getState().hostStatus ?? null,
+    hostStatus: state.hostStatus,
     hasSnapshot: state.lastUpdatedAt !== null,
     lastUpdatedAt: state.lastUpdatedAt,
     waitingSince: state.waitingSince,
     relay: state.host?.relay ?? null,
-    now,
-  });
+  };
+  // Tick once a second only while the banner on screen shows a clock.
+  const kindNow = bannerFor({ ...base, now: Date.now() })?.kind ?? null;
+  const now = useNow(kindNow !== null && needsClock(kindNow));
+  const banner = bannerFor({ ...base, now });
+  const reduceMotion = useReduceMotion();
 
   // The "Updating…" banner waits 1.5 s so a short reconnect does not flash it.
   const kind = banner?.kind ?? null;
@@ -48,8 +61,13 @@ export function ConnectionBanner({ onAction }: { onAction?: (action: BannerActio
 
   const visible = banner !== null && shownKind === banner.kind;
   useEffect(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.create(250, 'spring', 'opacity'));
-  }, [visible]);
+    // D1 §17.3: a spring, or a 150 ms fade with Reduce Motion.
+    LayoutAnimation.configureNext(
+      reduceMotion
+        ? LayoutAnimation.create(150, 'easeInEaseOut', 'opacity')
+        : LayoutAnimation.create(250, 'spring', 'opacity'),
+    );
+  }, [visible, reduceMotion]);
   useEffect(() => {
     if (visible && banner !== null) AccessibilityInfo.announceForAccessibility(banner.text);
     // Announce on kind change only (D1 §18).

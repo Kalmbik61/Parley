@@ -49,14 +49,15 @@ export function createKeyStore(store: SecureStoreLike, options: object): KeyStor
       return out;
     },
     async put(record: HostRecord): Promise<void> {
-      await store.setItemAsync(recordKey(record.hostId), JSON.stringify(record), options);
+      // Index first: a failure between the two writes leaves an id without a record, never a record `wipeAll` cannot see.
       const ids = await readIndex();
       if (!ids.includes(record.hostId)) await writeIndex([...ids, record.hostId]);
+      await store.setItemAsync(recordKey(record.hostId), JSON.stringify(record), options);
     },
     async remove(hostId: string): Promise<void> {
+      await store.deleteItemAsync(recordKey(hostId), options);
       const ids = await readIndex();
       await writeIndex(ids.filter((id) => id !== hostId));
-      await store.deleteItemAsync(recordKey(hostId), options);
     },
   };
 }

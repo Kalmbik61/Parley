@@ -23,6 +23,6 @@ export const runtime = new AppRuntime({
     create: () => markerFile.create({ intermediates: true, overwrite: true }),
   },
   client: { app: 'parley-mobile', version, platform: 'ios' },
-  seedHost: () => (__DEV__ && typeof devRelay === 'string' ? seedHostFromEnv(devRelay, platform.random) : null),
+  seedHost: __DEV__ && typeof devRelay === 'string' ? seedHostFromEnv(devRelay, platform.random) : null,
 });
 relayHost = () => runtime.relayHost;
