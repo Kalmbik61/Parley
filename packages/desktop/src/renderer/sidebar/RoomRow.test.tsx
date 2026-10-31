@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Message, Proposal, Room, WindowWorkEntry, WorkSession } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { refKey, type LiveMetrics } from '@parley/protocol';
 import type { LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -71,7 +71,6 @@ function renderRow(entry: WindowWorkEntry, options: Options = {}) {
         workId={WORK}
         bridge={BRIDGE}
         row={roomRowOf(entry, showClosed, roomId)}
-        unread={0}
         mentioned={false}
         activity={{}}
         now={NOW}
@@ -92,6 +91,7 @@ const rowEl = (): HTMLElement => {
 };
 const header = (): HTMLElement => rowEl().firstElementChild as HTMLElement;
 const memberRows = (): HTMLElement[] => [...rowEl().querySelectorAll<HTMLElement>('[data-session-id]')];
+const chip = (): HTMLElement | null => rowEl().querySelector<HTMLElement>('[data-sidebar-room-context]');
 const badges = (): HTMLElement[] => [...rowEl().querySelectorAll<HTMLElement>('[data-provider-badge]')];
 
 // ── раскладки для правила 2.6 ─────────────────────────────────────────────────────────────────────────────────────────
@@ -406,22 +406,15 @@ describe('RoomRow — фон и слово состояния (1.2)', () => {
     expect(screen.getByText('Возвраты').className).toContain('font-bold');
   });
 
-  it('непрочитанное — слово «N new» neutral-800 и жирное название; иначе слова нет, название обычное', () => {
-    renderRow(fourAgents(), { unread: 3 });
-    const word = screen.getByText('3 new');
-    expect(word.className).toContain('text-neutral-800');
-    expect(screen.getByText('Возвраты').className).toContain('font-bold');
-    cleanup();
+  it('без упоминания и решения слова нет, название обычное; упоминание — жирное название', () => {
     renderRow(fourAgents());
     expect(header().textContent).not.toContain('new');
+    expect(header().textContent).not.toContain('@you');
     expect(screen.getByText('Возвраты').className).not.toContain('font-bold');
     expect(screen.getByText('Возвраты').className).toContain('font-normal');
-  });
-
-  it('решение важнее непрочитанного: слово «decision», а не «N new»', () => {
-    renderRow(fourAgents({ proposal }), { unread: 2 });
-    expect(header().textContent).toContain('decision');
-    expect(header().textContent).not.toContain('2 new');
+    cleanup();
+    renderRow(fourAgents(), { mentioned: true });
+    expect(screen.getByText('Возвраты').className).toContain('font-bold');
   });
 
   // Спека застрявших 7.3: комната подсвечивается и тогда, когда живому участнику нужен человек (`need`), а решения нет.
@@ -440,14 +433,14 @@ describe('RoomRow — фон и слово состояния (1.2)', () => {
       expect(screen.getByText('Возвраты').className).toContain('font-bold');
     });
 
-    it('решение важнее: слово «decision»; необходимость человека важнее «N new» и упоминания', () => {
+    it('решение важнее: слово «decision»; необходимость человека важнее упоминания', () => {
       renderRow(fourAgents({ proposal }), { activity: stuckActivity() });
       expect(header().textContent).toContain('decision');
       expect(header().textContent).not.toContain(S.states.blocked);
       cleanup();
-      renderRow(fourAgents(), { activity: stuckActivity(), unread: 2, mentioned: true });
+      renderRow(fourAgents(), { activity: stuckActivity(), mentioned: true });
       expect(header().textContent).toContain(S.states.blocked);
-      expect(header().textContent).not.toContain('new');
+      expect(header().textContent).not.toContain('@you');
     });
 
     it('без need — прежний вид; need у закрытого и у спящего участника не считается', () => {
@@ -661,7 +654,7 @@ describe('RoomRow — длинные значения', () => {
       sessions: [makeSession('s-01', label), makeSession('s-02', 'b')],
       rooms: [{ ...room({ members: ['s-01', 's-02'], lead: 's-01' }), title }],
     });
-    renderRow(entry, { unread: 12 });
+    renderRow(entry, { mentioned: true });
     const name = screen.getByText(title);
     expect(name.textContent).toBe(title);
     expect(name.className).toContain('truncate');
@@ -670,7 +663,7 @@ describe('RoomRow — длинные значения', () => {
     const labelEl = screen.getByText(`S01 ${label}`);
     expect(labelEl.className).toContain('truncate');
     // Слово, шеврон и время не сжимаются: сжимается только название.
-    expect(screen.getByText('12 new').className).toContain('shrink-0');
+    expect(screen.getByText('@you').className).toContain('shrink-0');
     expect(screen.getByRole('button', { name: 'Hide agents' }).className).toContain('shrink-0');
     expect(rowEl().className).toContain('min-w-0');
   });
@@ -689,47 +682,114 @@ describe('RoomRow — активность и время', () => {
   });
 });
 
-// Parley 0.3.0: в комнате назвали человека (`@human`) — слово справа `@you · N new`; решение, что ждёт ответа, важнее.
+const ctxRef = (sessionId: string) => ({ projectPath: PROJECT, workId: WORK, sessionId });
+/** Срез активности: у s-01 известен контекст (и, если нужно, ждущая просьба сжатия). */
+function contextActivity(usedPercent: number, compaction: 'pending' | null = null) {
+  const context = { usedPercent, windowTokens: 200_000, usedTokens: Math.round(usedPercent * 2000), at: '2026-10-15T10:00:00.000Z' };
+  const metrics = { tokensIn: 1, tokensOut: 1, durationMs: null, unread: 0, subagents: 0, model: null, context, compaction } as unknown as LiveMetrics;
+  return activityMap([makeActivity(ctxRef('s-01'), 'idle', { metrics })]);
+}
+
+// Parley 0.3.0: в комнате назвали человека (`@human`) — слово справа `@you` (без числа); решение, что ждёт ответа, важнее.
 describe('RoomRow — упоминание человека (Parley 0.3.0)', () => {
-  it('словом строки становится «@you · N new»: N — все новые сообщения комнаты, а не только упоминания', () => {
-    renderRow(fourAgents(), { unread: 3, mentioned: true });
-    const word = screen.getByText('@you \u00b7 3 new');
+  it('словом строки становится «@you» и название жирное', () => {
+    renderRow(fourAgents(), { mentioned: true });
+    const word = screen.getByText('@you');
     expect(word.className).toContain('text-neutral-800');
     expect(word.className).toContain('text-[11px]');
     expect(word.className).toContain('shrink-0');
     expect(screen.getByText('Возвраты').className).toContain('font-bold');
-    // Слово заменило простое «N new», а не дополнило его.
-    expect(header().textContent?.match(/new/g)).toHaveLength(1);
-  });
-
-  it('тот же текст, что даёт строка окна: S.sidebar.roomMentioned', () => {
-    expect(S.sidebar.roomMentioned(1)).toBe('@you \u00b7 1 new');
-    renderRow(fourAgents(), { unread: 1, mentioned: true });
-    expect(header().textContent).toContain(S.sidebar.roomMentioned(1));
-  });
-
-  it('без упоминания — прежнее «N new»; без непрочитанного слова нет', () => {
-    renderRow(fourAgents(), { unread: 2, mentioned: false });
-    expect(header().textContent).toContain('2 new');
-    expect(header().textContent).not.toContain('@you');
-    cleanup();
-    renderRow(fourAgents());
-    expect(header().textContent).not.toContain('@you');
     expect(header().textContent).not.toContain('new');
   });
 
-  it('решение ждёт — слово «decision», а не «@you · N new»', () => {
-    renderRow(fourAgents({ proposal }), { unread: 2, mentioned: true });
+  it('тот же текст, что даёт строка окна: S.sidebar.roomMentioned', () => {
+    expect(S.sidebar.roomMentioned).toBe('@you');
+    renderRow(fourAgents(), { mentioned: true });
+    expect(header().textContent).toContain(S.sidebar.roomMentioned);
+  });
+
+  it('решение ждёт — слово «decision», а не «@you»', () => {
+    renderRow(fourAgents({ proposal }), { mentioned: true });
     expect(screen.getByText(S.sidebar.roomDecision).className).toContain('text-accent-800');
     expect(header().textContent).not.toContain('@you');
-    expect(header().textContent).not.toContain('2 new');
+  });
+
+  it('при упоминании значка контекста нет: слово вытесняет его', () => {
+    renderRow(fourAgents(), { mentioned: true, activity: contextActivity(72) });
+    expect(chip()).toBeNull();
   });
 });
 
-it('shows done progress without changing the room title or decision/unread indicators',()=>{
+// Значок контекста в строке комнаты: тот же `RoomContextChip`, что в шапке комнаты, вариант `sidebar`.
+describe('RoomRow — значок контекста', () => {
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['sessions.compact', 'sessions.cancelCompact'] } });
+  });
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('живой участник с 72 % — «Ctx 72%», уровень warn; 90 % — critical; 30 % — normal', () => {
+    renderRow(fourAgents(), { activity: contextActivity(72) });
+    expect(chip()?.textContent).toBe('Ctx 72%');
+    expect(chip()?.getAttribute('data-level')).toBe('warn');
+    expect(header().contains(chip())).toBe(true);
+    expect(document.querySelector('[data-testid="room-context-chip"]')).toBeNull();
+    cleanup();
+    renderRow(fourAgents(), { activity: contextActivity(90) });
+    expect(chip()?.getAttribute('data-level')).toBe('critical');
+    cleanup();
+    renderRow(fourAgents(), { activity: contextActivity(30) });
+    expect(chip()?.getAttribute('data-level')).toBe('normal');
+    expect(chip()?.className).toContain('text-neutral-800');
+  });
+
+  it('ждущая просьба сжатия — «⏳»', () => {
+    renderRow(fourAgents(), { activity: contextActivity(50, 'pending') });
+    expect(chip()?.textContent).toBe('Ctx 50% ⏳');
+  });
+
+  it('клик по значку открывает поповер, комната не открывается и строка не сворачивается', () => {
+    const onOpen = vi.fn();
+    const onParentClick = vi.fn();
+    renderRow(fourAgents(), { activity: contextActivity(72), onOpen, onParentClick });
+    const before = useUiStore.getState().roomExpanded;
+    fireEvent.click(chip()!);
+    expect(screen.getByTestId('room-context-popover')).toBeTruthy();
+    expect(screen.getByTestId('room-compact-all')).toBeTruthy();
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onParentClick).not.toHaveBeenCalled();
+    expect(useUiStore.getState().roomExpanded).toBe(before);
+  });
+
+  it('правый клик внутри поповера не открывает меню комнаты (событие не всплывает к RoomRowMenu)', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['sessions.compact', 'sessions.cancelCompact', 'rooms.rename', 'rooms.delete'] } });
+    // Контроль: на самой строке тот же жест меню открывает.
+    renderRow(fourAgents(), { activity: contextActivity(72) });
+    fireEvent.contextMenu(header());
+    expect(screen.queryByText('Rename')).not.toBeNull();
+    cleanup();
+    renderRow(fourAgents(), { activity: contextActivity(72) });
+    fireEvent.click(chip()!);
+    fireEvent.contextMenu(screen.getByTestId('room-compact-instructions'));
+    expect(screen.queryByText('Rename')).toBeNull();
+  });
+
+  it('значка нет: архивная комната; ни у кого нет поля context (старый хост); нет метрик', () => {
+    renderRow(fourAgents({ archivedAt: '2026-09-29T09:00:00.000Z' }), { activity: contextActivity(72) });
+    expect(chip()).toBeNull();
+    cleanup();
+    renderRow(fourAgents(), { activity: activityMap(['s-01', 's-02'].map((id) => makeActivity(ctxRef(id), 'idle', { metrics: { tokensIn: 1, tokensOut: 1 } as unknown as LiveMetrics }))) });
+    expect(chip()).toBeNull();
+    cleanup();
+    renderRow(fourAgents());
+    expect(chip()).toBeNull();
+  });
+
+});
+
+it('shows done progress without changing the room title or decision/mention indicators',()=>{
  const entry=makeWork('w-01',{projectPath:PROJECT,rooms:[room()],sessions:sessions('s-01')});
  const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:1,mode:'checklist',status:'active',goal:'Ship',items:[{id:1,title:'One',owner:'s-01',scope:'x',after:[],criteria:[],verifier:null,status:'done',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};
- renderRow(entry,{plan,unread:2}); expect(screen.getByText('1/1 done')).toBeTruthy();expect(screen.getByText('Возвраты')).toBeTruthy();expect(screen.getByText('2 new')).toBeTruthy();
+ renderRow(entry,{plan,mentioned:true}); expect(screen.getByText('1/1 done')).toBeTruthy();expect(screen.getByText('Возвраты')).toBeTruthy();expect(screen.getByText('@you')).toBeTruthy();
 });
 
 describe('RoomRow — меню строки: Rename и Make lead участника', () => {

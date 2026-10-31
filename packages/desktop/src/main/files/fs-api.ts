@@ -28,9 +28,17 @@ const BINARY_PROBE_BYTES = 8192;
 /** Имена, которые дерево не показывает в любом регистре: git и карты core (`.parley/` и прежний `.harnas/`) — не для правки из окна. */
 const HIDDEN_NAMES = new Set(['.git', ...STATE_DIRS]);
 
+export interface LocateOptions {
+  external?: boolean;
+}
+
 export interface FsApi {
   stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
-  locate(workKey: string, absPaths: string[]): Promise<Array<Located | null>>;
+  /**
+   * `options.external` (⌘-клик по пути вне корней, 2026-10-31): путь вне корней работы, но существующий, отдаётся
+   * как `Located` с корнем `external` и абсолютным realpath в `relPath`; без флага — `null`, как раньше.
+   */
+  locate(workKey: string, absPaths: string[], options?: LocateOptions): Promise<Array<Located | null>>;
   list(root: FileRoot, dir: string): Promise<DirEntry[]>;
   readText(root: FileRoot, path: string): Promise<TextFile>;
   readBytes(root: FileRoot, path: string, limit?: number): Promise<Uint8Array>;
@@ -289,17 +297,27 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
 
   return {
     stat: (root, paths) => Promise.all(paths.map((relPath) => statOne(root, relPath))),
-    locate: (workKey, absPaths) =>
+    locate: (workKey, absPaths, locateOptions) =>
       Promise.all(
         absPaths.map(async (absPath): Promise<Located | null> => {
           const found = await roots.locate(workKey, absPath);
-          if (found === null) return null;
+          if (found === null) {
+            if (locateOptions?.external !== true) return null;
+            // Вне корней работы: файл или папка по realpath — только для просмотра (корень `external`).
+            const root: FileRoot = { workKey, spec: { kind: 'external' } };
+            const real = await roots.resolve(root, absPath, 'read').catch(() => null);
+            if (real === null) return null;
+            const stat = await statReal(real).catch(() => null);
+            return stat === null ? null : { root, relPath: real, stat };
+          }
           const stat = await statOne(found.root, found.relPath);
           return stat === null ? null : { root: found.root, relPath: found.relPath, stat };
         }),
       ),
 
     list: async (root, dir) => {
+      // Внешний файл (2026-10-31) — один файл для просмотра, не папка для обхода.
+      if (root.spec.kind === 'external') throw new FilesDeniedError('external root cannot be listed');
       const real = await roots.resolve(root, dir, 'read');
       let names: string[];
       try {
@@ -353,7 +371,9 @@ export function createFsApi(roots: RootsRegistry, options: FsApiOptions = {}): F
         size: buffer.length,
         binary,
         utf8,
-        readOnlyReason: buffer.length > LIMITS.editableBytes ? 'too-large' : utf8 ? null : 'not-utf8',
+        // Внешний файл (2026-10-31) только для чтения, какого бы размера и кодировки он ни был.
+        readOnlyReason:
+          root.spec.kind === 'external' ? 'external' : buffer.length > LIMITS.editableBytes ? 'too-large' : utf8 ? null : 'not-utf8',
       };
     },
 

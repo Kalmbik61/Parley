@@ -38,6 +38,7 @@ import {
   sessionNeed,
   type Attention,
 } from '../../attention/derive.js';
+import { liveContext } from '../../lib/context-format.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../../lib/participant.js';
 import { modelName } from '../../lib/participant-tag.js';
@@ -310,9 +311,6 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       : summary?.next
         ? { kind: 'next', text: S.rooms.planNext(summary.next.subject) }
         : null;
-    const active = session.lifecycle === 'active';
-    const context = active ? liveEntry?.metrics?.context : null;
-    const compaction = active ? liveEntry?.metrics?.compaction : null;
     participants.push({
       id,
       role: session.role ?? null,
@@ -337,8 +335,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       agents,
       lead: id === lead,
       closed: session.lifecycle === 'closed',
-      ...(context === undefined ? {} : { context }),
-      ...(compaction === undefined ? {} : { compaction }),
+      ...liveContext(session, liveEntry),
     });
   }
 

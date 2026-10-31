@@ -26,7 +26,8 @@ export const tabId: {
   mail: () => 'mail',
   room: (roomId) => `room:${roomId}`,
   diff: (sessionId, commit) => (commit === null ? `diff:${sessionId}` : `diff:${sessionId}:${commit}`),
-  file: (root, path) => (root.kind === 'project' ? `file:p:${path}` : `file:w:${root.sessionId}:${path}`),
+  file: (root, path) =>
+    root.kind === 'project' ? `file:p:${path}` : root.kind === 'external' ? `file:x:${path}` : `file:w:${root.sessionId}:${path}`,
   browser: (random = Math.random) => `browser:${randomHex(6, random)}`,
 };
 

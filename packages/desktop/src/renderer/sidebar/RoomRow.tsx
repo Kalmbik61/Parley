@@ -5,9 +5,12 @@
  *
  * Облик: radius 14, отступ `4 6 7 8` и сдвиг на уровень `marginLeft: 20·depth` (как у строки сессии: заливка начинается
  * после изгиба линии дерева, `TreeGuides.tsx`), зазор 4, 12px. Шапка 18px, зазор 6: значок вопроса 12 (только
- * когда решение ждёт человека, иначе пустое место), Hash 13, название, слово состояния — `decision` (`accent-800`),
- * `@you · {n} new`, если среди новых сообщений есть упоминание человека (`@human`, Parley 0.3.0), или `{n} new`
- * (оба — `neutral-800`), шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего события. Свёрнутая —
+ * когда решение ждёт человека, иначе пустое место), Hash 13, название, один слот справа от названия (после прогресса
+ * плана): слово `decision` (`accent-800`), `needs you` или `@you` (упоминание человека `@human`, Parley 0.3.0;
+ * `neutral-800`) — а когда слова нет, значок контекста `Ctx NN%` с поповером сжатия (тот же `RoomContextChip`, что в
+ * шапке комнаты, вариант `sidebar`; клик по значку комнату не открывает и строку не сворачивает). Приоритет слота:
+ * решение → `needs you` → `@you` → значок. Шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего
+ * события. Название жирное, когда комната выбрана, ждёт человека или в ней назвали человека. Свёрнутая —
  * значки провайдеров участников (отступ 37, зазор 14): значок 14 и в правом нижнем углу кружок-счётчик, обведённый
  * цветом фона карточки; число — ВСЕ агенты провайдера в комнате, не только запущенные (решение 7), тултип
  * `2 Claude Code agents`. «В комнате» — те, кого сайдбар в неё поставил (`CardRoomRow.sessions`): сессия старой карты,
@@ -41,7 +44,7 @@
  *
  * Архивная комната (спека архива комнат, 5.1; `CardRoomRow.archived`) стоит под ссылкой внизу карточки и приглушена,
  * как `done`-карточка: `data-dimmed` на строке (правило `dimmed.css`). Остальное то же: она открывается, разворачивается
- * и берёт курсор клавиатуры; внимания (`decision`, `N new`) у неё нет — его не считает `attention/derive.ts`, а меню другое
+ * и берёт курсор клавиатуры; внимания (`decision`) и значка контекста у неё нет — его не считает `attention/derive.ts`, а меню другое
  * («Reopen», «Rename», «Delete…»). Целью броска сессии она не бывает (`layout/dnd-sidebar.ts`).
  */
 
@@ -56,7 +59,8 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useLayoutStore } from '../layout/store.js';
 import { cn } from '../lib/cn.js';
-import { sessionTag } from '../lib/participant.js';
+import { liveContext } from '../lib/context-format.js';
+import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { roomKey, roomTabState } from '../lib/room-view.js';
 import type { ActivityEntry } from '../store/activity.js';
@@ -66,6 +70,7 @@ import { RoomInlineRename } from './InlineRename.js';
 import { RoomRowMenu } from './RoomRowMenu.js';
 import { SessionRow } from './SessionRow.js';
 import { planProgress } from '../components/rooms/PlanPanel.js';
+import { RoomContextChip, type ContextMember } from '../components/rooms/RoomContextChip.js';
 import type { RoomPlan } from '@parley/core';
 import { NO_GUIDES, type CardRoomRow, type TreeGuide } from './sort.js';
 import { TREE_STEP, TreeGuides } from './TreeGuides.js';
@@ -83,8 +88,6 @@ export interface RoomRowProps {
   /** Линии дерева к этой строке и сквозь неё (`sort.ts#treeGuides`); у архивной комнаты их нет. */
   guides?: readonly TreeGuide[];
   plan?: RoomPlan | null;
-  /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
-  unread: number;
   /** Среди них есть упоминание человека `@human` (`WorkAttention.roomMentions`). */
   mentioned: boolean;
   /** Срез активности работы (`WorkCard`): по `refKey` сессии. */
@@ -130,7 +133,6 @@ export function RoomRow({
   ownerSessions = [],
   guides = NO_GUIDES,
   plan,
-  unread,
   mentioned,
   activity,
   now,
@@ -161,17 +163,23 @@ export function RoomRow({
     !row.archived &&
     row.sessions.some((session) => sessionNeed(session, activity[refKey({ projectPath, workId, sessionId: session.id })]?.activity ?? null) !== null);
   const needsYou = pending || stuck;
-  const bold = selected || unread > 0 || needsYou;
-  // Решение важнее всего, затем участник, которому нужен человек; упоминание человека — важнее простого «N new».
-  const word = pending
-    ? S.sidebar.roomDecision
-    : stuck
-      ? S.states.blocked
-      : mentioned
-        ? S.sidebar.roomMentioned(unread)
-        : unread > 0
-          ? S.sidebar.roomNew(unread)
-          : '';
+  const bold = selected || needsYou || mentioned;
+  // Решение важнее всего, затем участник, которому нужен человек, затем упоминание человека; значок контекста — только
+  // когда слова нет.
+  const word = pending ? S.sidebar.roomDecision : stuck ? S.states.blocked : mentioned ? S.sidebar.roomMentioned : '';
+  // Участники значка контекста — как в ленте комнаты (`liveContext`); закрытых значок отфильтрует сам.
+  const contextMembers: ContextMember[] = row.sessions.map((session) => {
+    const sessionRef = { projectPath, workId, sessionId: session.id };
+    return {
+      id: session.id,
+      label: sessionRowLabel(session.id, session.label),
+      provider: session.provider,
+      lifecycle: session.lifecycle,
+      closed: session.lifecycle === 'closed',
+      sessionRef,
+      ...liveContext(session, activity[refKey(sessionRef)]),
+    };
+  });
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
   const tooltip = S.sidebar.roomTooltip(
     row.lead === null ? null : sessionTag(row.lead),
@@ -256,7 +264,11 @@ export function RoomRow({
           <span className={cn('min-w-0 flex-1 truncate', bold ? 'font-bold' : 'font-normal')}>{title}</span>
         )}
         {plan ? <span data-room-plan-progress="" className="shrink-0 text-[11px]" title={planProgress(plan)}>{planProgress(plan)}</span> : null}
-        {word === '' ? null : <span className={cn('shrink-0 text-[11px]', needsYou ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>}
+        {word !== '' ? (
+          <span className={cn('shrink-0 text-[11px]', needsYou ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>
+        ) : row.archived ? null : (
+          <RoomContextChip bridge={bridge} roomTitle={title} participants={contextMembers} variant="sidebar" />
+        )}
         <button
           type="button"
           // Шеврон открывается стрелками на самой строке (→ и ←); в порядок Tab он не входит, как остальные строки списка.

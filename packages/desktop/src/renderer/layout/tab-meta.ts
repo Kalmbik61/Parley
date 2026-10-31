@@ -86,11 +86,14 @@ function withParent(path: string): string {
 
 /** Метка корня файла (раунд fix-live, D5): `S02` — worktree сессии, `Project` — папка проекта, как в выборе корня. */
 export function fileRootLabel(root: FileRootSpec): string {
+  if (root.kind === 'external') return S.files.external;
   return root.kind === 'project' ? S.files.project : sessionTag(root.sessionId);
 }
 
 /** Подсказка файловой вкладки: путь и метка корня — всегда, даже без тёзок (раунд fix-live, D5). */
 export function fileTabHint(tab: Extract<TabSpec, { kind: 'file' }>): string {
+  // Внешний файл (2026-10-31): подсказка — полный путь, метка корня не нужна.
+  if (tab.root.kind === 'external') return tab.path;
   return S.tabs.fileWithRoot(tab.path, fileRootLabel(tab.root));
 }
 

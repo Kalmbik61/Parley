@@ -406,3 +406,25 @@ describe('files/ipc: files:ls-files (решение по 7.1b)', () => {
     }
   });
 });
+
+describe('files/ipc: внешний корень (2026-10-31)', () => {
+  const EXT = { workKey: KEY, spec: { kind: 'external' } };
+
+  it('принимает корень external; относительный путь — bad_request до реестра, абсолютный и ~/ — доходят', async () => {
+    const { ipcMain, roots } = setup({ rootPath: '/' });
+    expect(await code(ipcMain.invoke('files:read-text', EXT, 'src/a.ts'))).toBe('bad_request');
+    expect(await code(ipcMain.invoke('files:stat', EXT, ['a.md']))).toBe('bad_request');
+    expect(await code(ipcMain.invoke('files:write', EXT, 'a.md', 'x', null))).toBe('bad_request');
+    expect(roots.resolve).not.toHaveBeenCalled();
+    await ipcMain.invoke('files:stat', EXT, ['/tmp/a.md', '~/a.md']);
+    expect(roots.resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it('locate принимает options.external и отвергает чужие поля', async () => {
+    const { ipcMain, roots } = setup();
+    await ipcMain.invoke('files:locate', KEY, ['/tmp/a.md'], { external: true });
+    expect(roots.locate).toHaveBeenCalledTimes(1);
+    expect(await code(ipcMain.invoke('files:locate', KEY, ['/tmp/a.md'], { external: 'yes' }))).toBe('bad_request');
+    expect(await code(ipcMain.invoke('files:locate', KEY, ['/tmp/a.md'], { other: true }))).toBe('bad_request');
+  });
+});

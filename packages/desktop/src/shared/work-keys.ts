@@ -12,9 +12,9 @@ export function workKey(projectPath: string, workId: string): string {
 
 /** Ключ корня (спека 10.8): workKey, вид и sessionId. */
 export function rootKey(root: FileRoot): string {
-  return root.spec.kind === 'project'
-    ? `${root.workKey} project`
-    : `${root.workKey} worktree ${root.spec.sessionId}`;
+  if (root.spec.kind === 'project') return `${root.workKey} project`;
+  if (root.spec.kind === 'external') return `${root.workKey} external`;
+  return `${root.workKey} worktree ${root.spec.sessionId}`;
 }
 
 /**

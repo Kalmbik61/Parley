@@ -173,7 +173,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
 
     // Ссылки — свой провайдер (`links.ts`) вместо `WebLinksAddon`: тот на каждом наведении
     // падал `SyntaxError` на флагах `gg`. Кэш `files.locate` — у каждого терминала свой.
-    const statCache = createStatCache((key, absPaths) => bridgeRef.current.files.locate(key, absPaths));
+    const statCache = createStatCache((key, absPaths) => bridgeRef.current.files.locate(key, absPaths, { external: true }));
     const linkProvider = term.registerLinkProvider(
       createLinkProvider(term, {
         workKey: () => linkContextRef.current.workKey,

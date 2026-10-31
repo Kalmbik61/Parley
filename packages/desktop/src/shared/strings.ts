@@ -570,11 +570,10 @@ export const S = {
     /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
     showAgents: 'Show agents',
     hideAgents: 'Hide agents',
-    /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
+    /** Слово строки комнаты, пока решение ждёт человека. */
     roomDecision: 'decision',
-    roomNew: (n: number): string => `${n} new`,
-    /** Слово строки комнаты, где человека назвали (`@human`): `@you · {n} new`, `n` — все непрочитанные сообщения комнаты. */
-    roomMentioned: (n: number): string => `@you · ${n} new`,
+    /** Слово строки комнаты, где человека назвали (`@human`). */
+    roomMentioned: '@you',
     /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
     roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
     /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
@@ -2500,6 +2499,8 @@ export const S = {
     /** Вкладка правого сайдбара и её дерево (кусок 7.2, спека 10.1). */
     panel: 'Files',
     project: 'Project',
+    /** Метка корня вкладки с файлом вне корней работы (⌘-клик по пути вне корней, 2026-10-31). */
+    external: 'External',
     /** Корень-worktree в `RootPicker`: ярлык сессии и ветка — данные, идут как есть. */
     worktreeRoot: (tag: string, branch: string): string => `⎇ ${tag} · ${branch}`,
     rootGone: 'Session folder no longer exists',
@@ -2531,6 +2532,7 @@ export const S = {
      */
     readOnlyTooLarge: 'Large file — editing disabled',
     readOnlyNotUtf8: 'Not UTF-8 — editing disabled',
+    readOnlyExternal: 'Read-only: this file is outside the workspace',
     tooLarge: 'File is larger than 20 MB',
     binary: 'Binary file',
     notFound: 'File not found',

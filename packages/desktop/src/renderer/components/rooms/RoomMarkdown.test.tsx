@@ -1126,3 +1126,43 @@ describe('RoomMarkdown — меню ссылки (правый клик)', () =>
   });
 });
 
+
+describe('RoomMarkdown — ссылка [имя](путь) (⌘-клик по пути вне корней, 2026-10-31)', () => {
+  const render_ = (text: string, inline = false): HTMLElement =>
+    render(<RoomMarkdown text={text} labelOf={() => null} onOpenExternal={() => {}} inline={inline} />).container;
+  const pathSpan = (container: HTMLElement): HTMLElement | null => container.querySelector('[data-file-path]');
+
+  it('[имя](путь:строка) — подпись становится путём к файлу со строкой', () => {
+    const span = pathSpan(render_('[RoomRow.tsx](packages/x/RoomRow.tsx:42)'));
+    expect(span?.textContent).toBe('RoomRow.tsx');
+    expect(span?.closest('a')).toBeNull();
+  });
+
+  it('хвост GitHub #L7 и #L7C2; ~/ и ../ тоже пути', () => {
+    expect(pathSpan(render_('[a](/Users/me/x.md#L7)'))?.textContent).toBe('a');
+    cleanup();
+    expect(pathSpan(render_('[b](~/notes/x.md#L7C2)'))?.textContent).toBe('b');
+    cleanup();
+    expect(pathSpan(render_('[c](../x.md)'))?.textContent).toBe('c');
+  });
+
+  it('схемы и мусор после пути — просто текст', () => {
+    for (const text of ['[a](file:///etc/passwd)', '[a](javascript:alert(1))', '[a](mailto:x@y.z)', '[a](/etc/hosts?x=1)', '[a](//evil.example/x.md)']) {
+      const container = render_(text);
+      expect(pathSpan(container)).toBeNull();
+      expect(container.querySelector('a')).toBeNull();
+      expect(container.textContent).toBe('a');
+      cleanup();
+    }
+  });
+
+  it('http(s) — по-прежнему внешняя ссылка; в строчном виде путь — текст', () => {
+    const web = render_('[a](https://x.y)');
+    expect(pathSpan(web)).toBeNull();
+    expect(web.querySelector('[data-testid], a, [role="link"], span')?.textContent).toBe('a');
+    cleanup();
+    const inline = render_('[a](/Users/me/x.md)', true);
+    expect(pathSpan(inline)).toBeNull();
+    expect(inline.textContent).toBe('a');
+  });
+});

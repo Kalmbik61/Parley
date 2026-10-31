@@ -353,6 +353,22 @@ describe('fileTabHint (раунд fix-live, D5)', () => {
   });
 });
 
+describe('файл вне корней (2026-10-31)', () => {
+  const tab = { kind: 'file' as const, id: 'file:x:/tmp/docs/a.md', root: { kind: 'external' as const }, path: '/tmp/docs/a.md' };
+
+  it('заголовок — имя файла, подсказка — полный путь', () => {
+    expect(fileTabHint(tab)).toBe('/tmp/docs/a.md');
+    expect(fileTabTitles([tab]).get(tab.id)).toBe('a.md');
+  });
+
+  it('тёзки из разных папок различаются родителем', () => {
+    const other = { ...tab, id: 'file:x:/var/x/a.md', path: '/var/x/a.md' };
+    const titles = fileTabTitles([tab, other]);
+    expect(titles.get(tab.id)).toBe('docs/a.md');
+    expect(titles.get(other.id)).toBe('x/a.md');
+  });
+});
+
 describe('tabMeta — вкладка браузера (тест 11 куска 9.2a)', () => {
   const tab: TabSpec = { kind: 'browser', id: 'browser:abc123', url: 'http://localhost:5173/' };
   const extras = (title: string | null, favicon: string | null): TabMetaExtras => ({

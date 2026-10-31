@@ -5,6 +5,8 @@
  * (`components/rooms/RoomMarkdown.tsx`): правила безопасности ссылок у обоих одни.
  */
 
+import { findLinkCandidates } from '../terminal/links.js';
+
 export type MarkdownLink =
   | { kind: 'external'; url: string }
   | { kind: 'file'; path: string }
@@ -40,18 +42,20 @@ export function resolveMarkdownLink(href: string, filePath: string): MarkdownLin
   const cut = raw.search(/[?#]/);
   const decoded = decode(cut < 0 ? raw : raw.slice(0, cut));
   if (decoded === null || decoded === '') return null;
-  const base = decoded.startsWith('/') ? [] : filePath.split('/').slice(0, -1);
+  // Файл вне корней работы (2026-10-31) лежит по абсолютному пути: `/путь` и `..` остаются в нём.
+  const absolute = filePath.startsWith('/');
+  const base = decoded.startsWith('/') ? (absolute ? [''] : []) : filePath.split('/').slice(0, -1);
   const parts = [...base];
   for (const part of decoded.split('/')) {
     if (part === '' || part === '.') continue;
     if (part === '..') {
-      if (parts.length === 0) return null;
+      if (parts.length === 0 || (absolute && parts.length === 1)) return null;
       parts.pop();
     } else {
       parts.push(part);
     }
   }
-  return parts.length === 0 ? null : { kind: 'file', path: parts.join('/') };
+  return parts.length === 0 || (absolute && parts.length === 1) ? null : { kind: 'file', path: parts.join('/') };
 }
 
 /**
@@ -72,4 +76,39 @@ export function safeUrlTransform(url: string): string {
   // Двоеточие до первого `/`, `?`, `#` — это схема; двоеточие дальше — часть пути (`a/b:c.md`).
   if (colon === -1 || (end !== -1 && end < colon)) return url;
   return /^https?$/i.test(bare.slice(0, colon)) ? url : '';
+}
+
+export interface FilePathHref {
+  path: string;
+  line?: number;
+  col?: number;
+}
+
+const GITHUB_LINE = /#L(\d+)(?:C(\d+))?$/;
+
+/**
+ * Адрес ссылки Markdown, который целиком есть путь к файлу (⌘-клик по пути вне корней, 2026-10-31): `/abs/x.md`,
+ * `~/x.md`, `../x.md`, `src/x.ts:12:3`, GitHub-хвост `#L42` и `#L42C5`. Путь распознаёт та же регулярка, что в терминале
+ * (`findLinkCandidates`), и кандидат обязан покрыть весь адрес — хвостовой мусор делает адрес текстом. Адрес со схемой
+ * (`file:`, `javascript:`, `mailto:`) и `//хост` — не путь, `http(s)` — тоже: им занимается `resolveMarkdownLink`.
+ */
+export function parseFilePathHref(href: string): FilePathHref | null {
+  let raw = href.trim();
+  if (raw === '' || raw.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return null;
+  let hashLine: number | undefined;
+  let hashCol: number | undefined;
+  const hash = GITHUB_LINE.exec(raw);
+  if (hash !== null) {
+    hashLine = Number(hash[1]);
+    if (hash[2] !== undefined) hashCol = Number(hash[2]);
+    raw = raw.slice(0, hash.index);
+  }
+  const decoded = decode(raw);
+  if (decoded === null) return null;
+  const [candidate, ...rest] = findLinkCandidates(decoded);
+  if (candidate === undefined || rest.length > 0 || candidate.kind !== 'path' || candidate.path === undefined) return null;
+  if (candidate.start !== 0 || candidate.end !== decoded.length) return null;
+  const line = candidate.line ?? hashLine;
+  const col = candidate.line === undefined ? hashCol : candidate.col;
+  return { path: candidate.path, ...(line === undefined ? {} : { line }), ...(col === undefined ? {} : { col }) };
 }

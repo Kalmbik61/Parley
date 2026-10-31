@@ -40,7 +40,7 @@ export interface BufferModel {
   ownWriteMtimeMs: number | null;
   /** Событие, пришедшее во время saving. */
   pendingDiskMtimeMs: number | null;
-  readOnlyReason: 'too-large' | 'not-utf8' | null;
+  readOnlyReason: 'too-large' | 'not-utf8' | 'external' | null;
   /** NUL в первых 8 КБ (спека 10.4): тело — «Binary file», а не редактор (кусок 7.3b). */
   binary: boolean;
   keepMine: boolean;

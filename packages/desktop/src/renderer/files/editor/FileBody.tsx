@@ -198,6 +198,8 @@ function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, 
   }, [bridge, workKey, tab.id, rootId, tab.path]);
 
   const absPath = absPathOf(entry, tab.root, tab.path);
+  // Файл вне корней (⌘-клик по пути вне корней, 2026-10-31) снаружи не запускается: кнопки «Open in default app» нет.
+  const external = tab.root.kind === 'external';
   const openDefault = (): void => {
     if (absPath !== null) void openLinkPath(bridge, absPath);
   };
@@ -273,15 +275,27 @@ function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, 
     // Картинки и PDF превью покажет 7.5.
     return (
       <Message text={S.files.binary}>
-        <Button type="button" size="sm" onClick={openDefault}>
-          {S.links.openInDefaultApp}
-        </Button>
+        {external ? (
+          <Button type="button" size="sm" onClick={revealInFinder}>
+            {S.cardMenu.reveal}
+          </Button>
+        ) : (
+          <Button type="button" size="sm" onClick={openDefault}>
+            {S.links.openInDefaultApp}
+          </Button>
+        )}
       </Message>
     );
   }
 
   const readOnlyText =
-    model.readOnlyReason === 'too-large' ? S.files.readOnlyTooLarge : model.readOnlyReason === 'not-utf8' ? S.files.readOnlyNotUtf8 : null;
+    model.readOnlyReason === 'too-large'
+      ? S.files.readOnlyTooLarge
+      : model.readOnlyReason === 'not-utf8'
+        ? S.files.readOnlyNotUtf8
+        : model.readOnlyReason === 'external'
+          ? S.files.readOnlyExternal
+          : null;
   const plaque = reloadedFlash ? S.files.reloadedFromDisk : readOnlyText;
   const fallback = <div className="h-full" />;
 
@@ -333,7 +347,7 @@ function TextBody({ bridge, workKey, entry, tab, onClose, font = FALLBACK_FONT, 
       <div className="relative min-h-0 flex-1">
         <ErrorBoundary
           title={S.files.editorFailed}
-          actions={[{ label: S.links.openInDefaultApp, onClick: openDefault }]}
+          actions={external ? [] : [{ label: S.links.openInDefaultApp, onClick: openDefault }]}
           onRetry={() => {
             // Какой из двух чанков отказал, граница не знает: удачная загрузка всё равно общая.
             retryEditor();

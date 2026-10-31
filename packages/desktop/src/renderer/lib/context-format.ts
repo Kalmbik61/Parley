@@ -3,10 +3,11 @@
  * максимум для значка комнаты. Уровень считается по округлённому проценту: чип «60%» не бывает нейтральным.
  */
 
-import type { ContextFill } from '@parley/core';
+import type { ContextFill, WorkSession } from '@parley/core';
 import { COMPACT_MAX_INSTRUCTIONS } from '@parley/protocol';
 import type { CompactionPhase } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
+import type { ActivityEntry } from '../store/activity.js';
 import { knownTokens } from './usage-format.js';
 
 const C = S.context;
@@ -79,4 +80,21 @@ export function contextNumbers(context: ContextFill | null): string {
 export function maxContext(contexts: ReadonlyArray<ContextFill | null | undefined>): number | null {
   const known = contexts.filter((context): context is ContextFill => context != null).map((context) => context.usedPercent);
   return known.length === 0 ? null : Math.max(...known);
+}
+
+/**
+ * Поля контекста участника из сессии карты и живой активности — одно место для ленты комнаты и строки сайдбара. У не
+ * `active` — `null`; ключа нет, когда хост поля не прислал (старый хост), — тогда значка контекста у комнаты нет.
+ */
+export function liveContext(
+  session: WorkSession,
+  live: ActivityEntry | null | undefined,
+): { context?: ContextFill | null; compaction?: CompactionPhase | null } {
+  const active = session.lifecycle === 'active';
+  const context = active ? live?.metrics?.context : null;
+  const compaction = active ? live?.metrics?.compaction : null;
+  return {
+    ...(context === undefined ? {} : { context }),
+    ...(compaction === undefined ? {} : { compaction }),
+  };
 }

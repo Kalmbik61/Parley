@@ -72,6 +72,22 @@ export function isFileLink(link: Extract<TerminalLink, { kind: 'path' }>): boole
   return link.located.stat.kind === 'file';
 }
 
+/** Путь вне корней работы (⌘-клик по пути вне корней, 2026-10-31): `files.locate` отдал его с корнем `external`. */
+export function isExternalLink(link: Extract<TerminalLink, { kind: 'path' }>): boolean {
+  return link.located.root.spec.kind === 'external';
+}
+
+/**
+ * Одно действие ⌘-клика по пути — в терминале, ленте, Chat и почте (⌘-клик по пути вне корней, 2026-10-31):
+ * файл — вкладка редактора; каталог в корне работы — приложение по умолчанию; каталог вне корней —
+ * только показать в Finder: запускать внешнее ничем нельзя.
+ */
+export function activatePathLink(bridge: ParleyBridge, link: Extract<TerminalLink, { kind: 'path' }>): void {
+  if (isFileLink(link)) openLinkInEditor(link);
+  else if (isExternalLink(link)) void revealLinkPath(bridge, link.absPath);
+  else void openLinkPath(bridge, link.absPath);
+}
+
 /** Системный браузер — только http(s): провайдер других ссылок не даёт, main проверяет ещё раз. */
 export function openLinkUrl(bridge: ParleyBridge, url: string): void {
   bridge.app.openExternal(url).catch((error: unknown) => console.warn('[parley] openExternal', error));
@@ -95,7 +111,9 @@ export function LinkMenu({ bridge, state, onClose }: LinkMenuProps): JSX.Element
         {link.kind === 'path' ? (
           <>
             {isFileLink(link) ? <DropdownMenuItem onSelect={() => openLinkInEditor(link)}>{S.links.openInEditor}</DropdownMenuItem> : null}
-            <DropdownMenuItem onSelect={() => void openLinkPath(bridge, link.absPath)}>{S.links.openInDefaultApp}</DropdownMenuItem>
+            {isExternalLink(link) ? null : (
+              <DropdownMenuItem onSelect={() => void openLinkPath(bridge, link.absPath)}>{S.links.openInDefaultApp}</DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={() => void revealLinkPath(bridge, link.absPath)}>{S.cardMenu.reveal}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => copy(link.absPath)}>{S.cardMenu.copyPath}</DropdownMenuItem>
           </>

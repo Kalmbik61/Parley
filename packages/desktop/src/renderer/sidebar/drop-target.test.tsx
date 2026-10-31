@@ -69,7 +69,6 @@ function Card({ entry, showClosed = false }: { entry: WindowWorkEntry; showClose
             workId={WORK}
             bridge={BRIDGE}
             row={row}
-            unread={0}
             mentioned={false}
             activity={{}}
             now={NOW}

@@ -32,7 +32,11 @@ export interface SplitNode {
   children: [LayoutNode, LayoutNode];
 }
 
-export type FileRootSpec = { kind: 'project' } | { kind: 'worktree'; sessionId: string };
+/**
+ * `external` — файл вне корней работ (⌘-клик по пути вне корней, 2026-10-31: только чтение). Вкладка с таким
+ * корнем хранит в `path` абсолютный realpath, который вернул main; запись и git для неё закрыты.
+ */
+export type FileRootSpec = { kind: 'project' } | { kind: 'worktree'; sessionId: string } | { kind: 'external' };
 
 /** Вид вкладки сессии (план 2026-10-01, решение 6): лента «Chat» или терминал. */
 export type TerminalView = 'chat' | 'terminal';
@@ -51,7 +55,7 @@ export type TabSpec =
   | { kind: 'room'; id: string; roomId: string }
   // commit: null — все изменения ветки, иначе один коммит.
   | { kind: 'diff'; id: string; sessionId: string; commit: string | null }
-  // path — относительный.
+  // path — относительный; у корня `external` — абсолютный.
   | { kind: 'file'; id: string; root: FileRootSpec; path: string }
   // viewport: нет поля — Fit (спека 2026-10-07-browser-devtools-agent-design.md, 4.2); размер переживает перезапуск.
   // target: нет поля — умолчание, сессия в фокусе работы (спека браузера 4.5).

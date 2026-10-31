@@ -119,7 +119,7 @@ function useQuickOpenFiles(
   const focused = useLayoutStore((state) => (activeWorkKey === null ? null : focusedSessionOf(state, activeWorkKey)));
   const entry = activeWorkKey === null ? undefined : works.find((item) => workKeyOf(item.projectPath, item.map.work.id) === activeWorkKey);
   const spec = entry === undefined ? null : filesRootSpec(rootByWork, entry, focused);
-  const specKey = spec === null ? null : spec.kind === 'project' ? 'project' : spec.sessionId;
+  const specKey = spec === null ? null : spec.kind === 'project' ? 'project' : spec.kind === 'worktree' ? spec.sessionId : 'external';
   // Одна ссылка на корень, пока тот же ключ: от неё зависят запрос и документы.
   const root = useMemo<FileRoot | null>(
     () => (activeWorkKey === null || spec === null ? null : { workKey: activeWorkKey, spec }),

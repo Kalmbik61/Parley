@@ -536,3 +536,61 @@ describe('работа создана, works.changed до реестра не д
     expect(located?.relPath).toBe('n.ts');
   });
 });
+
+describe('внешний корень (⌘-клик по пути вне корней, 2026-10-31: только чтение)', () => {
+  const EXT = (): FileRoot => ({ workKey: key, spec: { kind: 'external' } });
+
+  it('locate без флага: путь вне корней — null, как раньше', async () => {
+    await writeFile(path.join(dir, 'outside.md'), 'x');
+    expect(await createFsApi(registry).locate(key, [path.join(dir, 'outside.md')])).toEqual([null]);
+    expect(await createFsApi(registry).locate(key, [path.join(dir, 'outside.md')], {})).toEqual([null]);
+  });
+
+  it('locate с external: файл и каталог вне корней — внешний Located с realpath; нет пути — null', async () => {
+    await writeFile(path.join(dir, 'outside.md'), 'xyz');
+    await mkdir(path.join(dir, 'folder'));
+    const real = await realpath(dir);
+    const [file, folder, missing, relative] = await createFsApi(registry).locate(
+      key,
+      [path.join(dir, 'outside.md'), path.join(dir, 'folder'), path.join(dir, 'nope.md'), 'outside.md'],
+      { external: true },
+    );
+    expect(file).toMatchObject({
+      root: { workKey: key, spec: { kind: 'external' } },
+      relPath: path.join(real, 'outside.md'),
+      stat: { kind: 'file', size: 3 },
+    });
+    expect(folder).toMatchObject({ root: { spec: { kind: 'external' } }, relPath: path.join(real, 'folder'), stat: { kind: 'dir' } });
+    expect(missing).toBeNull();
+    expect(relative).toBeNull();
+  });
+
+  it('locate с external: путь в корне работы — корень работы, не внешний', async () => {
+    const [hit] = await createFsApi(registry).locate(key, [path.join(project, 'src', 'a.ts')], { external: true });
+    expect(hit).toMatchObject({ root: { workKey: key, spec: { kind: 'project' } }, relPath: path.join('src', 'a.ts') });
+  });
+
+  it('readText и readBytes читают файл вне корней; readOnlyReason — external; stat работает', async () => {
+    await writeFile(path.join(dir, 'outside.md'), 'hello');
+    const api = createFsApi(registry);
+    const abs = path.join(dir, 'outside.md');
+    expect(await api.readText(EXT(), abs)).toMatchObject({ text: 'hello', readOnlyReason: 'external', utf8: true });
+    expect(Buffer.from(await api.readBytes(EXT(), abs)).toString()).toBe('hello');
+    expect(await api.stat(EXT(), [abs, path.join(dir, 'nope')])).toEqual([expect.objectContaining({ kind: 'file', size: 5 }), null]);
+  });
+
+  it('write и list — files:denied', async () => {
+    await writeFile(path.join(dir, 'outside.md'), 'hello');
+    const api = createFsApi(registry);
+    expect(await codeOf(api.write(EXT(), path.join(dir, 'outside.md'), 'x', null))).toBe('files:denied');
+    expect(await codeOf(api.list(EXT(), dir))).toBe('files:denied');
+    expect(await readFile(path.join(dir, 'outside.md'), 'utf8')).toBe('hello');
+  });
+
+  it('FIFO вне корней — bad_request, а не зависание (readRegular)', async () => {
+    execFileSync('mkfifo', [path.join(dir, 'pipe')]);
+    const api = createFsApi(registry);
+    expect(await codeOf(api.readText(EXT(), path.join(dir, 'pipe')))).toBe('bad_request');
+    expect(await codeOf(api.readBytes(EXT(), '/dev/zero'))).toBe('bad_request');
+  });
+});

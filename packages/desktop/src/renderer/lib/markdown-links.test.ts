@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { resolveMarkdownLink, safeUrlTransform } from './markdown-links.js';
+import { parseFilePathHref, resolveMarkdownLink, safeUrlTransform } from './markdown-links.js';
 
 describe('safeUrlTransform (fix-7.5)', () => {
   it('http(s), относительные пути и #якоря — как есть', () => {
@@ -90,5 +90,34 @@ describe('resolveMarkdownLink (тест 2)', () => {
       path: 'src/a.ts',
     });
     expect(resolveMarkdownLink('#%D0%B0', 'x.md')).toEqual({ kind: 'anchor', id: 'а' });
+  });
+});
+
+describe('resolveMarkdownLink: файл вне корней, путь абсолютный (2026-10-31)', () => {
+  it('относительная ссылка — от папки файла, `/путь` остаётся абсолютным', () => {
+    expect(resolveMarkdownLink('b.md', '/tmp/docs/a.md')).toEqual({ kind: 'file', path: '/tmp/docs/b.md' });
+    expect(resolveMarkdownLink('../x/b.md', '/tmp/docs/a.md')).toEqual({ kind: 'file', path: '/tmp/x/b.md' });
+    expect(resolveMarkdownLink('/etc/hosts', '/tmp/docs/a.md')).toEqual({ kind: 'file', path: '/etc/hosts' });
+  });
+
+  it('выше корня файловой системы и сам `/` — null, а не относительный путь', () => {
+    expect(resolveMarkdownLink('../../../x.md', '/tmp/a.md')).toBeNull();
+    expect(resolveMarkdownLink('/', '/tmp/a.md')).toBeNull();
+  });
+});
+
+describe('parseFilePathHref (⌘-клик по пути вне корней, 2026-10-31)', () => {
+  it('путь со строкой, колонкой и GitHub-хвостом', () => {
+    expect(parseFilePathHref('packages/x/RoomRow.tsx:42')).toEqual({ path: 'packages/x/RoomRow.tsx', line: 42 });
+    expect(parseFilePathHref('src/a.ts:12:3')).toEqual({ path: 'src/a.ts', line: 12, col: 3 });
+    expect(parseFilePathHref('/Users/me/x.md#L7')).toEqual({ path: '/Users/me/x.md', line: 7 });
+    expect(parseFilePathHref('~/x.md#L7C5')).toEqual({ path: '~/x.md', line: 7, col: 5 });
+    expect(parseFilePathHref('../x.md')).toEqual({ path: '../x.md' });
+    expect(parseFilePathHref('/Users/me/%D1%84.md')).toEqual({ path: '/Users/me/ф.md' });
+  });
+
+  it('схемы, //хост, мусор после пути и битое кодирование — не путь', () => {
+    for (const href of ['file:///etc/passwd', 'javascript:alert(1)', 'mailto:a@b.c', 'https://x.y/a.md', '//h/a.md', '/etc/hosts?x=1', '/a/b.md trailing', '/a/%E0%A4%A', '', '#frag'])
+      expect(parseFilePathHref(href)).toBeNull();
   });
 });

@@ -85,11 +85,15 @@ export async function openOrReveal(absPath: string, deps: OpenPathDeps): Promise
   return 'opened';
 }
 
-/** `app.showInFinder`: только внутри корня любой работы; показывается сам путь (ссылка — как ссылка). */
+/**
+ * `app.showInFinder`: любой существующий путь (⌘-клик по пути вне корней, 2026-10-31). Показ в Finder ничего не
+ * запускает, в отличие от `openOrReveal`, который остаётся только внутри корней. Показывается сам путь (ссылка — как ссылка);
+ * несуществующий — прежняя ошибка `files:denied`.
+ */
 export async function revealInFinder(absPath: string, deps: Pick<OpenPathDeps, 'roots' | 'showItemInFolder'>): Promise<void> {
   const expanded = deps.roots.expandHome(absPath);
-  if ((await deps.roots.insideAnyRoot(expanded)) === null) {
-    throw new FilesDeniedError(`outside of workspace roots: ${absPath}`);
+  if (!path.isAbsolute(expanded) || expanded.includes('\0') || (await lstat(expanded).catch(() => null)) === null) {
+    throw new FilesDeniedError(`no such path: ${absPath}`);
   }
   deps.showItemInFolder(expanded);
 }
