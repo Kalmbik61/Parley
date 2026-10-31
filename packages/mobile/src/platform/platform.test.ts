@@ -48,6 +48,20 @@ describe('key store', () => {
     expect(await keys.list()).toEqual([]);
   });
 
+  it('writes the index before the record and deletes the record before the index, so no record is ever unlisted', async () => {
+    const secure = memorySecureStore();
+    const order: string[] = [];
+    const wrapped: SecureStoreLike = {
+      getItemAsync: secure.getItemAsync,
+      setItemAsync: async (k, v, o) => (order.push(`set:${k}`), secure.setItemAsync(k, v, o)),
+      deleteItemAsync: async (k, o) => (order.push(`del:${k}`), secure.deleteItemAsync(k, o)),
+    };
+    const store = createKeyStore(wrapped, {});
+    await store.put(record('h1'));
+    await store.remove('h1');
+    expect(order).toEqual(['set:parley.hosts', 'set:parley.host.h1', 'del:parley.host.h1', 'set:parley.hosts']);
+  });
+
   it('refuses a host id the Keychain cannot hold', async () => {
     await expect(createKeyStore(memorySecureStore(), {}).put(record('bad id/'))).rejects.toThrow();
   });

@@ -52,6 +52,10 @@ export interface BannerInput {
   now: number;
 }
 
+/** Banners whose text changes with the clock (`Last updated …`, `Retrying in …`). */
+export const needsClock = (kind: Banner['kind']): boolean =>
+  kind === 'updating' || kind === 'retrying' || kind === 'no-internet' || kind === 'relay-unreachable';
+
 export const UPDATING_DELAY_MS = 1500;
 export const LONG_WAIT_MS = 30_000;
 
@@ -129,6 +133,18 @@ export function bannerFor(i: BannerInput): Banner | null {
   if (sup.state === 'waiting' && waited > LONG_WAIT_MS) {
     const left = sup.retryAt === null ? null : Math.max(0, Math.ceil((sup.retryAt - i.now) / 1000));
     const retrying = left === null ? null : `Retrying in ${left} s`;
+    // The relay answered with a refusal (`relayError`): it is reachable, so this is a long back-off, not an outage.
+    // No answer at all (socket never opened, no `ready`): "Can't reach relay" (D1 §4).
+    if (sup.relayError !== null) {
+      return make({
+        kind: 'retrying',
+        icon: 'arrow.triangle.2.circlepath',
+        tone: 'neutral',
+        text: 'Updating…',
+        detail: retrying,
+        actions: ['retry'],
+      });
+    }
     return make({
       kind: 'relay-unreachable',
       icon: 'antenna.radiowaves.left.and.right.slash',

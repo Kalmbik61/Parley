@@ -38,6 +38,11 @@ describe('bannerFor (D1 §4)', () => {
     const b = bannerFor(input({ supervisor: sup({ state: 'waiting', retryAt: 133_000 }), waitingSince: 60_000 }))!;
     expect(b).toMatchObject({ kind: 'relay-unreachable', detail: 'relay.example.com · Retrying in 12 s', actions: ['retry'] });
     expect(kind({ supervisor: sup({ state: 'waiting' }), waitingSince: 100_000 })).toBe('updating');
+    // the relay answered (rate_limited): reachable, so a long neutral back-off, not an outage
+    const slow = bannerFor(
+      input({ supervisor: sup({ state: 'waiting', relayError: 'rate_limited', retryAt: 133_000 }), waitingSince: 60_000 }),
+    )!;
+    expect(slow).toMatchObject({ kind: 'retrying', tone: 'neutral', text: 'Updating…', detail: 'Retrying in 12 s', actions: ['retry'] });
   });
 
   it('offline, relay errors, host status', () => {
