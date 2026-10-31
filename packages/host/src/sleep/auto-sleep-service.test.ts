@@ -6,6 +6,7 @@ import {
   PARLEY,
   SYSTEM,
   addSession,
+  asleepHint,
   createWork,
   readStoredMap,
   removeSession,
@@ -785,19 +786,11 @@ describe('сервис сна: усыплённый ждал другую сес
     [
       'усыплена хостом',
       'asleep',
-      (tag) => `${tag} is asleep: write to it to wake it, or wait for mail via inbox.`,
+      (tag) => asleepHint(tag),
       (id) => (map) => {
         // Как после `exitProcess`: отметка «засыпает» при выходе процесса становится `autoSleep`.
         const session = map.sessions.find((candidate) => candidate.id === id)!;
         session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget: null };
-        transitionSession(map, id, 'sleeping', { exitCode: 0 });
-      },
-    ],
-    [
-      'остановлена человеком',
-      'sleeping',
-      (tag) => `${tag} was stopped: write to it to wake it.`,
-      (id) => (map) => {
         transitionSession(map, id, 'sleeping', { exitCode: 0 });
       },
     ],
@@ -871,7 +864,7 @@ describe('сервис сна: усыплённый ждал другую сес
     expect(sessionOf(sleeper).autoSleep).toEqual({ reason: 'idle', at: iso(T0), waitTarget: target.sessionId });
   });
 
-  it('цель в смене агента (switching) не кончила — письма нет, пока замена не кончится', async () => {
+  it('цель в смене агента (switching) письма не даёт, остановленная человеком после смены — тоже', async () => {
     const target = await startSession({ activity: workingActivity() });
     const sleeper = await startSleeper(target.sessionId);
     boot();
@@ -887,15 +880,76 @@ describe('сервис сна: усыплённый ждал другую сес
     expect(systemLetters()).toEqual([]);
     expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
 
-    // Замена кончилась, а цель осталась остановленной: теперь письмо есть — держала его только замена.
+    // Замена кончилась, а цель осталась остановленной: остановленную человеком по-прежнему не считаем концом.
     await updateMap(project, workId, (map) => {
       map.sessions.find((session) => session.id === target.sessionId)!.switching = null;
     });
     publishWorks();
     await quiet();
 
-    const stopped = `${sessionTag(target.sessionId)} was stopped: write to it to wake it.`;
-    expect(systemLetters().map((letter) => letter.text)).toEqual([stopped]);
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+  });
+
+  it('усыплённая хостом цель в смене агента (switching) письма не даёт, пока замена не кончится', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    // Без замены такая цель уже дала бы письмо «asleep»: держит его только `switching`.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === target.sessionId)!;
+      session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget: null };
+      transitionSession(map, session.id, 'sleeping', { exitCode: 0 });
+      session.switching = { id: 'sw-01', to: 'codex', since: iso(T0) };
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === target.sessionId)!.switching = null;
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters().map((letter) => letter.text)).toEqual([asleepHint(sessionTag(target.sessionId))]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBeNull();
+  });
+
+  it('цель остановлена человеком — письма нет, цель ожидания остаётся; кончит после продолжения — письмо', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    // Остановка человеком, выход приложения и сверка мёртвого процесса оставляют `sleeping` без `autoSleep`: такую цель без
+    // согласия человека не поднимают, и будить ждавшего не за чем.
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target.sessionId, 'sleeping', { exitCode: 0 });
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+
+    // Человек продолжил цель: она снова работает, письма по-прежнему нет.
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target.sessionId, 'active');
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters()).toEqual([]);
+
+    // Цель кончила — ждавшему есть что сказать.
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters().map((letter) => letter.text)).toEqual([`${sessionTag(target.sessionId)} finished: done`]);
     expect(sessionOf(sleeper).autoSleep?.waitTarget).toBeNull();
   });
 

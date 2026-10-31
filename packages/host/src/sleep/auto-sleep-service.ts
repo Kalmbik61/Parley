@@ -13,11 +13,13 @@
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
  *
  * Усыплённый на `wait_for(<id>)` сам не узнает, что с целью ожидания стало: процесса у него нет. Сервис следит за целью по
- * снимку работ и, когда `wait_for` ответил бы на неё сразу (итог, `stuck`, сон, остановка, закрытие, удаление), пишет
- * спящему системное письмо; оно поднимает сессию обычным путём будильника.
+ * снимку работ и, когда `wait_for` ответил бы на неё сразу (итог, `stuck`, сон по решению хоста, закрытие, удаление), пишет
+ * спящему системное письмо; оно поднимает сессию обычным путём будильника. Цель, остановленную человеком, письмом не
+ * считают: без его согласия её не поднимают, и ждавший проснётся, когда её продолжат и она кончит.
  */
 
 import {
+  asleepHint,
   autoSleepVerdict,
   deliveredSince,
   finishedState,
@@ -101,23 +103,24 @@ function sinceLaunch(activity: SessionActivity | null, startedAt: number): Sessi
 }
 
 /**
- * Что ответил бы `wait_for(<id>)` на цель ожидания прямо сейчас. Правило то же, что у вызова (`finishedState` из core): итог,
- * `stuck`, `asleep` (усыплена хостом), `sleeping` (остановлена), `closed`; `deleted` — цели нет в карте. `null` — цель
- * работает или идёт замена агента: ждать дальше.
+ * Что ответил бы `wait_for(<id>)` на цель ожидания прямо сейчас (`finishedState` из core): итог, `stuck`, `asleep` (усыплена
+ * хостом), `closed`; `deleted` — цели нет в карте. Одно отличие: остановленная человеком цель (`sleeping` без `autoSleep`;
+ * так же выглядят выход приложения и сверка мёртвого процесса) — не конец. Её без согласия человека не поднимают, поэтому
+ * письма нет, а ждавший проснётся, когда её продолжат и она кончит. `null` — ждать дальше.
  */
 function targetState(target: WorkSession | undefined): string | null {
-  return target === undefined ? 'deleted' : finishedState(target);
+  if (target === undefined) return 'deleted';
+  const state = finishedState(target);
+  return state === 'sleeping' ? null : state;
 }
 
 /**
- * Письмо ждавшему о состоянии цели (`targetState`). Уснувшая и остановленная цель итога не сдаст, пока её не разбудят: письмо
- * говорит, что делать, в духе `asleepHint`.
+ * Письмо ждавшему о состоянии цели (`targetState`). Усыплённая хостом цель итога не сдаст, пока её не разбудят: подсказка
+ * та же, что `wait_for` даёт на неё (`asleepHint`).
  */
 function waiterLetter(targetId: string, state: string): string {
   const tag = sessionTag(targetId);
-  if (state === 'asleep') return `${tag} is asleep: write to it to wake it, or wait for mail via inbox.`;
-  if (state === 'sleeping') return `${tag} was stopped: write to it to wake it.`;
-  return `${tag} finished: ${state}`;
+  return state === 'asleep' ? asleepHint(tag) : `${tag} finished: ${state}`;
 }
 
 export function createAutoSleepService(host: HostContext, deps: AutoSleepServiceDeps): AutoSleepService {
@@ -317,8 +320,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   }
 
   /**
-   * Проход по снимку работ: каждому `sleeping` с целью ожидания, которая уже не работает (`targetState`), — письмо. У спящих
-   * нет PTY, поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
+   * Проход по снимку работ: каждому `sleeping` с целью ожидания, о которой есть что сказать (`targetState`), — письмо. У
+   * спящих нет PTY, поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
    */
   async function notifyWaiters(): Promise<void> {
     if (stopped) return;
