@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 export const haptic = {
   qrRecognized: () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
   sasShown: () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium),
+  success: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   paired: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   selection: () => void Haptics.selectionAsync(),
   success: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),

@@ -6,6 +6,7 @@ import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { useRemoteState } from '../../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
+import { NewButton } from '../../launch/NewButton';
 import { typography, useColors } from '../../theme';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, SingleGroup, TeamCard, type TreeEnv } from '../../works/TeamTree';
@@ -64,7 +65,7 @@ export default function WorkScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
-      <Stack.Screen options={{ title: view?.work.title ?? 'Work', headerLargeTitle: true, headerBackTitle: 'Works' }} />
+      <Stack.Screen options={{ title: view?.work.title ?? 'Work', headerLargeTitle: true, headerBackTitle: 'Works', headerRight: () => <NewButton work={ref} /> }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={false} onRefresh={() => runtime.retry()} />}>
         <View style={styles.banner}>
           <ConnectionBanner />

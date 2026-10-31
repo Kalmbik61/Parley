@@ -71,11 +71,27 @@ export function installDemo(client: RemoteClient): void {
       letter('m2', 'Mobile-D1-designer', 'S7 draft is committed; screens follow the mockups.', 1500, true),
     ],
   });
+  // The "+" and the New session / New room sheet (A26): launch methods in the hello, a made-up provider and role list.
+  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping']);
+  store.dispatch({
+    t: 'catalog.providers', epoch: 'demo',
+    providers: { providers: [
+      { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] },
+      { id: 'codex', label: 'Codex', available: false, needs: 'sign-in' },
+    ] } as never,
+  });
+  store.dispatch({
+    t: 'catalog.roles', epoch: 'demo', projectPath: P,
+    roles: { partial: false, diagnostics: [], roles: [
+      { id: 'executor', name: 'executor', description: '', source: 'builtin', provider: 'claude', model: null, effort: null, readOnly: false },
+      { id: 'writer', name: 'writer', description: '', source: 'builtin', provider: 'claude', model: null, effort: null, readOnly: false },
+    ] } as never,
+  });
   store.dispatch({ t: 'cards.loaded', ref: ref('d1'), epoch: 'demo', items: [permission], at: Date.now() });
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
 
-/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -96,6 +112,10 @@ export function demoRoute(name: unknown): string | null {
       return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':
       return s('greta');
+    case 'new':
+      return `/new?ref=${encodeURIComponent(w)}`;
+    case 'new-room':
+      return `/new?ref=${encodeURIComponent(w)}&mode=room`;
     default:
       return null;
   }
