@@ -12,7 +12,7 @@ COPY packages/core packages/core
 COPY packages/protocol packages/protocol
 COPY packages/relay packages/relay
 RUN pnpm --filter @parley/relay... build \
- && pnpm --filter @parley/relay deploy --prod /out
+ && pnpm --filter @parley/relay deploy --prod --ignore-scripts /out
 
 FROM node:22-slim
 ENV NODE_ENV=production \

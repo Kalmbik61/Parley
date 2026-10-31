@@ -52,6 +52,7 @@ import type { RecipeSaveRequest, RecipeSaveResult } from '../../shared/recipe-sa
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import type { RemoteCallName, RemoteCalls, RemoteEvent } from '../../shared/remote-types.js';
+import type { RelaySetupCallName, RelaySetupCalls, RelaySetupEvent } from '../../shared/relay-setup-types.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
@@ -73,6 +74,10 @@ export interface FakeBridge extends ParleyBridge {
   /** Calls of `remote.call` in order. */
   readonly remoteCalls: Array<{ name: RemoteCallName; params: unknown }>;
   emitRemote(event: RemoteEvent): void;
+  /** Handler of a `relaySetup.call` (the relay setup wizard); without one the call is rejected. */
+  setRelaySetupHandler<N extends RelaySetupCallName>(name: N, handler: (params: RelaySetupCalls[N]['params']) => RelaySetupCalls[N]['result'] | Promise<RelaySetupCalls[N]['result']>): void;
+  readonly relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }>;
+  emitRelaySetup(event: RelaySetupEvent): void;
   /** Вызовы `call` — для проверки, что и с какими параметрами позвали. */
   readonly calls: Array<{ method: MethodName; params: unknown }>;
   emit<E extends EventName>(event: E, data: EventData<E>): void;
@@ -429,7 +434,29 @@ export function createFakeBridge(): FakeBridge {
   const remoteHandlers = new Map<string, (params: never) => unknown>();
   const remoteListeners = new Set<(event: RemoteEvent) => void>();
   const remoteCalls: Array<{ name: RemoteCallName; params: unknown }> = [];
+  const setupHandlers = new Map<string, (params: never) => unknown>();
+  const setupListeners = new Set<(event: RelaySetupEvent) => void>();
+  const relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }> = [];
   const bridge: FakeBridge = {
+    setRelaySetupHandler: (name, handler) => {
+      setupHandlers.set(name, handler as (params: never) => unknown);
+    },
+    relaySetupCalls,
+    emitRelaySetup: (event) => {
+      for (const listener of setupListeners) listener(event);
+    },
+    relaySetup: {
+      call: async (name, params) => {
+        relaySetupCalls.push({ name, params });
+        const handler = setupHandlers.get(name);
+        if (!handler) throw new Error(`no relay setup handler for ${name}`);
+        return (await handler(params as never)) as never;
+      },
+      on: (listener) => {
+        setupListeners.add(listener);
+        return () => setupListeners.delete(listener);
+      },
+    },
     setRemoteHandler: (name, handler) => {
       remoteHandlers.set(name, handler as (params: never) => unknown);
     },

@@ -14,6 +14,7 @@ import { Input } from '../../ui/input.js';
 import { Switch } from '../../ui/switch.js';
 import { isPrivateRelayHost } from '@parley/protocol/remote';
 import { normalizeRelayInput } from '../../../shared/relay-input.js';
+import { RelaySetupDialog } from './RelaySetupDialog.js';
 import { groupSas, INITIAL_PAIR, pairReducer, platformLabel, reissueDue } from './remote-pairing.js';
 
 export interface RemoteSettingsProps {
@@ -50,6 +51,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
   const [relay, setRelay] = useState('');
   const [relayError, setRelayError] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const alive = useRef(true);
   const running = state.process === 'running';
@@ -271,7 +273,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
               const host = normalizeRelayInput(relay);
               return host !== null && isPrivateRelayHost(host) ? <span className="text-xs text-muted-foreground">{TEXT.relayDevNote}</span> : null;
             })()}
-            <Button type="button" variant="outline" size="sm" className="self-start" disabled title={TEXT.wizardSoon} data-testid="remote-wizard">
+            <Button type="button" variant="outline" size="sm" className="self-start" data-testid="remote-wizard" onClick={() => setWizardOpen(true)}>
               {TEXT.setUpOnServer}
             </Button>
           </div>
@@ -414,6 +416,8 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
           </div>
         </>
       ) : null}
+
+      <RelaySetupDialog bridge={bridge} open={wizardOpen} onClose={() => setWizardOpen(false)} />
 
       <Dialog open={request !== null} onOpenChange={(open) => !open && request !== null && answer(request.requestId, false)}>
         <DialogContent data-testid="remote-pair-dialog">
