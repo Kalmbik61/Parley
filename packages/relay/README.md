@@ -69,19 +69,27 @@ If something already holds ports 80 or 443, run the relay behind your existing r
 it to `127.0.0.1:8787`, pass WebSocket upgrades (`Upgrade` and `Connection` headers) under `/v1/`, use timeouts
 longer than 60 s and set `TRUST_PROXY=1`.
 
-### Setup wizard (planned, not available yet)
+### Setup wizard
 
-Settings → Remote access → "Set up on my server…" is meant to do the steps above over SSH from the Parley window on
-the Mac (the bridge knows nothing about SSH). **The wizard is not built yet: the button says so, and nothing below
-is verified.** The design (spec §6.7): you enter the host, SSH port and user and choose a key from `~/.ssh` or a
-password; the first connection shows the server's key fingerprint for you to accept (a changed key stops the run);
-the wizard reads the server first (OS, architecture, Docker, who listens on 80 and 443, `ufw`), shows the full list
-of commands and changes nothing until you press "Run"; it installs Docker from Docker's apt repository if missing,
-writes `/opt/parley-relay/` (`compose.yml`, `Caddyfile`, `.env`, `data/`), pulls the relay image of the version that
-matches your Parley by digest, starts it and checks `https://<address>/v1/health`. Without a domain it uses
-`<ip-with-dashes>.sslip.io`. SSH passwords and key passphrases stay in memory for one run; nothing is stored. A
-second run updates the image and keeps `data/`; "Roll back" and "Remove relay" are separate buttons. Ubuntu
-22.04/24.04 and Debian 12 first; elsewhere it stops after the survey and points back to this page.
+Settings → Remote access → "Set up on my server…" does the steps above over SSH from the Parley window on the Mac
+(the bridge knows nothing about SSH). You enter the host, SSH port and user and choose a key from `~/.ssh`, the SSH
+agent or a password. The first connection shows the server's key fingerprint for you to accept; it is kept in
+`~/.parley/remote/known_hosts`, and a changed key stops the run before anything is sent. The wizard reads the server
+first (OS, architecture, `sudo`, Docker, who listens on 80 and 443, `ufw`), shows the full list of commands and
+changes nothing until you press "Run". Each step checks first and acts only when needed: Docker from Docker's apt
+repository if missing, `/opt/parley-relay/` (`compose.yml`, `Caddyfile`, `.env`; the relay data lives in Docker
+volumes), the relay image pinned by digest, a firewall rule when `ufw` is active, `docker compose up -d`. Then it checks
+`https://<address>/v1/health` and sets the Relay field. Without a domain it uses `<ip-with-dashes>.sslip.io` (a
+non-public address is refused). If port 80 is taken it installs no Caddy: the relay listens on `127.0.0.1` and the
+wizard shows a reverse-proxy snippet for your web server, whose configuration it never edits; if only 443 is taken,
+Caddy moves to 8443 and the port becomes part of the address. SSH passwords, key passphrases and the `sudo` password
+stay in memory for one run; nothing is stored. A second run updates the image and keeps the data; "Roll back" returns
+to the previous files and image and "Remove relay" deletes `/opt/parley-relay` (the data only if you confirm that
+separately; Docker stays installed). Ubuntu 22.04/24.04 and Debian 12 only; elsewhere it stops after the survey.
+
+Two things are still open. The wizard refuses to install until the relay image is published (the digest in this build
+is a placeholder), and a run on a real server with a real certificate is still pending (A18b); it has been tested
+against servers in Docker only.
 
 ### Not yet checked
 

@@ -113,8 +113,8 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
   const begin = (): void => {
     const auth: SetupAuthInput = authKind === 'key' ? { kind: 'key', file: keyFile } : { kind: authKind };
     setRows([]);
-    void step(async () => {
-      const result = await setup.call('begin', {
+    // The request is built, the form forgets the secrets, and only then does the (slow) call start.
+    const payload = {
         host: host.trim(),
         port: port.trim(),
         user: user.trim(),
@@ -126,11 +126,9 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
         },
         ...(domain.trim() !== '' ? { domain: domain.trim() } : {}),
         intent,
-      });
-      // The details have been handed to main: this window forgets them at once.
-      wipeSecrets();
-      return result;
-    });
+    };
+    wipeSecrets();
+    void step(() => setup.call('begin', payload));
   };
 
   const terminal = phase !== null && ['hostkey-changed', 'auth-failed', 'unsupported', 'done', 'removed', 'failed'].includes(phase.phase);
@@ -233,7 +231,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
 
           {phase?.phase === 'need-passphrase' || phase?.phase === 'need-sudo' ? (
             <>
-              <p>{phase.phase === 'need-passphrase' ? T.needPassphrase : T.needSudo}</p>
+              <p>{phase.phase === 'need-passphrase' ? (phase.wrong ? T.wrongPassphrase : T.needPassphrase) : T.needSudo}</p>
               <Input
                 data-testid="relay-setup-secret"
                 type="password"
@@ -250,11 +248,8 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
                   disabled={busy}
                   onClick={() => {
                     const value = phase.phase === 'need-passphrase' ? { passphrase } : { sudoPassword };
-                    void step(async () => {
-                      const result = await setup.call('provide', value);
-                      wipeSecrets();
-                      return result;
-                    });
+                    wipeSecrets();
+                    void step(() => setup.call('provide', value));
                   }}
                 >
                   {T.continue}

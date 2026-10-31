@@ -1,7 +1,7 @@
 import net from 'node:net';
 import { RELAY_MANUAL_URL, type RelayPlanView, type RelaySetupCallName, type RelaySetupCalls, type RelaySetupEvent, type RelaySetupPhase } from '../../shared/relay-setup-types.js';
 import { ControlCallError } from '../remote-control.js';
-import { addressesOf, checkHealth, domainPointsTo, firstIPv4, type HealthFetcher, type Resolver } from './health.js';
+import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
 import { isValidDomain, validateInput, type SetupInput } from './input.js';
 import type { KnownHosts, HostKeyInfo } from './known-hosts.js';
 import { buildPlan, decidePorts, sslipName, type Plan } from './plan.js';
@@ -83,6 +83,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   let idle: NodeJS.Timeout | null = null;
   /** Where «Check» goes after a run: the address to test and whether the bridge has been told yet. */
   let pendingAddress: string | null = null;
+  let cancelRequested = false;
   const idleMs = deps.idleMs ?? 10 * 60_000;
 
   const secretList = (s: Session | null): string[] =>
@@ -102,6 +103,9 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       session.sudo = null;
     }
     session = null;
+    // The last log line of the run has been masked by now; the secrets are not kept for the next one.
+    lastSecrets = [];
+    cancelRequested = false;
   }
 
   function touch(): void {
@@ -120,8 +124,9 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
 
   const failed = (step: string | null, message: string): RelaySetupPhase => {
     note(`failed: ${message}`);
+    const masked = mask(message);
     end();
-    return { phase: 'failed', step, message: mask(message) };
+    return { phase: 'failed', step, message: masked };
   };
 
   async function connect(s: Session): Promise<RelaySetupPhase> {
@@ -143,8 +148,9 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
         return { phase: 'hostkey-changed', host: s.input.host, port: s.input.port, known: outcome.known, presented: outcome.key.fingerprint };
       }
       case 'passphrase-required':
+        delete s.input.secrets.passphrase;
         s.waiting = 'passphrase';
-        return { phase: 'need-passphrase' };
+        return { phase: 'need-passphrase', wrong: outcome.wrong };
       case 'auth-failed':
         note('authentication failed');
         end();
@@ -221,7 +227,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
           } else s.name = s.input.domain;
         } else {
           const v4 = firstIPv4(serverIps);
-          if (v4 === null) blocked = 'The server has no IPv4 address that can be used for a free host name. Enter your own domain.';
+          if (v4 !== null && !isPublicIPv4(v4)) blocked = "This address is not reachable from the internet: enter the server's public address or your own domain.";
+          else if (v4 === null) blocked = 'The server has no IPv4 address that can be used for a free host name. Enter your own domain.';
           else s.name = sslipName(v4);
         }
       }
@@ -280,9 +287,10 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
         void deps.log.write(clean).catch(() => {});
         deps.emit({ event: 'line', step: stepId, text: clean });
       },
-    });
+    }, () => cancelRequested);
     const probe = s.probe;
     end();
+    if (outcome.stopped === true) return failed(outcome.failedStep, 'Stopped before the step «' + (outcome.failedStep ?? '') + '». Run the wizard again to finish: finished steps are skipped.');
     if (!outcome.ok) return failed(outcome.failedStep, `The step «${outcome.failedStep}» failed. The server output is in the log above.`);
     if (plan.intent === 'remove') return { phase: 'removed', docker: 'kept' };
     if (plan.intent === 'rollback') {
@@ -310,6 +318,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       // Everything is validated before the first byte leaves this machine (acceptance 7).
       const checked = validateInput(raw);
       if (!checked.ok) throw new ControlCallError('bad_input', Object.values(checked.errors).join(' · '));
+      if (session?.running === true) throw bad('A setup run is in progress');
       end();
       const s: Session = { input: checked.value, trusted: null, pendingKey: null, connection: null, sudo: null, base: null, probe: null, plan: null, name: null, waiting: null, running: false };
       session = s;
@@ -361,6 +370,12 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       return health(pendingAddress);
     },
     async cancel() {
+      if (session?.running === true) {
+        // Takes effect before the next step; the connection is closed when the run ends.
+        cancelRequested = true;
+        note('cancel requested during a run');
+        return null;
+      }
       note('cancelled');
       end();
       return null;

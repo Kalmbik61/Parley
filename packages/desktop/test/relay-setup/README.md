@@ -19,7 +19,7 @@ relay image built from the repository and Caddy on this Mac first.
 
 ```
 docker build -f packages/relay/Dockerfile -t parley-relay:stand .
-docker pull caddy:2
+docker pull caddy:2.11.7
 RELAY_SETUP_STAND=1 RELAY_SETUP_FULL=1 pnpm --filter @parley/desktop exec vitest run test/relay-setup
 ```
 
@@ -48,5 +48,7 @@ The tests remove their containers (`parley-stand-*`) when they finish.
 - **The published image.** The digest in `src/main/relay-setup/image.ts` is a placeholder until the human publishes the
   image; the stand preloads `parley-relay:stand` into each server's Docker, so the `docker pull` step finds it and is
   skipped.
+- **Caddy.** The compose file pins `caddy:2.11.7@sha256:…`; an image loaded from a tarball has no registry digest, so the
+  server's Docker pulls Caddy from Docker Hub: the full flow needs internet access from the containers.
 - **systemd.** The containers have none. `docker/docker-shim.sh` and `docker/stand-dockerd.sh` start `dockerd` after the
   wizard's `apt` install and make Docker commands wait for it — what the package postinst does on a real server.

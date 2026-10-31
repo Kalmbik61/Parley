@@ -31,7 +31,7 @@ async function wizard(): Promise<{ service: RelaySetupService; dir: string; conf
     image: { ref: 'parley-relay:stand', published: true },
     health: async () => ({ status: 200 }),
     healthAttempts: 1,
-    resolver: { resolve4: async () => ['127.0.0.1'], resolve6: async () => [] },
+    resolver: { resolve4: async () => ['203.0.113.7'], resolve6: async () => [] },
     configureBridge: async (address) => void configured.push(address),
     emit: () => undefined,
   });
@@ -39,7 +39,7 @@ async function wizard(): Promise<{ service: RelaySetupService; dir: string; conf
 }
 
 const rootLogin = (server: Server, over: Record<string, unknown> = {}) => ({
-  host: '127.0.0.1',
+  host: 'localhost',
   port: server.port,
   user: 'root',
   auth: { kind: 'password' as const },
@@ -79,7 +79,7 @@ describe.skipIf(!ENABLED)('relay setup stand', () => {
     expect(phase.plan.blocked).toBeNull();
     expect(phase.plan.steps.map((s) => s.id)).toEqual(['docker', 'dir', 'files', 'image', 'start']);
     expect(phase.os).toMatch(flavour === 'ubuntu24' ? /Ubuntu 24\.04/ : /Debian GNU\/Linux 12/);
-    expect(await readFile(path.join(dir, 'known_hosts'), 'utf8')).toContain('[127.0.0.1]:');
+    expect(await readFile(path.join(dir, 'known_hosts'), 'utf8')).toContain('[localhost]:');
     // Probing only: nothing exists yet on the server.
     expect(exec(server.name, 'ls /opt/parley-relay 2>&1 || true')).toMatch(/No such file/);
     await service.call('cancel', {});

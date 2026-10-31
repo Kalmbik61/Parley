@@ -40,7 +40,7 @@ function service(server: Server, ref: string, events: RelaySetupEvent[] = []) {
       },
       healthAttempts: 3,
       healthDelayMs: 1000,
-      resolver: { resolve4: async () => ['127.0.0.1'], resolve6: async () => [] },
+      resolver: { resolve4: async () => ['203.0.113.7'], resolve6: async () => [] },
       configureBridge: async (address) => void configured.push(address),
       emit: (event) => events.push(event),
     }),
@@ -49,7 +49,7 @@ function service(server: Server, ref: string, events: RelaySetupEvent[] = []) {
 
 async function start(server: Server, intent: 'install' | 'rollback' | 'remove', ref: string, removeData = false): Promise<{ phase: RelaySetupPhase; events: RelaySetupEvent[]; configured: string[] }> {
   const { service: wizard, events, configured } = service(server, ref);
-  let phase = await wizard.call('begin', { host: '127.0.0.1', port: server.port, user: 'root', auth: { kind: 'password' }, secrets: { password: 'stand-root-pw' }, intent });
+  let phase = await wizard.call('begin', { host: 'localhost', port: server.port, user: 'root', auth: { kind: 'password' }, secrets: { password: 'stand-root-pw' }, intent });
   if (phase.phase === 'hostkey') phase = await wizard.call('trust', {});
   expect(phase.phase).toBe('plan');
   if (removeData) phase = await wizard.call('plan', { removeData: true });
@@ -82,8 +82,8 @@ describe.skipIf(!ENABLED)('relay setup stand: full install', () => {
     const server = startServer('ubuntu24', 'parley-stand-full-busy443', undefined, { imagesDir, listen: 443 });
     await waitForSsh(server.port);
     const run = await start(server, 'install', 'parley-relay:stand');
-    expect(run.phase).toMatchObject({ phase: 'done', address: '127-0-0-1.sslip.io:8443' });
-    expect(run.configured).toEqual(['127-0-0-1.sslip.io:8443']);
+    expect(run.phase).toMatchObject({ phase: 'done', address: '203-0-113-7.sslip.io:8443' });
+    expect(run.configured).toEqual(['203-0-113-7.sslip.io:8443']);
     expect(exec(server.name, 'docker port parley-relay-caddy-1')).toMatch(/443\/tcp -> 0\.0\.0\.0:8443/);
     expect(exec(server.name, 'cat /opt/parley-relay/.env')).toContain('RELAY_HTTPS_PORT=8443');
   }, 900_000);

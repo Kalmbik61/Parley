@@ -113,5 +113,6 @@ export function saveImages(dir: string): void {
   mkdirSync(dir, { recursive: true });
   docker(['tag', 'parley-relay:stand', 'parley-relay:stand2']);
   docker(['save', '-o', path.join(dir, 'relay.tar'), 'parley-relay:stand', 'parley-relay:stand2']);
-  docker(['save', '-o', path.join(dir, 'caddy.tar'), 'caddy:2']);
+  // Caddy is pinned by digest in the compose file, so the server pulls it itself; the tarball only saves a round trip.
+  docker(['save', '-o', path.join(dir, 'caddy.tar'), 'caddy:2.11.7']);
 }

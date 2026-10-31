@@ -32,7 +32,8 @@ export type ConnectOutcome =
   | { kind: 'ok'; connection: SshConnection }
   | { kind: 'hostkey-unknown'; key: HostKeyInfo }
   | { kind: 'hostkey-changed'; key: HostKeyInfo; known: string }
-  | { kind: 'passphrase-required' }
+  /** `wrong`: a passphrase was given and the key still did not open. */
+  | { kind: 'passphrase-required'; wrong: boolean }
   | { kind: 'auth-failed' }
   | { kind: 'error'; message: string };
 
@@ -103,11 +104,19 @@ function wrap(connection: Client): SshConnection {
   };
 }
 
-export const connectSsh: ConnectFn = async (request, knownHosts) => {
+const PASSPHRASE = /passphrase/i;
+
+export function createConnectSsh(sshDir: string = path.join(os.homedir(), '.ssh')): ConnectFn {
+  return (request, knownHosts) => connectWith(sshDir, request, knownHosts);
+}
+
+export const connectSsh: ConnectFn = createConnectSsh();
+
+const connectWith = async (sshDir: string, request: ConnectRequest, knownHosts: KnownHosts): Promise<ConnectOutcome> => {
   let privateKey: Buffer | undefined;
   if (request.auth.kind === 'key') {
     try {
-      privateKey = await readFile(path.join(os.homedir(), '.ssh', request.auth.file));
+      privateKey = await readFile(path.join(sshDir, request.auth.file));
     } catch {
       return { kind: 'error', message: 'The key file could not be read' };
     }
@@ -134,7 +143,7 @@ export const connectSsh: ConnectFn = async (request, knownHosts) => {
       if (presented !== null && verdict?.kind === 'unknown' && request.trusted !== presented.fingerprint) {
         return settle({ kind: 'hostkey-unknown', key: presented });
       }
-      if (/passphrase/i.test(error.message)) return settle({ kind: 'passphrase-required' });
+      if (PASSPHRASE.test(error.message)) return settle({ kind: 'passphrase-required', wrong: request.secrets.passphrase !== undefined });
       if (error.level === 'client-authentication') return settle({ kind: 'auth-failed' });
       // `error.message` of ssh2 never contains credentials, but keep it short and single-line anyway.
       return settle({ kind: 'error', message: error.message.split('\n')[0]?.slice(0, 160) ?? 'Connection failed' });
@@ -165,7 +174,10 @@ export const connectSsh: ConnectFn = async (request, knownHosts) => {
         },
       });
     } catch (error) {
-      settle({ kind: 'error', message: error instanceof Error ? error.message.slice(0, 160) : 'Connection failed' });
+      // ssh2 parses `privateKey` inside connect() and throws from there, not through the 'error' event.
+      const message = error instanceof Error ? error.message : '';
+      if (PASSPHRASE.test(message)) settle({ kind: 'passphrase-required', wrong: request.secrets.passphrase !== undefined });
+      else settle({ kind: 'error', message: message.split('\n')[0]?.slice(0, 160) || 'Connection failed' });
     }
   });
 };
@@ -176,7 +188,8 @@ export type SudoMode = { kind: 'root' } | { kind: 'nopasswd' } | { kind: 'passwo
 export function createShell(connection: SshConnection, sudo: SudoMode): RemoteShell {
   return {
     run(command: string, options: RunOptions = {}): Promise<RunResult> {
-      const inner = `sh -c ${shQuote(command)}`;
+      // stdin of the command is closed: after `sudo -S` took the password line nothing else can read the rest.
+      const inner = `sh -c ${shQuote(`exec </dev/null; ${command}`)}`;
       const elevate = options.sudo === true && sudo.kind !== 'root';
       const line = !elevate ? inner : sudo.kind === 'password' ? `sudo -S -p '' ${inner}` : `sudo -n ${inner}`;
       return connection.exec(line, {
