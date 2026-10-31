@@ -7,6 +7,7 @@ import {
   PING_INTERVAL_MS,
   PING_TIMEOUT_MS,
   PROBE_TIMEOUT_MS,
+  REKEY_GRACE_MS,
   Supervisor,
 } from '../src/supervisor.js';
 import { FakeBridge, advance, flush, makePlatform, type TestPlatform } from './fakes.js';
@@ -398,7 +399,9 @@ describe('acceptance 5: one attempt at a time', () => {
     expect(sup.status.state).toBe('ready');
     const first = bridge.last.ts!;
 
-    // `rekey` — сразу, без отступа, при тех же часах.
+    // `rekey` после `REKEY_GRACE_MS` — сразу, без отступа, при тех же часах.
+    await advance(REKEY_GRACE_MS);
+    vi.setSystemTime(first);
     bridge.last.event('session.closing', { reason: 'rekey' });
     await flush(200);
     expect(platform.relay.sockets).toHaveLength(2);
@@ -411,10 +414,37 @@ describe('acceptance 5: one attempt at a time', () => {
   it('the clock going back does not lower ts', async () => {
     await connect();
     const first = bridge.last.ts!;
+    await advance(REKEY_GRACE_MS);
     vi.setSystemTime(Date.now() - 3_600_000);
     bridge.last.event('session.closing', { reason: 'rekey' });
     await flush(200);
     expect(bridge.last.ts).toBe(first + 1);
+    expect(sup.status.state).toBe('ready');
+  });
+
+  it('m9: `rekey` within 30 s of ready goes through the usual backoff, and the failures add up', async () => {
+    platform.jitterByte = 0xff;
+    await connect();
+    const delays: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const sockets = platform.relay.sockets.length;
+      bridge.last.event('session.closing', { reason: 'rekey' });
+      await flush(200);
+      expect(platform.relay.sockets).toHaveLength(sockets);
+      const delay = retryDelay();
+      delays.push(delay);
+      await advance(delay);
+      await flush(200);
+      expect(sup.status.state).toBe('ready');
+    }
+    expect(delays).toEqual([500, 1000, 2000].map((c) => Math.floor(c * NEAR_ONE)));
+
+    // Сессия старше 30 с — снова сразу.
+    await advance(REKEY_GRACE_MS);
+    const sockets = platform.relay.sockets.length;
+    bridge.last.event('session.closing', { reason: 'rekey' });
+    await flush(200);
+    expect(platform.relay.sockets).toHaveLength(sockets + 1);
     expect(sup.status.state).toBe('ready');
   });
 

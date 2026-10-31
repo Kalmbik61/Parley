@@ -32,6 +32,11 @@ export const BACKOFF_BASE_MS = 500;
 export const BACKOFF_CAP_MS = 30_000;
 export const BACKOFF_LONG_CAP_MS = 60_000;
 export const BACKOFF_LONG_AFTER_MS = 5 * 60_000;
+/**
+ * `rekey` раньше этого срока после `ready` идёт через обычный отступ со счётом неудачи: мост, шлющий `rekey`
+ * сразу после каждого `ready`, иначе дал бы тесный цикл рукопожатий (ревью волны 3, m9).
+ */
+export const REKEY_GRACE_MS = 30_000;
 /** Потолок принятого кадра приложения на телефоне (§5.7). */
 export const PHONE_MAX_FRAME = 8 * 1024 * 1024;
 
@@ -84,6 +89,8 @@ interface Conn {
   rpc: Rpc | null;
   heartbeat: TimerHandle | null;
   lastPongAt: number;
+  /** Идёт, пока сессии меньше `REKEY_GRACE_MS`. */
+  young: TimerHandle | null;
 }
 
 class HandshakeFailure extends Error {}
@@ -216,6 +223,7 @@ export class Supervisor {
       rpc: null,
       heartbeat: null,
       lastPongAt: 0,
+      young: null,
     };
     this.#conn = conn;
     this.#set({ state: 'connecting', retryAt: null });
@@ -293,6 +301,9 @@ export class Supervisor {
     conn.codec = new FrameCodec({ maxFrame: PHONE_MAX_FRAME });
     conn.rpc = new Rpc((frame) => this.#send(conn, frame), this.#platform);
     conn.lastPongAt = this.#platform.now();
+    conn.young = this.#platform.setTimeout(() => {
+      conn.young = null;
+    }, REKEY_GRACE_MS);
     this.#set({ state: 'ready', relayError: null, hello, retryAt: null });
     // Первый транспортный кадр — подтверждение сессии для моста (§7.5).
     conn.rpc.call('client.info', { ...this.#client }).catch(() => undefined);
@@ -353,6 +364,8 @@ export class Supervisor {
       case 'reset':
         return this.#block(reason);
       case 'rekey':
+        // Сессия моложе `REKEY_GRACE_MS` — обычный отступ (m9).
+        if (conn.young !== null) return this.#lost(conn, null);
         // Новое рукопожатие сразу, без отступа и без счёта неудачи (§7.6).
         this.#teardown(conn);
         return this.#connect();
@@ -490,6 +503,10 @@ export class Supervisor {
     if (conn.heartbeat !== null) {
       this.#platform.clearTimeout(conn.heartbeat);
       conn.heartbeat = null;
+    }
+    if (conn.young !== null) {
+      this.#platform.clearTimeout(conn.young);
+      conn.young = null;
     }
     conn.link?.close();
     conn.rpc?.failAll();

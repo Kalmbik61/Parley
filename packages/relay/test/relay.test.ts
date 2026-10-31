@@ -14,7 +14,7 @@ import { lanAddress, loadConfig } from '../src/main.js';
 import { hashMatches, sha256OfB64 } from '../src/routes.js';
 import { DEFAULT_TIMING } from '../src/pipe.js';
 import { createRelay, MAX_FRAME_BYTES, type Relay, type RelayOptions } from '../src/server.js';
-import { EMPTY_ROUTE_TTL_MS, ROUTE_TTL_MS, Store } from '../src/store.js';
+import { EMPTY_ROUTE_TTL_MS, MAX_ROUTES, ROUTE_TTL_MS, Store, TOMBSTONE_TTL_MS } from '../src/store.js';
 
 const id = (n: number): string => b64urlEncode(randomBytes(n));
 const sha = (b64: string): string => b64urlEncode(createHash('sha256').update(Buffer.from(b64, 'base64url')).digest());
@@ -702,5 +702,82 @@ describe('review fixes (A4 M1, M2, m6, m8)', () => {
     await sleep(50);
     expect(env.store.devicesOf(b.route)).toHaveLength(1);
     expect(env.relay.registry.offerCount()).toBe(0);
+  });
+});
+
+describe('review fixes, wave 3 (M2, m14)', () => {
+  it('M2: a full table evicts the oldest empty route without a bridge, never one with devices or a bridge', async () => {
+    let t = 1_000_000;
+    const env = await start({ store: new Store(null, () => t) });
+    const attached = await bridge(env);
+    t += 1;
+    env.store.createRoute('used', 'h');
+    env.store.replaceDevices('used', [{ device: 'd', tokenHash: 'x' }]);
+    t += 1;
+    env.store.createRoute('oldest-empty', 'h');
+    t += 1;
+    for (let i = env.store.routeCount(); i < MAX_ROUTES; i++) env.store.createRoute(`fresh-${i}`, 'h');
+    expect(env.store.routeCount()).toBe(MAX_ROUTES);
+
+    const owner = await bridge(env);
+    expect(env.store.route(owner.route)).toBeDefined();
+    expect(env.store.route('oldest-empty')).toBeUndefined();
+    expect(env.store.route('used')).toBeDefined();
+    expect(env.store.route(attached.route)).toBeDefined();
+    expect(env.store.routeCount()).toBe(MAX_ROUTES);
+    expect(env.logs.some((l) => l.includes('"routes_gc"') && l.includes('"full"'))).toBe(true);
+  });
+
+  it('M2: a full table with nothing to evict refuses the new route', async () => {
+    const env = await start({ store: new Store(null) });
+    for (let i = 0; i < MAX_ROUTES; i++) {
+      env.store.createRoute(`r${i}`, 'h');
+      env.store.replaceDevices(`r${i}`, [{ device: 'd', tokenHash: 'x' }]);
+    }
+    const h = await connectTo(env.base, '/v1/host');
+    h.send({ v: 1, t: 'hello', route: id(16), secret: id(32) });
+    expect(await h.json()).toMatchObject({ t: 'error', code: 'rate_limited' });
+    expect(env.store.routeCount()).toBe(MAX_ROUTES);
+  });
+
+  it('m14: a route collected with devices can be recreated only with its old secret, for a year', async () => {
+    let t = 1_000_000;
+    const file = join(dir, 'relay.json');
+    const env = await start({ store: new Store(file, () => t) });
+    const owner = await bridge(env);
+    await setDevices(env, owner, [{ device: id(16), token: id(32) }]);
+    owner.host.ws.close();
+    await owner.host.closed;
+    for (let i = 0; i < 50 && env.relay.registry.host(owner.route) !== undefined; i++) await sleep(5);
+    t += ROUTE_TTL_MS;
+    expect(env.store.gc(() => false)).toBe(1);
+    expect(env.store.route(owner.route)).toBeUndefined();
+    env.store.flush();
+    expect(new Store(file, () => t).tombstone(owner.route)).toBe(sha(owner.secret));
+
+    const thief = await connectTo(env.base, '/v1/host');
+    thief.send({ v: 1, t: 'hello', route: owner.route, secret: id(32) });
+    expect(await thief.json()).toMatchObject({ t: 'error', code: 'unknown_route' });
+    expect(env.store.route(owner.route)).toBeUndefined();
+
+    await bridge(env, owner.route, owner.secret);
+    expect(env.store.route(owner.route)!.secretHash).toBe(sha(owner.secret));
+    expect(env.store.tombstone(owner.route)).toBeUndefined();
+  });
+
+  it('m14: empty routes leave no tombstone; tombstones expire', () => {
+    let t = 1_000_000;
+    const store = new Store(null, () => t);
+    store.createRoute('empty', 'h1');
+    store.createRoute('used', 'h2');
+    store.replaceDevices('used', [{ device: 'd', tokenHash: 'x' }]);
+    t += ROUTE_TTL_MS;
+    expect(store.gc(() => false)).toBe(2);
+    expect(store.tombstone('empty')).toBeUndefined();
+    expect(store.tombstone('used')).toBe('h2');
+    t += TOMBSTONE_TTL_MS;
+    expect(store.tombstone('used')).toBeUndefined();
+    store.gc(() => false);
+    expect(store.tombstone('used')).toBeUndefined();
   });
 });

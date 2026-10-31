@@ -9,10 +9,15 @@ Noise, end to end). Spec: `docs/specs/2026-10-29-mobile-app-design.md` §6.
   route secret and of each device token. Writes are deferred by 1 s and flushed on stop; a crash loses at most that
   second, which the bridge restores with its next `hello` and `devices`. Offers and streams live in memory.
 - Routes are collected hourly: a route without devices whose bridge has been away for 24 h, and any route whose
-  bridge has been away for 30 days. A returning bridge recreates its route with the same `hello`.
+  bridge has been away for 30 days. A returning bridge recreates its route with the same `hello`. A route collected
+  with devices leaves a tombstone for a year: until then only its old secret can recreate it, because phones and
+  the push gateway know the route id.
+- At most 10 000 routes. When the table is full, a new route evicts the least recently seen route that has no
+  devices and no attached bridge; routes with devices or a bridge are never evicted. If none can go, `rate_limited`.
 - Limits per client address (IPv6: per /64; `::ffff:` mapped addresses count as IPv4): at most 32 open
   connections (upgrades included, beyond that HTTP 429), plus the frame limits of spec §6.4. The first frame on a
-  new socket must arrive within 5 s.
+  new socket must arrive within 5 s. Everyone behind one carrier-grade NAT or one shared /64 shares these limits;
+  that is fine for a personal relay, a public one would need a higher cap.
 - Config (environment): `PORT` (8787), `HOST` (`127.0.0.1`), `DATA_FILE`, `TRUST_PROXY=1` (client IP = last
   `x-forwarded-for` entry; only behind a proxy).
 

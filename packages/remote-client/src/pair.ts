@@ -96,14 +96,14 @@ export async function pair(
     if (name.length + ch.length > 64) break;
     name += ch;
   }
-  const msg1Payload = encodeFrame(
-    pairMsg1Payload.parse({
-      v: 1,
-      name: name || 'Phone',
-      platform: options.platformName,
-      app: options.app,
-    }),
-  );
+  const payload = pairMsg1Payload.safeParse({
+    v: 1,
+    name: name || 'Phone',
+    platform: options.platformName,
+    app: options.app,
+  });
+  if (!payload.success) throw new PairError('protocol');
+  const msg1Payload = encodeFrame(payload.data);
   let offer: PairOffer;
   let baseUrl: string;
   try {
@@ -174,7 +174,10 @@ export async function pair(
       pairedAt: platform.now(),
     };
     if (signal?.aborted) throw new PairError('cancelled');
+    // Повторный паринг с тем же Маком: прежняя запись рабочая, пока мост не принял новое устройство (m10).
+    let previous: HostRecord | null;
     try {
+      previous = await store.get(hostId);
       await store.put(record);
     } catch {
       throw new PairError('storage');
@@ -185,7 +188,7 @@ export async function pair(
       }
     } catch {
       // Мост без `paired` удалит устройство через 30 с — запись телефона тогда бесполезна.
-      await store.remove(hostId).catch(() => undefined);
+      await restore(store, record, previous).catch(() => undefined);
       throw new PairError('connection');
     }
     return record;
@@ -197,6 +200,17 @@ export async function pair(
     signal?.removeEventListener('abort', abort);
     link.close();
   }
+}
+
+/**
+ * Откат неудачного паринга: прежняя запись хоста возвращается, иначе запись удаляется. Если прежнее устройство
+ * успело подключиться поверх новой записи, `lastTs` берётся наибольший — метки подключения не идут назад.
+ */
+async function restore(store: HostStore, record: HostRecord, previous: HostRecord | null): Promise<void> {
+  if (previous === null) return store.remove(record.hostId);
+  const current = await store.get(record.hostId);
+  const lastTs = Math.max(previous.lastTs, current?.lastTs ?? 0);
+  return store.put({ ...previous, lastTs });
 }
 
 function mapLinkError(error: unknown, stage: 'relay' | 'handshake' | 'credentials'): PairError {
