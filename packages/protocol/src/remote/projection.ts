@@ -73,7 +73,7 @@ const remoteSwarmCreatorSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('human') }),
 ]);
 
-/** Рой без `objective`, `result`, `failure`, `seenAt`, `expiredAt` и `addedAt` участников. */
+/** Рой без `objective`, `result`, `failure`, `expiredAt` и `addedAt` участников; `seenAt` — метка без текста. */
 export const remoteSwarmSchema = z.strictObject({
   id: z.string(),
   tag: z.string(),
@@ -90,6 +90,7 @@ export const remoteSwarmSchema = z.strictObject({
   status: z.enum(['running', 'collecting', 'done', 'failed', 'cancelled']),
   createdAt: z.string(),
   endedAt: z.string().nullable(),
+  seenAt: z.string().nullable(),
 });
 
 export const remoteWorkSchema = z.strictObject({
@@ -170,6 +171,7 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
           status: w.status,
           createdAt: w.createdAt,
           endedAt: w.endedAt,
+          seenAt: w.seenAt ?? null,
         })),
         rooms: m.rooms.map((r) => ({
           id: r.id,

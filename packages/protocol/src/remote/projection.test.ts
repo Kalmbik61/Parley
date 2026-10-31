@@ -79,7 +79,7 @@ describe('projectWorksSnapshot', () => {
     expect(w.swarms).toEqual([{
       id: 'sw-01', tag: 'Research', creator: { kind: 'session', sessionId: 's-01' }, queen: 's-01',
       members: [{ sessionId: 's-01', role: 'queen', n: 1, handedAt: null }, { sessionId: 's-02', role: 'drone', n: 1, handedAt: 'h' }],
-      status: 'running', createdAt: 'c', endedAt: null,
+      status: 'running', createdAt: 'c', endedAt: null, seenAt: 's',
     }]);
     expect(w.sessions[1]).toMatchObject({ lifecycle: 'closed', result: 'done', role: null, model: null, stuck: { kind: 'limit' } });
     expect(w.rooms[0]).toEqual({
@@ -93,7 +93,7 @@ describe('projectWorksSnapshot', () => {
     const found = keys(p).filter((k) => FORBIDDEN.includes(k));
     expect(found).toEqual([]);
     const swarmKeys = keys(p.works.flatMap((w) => w.swarms));
-    for (const k of ['objective', 'result', 'failure', 'seenAt', 'expiredAt', 'addedAt']) expect(swarmKeys).not.toContain(k);
+    for (const k of ['objective', 'result', 'failure', 'expiredAt', 'addedAt']) expect(swarmKeys).not.toContain(k);
   });
 
   it('handles empty history, missing compact and missing revision', () => {
