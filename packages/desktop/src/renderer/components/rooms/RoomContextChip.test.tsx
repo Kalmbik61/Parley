@@ -57,6 +57,24 @@ afterEach(() => {
 });
 
 describe('RoomContextChip (спека 3.3)', () => {
+  it('вариант по умолчанию — шапка комнаты (testid есть); sidebar testid не ставит, а клик не всплывает к родителю', () => {
+    render(<RoomContextChip bridge={bridge} roomTitle="Auth" participants={MEMBERS} />);
+    expect(screen.getByTestId('room-context-chip')).toBeTruthy();
+    cleanup();
+    const onParentClick = vi.fn();
+    render(
+      <div onClick={onParentClick}>
+        <RoomContextChip bridge={bridge} roomTitle="Auth" participants={MEMBERS} variant="sidebar" />
+      </div>,
+    );
+    expect(screen.queryByTestId('room-context-chip')).toBeNull();
+    const trigger = document.querySelector<HTMLElement>('[data-sidebar-room-context]')!;
+    expect(trigger.textContent).toBe('Ctx 82% ⏳');
+    fireEvent.click(trigger);
+    expect(screen.getByTestId('room-context-popover')).toBeTruthy();
+    expect(onParentClick).not.toHaveBeenCalled();
+  });
+
   it('значок — максимум по живым и ⏳ при ждущей просьбе', () => {
     render(<RoomContextChip bridge={bridge} roomTitle="Auth" participants={MEMBERS} />);
     expect(screen.getByTestId('room-context-chip').textContent).toBe('Ctx 82% ⏳');

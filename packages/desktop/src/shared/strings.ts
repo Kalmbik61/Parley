@@ -570,11 +570,10 @@ export const S = {
     /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
     showAgents: 'Show agents',
     hideAgents: 'Hide agents',
-    /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
+    /** Слово строки комнаты, пока решение ждёт человека. */
     roomDecision: 'decision',
-    roomNew: (n: number): string => `${n} new`,
-    /** Слово строки комнаты, где человека назвали (`@human`): `@you · {n} new`, `n` — все непрочитанные сообщения комнаты. */
-    roomMentioned: (n: number): string => `@you · ${n} new`,
+    /** Слово строки комнаты, где человека назвали (`@human`). */
+    roomMentioned: '@you',
     /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
     roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
     /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */

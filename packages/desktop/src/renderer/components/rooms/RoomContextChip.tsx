@@ -2,6 +2,8 @@
  * Значок контекста в шапке комнаты (спека 2026-10-15, 3.3): `Ctx 82%` — наибольший процент среди живых участников,
  * `⏳` — есть ждущие просьбы. Поповер: участники с полосой и процентом, Compact / Cancel в строке, спящие — `asleep`
  * без кнопки; одно общее поле инструкции для строк и `Compact all`. Старый хост без поля `context` — значка нет.
+ * Вариант `sidebar` меняет только триггер (мелкая кнопка в строке комнаты, клик не открывает комнату): расчёт значка и
+ * поповер общие с шапкой.
  */
 
 import { useState } from 'react';
@@ -26,15 +28,23 @@ import { Textarea } from '../../ui/textarea.js';
 import { cancelCompaction, compactSession } from '../context/compact-actions.js';
 import type { ParticipantModel } from './feed-model.js';
 
+/** Участник, которого хватает значку и поповеру: лента комнаты и строка сайдбара собирают его каждая по-своему. */
+export type ContextMember = Pick<
+  ParticipantModel,
+  'id' | 'label' | 'provider' | 'lifecycle' | 'closed' | 'sessionRef' | 'context' | 'compaction'
+>;
+
 const C = S.context;
 
 export interface RoomContextChipProps {
   bridge: ParleyBridge;
   roomTitle: string;
-  participants: readonly ParticipantModel[];
+  participants: readonly ContextMember[];
+  /** `header` — кнопка шапки комнаты (по умолчанию); `sidebar` — мелкая кнопка строки комнаты в сайдбаре. */
+  variant?: 'header' | 'sidebar';
 }
 
-export function RoomContextChip({ bridge, roomTitle, participants }: RoomContextChipProps): JSX.Element | null {
+export function RoomContextChip({ bridge, roomTitle, participants, variant = 'header' }: RoomContextChipProps): JSX.Element | null {
   const supported = useHostSupports('sessions.compact');
   const members = participants.filter((participant) => !participant.closed && participant.sessionRef !== undefined);
   const live = members.filter((participant) => participant.lifecycle === 'active');
@@ -46,18 +56,43 @@ export function RoomContextChip({ bridge, roomTitle, participants }: RoomContext
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          data-testid="room-context-chip"
-          data-level={level}
-          className={cn('shrink-0 font-mono tabular-nums', LEVEL_CLASS[level])}
-        >
-          {text}
-        </Button>
+        {variant === 'sidebar' ? (
+          <button
+            type="button"
+            // Как шеврон строки: в порядок Tab не входит; клик не доходит до строки, комната не открывается.
+            tabIndex={-1}
+            data-sidebar-room-context=""
+            data-level={level}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            className={cn(
+              'h-4 shrink-0 rounded-sm border px-1 font-mono text-[11px] leading-none tabular-nums outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+              level === 'normal' ? 'border-transparent text-neutral-800' : LEVEL_CLASS[level],
+            )}
+          >
+            {text}
+          </button>
+        ) : (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            data-testid="room-context-chip"
+            data-level={level}
+            className={cn('shrink-0 font-mono tabular-nums', LEVEL_CLASS[level])}
+          >
+            {text}
+          </Button>
+        )}
       </PopoverTrigger>
-      <PopoverContent align="start" data-testid="room-context-popover" className="w-[min(360px,calc(100vw-32px))] p-3 text-xs">
+      <PopoverContent
+        align="start"
+        data-testid="room-context-popover"
+        // Поповер в портале, но события React всплывают по дереву компонентов: без этого правый клик внутри него дошёл бы
+        // до `RoomRowMenu` предка (вариант `sidebar`) и открыл меню комнаты поверх поповера.
+        onContextMenu={(event) => event.stopPropagation()}
+        className="w-[min(360px,calc(100vw-32px))] p-3 text-xs"
+      >
         <RoomContextBody bridge={bridge} roomTitle={roomTitle} members={members} supported={supported} />
       </PopoverContent>
     </Popover>
@@ -73,7 +108,7 @@ function RoomContextBody({
 }: {
   bridge: ParleyBridge;
   roomTitle: string;
-  members: readonly ParticipantModel[];
+  members: readonly ContextMember[];
   supported: boolean;
 }): JSX.Element {
   const [text, setText] = useState(fitDefaultInstructions(C.roomDefault, roomTitle));
