@@ -273,6 +273,8 @@ export class BridgeConn {
   hs: HandshakeState | null = null;
   ciphers: TransportCiphers | null = null;
   readonly codec = new FrameCodec({ maxFrame: 64 * 1024 });
+  /** Байт флагов каждого принятого транспортного сообщения (§7.7: бит 1 — deflate). */
+  readonly flags: number[] = [];
   /** Принятые кадры приложения. */
   readonly frames: Array<Record<string, unknown>> = [];
   ts: number | null = null;
@@ -297,7 +299,9 @@ export class BridgeConn {
   onBinary(bytes: Uint8Array): void {
     if (this.ciphers === null)
       return this.kind === 'pair' ? this.#pairMsg1(bytes) : this.#connectMsg1(bytes);
-    const chunk = this.codec.decode(this.ciphers.receive.decryptWithAd(EMPTY, bytes));
+    const plaintext = this.ciphers.receive.decryptWithAd(EMPTY, bytes);
+    this.flags.push(plaintext[0]!);
+    const chunk = this.codec.decode(plaintext);
     if (chunk === null) return;
     const frame = decodeFrame(chunk) as Record<string, unknown>;
     this.frames.push(frame);
