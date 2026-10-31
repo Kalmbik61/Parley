@@ -12,7 +12,9 @@ import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
 import { Switch } from '../../ui/switch.js';
-import { INITIAL_PAIR, pairReducer, reissueDue } from './remote-pairing.js';
+import { isPrivateRelayHost } from '@parley/protocol/remote';
+import { normalizeRelayInput } from '../../../shared/relay-input.js';
+import { groupSas, INITIAL_PAIR, pairReducer, platformLabel, reissueDue } from './remote-pairing.js';
 
 export interface RemoteSettingsProps {
   bridge: ParleyBridge;
@@ -33,6 +35,11 @@ function whenText(ms: number | null): string {
   return ms === null ? TEXT.devices.neverSeen : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function timeText(iso: string): string {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? iso : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
+}
+
 export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSettingsProps): JSX.Element {
   const remote = bridge.remote;
   const [state, setState] = useState<RemoteState>(OFF);
@@ -41,6 +48,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [activity, setActivity] = useState<RemoteAuditRecord[]>([]);
   const [relay, setRelay] = useState('');
+  const [relayError, setRelayError] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const alive = useRef(true);
@@ -225,23 +233,44 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                 aria-label={TEXT.relayLabel}
                 placeholder={TEXT.relayPlaceholder}
                 value={relay}
-                onChange={(event) => setRelay(event.target.value)}
+                onChange={(event) => {
+                  setRelay(event.target.value);
+                  setRelayError(null);
+                }}
               />
               <Button
                 type="button"
                 variant="outline"
                 data-testid="remote-relay-save"
                 disabled={!running || relay.trim() === ''}
-                onClick={() =>
+                onClick={() => {
+                  // The bridge takes `host[:port]`: a typed scheme is dropped, a path or `@` is shown at the field.
+                  const host = normalizeRelayInput(relay);
+                  if (host === null) {
+                    setRelayError(TEXT.relayInvalid);
+                    return;
+                  }
+                  setRelay(host);
                   void run(S.errors.actions.saveSettings, async () => {
-                    setState(await remote.call('configure', { relayUrl: relay.trim() }));
-                  })
-                }
+                    setState(await remote.call('configure', { relayUrl: host }));
+                  });
+                }}
               >
                 {TEXT.relaySave}
               </Button>
+              <Button type="button" variant="outline" data-testid="remote-relay-check" disabled={!running} onClick={() => void run(S.errors.actions.loadSettings, async () => void setState(await remote.call('state', {})))}>
+                {TEXT.relayCheck}
+              </Button>
             </div>
-            {relay.trim().startsWith('ws://') ? <span className="text-xs text-muted-foreground">{TEXT.relayDevNote}</span> : null}
+            {relayError !== null ? (
+              <span data-testid="remote-relay-error" className="text-xs text-destructive">
+                {relayError}
+              </span>
+            ) : null}
+            {(() => {
+              const host = normalizeRelayInput(relay);
+              return host !== null && isPrivateRelayHost(host) ? <span className="text-xs text-muted-foreground">{TEXT.relayDevNote}</span> : null;
+            })()}
             <Button type="button" variant="outline" size="sm" className="self-start" disabled title={TEXT.wizardSoon} data-testid="remote-wizard">
               {TEXT.setUpOnServer}
             </Button>
@@ -315,7 +344,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
               <div key={device.deviceId} className="flex items-center justify-between gap-2" data-testid="remote-device">
                 <div className="flex min-w-0 flex-col">
                   <span className="truncate">
-                    {device.name} <span className="text-muted-foreground">· {device.platform}</span>
+                    {device.name} <span className="text-muted-foreground">· {platformLabel(device.platform)}</span>
                   </span>
                   <span className="text-xs text-muted-foreground">
                     {TEXT.devices.paired(whenText(device.pairedAt))} · {device.lastSeen === null ? TEXT.devices.neverSeen : TEXT.devices.lastSeen(whenText(device.lastSeen))}
@@ -379,7 +408,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
             {activity.length === 0 ? <p className="text-xs text-muted-foreground">{TEXT.activity.empty}</p> : null}
             <ul className="flex max-h-40 flex-col gap-0.5 overflow-y-auto font-mono text-xs text-muted-foreground">
               {activity.map((record, index) => (
-                <li key={`${record.at}-${index}`}>{TEXT.activity.line(record.at, record.deviceName, record.method ?? record.kind, record.outcome)}</li>
+                <li key={`${record.at}-${index}`}>{TEXT.activity.line(timeText(record.at), record.deviceName, record.method ?? record.kind, record.outcome)}</li>
               ))}
             </ul>
           </div>
@@ -395,12 +424,12 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                 <span data-testid="remote-pair-name" className="font-medium">
                   {TEXT.dialog.unverified(request.name)}
                 </span>
-                <span className="text-xs text-muted-foreground">{TEXT.dialog.platform(request.platform)}</span>
+                <span className="text-xs text-muted-foreground">{TEXT.dialog.platform(platformLabel(request.platform))}</span>
               </div>
               <div className="flex flex-col items-center gap-1">
                 <span className="text-xs text-muted-foreground">{TEXT.dialog.codeLabel}</span>
                 <span data-testid="remote-pair-sas" className="font-mono text-3xl tracking-widest">
-                  {request.sas}
+                  {groupSas(request.sas)}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">{TEXT.dialog.compare}</p>

@@ -65,3 +65,14 @@ export function pairReducer(state: PairState, action: PairAction): PairState {
 export function reissueDue(state: PairState): boolean {
   return state.active && state.request === null;
 }
+
+/** `123456` → `123 456`, as the phone shows it (design D1 6.5), so the two codes are easy to compare. */
+export function groupSas(sas: string): string {
+  return sas.length === 6 ? `${sas.slice(0, 3)} ${sas.slice(3)}` : sas;
+}
+
+/** The platform string of a phone as a label: `ios` → `iOS`, `android` → `Android`; anything else as it came. */
+export function platformLabel(platform: string): string {
+  const known: Record<string, string> = { ios: 'iOS', android: 'Android' };
+  return known[platform.toLowerCase()] ?? platform;
+}

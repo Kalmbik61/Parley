@@ -16,7 +16,7 @@ writeFileSync(path.join(dir, 'bridge.pid'), String(process.pid));
 
 const sockets = new Set();
 let devices = [];
-let relayUrl = 'ws://192.168.1.10:8787';
+let relayUrl = '192.168.1.10:8787';
 let reqNo = 0;
 const log = [{ at: new Date().toISOString(), deviceId: '', deviceName: '', kind: 'connect', outcome: 'bridge started' }];
 const reply = (socket, id, result) => socket.write(`${JSON.stringify({ id, result })}\n`);

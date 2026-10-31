@@ -11,6 +11,7 @@ import {
   type RemotePairOffer,
   type RemoteState,
 } from '../shared/remote-types.js';
+import { normalizeRelayInput } from '../shared/relay-input.js';
 import { ControlCallError, startPresence, type PowerMonitorLike, type PresenceState } from './remote-control.js';
 import type { RemoteLauncher } from './remote-launcher.js';
 import { withIpcError } from './ipc.js';
@@ -27,6 +28,8 @@ export interface RemoteServiceOptions {
   broadcast: (event: RemoteEvent) => void;
   /** The offer string is turned into an image here, in main (spec 12). */
   qrDataUrl?: (text: string) => Promise<string>;
+  /** Delays of the reconnect to a dropped control socket, ms; the last one repeats. */
+  reconnectDelaysMs?: readonly number[];
 }
 
 export interface RemoteService {
@@ -48,6 +51,16 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
   const state: RemoteState = { enabled: false, process: 'off', error: null, status: null };
   let presence: { resend(): void; stop(): void } | null = null;
   let unsubscribe: Array<() => void> = [];
+  // Starts and stops of the bridge run one after another: a stop never overtakes a start still in flight.
+  let chain: Promise<unknown> = Promise.resolve();
+  const serial = <T,>(task: () => Promise<T>): Promise<T> => {
+    const next = chain.then(task, task);
+    chain = next.catch(() => undefined);
+    return next;
+  };
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  let reconnectAttempt = 0;
+  const reconnectDelays = options.reconnectDelaysMs ?? [1000, 2000, 5000, 10_000, 30_000];
 
   const snapshot = (): RemoteState => ({ ...state });
   const publish = (): void => broadcast({ event: 'state', data: snapshot() });
@@ -82,6 +95,11 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
       publish();
       return;
     }
+    // Switched off while the bridge was starting: do not leave it running behind an off switch.
+    if (!state.enabled) {
+      await bringDown();
+      return;
+    }
     detachListeners();
     unsubscribe.push(
       launcher.client.onEvent((event, data) => {
@@ -94,6 +112,7 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
         state.process = state.enabled ? 'error' : 'off';
         state.error = state.enabled ? 'The bridge stopped' : null;
         publish();
+        if (state.enabled) scheduleReconnect();
       }),
     );
     presence = startPresence({
@@ -103,11 +122,35 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
       },
     });
     state.process = 'running';
+    reconnectAttempt = 0;
     await refreshStatus();
     publish();
   }
 
+  /** A dropped control socket of a live bridge: connect again with a backoff while the switch is on (presence, pairing events). */
+  function scheduleReconnect(): void {
+    if (reconnectTimer !== null || !state.enabled) return;
+    const delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)] ?? 30_000;
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void serial(async () => {
+        if (!state.enabled || state.process === 'running') return;
+        await bringUp();
+        if (state.process === 'error' && state.enabled) scheduleReconnect();
+      });
+    }, delay);
+    reconnectTimer.unref();
+  }
+
+  function cancelReconnect(): void {
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    reconnectAttempt = 0;
+  }
+
   async function bringDown(): Promise<void> {
+    cancelReconnect();
     detachListeners();
     await launcher.stop();
     state.process = 'off';
@@ -125,12 +168,14 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
       if (typeof enabled !== 'boolean') throw new ControlCallError('bad_request', 'invalid argument');
       state.enabled = enabled;
       await options.saveEnabled(enabled);
-      if (enabled) await bringUp();
-      else await bringDown();
+      await serial(() => (state.enabled ? bringUp() : bringDown()));
       return snapshot();
     },
     async configure({ relayUrl }) {
-      await control('configure', { relayUrl: text(relayUrl, 256) });
+      // The bridge takes `host[:port]` only (spec 5.3): a scheme is dropped here, a path or `@` is refused.
+      const host = normalizeRelayInput(text(relayUrl, 256));
+      if (host === null) throw new ControlCallError('bad_request', 'invalid relay address');
+      await control('configure', { relayUrl: host });
       await refreshStatus();
       publish();
       return snapshot();
@@ -177,7 +222,9 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
     async init() {
       try {
         state.enabled = await options.loadEnabled();
-        if (state.enabled) await bringUp();
+        // Off: a bridge left running by an earlier window (a start that was interrupted) is stopped, not forgotten.
+        await serial(() => (state.enabled ? bringUp() : launcher.stop()));
+        if (state.process === 'error' && state.enabled) scheduleReconnect();
       } catch (error) {
         console.warn('[parley] remote access init failed', error);
       }
@@ -186,6 +233,7 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
       return handlers[name](params as never) as Promise<RemoteCalls[typeof name]['result']>;
     },
     dispose() {
+      cancelReconnect();
       detachListeners();
       launcher.detach();
     },

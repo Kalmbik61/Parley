@@ -13,7 +13,7 @@ const RUNNING: RemoteState = {
   enabled: true,
   process: 'running',
   error: null,
-  status: { running: true, host: 'online', relay: 'connected', relayUrl: 'wss://relay.example.com', devices: 1, version: '1' },
+  status: { running: true, host: 'online', relay: 'connected', relayUrl: 'relay.example.com', devices: 1, version: '1' },
 };
 const request = (id: string, sas = '123456'): RemotePairRequest => ({ requestId: id, name: 'Anna’s iPhone', platform: 'ios', sas, fingerprint: 'fp', expiresAt: Date.now() + 60_000 });
 const DEVICE: RemoteDevice = { deviceId: 'd1', name: 'Anna’s iPhone', platform: 'ios', pairedAt: Date.UTC(2026, 9, 30), lastSeen: null };
@@ -58,8 +58,32 @@ describe('RemoteSettings', () => {
     mount();
     expect(await screen.findByText(T.status.host.online)).toBeTruthy();
     expect(screen.getByText(T.status.relay.connected)).toBeTruthy();
-    await waitFor(() => expect((screen.getByTestId('remote-relay') as HTMLInputElement).value).toBe('wss://relay.example.com'));
+    await waitFor(() => expect((screen.getByTestId('remote-relay') as HTMLInputElement).value).toBe('relay.example.com'));
     expect(await screen.findByText(/Anna’s iPhone/)).toBeTruthy();
+  });
+
+  it('relay: a typed scheme is dropped before configure; a path is refused at the field; the dev note follows the host', async () => {
+    const { bridge } = mount(RUNNING, (b) => b.setRemoteHandler('configure', () => RUNNING));
+    const field = (await screen.findByTestId('remote-relay')) as HTMLInputElement;
+    await waitFor(() => expect(field.value).toBe('relay.example.com'));
+    expect(screen.queryByText(T.relayDevNote)).toBeNull();
+    fireEvent.change(field, { target: { value: 'wss://relay.example.com/path' } });
+    fireEvent.click(screen.getByTestId('remote-relay-save'));
+    expect((await screen.findByTestId('remote-relay-error')).textContent).toBe(T.relayInvalid);
+    expect(bridge.remoteCalls.some((c) => c.name === 'configure')).toBe(false);
+    fireEvent.change(field, { target: { value: 'ws://192.168.1.10:8787' } });
+    expect(screen.getByText(T.relayDevNote)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('remote-relay-save'));
+    await waitFor(() => expect(bridge.remoteCalls.at(-1)).toEqual({ name: 'configure', params: { relayUrl: '192.168.1.10:8787' } }));
+    expect(field.value).toBe('192.168.1.10:8787');
+  });
+
+  it('Check asks the bridge for its status again', async () => {
+    const { bridge } = mount();
+    await screen.findByText(T.status.host.online);
+    const before = bridge.remoteCalls.filter((c) => c.name === 'state').length;
+    fireEvent.click(screen.getByTestId('remote-relay-check'));
+    await waitFor(() => expect(bridge.remoteCalls.filter((c) => c.name === 'state').length).toBe(before + 1));
   });
 
   it('the pairing dialog shows «(unverified)» and the SAS, and Allow answers with the dialog’s requestId', async () => {
@@ -67,7 +91,8 @@ describe('RemoteSettings', () => {
     await startPairing(bridge);
     act(() => bridge.emitRemote({ event: 'pair.request', data: request('req-A') }));
     expect((await screen.findByTestId('remote-pair-name')).textContent).toBe(T.dialog.unverified('Anna’s iPhone'));
-    expect(screen.getByTestId('remote-pair-sas').textContent).toBe('123456');
+    expect(screen.getByTestId('remote-pair-sas').textContent).toBe('123 456');
+    expect(screen.getByText(T.dialog.platform('iOS'))).toBeTruthy();
     fireEvent.click(screen.getByText(T.dialog.allow));
     await waitFor(() => expect(bridge.remoteCalls.at(-1)).toEqual({ name: 'pair.answer', params: { requestId: 'req-A', allow: true } }));
     expect(screen.queryByTestId('remote-pair-sas')).toBeNull();
@@ -85,7 +110,7 @@ describe('RemoteSettings', () => {
     expect(screen.queryByTestId('remote-pair-sas')).toBeNull();
     // The new request has its own dialog and its own id.
     act(() => bridge.emitRemote({ event: 'pair.request', data: request('req-B', '222222') }));
-    expect((await screen.findByTestId('remote-pair-sas')).textContent).toBe('222222');
+    expect((await screen.findByTestId('remote-pair-sas')).textContent).toBe('222 222');
     fireEvent.click(screen.getByTestId('remote-pair-allow'));
     await waitFor(() => expect(bridge.remoteCalls.filter((c) => c.name === 'pair.answer')).toEqual([{ name: 'pair.answer', params: { requestId: 'req-B', allow: true } }]));
   });

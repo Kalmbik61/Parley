@@ -38,6 +38,7 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   let socket: net.Socket | null = null;
   let connected = false;
   let nextId = 1;
+  let connecting: Promise<void> | null = null;
 
   function failAll(error: Error): void {
     for (const entry of pending.values()) {
@@ -93,8 +94,36 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   }
 
   return {
-    async connect() {
-      if (connected) return;
+    connect() {
+      if (connected) return Promise.resolve();
+      // Two callers share one attempt: a second socket would replace the first.
+      connecting ??= connectOnce().finally(() => {
+        connecting = null;
+      });
+      return connecting;
+    },
+    isConnected: () => connected,
+    call(method, params, timeoutMs = 10_000) {
+      if (!socket || !connected) return Promise.reject(new ControlCallError('closed', 'not connected to the bridge'));
+      return request(socket, method, params, timeoutMs);
+    },
+    onEvent(listener) {
+      events.add(listener);
+      return () => events.delete(listener);
+    },
+    onClose(listener) {
+      closers.add(listener);
+      return () => closers.delete(listener);
+    },
+    close() {
+      connected = false;
+      socket?.destroy();
+      socket = null;
+    },
+  };
+
+  async function connectOnce(): Promise<void> {
+    {
       const token = (await readFile(options.tokenPath, 'utf8')).trim();
       const created = (options.connectSocket ?? net.connect)(options.socketPath);
       await new Promise<void>((resolve, reject) => {
@@ -119,26 +148,8 @@ export function createControlClient(options: ControlClientOptions): ControlClien
         throw error;
       }
       connected = true;
-    },
-    isConnected: () => connected,
-    call(method, params, timeoutMs = 10_000) {
-      if (!socket || !connected) return Promise.reject(new ControlCallError('closed', 'not connected to the bridge'));
-      return request(socket, method, params, timeoutMs);
-    },
-    onEvent(listener) {
-      events.add(listener);
-      return () => events.delete(listener);
-    },
-    onClose(listener) {
-      closers.add(listener);
-      return () => closers.delete(listener);
-    },
-    close() {
-      connected = false;
-      socket?.destroy();
-      socket = null;
-    },
-  };
+    }
+  }
 }
 
 export type PresenceState = 'active' | 'idle' | 'locked';
