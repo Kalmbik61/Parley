@@ -9,6 +9,7 @@ import {
   dotState,
   liveStatus,
   needWord,
+  queuedWord,
   reportedStatus,
   sessionDotState,
   sessionDotStateWithNeed,
@@ -20,7 +21,7 @@ import {
   type SessionStatus,
 } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
-import type { AutoSleep } from './types.js';
+import type { AutoSleep, QueuedLaunch } from './types.js';
 
 describe('reportedStatus и liveStatus', () => {
   // Таблица двух осей (план этапа 3, 3.1): бриф и MCP ставят итог выше процесса, окно и помощник у живой — нет.
@@ -87,6 +88,55 @@ describe('agentStatus: сон по решению хоста', () => {
         expect(agentStatus({ lifecycle, result })).toBe(reportedStatus({ lifecycle, result }));
       }
     }
+  });
+});
+
+describe('agentStatus: очередь машины', () => {
+  const slept: AutoSleep = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+  const queued: QueuedLaunch = {
+    class: 'agent', mode: 'new', by: 's-01', at: '2026-10-31T12:00:00.000Z', reason: 'machine-limit', live: 18, limit: 18,
+  };
+
+  it('ожидающая запуска сессия с записью очереди — queued', () => {
+    expect(agentStatus({ lifecycle: 'pending', queued })).toBe('queued');
+    expect(agentStatus({ lifecycle: 'pending', result: null, queued })).toBe('queued');
+  });
+
+  it('спящая сессия с записью очереди — queued, и усыплённая хостом тоже: её поднимает очередь', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', queued })).toBe('queued');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept, queued })).toBe('queued');
+  });
+
+  it('итог важнее очереди', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'done', queued })).toBe('done');
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'failed', autoSleep: slept, queued })).toBe('failed');
+  });
+
+  it('у живой и закрытой сессии запись очереди не решает: жизненный цикл главнее', () => {
+    expect(agentStatus({ lifecycle: 'active', queued })).toBe('active');
+    expect(agentStatus({ lifecycle: 'closed', queued })).toBe('exited');
+  });
+
+  it('пустая запись очереди (null или нет) — как без очереди', () => {
+    expect(agentStatus({ lifecycle: 'pending', queued: null })).toBe('pending');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept, queued: null })).toBe('asleep');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept })).toBe('asleep');
+  });
+});
+
+describe('queuedWord: слово сессии в очереди машины', () => {
+  it('потолок полон: причина и сколько живо из скольких', () => {
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: 18 })).toBe('queued · machine limit 18/18');
+    expect(queuedWord({ reason: 'machine-limit', live: 7, limit: 12 })).toBe('queued · machine limit 7/12');
+  });
+
+  it('потолка нет — слово без чисел', () => {
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: null })).toBe('queued · machine limit');
+  });
+
+  it('давление памяти critical — слово про память, числа не нужны', () => {
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: 18 })).toBe('queued · memory critical');
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: null })).toBe('queued · memory critical');
   });
 });
 

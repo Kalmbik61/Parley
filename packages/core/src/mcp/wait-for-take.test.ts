@@ -8,7 +8,7 @@ import { addRoom } from '../work/rooms.js';
 import { asleepHint } from '../work/session-state.js';
 import { createWork, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { unreadLetters, writeLetters, type NewLetter } from '../work/letter-store.js';
-import { HUMAN, type WorkSession } from '../work/types.js';
+import { HUMAN, type QueuedLaunch, type WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
 import { createToolRunner, finishedState, type ToolRunner } from './tools.js';
 
@@ -709,5 +709,89 @@ describe('усыплённая хостом сессия в ответах ин�
     const answer = body(await runner.call('report', { status: 'progress', summary: 'ещё работаю' }, undefined));
 
     expect(answer['status']).toBe('asleep');
+  });
+});
+
+describe('ждущая слота машины сессия в ответах инструментов: queued, а не exited или asleep; wait_for(<id>) ждёт её как работающую', () => {
+  const QUEUED: QueuedLaunch = {
+    class: 'agent', mode: 'resume', by: 's-01', at: '2026-10-31T12:00:00.000Z', reason: 'machine-limit', live: 18, limit: 18,
+  };
+  const SLEPT = { reason: 'idle', at: '2026-10-31T11:00:00.000Z', waitTarget: null } as const;
+  const patch = (patcher: (session: WorkSession) => void, id = 's-02'): Promise<unknown> =>
+    updateMap(project, workId, (map) => { patcher(map.sessions.find((session) => session.id === id)!); });
+
+  it('finishedState: запись очереди у ожидающей и спящей сессии — работает (null), итог отвечает сразу, закрытая — closed', () => {
+    const base = { result: null, stuck: null, autoSleep: null, queued: QUEUED } as unknown as WorkSession;
+
+    expect(finishedState({ ...base, lifecycle: 'pending' } as WorkSession)).toBeNull();
+    expect(finishedState({ ...base, lifecycle: 'sleeping' } as WorkSession)).toBeNull();
+    // Усыплённая хостом и поставленная в очередь на подъём: слово `asleep` уже не про неё.
+    expect(finishedState({ ...base, lifecycle: 'sleeping', autoSleep: SLEPT } as WorkSession)).toBeNull();
+    expect(finishedState({ ...base, lifecycle: 'sleeping', result: 'done' } as WorkSession)).toBe('done');
+    expect(finishedState({ ...base, lifecycle: 'sleeping', result: 'failed' } as WorkSession)).toBe('failed');
+    expect(finishedState({ ...base, lifecycle: 'closed' } as WorkSession)).toBe('closed');
+  });
+
+  it('finishedState: застрявшая сессия в очереди остаётся stuck, пустая запись очереди ничего не меняет', () => {
+    const base = { result: null, stuck: null, autoSleep: SLEPT, lifecycle: 'sleeping' } as unknown as WorkSession;
+
+    expect(finishedState({ ...base, queued: QUEUED, stuck: { kind: 'limit' } } as unknown as WorkSession)).toBe('stuck');
+    expect(finishedState({ ...base, queued: null })).toBe('asleep');
+    expect(finishedState({ ...base, autoSleep: null, queued: null })).toBe('sleeping');
+  });
+
+  it('wait_for(<id>) на ждущую слота цель не отвечает сразу, а ждёт: по таймауту running', async () => {
+    await patch((session) => { session.lifecycle = 'sleeping'; session.queued = { ...QUEUED }; });
+    const startedAt = Date.now();
+
+    expect(body(await runner.call('wait_for', { target: 's-02', timeoutSec: 0.3 }, undefined))).toEqual({ state: 'running' });
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250);
+    // Ожидание началось по-настоящему: в журнале пара Start/End.
+    expect((await journalLines()).map((line) => line['hook_event_name'])).toEqual(['ParleyWaitStart', 'ParleyWaitEnd']);
+  });
+
+  it('wait_for(<id>) на ждущую слота цель ждёт, а когда очередь её подняла и она сдала итог, отвечает итогом', async () => {
+    // Усыплённая хостом, письмо подняло её, а машина полна: sleeping, autoSleep и запись очереди.
+    await patch((session) => { session.lifecycle = 'sleeping'; session.autoSleep = { ...SLEPT }; session.queued = { ...QUEUED }; });
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => { started = resolve; });
+    journal.beforeLine = (line) => {
+      if (line.includes('ParleyWaitStart')) started();
+    };
+
+    const waiting = runner.call('wait_for', { target: 's-02', timeoutSec: 30 }, undefined);
+    // Ждёт, а не отвечает сразу: началась запись ожидания в журнал, ответа ещё нет.
+    expect(await Promise.race([hasStarted.then(() => 'waiting'), waiting.then(() => 'answered')])).toBe('waiting');
+    await patch((session) => {
+      session.lifecycle = 'active';
+      delete session.autoSleep;
+      delete session.queued;
+      session.result = 'done';
+      session.summary = 'готово';
+    });
+
+    expect(body(await waiting)).toEqual({ state: 'done', sessionId: 's-02', summary: 'готово', artifacts: [] });
+  });
+
+  it('get_map summaries: статус ждущей слота сессии — queued, даже если её усыпил хост', async () => {
+    await patch((session) => {
+      session.summary = 'бэк готов';
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+      session.queued = { ...QUEUED };
+    });
+
+    const summaries = body(await runner.call('get_map', { field: 'summaries' }, undefined))['summaries'] as { id: string; status: string }[];
+
+    expect(summaries.map((row) => [row.id, row.status])).toEqual([['s-02', 'queued']]);
+  });
+
+  it('report позднего вызова ждущей слота сессии называет статус queued', async () => {
+    await patch((session) => { session.lifecycle = 'sleeping'; session.queued = { ...QUEUED }; }, 's-01');
+
+    const answer = body(await runner.call('report', { status: 'progress', summary: 'ещё работаю' }, undefined));
+
+    expect(answer['status']).toBe('queued');
   });
 });

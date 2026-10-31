@@ -93,6 +93,28 @@ describe('create_session MCP', () => {
     expect((await call(client)).text).not.toContain('trust the folder');
   });
 
+  it('queued — ответ хоста и вторым блоком фраза про очередь машины, на обе причины', async () => {
+    const client = await connect(await startEndpoint());
+    for (const queued of ['machine-limit', 'memory-critical']) {
+      answer.body = { ok: true, result: { sessionId: 's-07', provider: 'claude', queued } };
+      const result = await call(client);
+      expect(result.isError).not.toBe(true);
+      const [json, sentence, ...rest] = result.text.split('\n');
+      expect(JSON.parse(json!)).toEqual({ sessionId: 's-07', provider: 'claude', queued });
+      expect(sentence).toBe(
+        'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.',
+      );
+      expect(rest).toEqual([]);
+    }
+  });
+
+  it('без queued, и с незнакомой причиной, фразы про очередь нет', async () => {
+    const client = await connect(await startEndpoint());
+    expect((await call(client)).text).not.toContain('queued');
+    answer.body = { ok: true, result: { sessionId: 's-07', provider: 'claude', queued: 'something-new' } };
+    expect((await call(client)).text.split('\n')).toHaveLength(1);
+  });
+
   it('explains unavailable host support without mutating a map', async () => {
     const result = await call(await connect());
     expect(result.isError).toBe(true);

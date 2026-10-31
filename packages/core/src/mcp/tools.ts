@@ -120,12 +120,14 @@ const SETTLE_SLACK_MS = 20;
  * процесса больше нет — ушла в `sleeping` или `closed`. Усыплённая хостом (`autoSleep`) — `asleep`: она не кончила
  * и не умерла, письмо её поднимет (спека сна агентов 4.1). `null` — цель ещё работает. Идёт замена агента (спека
  * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
- * `stuck` снят, но работа у неё не кончилась.
+ * `stuck` снят, но работа у неё не кончилась. Цель в очереди машины (`queued`, спека ёмкости 4.2) тоже работает: процесса
+ * ещё нет, но запуск начнётся сам, и `wait_for` ждёт её, как работающую. Итог и `stuck` отвечают раньше очереди.
  */
 export function finishedState(session: WorkSession): string | null {
   if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
+  if (session.queued != null && session.lifecycle !== 'closed') return null;
   if (session.lifecycle === 'sleeping' && session.autoSleep != null) return 'asleep';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
     ? session.lifecycle
