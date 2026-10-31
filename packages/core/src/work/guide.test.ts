@@ -164,6 +164,14 @@ describe('темы гида', () => {
     expect(text).toContain('take code only for a named reason (topic `tools`, `create_session`).');
   });
 
+  it('тема lead, шаг 5: перед раздачей параллельных частей лид смотрит get_capacity', () => {
+    const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain(
+      'Before handing out parts to run in parallel, call `get_capacity`: it tells how many sessions can start now and which limit stops the rest.',
+    );
+  });
+
   it('тема lead: ждать позиции одним wait_for("inbox", 1500), не писать «plan accepted, handing out»', () => {
     const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
 

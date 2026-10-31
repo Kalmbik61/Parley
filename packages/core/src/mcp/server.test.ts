@@ -230,6 +230,7 @@ describe('список инструментов', () => {
       'check_inbox',
       'close_session',
       'create_room',
+      'get_capacity',
       'get_map',
       'list_roles',
       'memory_read',

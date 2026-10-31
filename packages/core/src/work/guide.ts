@@ -343,7 +343,9 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    \`kind: decision\` message. \`Returned for rework: <note>\` (without a note —
    \`Returned for rework.\`) means returned for rework.
 5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
-   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. Do not post
+   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. Before handing
+   out parts to run in parallel, call \`get_capacity\`: it tells how many sessions can start now and
+   which limit stops the rest. Do not post
    "plan accepted, handing out" first: the hand-out message itself is the news. Implementation parts go to
    standard-tier sessions (Executor); strong models keep the plan, the critique and the review, and take
    code only for a named reason (topic \`tools\`, \`create_session\`). The

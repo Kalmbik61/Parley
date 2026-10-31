@@ -1,4 +1,4 @@
-import { loadConfig, workPaths, type McpContext, type ProviderRow, type RoleCatalog, type SessionActivity, type ToolLaunch } from '@parley/core';
+import { loadConfig, workPaths, type CapacityFacts, type McpContext, type ProviderRow, type RoleCatalog, type SessionActivity, type ToolLaunch } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -71,6 +71,8 @@ export async function hostToolContext(
     attempts?: (ref: SessionRef, request: unknown, signal?: AbortSignal) => Promise<unknown>;
     /** Границы хода для брошенного `wait_for` (только Codex, см. `TurnBoundarySource`); нет — вызов всегда живой. */
     turnBoundary?: TurnBoundarySource;
+    /** Числа машины и активность сессии для `get_capacity`; `null` — хост не смог ответить. Нет — поля `capacity` нет. */
+    capacity?: (ref: SessionRef) => Promise<CapacityFacts | null>;
   },
 ): Promise<McpContext> {
   const { config } = await loadConfig();
@@ -93,6 +95,7 @@ export async function hostToolContext(
     },
     mapChanges: deps.onWorksChange,
     ...(deps.roleCatalog === undefined ? {} : { roleCatalog: deps.roleCatalog }),
+    ...(deps.capacity === undefined ? {} : { capacity: () => deps.capacity!(ref) }),
     ...(deps.attempts === undefined ? {} : { attempts: (request, signal) => deps.attempts!(ref, request, signal) }),
     // Граница хода новее начала вызова — вызов брошен (`wait_for`). Провайдер решает, есть ли проверка вообще; активность
     // читается в момент вопроса, а не при создании контекста.

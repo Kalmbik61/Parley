@@ -1,4 +1,4 @@
-import type { AgentPlan, ContextFill, Message, UsageSummary, WindowWorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, MachineCapacity, Message, QueuedLaunch, UsageSummary, WindowWorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -467,4 +467,10 @@ export interface RoomsMailEvent {
    * каркас кадра (отметки прочтения) оставил под него меньше потолка: урезанных кандидатов окно получит со следующим снимком.
    */
   mentionCandidates: Message[];
+}
+
+/** Снимок ёмкости машины для окна (спека 4.5): числа — те же, что у get_capacity; очередь — в порядке compareQueued. */
+export interface CapacitySnapshot {
+  machine: MachineCapacity;
+  queue: Array<{ ref: SessionRef; queued: QueuedLaunch }>;
 }

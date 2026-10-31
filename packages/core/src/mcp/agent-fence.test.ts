@@ -113,6 +113,9 @@ describe('ограда агента', () => {
     await setRevision('rev-new');
     const result = await runnerWith('rev-old').call('get_map', {});
     expect(result.isError).toBeFalsy();
+    // get_capacity тоже только читает: прежний агент видит ёмкость машины.
+    const capacity = await runnerWith('rev-old').call('get_capacity', {});
+    expect(capacity.isError).toBeFalsy();
   });
 
   it('процесс нового агента с той же ревизией пишет', async () => {

@@ -8,7 +8,7 @@
  * отступ `0 14 2 18`, зазор 14, 12px `neutral-800`. Слева — сегмент на провайдера: значок 14, имя и версия
  * CLI моноширинным 11px `neutral-700`. Claude/Codex/GLM видны всегда в этом порядке;
  * недоступная кнопка приглушена, без версии и лимитов. Клик открывает общую карточку подключения. Справа — сегменты спеки Orca-UI 5.9: последнее уведомление хоста
- * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», диагностика (`DiagnosticsSegment`), будильник.
+ * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», ёмкость машины (`CapacitySegment`), диагностика (`DiagnosticsSegment`), будильник.
  *
  * Лимиты подписки (кусок 9b, спека комнат Organic, 3.5) — после версии: полоска пятичасового окна (нет
  * его — недельного) и «58% 5h · 41% wk». Нет данных — сегмент прежний. Проценты целые, округление вниз:
@@ -36,6 +36,7 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
+import { CapacitySegment } from './CapacitySegment.js';
 import { DiagnosticsSegment } from './DiagnosticsSegment.js';
 import { SEGMENT_BUTTON } from './segment.js';
 
@@ -300,6 +301,7 @@ export function StatusBar({
           onConfirm={onRestartHost}
           onOpenChange={onRestartHostOpenChange}
         />
+        <CapacitySegment />
         <DiagnosticsSegment />
         <button
           type="button"
