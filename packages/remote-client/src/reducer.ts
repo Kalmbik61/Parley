@@ -24,10 +24,11 @@ export type RemoteAction =
   | { t: 'activity.changed'; ref: SessionRef; activity: SessionActivity; metrics: unknown }
   | { t: 'mail'; event: RoomsMailEvent }
   | { t: 'messages'; projectPath: string; workId: string; roomId: string | null; messages: Message[]; epoch?: string | null }
-  | { t: 'cards.loaded'; ref: SessionRef; epoch: string | null; items: FeedItem[]; at: number }
+  /** `at` — когда чтение закончилось, `startedAt` — когда началось (без него равно `at`). */
+  | { t: 'cards.loaded'; ref: SessionRef; epoch: string | null; items: FeedItem[]; at: number; startedAt?: number }
   | { t: 'cards.failed'; ref: SessionRef; epoch: string | null; at: number }
   /** Карточку решили мы сами: она уходит без «Answered at your Mac». */
-  | { t: 'cards.resolved'; ref: SessionRef; cardId: string }
+  | { t: 'cards.resolved'; ref: SessionRef; cardId: string; at: number }
   | { t: 'gone.dismiss'; key: string }
   /** Методы из hello моста; `null` — соединение потеряно, hello устарел. */
   | { t: 'hello'; methods: string[] | null }
@@ -86,9 +87,22 @@ function applyMail(state: RemoteState, event: RoomsMailEvent): RemoteState {
   return next;
 }
 
-function applyCards(state: RemoteState, ref: SessionRef, items: FeedItem[], at: number): RemoteState {
+function applyCards(state: RemoteState, ref: SessionRef, items: FeedItem[], at: number, startedAt: number): RemoteState {
   const key = sessionKey(ref);
-  const cards = pendingCards(items);
+  // Карточка, решённая на телефоне после начала этого чтения, в устаревшем ответе не воскресает.
+  const resolved = { ...state.resolved };
+  let touched = false;
+  const cards = pendingCards(items).filter((c) => {
+    const at0 = resolved[goneKey(key, c.cardId)];
+    return at0 === undefined || startedAt > at0;
+  });
+  const prefix = `${key}\u0000`;
+  for (const [k, resolvedAt] of Object.entries(resolved)) {
+    if (k.startsWith(prefix) && startedAt > resolvedAt) {
+      delete resolved[k];
+      touched = true;
+    }
+  }
   const texts = items.filter((i): i is Extract<FeedItem, { kind: 'text' }> => i.kind === 'text');
   const last = texts[texts.length - 1];
   const entry: CardsEntry = {
@@ -104,7 +118,7 @@ function applyCards(state: RemoteState, ref: SessionRef, items: FeedItem[], at: 
     if (gone === state.gone) gone = { ...gone };
     gone[goneKey(key, old.cardId)] = { sessionKey: key, cardId: old.cardId, card: old, at };
   }
-  return { ...state, gone, cards: { ...state.cards, [key]: entry } };
+  return { ...state, gone, cards: { ...state.cards, [key]: entry }, ...(touched ? { resolved } : {}) };
 }
 
 export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
@@ -144,7 +158,7 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
         ? mergeLetters(state, workKeyOf(action.projectPath, action.workId), action.messages)
         : state;
     case 'cards.loaded':
-      return action.epoch === state.epoch ? applyCards(state, action.ref, action.items, action.at) : state;
+      return action.epoch === state.epoch ? applyCards(state, action.ref, action.items, action.at, action.startedAt ?? action.at) : state;
     case 'cards.failed': {
       if (action.epoch !== state.epoch) return state;
       const key = sessionKey(action.ref);
@@ -154,9 +168,10 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
     case 'cards.resolved': {
       const key = sessionKey(action.ref);
       const entry = state.cards[key];
-      if (entry === undefined) return state;
+      if (entry === undefined) return { ...state, resolved: { ...state.resolved, [goneKey(key, action.cardId)]: action.at } };
       return {
         ...state,
+        resolved: { ...state.resolved, [goneKey(key, action.cardId)]: action.at },
         cards: { ...state.cards, [key]: { ...entry, cards: entry.cards.filter((c) => c.cardId !== action.cardId) } },
       };
     }

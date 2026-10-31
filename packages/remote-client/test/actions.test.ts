@@ -3,7 +3,7 @@ import { createRemoteClient, type Clock, type Rpc } from '../src/index.js';
 import { PROJECT, permissionCard, proposal, ref, room, session, snap, textItem, work } from './fixtures.js';
 
 const clock: Clock = {
-  now: () => 1000,
+  now: () => Date.now(),
   setTimeout: (f, ms) => setTimeout(f, ms),
   clearTimeout: (h) => clearTimeout(h as never),
   setInterval: (f, ms) => setInterval(f, ms),
@@ -134,5 +134,55 @@ describe('readCards', () => {
     release();
     expect((await p).ok).toBe(false);
     expect(client.store.getState().cards).toEqual({});
+  });
+});
+
+describe('wave 3: timeout and stale reads', () => {
+  it('W1: timeout on feed.decide is a lost answer: re-read, lost with stillPending, no throw', async () => {
+    const { client } = setup(async (method) => {
+      if (method === 'feed.decide') throw Object.assign(new Error('t'), { code: 'timeout' });
+      return { items: [permissionCard('c-1', 'ls')] };
+    });
+    expect(await client.decide(ref('s-1'), 'c-1', allow)).toEqual({ outcome: 'lost', stillPending: true });
+  });
+
+  it('W1: timeout on rooms.resolveProposal is lost, not a throw', async () => {
+    const { client } = setup(async (method) => {
+      if (method === 'rooms.resolveProposal') throw Object.assign(new Error('t'), { code: 'timeout' });
+      return snap(2, [work('w-1', { rooms: [room('r-1', { proposal: null })] })]);
+    });
+    expect(await client.resolveProposal(resolveParams)).toEqual({ outcome: 'lost', stillPending: false });
+  });
+
+  it('W2: a feed.snapshot read started before the phone decision does not resurrect the card nor mark it gone', async () => {
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((r) => (releaseRead = r));
+    let first = true;
+    const { client } = setup(async (method) => {
+      if (method === 'feed.snapshot' && first) {
+        first = false;
+        await gate;
+        return { items: [permissionCard('c-1', 'ls')] };
+      }
+      if (method === 'feed.decide') return { applied: true, state: 'allowed' };
+      return { items: [] };
+    });
+    vi.useFakeTimers();
+    try {
+      const stale = client.readCards(ref('s-1')); // начато до решения
+      await vi.advanceTimersByTimeAsync(5);
+      await client.decide(ref('s-1'), 'c-1', allow);
+      releaseRead();
+      await stale;
+      let s = client.store.getState();
+      expect(Object.values(s.cards)[0]?.cards).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5);
+      await client.readCards(ref('s-1')); // чтение позже решения: карточки нет, метки нет
+      s = client.store.getState();
+      expect(s.gone).toEqual({});
+      expect(s.resolved).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

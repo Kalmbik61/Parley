@@ -51,6 +51,7 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
   const store = createRemoteStore();
   const refresher = createRefresher({ store, rpc, clock });
   const now = (): number => clock.now();
+  const env = { now, sleep: (ms: number) => new Promise<void>((resolve) => clock.setTimeout(resolve, ms)) };
 
   // Письма: по счётчику `unread` снимка или `rooms.mail` дочитываем новейшую страницу `context.messages`, когда счётчик
   // сменился и писем в сторе меньше. Один запрос на работу одновременно.
@@ -89,9 +90,9 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     resolveProposal: (params) => resolveProposal(store, rpc, params),
     readCards: (ref) => readCards(store, rpc, now, ref),
     setBridgeMethods: (methods) => store.dispatch({ t: 'hello', methods }),
-    createSession: (params) => createSession(store, rpc, params),
-    createRoom: (params) => createRoom(store, rpc, params),
-    sendRoomMessage: (params) => sendRoomMessage(store, rpc, params),
+    createSession: (params) => createSession(store, rpc, env, params),
+    createRoom: (params) => createRoom(store, rpc, env, params),
+    sendRoomMessage: (params) => sendRoomMessage(store, rpc, env, params),
     loadProviders: () => loadProviders(store, rpc),
     loadRoles: (projectPath) => loadRoles(store, rpc, projectPath),
     dispose: () => {

@@ -22,6 +22,7 @@ export {
   loadProviders,
   loadRoles,
   type Rpc as ActionRpc,
+  type ActionEnv,
   type Rejected,
   type CreateSessionParams,
   type CreateSessionOutcome,

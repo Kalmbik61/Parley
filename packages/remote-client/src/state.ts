@@ -67,6 +67,11 @@ export interface RemoteState {
   letterUnread: Record<string, number>;
   /** Ключ — `sessionKey` + `\u0000` + `cardId`. */
   gone: Record<string, GoneCard>;
+  /**
+   * Карточки, решённые с телефона: `goneKey` → время решения. Чтение, начатое не позже него, их не возвращает и в `gone`
+   * не кладёт (устаревший ответ). Запись уходит с первым чтением, начатым позже решения.
+   */
+  resolved: Record<string, number>;
   /** Методы из hello моста (пересечение с хостом эпохи): по ним UI решает, показывать ли запуск и письмо. `null` — hello нет. */
   methods: string[] | null;
   /** `providers.list`; `null` — не загружен. Сбрасывается с эпохой. */
@@ -86,6 +91,7 @@ export const initialRemoteState = (): RemoteState => ({
   letters: {},
   letterUnread: {},
   gone: {},
+  resolved: {},
   methods: null,
   providers: null,
   roles: {},

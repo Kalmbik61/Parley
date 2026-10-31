@@ -2,8 +2,29 @@
 import { appResponseFrame } from '@parley/protocol/remote';
 import type { Platform, TimerHandle } from './platform.js';
 
-/** Таймаут вызова по умолчанию (§10.1). */
+/** Таймаут чтения по умолчанию (§10.1). */
 export const RPC_TIMEOUT_MS = 15_000;
+
+/**
+ * Таймаут изменяющих вызовов: больше срока вызова хоста у моста (30 с) с запасом. Раньше телефон сдавался через 15 с,
+ * пока мост ещё ждал хост, и итог вызова (решение применено, сессия запущена) терялся для человека.
+ */
+export const RPC_MUTATING_TIMEOUT_MS = 45_000;
+
+/** Срок вызова хоста у моста (`host-link`), с которым связан таймаут изменяющих вызовов. */
+export const BRIDGE_CALL_DEADLINE_MS = 30_000;
+
+const MUTATING_METHODS: ReadonlySet<string> = new Set([
+  'feed.decide',
+  'rooms.resolveProposal',
+  'sessions.create',
+  'rooms.create',
+  'rooms.send',
+]);
+
+/** Таймаут по умолчанию для метода: изменяющие ждут дольше чтений. */
+export const defaultTimeoutFor = (method: string): number =>
+  MUTATING_METHODS.has(method) ? RPC_MUTATING_TIMEOUT_MS : RPC_TIMEOUT_MS;
 
 /**
  * Коды клиента: `timeout` — ответа нет в срок; `connection_lost` — соединение ушло до ответа (итог вызова
@@ -50,7 +71,7 @@ export class Rpc {
     return this.#pending.size;
   }
 
-  call(method: string, params?: unknown, timeoutMs = RPC_TIMEOUT_MS): Promise<unknown> {
+  call(method: string, params?: unknown, timeoutMs = defaultTimeoutFor(method)): Promise<unknown> {
     if (this.#closed) return Promise.reject(new RpcError('connection_lost', 'connection lost'));
     const id = String(++this.#seq);
     return new Promise<unknown>((resolve, reject) => {

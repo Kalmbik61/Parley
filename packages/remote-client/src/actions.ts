@@ -1,6 +1,7 @@
 // Действия человека (спека §10.1, §11.4): итог — `applied | conflict | stale | lost`. Изменяющий вызов после потери
 // соединения не повторяется: клиент перечитывает состояние и называет итог по его данным.
-import type { FeedDecision, RoleList } from '@parley/core';
+import type { FeedDecision, Message, RoleList } from '@parley/core';
+import { BRIDGE_CALL_DEADLINE_MS } from './rpc.js';
 import { remoteWorksSnapshotSchema, type RemoteRoom } from '@parley/protocol/remote';
 import type { RemoteStore } from './store.js';
 import { roomKey, sessionKey, type ProviderCatalog, type RoomRef, type SessionRef } from './state.js';
@@ -15,6 +16,9 @@ const codeOf = (error: unknown): string | null =>
     ? (error as { code: string }).code
     : null;
 
+/** Ответа нет: соединение ушло или вышел срок. Итог вызова неизвестен, его узнают перечитыванием. */
+const isLostCode = (code: string | null): boolean => code === 'connection_lost' || code === 'timeout';
+
 export interface ReadCardsResult {
   /** Чтение завершилось и применено; `false` — ошибка, чужая эпоха или потеря соединения. */
   ok: boolean;
@@ -26,13 +30,14 @@ export interface ReadCardsResult {
  */
 export async function readCards(store: RemoteStore, rpc: Rpc, now: () => number, ref: SessionRef): Promise<ReadCardsResult> {
   const epoch = store.getState().epoch;
+  const startedAt = now();
   try {
     const res = (await rpc.call('feed.snapshot', { ref, scope: 'attention' })) as { items?: unknown } | null;
     const items = Array.isArray(res?.items) ? (res.items as never[]) : [];
-    store.dispatch({ t: 'cards.loaded', ref, epoch, items, at: now() });
+    store.dispatch({ t: 'cards.loaded', ref, epoch, items, at: now(), startedAt });
     return { ok: store.getState().epoch === epoch };
   } catch (error) {
-    if (codeOf(error) !== 'connection_lost') store.dispatch({ t: 'cards.failed', ref, epoch, at: now() });
+    if (!isLostCode(codeOf(error))) store.dispatch({ t: 'cards.failed', ref, epoch, at: now() });
     return { ok: false };
   }
 }
@@ -54,7 +59,7 @@ export async function decide(
   try {
     const res = (await rpc.call('feed.decide', { ref, cardId, decision })) as { applied?: boolean };
     if (store.getState().epoch === epoch && res.applied === true) {
-      store.dispatch({ t: 'cards.resolved', ref, cardId });
+      store.dispatch({ t: 'cards.resolved', ref, cardId, at: now() });
       return { outcome: 'applied' };
     }
     if (store.getState().epoch === epoch) {
@@ -66,7 +71,7 @@ export async function decide(
   } catch (error) {
     const code = codeOf(error);
     if (code === 'conflict') return { outcome: 'conflict' };
-    if (code !== 'connection_lost') throw error;
+    if (!isLostCode(code)) throw error;
   }
   const read = await readCards(store, rpc, now, ref);
   if (!read.ok) return { outcome: 'lost', stillPending: null };
@@ -123,7 +128,7 @@ export async function resolveProposal(store: RemoteStore, rpc: Rpc, p: ResolvePr
     return store.getState().epoch !== epoch ? await lostResolve(store, rpc, stillPending) : { outcome: 'applied' };
   } catch (error) {
     const code = codeOf(error);
-    if (code === 'connection_lost') return lostResolve(store, rpc, stillPending);
+    if (isLostCode(code)) return lostResolve(store, rpc, stillPending);
     if (code === 'conflict') {
       await rereadWorks(store, rpc);
       return { outcome: 'conflict', proposal: proposalOf(store, p) ?? null };
@@ -147,8 +152,6 @@ export interface Rejected {
   message: string;
 }
 
-const LOST_CODES = new Set(['connection_lost', 'timeout']);
-
 const messageOf = (error: unknown): string =>
   typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string'
     ? (error as { message: string }).message
@@ -158,8 +161,25 @@ const messageOf = (error: unknown): string =>
 function rejection(error: unknown): Rejected | null {
   const code = codeOf(error);
   if (code === null) throw error;
-  return LOST_CODES.has(code) ? null : { outcome: 'rejected', code, message: messageOf(error) };
+  return isLostCode(code) ? null : { outcome: 'rejected', code, message: messageOf(error) };
 }
+
+/** Часы и пауза для действий с ожиданием итога; в тестах — фейковые. */
+export interface ActionEnv {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+/** Расхождение часов телефона и Мака, которое поиск созданного прощает (старт сессии и письмо ставят часы хоста). */
+export const CLOCK_SKEW_MS = 60_000;
+/** Отступы между перечитываниями снимка после потери ответа на запуск. */
+const REREAD_BACKOFF_MS = [1000, 2000, 4000, 5000];
+
+const isoMs = (iso: string | null): number | null => {
+  if (iso === null) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+};
 
 export interface CreateSessionParams {
   projectPath: string;
@@ -177,23 +197,37 @@ export type CreateSessionOutcome =
   | Rejected
   /** Ответа нет, и снимок перечитать не удалось. */
   | { outcome: 'lost' }
-  /** Снимок перечитан, новой сессии с этим именем в нём нет. */
+  /** Снимок перечитан до срока вызова моста, новой сессии с этими параметрами в нём нет: возможно, она ещё запускается. */
   | { outcome: 'unknown' };
 
-const sessionIds = (store: RemoteStore, projectPath: string, workId: string): Set<string> => {
-  const work = store.getState().snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
-  return new Set(work?.sessions.map((x) => x.id));
-};
+const workOf = (store: RemoteStore, projectPath: string, workId: string) =>
+  store.getState().snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
 
-const roomIds = (store: RemoteStore, projectPath: string, workId: string): Set<string> => {
-  const work = store.getState().snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
-  return new Set(work?.rooms.map((x) => x.id));
-};
+/**
+ * После потери ответа ищем созданное в свежем снимке. Мост ещё ждёт хост до `BRIDGE_CALL_DEADLINE_MS` от начала вызова,
+ * поэтому, пока срок не вышел, перечитываем с отступом; после срока — последняя попытка и итог.
+ * `null` — снимок не удалось перечитать ни разу; `undefined` — читали, но не нашли.
+ */
+async function awaitCreated<T>(store: RemoteStore, rpc: Rpc, env: ActionEnv, startedAt: number, find: () => T | undefined): Promise<T | null | undefined> {
+  const deadline = startedAt + BRIDGE_CALL_DEADLINE_MS + 2000;
+  let read = false;
+  for (let attempt = 0; ; attempt++) {
+    if (await rereadWorks(store, rpc)) {
+      read = true;
+      const found = find();
+      if (found !== undefined) return found;
+    }
+    const wait = REREAD_BACKOFF_MS[Math.min(attempt, REREAD_BACKOFF_MS.length - 1)] ?? 5000;
+    if (env.now() + wait > deadline) return read ? undefined : null;
+    await env.sleep(wait);
+  }
+}
 
 /** Запустить сессию. `projectPath` и `workId` — из проекции: новую работу с телефона не создать. */
-export async function createSession(store: RemoteStore, rpc: Rpc, params: CreateSessionParams): Promise<CreateSessionOutcome> {
+export async function createSession(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: CreateSessionParams): Promise<CreateSessionOutcome> {
   const epoch = store.getState().epoch;
-  const before = sessionIds(store, params.projectPath, params.workId);
+  const startedAt = env.now();
+  const before = new Set(workOf(store, params.projectPath, params.workId)?.sessions.map((x) => x.id));
   try {
     const res = (await rpc.call('sessions.create', { ...params, parent: null })) as { ref?: SessionRef } | null;
     if (store.getState().epoch === epoch && res?.ref !== undefined) return { outcome: 'created', ref: res.ref };
@@ -201,10 +235,18 @@ export async function createSession(store: RemoteStore, rpc: Rpc, params: Create
     const rejected = rejection(error);
     if (rejected !== null) return rejected;
   }
-  // Итог неизвестен: ищем новую сессию с этим именем в свежем снимке.
-  if (!(await rereadWorks(store, rpc))) return { outcome: 'lost' };
-  const work = store.getState().snapshot?.works.find((w) => w.projectPath === params.projectPath && w.id === params.workId);
-  const found = work?.sessions.filter((x) => !before.has(x.id) && x.label === params.label).at(-1);
+  // Итог неизвестен: новая сессия — не из прежнего снимка, с тем же именем, провайдером и моделью, начатая не раньше вызова.
+  const found = await awaitCreated(store, rpc, env, startedAt, () =>
+    workOf(store, params.projectPath, params.workId)
+      ?.sessions.filter((x) => {
+        if (before.has(x.id) || x.label !== params.label || x.provider !== params.provider) return false;
+        if (params.model && x.model !== null && x.model !== params.model) return false;
+        const started = isoMs(x.startedAt);
+        return started === null || started >= startedAt - CLOCK_SKEW_MS;
+      })
+      .at(-1),
+  );
+  if (found === null) return { outcome: 'lost' };
   return found === undefined
     ? { outcome: 'unknown' }
     : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, sessionId: found.id } };
@@ -227,9 +269,10 @@ export type CreateRoomOutcome =
   | { outcome: 'lost' }
   | { outcome: 'unknown' };
 
-export async function createRoom(store: RemoteStore, rpc: Rpc, params: CreateRoomParams): Promise<CreateRoomOutcome> {
+export async function createRoom(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: CreateRoomParams): Promise<CreateRoomOutcome> {
   const epoch = store.getState().epoch;
-  const before = roomIds(store, params.projectPath, params.workId);
+  const startedAt = env.now();
+  const before = new Set(workOf(store, params.projectPath, params.workId)?.rooms.map((x) => x.id));
   try {
     const res = (await rpc.call('rooms.create', params)) as { roomId?: string } | null;
     if (store.getState().epoch === epoch && typeof res?.roomId === 'string') {
@@ -239,9 +282,19 @@ export async function createRoom(store: RemoteStore, rpc: Rpc, params: CreateRoo
     const rejected = rejection(error);
     if (rejected !== null) return rejected;
   }
-  if (!(await rereadWorks(store, rpc))) return { outcome: 'lost' };
-  const work = store.getState().snapshot?.works.find((w) => w.projectPath === params.projectPath && w.id === params.workId);
-  const found = work?.rooms.filter((r) => !before.has(r.id) && r.title === params.title).at(-1);
+  // У комнаты в проекции нет времени создания: сверяем название, состав и режим.
+  const found = await awaitCreated(store, rpc, env, startedAt, () =>
+    workOf(store, params.projectPath, params.workId)
+      ?.rooms.filter(
+        (r) =>
+          !before.has(r.id) &&
+          r.title === params.title &&
+          params.members.every((m) => r.members.includes(m)) &&
+          (r.mode ?? 'free') === (params.mode ?? 'free'),
+      )
+      .at(-1),
+  );
+  if (found === null) return { outcome: 'lost' };
   return found === undefined
     ? { outcome: 'unknown' }
     : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, roomId: found.id } };
@@ -257,14 +310,37 @@ export interface SendRoomMessageParams extends RoomRef {
 
 export type SendRoomMessageOutcome = { outcome: 'sent'; messageId: string } | Rejected | { outcome: 'lost' };
 
+/** Письмо человека с этим текстом в ленте комнаты, написанное не раньше начала отправки (с поправкой на часы). */
+async function findSentLetter(rpc: Rpc, params: SendRoomMessageParams, startedAt: number): Promise<Message | null> {
+  try {
+    const page = (await rpc.call('context.messages', { projectPath: params.projectPath, workId: params.workId, roomId: params.roomId })) as { messages?: Message[] } | null;
+    const found = (page?.messages ?? []).filter((m) => {
+      if (m.from !== 'human' || m.roomId !== params.roomId) return false;
+      // Длинное письмо хост в странице сокращает (`textBytes`): тогда сверяем начало.
+      const same = m.text === params.text || (m.textBytes !== undefined && params.text.startsWith(m.text));
+      const at = isoMs(m.at);
+      return same && at !== null && at >= startedAt - CLOCK_SKEW_MS;
+    });
+    return found.at(-1) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Письмо в комнату. Текст лежит в черновике (`state.drafts`) с начала отправки и уходит из него только после `sent`:
- * отказ и потеря ответа оставляют письмо человеку. Письмо после `lost` само не повторяется — человек решает.
+ * отказ и потеря ответа оставляют письмо человеку. После потери ответа лента комнаты проверяется: письмо уже там — итог
+ * `sent`. Само письмо не повторяется.
  */
-export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, params: SendRoomMessageParams): Promise<SendRoomMessageOutcome> {
+export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: SendRoomMessageParams): Promise<SendRoomMessageOutcome> {
   const epoch = store.getState().epoch;
   const key = roomKey(params);
+  const startedAt = env.now();
   store.dispatch({ t: 'draft', key, text: params.text });
+  const sent = (messageId: string): SendRoomMessageOutcome => {
+    store.dispatch({ t: 'draft', key, text: '' });
+    return { outcome: 'sent', messageId };
+  };
   try {
     const res = (await rpc.call('rooms.send', {
       projectPath: params.projectPath,
@@ -275,14 +351,13 @@ export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, params: Send
       kind: params.kind,
       ...(params.replyTo !== undefined ? { replyTo: params.replyTo } : {}),
     })) as { messageId?: string } | null;
-    if (store.getState().epoch === epoch && typeof res?.messageId === 'string') {
-      store.dispatch({ t: 'draft', key, text: '' });
-      return { outcome: 'sent', messageId: res.messageId };
-    }
-    return { outcome: 'lost' };
+    if (store.getState().epoch === epoch && typeof res?.messageId === 'string') return sent(res.messageId);
   } catch (error) {
-    return rejection(error) ?? { outcome: 'lost' };
+    const rejected = rejection(error);
+    if (rejected !== null) return rejected;
   }
+  const letter = await findSentLetter(rpc, params, startedAt);
+  return letter === null ? { outcome: 'lost' } : sent(letter.id);
 }
 
 /** Каталог провайдеров для диалога запуска; `false` — не загрузился (метода нет, обрыв). */
