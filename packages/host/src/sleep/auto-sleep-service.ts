@@ -11,6 +11,9 @@
  * 3. при выходе процесса `transitionSession` превращает отметку в `autoSleep` (core); если сессия всё же осталась `active`,
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
+ *
+ * Усыплённый на `wait_for(<id>)` сам не узнает, что цель кончила: процесса у него нет. Сервис следит за целью по снимку
+ * работ и пишет спящему системное письмо; оно поднимает сессию обычным путём будильника.
  */
 
 import {
@@ -18,6 +21,8 @@ import {
   deliveredSince,
   hookedSince,
   isClaudeCode,
+  sessionTag,
+  SYSTEM,
   unreadCount,
   updateMap,
   type AutoSleep,
@@ -47,7 +52,8 @@ export const ALLOW_WAITER_SLEEP: boolean = true;
 export const AUTO_SLEEP_TICK_MS = 30_000;
 
 export interface AutoSleepServiceDeps {
-  works: Pick<WorksService, 'snapshot'>;
+  /** `snapshot` — карты работ, в том числе спящих сессий без PTY; `onChange` — повод проверить цели их ожидания. */
+  works: Pick<WorksService, 'snapshot' | 'onChange'>;
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   pty: Pick<PtyManager, 'list' | 'get'>;
   sessions: Pick<SessionsService, 'stop'>;
@@ -92,6 +98,17 @@ function sinceLaunch(activity: SessionActivity | null, startedAt: number): Sessi
     : activity;
 }
 
+/**
+ * Чем кончила цель ожидания (`wait_for(<id>)`): итогом, `stuck`, `closed` или `deleted` (в карте её нет). `null` — ещё не
+ * кончила; уход цели в сон без итога концом не считается.
+ */
+function finishOf(target: WorkSession | undefined): string | null {
+  if (target === undefined) return 'deleted';
+  if (target.result !== null) return target.result;
+  if ((target.stuck ?? null) !== null) return 'stuck';
+  return target.lifecycle === 'closed' ? 'closed' : null;
+}
+
 export function createAutoSleepService(host: HostContext, deps: AutoSleepServiceDeps): AutoSleepService {
   const now = deps.now ?? Date.now;
   const tickMs = deps.tickMs ?? AUTO_SLEEP_TICK_MS;
@@ -110,6 +127,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   let stopped = true;
   let ticking = false;
   let unsubscribe: (() => void) | null = null;
+  let unsubscribeWorks: (() => void) | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   /**
@@ -245,6 +263,66 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   }
 
   /**
+   * Пишет усыплённому письмо о том, что кончила цель его `wait_for(<id>)`, и снимает цель ожидания. Одна запись, решающая
+   * проверка под замком карты: снимок работ отстаёт от базы, и за это время сессию могли поднять или письмо могла записать
+   * другая проверка — тогда не пишется ничего. Не бросает: сбой одной записи не должен остановить проход по остальным.
+   */
+  async function notifyWaiter(ref: SessionRef, targetId: string): Promise<void> {
+    const done: { state: string | null } = { state: null };
+    try {
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map, letters) => {
+          const sleeper = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (sleeper?.lifecycle !== 'sleeping' || sleeper.autoSleep?.waitTarget !== targetId) return;
+          const state = finishOf(map.sessions.find((candidate) => candidate.id === targetId));
+          if (state === null) return;
+          letters.add({
+            roomId: null,
+            from: SYSTEM,
+            to: [ref.sessionId],
+            text: `${sessionTag(targetId)} finished: ${state}`,
+            kind: 'note',
+          });
+          // Причина и время сна остаются: сессия спит по-прежнему, письмо поднимет её будильником.
+          sleeper.autoSleep = { ...sleeper.autoSleep, waitTarget: null };
+          done.state = state;
+        },
+        // Служебная запись, не событие работы: карточка работы не всплывает в сайдбаре.
+        { touch: false },
+      );
+    } catch (error) {
+      host.log.error('сон агентов: письмо усыплённому о цели его ожидания не записалось', { ref, error: String(error) });
+      return;
+    }
+    if (done.state !== null) {
+      host.log.info('цель ожидания усыплённого закончила, ему записано письмо', {
+        ref,
+        target: targetId,
+        state: done.state,
+      });
+    }
+  }
+
+  /**
+   * Проход по снимку работ: каждому `sleeping` с целью ожидания, чья цель кончила (`finishOf`), — письмо. У спящих нет PTY,
+   * поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
+   */
+  async function notifyWaiters(): Promise<void> {
+    if (stopped) return;
+    for (const entry of deps.works.snapshot().entries) {
+      for (const session of entry.map.sessions) {
+        const targetId = session.lifecycle === 'sleeping' ? session.autoSleep?.waitTarget : null;
+        if (targetId == null) continue;
+        if (finishOf(entry.map.sessions.find((candidate) => candidate.id === targetId)) === null) continue;
+        if (stopped) return;
+        await notifyWaiter({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, targetId);
+      }
+    }
+  }
+
+  /**
    * Проверяет одну сессию и усыпляет, если пора. `config` передаёт таймер: настройки читаются раз на проход, а не на
    * каждую сессию. Не бросает: сбой одной сессии не должен остановить проход по остальным.
    */
@@ -277,11 +355,12 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     }
   }
 
-  /** Проход по живым PTY хоста, по одной сессии за раз. */
+  /** Сначала письма ждавшим усыплённым, затем проход по живым PTY хоста, по одной сессии за раз. */
   async function tick(): Promise<void> {
     if (stopped || ticking) return;
     ticking = true;
     try {
+      await notifyWaiters();
       const live = deps.pty.list();
       forget(live);
       const config = await deps.config();
@@ -314,6 +393,9 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       if (!stopped) return;
       stopped = false;
       unsubscribe = deps.activity.onChange(onActivity);
+      unsubscribeWorks = deps.works.onChange(() => {
+        void notifyWaiters();
+      });
       timer = setInterval(() => {
         void tick();
       }, tickMs);
@@ -324,6 +406,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       stopped = true;
       unsubscribe?.();
       unsubscribe = null;
+      unsubscribeWorks?.();
+      unsubscribeWorks = null;
       if (timer !== null) clearInterval(timer);
       timer = null;
       waits.clear();
