@@ -67,6 +67,10 @@ describe('bridge paths', () => {
     expect(paths.controlToken).toBe('/h/remote/control.token');
   });
 
+  it('resolves the dev entry through the workspace package @parley/remote', () => {
+    expect(resolveBridgeEntry({ packaged: false, resourcesPath: '/R' })).toMatch(/packages\/remote\/dist\/main\.js$/);
+  });
+
   it('resolves the packaged entry under Resources/remote', () => {
     expect(resolveBridgeEntry({ packaged: true, resourcesPath: '/R' })).toBe('/R/remote/dist/main.js');
   });

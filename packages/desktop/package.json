@@ -21,7 +21,7 @@
     "fetch-node": "node scripts/fetch-node.mjs",
     "fetch-whisper": "node scripts/fetch-whisper.mjs",
     "fetch-speech": "node scripts/fetch-speech.mjs",
-    "dist": "pnpm build && rm -rf out/host && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && electron-builder"
+    "dist": "pnpm build && rm -rf out/host out/remote && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && pnpm --filter @parley/remote deploy --prod \"$PWD/out/remote\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/remote\" && electron-builder"
   },
   "dependencies": {
     "@parley/core": "workspace:*",
