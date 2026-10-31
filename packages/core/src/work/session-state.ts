@@ -177,6 +177,8 @@ export function needWord(kind: NeedKind): string {
 export const AUTO_SLEEP_WORDS: Readonly<Record<AutoSleepReason, string>> = {
   idle: 'asleep · idle',
   'swarm-done': 'asleep · swarm done',
+  pressure: 'asleep · memory was low',
+  slot: 'asleep · freed a slot',
 };
 
 /** Слово причины сна из таблицы `AUTO_SLEEP_WORDS`. */

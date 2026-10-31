@@ -454,7 +454,7 @@ export {
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { CodexWriteApprovals, ParleyConfig, LoadedConfig } from './config.js';
+export type { CodexWriteApprovals, MachineConcurrent, ParleyConfig, LoadedConfig } from './config.js';
 export { CODEX_AUTO_MIN_VERSION } from './work/codex-policy.js';
 export {
   SecretFormatError,
@@ -641,11 +641,15 @@ export type {
   AutoSleep,
   AutoSleepReason,
   HistoryEntry,
+  LaunchClass,
   LaunchedBy,
+  MemoryPressure,
   Message,
   MessageKind,
   MessageVia,
   Proposal,
+  QueuedLaunch,
+  QueueReason,
   Room,
   RoomMembership,
   SessionLifecycle,

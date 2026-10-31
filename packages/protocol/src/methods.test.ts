@@ -911,6 +911,16 @@ describe('swarms.* — рой из окна (спека роя v1, 6)', () => {
   });
 });
 
+describe('очередь запусков машины в протоколе', () => {
+  it('уведомление о запуске сверх потолка входит в NoticeKind', () => {
+    expectTypeOf<'machine-over-limit'>().toExtend<import('./types.js').NoticeKind>();
+  });
+
+  it('запуск в очереди — причина, по которой письмо ещё не забрано (MailWait)', () => {
+    expectTypeOf<'queued'>().toExtend<import('./types.js').MailWait>();
+  });
+});
+
 describe('sessions.switchOptions / sessions.switchAgent', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
   const requestId = '3f2b8c1e-5a4d-4e6f-9b7a-1c2d3e4f5a6b';

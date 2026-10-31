@@ -1172,6 +1172,7 @@ export const S = {
       'folder-trust': 'waiting for folder trust',
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
+      queued: 'queued for a free agent slot',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
@@ -2912,6 +2913,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
   'swarm-done': 'swarm finished',
   'swarm-failed': "swarm didn't finish",
+  'machine-over-limit': 'started over the machine limit',
 };
 
 /**

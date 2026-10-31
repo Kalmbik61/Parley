@@ -274,7 +274,8 @@ const findSession = (map: WorkMap, sessionId: string): WorkSession => {
  * `history`. Недопустимый переход — ошибка, карта не меняется. Сон по решению хоста
  * ведёт здесь же: отметка «засыпает» (`autoSleepPending`) при уходе в `sleeping`
  * становится `autoSleep` и причиной записи истории, подъём и закрытие убирают оба
- * ключа. Ключи удаляются, а не пишутся `null`: нет поля — то же, что `null`, и пара
+ * ключа и запись очереди машины `queued`: запуск начался, либо сессии больше нет.
+ * Ключи удаляются, а не пишутся `null`: нет поля — то же, что `null`, и пара
  * пустых ключей не раздувает карту у каждой сессии.
  */
 export function transitionSession(
@@ -300,6 +301,7 @@ export function transitionSession(
   } else if (to === 'active' || to === 'closed') {
     delete session.autoSleep;
     delete session.autoSleepPending;
+    delete session.queued;
   }
   session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;

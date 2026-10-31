@@ -92,9 +92,16 @@ describe('agentStatus: сон по решению хоста', () => {
 
 describe('слова сна по решению хоста', () => {
   it('AUTO_SLEEP_WORDS: слово на каждую причину, autoSleepWord берёт из таблицы', () => {
-    expect(AUTO_SLEEP_WORDS).toEqual({ idle: 'asleep · idle', 'swarm-done': 'asleep · swarm done' });
+    expect(AUTO_SLEEP_WORDS).toEqual({
+      idle: 'asleep · idle',
+      'swarm-done': 'asleep · swarm done',
+      pressure: 'asleep · memory was low',
+      slot: 'asleep · freed a slot',
+    });
     expect(autoSleepWord('idle')).toBe('asleep · idle');
     expect(autoSleepWord('swarm-done')).toBe('asleep · swarm done');
+    expect(autoSleepWord('pressure')).toBe('asleep · memory was low');
+    expect(autoSleepWord('slot')).toBe('asleep · freed a slot');
   });
 
   it('asleepHint: подсказка тому, кто ждёт усыплённую цель', () => {
