@@ -191,6 +191,14 @@ describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
     expect(checkRemoteParams('rooms.send', { ...letter, text: 'a'.repeat(16 * 1024 + 1) })).toBe(false);
   });
 
+  it('rooms.send: only the listed keys (spec 4.2, revision 14)', () => {
+    const letter = { projectPath: '/p', workId: 'w-01', roomId: 'r-1', to: ['s-01'], kind: 'note', text: 'task' };
+    expect(checkRemoteParams('rooms.send', { ...letter, replyTo: 'm-01', requestedAt: 1 })).toBe(true);
+    for (const extra of [{ via: 'phone' }, { from: 's-01' }, { agent: 'x' }, { mode: 'autonomous' }]) {
+      expect(checkRemoteParams('rooms.send', { ...letter, ...extra }), JSON.stringify(extra)).toBe(false);
+    }
+  });
+
   it('roles.list and providers.list have no rule', () => {
     expect(checkRemoteParams('roles.list', { projectPath: '/p' })).toBe(true);
     expect(checkRemoteParams('providers.list', {})).toBe(true);

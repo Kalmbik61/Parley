@@ -42,6 +42,8 @@ export interface RemoteLaunchPolicy {
   enabled(): boolean;
   /** `projectPath` — известный хосту проект, `workId` — существующая неархивная работа этого проекта. */
   workOpen(projectPath: string, workId: string): boolean;
+  /** Комната этой работы в режиме `autonomous`: письмо с телефона в неё не уходит (спека 4.2, правки 14). */
+  roomAutonomous(projectPath: string, workId: string, roomId: string): boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -235,6 +237,13 @@ function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
   return options.remoteLaunch?.workOpen(projectPath, workId) === true;
 }
 
+/** Письмо с телефона в идущую автономную комнату (спека 4.2, правки 14). Комнату ищет политика по снимку хоста. */
+function remoteRoomAutonomous(params: unknown, options: ServerOptions): boolean {
+  const { projectPath, workId, roomId } = params as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof roomId !== 'string') return false;
+  return options.remoteLaunch?.roomAutonomous(projectPath, workId, roomId) === true;
+}
+
 function handleMessage(raw: unknown, client: Client, options: ServerOptions): void {
   if (client.role === 'remote' && rejectedForRemote(raw, client, options)) return;
   const parsed = parseIncoming(raw);
@@ -270,6 +279,10 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   }
   if (client.role === 'remote' && REMOTE_LAUNCH_METHODS.has(method) && !remoteWorkOpen(parsed.params, options)) {
     client.send({ id, error: { code: 'bad_request', message: 'unknown project or work' } });
+    return;
+  }
+  if (client.role === 'remote' && method === 'rooms.send' && remoteRoomAutonomous(parsed.params, options)) {
+    client.send({ id, error: { code: 'bad_request', message: 'the phone cannot write into an autonomous room' } });
     return;
   }
   const handler = options.methodHandlers[method];
