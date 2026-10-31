@@ -15,11 +15,19 @@ All notable changes to Parley are documented in this file.
 - Sessions and agents have a new state, `queued`. The sidebar row reads `queued · limit 18/18` or `queued · low memory`, and agents see the same state in `get_map` and in their brief. `create_session`, `create_swarm` and `swarm_add` answer `queued` with the reason instead of failing, and `wait_for` on a queued session waits for it as for a running one.
 - Agents can see how busy Parley and the machine are with the new `get_capacity` tool: live, asleep and queued sessions on the machine and in their workspace, their own child sessions, subagents and background tasks, the limits that apply and how much of each is used, and the memory pressure. It also says how many sessions can start right now and which limit stops the rest. A room lead is advised to call it before handing out parts to run in parallel.
 - The status bar shows how many agents run on the machine: `Agents 17/18 · 3 queued · memory warn`, or just `Agents 5` when there is no cap and nothing else to report. A click lists the queued launches with their reasons and waiting time, the memory pressure and swap, and when idle agents fall asleep; "Limits in Settings" opens the agent settings. These are the same numbers `get_capacity` gives agents.
+- A workspace can let its agents close finished sessions: turn on "Agents close finished sessions" in the workspace card menu. An agent then closes its own session once its part is accepted, and a room lead closes the room's finished members, so you no longer have to write "wrap up" in every room. It is off by default, and sessions you start yourself still wait for you.
+- An agent can answer your direct letter: it replies with `send_message` to `human`, and the reply arrives in the workspace mail like any letter to you.
 
 ### Changed
 
 - The limits on what agents create — new sessions per workspace and per room, swarm sessions and swarms per workspace — now count the last 24 hours (a sliding window) instead of all time. Before, the counters only grew, so in a long-running workspace agents hit a limit for good and the only way on was to raise it again; now a creation stops counting after a day. Settings → Limits names them "… per day", the defaults stay 50, 12, 64 and 6, and a refusal says how many agents created in the last 24 hours and that waiting also helps. The count starts from zero after the update.
 - The host no longer runs `ps` for its own agent processes when it checks whether sessions are alive, so the check is lighter.
+- The queen of a swarm always starts lean, without your plugins and other MCP servers: it only coordinates, and it no longer stops at Claude Code's "new MCP servers found" prompt.
+- A new session from the window starts lean when Settings → Agents → "Lean agent sessions" is on; untick "Lean session" in the dialog to start it with your plugins and MCP servers.
+
+### Fixed
+
+- Clearing "Session wake-ups per hour" in Settings no longer saves 0, which silently stopped every wake-up by letter.
 
 ## 0.26.0
 
