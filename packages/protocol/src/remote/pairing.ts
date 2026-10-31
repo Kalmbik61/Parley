@@ -48,6 +48,12 @@ export const pairDoneEvent = z.strictObject({ requestId: requestIdSchema, device
 /** Причины провала паринга (7.4). */
 export const PAIR_FAILED_REASONS = ['bad-psk', 'timeout', 'no-ack', 'denied', 'offer_closed'] as const;
 export const pairFailedEvent = z.strictObject({ requestId: requestIdSchema, reason: z.enum(PAIR_FAILED_REASONS) });
+/**
+ * Оффер израсходован первым msg1 (7.4), QR больше не работает. `bad-psk` — неверный код, запроса не будет: окно
+ * перевыпускает QR сразу. `used` — оффер принят; дальше `pair.request` или провал без запроса.
+ */
+export const PAIR_OFFER_CLOSED_REASONS = ['bad-psk', 'used'] as const;
+export const pairOfferClosedEvent = z.strictObject({ reason: z.enum(PAIR_OFFER_CLOSED_REASONS) });
 
 export const pairStartResult = z.strictObject({ qr: z.string().max(256), expiresAt: z.number().int().positive() });
 export const controlStatusResult = z.strictObject({

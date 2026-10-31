@@ -568,7 +568,10 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
   - IPC в renderer.
   - Экран Settings:
     - переключатель, поле relay, статус; кнопка «Set up on my server…» открывает мастер A18a;
-    - «Pair a device»: QR через `qrcode` в main → data URL, таймер, перевыпуск;
+    - «Pair a device»: QR через `qrcode` в main → data URL, таймер, перевыпуск; таймер перевыпуска
+      останавливается на `pair.request` — `pair.start` отменяет ждущий запрос (критик волны 3, m7); событие
+      `pair.offerClosed` (неверный код или оффер израсходован) — сразу новый QR и строка «Someone tried to pair with
+      a wrong code» (m2);
     - диалог запроса с SAS и «Codes match — Allow» / «Deny»; ответ несёт `requestId` своего диалога;
       `stale_request` и истечение срока закрывают диалог; «Phone connected ✓»;
     - Devices с «Revoke», «Revoke all and reset key» с подтверждением;
@@ -699,7 +702,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
   - Реализация `Platform` (§10): `expo-secure-store`, WebSocket, AppState, NetInfo с проверкой `/v1/health`
     relay. Адрес relay строится через `relayUrlFor` (A1) с `allowLocal = __DEV__`.
   - Native tabs Inbox / Works / Settings; токены темы; компонент плашки подключения.
-  - Подключение стора `remote-client`; стирание записей Keychain при первом запуске (§7.8).
+  - Подключение стора `remote-client`; стирание записей Keychain при первом запуске (§7.8) через
+    `HostStore.wipeAll()` — один `HostStore` на приложение (критик волны 3, m11–m12).
 - **Файлы.** `packages/mobile/**` (имя пакета `@parley/mobile`; ESLint-конфиг корня покрывает его файлы RN —
   правка `eslint.config.*` при необходимости): `app/_layout.tsx`, `app/(tabs)/*`, `src/platform/*`, `src/theme/*`,
   `src/components/ConnectionBanner.tsx`.
@@ -1278,3 +1282,10 @@ Android не удалён, а отложен (Р3, правки 5). Блок п�
 | № | Решение | Что изменено |
 |---|---|---|
 | 11.1 | `rooms.create`, `roles.list`, `rooms.send` — в этапе A; один переключатель `remoteCreate`, по умолчанию включён; Face ID на каждый запуск и письмо; `rooms.create` убран из запрещённых | A25; A1c; A2b; A8b; A12b; A26 (экраны New session и New room); A10; A17; A20 п. 23; 2.2; 2.4 |
+
+**Правки 12 — ревью критиков волны 3, 2026-10-31** (`docs/audits/2026-10-31/mobile-stage-a-critic-wave3-*.md`).
+
+| № | Находка | Что изменено |
+|---|---|---|
+| 12.1 | m7: перевыпуск оффера по таймеру убивает ждущий запрос; m2: окно не знает о сожжённом оффере | A10 |
+| 12.2 | m11–m12: стирание Keychain при первом запуске без владельца; один `HostStore` | A13 |

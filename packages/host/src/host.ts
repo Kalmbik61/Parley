@@ -839,6 +839,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
       roomAutonomous: (projectPath, workId, roomId) =>
         worksService.entry(projectPath, workId)?.map.rooms.find((room) => room.id === roomId)?.mode === 'autonomous',
+      projectKnown: (projectPath) => worksService.snapshot().entries.some((entry) => entry.projectPath === projectPath),
+      workKnown: (projectPath, workId) => worksService.entry(projectPath, workId) !== undefined,
     },
     // Активность хост шлёт только при изменении, а живёт дольше окна: окно,
     // перезапущенное при живом хосте, до следующего события считало бы

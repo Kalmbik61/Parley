@@ -448,6 +448,18 @@ describe('acceptance 5: one attempt at a time', () => {
     expect(sup.status.state).toBe('ready');
   });
 
+  it('W12: `session.closing protocol` → reconnect with the normal backoff, not a stop', async () => {
+    platform.jitterByte = 0;
+    await connect();
+    bridge.last.event('session.closing', { reason: 'protocol' });
+    await flush();
+    expect(sup.status.state).toBe('waiting');
+    expect(sup.status.retryAt).not.toBeNull();
+    await advance(60_000);
+    expect(platform.relay.sockets.length).toBeGreaterThan(1);
+    expect(sup.status.state).toBe('ready');
+  });
+
   it('`replaced` → idle without an automatic reconnect', async () => {
     await connect();
     bridge.last.event('session.closing', { reason: 'replaced' });

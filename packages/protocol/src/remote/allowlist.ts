@@ -214,6 +214,12 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
     const p = record(params);
     return p !== null && typeof p.rev === 'number' && Number.isInteger(p.rev) && p.rev >= 0;
   },
+  // Этап A читает только урезанную ленту: ждущие карточки и последний ответ модели. Полная лента несёт входы и выходы
+  // инструментов, в том числе напечатанные секреты; лента субагента (`agentId`) тоже закрыта до этапа B.
+  'feed.snapshot': params => {
+    const p = record(params);
+    return p !== null && p.scope === 'attention' && p.agentId === undefined && typeof p.ref === 'object' && p.ref !== null;
+  },
   // Запуск с телефона (спека 4.2): новую работу, дочернюю сессию, `agent`, `effort` и `lean` с телефона не задать.
   'sessions.create': params => {
     const p = record(params);

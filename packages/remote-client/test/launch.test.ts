@@ -181,7 +181,9 @@ describe('sendRoomMessage', () => {
     const lost = setup(async () => {
       throw err('connection_lost');
     });
-    expect(await lost.client.sendRoomMessage(msg)).toEqual({ outcome: 'lost' });
+    const pendingLost = lost.client.sendRoomMessage(msg);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pendingLost).toEqual({ outcome: 'lost' });
     expect(lost.client.store.getState().drafts[key]).toBe('hello room');
     expect(calls(lost.rpc, 'rooms.send')).toHaveLength(1);
     const bad = setup(async () => {
@@ -256,13 +258,30 @@ describe('wave 3 fixes', () => {
     expect(client.store.getState().drafts[roomKey({ projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' })]).toBeUndefined();
   });
 
+  it('W8: the link comes back after 2 s: the feed is read again and the letter found', async () => {
+    const letter = { id: 'm-9', roomId: 'r-1', from: 'human', to: [], at: new Date().toISOString(), text: 'hello room', kind: 'note', readBy: {} };
+    const up = Date.now() + 2000;
+    const { client, rpc } = setup(async (method) => {
+      if (method === 'rooms.send') throw err('connection_lost');
+      if (Date.now() < up) throw err('connection_lost');
+      return { messages: [letter], page: {} };
+    });
+    const pending = client.sendRoomMessage(msg);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toEqual({ outcome: 'sent', messageId: 'm-9' });
+    expect(calls(rpc, 'rooms.send')).toHaveLength(1);
+    expect(calls(rpc, 'context.messages').length).toBeGreaterThan(1);
+  });
+
   it('W8: an older identical letter does not count; feed unreadable → lost, draft stays', async () => {
     const stale = { id: 'm-3', roomId: 'r-1', from: 'human', to: [], at: new Date(Date.now() - 3600_000).toISOString(), text: 'hello room', kind: 'note', readBy: {} };
     const { client } = setup(async (method) => {
       if (method === 'rooms.send') throw err('timeout');
       return { messages: [stale], page: {} };
     });
-    expect(await client.sendRoomMessage(msg)).toEqual({ outcome: 'lost' });
+    const pending = client.sendRoomMessage(msg);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pending).toEqual({ outcome: 'lost' });
     expect(client.store.getState().drafts[roomKey({ projectPath: PROJECT, workId: 'w-1', roomId: 'r-1' })]).toBe('hello room');
   });
 });

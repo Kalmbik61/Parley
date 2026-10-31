@@ -32,7 +32,10 @@ export interface ServerOptions {
   unregisterClient: (client: Client) => void;
   /** Часы для замера запросов (мс); по умолчанию `performance.now`. */
   now?: () => number;
-  /** Запуск с телефона (спека мобильного приложения 4.2). Нет — методы запуска клиенту `remote` закрыты. */
+  /**
+   * Власть хоста над клиентом `remote` (спека мобильного приложения 4.2, 14): запуск и проекты. Нет — методы запуска
+   * закрыты, а проекты вызовов не сверяются (голый сервер в тестах; хост передаёт политику всегда).
+   */
   remoteLaunch?: RemoteLaunchPolicy;
 }
 
@@ -44,6 +47,10 @@ export interface RemoteLaunchPolicy {
   workOpen(projectPath: string, workId: string): boolean;
   /** Комната этой работы в режиме `autonomous`: письмо с телефона в неё не уходит (спека 4.2, правки 14). */
   roomAutonomous(projectPath: string, workId: string, roomId: string): boolean;
+  /** Проект известен хосту (есть хоть одна его работа): чтения без `workId`, например `roles.list`. */
+  projectKnown(projectPath: string): boolean;
+  /** Работа этого проекта существует, архивная тоже: чтения и решения по ней. */
+  workKnown(projectPath: string, workId: string): boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -237,6 +244,33 @@ function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
   return options.remoteLaunch?.workOpen(projectPath, workId) === true;
 }
 
+/** Проект и работа, которые называет вызов: верхний уровень и `ref` сессии (у `roles.list` — оба). */
+function remoteTargets(params: unknown): { projectPath: string; workId: string | null }[] {
+  const out: { projectPath: string; workId: string | null }[] = [];
+  const add = (value: unknown): void => {
+    if (typeof value !== 'object' || value === null) return;
+    const { projectPath, workId } = value as Record<string, unknown>;
+    if (typeof projectPath !== 'string') return;
+    out.push({ projectPath, workId: typeof workId === 'string' ? workId : null });
+  };
+  add(params);
+  if (typeof params === 'object' && params !== null) add((params as Record<string, unknown>).ref);
+  return out;
+}
+
+/**
+ * Только известные хосту проекты (спека 14, критик W11): запуск — в существующую неархивную работу, прочие вызовы с
+ * проектом — в известный проект и существующую работу. Вызовы без проекта (`works.list`, `host.info`) не затронуты.
+ */
+function remoteTargetsKnown(method: string, params: unknown, options: ServerOptions): boolean {
+  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(params, options);
+  const policy = options.remoteLaunch;
+  if (policy === undefined) return true;
+  return remoteTargets(params).every(({ projectPath, workId }) =>
+    workId === null ? policy.projectKnown(projectPath) : policy.workKnown(projectPath, workId),
+  );
+}
+
 /** Письмо с телефона в идущую автономную комнату (спека 4.2, правки 14). Комнату ищет политика по снимку хоста. */
 function remoteRoomAutonomous(params: unknown, options: ServerOptions): boolean {
   const { projectPath, workId, roomId } = params as Record<string, unknown>;
@@ -277,7 +311,7 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     client.send({ id, error: { code: 'bad_request', message: `params are not allowed for remote clients: ${method}` } });
     return;
   }
-  if (client.role === 'remote' && REMOTE_LAUNCH_METHODS.has(method) && !remoteWorkOpen(parsed.params, options)) {
+  if (client.role === 'remote' && !remoteTargetsKnown(method, parsed.params, options)) {
     client.send({ id, error: { code: 'bad_request', message: 'unknown project or work' } });
     return;
   }

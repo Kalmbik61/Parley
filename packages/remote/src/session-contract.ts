@@ -3,7 +3,7 @@
 // Chunking, deflate (FrameCodec) and encryption live in A7. The inbound 64 KiB ceiling is enforced by A7.
 import type { BridgeHello } from '@parley/protocol/remote';
 
-export type SessionClosingReason = 'revoked' | 'reset' | 'rekey' | 'replaced' | 'shutdown' | 'slow';
+export type SessionClosingReason = 'revoked' | 'reset' | 'rekey' | 'replaced' | 'shutdown' | 'slow' | 'protocol';
 
 export interface DevicePush {
   apnsToken: string;

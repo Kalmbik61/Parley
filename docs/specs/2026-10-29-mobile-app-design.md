@@ -368,6 +368,9 @@ Unix-сокет, токен как у хоста; клиент — только 
   не отвечен. Иначе — отказ `stale_request`, и окно закрывает диалог. Запоздалый клик по истёкшему запросу A не
   может одобрить запрос B, пришедший после перевыпуска оффера;
 - событие `pair.done {requestId, deviceId} | pair.failed {requestId, reason}`;
+- событие `pair.offerClosed {reason: 'bad-psk' | 'used'}`: первый msg1 израсходовал оффер, QR больше не работает.
+  `bad-psk` — кто-то пришёл с неверным кодом, запроса не будет; окно сразу перевыпускает QR и говорит «Someone
+  tried to pair with a wrong code». `used` — оффер принят, дальше идёт `pair.request` или провал без него;
 - `devices.list`, `devices.revoke {deviceId}`, `reset` («Revoke all and reset key»);
 - `audit.tail {limit ≤ 200}`;
 - `presence {state: 'active' | 'idle' | 'locked'}` — из `powerMonitor` окна, С1 §7; `locked` — по событиям

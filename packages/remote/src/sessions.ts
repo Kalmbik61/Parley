@@ -163,24 +163,66 @@ export interface SessionManagerOptions {
   log: BridgeLog;
   timing?: Partial<SessionTiming>;
   now?: () => number;
+  /** Shared with pairing: streams accepted from the relay and still waiting for msg1. */
+  pending?: PendingAccepts;
+}
+
+/** Most streams accepted from the relay that may wait for msg1 at once (critic m5 on A7), as on the relay. */
+export const MAX_PENDING_ACCEPTS = 10;
+
+/**
+ * A relay can announce any number of `incoming`; each accept is an outgoing socket held up to `msg1Ms`. Past the
+ * cap the bridge does not accept, and the relay answers the phone itself after its wait.
+ */
+export class PendingAccepts {
+  #count = 0;
+  #warned = false;
+  constructor(private readonly max = MAX_PENDING_ACCEPTS) {}
+
+  get count(): number {
+    return this.#count;
+  }
+
+  /** `false` — at the cap; the caller must not accept. One log line per saturation. */
+  take(log: BridgeLog): boolean {
+    if (this.#count >= this.max) {
+      if (!this.#warned) log.warn('relay.incoming-capped', { pending: this.#count });
+      this.#warned = true;
+      return false;
+    }
+    this.#count += 1;
+    return true;
+  }
+
+  release(): void {
+    this.#count -= 1;
+    if (this.#count < this.max) this.#warned = false;
+  }
 }
 
 /** Sliding one-minute counters for failed handshakes (spec §5.7). */
-class FailureLimiter {
+export class FailureLimiter {
   readonly #hits = new Map<string, number[]>();
-  readonly #paused = new Map<string, number>();
+  /** Pause end per key; `announced` — the refusal of this pause is already in the audit log (critic m8). */
+  readonly #paused = new Map<string, { until: number; announced: boolean }>();
   constructor(
     private readonly now: () => number,
     private readonly perDevice = 5,
     private readonly global = 60,
   ) {}
 
-  blocked(deviceId: string): boolean {
+  /** `open`, or `paused` with `first` true only for the first refusal of this pause. */
+  check(deviceId: string): { paused: false } | { paused: true; first: boolean } {
     const t = this.now();
-    return (this.#paused.get(deviceId) ?? 0) > t || (this.#paused.get('*') ?? 0) > t;
+    const pause = [this.#paused.get(deviceId), this.#paused.get('*')].find((p) => p && p.until > t);
+    if (!pause) return { paused: false };
+    const first = !pause.announced;
+    pause.announced = true;
+    return { paused: true, first };
   }
 
   fail(deviceId: string): void {
+    this.#sweep();
     this.#hit(deviceId, this.perDevice);
     this.#hit('*', this.global);
   }
@@ -190,7 +232,21 @@ class FailureLimiter {
     const recent = (this.#hits.get(key) ?? []).filter((at) => t - at < 60_000);
     recent.push(t);
     this.#hits.set(key, recent);
-    if (recent.length > max) this.#paused.set(key, t + 60_000);
+    if (recent.length > max && !((this.#paused.get(key)?.until ?? 0) > t))
+      this.#paused.set(key, { until: t + 60_000, announced: false });
+  }
+
+  /** Keys come from the relay (critic m5): entries without a hit in the window and ended pauses go away. */
+  #sweep(): void {
+    const t = this.now();
+    for (const [key, hits] of this.#hits)
+      if (hits.every((at) => t - at >= 60_000)) this.#hits.delete(key);
+    for (const [key, pause] of this.#paused) if (pause.until <= t) this.#paused.delete(key);
+  }
+
+  /** Tests: tracked keys. */
+  get size(): number {
+    return this.#hits.size + this.#paused.size;
   }
 }
 
@@ -207,6 +263,7 @@ export class SessionManager implements PhoneSessions {
   /** Every open session, confirmed or not. */
   readonly #all = new Set<Session>();
   readonly #limiter: FailureLimiter;
+  readonly #pending: PendingAccepts;
   #handler: SessionHandler | null = null;
   #accepting = true;
 
@@ -215,6 +272,7 @@ export class SessionManager implements PhoneSessions {
     this.#timing = { ...DEFAULT_SESSION_TIMING, ...options.timing };
     this.#now = options.now ?? Date.now;
     this.#limiter = new FailureLimiter(this.#now);
+    this.#pending = options.pending ?? new PendingAccepts();
   }
 
   setHandler(handler: SessionHandler): void {
@@ -260,23 +318,32 @@ export class SessionManager implements PhoneSessions {
     const claimed = incoming.device;
     // The relay must name the device (critic m5): without it the DS_pub ↔ deviceId check (§7.5) has nothing to bind.
     if (!this.#accepting || incoming.kind !== 'connect' || claimed === undefined) return;
-    if (this.#limiter.blocked(claimed)) {
-      // Not accepted: the relay answers the phone itself after its wait.
-      this.#o.audit.append({
-        kind: 'connect-refused',
-        deviceId: claimed,
-        outcome: 'refused',
-        detail: 'rate',
-      });
+    const limit = this.#limiter.check(claimed);
+    if (limit.paused) {
+      // Not accepted: the relay answers the phone itself after its wait. One audit line per pause (critic m8).
+      if (limit.first) {
+        this.#o.audit.append({
+          kind: 'connect-refused',
+          deviceId: claimed,
+          outcome: 'refused',
+          detail: 'rate',
+        });
+      }
       return;
     }
-    const ws = this.#o.link.accept(incoming.stream);
+    if (!this.#pending.take(this.#o.log)) return;
     let msg1: Uint8Array;
+    let ws: WebSocket;
     try {
-      msg1 = await firstMessage(ws, this.#timing.msg1Ms);
-    } catch {
-      ws.terminate();
-      return;
+      ws = this.#o.link.accept(incoming.stream);
+      try {
+        msg1 = await firstMessage(ws, this.#timing.msg1Ms);
+      } catch {
+        ws.terminate();
+        return;
+      }
+    } finally {
+      this.#pending.release();
     }
     this.#handshake(ws, claimed, msg1);
   }
@@ -343,8 +410,10 @@ export class SessionManager implements PhoneSessions {
 
   #onMessage(s: Session, data: RawData, isBinary: boolean): void {
     if (s.closed) return;
-    // Revoked or reset since msg1: nothing reaches A8 and the session never activates (spec §7.9).
-    if (!this.#valid(s)) return this.#drop(s);
+    // Revoked or reset since msg1: nothing reaches A8 and the session never activates (spec §7.9). An unconfirmed
+    // session closes silently now. A live one only stops routing: the revoke or reset closes it with
+    // `session.closing` after its disk write, and a heartbeat during that `fsync` must not lose it (critic m1).
+    if (!this.#valid(s)) return s.confirmed ? this.#detach(s) : this.#drop(s);
     let frame: Uint8Array | null;
     try {
       frame = s.channel.receive(data, isBinary);

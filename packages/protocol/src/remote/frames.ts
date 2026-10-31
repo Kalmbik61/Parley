@@ -50,7 +50,7 @@ export const bridgeEventSchemas = {
   // `items` — кэш активности моста; форму элемента задаёт мост, клиент разбирает его сам.
   'activity.snapshot': z.strictObject({ epoch: z.string().max(64).nullable(), items: z.array(z.unknown()) }),
   'session.closing': z.strictObject({
-    reason: z.enum(['revoked', 'reset', 'rekey', 'replaced', 'shutdown', 'slow']),
+    reason: z.enum(['revoked', 'reset', 'rekey', 'replaced', 'shutdown', 'slow', 'protocol']),
   }),
 } as const;
 
