@@ -773,7 +773,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
   };
 
   describe('сервер со шпионами', () => {
-    async function launchServer(policy: { enabled: boolean; open: boolean } | null) {
+    async function launchServer(policy: { enabled: boolean; open: boolean; autonomous?: boolean } | null) {
       const home = await tempHome();
       homes.push(home);
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -784,6 +784,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         'rooms.send': vi.fn(async () => ({ messageId: 'm-09' })),
       };
       const workOpen = vi.fn(() => policy?.open ?? false);
+      const roomAutonomous = vi.fn(() => policy?.autonomous ?? false);
       const state = { enabled: policy?.enabled ?? false };
       const server = createHostServer({
         context,
@@ -793,7 +794,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         notificationHandlers: {},
         registerClient: () => {},
         unregisterClient: () => {},
-        ...(policy === null ? {} : { remoteLaunch: { enabled: () => state.enabled, workOpen } }),
+        ...(policy === null ? {} : { remoteLaunch: { enabled: () => state.enabled, workOpen, roomAutonomous } }),
       });
       const socketPath = path.join(home, 'launch.sock');
       await new Promise<void>((resolve) => server.listen(socketPath, resolve));
@@ -809,7 +810,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         for (const client of clients) client.close();
         server.close();
       };
-      return { spies, workOpen, state, connect, close };
+      return { spies, workOpen, roomAutonomous, state, connect, close };
     }
 
     const session = { projectPath: '/p', workId: 'w-01', provider: 'claude', label: 'fix', task: 'do it', parent: null };
@@ -894,6 +895,23 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    it('письмо remote в автономную комнату — bad_request, обработчик не вызван; desktop пишет как прежде', async () => {
+      const s = await launchServer({ enabled: true, open: true, autonomous: true });
+      const remote = await s.connect('remote');
+      expect((await answer(remote.client, 160, 'rooms.send', letter)).error).toMatchObject({
+        code: 'bad_request',
+        message: 'the phone cannot write into an autonomous room',
+      });
+      expect(s.spies['rooms.send']).not.toHaveBeenCalled();
+      expect(s.roomAutonomous.mock.calls).toEqual([['/p', 'w-01', 'r-01']]);
+      // Запуск сессии и комнаты от режима комнат не зависит.
+      expect((await answer(remote.client, 161, 'rooms.create', room)).error).toBeUndefined();
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, 162, 'rooms.send', letter)).error).toBeUndefined();
+      expect(s.spies['rooms.send']).toHaveBeenCalledTimes(1);
+      s.close();
+    });
+
     it('переключатель выключен после hello — следующий вызов получает unknown_method', async () => {
       const s = await launchServer({ enabled: true, open: true });
       const remote = await s.connect('remote');
@@ -971,7 +989,24 @@ describe('роль remote: запуск с телефона (A2b, спека м�
           projectPath: p.dir, workId: 'w-99', title: 'x', members: p.sessions,
         })).error).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
 
+        // Комната ушла в автономный режим: письмо с телефона в неё не уходит, у окна — уходит.
+        await updateMap(p.dir, p.workId, (current) => {
+          const target = current.rooms.find((entry) => entry.id === roomId);
+          if (target) target.mode = 'autonomous';
+        });
+        const autonomousDeadline = Date.now() + 10_000;
+        for (let id = 250; ; id++) {
+          const reply = await answer(remote.client, id, 'rooms.send', {
+            projectPath: p.dir, workId: p.workId, roomId, to: [], text: 'steer', kind: 'note',
+          });
+          if (reply.error?.message === 'the phone cannot write into an autonomous room') break;
+          if (Date.now() > autonomousDeadline) throw new Error('the autonomous room stayed open for the phone');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
         const desktop = await connectAs(home, token, 'desktop');
+        expect((await answer(desktop.client, 290, 'rooms.send', {
+          projectPath: p.dir, workId: p.workId, roomId, to: [], text: 'from the window', kind: 'note',
+        })).error).toBeUndefined();
         expect((await answer(desktop.client, 205, 'works.setStatus', { projectPath: p.dir, workId: p.workId, status: 'archived' })).error).toBeUndefined();
         const deadline = Date.now() + 10_000;
         for (let id = 300; ; id++) {

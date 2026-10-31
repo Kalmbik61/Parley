@@ -190,6 +190,16 @@ const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
   'quiet',
   'mode',
 ]);
+const ROOM_SEND_KEYS: ReadonlySet<string> = new Set([
+  'projectPath',
+  'workId',
+  'roomId',
+  'to',
+  'text',
+  'kind',
+  'replyTo',
+  'requestedAt',
+]);
 const ROOM_MODES: ReadonlySet<unknown> = new Set(['free', 'checklist', 'verified']);
 export const REMOTE_LABEL_MAX = 64;
 export const REMOTE_ROOM_TITLE_MAX = 128;
@@ -236,6 +246,7 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
     const p = record(params);
     return (
       p !== null &&
+      onlyKeys(p, ROOM_SEND_KEYS) &&
       typeof p.roomId === 'string' &&
       p.roomId.length > 0 &&
       (p.kind === 'note' || p.kind === 'question') &&
