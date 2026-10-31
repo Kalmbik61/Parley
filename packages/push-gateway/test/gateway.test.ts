@@ -11,7 +11,8 @@ import { createGatewayServer, MAX_BODY_BYTES } from '../src/server.js';
 
 const TOKEN = 'ab'.repeat(32);
 const ROUTE_A = 'A'.repeat(22);
-const ROUTE_B = 'B'.repeat(22);
+// Канонический b64url: последний знак 22-значной строки оставляет 4 младших бита нулевыми.
+const ROUTE_B = 'B'.repeat(21) + 'A';
 const TOPIC = 'app.parley.test';
 const KEY_ID = 'KEY1234567';
 const TEAM_ID = 'TEAM123456';

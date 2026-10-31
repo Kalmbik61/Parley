@@ -465,6 +465,22 @@ describe('acceptance 6: RPC', () => {
     expect(sup.status.state).toBe('ready');
   });
 
+  it('push.register goes uncompressed even when large; other large frames are compressed (review A3 m5)', async () => {
+    await connect();
+    const conn = bridge.last;
+    const pad = 'x'.repeat(4000);
+    void sup
+      .call('push.register', { apnsToken: 'ab'.repeat(32), env: 'sandbox', pad })
+      .catch(() => undefined);
+    await flush();
+    const registerFlags = conn.flags.at(-1)!;
+    void sup.call('works.list', { pad }).catch(() => undefined);
+    await flush();
+    expect(conn.methods('push.register')).toHaveLength(1);
+    expect(registerFlags & 0x02).toBe(0);
+    expect(conn.flags.at(-1)! & 0x02).toBe(0x02);
+  });
+
   it('a call without a connection → not_connected, nothing sent', async () => {
     platform.relay.mode = { error: 'host_offline' };
     sup.start();

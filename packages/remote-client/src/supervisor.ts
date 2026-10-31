@@ -35,6 +35,14 @@ export const BACKOFF_LONG_AFTER_MS = 5 * 60_000;
 /** Потолок принятого кадра приложения на телефоне (§5.7). */
 export const PHONE_MAX_FRAME = 8 * 1024 * 1024;
 
+/**
+ * Вызовы с токенами уходят без сжатия: сжатие кадра, где секрет соседствует с текстом, подконтрольным
+ * атакующему, даёт оракул длины (ревью A3, m5).
+ */
+const UNCOMPRESSED_METHODS: ReadonlySet<string> = new Set(['push.register']);
+/** Кодек отправки без сжатия: порог больше любого кадра. */
+const PLAIN_CODEC = new FrameCodec({ maxFrame: 0, compressMin: Number.MAX_SAFE_INTEGER });
+
 const CONNECT_PROLOGUE = new TextEncoder().encode('parley-remote/1');
 const EMPTY = new Uint8Array(0);
 
@@ -298,7 +306,10 @@ export class Supervisor {
   #send(conn: Conn, frame: object): void {
     if (conn.link === null || conn.ciphers === null || conn.codec === null)
       throw new Error('not ready');
-    for (const plaintext of conn.codec.encode(encodeFrame(frame))) {
+    const method = (frame as { method?: unknown }).method;
+    const codec =
+      typeof method === 'string' && UNCOMPRESSED_METHODS.has(method) ? PLAIN_CODEC : conn.codec;
+    for (const plaintext of codec.encode(encodeFrame(frame))) {
       conn.link.send(conn.ciphers.send.encryptWithAd(EMPTY, plaintext));
     }
   }
