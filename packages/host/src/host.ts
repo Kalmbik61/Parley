@@ -460,6 +460,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
         attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
         turnBoundary: turnBoundarySource(worksService, activityService),
+        // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
+        // инструмент: `null` — в ответе `machine: null`.
+        capacity: async (ref) => {
+          try {
+            const live = activityService.get(ref)?.activity;
+            return {
+              machine: (await capacityFeed.snapshot()).machine,
+              activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
+            };
+          } catch {
+            return null;
+          }
+        },
       }),
     log,
   });
