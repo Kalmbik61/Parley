@@ -12,18 +12,19 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 
 - **Remote access (beta).** Settings → Remote access switches a separate bridge process on. It only connects out to the relay address you enter, listens on no port and stops when you switch it off. "Pair a device" shows a one-time QR code; the phone scans it, both sides show a comparison code and you press "Codes match — Allow". Devices lists the paired phones (up to 5) with Revoke, and "Revoke all and reset key" starts over with a new key; Activity shows the last 200 actions the bridge handled. Everything between the phone and the Mac is end-to-end encrypted (Noise); the relay sees addresses, timing, frame sizes, the route id and the device id, never texts, decisions, names, paths or push tokens. The phone can answer permissions, questions and plans, accept or send back a room's decision and read letters from agents; it cannot change settings, delete or close anything, run git or worktree operations or type into a terminal. "Allow creating sessions and rooms from the phone" (on by default) also lets it start sessions and rooms and send messages into rooms.
 - **Face ID on approvals.** The iPhone app asks for Face ID (or the device passcode) before Allow, Accept and every plan approval, and before every session or room it starts and every message it sends into a room. Deny, Return for rework, answers and viewing never ask. "Require Face ID to allow" in the app turns the prompt off for approvals only, and turning it off asks Face ID too. It guards against other hands on your unlocked phone; the Mac does not know about it.
+- **Relay setup wizard.** Settings → Remote access → "Set up on my server…" installs, updates, rolls back and removes the relay on your Ubuntu 22.04/24.04 or Debian 12 server over SSH. It shows the server's key fingerprint for you to confirm, looks at the server read-only, shows every command it will run and runs them only after "Run". Your SSH password, key passphrase and sudo password stay in memory for that one run and are never saved. It uses your own domain or a free `<ip>.sslip.io` name, leaves a web server already on port 80 alone and gives you a proxy snippet for it.
 - **`@parley/relay`.** The relay service for your own server: a Docker image with Caddy for TLS, a manual install in its README and a local development relay (`pnpm --filter @parley/relay dev`) that has no TLS and is for development only.
 - **`@parley/push-gateway`.** The small APNs service that turns "N waiting" into a notification without storing tokens or texts. It is not deployed yet, so no build sends push for now.
 
 ### Changed
 
-- The README no longer says that the window is the only network client: with Remote access on, the bridge also connects out to your relay (and, once push works, to the push gateway), and the window itself uses SSH only while you run the relay setup wizard, which is not available yet.
+- The README no longer says that the window is the only network client: with Remote access on, the bridge also connects out to your relay (and, once push works, to the push gateway), and the window itself uses SSH only while you run the relay setup wizard.
 
 ### What is not proven yet
 
 - The iPhone app, pairing, Face ID and a relay on a real server have been run in the simulator and in tests only; the checks on an iPhone, on a mobile network and against a server of your own (plan steps A18b and A20) are still to do.
 - Push notifications need the app's push gateway and an Apple Developer account; a live push has never been sent.
-- The relay setup wizard ("Set up on my server…") is not built yet; install the relay by hand as described in `packages/relay/README.md`.
+- The relay setup wizard installs only a published relay image: until the image is published at release time, install the relay by hand as described in `packages/relay/README.md`. The wizard has been run against test servers in Docker, not against a real server, and not with a real certificate authority.
 
 ## 0.26.0
 

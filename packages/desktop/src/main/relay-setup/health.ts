@@ -65,3 +65,16 @@ export async function domainPointsTo(domain: string, serverIps: readonly string[
 }
 
 export const firstIPv4 = (ips: readonly string[]): string | null => ips.find(isIPv4) ?? null;
+
+/** Private, loopback, link-local, CGNAT and other non-routable IPv4 ranges: no certificate can be issued for them. */
+export function isPublicIPv4(ip: string): boolean {
+  const [a = 0, b = 0] = ip.split('.').map(Number);
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+  if (a === 100 && b >= 64 && b <= 127) return false;
+  if (a === 169 && b === 254) return false;
+  if (a === 172 && b >= 16 && b <= 31) return false;
+  if (a === 192 && b === 168) return false;
+  if (a === 192 && b === 0) return false;
+  if (a === 198 && (b === 18 || b === 19)) return false;
+  return true;
+}

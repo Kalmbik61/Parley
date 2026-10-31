@@ -16,7 +16,7 @@ const SECRETS = { password: 'hunter2-SSH-pw', passphrase: 'pass-phrase-XYZ', sud
 
 /** Unwraps `[sudo …] sh -c '<command>'` as `ssh.ts` builds it. */
 function unwrap(line: string): { command: string; sudo: boolean } {
-  const match = /^(sudo -n |sudo -S -p '' )?sh -c '(.*)'$/s.exec(line);
+  const match = /^(sudo -n |sudo -S -p '' )?sh -c 'exec <\/dev\/null; (.*)'$/s.exec(line);
   if (!match) throw new Error(`unexpected command line: ${line}`);
   return { sudo: match[1] !== undefined, command: match[2]!.replace(/'\\''/g, "'") };
 }
@@ -30,6 +30,8 @@ interface FakeServer {
   listen: string;
   echoSecretOnFailure?: string;
   failCommand?: RegExp;
+  /** The first command matching `match` waits for `release` (a cancel arrives meanwhile). */
+  gate?: { match: RegExp; release: Promise<void>; started: () => void };
   lines: string[];
   stdins: string[];
 }
@@ -60,6 +62,12 @@ function connection(server: FakeServer): SshConnection {
       if (/^(docker --version && |test -d |cd \/opt\/parley-relay && printf|docker image inspect |docker compose --project-directory \/opt\/parley-relay ps )/.test(command)) {
         return reply(server.installed ? 0 : 1);
       }
+      if (server.gate?.match.test(command)) {
+        const { release, started } = server.gate;
+        server.gate = undefined;
+        started();
+        await release;
+      }
       if (server.failCommand?.test(command)) {
         options.onLine?.(`error: authentication with ${server.echoSecretOnFailure ?? ''} failed`);
         return reply(100);
@@ -73,7 +81,7 @@ function connection(server: FakeServer): SshConnection {
   };
 }
 
-const mutations = (server: FakeServer): string[] => server.lines.map((l) => unwrap(l.startsWith('<') ? "sh -c '<closed>'" : l).command).filter((c) => !READS.test(c) && c !== 'true' && c !== '<closed>' && !/^(docker --version && |test -d |cd \/opt\/parley-relay && printf|docker image inspect |docker compose --project-directory \/opt\/parley-relay ps )/.test(c));
+const mutations = (server: FakeServer): string[] => server.lines.map((l) => unwrap(l.startsWith('<') ? "sh -c 'exec </dev/null; <closed>'" : l).command).filter((c) => !READS.test(c) && c !== 'true' && c !== '<closed>' && !/^(docker --version && |test -d |cd \/opt\/parley-relay && printf|docker image inspect |docker compose --project-directory \/opt\/parley-relay ps )/.test(c));
 
 async function setup(over: Partial<FakeServer> = {}, deps: Partial<RelaySetupDeps> = {}, connectOutcome?: (req: ConnectRequest, calls: number) => ConnectOutcome | undefined) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'relay-setup-'));
@@ -313,10 +321,41 @@ describe('credentials (acceptance 8)', () => {
   });
 });
 
+describe('sslip for a non-public address (R8)', () => {
+  it.each(['192.168.1.10', '10.0.0.5', '100.64.3.1', '172.20.0.9', '127.0.0.1', '169.254.1.1'])('%s is refused without a domain', async (ip) => {
+    const h = await setup({}, { resolver: { resolve4: async () => [ip], resolve6: async () => [] } });
+    const plan = planOf(await trusted(h, request({ host: ip })));
+    expect(plan.blocked).toMatch(/not reachable from the internet/);
+    await expect(h.service.call('run', { removeData: false })).rejects.toBeInstanceOf(ControlCallError);
+  });
+});
+
+describe('a cancel never cuts a run in half (R4)', () => {
+  it('begin is refused during a run; cancel stops before the next step and closes the connection', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const begun = new Promise<void>((r) => (started = r));
+    const h = await setup({ gate: { match: /apt-get update/, release: hold, started } });
+    await trusted(h);
+    const running = h.service.call('run', { removeData: false });
+    await begun;
+    await expect(h.service.call('begin', request())).rejects.toMatchObject({ code: 'bad_request' });
+    expect(await h.service.call('cancel', {})).toBeNull();
+    release();
+    const phase = await running;
+    expect(phase).toMatchObject({ phase: 'failed', step: 'dir' });
+    expect(h.events).toContainEqual(expect.objectContaining({ event: 'step', id: 'dir', status: 'stopped' }));
+    // The step that was running finished; later steps never started.
+    expect(mutations(h.server).join('\n')).not.toContain('install -d -m 0755 /opt/parley-relay');
+    expect(h.server.lines.at(-1)).toBe('<closed>');
+  });
+});
+
 describe('failures are reported without leaking', () => {
   it('auth failure and key passphrase prompts', async () => {
-    const h = await setup({}, {}, (_req, n) => (n === 1 ? { kind: 'passphrase-required' } : undefined));
-    expect(await h.service.call('begin', request({ auth: { kind: 'key', file: 'id_ed25519' } }))).toEqual({ phase: 'need-passphrase' });
+    const h = await setup({}, {}, (_req, n) => (n === 1 ? { kind: 'passphrase-required', wrong: false } : undefined));
+    expect(await h.service.call('begin', request({ auth: { kind: 'key', file: 'id_ed25519' } }))).toEqual({ phase: 'need-passphrase', wrong: false });
     await expect(h.service.call('provide', { passphrase: '' })).rejects.toMatchObject({ code: 'bad_input' });
     expect((await h.service.call('provide', { passphrase: SECRETS.passphrase })).phase).toBe('hostkey');
     expect(h.requests.at(-1)?.secrets.passphrase).toBe(SECRETS.passphrase);

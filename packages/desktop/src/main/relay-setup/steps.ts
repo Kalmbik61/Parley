@@ -1,7 +1,7 @@
 import type { Plan, PlanStep } from './plan.js';
 import type { RemoteShell } from './shell.js';
 
-export type StepStatus = 'running' | 'skipped' | 'done' | 'failed';
+export type StepStatus = 'running' | 'skipped' | 'done' | 'failed' | 'stopped';
 
 export interface RunEvents {
   step(id: string, title: string, status: StepStatus): void;
@@ -11,6 +11,8 @@ export interface RunEvents {
 export interface RunOutcome {
   ok: boolean;
   failedStep: string | null;
+  /** The person cancelled: the run ended between two steps. */
+  stopped?: boolean;
   /** Some step ran its commands (not only checks). */
   changed: boolean;
 }
@@ -34,9 +36,14 @@ async function runStep(step: PlanStep, shell: RemoteShell, events: RunEvents, ch
   return 'done';
 }
 
-export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents): Promise<RunOutcome> {
+export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents, shouldStop: () => boolean = () => false): Promise<RunOutcome> {
   let changed = false;
   for (const step of plan.steps) {
+    // A cancel never cuts a step in half (apt, compose): it takes effect before the next one.
+    if (shouldStop()) {
+      events.step(step.id, step.title, 'stopped');
+      return { ok: false, failedStep: step.id, changed, stopped: true };
+    }
     events.step(step.id, step.title, 'running');
     let status: 'skipped' | 'done' | 'failed';
     try {

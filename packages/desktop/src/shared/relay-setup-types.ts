@@ -40,7 +40,7 @@ export type RelaySetupPhase =
   | { phase: 'hostkey'; host: string; port: number; keyType: string; fingerprint: string }
   /** Terminal: the server's key differs from the one on record. There is no «continue anyway». */
   | { phase: 'hostkey-changed'; host: string; port: number; known: string; presented: string }
-  | { phase: 'need-passphrase' }
+  | { phase: 'need-passphrase'; wrong: boolean }
   | { phase: 'need-sudo' }
   | { phase: 'auth-failed' }
   | { phase: 'unsupported'; os: string; manualUrl: string }
@@ -66,7 +66,7 @@ export type RelaySetupCallName = keyof RelaySetupCalls;
 export const RELAY_SETUP_CALL_NAMES: readonly RelaySetupCallName[] = ['keys', 'begin', 'trust', 'provide', 'plan', 'run', 'check', 'cancel'];
 
 export type RelaySetupEvent =
-  | { event: 'step'; id: string; title: string; status: 'running' | 'skipped' | 'done' | 'failed' }
+  | { event: 'step'; id: string; title: string; status: 'running' | 'skipped' | 'done' | 'failed' | 'stopped' }
   | { event: 'line'; step: string; text: string };
 
 export const RELAY_MANUAL_URL = 'https://github.com/Kalmbik61/Parley/blob/master/packages/relay/README.md';

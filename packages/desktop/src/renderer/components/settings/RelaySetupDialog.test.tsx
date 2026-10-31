@@ -81,4 +81,18 @@ describe('RelaySetupDialog', () => {
     fireEvent.click(await screen.findByTestId('relay-setup-remove-data'));
     await waitFor(() => expect(bridge.relaySetupCalls.some((c) => c.name === 'plan' && (c.params as { removeData: boolean }).removeData)).toBe(true));
   });
+
+  it('forgets the password as soon as the request is sent, not when the slow connect returns', async () => {
+    const bridge = mount();
+    let finish!: () => void;
+    bridge.setRelaySetupHandler('begin', () => new Promise((resolve) => (finish = () => resolve({ phase: 'auth-failed' }))));
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    await waitFor(() => expect(screen.getByTestId('relay-setup-auth-password')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('relay-setup-auth-password'));
+    fireEvent.change(screen.getByTestId('relay-setup-password'), { target: { value: 'secret-pw' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    expect((screen.getByTestId('relay-setup-password') as HTMLInputElement).value).toBe('');
+    finish();
+    await screen.findByTestId('relay-setup-auth-failed');
+  });
 });

@@ -38,7 +38,11 @@ const USER = /^[a-z_][a-z0-9_-]{0,31}$/;
 const KEY_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SECRET_MAX = 512;
 
-/** Single-quotes a value for a POSIX shell: the only way a validated parameter enters a command. */
+/**
+ * Single-quotes a value for a POSIX shell: the only way a validated parameter enters a command. The result is parsed
+ * by the login shell of the remote user; sh, bash and zsh read it as written, fish treats backslashes inside single
+ * quotes as escapes, so templates must not contain a backslash (the file bodies are sent as base64 for that reason).
+ */
 export function shQuote(value: string): string {
   if (value.includes('\0')) throw new Error('NUL in a shell argument');
   return `'${value.replace(/'/g, `'\\''`)}'`;
