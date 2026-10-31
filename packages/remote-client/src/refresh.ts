@@ -25,6 +25,11 @@ export const SESSION_POLL_MS = 3000;
 export const INBOX_POLL_MS = 10_000;
 export const VISIBLE_BUDGET = 10;
 export const CIRCLE_BUDGET = 10;
+/**
+ * Запросов в полёте разом: Inbox заказывает до 20 за тик, а мост держит на устройство не больше 16 вызовов (`MAX_IN_FLIGHT`):
+ * лишние получили бы `rate_limited`. Остальные ждут очереди и уходят по мере ответов.
+ */
+export const MAX_PARALLEL_READS = 8;
 
 export interface RefresherOptions {
   store: RemoteStore;
@@ -51,6 +56,7 @@ export function createRefresher({ store, rpc, clock }: RefresherOptions): Refres
   const pending = new Map<string, SessionRef>();
   const inflight = new Set<string>();
   const dirty = new Map<string, SessionRef>();
+  const queued = new Map<string, SessionRef>();
 
   const active = (): boolean => foreground && connected;
 
@@ -61,6 +67,15 @@ export function createRefresher({ store, rpc, clock }: RefresherOptions): Refres
       dirty.set(key, ref);
       return;
     }
+    if (queued.has(key)) return;
+    if (inflight.size >= MAX_PARALLEL_READS) {
+      queued.set(key, ref);
+      return;
+    }
+    start(key, ref);
+  };
+
+  const start = (key: string, ref: SessionRef): void => {
     inflight.add(key);
     void readCards(store, rpc, () => clock.now(), ref).finally(() => {
       inflight.delete(key);
@@ -69,7 +84,18 @@ export function createRefresher({ store, rpc, clock }: RefresherOptions): Refres
         dirty.delete(key);
         read(again);
       }
+      pump();
     });
+  };
+
+  const pump = (): void => {
+    while (active() && inflight.size < MAX_PARALLEL_READS) {
+      const next = queued.entries().next();
+      if (next.done === true) return;
+      const [key, ref] = next.value;
+      queued.delete(key);
+      if (!inflight.has(key)) start(key, ref);
+    }
   };
 
   const onScreen = (): SessionRef[] =>
@@ -108,6 +134,7 @@ export function createRefresher({ store, rpc, clock }: RefresherOptions): Refres
     timer = null;
     coalesce = null;
     pending.clear();
+    queued.clear();
   };
 
   const restart = (): void => {
