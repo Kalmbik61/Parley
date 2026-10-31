@@ -346,7 +346,7 @@ export class Supervisor {
   /** `session.closing` пришёл внутри Noise — аутентифицирован. */
   #onClosing(
     conn: Conn,
-    reason: 'revoked' | 'reset' | 'rekey' | 'replaced' | 'shutdown' | 'slow',
+    reason: 'revoked' | 'reset' | 'rekey' | 'replaced' | 'shutdown' | 'slow' | 'protocol',
   ): void {
     switch (reason) {
       case 'revoked':
@@ -361,6 +361,10 @@ export class Supervisor {
         // выбивали друг друга по кругу. Следующий триггер подключит заново.
         this.#teardown(conn);
         return this.#set({ state: 'idle' });
+      case 'protocol':
+        // Мост закрыл сессию за нарушение протокола или свой сбой: обычное переподключение с отступом, а не «Mac
+        // останавливается» (`shutdown`).
+        return this.#lost(conn, null);
       default:
         return this.#lost(conn, null);
     }

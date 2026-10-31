@@ -5,6 +5,10 @@ export const MAX_QUEUE_BYTES = 4 * 1024 * 1024;
 export const MAX_IN_FLIGHT = 16;
 export const MUTATING_PER_MINUTE = 30;
 export const COALESCE_MS = 1000;
+/** Чтения (всё, что не изменяет и не метод моста) — на устройство, поверх `MAX_IN_FLIGHT`. */
+export const READS_PER_MINUTE = 120;
+/** `push.register` пишет `devices.json`: чаще 10 раз в минуту не нужно. */
+export const PUSH_REGISTER_PER_MINUTE = 10;
 
 /**
  * Изменяющие методы этапа A (спека 5.7): решения и запуск с телефона (`sessions.create`, `rooms.create`, `rooms.send`,

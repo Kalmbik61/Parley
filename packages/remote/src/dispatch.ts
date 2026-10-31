@@ -16,7 +16,15 @@ import { createFanout } from './fanout.js';
 import type { SessionHandler, PhoneSessions } from './session-contract.js';
 import { HostCallError } from './host-link.js';
 import type { HostLink } from './host-link.js';
-import { MAX_FRAME_FROM_PHONE, MAX_IN_FLIGHT, MUTATING_METHODS, MUTATING_PER_MINUTE, createRateLimiter } from './limits.js';
+import {
+  MAX_FRAME_FROM_PHONE,
+  MAX_IN_FLIGHT,
+  MUTATING_METHODS,
+  MUTATING_PER_MINUTE,
+  PUSH_REGISTER_PER_MINUTE,
+  READS_PER_MINUTE,
+  createRateLimiter,
+} from './limits.js';
 import { LOCAL_METHODS, LocalMethodError, callLocalMethod } from './local-methods.js';
 import type { ClientInfo } from './local-methods.js';
 import type { BridgeLog } from './log.js';
@@ -47,6 +55,8 @@ export interface BridgeOptions {
 interface DeviceState {
   name: string;
   inFlight: number;
+  /** Ключ последнего `push.register` сессии (`local-methods`). */
+  pushKey?: string;
   clientInfo?: ClientInfo;
 }
 
@@ -85,6 +95,32 @@ function describeParams(params: unknown): string | undefined {
   return parts.length ? parts.join(' ') : undefined;
 }
 
+/**
+ * Журнал вызова (спека 5.8): цель и подробности. У `feed.decide` сессия и выбор лежат во вложенных объектах (`ref`,
+ * `decision`): цель — сессия, в подробностях карточка, вид и выбор; ответы на вопрос и текст отказа — длиной и хэшем.
+ */
+function auditOf(method: string, params: unknown): { target: string | undefined; detail: string | undefined } {
+  if (method !== 'feed.decide' || typeof params !== 'object' || params === null) {
+    return { target: targetOf(params), detail: describeParams(params) };
+  }
+  const p = params as { ref?: unknown; cardId?: unknown; decision?: unknown };
+  const ref = typeof p.ref === 'object' && p.ref !== null ? (p.ref as Record<string, unknown>) : {};
+  const target = typeof ref.sessionId === 'string' && ref.sessionId.length <= 128 ? ref.sessionId : undefined;
+  const parts: string[] = [];
+  if (typeof p.cardId === 'string') parts.push(/^[\w.:-]{1,64}$/.test(p.cardId) ? `cardId=${p.cardId}` : opaque('cardId', p.cardId));
+  const d = typeof p.decision === 'object' && p.decision !== null ? (p.decision as Record<string, unknown>) : {};
+  for (const key of ['kind', 'behavior', 'choice']) if (typeof d[key] === 'string' && /^[\w-]{1,24}$/.test(d[key] as string)) parts.push(`${key}=${d[key]}`);
+  if (typeof d.always === 'boolean') parts.push(`always=${d.always}`);
+  if (typeof d.message === 'string') parts.push(opaque('message', d.message));
+  if (d.answers !== undefined) parts.push(opaque('answers', JSON.stringify(d.answers) ?? ''));
+  return { target, detail: parts.length ? parts.join(' ') : undefined };
+}
+
+/** Текст журнала: только длина и хэш. */
+function opaque(key: string, value: string): string {
+  return `${key}:len=${Buffer.byteLength(value)},sha256=${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
+}
+
 function targetOf(params: unknown): string | undefined {
   if (typeof params !== 'object' || params === null) return undefined;
   const p = params as Record<string, unknown>;
@@ -99,6 +135,16 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   const push = sessions;
   const fanout = createFanout({ host, sessions, log, ...(options.coalesceMs === undefined ? {} : { coalesceMs: options.coalesceMs }) });
   const limiter = createRateLimiter(MUTATING_PER_MINUTE, 60_000, options.now);
+  const readLimiter = createRateLimiter(READS_PER_MINUTE, 60_000, options.now);
+  const pushLimiter = createRateLimiter(PUSH_REGISTER_PER_MINUTE, 60_000, options.now);
+  /** Проекция снимка эпохи: считается один раз на снимок, а не на каждый вызов `works.list`. */
+  let projected: { source: WorksSnapshot; value: ReturnType<typeof projectWorksSnapshot> } | null = null;
+  function projectedSnapshot(): ReturnType<typeof projectWorksSnapshot> | null {
+    const source = host.snapshot;
+    if (!source) return null;
+    if (projected?.source !== source) projected = { source, value: projectWorksSnapshot(source) };
+    return projected.value;
+  }
   const devices = new Map<string, DeviceState>();
 
   function reply(deviceId: string, id: string, body: { result: unknown } | { error: { code: string; message: string; data?: unknown } }): void {
@@ -135,15 +181,21 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (event.type === 'status' && event.status === 'online') for (const deviceId of [...devices.keys()]) rekeyIfStale(deviceId);
   });
 
-  /** Нарушение протокола: в `PhoneSessions.close` нет отдельной причины, берём `shutdown`. */
+  /** Нарушение протокола: `session.closing protocol` — телефон переподключится с отступом, а не примет это за остановку моста. */
   function close(deviceId: string): void {
     devices.delete(deviceId);
     fanout.sessionClosed(deviceId);
-    sessions.close(deviceId, 'shutdown');
+    sessions.close(deviceId, 'protocol');
   }
 
   async function handle(deviceId: string, state: DeviceState, id: string, method: string, params: unknown): Promise<void> {
     if (LOCAL_METHODS.has(method)) {
+      // Методы моста тоже считаются в работе; `push.register` пишет файл — не чаще 10 раз в минуту.
+      if (state.inFlight >= MAX_IN_FLIGHT || (method === 'push.register' && !pushLimiter.take(deviceId))) {
+        fail(deviceId, id, 'rate_limited', 'too many requests');
+        return;
+      }
+      state.inFlight++;
       try {
         reply(deviceId, id, {
           result: await callLocalMethod(method, params, {
@@ -151,6 +203,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
             push,
             setClientInfo: (info) => {
               state.clientInfo = info;
+            },
+            pushKey: {
+              get: () => state.pushKey,
+              set: (key) => {
+                state.pushKey = key;
+              },
             },
           }),
         });
@@ -160,6 +218,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
           log.error('dispatch.local_failed', { method, error });
           fail(deviceId, id, 'internal', 'internal error');
         }
+      } finally {
+        state.inFlight--;
       }
       return;
     }
@@ -192,17 +252,33 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       fail(deviceId, id, 'rate_limited', 'too many changes per minute');
       return;
     }
+    if (!mutating && !readLimiter.take(deviceId)) {
+      fail(deviceId, id, 'rate_limited', 'too many reads per minute');
+      return;
+    }
+    // `works.list` телефону — проекция снимка эпохи, хост не зовётся: иначе каждый вызов собирал бы полный снимок (мегабайты).
+    if (method === 'works.list') {
+      try {
+        const snapshot = projectedSnapshot();
+        if (snapshot === null) fail(deviceId, id, 'host_offline');
+        else reply(deviceId, id, { result: snapshot });
+      } catch (error) {
+        log.error('dispatch.projection_failed', { method, error });
+        fail(deviceId, id, 'internal', 'internal error');
+      }
+      return;
+    }
 
     state.inFlight++;
     try {
       const raw = await host.call(method, params ?? {});
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;
-      if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, target: targetOf(params), outcome: 'ok', detail: describeParams(params) });
+      if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, ...auditOf(method, params), outcome: 'ok' });
       reply(deviceId, id, { result });
     } catch (error) {
       const code = error instanceof HostCallError ? error.code : 'internal';
-      if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, target: targetOf(params), outcome: code, detail: describeParams(params) });
+      if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, ...auditOf(method, params), outcome: code });
       if (error instanceof HostCallError) fail(deviceId, id, error.code, error.message, safeErrorData(error.data));
       else {
         log.error('dispatch.call_failed', { method, error });
@@ -240,6 +316,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     onClose(deviceId) {
       devices.delete(deviceId);
       limiter.forget(deviceId);
+      readLimiter.forget(deviceId);
+      pushLimiter.forget(deviceId);
       helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);
     },
