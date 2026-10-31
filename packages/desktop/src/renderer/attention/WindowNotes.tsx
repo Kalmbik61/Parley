@@ -48,6 +48,19 @@ function WindowNoteCard({ note, onOpen }: { note: ShownWindowNote; onOpen: (note
           <Button type="button" onClick={() => onOpen(note)}>
             {S.notifications.open}
           </Button>
+          {note.action === undefined ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              data-window-note-action=""
+              onClick={() => {
+                dismiss(note.tag, note.seq);
+                note.action?.run();
+              }}
+            >
+              {note.action.label}
+            </Button>
+          )}
           <Button type="button" variant="outline" onClick={() => dismiss(note.tag, note.seq)}>
             {S.notifications.later}
           </Button>

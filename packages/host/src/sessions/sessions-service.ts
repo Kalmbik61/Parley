@@ -15,7 +15,25 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
+  addSystemMessage,
+  appendAgentBinding,
+  applyAgentSwitch,
+  currentSegmentUsage,
   attemptKindFor,
+  collectHandover,
+  freezeUsage,
+  isRoomArchived,
+  liveLead,
+  PARLEY,
+  parleyNote,
+  providerLabel,
+  switchBlockers,
+  unreadLetters,
+  type AgentBinding,
+  type LetterTx,
+  type LimitAlternative,
+  type ProviderLimits,
+  type WorkMap,
   limitsFromConfig,
   prepareSessionRole,
   roleId,
@@ -72,6 +90,7 @@ import {
   reserveAttempt,
   roomOfSession,
   ResourceDeniedError,
+  sessionMention,
   sessionTag,
   settleAttempt,
   startSession,
@@ -90,9 +109,10 @@ import {
   type LaunchPlan,
   type SpawnLimits,
   type ProviderEntry,
+  type UsageSummary,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
-import type { SessionRef } from '@parley/protocol';
+import type { Result, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { HostContext } from '../context.js';
@@ -110,6 +130,7 @@ import { createSkillInstaller } from './agent-skills.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
 import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
+import { copyTranscript, discardCopy, hasConversation, isClaudeAccount, removeForkCopy, type CarriedTranscript } from './transcript-carry.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -163,6 +184,50 @@ export type CreatedSession = SessionRef & { held?: 'folder-trust' };
  */
 const START_WRITE_ATTEMPTS = 3;
 
+/** Сколько ждать файла форка, чтобы убрать копию транскрипта в папке цели, и как часто смотреть. */
+const FORK_WAIT_MS = 10 * 60_000;
+const FORK_POLL_MS = 1000;
+
+/** Сколько исходов замен агента помнит хост для повторов того же `requestId`. */
+const SWITCH_RESULTS_KEPT = 100;
+
+/** Короткая причина замены в строке ленты: «(Claude Code 2: usage limit)». */
+const SWITCH_REASON: Record<AgentBinding['reason'], string> = {
+  limit: 'usage limit',
+  'sign-in': 'signed out',
+  'provider-missing': 'removed from Parley',
+  manual: 'replaced',
+  model: 'model changed',
+};
+
+/** Строка ленты каждой комнаты сессии (спека замены агента, 5.7, 6.5) — для человека. */
+export function switchLine(sessionId: string, target: string, model: string | null, previous: string, reason: AgentBinding['reason']): string {
+  return `${sessionMention(sessionId)} continues on ${target}${model === null ? '' : ` · ${model}`} (${previous}: ${SWITCH_REASON[reason]})`;
+}
+
+/** Почему прежний агент сменён — для писем и первого хода форка. */
+function switchWhy(previous: string, reason: AgentBinding['reason']): string {
+  return reason === 'limit'
+    ? `${previous} hit its usage limit`
+    : reason === 'sign-in'
+      ? `${previous} was signed out`
+      : reason === 'provider-missing'
+        ? `${previous} was removed from Parley`
+        : `${previous} was replaced`;
+}
+
+/** Первый ход форка (спека 5.4.1): разговор тот же, аккаунт другой — что проверить, прежде чем продолжать. */
+export function transcriptNote(sessionId: string, target: string, previous: string, reason: AgentBinding['reason']): string {
+  return `You continue this conversation as ${sessionMention(sessionId)} on ${target} after ${switchWhy(previous, reason)}. Same id, rooms, children, worktree and mail. Time has passed: check get_map and your inbox before redoing anything.`;
+}
+
+/** Письмо `parley` ведущему и ждущим ответа (спека 6.5): кто сменился и что с ждавшими письмами. */
+export function switchLetter(sessionId: string, target: string, model: string | null, previous: string, reason: AgentBinding['reason']): string {
+  const why = switchWhy(previous, reason);
+  const mention = sessionMention(sessionId);
+  return `${mention} continues on ${target}${model === null ? '' : ` (${model})`} after ${why}. Its rooms, children and mail stay with it; messages that waited are being delivered.`;
+}
+
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
   /**
@@ -173,6 +238,10 @@ export interface LaunchChoice {
   by?: string;
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
+  /** Пакет передачи при замене агента: первым сообщением `launch` после брифа. */
+  handover?: string;
+  /** Продолжение разговора форком: `resume` поднимает разговор с этим id как `--fork-session` (спека 5.4.1). */
+  forkFrom?: string;
   model?: string | null;
   effort?: EffortLevel | null;
 }
@@ -213,6 +282,47 @@ export interface SessionsService {
    * модели такого уровня нет) или его не было. Та же модель — ни записи, ни перезапуска.
    */
   setModel(ref: SessionRef, model: string): Promise<{ model: string; effort: string | null; restarted: boolean }>;
+  /** Куда можно перевести сессию и что останется при ней (спека замены агента, 5.2, 6.10). */
+  switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>>;
+  /**
+   * Замена агента на месте (спека замены агента, 5.3): id, комнаты, дети, почта и worktree остаются, меняется
+   * провайдер процесса. Повтор того же `requestId` — тот же ответ (6.13).
+   */
+  switchAgent(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>>;
+  /**
+   * На старте хоста: `switching` в карте пережил прежний хост (замены живут только в его памяти) — снимается. Сессия
+   * спит; если прежний агент уже заменён, следующий запуск поднимет нового с пакетом передачи. Заодно убирает копии
+   * транскрипта в папке цели, оставшиеся после форка (спека 5.4.1).
+   */
+  clearStaleSwitches(): Promise<void>;
+}
+
+/** Параметры `sessions.switchAgent` без `ref`; `by` — кто просил (`human` или id сессии, чей запрос одобрен). */
+export interface SwitchRequest {
+  requestId: string;
+  provider: string;
+  model?: string | null;
+  effort?: string | null;
+  carry?: 'handover' | 'transcript';
+  force?: boolean;
+  by?: string;
+}
+
+/**
+ * Связи замены агента со службами, которые заводятся после сессий (спека замены агента, 5.3, 6.3–6.5, 6.10). Без них
+ * замена идёт без снятия эпизода «застрял», без сброса будильника и без подсказки цели.
+ */
+export interface SessionsTakeoverOptions {
+  /** Эпизод лимита или входа закрывается молча — без «is back» (6.4). */
+  stuck?: { endBySwitch(ref: SessionRef): Promise<void> };
+  /** Будильник создаётся позже сервиса сессий: ссылка читается при замене. */
+  wake?: () => { switched(ref: SessionRef): void } | undefined;
+  /** Вошедшие аккаунты того же CLI — как в письме о лимите (`limitAlternatives`). */
+  alternatives?: (provider: string) => Promise<readonly LimitAlternative[]>;
+  /** Лимиты аккаунта; `null` — хост их не знает. */
+  limits?: (provider: string) => ProviderLimits | null;
+  /** Пакет передачи (`collectHandover` из core); подмена — для тестов. */
+  handover?: typeof collectHandover;
 }
 
 /**
@@ -248,6 +358,8 @@ export interface SessionsFeedOptions {
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
    */
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
+  /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
+  takeover?: SessionsTakeoverOptions;
 }
 
 
@@ -366,6 +478,14 @@ export function createSessionsService(
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
   // ручной `sessions.resume` одновременно с подъёмом той же сессии письмом.
   const launching = new Set<string>();
+
+  // Идущие замены агента (спека замены агента, 5.3, 6.13): по сессии — id запроса и его исход. Живут только в памяти
+  // этого хоста: `switching` в карте без записи здесь после перезапуска — оборванная замена (`clearStaleSwitches`).
+  const switches = new Map<string, { id: string; result: Promise<Result<'sessions.switchAgent'>> }>();
+  // Исходы законченных замен по `requestId`: повтор того же запроса — тот же ответ.
+  const switched = new Map<string, Result<'sessions.switchAgent'>>();
+  // Пакет передачи до первого старта нового агента: Codex, удержанный до согласия на папку, стартует позже.
+  const pendingHandovers = new Map<string, string>();
 
   // Запись карты по выходу процесса идёт асинхронно и без ожидания в самом
   // обработчике `exit` (его сигнатура синхронная) — но `stop()`/`delete()`
@@ -565,8 +685,13 @@ export function createSessionsService(
     return mode;
   }
 
-  async function readyProvider(provider: string): Promise<ProviderEntry> {
+  async function readyProvider(provider: string, recorded = false): Promise<ProviderEntry> {
     const entry = (await loadProviders())[provider];
+    // Записанная сессия удалённого провайдера — не ошибка ввода: она цела и ждёт, пока человек продолжит её на другом
+    // провайдере. `conflict`: состояние сессии не даёт запуск, а не запрос сломан.
+    if (entry === undefined && recorded) {
+      throw new HostError('conflict', `${provider} is not in Parley: continue the session on another provider`);
+    }
     if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
@@ -619,6 +744,28 @@ export function createSessionsService(
       return 'started';
     }
     launching.add(key);
+    try {
+      return await launchHeld(ref, mode, options);
+    } finally {
+      launching.delete(key);
+    }
+  }
+
+  /**
+   * Тело запуска под ключом `launching`, который держит вызывающий: `launch` — на один запуск, `switchAgent` — на всю
+   * замену агента (спека замены агента, 6.3). `notify: false` — об отказе скажет сам вызывающий.
+   */
+  async function launchHeld(
+    ref: SessionRef,
+    requested: LaunchMode,
+    choice: LaunchChoice = {},
+    notify = true,
+  ): Promise<LaunchOutcome> {
+    const key = refKey(ref);
+    let mode = requested;
+    let options = choice;
+    // Замена, чей запуск это: отказ запуска её снимает (5.3 шаг 9).
+    let switchingId: string | undefined;
     const timer = createStepTimer();
     let failed = true;
     let held = false;
@@ -643,10 +790,29 @@ export function createSessionsService(
       if (map.work.status === 'archived') {
         throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
       }
+      // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
+      // самой замены, и у Resume после отказа, и после согласия на папку Codex.
+      if (options.handover === undefined && options.forkFrom === undefined && mode !== 'new') {
+        if (awaitingAgent(session)) {
+          mode = 'launch';
+          options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
+        } else if (await forkWithoutFile(session)) {
+          // Форк стартовал и вышел, не записав разговор (5.4.1): тот же форк заново, а не голый бриф под его id.
+          const retry = await reforkOf(ref, session);
+          if (retry === null) {
+            mode = 'launch';
+            options = { ...options, handover: await recollectHandover(ref, session) };
+          } else {
+            mode = 'resume';
+            options = { ...options, forkFrom: retry.from, prompt: [retry.note, options.prompt ?? ''].filter((part) => part !== '').join('\n\n') };
+          }
+        }
+      }
+      switchingId = session.switching?.id;
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
-      const entry = await timer.step('provider', () => readyProvider(session.provider));
+      const entry = await timer.step('provider', () => readyProvider(session.provider, true));
 
       // Согласие человека на папку (спека 2026-10-21, 4.2) — до бюджета, worktree, скилла и PARLEY.md: удержанный запуск
       // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.
@@ -779,6 +945,8 @@ export function createSessionsService(
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
         ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
+        ...(options.handover === undefined ? {} : { handover: options.handover }),
+        ...(options.forkFrom === undefined ? {} : { forkFrom: options.forkFrom }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       }));
@@ -938,20 +1106,28 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+      // Форк записывает разговор с первым ходом: копия транскрипта в папке цели уберётся, как только он появится.
+      if (options.forkFrom !== undefined) {
+        watchFork(ref, session.previousAgents?.at(-1)?.provider ?? session.provider, session.provider, options.forkFrom);
+      }
+      // Новый агент поднят: замена окончена — `switching` снят, письма ждавшим (спека замены агента, 5.3 шаг 8).
+      if (session.switching !== null && session.switching !== undefined) await finishSwitch(ref);
       return 'started';
     } catch (error) {
-      if (error instanceof HostError) host.broadcast('host.notice', {
+      if (notify && error instanceof HostError) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
         text: `session ${ref.sessionId} failed to launch: ${error.message}`,
         at: new Date().toISOString(),
       });
+      // Запуск нового агента вне оркестратора (после согласия на папку Codex) отказал: замена окончена, сессия спит с
+      // новым провайдером (5.3 шаг 9). Оркестратор снимает `switching` сам.
+      if (switchingId !== undefined && !switches.has(key)) await dropSwitch(ref, switchingId);
       throw error;
     } finally {
       // Процесс не стартовал — токен канала никому не нужен.
       if (agentChannel !== undefined && !processStarted) feed.agent?.unregister(ref);
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
-      launching.delete(key);
       host.log.info('запуск сессии: время шагов', {
         ref,
         mode,
@@ -1207,6 +1383,7 @@ export function createSessionsService(
   async function setChoice(
     ref: SessionRef,
     choice: { model?: string | null; effort?: string | null },
+    closed?: AgentBinding,
   ): Promise<void> {
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1217,6 +1394,8 @@ export function createSessionsService(
       // вернулось бы умолчание роли.
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
+      // Смена модели закрывает отрезок расхода (5.9): тот же разговор, новая модель.
+      if (closed !== undefined) session.previousAgents = appendAgentBinding(session.previousAgents, closed);
     });
   }
 
@@ -1270,12 +1449,569 @@ export function createSessionsService(
           throw busyError('The input field has unsent text; send or clear it first');
         }
       }
-      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) });
+      // Разговор уже был — прежняя модель закрывает отрезок расхода (5.9); без разговора считать нечего.
+      let closed: AgentBinding | undefined;
+      if (session.providerSessionId !== null) {
+        const endedAt = new Date().toISOString();
+        const usage = await segmentUsage(session, endedAt);
+        closed = {
+          provider: session.provider,
+          model: session.model ?? null,
+          effort: session.effort ?? null,
+          providerSessionId: session.providerSessionId,
+          startedAt: session.previousAgents?.at(-1)?.endedAt ?? session.startedAt,
+          endedAt,
+          reason: 'model',
+          requestedBy: 'human',
+          carried: 'transcript',
+          ...(usage === undefined ? {} : { usage }),
+          costUsd: await segmentCost(session, endedAt),
+        };
+      }
+      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) }, closed);
       if (!live) return { model: next, effort: effort ?? null, restarted: false };
       await stop(ref);
       await launch(ref, 'resume');
       return { model: next, effort: effort ?? null, restarted: true };
     });
+  }
+
+  /** Имя провайдера для людей и агентов; удалённый из реестра — своим id. */
+  const labelOf = (registry: Record<string, ProviderEntry>, id: string): string =>
+    providerLabel(registry[id] ?? { id, label: id });
+
+  /** Новый агент ещё не стартовал после замены: прежний агент записан, разговора у нового пока нет. */
+  const awaitingAgent = (session: WorkSession): boolean =>
+    (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
+
+  /** Агент продолжал разговор форком, а файла форка в папке его аккаунта нет: форк вышел до первой записи. */
+  async function forkWithoutFile(session: WorkSession): Promise<boolean> {
+    const last = session.previousAgents?.at(-1);
+    if (last?.carried !== 'transcript' || last.providerSessionId === null || session.providerSessionId === null) return false;
+    if (session.providerSessionId === last.providerSessionId) return false;
+    try {
+      return !(await hasConversation(session.provider, session.providerSessionId));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Повтор форка от разговора прежнего агента: копия в папке цели обновляется из источника. Не вышло — `null`, и
+   * привязка помечается пакетом передачи: новый агент стартует с ним, а следующий запуск форк уже не повторяет.
+   */
+  async function reforkOf(ref: SessionRef, session: WorkSession): Promise<{ from: string; note: string } | null> {
+    const last = session.previousAgents?.at(-1);
+    if (last === undefined || last.providerSessionId === null) return null;
+    try {
+      const carried = await copyTranscript(last.provider, session.provider, last.providerSessionId);
+      const registry = await loadProviders();
+      return { from: carried.from, note: transcriptNote(session.id, labelOf(registry, session.provider), labelOf(registry, last.provider), last.reason) };
+    } catch (error) {
+      host.log.warn('форк не повторить — новый агент стартует с пакетом передачи', { ref, error: String(error) });
+      await updateMap(ref.projectPath, ref.workId, (map) => {
+        const record = map.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+        if (record !== undefined) record.carried = 'handover';
+      }).catch(() => {});
+      return null;
+    }
+  }
+
+  /** Пакет передачи по карте (`collectHandover`); подмена — `takeover.handover`. */
+  const handoverOf = (
+    ref: SessionRef,
+    previous: Parameters<typeof collectHandover>[3],
+    target: Parameters<typeof collectHandover>[4],
+    conversation?: string | null,
+  ): ReturnType<typeof collectHandover> =>
+    (feed.takeover?.handover ?? collectHandover)(ref.projectPath, ref.workId, ref.sessionId, previous, target, conversation);
+
+  /**
+   * Пакет для запуска нового агента, когда собранного в памяти нет (хост перезапущен, Resume после отказа): по
+   * последней привязке. В карте разговор прежнего агента уже сброшен — хвост берётся по id из привязки; сбой — запуск
+   * без пакета.
+   */
+  async function recollectHandover(ref: SessionRef, session: WorkSession): Promise<string> {
+    const last = session.previousAgents?.at(-1);
+    if (last === undefined) return '';
+    try {
+      const registry = await loadProviders();
+      const { text } = await handoverOf(
+        ref,
+        {
+          provider: last.provider,
+          providerLabel: labelOf(registry, last.provider),
+          model: last.model,
+          reason: last.reason === 'model' ? 'manual' : last.reason,
+          endedAt: last.endedAt,
+          resetsAt: null,
+        },
+        { providerLabel: labelOf(registry, session.provider), model: session.model ?? null },
+        last.providerSessionId,
+      );
+      return text;
+    } catch (error) {
+      host.log.warn('пакет передачи не собрался — новый агент стартует по брифу', { ref, error: String(error) });
+      return '';
+    }
+  }
+
+  /** Комнаты сессии, куда пишутся строка и письма о замене: где она участник, кроме архивных (спека 6.5). */
+  const roomsOfSession = (map: WorkMap, sessionId: string) =>
+    map.rooms.filter((room) => room.members.includes(sessionId) && !isRoomArchived(room));
+
+  /**
+   * Письма `parley` о замене (спека 6.5): живым ведущим комнат сессии и отправителям непрочитанных писем к ней — тем
+   * же, кому ушло письмо о лимите. Детям — ничего: их родитель тот же. В общей комнате письмо идёт в неё, иначе прямое.
+   */
+  function notifyWaiting(map: WorkMap, letters: LetterTx, session: WorkSession, text: string, at: string): void {
+    const rooms = roomsOfSession(map, session.id);
+    const to = new Map<string, string | null>();
+    for (const room of rooms) {
+      const lead = liveLead(map, room);
+      if (lead !== null && !to.has(lead)) to.set(lead, room.id);
+    }
+    for (const message of letters.unreadFor(session.id)) {
+      if (to.has(message.from)) continue;
+      const shared = message.roomId !== null && rooms.some((room) => room.id === message.roomId) ? message.roomId : null;
+      to.set(message.from, shared);
+    }
+    to.delete(session.id);
+    for (const [id, roomId] of to) {
+      if (!map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed')) continue;
+      if (roomId !== null) parleyNote(map, letters, roomId, id, text, at);
+      else letters.add({ roomId: null, from: PARLEY, to: [id], text, kind: 'note', at });
+    }
+  }
+
+  /** Замена окончена (новый агент поднят): `switching` снят, письма ждавшим, будильник забывает прежний подъём. */
+  async function finishSwitch(ref: SessionRef): Promise<void> {
+    pendingHandovers.delete(refKey(ref));
+    try {
+      const registry = await loadProviders();
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (session?.switching === null || session?.switching === undefined) return;
+        session.switching = null;
+        const last = session.previousAgents?.at(-1);
+        if (last === undefined) return;
+        const text = switchLetter(session.id, labelOf(registry, session.provider), session.model ?? null, labelOf(registry, last.provider), last.reason);
+        notifyWaiting(map, letters, session, text, new Date().toISOString());
+      });
+    } catch (error) {
+      host.log.error('конец замены агента не записался', { ref, error: String(error) });
+    }
+    feed.takeover?.wake?.()?.switched(ref);
+  }
+
+  /**
+   * Снять `switching` без писем: замена не дошла до старта нового агента. Будильник забывает подъём прежнего агента
+   * (указанные письма, удержания): иначе письма, указанные за время замены, больше не указывались бы.
+   */
+  async function dropSwitch(ref: SessionRef, requestId: string): Promise<void> {
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.switching?.id === requestId) session.switching = null;
+    }).catch((error: unknown) => {
+      host.log.error('switching не снялся после отказа замены', { ref, error: String(error) });
+    });
+    feed.takeover?.wake?.()?.switched(ref);
+  }
+
+  /**
+   * Снимок расхода закрываемого отрезка (спека 5.9): записи лога в окне `[начало отрезка, замена)`. Начало — конец
+   * прежней привязки или первый старт сессии. Нет индекса лога — снимок, который выход процесса записал в карту,
+   * если он того же разговора и отрезок первый (тогда он и есть весь разговор).
+   */
+  async function segmentUsage(session: WorkSession, endedAt: string): Promise<AgentBinding['usage']> {
+    const binding = session.providerSessionId;
+    if (binding === null) return undefined;
+    const from = session.previousAgents?.at(-1)?.endedAt ?? session.startedAt;
+    let usage: UsageSummary | null = null;
+    try {
+      const resolver = typeof activity.usageResolver === 'function' ? activity.usageResolver() : undefined;
+      if (resolver !== undefined) {
+        usage =
+          (session.previousAgents?.length ?? 0) > 0 && from !== null
+            ? await currentSegmentUsage(session, resolver, [{ from, to: endedAt }])
+            : from === null
+              ? resolver.whole(session)
+              : await resolver.slice(session, [{ from, to: endedAt }]);
+      }
+    } catch (error) {
+      host.log.warn('расход отрезка не посчитался', { sessionId: session.id, error: String(error) });
+    }
+    const frozen = session.metrics?.usage;
+    if (usage === null && frozen?.binding === binding && (session.previousAgents?.length ?? 0) === 0) usage = frozen;
+    return usage === null ? undefined : freezeUsage(usage, { binding, epoch: session.startedAtProcess, closed: true });
+  }
+
+  /** Стоимость закрываемого отрезка по `cost-state` лога (5.9); `null` — лог её не сообщает. */
+  async function segmentCost(session: WorkSession, endedAt: string): Promise<number | null> {
+    const from = session.previousAgents?.at(-1)?.endedAt ?? session.startedAt;
+    if (session.providerSessionId === null || from === null) return null;
+    try {
+      const resolver = typeof activity.usageResolver === 'function' ? activity.usageResolver() : undefined;
+      return (await resolver?.cost?.(session, { from, to: endedAt })) ?? null;
+    } catch (error) {
+      host.log.warn('стоимость отрезка не посчиталась', { sessionId: session.id, error: String(error) });
+      return null;
+    }
+  }
+
+  /** Почему прежний агент сменён: из застревания, отсутствия в реестре или по просьбе. */
+  function switchReason(session: WorkSession, registry: Record<string, ProviderEntry>): Exclude<AgentBinding['reason'], 'model'> {
+    if (registry[session.provider] === undefined) return 'provider-missing';
+    if (session.stuck?.kind === 'limit') return 'limit';
+    if (session.stuck?.kind === 'sign-in') return 'sign-in';
+    return 'manual';
+  }
+
+  async function switchAgent(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
+    const key = refKey(ref);
+    const running = switches.get(key);
+    if (running !== undefined) {
+      // Двойной клик, два окна, остров и Telegram (6.13): тот же запрос ждёт тот же исход, другой — `busy`.
+      if (running.id === request.requestId) return running.result;
+      throw busyError('The session is already continuing on another provider');
+    }
+    const done = switched.get(request.requestId);
+    if (done !== undefined) return done;
+    const result = exclusive(ref, () => runSwitch(ref, request));
+    switches.set(key, { id: request.requestId, result });
+    try {
+      const outcome = await result;
+      switched.set(request.requestId, outcome);
+      // Память ответов — на повторы одного запроса, а не журнал: старые уходят.
+      if (switched.size > SWITCH_RESULTS_KEPT) switched.delete(switched.keys().next().value as string);
+      return outcome;
+    } finally {
+      switches.delete(key);
+    }
+  }
+
+  /** Шаги 1–9 спеки 5.3 под замком `exclusive` и ключом `launching` на весь срок (6.3). */
+  async function runSwitch(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
+    const key = refKey(ref);
+    const carry = request.carry ?? 'handover';
+    const map = await readMap(ref.projectPath, ref.workId);
+    const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) {
+      throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+    }
+    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет.
+    if (session.switching?.id === request.requestId) return { outcome: 'held', carried: carry };
+    if (session.switching !== null && session.switching !== undefined) {
+      throw busyError('The session is already continuing on another provider');
+    }
+    const choice = await resolveModelChoice(request.provider, request.model ?? undefined, request.effort ?? undefined);
+    const target = {
+      provider: request.provider,
+      ...(request.model === undefined ? {} : { model: request.model === null ? null : (choice.model ?? null) }),
+      ...(request.effort === undefined ? {} : { effort: request.effort === null ? null : ((choice.effort as EffortLevel | undefined) ?? null) }),
+    };
+    const blockers = switchBlockers(map, ref.sessionId, target);
+    if (blockers.length > 0) throw new HostError('conflict', blockers.join('; '));
+    // Готовность цели — до любых изменений: отказ не трогает прежнего агента.
+    const entry = await readyProvider(request.provider);
+    const registry = await loadProviders();
+    // Продолжение разговора — только между аккаунтами Anthropic (5.4): иначе отказ, тоже до любых изменений.
+    if (carry === 'transcript' && !(isClaudeAccount(session.provider, registry[session.provider]) && isClaudeAccount(entry.id, entry))) {
+      throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
+    }
+    // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
+    // к работе — по старому снимку его погасили бы посреди хода без `force`.
+    const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (current === undefined) throw new HostError('not_found', `session ${ref.sessionId} is gone`);
+    // От этой проверки до `launching.add` — ни одного `await`: иначе подъём письмом успел бы занять ключ, а `finally`
+    // замены снял бы чужой.
+    if (current.switching !== null && current.switching !== undefined) {
+      throw busyError('The session is already continuing on another provider');
+    }
+    if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
+    // Причина — по снимку до остановки: выход процесса и `endBySwitch` снимают `stuck`.
+    const reason = switchReason(current, registry);
+
+    // Живой агент: только у приглашения, без фоновых задач и черновика — как у `setModel`. Застрявший в лимите или
+    // на входе ход не продолжит и так. Процесс не от хоста гасить нечем — только с `force`.
+    const live = pty.get(ref);
+    const stuck = current.stuck?.kind === 'limit' || current.stuck?.kind === 'sign-in';
+    if (live !== undefined && request.force !== true && !stuck) {
+      const state = activity.get(ref);
+      if (!atPrompt(state)) throw busyError('Wait until the agent is idle or stop it first');
+      if (state?.activity.tasks.some((task) => task.background) === true) {
+        throw busyError('Wait until background tasks finish');
+      }
+      if (live.hasDraft()) throw busyError('The input field has unsent text; send or clear it first');
+    }
+    if (live === undefined && current.lifecycle === 'active' && request.force !== true) {
+      throw busyError('The agent runs outside Parley: stop it first or continue with force');
+    }
+
+    const since = new Date().toISOString();
+    launching.add(key);
+    let applied = false;
+    try {
+      await updateMap(ref.projectPath, ref.workId, (current) => {
+        const record = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (record !== undefined) record.switching = { id: request.requestId, to: request.provider, since };
+      });
+      if (live !== undefined) await stop(ref);
+      if (pty.get(ref) !== undefined) throw new HostError('internal', 'the previous agent did not stop');
+      await feed.takeover?.stuck?.endBySwitch(ref);
+
+      // Карта после выхода процесса: итоговые метрики и разговор прежнего агента — для пакета и снимка расхода.
+      const stopped = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (stopped === undefined) throw new HostError('not_found', `session ${ref.sessionId} is gone`);
+      const endedAt = new Date().toISOString();
+      const previousLabel = labelOf(registry, stopped.provider);
+      const targetLabel = providerLabel(entry);
+      // Пакет — после остановки (транскрипт и рабочая копия в конечном виде) и до `applyAgentSwitch` (он сбрасывает
+      // разговор, и хвоста не было бы). Сбой пакета замену не останавливает: бриф уйдёт всё равно.
+      let handover = '';
+      try {
+        handover = (
+          await handoverOf(
+            ref,
+            {
+              provider: stopped.provider,
+              providerLabel: previousLabel,
+              model: stopped.model ?? null,
+              reason,
+              endedAt,
+              resetsAt: stopped.stuck?.resetsAt ?? current.stuck?.resetsAt ?? null,
+            },
+            { providerLabel: targetLabel, model: target.model ?? null },
+          )
+        ).text;
+      } catch (error) {
+        host.log.warn('пакет передачи не собрался — новый агент стартует по брифу', { ref, error: String(error) });
+      }
+      // Перенос разговора (5.4.1): копия транскрипта в папку цели — до замены в карте, пока id прежнего разговора на
+      // месте. Сбой или транскрипта нет — откат к пакету передачи, сессия не теряется.
+      let transcript: CarriedTranscript | null = null;
+      if (carry === 'transcript' && stopped.providerSessionId !== null) {
+        try {
+          transcript = await copyTranscript(stopped.provider, request.provider, stopped.providerSessionId);
+        } catch (error) {
+          host.log.warn('транскрипт не скопировался — замена с пакетом передачи', { ref, error: String(error) });
+        }
+      }
+      const usage = await segmentUsage(stopped, endedAt);
+      const binding: AgentBinding = {
+        provider: stopped.provider,
+        model: stopped.model ?? null,
+        effort: stopped.effort ?? null,
+        providerSessionId: stopped.providerSessionId,
+        startedAt: stopped.previousAgents?.at(-1)?.endedAt ?? stopped.startedAt,
+        endedAt,
+        reason,
+        requestedBy: request.by ?? 'human',
+        carried: transcript === null ? 'handover' : 'transcript',
+        ...(usage === undefined ? {} : { usage }),
+        costUsd: await segmentCost(stopped, endedAt),
+      };
+      await updateMap(ref.projectPath, ref.workId, (current, letters) => {
+        const fresh = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (fresh?.switching?.id !== request.requestId) throw new HostError('conflict', 'the switch was cancelled');
+        current.sessions = applyAgentSwitch(current, ref.sessionId, target, binding, randomUUID()).sessions;
+        const line = switchLine(ref.sessionId, targetLabel, target.model ?? null, previousLabel, reason);
+        for (const room of roomsOfSession(current, ref.sessionId)) addSystemMessage(current, letters, room.id, line, endedAt);
+      });
+      applied = true;
+      pendingHandovers.set(key, handover);
+
+      const by = request.by ?? 'human';
+      let outcome: LaunchOutcome;
+      try {
+        if (transcript === null) outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+        else {
+          try {
+            const prompt = transcriptNote(ref.sessionId, targetLabel, previousLabel, reason);
+            outcome = await launchHeld(ref, 'resume', { by, forkFrom: transcript.from, prompt }, false);
+          } catch (error) {
+            // Форк не поднялся: копия убрана, новый агент стартует с пакетом передачи (5.4.1), и ответ это называет.
+            host.log.warn('форк разговора не поднялся — запуск с пакетом передачи', { ref, error: String(error) });
+            await discardCopy(transcript).catch((cleanup: unknown) => {
+              host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
+            });
+            transcript = null;
+            await updateMap(ref.projectPath, ref.workId, (current) => {
+              const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+              if (last !== undefined) last.carried = 'handover';
+            });
+            outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+          }
+        }
+      } catch (error) {
+        // Шаг 9: карта уже с новым провайдером, сессия спит; Resume повторит запуск, обратная замена — тот же метод.
+        await dropSwitch(ref, request.requestId);
+        host.broadcast('host.notice', {
+          kind: 'launch-failed',
+          ref,
+          text: `${sessionMention(ref.sessionId)} did not start on ${targetLabel}: ${(error as Error).message}. Resume to retry, or continue it on ${previousLabel} again.`,
+          at: new Date().toISOString(),
+        });
+        throw error;
+      }
+      // `held`: запуск Codex ждёт согласия на папку; `switching` остаётся до решения, снимет его запуск после согласия.
+      return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
+    } catch (error) {
+      if (!applied) {
+        pendingHandovers.delete(key);
+        await dropSwitch(ref, request.requestId);
+      }
+      throw error;
+    } finally {
+      launching.delete(key);
+    }
+  }
+
+  /**
+   * Копия транскрипта в папке цели удаляется, как только рядом появился файл форка (5.4.1, п. 1): Claude Code пишет
+   * его с первым ходом. Ждём в фоне до `FORK_WAIT_MS`; не дождались или хост перезапущен — копию уберёт
+   * `clearStaleSwitches` на следующем старте.
+   */
+  function watchFork(ref: SessionRef, previous: string, target: string, from: string): void {
+    const deadline = Date.now() + FORK_WAIT_MS;
+    const check = async (): Promise<void> => {
+      const fork = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)
+        ?.providerSessionId;
+      if (fork === null || fork === undefined || fork === from) return;
+      if (await removeForkCopy(previous, target, from, fork)) return;
+      if (Date.now() < deadline) setTimeout(() => void check().catch(() => {}), FORK_POLL_MS).unref?.();
+    };
+    setTimeout(() => void check().catch((error: unknown) => {
+      host.log.warn('копия транскрипта после форка не убралась', { ref, error: String(error) });
+    }), FORK_POLL_MS).unref?.();
+  }
+
+  /** Запас лимита аккаунта: 100 минус наибольшая занятость окон; лимитов нет — ниже любого известного. */
+  const headroom = (limits: ProviderLimits | null): number =>
+    limits === null ? -1 : 100 - Math.max(limits.fiveHour?.usedPercent ?? 0, limits.week?.usedPercent ?? 0);
+
+  async function switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>> {
+    const map = await readMap(ref.projectPath, ref.workId);
+    const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) {
+      throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+    }
+    const registry = await loadProviders();
+    const currentEntry = registry[session.provider];
+    const reason = currentEntry === undefined
+      ? 'provider-missing'
+      : session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in'
+        ? session.stuck.kind
+        : null;
+
+    const readiness = async (entry: ProviderEntry): Promise<{ needs: string | null }> => {
+      try {
+        const state = await providerReadiness(entry, {
+          ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
+          signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
+        });
+        return { needs: state.needs ?? (state.error === null ? null : 'error') };
+      } catch {
+        return { needs: 'error' };
+      }
+    };
+    const limitsOf = (id: string): ProviderLimits | null => feed.takeover?.limits?.(id) ?? null;
+
+    const targets: Result<'sessions.switchOptions'>['targets'] = [];
+    for (const entry of Object.values(registry)) {
+      if (entry.id === session.provider) continue;
+      const { needs } = await readiness(entry);
+      targets.push({
+        id: entry.id,
+        label: providerLabel(entry),
+        family: entry.family ?? null,
+        available: needs === null,
+        needs,
+        limits: limitsOf(entry.id),
+        transcript: isClaudeAccount(session.provider, currentEntry) && isClaudeAccount(entry.id, entry),
+      });
+    }
+
+    // Подсказка (6.10): вошедший аккаунт того же семейства с наибольшим запасом, иначе готовый другого семейства.
+    let alternatives: readonly LimitAlternative[] = [];
+    if (currentEntry !== undefined && feed.takeover?.alternatives !== undefined) {
+      try {
+        alternatives = await feed.takeover.alternatives(session.provider);
+      } catch (error) {
+        host.log.warn('альтернативы для замены агента не собрались', { ref, error: String(error) });
+      }
+    }
+    const ready = new Set(targets.filter((target) => target.available).map((target) => target.id));
+    const same = alternatives.filter((alternative) => ready.has(alternative.id));
+    const best = [...same].sort((a, b) => headroom(b.limits) - headroom(a.limits))[0];
+    const family = currentEntry?.family;
+    const other = targets.find((target) => target.available && (family === undefined || target.family !== family));
+    const suggested = best?.id ?? other?.id ?? null;
+
+    const rooms = map.rooms.filter((room) => room.members.includes(session.id));
+    let unread = 0;
+    try {
+      unread = unreadLetters(ref.projectPath, ref.workId, session.id).length;
+    } catch (error) {
+      host.log.warn('непрочитанное для замены агента не прочиталось', { ref, error: String(error) });
+    }
+    return {
+      current: { provider: session.provider, available: reason === null && currentEntry !== undefined, reason },
+      targets,
+      suggested,
+      keeps: {
+        rooms: rooms.length,
+        leads: rooms.filter((room) => liveLead(map, room) === session.id).map((room) => room.id),
+        owns: map.rooms.filter((room) => room.ownerId === session.id).map((room) => room.id),
+        // Дети — и записанные родителем, и заведённые этой сессией через `create_session` (`createdBy`).
+        children: map.sessions.filter(
+          (child) => child.id !== session.id && (child.parent === session.id || child.createdBy === session.id) && child.lifecycle !== 'closed',
+        ).length,
+        unread,
+        worktree: session.worktree?.branch ?? null,
+      },
+      // Цель ещё не выбрана: проверки по самой сессии, без «та же цель».
+      blockers: switchBlockers(map, session.id, { provider: '' }),
+    };
+  }
+
+  /**
+   * `switching` в карте пережил прежний хост: замена в его памяти оборвалась. Снимается у всех: сессия спит. Прежний
+   * агент уже заменён — следующий запуск (Resume, письмо, согласие на папку Codex) поднимет нового с пакетом.
+   */
+  async function clearStaleSwitches(): Promise<void> {
+    let registry: Record<string, ProviderEntry> = {};
+    try {
+      registry = await loadProviders();
+    } catch (error) {
+      host.log.warn('реестр провайдеров не прочитался для оборванных замен', { error: String(error) });
+    }
+    for (const entry of works.snapshot().entries) {
+      for (const session of entry.map.sessions) {
+        // Копия транскрипта, которую прежний хост не успел убрать после форка (5.4.1): форк уже есть — копия лишняя.
+        const last = session.previousAgents?.at(-1);
+        if (last?.carried === 'transcript' && last.providerSessionId !== null && session.providerSessionId !== null &&
+          session.providerSessionId !== last.providerSessionId) {
+          await removeForkCopy(last.provider, session.provider, last.providerSessionId, session.providerSessionId).catch((error: unknown) => {
+            host.log.warn('копия транскрипта после форка не убралась', { sessionId: session.id, error: String(error) });
+          });
+        }
+        if (session.switching === null || session.switching === undefined) continue;
+        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
+        if (switches.has(refKey(ref))) continue;
+        const stale = session.switching.id;
+        await dropSwitch(ref, stale);
+        host.log.warn('замена агента оборвалась вместе с прежним хостом — switching снят', { ref, to: session.switching.to });
+        if (awaitingAgent(session)) {
+          host.broadcast('host.notice', {
+            kind: 'launch-failed',
+            ref,
+            text: `${sessionMention(session.id)} did not finish continuing on ${labelOf(registry, session.provider)}: Resume starts it.`,
+            at: new Date().toISOString(),
+          });
+        }
+      }
+    }
   }
 
   async function close(ref: SessionRef): Promise<void> {
@@ -1371,6 +2107,9 @@ export function createSessionsService(
     setChoice,
     exclusive,
     setModel,
+    switchOptions,
+    switchAgent,
+    clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
     async stopAll() {
       await Promise.all(

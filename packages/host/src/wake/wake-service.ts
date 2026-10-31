@@ -102,9 +102,16 @@ export interface WakeService {
    * без процесса письма заново считаются неуказанными — и после перезапуска хоста тоже.
    */
   retry(ref: SessionRef): void;
+  /**
+   * Агента сессии заменили (спека замены агента, 5.3 шаг 8): прежний подъём забыт — недоступный resume, удержание
+   * согласия, пауза бюджета, эпизод лимита и указанные письма; ждавшие письма доставляются новому агенту заново.
+   */
+  switched(ref: SessionRef): void;
 }
 
 const DEFAULT_ENTER_DELAY_MS = 500;
+/** Сколько будильник верит прочитанному реестру провайдеров. */
+const REGISTRY_TTL_MS = 2000;
 const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
@@ -204,6 +211,11 @@ interface AttemptState {
    * начала, и «заново» тут нечего.
    */
   resumeUnavailable: boolean;
+  /**
+   * Есть ли провайдер сессии в реестре (`loadProviders` асинхронен, пересчёт — нет): последний ответ проверки.
+   * Нет провайдера — сессия не поднимается и ждёт человека (`provider-missing`), слот часа не берётся.
+   */
+  providerCheck: { provider: string; present: boolean } | null;
   /**
    * Когда бюджет работы отказал в подъёме (P37): письма ждут, а не считаются указанными. Новую попытку не начинаем
    * `BUDGET_RETRY_MS` — иначе каждое событие карты заново стучалось бы за слотом. Это пауза между просьбами, а не
@@ -327,6 +339,7 @@ export function createWakeService(
         earlyExit: undefined,
         pointerAfter: null,
         resumeUnavailable: false,
+        providerCheck: null,
         budgetDeniedAt: null,
         trustHeld: false,
         pasteRetry: undefined,
@@ -541,14 +554,21 @@ export function createWakeService(
     try {
       const registry = await loadProviders();
       const template = registry[session.provider]?.runner.resumeArgs;
+      // Новый агент после замены ещё не стартовал (спека замены агента, 5.3 шаг 9): письмо поднимает его — `launch`
+      // сессий сам переведёт подъём в запуск с пакетом передачи, указатель уйдёт после первого простоя.
+      const awaiting = (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
       // Без id у провайдера core запустил бы новый процесс по брифу, а не `resume`.
-      if (template === undefined || session.providerSessionId === null) {
+      if (template === undefined || (session.providerSessionId === null && !awaiting)) {
         state.resumeUnavailable = true;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
         limiter.release(ref);
+        // Окно уже видит «resuming»: пересчёт покажет, что письма ждут (`sleeping`). `resuming` снимается до него, иначе
+        // пересчёт снова записал бы «resuming».
+        state.resuming = false;
+        recompute(ref);
         return;
       }
-      const withPrompt = template.includes('{prompt}');
+      const withPrompt = template.includes('{prompt}') && !awaiting;
 
       state.journalBase = await journalLength(ref);
       state.resumeLetters = [...action.letterIds];
@@ -891,6 +911,31 @@ export function createWakeService(
     host.log.info('будильник: возврат после сброса лимита', { ref, returns: state.returns, letters: letterIds.length });
   }
 
+  // Реестр провайдеров на короткий срок: пересчёт каждой спящей сессии с письмами иначе читал бы три файла каждый раз.
+  let registryCache: { at: number; value: Promise<Record<string, unknown>> } | undefined;
+  const registryNow = (): Promise<Record<string, unknown>> => {
+    if (registryCache === undefined || Date.now() - registryCache.at > REGISTRY_TTL_MS) {
+      registryCache = { at: Date.now(), value: loadProviders() };
+    }
+    return registryCache.value;
+  };
+
+  /**
+   * Спрашивает реестр о провайдере сессии; ответ изменился — пересчёт. Реестр не прочитался (битый `providers.json`) —
+   * провайдер считается на месте, как до проверки: подъём сам отчитается сбоем, а хост не падает.
+   */
+  async function checkProvider(ref: SessionRef, state: AttemptState, provider: string): Promise<void> {
+    let present = true;
+    try {
+      present = provider in (await registryNow());
+    } catch (error) {
+      host.log.warn('будильник: реестр провайдеров не прочитался', { ref, error: String(error) });
+    }
+    const before = state.providerCheck;
+    state.providerCheck = { provider, present };
+    if (before?.provider !== provider || before.present !== present) recompute(ref);
+  }
+
   function recompute(ref: SessionRef): void {
     if (!started) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -900,6 +945,12 @@ export function createWakeService(
     ensureKnown(entry);
 
     const state = stateFor(refKey(ref));
+    // Идёт замена агента (спека замены агента, 6.3): ни подъёма, ни указателя, ни возврата после лимита — письма ждут
+    // нового агента, а путь resume будильника мимо замка замены прошёл бы. Снимает `switched` по концу замены.
+    if (session.switching !== null && session.switching !== undefined) {
+      publishWaiting(ref, state, hasUnread(entry, session.id) ? 'resuming' : null);
+      return;
+    }
     const handle = pty.get(ref);
     trackLimit(ref, state, entry, session, handle);
 
@@ -922,6 +973,22 @@ export function createWakeService(
                 : 'sleeping';
         publishWaiting(ref, state, reason);
         return;
+      }
+      // Провайдера нет в реестре: сессия ждёт человека. До лимита часа — слот под подъём, которого не будет, не берём.
+      if (letters) {
+        void checkProvider(ref, state, session.provider).catch((error: unknown) => {
+          host.log.warn('будильник: проверка провайдера упала', { ref, error: String(error) });
+        });
+        const known = state.providerCheck?.provider === session.provider ? state.providerCheck.present : null;
+        if (known === null) {
+          // Ответа реестра ещё нет: подъём ждёт его, пересчёт придёт следом. Ожидание не публикуется — иначе окно мигнуло
+          // бы промежуточным «sleeping» перед настоящим состоянием.
+          return;
+        }
+        if (!known) {
+          publishWaiting(ref, state, 'provider-missing');
+          return;
+        }
       }
       const input: DeliveryInput = {
         session,
@@ -1145,6 +1212,24 @@ export function createWakeService(
       // подъёме. Без этого после перезапуска хоста старт (`ensureKnown`) уже записал бы такие письма как указанные, и
       // согласие ничего бы не подняло. У живого процесса `pointed` не трогаем: повторный указатель задвоил бы доставку.
       if (pty.get(ref) === undefined) state.pointed.clear();
+      recompute(ref);
+    },
+
+    switched(ref) {
+      const state = stateFor(refKey(ref));
+      clearTimers(state);
+      dropLimit(state);
+      state.inFlight = false;
+      state.pointed.clear();
+      state.pointerAfter = null;
+      state.resumedAt = null;
+      state.resumeLetters = [];
+      state.earlyExit = undefined;
+      state.resumeUnavailable = false;
+      state.trustHeld = false;
+      state.budgetDeniedAt = null;
+      state.returns = 0;
+      state.returnTurn = null;
       recompute(ref);
     },
 

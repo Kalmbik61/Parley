@@ -55,7 +55,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * Снимок запуска из тела запроса. Берутся только четыре известных поля нужных типов: остальное (чужие поля, которыми
+ * Снимок запуска из тела запроса. Берутся только пять известных полей нужных типов: остальное (чужие поля, которыми
  * запрос мог бы подменить сессию или канал) в контекст исполнителя не попадает.
  */
 function parseLaunch(value: unknown): ToolLaunch {
@@ -67,10 +67,11 @@ function parseLaunch(value: unknown): ToolLaunch {
     if (typeof flag !== 'boolean') throw new BadRequest(`launch.${key} must be a boolean.`);
     launch[key] = flag;
   }
-  const revision = value['nativeContextRevision'];
-  if (revision !== undefined) {
-    if (typeof revision !== 'string') throw new BadRequest('launch.nativeContextRevision must be a string.');
-    launch.nativeContextRevision = revision;
+  for (const key of ['nativeContextRevision', 'agentRevision'] as const) {
+    const revision = value[key];
+    if (revision === undefined) continue;
+    if (typeof revision !== 'string') throw new BadRequest(`launch.${key} must be a string.`);
+    launch[key] = revision;
   }
   const profile = value['toolProfile'];
   if (profile !== undefined) {
@@ -145,7 +146,7 @@ export function createToolsEndpoint(options: {
 
   function toolsOf(ref: SessionRef, launch: ToolLaunch): SessionTools {
     const key = refKey(ref);
-    const launchKey = JSON.stringify([launch.skillNavigator, launch.skillListReduced, launch.nativeContextRevision, launch.toolProfile]);
+    const launchKey = JSON.stringify([launch.skillNavigator, launch.skillListReduced, launch.nativeContextRevision, launch.agentRevision, launch.toolProfile]);
     const known = sessions.get(key);
     if (known !== undefined && known.launchKey === launchKey) return known;
     const created: SessionTools = {

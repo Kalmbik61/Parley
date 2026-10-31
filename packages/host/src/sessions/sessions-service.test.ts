@@ -672,8 +672,8 @@ describe('create(): модель и усилие из диалога (дизай
     const sessionId = await createPendingSession(project, work.work.id, { provider: 'gone', label: '', task: '' });
     await expect(service.launch({ projectPath: project, workId: work.work.id, sessionId }, 'launch')).rejects.toMatchObject({
       name: 'HostError',
-      code: 'bad_request',
-      message,
+      code: 'conflict',
+      message: 'gone is not in Parley: continue the session on another provider',
     });
 
     expect(existsSync(argsFile)).toBe(false);
@@ -2363,6 +2363,50 @@ describe('setModel(): смена модели (спека нормалайзер
 
   const sessionOf = async (ref: SessionRef) =>
     (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+
+  it('реальная смена модели закрывает отрезок расхода привязкой reason model; та же модель — ничего не пишет (5.9)', async () => {
+    const asked: unknown[] = [];
+    const usage = {
+      input: 100, output: 50, cacheRead: 0, cacheWrite: 0, totalInput: 100,
+      source: 'native-index', observedAt: null, stale: false, completeness: 'complete', coverage: 'conversation',
+    };
+    const metered = {
+      ...activityAt('idle'),
+      usageResolver: () => ({
+        whole: () => null,
+        bounds: () => null,
+        slice: async (_session: unknown, windows: unknown) => {
+          asked.push(windows);
+          return usage;
+        },
+        cost: async () => 0.42,
+      }),
+    } as unknown as ActivityService;
+    const { service, ref, uuid } = await liveSession(metered);
+    await service.stop(ref);
+    const before = await sessionOf(ref);
+
+    await service.setModel(ref, 'opus');
+    expect((await sessionOf(ref))?.previousAgents).toBeUndefined();
+
+    await service.setModel(ref, 'sonnet');
+    const after = await sessionOf(ref);
+    expect(after?.previousAgents).toHaveLength(1);
+    expect(after?.previousAgents?.[0]).toMatchObject({
+      provider: 'claude',
+      model: 'opus',
+      providerSessionId: uuid,
+      startedAt: before?.startedAt ?? null,
+      reason: 'model',
+      carried: 'transcript',
+      requestedBy: 'human',
+      costUsd: 0.42,
+      usage: { input: 100, output: 50 },
+    });
+    expect(after?.previousAgents?.[0]?.endedAt).toEqual(expect.any(String));
+    expect(after?.providerSessionId).toBe(uuid);
+    expect(asked).toHaveLength(1);
+  });
 
   it('спящая сессия: только карта, процесс не поднимается; уровень, который есть у новой модели, остаётся', async () => {
     const { service, ref } = await liveSession(activityAt('idle'));

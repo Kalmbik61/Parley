@@ -499,6 +499,35 @@ describe('сигналы терминала codex → активность', () 
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
   }, 20_000);
 
+  it('замена агента: лимит прежнего процесса (StopFailure в журнале) новому процессу Codex need не даёт', async () => {
+    const { workId, ref } = await codexSession({ eventsDir: true });
+    // Журнал общий у сессии: прежний агент (Claude) упёрся в лимит до замены.
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'StopFailure', error: 'rate_limit', last_assistant_message: "You've hit your session limit" })}\n`,
+    );
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    // Журнал прежнего процесса хост уже прочитал: без границы его лимит стоял бы и у нового агента.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    a.terminalStarted(ref);
+    await settle(150);
+    expect(a.get(ref)?.activity.need ?? null).toBeNull();
+    a.terminalSignal(ref, READY);
+    await settle(50);
+    expect(a.get(ref)?.activity.need ?? null).toBeNull();
+    // Новая строка журнала — уже нового процесса — по-прежнему читается.
+    a.terminalSignal(ref, WORKING);
+    await settle(30);
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'Готово.' })}\n`,
+    );
+    await touchMap(workId);
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+  }, 20_000);
+
   it('Stop, записанный до последнего сигнала работы, следующий ход не перекрывает', async () => {
     const { a, ref, workId } = await started();
     const dir = workPaths(project, workId).events;

@@ -23,6 +23,7 @@ import { useHostConfigStore } from '../store/config.js';
 import { useConsentsStore } from '../store/consents.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
+import { useSwitchAgentStore } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
@@ -2284,3 +2285,74 @@ describe('ChatView — история ↑/↓ (спека 2026-10-16, 3.2)', () 
   });
 });
 
+
+describe('ChatView — замена агента (баннер и разделители)', () => {
+  const need = (kind: 'limit' | 'sign-in', resetsAt: string | null = null) =>
+    ({ kind, since: '2026-10-30T10:00:00.000Z', detail: null, resetsAt, window: null, account: null }) as never;
+  const seed = (session: WorkSession): WorkSession => {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })], branches: {}, loading: false, error: null });
+    renderBody(session);
+    setFeed([prompt('p1', 'hi')]);
+    return session;
+  };
+  const prompt = (id: string, text: string, at = '2026-10-30T09:00:00.000Z'): FeedItem => ({ id, at, kind: 'prompt', text, images: 0 }) as FeedItem;
+  const banner = (): string | null => screen.queryByTestId('chat-switch-banner')?.textContent ?? null;
+
+  afterEach(() => useSwitchAgentStore.setState({ ref: null }));
+
+  it('limit и sign-in — limit и sign-in; кнопка открывает диалог для сессии', () => {
+    hostWith([...FEED_METHODS, 'sessions.switchAgent']);
+    seed(makeSession('s-01', 'S01', { stuck: need('sign-in') }));
+    expect(banner()).toBe(`Claude Code needs a sign-in${S.chat.switchBanner.action}`);
+    cleanup();
+    seed(makeSession('s-01', 'S01', { stuck: need('limit') }));
+    expect(banner()).toBe(`Out of Claude Code usage${S.chat.switchBanner.action}`);
+    cleanup();
+    seed(makeSession('s-01', 'S01', { stuck: need('limit') }));
+    fireEvent.click(screen.getByTestId('chat-switch-open'));
+    expect(useSwitchAgentStore.getState().ref).toEqual(REF);
+  });
+
+  it('limit с часом сброса называет время', () => {
+    hostWith([...FEED_METHODS, 'sessions.switchAgent']);
+    const resetsAt = new Date(2026, 9, 30, 16, 27).toISOString();
+    seed(makeSession('s-01', 'S01', { stuck: need('limit', resetsAt) }));
+    expect(banner()).toContain('usage until');
+  });
+
+  it('идёт замена — «Switching to …» без кнопки; без sessions.switchAgent, у закрытой и autonomous баннера нет', () => {
+    hostWith([...FEED_METHODS, 'sessions.switchAgent']);
+    seed(makeSession('s-01', 'S01', { switching: { id: 'x', to: 'codex', since: '2026-10-30T10:00:00.000Z' } }));
+    expect(banner()).toBe('Switching to Codex…');
+    expect(screen.queryByTestId('chat-switch-open')).toBeNull();
+    cleanup();
+    seed(makeSession('s-01', 'S01', { stuck: need('limit'), lifecycle: 'closed' }));
+    expect(banner()).toBeNull();
+    cleanup();
+    seed(makeSession('s-01', 'S01', { stuck: need('limit'), workspace: { kind: 'clone', path: '/tmp/ws' } } as never));
+    expect(banner()).toBeNull();
+    cleanup();
+    hostWith(FEED_METHODS);
+    seed(makeSession('s-01', 'S01', { stuck: need('limit') }));
+    expect(banner()).toBeNull();
+  });
+
+  it('две замены — два разделителя с текстами по записям previousAgents', () => {
+    const binding = (provider: string, endedAt: string, reason: 'limit' | 'manual', requestedBy: string) => ({
+      provider, model: null, effort: null, providerSessionId: null, startedAt: null, endedAt, reason, requestedBy, carried: 'handover' as const,
+    });
+    seed(makeSession('s-01', 'S01', {
+      provider: 'claude',
+      model: 'opus',
+      previousAgents: [
+        binding('codex', new Date(2026, 9, 30, 10, 5).toISOString(), 'limit', 'human'),
+        binding('claude', new Date(2026, 9, 30, 11, 40).toISOString(), 'manual', 's-02'),
+      ],
+    }));
+    const texts = screen.getAllByTestId('chat-switch-divider').map((item) => item.textContent);
+    expect(texts).toEqual([
+      'Continued on Claude Code (codex: usage limit)'.replace('Claude Code', 'Claude Code · 10:05').replace('codex', 'Codex'),
+      'Continued on Claude Code · opus · 11:40 (Claude Code: switched by @s02)',
+    ]);
+  });
+});

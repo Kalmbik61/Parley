@@ -166,6 +166,11 @@ export interface UsageWindow {
 export interface UsageLedgerOptions {
   /** Учитывать только наблюдения внутри окон. Нет — весь лог, как раньше. */
   windows?: readonly UsageWindow[];
+  /**
+   * Нативные id ответов (`msg:…`), уже учтённые в прежних отрезках сессии (спека передачи 5.9): форк несёт копии
+   * прежних ответов, и окно по времени их не отсекает, если время переписано. Такие наблюдения пропускаются.
+   */
+  excludeIds?: ReadonlySet<string>;
 }
 
 /** Окно в миллисекундах. */
@@ -293,6 +298,7 @@ export function createUsageLedger(options: UsageLedgerOptions = {}) {
         }
         if (!inside(spans, t)) return;
       }
+      if (observation.kind === 'delta' && options.excludeIds?.has(observation.id) === true) return;
       if (observation.at !== null && (lastAt === null || observation.at > lastAt)) lastAt = observation.at;
       if (observation.child === true) descendants = true;
 

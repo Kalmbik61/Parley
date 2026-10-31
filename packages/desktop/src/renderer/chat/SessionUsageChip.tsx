@@ -6,7 +6,7 @@
 import { Fragment } from 'react';
 import type { LiveMetrics } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
-import { knownTokens, usageCells, usageChipText, usageMarks } from '../lib/usage-format.js';
+import { knownTokens, usageCells, usageChipText, segmentLine, usageMarks } from '../lib/usage-format.js';
 import { Button } from '../ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
 
@@ -21,6 +21,8 @@ export function SessionUsageChip({ metrics }: { metrics: LiveMetrics }): JSX.Ele
         ? '—'
         : `↑${knownTokens(metrics.tokensIn ?? 0)} ↓${knownTokens(metrics.tokensOut ?? 0)}`;
   const cells = usage !== undefined ? usageCells(usage) : [knownTokens(metrics.tokensIn), knownTokens(metrics.tokensOut), '?', '?'];
+  // Сессию переводили на другого агента: расход по отрезкам, затем итог как раньше. Один отрезок — прежний вид.
+  const segments = metrics.usageSegments !== undefined && metrics.usageSegments.length >= 2 ? metrics.usageSegments : null;
   const marks = usage === undefined ? [] : usageMarks(usage);
   return (
     <Popover>
@@ -33,6 +35,15 @@ export function SessionUsageChip({ metrics }: { metrics: LiveMetrics }): JSX.Ele
         <p className="mb-2 font-medium">
           {U.title} · {U.sessionScope}
         </p>
+        {segments === null ? null : (
+          <ul data-testid="chat-usage-segments" className="mb-2 flex list-none flex-col gap-1 p-0">
+            {segments.map((segment, index) => (
+              <li key={index} className="m-0 break-words text-muted-foreground">
+                {segmentLine(segment)}
+              </li>
+            ))}
+          </ul>
+        )}
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1">
           {U.columns.map((column, index) => (
             <Fragment key={column}>

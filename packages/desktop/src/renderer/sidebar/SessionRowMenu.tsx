@@ -29,9 +29,12 @@ import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { splitGroup } from '../layout/tree.js';
+import { cn } from '../lib/cn.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { useReviewStore } from '../review/store.js';
+import { useProviderMissing } from '../store/provider-missing.js';
+import { openSwitchAgent } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import {
   ContextMenu,
@@ -73,8 +76,14 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
 
   const canRename = useHostSupports('sessions.rename');
   const canSetLead = useHostSupports('rooms.setLead');
+  const canSwitch = useHostSupports('sessions.switchAgent');
+  // Провайдера сессии нет в списке окна (удалён): пункт подсвечен. Пока список не пришёл, судить рано.
+  const providerMissing = useProviderMissing(session.provider);
   const status = liveStatus(session);
   const closed = session.lifecycle === 'closed';
+  // Сессии движка autonomous заменять нельзя (спека 6.7); подсвечены те, кому нужен другой аккаунт.
+  const canContinueElsewhere = canSwitch && !closed && (session.workspace ?? null) === null;
+  const needsSwitch = session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in' || providerMissing;
   const label = sessionRowLabel(session.id, session.label);
   const ref = { projectPath, workId, sessionId: session.id };
   // Ошибки управления сессией — как у прежнего меню: в консоль, строка сама покажет исход.
@@ -175,6 +184,16 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           ) : null}
           {room !== undefined && !room.lead && !closed && canSetLead ? (
             <ContextMenuItem onSelect={() => makeLead(room.id)}>{S.sidebar.sessionMenu.makeLead}</ContextMenuItem>
+          ) : null}
+          {canContinueElsewhere ? (
+            <ContextMenuItem
+              data-session-action="continue-elsewhere"
+              data-highlight={needsSwitch ? 'true' : undefined}
+              className={cn(needsSwitch && 'font-medium text-ring')}
+              onSelect={() => openSwitchAgent(ref)}
+            >
+              {S.sidebar.sessionMenu.continueElsewhere}
+            </ContextMenuItem>
           ) : null}
           <ContextMenuItem onSelect={openChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
           {worktree !== null ? (

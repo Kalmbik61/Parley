@@ -863,7 +863,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   // ── Карточки согласия на папку ─────────────────────────────────────────────────────────────────
 
   /** `S03 Ruslan (agent)`; без названной сессии — только источник запуска. */
-  const consentLabel = ({ requestedBy }: ConsentCard): string => {
+  const consentLabel = (card: ConsentCard): string => {
+    if (card.kind === 'agent-switch') return card.requestedBy.label;
+    const { requestedBy } = card;
     const who = requestedBy.label ?? requestedBy.sessionId;
     return who === undefined ? requestedBy.source : `${who} (${requestedBy.source})`;
   };
@@ -924,13 +926,14 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const decision = code === CALLBACK_CODES.allow ? 'allow' : 'deny';
     deciding.add(record.consentId);
     let result: { applied: boolean; state: ConsentCard['state'] };
+    const isSwitch = deps.consents.list().some((card) => card.id === record.consentId && card.kind === 'agent-switch');
     try {
       result = await deps.consents.decide(record.consentId, decision);
     } finally {
       deciding.delete(record.consentId);
     }
     state.audit({ kind: 'decision', shortId, result: result.applied ? decision : `not applied (${result.state})` });
-    closeCard(shortId, !result.applied ? T.answeredAtMac : decision === 'allow' ? T.trusted : T.denied);
+    closeCard(shortId, !result.applied ? T.answeredAtMac : decision === 'allow' ? (isSwitch ? T.switchAllowed : T.trusted) : T.denied);
   }
 
   // ── Входящие ────────────────────────────────────────────────────────────────────────────────────

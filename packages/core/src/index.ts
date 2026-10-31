@@ -369,6 +369,8 @@ export type { HostLease } from './work/lease.js';
 export { decisionsOf, participantLabel, sessionMention, sessionTag, threadOf } from './work/thread.js';
 export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
+export { appendAgentBinding, applyAgentSwitch, PREVIOUS_AGENTS_MAX, switchBlockers } from './work/agent-switch.js';
+export type { AgentTarget } from './work/agent-switch.js';
 export {
   applyAutoTitle,
   autoTitleOf,
@@ -420,6 +422,8 @@ export {
   summaryPrompt,
 } from './work/summary.js';
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
+export { collectHandover, formatHandover, HANDOVER_BUDGET } from './work/handover.js';
+export type { HandoverInput } from './work/handover.js';
 export { readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
@@ -646,6 +650,7 @@ export type {
   WorkMap,
   WorkProvider,
   WorkSession,
+  AgentBinding,
   CodexThreadBinding,
   WorkStatus,
   WorksIndex,
@@ -799,12 +804,15 @@ export {
 export type { ClaudeSidechain, UsageLedger } from './work/usage-observations.js';
 export {
   DEFAULT_TIMELINE_READER,
+  claudeCostIn,
+  claudeDeltaIdsIn,
   claudeUsageFromTimelines,
   codexUsageFromTimeline,
   extendUsageTimeline,
 } from './work/usage-timeline.js';
 export type { SubagentTimeline, TimelineReader, UsageTimeline } from './work/usage-timeline.js';
 export { roomUsage } from './work/room-usage.js';
+export { bindingUsage, currentSegmentUsage, sumSegments } from './work/usage-segments.js';
 export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';
 export { MODEL_MOODS, matchConfirm, normalizePhrase, normalizeSentText, splitMood } from './assistant/text.js';
 export type { AssistantLanguage, AssistantMood, ConfirmAnswer, MoodSplit } from './assistant/text.js';

@@ -899,6 +899,131 @@ describe('WakeService: подъём спящей письмом', () => {
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
   }, 20_000);
 
+  it('5-pm: провайдера сессии нет в реестре — письмо ждёт provider-missing: ни запуска, ни слота часа, ни resume-failed, ни писем отправителям', async () => {
+    const { workId, target } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.provider = 'custom-claude-2';
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const limiter = new ResumeLimiter(() => 6);
+    const launch = vi.fn();
+    const { sessions, activity } = await resumeRig({ limiter }, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+
+    await sendLetter(workId, target);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'provider-missing', 5000);
+    await settle(300);
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(sessions.live(ref)).toBe(false);
+    expect(notices('resume-failed')).toHaveLength(0);
+    expect(notices('resume-limit')).toHaveLength(0);
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const map = readStoredMap(project, workId);
+    expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+    expect(JSON.stringify(map)).not.toContain('did not resume');
+  }, 20_000);
+
+  it('5-sw: идёт замена агента — письмо не поднимает сессию, ожидание resuming; switched после замены — подъём (спека замены 6.3)', async () => {
+    const { workId, target } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.switching = { id: 'sw-1', to: 'codex', since: new Date().toISOString() };
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn(async () => 'started' as const);
+    const { activity, wake } = await resumeRig({}, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+
+    await sendLetter(workId, target);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'resuming', 5000);
+    await settle(300);
+    expect(launch).not.toHaveBeenCalled();
+    expect(notices('resume-failed')).toHaveLength(0);
+
+    // Замена кончилась (оркестратор снял `switching`): письмо поднимает сессию обычным путём.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.switching = null;
+    });
+    await waitFor(() => readStoredMap(project, workId).sessions.find((s) => s.id === target)?.switching === null, 5000);
+    await settle(200);
+    wake.switched(ref);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', expect.objectContaining({ by: 'wake' }));
+  }, 20_000);
+
+  it('5-sw2: после замены прежний «поднять нечем» не мешает следующему подъёму', async () => {
+    const { workId, target, providerSessionId } = await sleepingPair();
+    // Прежний агент без разговора у провайдера: подъёму письмом нечем — resumeUnavailable.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.providerSessionId = null;
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn(async () => 'started' as const);
+    const { activity, wake } = await resumeRig({}, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+    await sendLetter(workId, target);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(200);
+    expect(launch).not.toHaveBeenCalled();
+
+    // Новый агент записан с разговором (как после замены): без `switched` удержание осталось бы до живого процесса.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session !== undefined) session.providerSessionId = providerSessionId;
+    });
+    await settle(300);
+    expect(launch).not.toHaveBeenCalled();
+    wake.switched(ref);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 20_000);
+
+  it('5-sw3: письмо поднимает сессию, ждущую нового агента после отказа замены (ревью №8) — подъём без указателя в argv', async () => {
+    const { workId, target, providerSessionId } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((s) => s.id === target);
+      if (session === undefined) return;
+      session.previousAgents = [{
+        provider: 'claude', model: null, effort: null, providerSessionId, startedAt: null, endedAt: new Date().toISOString(),
+        reason: 'limit', requestedBy: 'human', carried: 'handover',
+      }];
+      session.providerSessionId = null;
+    });
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, (real) => {
+      const spy = Object.create(real) as SessionsService;
+      spy.launch = launch;
+      return spy;
+    });
+    await sendLetter(workId, target);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    // `launch` сессий сам переведёт подъём в запуск с пакетом; указатель уйдёт после первого простоя, не в argv.
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake' });
+  }, 20_000);
+
+  it('5-pm2: битый providers.json не роняет хост (ревью №3): провайдер считается на месте, подъём отчитывается сбоем', async () => {
+    const { workId, target } = await sleepingPair();
+    await writeFile(path.join(home, 'providers.json'), '{ not json');
+    const ref = { projectPath: project, workId, sessionId: target };
+    const { activity } = await resumeRig();
+    await sendLetter(workId, target);
+    await waitFor(() => notices('resume-failed').length > 0, 8000);
+    expect(activity.get(ref)?.metrics?.mailWaiting).not.toBe('provider-missing');
+  }, 20_000);
+
   it('5: седьмой подъём за час — письмо ждёт, приходит resume-limit один раз', async () => {
     const { workId, target } = await sleepingPair();
     const ref = { projectPath: project, workId, sessionId: target };

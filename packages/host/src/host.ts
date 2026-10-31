@@ -1,5 +1,6 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
+import { AGENT_SWITCH_PATH, createSwitchEndpoint } from './agent/switch-endpoint.js';
 import { AGENT_SWARMS_PATH, createSwarmEndpoint } from './agent/swarm-endpoint.js';
 import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
 import { hostToolContext, mapChangeSignal, turnBoundarySource } from './agent/tool-context.js';
@@ -23,6 +24,9 @@ import {
   isStaleHostLock,
   loadConfig,
   loadProviders,
+  PARLEY,
+  providerLabel,
+  updateMap,
   migrateMapsToDb,
   migrateProjects,
   parleyHome,
@@ -394,6 +398,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
+  // Просьба агента продолжить сессию на другом провайдере (спека замены агента, 5.5): только карточка согласия.
+  const switchEndpoint = createSwitchEndpoint({
+    authenticate: (req) => browserEndpoint.authenticate(req),
+    readMap: (ref) => readMap(ref.projectPath, ref.workId),
+    providerLabel: async (provider) => {
+      const entry = (await loadProviders())[provider];
+      return entry === undefined ? null : providerLabel(entry);
+    },
+    request: (input) => {
+      consentsService.requestSwitch(input);
+    },
+  });
   const swarmEndpoint = createSwarmEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
@@ -450,7 +466,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -496,7 +512,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launch: (ref, mode, launchOptions) => sessionsService.launch(ref, mode, launchOptions),
       close: (ref) => sessionsService.close(ref),
       retry: (ref) => wakeService.retry(ref),
+      switched: (ref) => wakeService.switched(ref),
     }),
+    // `allow` карточки `agent-switch`: замена от имени человека; ошибка уходит просившему письмом и окну уведомлением.
+    switchAgent: (ref, request) => sessionsService.switchAgent(ref, request),
+    tellRequester: async (ref, to, text) => {
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
+        if (!map.sessions.some((session) => session.id === to && session.lifecycle !== 'closed')) return;
+        letters.add({ roomId: null, from: PARLEY, to: [to], text, kind: 'note', at: new Date().toISOString() });
+      });
+    },
+    noticeFailure: (ref, text) => {
+      handle.context.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+    },
     // Держать больше нечего: процесс уже идёт, сессия закрыта, запущена другим путём или исчезла вместе с работой.
     isLive: async (ref: SessionRef): Promise<boolean> => {
       if (ptyManager.get(ref) !== undefined) return true;
@@ -531,6 +559,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           browserEndpoint.unregister(ref);
           toolsEndpoint.forget(ref);
         },
+      },
+      // Замена агента (спека 2026-10-30): эпизод «застрял» закрывается молча, будильник (создан ниже) забывает прежний
+      // подъём, подсказка цели — те же вошедшие аккаунты и лимиты, что в письме о лимите.
+      takeover: {
+        stuck: stuckService,
+        wake: () => wakeService,
+        alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: (id) => authService.status(id) }),
+        limits: (provider) => limitsService.get(provider),
       },
     },
   );
@@ -841,6 +877,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // посреди хода, прерваны падением прошлого хоста (спека 10).
     await sessionsService.collectInterrupted().catch((error: unknown) => {
       log.error('список прерванных сессий не собрался', { error: String(error) });
+    });
+    // Замена агента, оборванная прежним хостом: `switching` в карте снимается до того, как будильник начнёт будить.
+    await sessionsService.clearStaleSwitches().catch((error: unknown) => {
+      log.error('оборванные замены агента не снялись', { error: String(error) });
     });
     // После сбора прерванных, а не сразу после чтения: sessions.interrupted тоже ждёт этих ворот
     // (раунд lane-r4, п. 4) — иначе окно на старте получало пустой список и баннера не было.

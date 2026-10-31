@@ -14,6 +14,8 @@ export interface HeldLaunchDeps {
   close(ref: SessionRef): Promise<void>;
   /** Пересчёт сессии будильником (`WakeService.retry`). */
   retry(ref: SessionRef): void;
+  /** Будильник забывает подъём прежнего агента (`WakeService.switched`): замена окончена отказом в папке. */
+  switched?(ref: SessionRef): void;
 }
 
 export function createHeldLaunchActions(deps: HeldLaunchDeps): {
@@ -38,10 +40,19 @@ export function createHeldLaunchActions(deps: HeldLaunchDeps): {
       if (hold.mode !== 'launch') return;
       const { ref } = hold;
       let open = false;
+      let switched = false;
       await updateMap(ref.projectPath, ref.workId, (map, letters) => {
         const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
         // Сессии уже нет или её закрыли за время ожидания: отказывать нечему.
         if (session === undefined || session.lifecycle === 'closed') return;
+        // Закрывается только сессия, которая ни разу не запускалась. Новый агент после замены (спека замены агента, 5.3)
+        // — уже нет: и с `switching`, и после перезапуска хоста, который его снял, отказ в папке её не закрывает. Она
+        // спит с новым провайдером, и человек продолжит её на другом провайдере или поднимет позже.
+        if (session.lifecycle !== 'pending' || (session.previousAgents?.length ?? 0) > 0) {
+          switched = (session.previousAgents?.length ?? 0) > 0;
+          session.switching = null;
+          return;
+        }
         open = true;
         setResult(map, ref.sessionId, 'failed');
         // Создатель — родитель записи или тот, чей id пришёл как `by` (`create_session` ставит его); у запуска человека
@@ -52,6 +63,7 @@ export function createHeldLaunchActions(deps: HeldLaunchDeps): {
         }
       });
       if (open) await deps.close(ref);
+      if (switched) deps.switched?.(ref);
     },
   };
 }

@@ -886,3 +886,29 @@ describe('swarms.* — рой из окна (спека роя v1, 6)', () => {
     expectTypeOf<'swarm-done' | 'swarm-failed'>().toExtend<import('./types.js').NoticeKind>();
   });
 });
+
+describe('sessions.switchOptions / sessions.switchAgent', () => {
+  const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+  const requestId = '3f2b8c1e-5a4d-4e6f-9b7a-1c2d3e4f5a6b';
+  const parse = (v: unknown) => METHODS['sessions.switchAgent'].safeParse(v);
+  it('switchOptions принимает только ref', () => {
+    expect(METHODS['sessions.switchOptions'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['sessions.switchOptions'].safeParse({}).success).toBe(false);
+  });
+  it('валидные параметры разбираются; без carry — handover', () => {
+    const r = parse({ ref, requestId, provider: 'codex' });
+    expect(r.success && r.data.carry).toBe('handover');
+    const full = parse({ ref, requestId, provider: 'claude', model: null, effort: 'high', carry: 'transcript', force: true });
+    expect(full.success && full.data.carry).toBe('transcript');
+  });
+  it('кривой requestId, провайдер, carry и effort отклоняются', () => {
+    expect(parse({ ref, requestId: 'nope', provider: 'codex' }).success).toBe(false);
+    expect(parse({ ref, requestId, provider: '' }).success).toBe(false);
+    expect(parse({ ref, requestId, provider: 'codex', carry: 'x' }).success).toBe(false);
+    expect(parse({ ref, requestId, provider: 'codex', effort: 'High!' }).success).toBe(false);
+  });
+  it('результат switchAgent и тип лимитов цели', () => {
+    expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held'>();
+    expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['limits']>().toEqualTypeOf<ProviderLimits | null>();
+  });
+});

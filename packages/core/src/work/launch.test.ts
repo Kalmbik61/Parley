@@ -1014,6 +1014,30 @@ describe('план возобновления', () => {
       }
     });
 
+    it('корень цели: транскрипт только в чужом корне — для custom-* разговора нет', async () => {
+      await writeCustomProviders(
+        [{ id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+          models: { opus: 'a', sonnet: 'b', haiku: 'c', subagent: 'b' }, contextWindow: null, linkClaude: false }],
+        customProvidersFile(),
+      );
+      setEnv('PARLEY_CLAUDE_PROJECTS_DIR', undefined);
+      const fakeHome = await mkdtemp(path.join(tmpdir(), 'parley-claude-home-'));
+      try {
+        setEnv('HOME', fakeHome);
+        setEnv('CLAUDE_CONFIG_DIR', undefined);
+        // Свой корень провайдера прочитан и пуст; транскрипт лежит в корне `~/.claude`.
+        await mkdir(path.join(home, 'providers', 'custom-local', 'projects', '-p'), { recursive: true });
+        await mkdir(path.join(fakeHome, '.claude', 'projects', '-p'), { recursive: true });
+        await writeFile(path.join(fakeHome, '.claude', 'projects', '-p', `${id}.jsonl`), '{"type":"user"}\n');
+        const { workId, sessionId } = await pending('custom-local');
+        await withId(workId, sessionId);
+        const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(plan.args).not.toContain('--resume');
+      } finally {
+        await rm(fakeHome, { recursive: true, force: true });
+      }
+    });
+
     it('ни один корень истории не прочитать — ответа нет, остаётся --resume', async () => {
       setEnv('PARLEY_CLAUDE_PROJECTS_DIR', path.join(logs, 'нет-такого-каталога'));
       const { workId, sessionId } = await pending('claude');
@@ -3191,4 +3215,89 @@ it('refuses autonomous Claude roles that require native permission delivery', as
   session.role = { source: 'claude', name: 'native-reviewer' };
   const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
   await expect(planLaunch(project, workId, session, { roleCatalog })).rejects.toThrow('confinement-unavailable');
+});
+
+describe('ревизия агента в окружении запуска (спека передачи сессии 6.1)', () => {
+  it('переведённая сессия несёт ревизию из карты в окружение процесса и сервера MCP: Claude и Codex', async () => {
+    for (const provider of ['claude', 'codex'] as const) {
+      const { workId, sessionId } = await pending(provider);
+      await updateMap(project, workId, (map) => {
+        map.sessions.find((session) => session.id === sessionId)!.agentRevision = 'rev-switch';
+      });
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.env.PARLEY_AGENT_REVISION).toBe('rev-switch');
+      expect(plan.env.HARNAS_AGENT_REVISION).toBe('rev-switch');
+      const env =
+        provider === 'claude'
+          ? JSON.parse(await readFile(plan.args[plan.args.indexOf('--mcp-config') + 1] as string, 'utf8')).mcpServers.parley.env
+          : (parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> }).env;
+      expect(env.PARLEY_AGENT_REVISION).toBe('rev-switch');
+    }
+  });
+
+  it('сессия без замены — без переменной', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_REVISION');
+    const config = JSON.parse(await readFile(plan.args[plan.args.indexOf('--mcp-config') + 1] as string, 'utf8'));
+    expect(config.mcpServers.parley.env).not.toHaveProperty('PARLEY_AGENT_REVISION');
+  });
+});
+
+describe('launch с пакетом передачи', () => {
+  const handover = 'HANDOVER: предыдущий агент сделал шаги 1–2';
+
+  it('launch: бриф и пакет первым сообщением через пустую строку', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), { handover });
+    const first = plan.args.at(-1) ?? '';
+    expect(first).toContain('прогнать e2e');
+    expect(first.indexOf('прогнать e2e')).toBeLessThan(first.indexOf(handover));
+    expect(first).toContain(`\n\n${handover}`);
+  });
+
+  it('тихая сессия: первым сообщением уходит один пакет', async () => {
+    const { workId, session } = await createNewSession(project, null);
+    const plan = await planLaunch(project, workId, await sessionOf(workId, session.id), { handover });
+    expect(plan.args.at(-1)).toBe(handover);
+  });
+
+  it('resume и new игнорируют пакет', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const resumed = await planResume(project, workId, await sessionOf(workId, sessionId), { handover });
+    expect(resumed.args.join('\n')).not.toContain(handover);
+    const created = await createNewSession(project, null);
+    const fresh = await planNew(project, created.workId, await sessionOf(created.workId, created.session.id), { handover });
+    expect(fresh.args.join('\n')).not.toContain(handover);
+  });
+
+  it('providerSessionId: null — уходит новый uuid', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), { handover });
+    expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe(plan.providerSessionId);
+  });
+});
+
+describe('resume форком чужого разговора (спека передачи сессии, 5.4.1)', () => {
+  const source = '11111111-2222-4333-8444-555555555555';
+
+  it('forkFrom: --resume <источник> --fork-session --session-id <новый>, новый id в плане, указатель первым ходом', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), { forkFrom: source, prompt: 'You continue here.' });
+    const at = plan.args.indexOf('--resume');
+    expect(plan.args.slice(at, at + 5)).toEqual(['--resume', source, '--fork-session', '--session-id', plan.providerSessionId]);
+    expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(plan.providerSessionId).not.toBe(source);
+    expect(plan.args.at(-1)).toBe('You continue here.');
+  });
+
+  it('forkFrom не у Claude Code и не в resume — обычный запуск', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const launched = await planLaunch(project, workId, await sessionOf(workId, sessionId), { forkFrom: source });
+    expect(launched.args).not.toContain('--fork-session');
+    const codex = await pending('codex');
+    const resumed = await planResume(project, codex.workId, await sessionOf(codex.workId, codex.sessionId), { forkFrom: source });
+    expect(resumed.args).not.toContain('--fork-session');
+  });
 });

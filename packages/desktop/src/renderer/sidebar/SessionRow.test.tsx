@@ -19,6 +19,7 @@ import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';
 import { useHostStore } from '../store/host.js';
 import { useNoticesStore } from '../store/notices.js';
+import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeNeed, makeSession } from '../test-utils/work-fixtures.js';
@@ -1053,5 +1054,23 @@ describe('SessionRow — Rename (поле на месте ярлыка)', () => 
     fireEvent.contextMenu(row());
     expect(screen.queryByText('Rename')).toBeNull();
     expect(screen.getByText('Open')).toBeTruthy();
+  });
+});
+
+describe('SessionRow — провайдер удалён', () => {
+  afterEach(() => useProvidersStore.setState({ providers: [], loaded: false }));
+
+  it('провайдера сессии нет в списке — значок «Provider removed»; есть в списке или список не пришёл — нет', () => {
+    const mark = (): HTMLElement | null => document.querySelector('[data-provider-missing]');
+    const claude = { id: 'claude', label: 'Claude Code', available: true, version: null, limits: null } as never;
+    renderRow(makeSession('s-01', 'plan', { provider: 'codex' }));
+    expect(mark()).toBeNull();
+    cleanup();
+    useProvidersStore.setState({ providers: [claude], loaded: true });
+    renderRow(makeSession('s-01', 'plan', { provider: 'codex' }));
+    expect(mark()?.getAttribute('title')).toBe('Provider removed');
+    cleanup();
+    renderRow(makeSession('s-01', 'plan', { provider: 'claude' }));
+    expect(mark()).toBeNull();
   });
 });

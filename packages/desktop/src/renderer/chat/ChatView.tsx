@@ -68,7 +68,7 @@ import type { FeedItem } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey, type ModelOption, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { errorText, S } from '../../shared/strings.js';
+import { errorText, providerName, S } from '../../shared/strings.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
@@ -82,6 +82,7 @@ import { sessionRowLabel } from '../lib/participant.js';
 import { activityFor, useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostConfigStore } from '../store/config.js';
 import { trustCardFor, useConsentsStore } from '../store/consents.js';
+import { useProviderMissing } from '../store/provider-missing.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -102,7 +103,7 @@ import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
-import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-model.js';
+import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { pasteClipboardImage } from './paste-image.js';
@@ -112,6 +113,7 @@ import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
+import { SwitchBanner, switchBannerKind } from './SwitchBanner.js';
 import { WaitingBanner } from './WaitingBanner.js';
 
 export interface ChatViewProps {
@@ -154,6 +156,7 @@ function useHeldFor(condition: boolean, delayMs: number): boolean {
 }
 
 const NO_ITEMS: readonly FeedItem[] = [];
+const NO_DIVIDERS: readonly SwitchDivider[] = [];
 const NO_QUEUED: readonly Queued[] = [];
 const NO_MODELS: readonly ModelOption[] = [];
 const NO_PATHS: readonly string[] = [];
@@ -209,6 +212,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
+  const canSwitch = useHostSupports('sessions.switchAgent');
+  const providerMissing = useProviderMissing(provider);
+  const providerList = useProvidersStore((state) => state.providers);
+  const providerLabel = useCallback((id: string): string => providerName(id, providerList.find((item) => item.id === id)?.label ?? ''), [providerList]);
+  const switchKind = canSwitch && session !== undefined ? switchBannerKind(session, providerMissing) : null;
+  const dividers = useMemo(() => (session === undefined ? NO_DIVIDERS : switchDividers(session, providerLabel)), [session, providerLabel]);
   const canSetMode = useHostSupports('sessions.setMode');
   const canInterrupt = useHostSupports('feed.interrupt');
   const canSetModel = useHostSupports('sessions.setModel');
@@ -476,6 +485,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         <ImagePreviewHost bridge={bridge} sessionKey={sessionKey} visible={visible}>
           <FeedList
             items={items}
+            dividers={dividers}
             viaIds={viaIds}
             queued={queued}
             outbox={outbox}
@@ -489,6 +499,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           />
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
+        {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (

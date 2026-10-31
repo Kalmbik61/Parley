@@ -98,12 +98,22 @@ interface Posting {
   letter: string | null;
 }
 
+export interface StuckService {
+  start(): void;
+  stop(): void;
+  /**
+   * Агента сессии заменили (спека замены агента, 6.4): эпизод кончается молча — `stuck` снят, без «is back» в комнату и
+   * без писем; о замене пишет сам оркестратор. Идёт в той же очереди, что и события активности сессии.
+   */
+  endBySwitch(ref: SessionRef): Promise<void>;
+}
+
 export function createStuckService(
   host: HostContext,
   works: WorksService,
   activity: ActivityService,
   options: StuckServiceOptions = {},
-): { start(): void; stop(): void } {
+): StuckService {
   const reportMs = options.reportMs ?? STUCK_REPORT_MS;
   const now = options.now ?? Date.now;
   const alternatives =
@@ -335,6 +345,30 @@ export function createStuckService(
       seen.clear();
       withoutNeed.clear();
       chains.clear();
+    },
+    endBySwitch(ref) {
+      const key = refKey(ref);
+      const end = async (): Promise<void> => {
+        const episode = episodes.get(key);
+        if (episode !== undefined) {
+          clearTimeout(episode.timer);
+          episodes.delete(key);
+        }
+        await write(ref, (_map, session) => {
+          session.stuck = null;
+        });
+      };
+      // Служба остановлена — очереди нет, но `stuck` в карте всё равно снимается.
+      if (unsubscribe === undefined) return end();
+      return new Promise<void>((resolve) => {
+        enqueue(key, async () => {
+          try {
+            await end();
+          } finally {
+            resolve();
+          }
+        });
+      });
     },
   };
 }

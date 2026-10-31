@@ -134,21 +134,29 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
         {usage === null ? (
           <p className="text-muted-foreground">{failed ? U.unavailable : U.counting}</p>
         ) : (
-          <UsageTable usage={usage} labels={labels} onCopy={copy} onRefresh={refresh} loading={loading} />
+          <UsageTable usage={usage} entry={entry} labels={labels} onCopy={copy} onRefresh={refresh} loading={loading} />
         )}
       </PopoverContent>
     </Popover>
   );
 }
 
+/** У переведённой на другого агента сессии — пометка «N segments»; расход по отрезкам виден в её чате. */
+function segmentMark(entry: WindowWorkEntry, sessionId: string): string[] {
+  const previous = entry.map.sessions.find((session) => session.id === sessionId)?.previousAgents?.length ?? 0;
+  return previous > 0 ? [U.segments(previous + 1)] : [];
+}
+
 function UsageTable({
   usage,
+  entry,
   labels,
   onCopy,
   onRefresh,
   loading,
 }: {
   usage: RoomUsage;
+  entry: WindowWorkEntry;
   labels: UsageLabels;
   onCopy: () => void;
   onRefresh: () => void;
@@ -202,7 +210,7 @@ function UsageTable({
             key={member.sessionId}
             label={labels.memberName(member)}
             tags={labels.memberTags(member)}
-            marks={memberMarks(member)}
+            marks={[...memberMarks(member), ...segmentMark(entry, member.sessionId)]}
             counters={member.usage}
           />
         ))}

@@ -581,14 +581,39 @@ export function isCreatedDescendant(map: WorkMap, ancestor: string, id: string):
   return false;
 }
 
-/** Владение не меняет состав, ведущего или историю участия. */
-export function setRoomOwner(map: WorkMap, roomId: string, sessionId: string | null): void {
+/**
+ * Владение не меняет состав, ведущего или историю участия. Когда человек передаёт комнату сессии (или забирает у неё),
+ * в ленту ложится строка, а новому владельцу и прежнему живому — письма `parley` (по образцу `setRoomLead`).
+ */
+export function setRoomOwner(
+  map: WorkMap,
+  roomId: string,
+  sessionId: string | null,
+  letters?: LetterTx,
+  at = new Date().toISOString(),
+): LeadChange | null {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
   if (sessionId !== null && !map.sessions.some((session) => session.id === sessionId)) {
     throw new RoomRuleError(`owner ${sessionId} is not in the map`);
   }
+  const previous = room.ownerId ?? null;
   room.ownerId = sessionId;
+  if (letters === undefined || previous === sessionId) return null;
+  const isLive = (id: string | null): id is string =>
+    id !== null && map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');
+  const text = sessionId === null ? 'The room has no owner now' : `${sessionMention(sessionId)} is now the owner`;
+  const line = addSystemMessage(map, letters, roomId, text, at);
+  const where = `room ${room.id} "${room.title}"`;
+  const notes: Message[] = [];
+  if (isLive(sessionId)) {
+    notes.push(parleyNote(map, letters, roomId, sessionId, `You now own ${where}: the human made you the owner.`, at));
+  }
+  if (isLive(previous)) {
+    const who = sessionId === null ? 'nobody' : sessionMention(sessionId);
+    notes.push(parleyNote(map, letters, roomId, previous, `${who} now owns ${where}: the human changed the owner.`, at));
+  }
+  return { line, letters: notes };
 }
 
 export function canReadRoom(room: Room, sessionId: string): boolean {

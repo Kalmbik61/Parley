@@ -37,7 +37,7 @@ import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 import { limitAlternatives } from './limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck-service.js';
-import type { StuckServiceOptions } from './stuck-service.js';
+import type { StuckService, StuckServiceOptions } from './stuck-service.js';
 
 let home = '';
 let project = '';
@@ -166,7 +166,7 @@ async function makeWork(
   return ids;
 }
 
-function boot(options: StuckServiceOptions = {}): { stop(): void } {
+function boot(options: StuckServiceOptions = {}): StuckService {
   const service = createStuckService(fakeHost(), fakeWorks, fakeActivity, options);
   service.start();
   stoppers.push(() => service.stop());
@@ -617,6 +617,25 @@ describe('служба «застрял» — смена внутри эпизо
     const map = readStoredMap(project, workId);
     expect(lines(map).map((line) => line.text).at(-1)).toBe(backLine(worker, 'limit'));
     expect(letters(map).at(-1)).toMatchObject({ to: [lead], roomId: 'r-01', text: backLetter(worker, 'limit') });
+  });
+
+  it('замена агента (endBySwitch): эпизод лимита кончается молча — stuck снят, ни «back», ни писем; новый агент active — тоже тишина', async () => {
+    const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map));
+    const service = boot({ alternatives: async () => [] });
+    await emit(worker, needOf('limit'));
+    await until(async () => (await stuckOf(worker)) != null);
+    const before = readStoredMap(project, workId);
+    const linesBefore = lines(before).length;
+    const lettersBefore = letters(before).length;
+
+    await service.endBySwitch(refOf(worker));
+    expect(await stuckOf(worker)).toBeNull();
+    // Новый агент уже идёт и без нужды: эпизода нет — «back» писать не о чем.
+    await emit(worker, null);
+    const map = readStoredMap(project, workId);
+    expect(lines(map)).toHaveLength(linesBefore);
+    expect(letters(map)).toHaveLength(lettersBefore);
+    expect(lines(map).some((line) => line.text.includes('is back'))).toBe(false);
   });
 
   it('вход и экран старта: «back» тоже с письмом', async () => {

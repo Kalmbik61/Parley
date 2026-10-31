@@ -192,6 +192,17 @@ export const METHODS = {
   // Смена модели идущей сессии из меню чата (нормалайзер модели и effort, 5.8): то же одно слово, что у
   // `sessions.create`, но непустое. Список моделей сверяет хост (`bad_request`).
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
+  // Замена агента сессии (спека 2026-10-30, 5.2): какие цели есть и что сессия сохранит; сама замена.
+  'sessions.switchOptions': z.object({ ref: sessionRef }),
+  'sessions.switchAgent': z.object({
+    ref: sessionRef,
+    requestId: z.string().uuid(),
+    provider: z.string().min(1),
+    model: z.string().max(200).nullable().optional(),
+    effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
+    carry: z.enum(['handover', 'transcript']).default('handover'),
+    force: z.boolean().optional(),
+  }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
   'capabilities.get': z.object({ projectPath: z.string().min(1) }).strict(),
@@ -456,6 +467,24 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
    * переписал в карте.
    */
   'sessions.setModel': { model: string; effort: string | null; restarted: boolean };
+  /** Цели замены агента; `suggested` — предвыбор окна (спека 2026-10-30, 5.2 и 6.10); `blockers` пуст — замена возможна. */
+  'sessions.switchOptions': {
+    current: { provider: string; available: boolean; reason: 'limit' | 'sign-in' | 'provider-missing' | null };
+    targets: Array<{
+      id: string;
+      label: string;
+      family: string | null;
+      available: boolean;
+      needs: string | null;
+      limits: ProviderLimits | null;
+      transcript: boolean;
+    }>;
+    suggested: string | null;
+    keeps: { rooms: number; leads: string[]; owns: string[]; children: number; unread: number; worktree: string | null };
+    blockers: string[];
+  };
+  /** `held` — запуск ждёт согласия (папка Codex); `carried` — как передан контекст. */
+  'sessions.switchAgent': { outcome: 'started' | 'held'; carried: 'handover' | 'transcript' };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;

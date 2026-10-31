@@ -144,4 +144,37 @@ describe('ConsentPrompt', () => {
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  describe('agent-switch', () => {
+    const switchCard = (id: string): ConsentCard => ({
+      id, kind: 'agent-switch', projectPath: '/tmp/p', ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-03' },
+      provider: 'codex', providerLabel: 'Codex', model: null, reason: 'the Claude limit is near',
+      requestedBy: { sessionId: 's-11', label: 'Greta' }, at: '2026-10-30T10:00:00.000Z', state: 'pending',
+    });
+
+    it('диалог с просьбой агента; Allow решает allow', async () => {
+      render(<ConsentPrompt />);
+      act(() => bridge.emit('consents.changed', { upsert: [switchCard('c-05')], removed: [] }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog.textContent).toContain('Continue on another provider?');
+      expect(dialog.textContent).toContain('@s11 asks to continue @s03 on Codex: the Claude limit is near. Allow stops @s03 now and continues it there.');
+      fireEvent.click(screen.getByRole('button', { name: S.dialogs.agentSwitch.allow }));
+      await flush();
+      expect(decideCalls()).toEqual([{ id: 'c-05', decision: 'allow' }]);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('Deny решает deny; Cancel не решает ничего', async () => {
+      render(<ConsentPrompt />);
+      act(() => bridge.emit('consents.changed', { upsert: [switchCard('c-05'), switchCard('c-06')], removed: [] }));
+      await screen.findByRole('dialog');
+      fireEvent.click(screen.getByRole('button', { name: S.dialogs.agentSwitch.deny }));
+      await flush();
+      expect(decideCalls()).toEqual([{ id: 'c-05', decision: 'deny' }]);
+      await screen.findByRole('dialog');
+      fireEvent.click(screen.getByRole('button', { name: S.common.cancel }));
+      await flush();
+      expect(decideCalls()).toHaveLength(1);
+    });
+  });
 });

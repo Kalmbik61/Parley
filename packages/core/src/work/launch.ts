@@ -20,9 +20,9 @@ import { prepareWorktreeGitWrites } from './worktree.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
-import { claudeProjectRoots } from '../discover.js';
+import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
-import { bothEnv } from '../names.js';
+import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
@@ -74,6 +74,17 @@ export interface LaunchOptions {
    * печатает указатель сам после первого простоя.
    */
   prompt?: string;
+  /**
+   * Пакет передачи при замене агента (спека передачи сессии, 5.4): уходит первым сообщением после брифа
+   * (у тихой сессии — единственным). Только в режиме `launch`; в `resume` и `new` игнорируется.
+   */
+  handover?: string;
+  /**
+   * Продолжение чужого разговора форком (спека передачи сессии, 5.4, 5.4.1): `resume` поднимает разговор с этим id
+   * (его транскрипт хост уже скопировал в папку провайдера) как `--resume <id> --fork-session --session-id <новый>`.
+   * Новый id — в `providerSessionId` плана. Только Claude Code и только в `resume`; шаблон без `--resume` — ошибка.
+   */
+  forkFrom?: string;
   /**
    * Явный выбор модели и усилия для запуска перекрывает выбор, записанный в карте
    * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`. Нет выбора — умолчание
@@ -186,9 +197,9 @@ async function writtenBrief(
  * (их нет, нет доступа) — разговор считается, и остаётся прежний `--resume`: новый процесс с занятым id
  * Claude Code не запустит («Session ID … is already in use»), а это хуже, чем «No conversation found».
  */
-async function claudeConversationExists(id: string): Promise<boolean> {
+async function claudeConversationExists(id: string, roots: string[] = claudeProjectRoots()): Promise<boolean> {
   let readAny = false;
-  for (const root of claudeProjectRoots()) {
+  for (const root of roots) {
     let projects: Dirent[];
     try {
       projects = await readdir(root, { withFileTypes: true });
@@ -209,6 +220,16 @@ async function claudeConversationExists(id: string): Promise<boolean> {
 }
 
 /**
+ * Корни, где искать разговор записи провайдера: известна своя папка конфигурации (аккаунт Claude, свой провайдер) —
+ * только её `projects`, чтобы транскрипт чужого аккаунта не сошёл за свой. Подмена тестов и записи без своей
+ * папки — все корни, как раньше.
+ */
+function conversationRoots(entry: ProviderEntry): string[] {
+  if (envValue(process.env, CLAUDE_PROJECTS_DIR_KEY) !== undefined) return claudeProjectRoots();
+  return entry.runner.configDir === undefined ? claudeProjectRoots() : [path.join(entry.runner.configDir, 'projects')];
+}
+
+/**
  * Как поднимается процесс: `launch` — по брифу, `resume` — по `resumeArgs`,
  * `new` — быстрая сессия без промпта вовсе (дизайн TUI v2, 5.1).
  */
@@ -225,6 +246,8 @@ async function plan(
   // Immutable for this launch and its MCP child, including resume.
   const { config: launchConfig } = await loadConfig();
   const nativeContextRevision = randomUUID();
+  // Ревизия агента — из карты, не на каждый запуск: меняет её только замена агента (спека передачи сессии 6.1).
+  const agentRevision = session.agentRevision ?? undefined;
   let entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
   // Режим одобрений пишущих ролей Codex: решение хоста (проба версии) важнее настройки; и политика, и хуки идут от него.
@@ -263,10 +286,12 @@ async function plan(
   // новый процесс по тому же брифу, запись в карте остаётся прежней. Id Claude Code харнесс выдаёт
   // сам (`--session-id`) ещё на запуске, а транскрипт появляется с первым сообщением: сессию, уснувшую
   // раньше, `--resume` не поднимет («No conversation found»), и её тоже запускаем заново — с тем же id.
+  const forkFrom = mode === 'resume' && isClaudeCode(entry) ? options.forkFrom : undefined;
   const resuming =
-    mode === 'resume' &&
-    session.providerSessionId !== null &&
-    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId)));
+    forkFrom !== undefined ||
+    (mode === 'resume' &&
+      session.providerSessionId !== null &&
+      (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry)))));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -357,6 +382,7 @@ async function plan(
     skillNavigator,
     skillListReduced: skillList !== undefined,
     nativeContextRevision,
+    ...(agentRevision === undefined ? {} : { agentRevision }),
     // Короткий набор инструментов — только у Codex: Claude читает файл `--mcp-config` (он ниже, без профиля).
     ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
     env: process.env,
@@ -372,6 +398,7 @@ async function plan(
           skillNavigator,
           skillListReduced: skillList !== undefined,
           nativeContextRevision,
+          ...(agentRevision === undefined ? {} : { agentRevision }),
           ...(options.agent === undefined ? {} : { agent: options.agent }),
         })
       : null;
@@ -543,7 +570,7 @@ async function plan(
   }
 
   if (resuming) {
-    subs.providerSessionId = session.providerSessionId as string;
+    subs.providerSessionId = forkFrom ?? (session.providerSessionId as string);
     // Бриф возобновлённой сессии заново не посылается: разговор помнит старый. Изменился он с тех пор (задача,
     // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
     // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
@@ -564,7 +591,8 @@ async function plan(
     // Сессию без разговора, поднятую письмом, указатель догоняет её первым сообщением: будильник уже
     // счёл письма указанными (`{prompt}` в `resumeArgs`) и второй раз их не напечатает.
     const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
-    const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
+    const handover = mode === 'launch' ? (options.handover ?? '') : '';
+    const first = [brief, handover, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
@@ -573,6 +601,13 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  if (forkFrom !== undefined) {
+    // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
+    const at = args.findIndex((arg, index) => arg === '--resume' && args[index + 1] === forkFrom);
+    if (at === -1) throw new Error('fork-unsupported: the resume template of this provider has no --resume <id>');
+    providerSessionId = randomUUID();
+    args.splice(at + 2, 0, '--fork-session', '--session-id', providerSessionId);
+  }
   if (workspace && entry.id === 'claude') args.unshift('--permission-mode', 'auto');
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
   if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
@@ -591,6 +626,7 @@ async function plan(
     env: {
       ...entry.runner.env,
       ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
+        ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
       ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),

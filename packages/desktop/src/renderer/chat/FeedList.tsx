@@ -33,7 +33,7 @@ import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
-import { imagesExtraPx } from './feed-model.js';
+import { imagesExtraPx, type SwitchDivider } from './feed-model.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
@@ -64,9 +64,10 @@ export interface OutboxPrompt {
   flying: boolean;
 }
 
+const NO_DIVIDERS: readonly SwitchDivider[] = [];
 const NO_OUTBOX: readonly OutboxPrompt[] = [];
 
-type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt } | { key: string; outbox: OutboxPrompt };
+type Row = { key: string; item: FeedItem } | { key: string; divider: SwitchDivider } | { key: string; queued: QueuedPrompt } | { key: string; outbox: OutboxPrompt };
 
 export interface FeedListProps {
   items: readonly FeedItem[];
@@ -88,8 +89,25 @@ export interface FeedListProps {
    */
   reveal?: ({ agentId: string } | { itemId: string }) & { nonce: number };
   onRevealed?: (nonce: number) => void;
+  /** Разделители замен агента сессии (`switchDividers`): встают в ленту по времени `at`. */
+  dividers?: readonly SwitchDivider[];
   /** Id промптов, которые отправил помощник (`viaAssistantIds`): над пузырём «via assistant». */
   viaIds?: ReadonlySet<string>;
+}
+
+/** Элементы ленты и разделители замен: разделитель — перед первым элементом, что появился позже него. */
+function withDividers(items: readonly FeedItem[], dividers: readonly SwitchDivider[]): Row[] {
+  const rows: Row[] = [];
+  const pending = [...dividers].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  for (const item of items) {
+    while (pending.length > 0 && Date.parse(pending[0]!.at) < Date.parse(item.at)) {
+      const divider = pending.shift()!;
+      rows.push({ key: divider.id, divider });
+    }
+    rows.push({ key: item.id, item });
+  }
+  for (const divider of pending) rows.push({ key: divider.id, divider });
+  return rows;
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
@@ -153,11 +171,11 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
-    ...items.map((item) => ({ key: item.id, item })),
+    ...withDividers(items, dividers),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
     ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
   ];
@@ -295,6 +313,12 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                       onTranscript={updateTranscript}
                       via={viaIds?.has(row.item.id) === true}
                     />
+                  ) : 'divider' in row ? (
+                    <div data-testid="chat-switch-divider" className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span className="h-px flex-1 bg-border" />
+                      <span className="shrink-0">{row.divider.text}</span>
+                      <span className="h-px flex-1 bg-border" />
+                    </div>
                   ) : 'queued' in row ? (
                     <PromptItem text={row.queued.text} state="queued" />
                   ) : (

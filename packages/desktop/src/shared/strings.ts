@@ -16,7 +16,7 @@
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 import type { TtsModelId } from './tts-types.js';
@@ -246,6 +246,12 @@ export const S = {
     title: 'Token usage',
     since: 'Since each member joined',
     sessionScope: 'This session, all time',
+    /** Строка отрезка расхода сессии, которую переводили на другого агента (спека 2026-10-30, 5.9). */
+    segmentLine: (head: string, from: string, to: string, tokens: string, cost: number | null): string =>
+      `${head} · ${from}–${to} — ${tokens}${cost === null ? '' : `, ≈ $${cost.toFixed(2)} (list price)`}`,
+    segmentNow: 'now',
+    segmentUnknown: '?',
+    segments: (n: number): string => `${n} segments`,
     columns: ['In', 'Out', 'Cache read', 'Cache write'],
     total: 'Total',
     lead: 'lead',
@@ -420,6 +426,8 @@ export const S = {
     },
     /** Хвост тела уведомления для сессии в комнате (спека застрявших 7.1): `· room Backend`. */
     inRoom: (room: string): string => `· room ${room}`,
+    /** Кнопка карточки уведомления о лимите: открывает диалог замены провайдера для сессии. */
+    continueOn: 'Continue on…',
     /** Текст строки доставки под сообщением, когда письмо не забрано из-за застрявшей сессии (`MailWait` `stuck`). */
     mail: {
       approval: (word: string): string => `waiting for your ${word}`,
@@ -537,6 +545,8 @@ export const S = {
     startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
     /** Тултип и `aria-label` мигающего значка письма в строке сессии: агенту пришли письма, он их ещё не прочёл. */
     agentUnread: 'Has new messages',
+    /** Значок у сессии, чьего провайдера нет в списке провайдеров окна. */
+    providerRemoved: 'Provider removed',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
@@ -595,6 +605,8 @@ export const S = {
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
       /** Участник развёрнутой комнаты, не ведущий и не закрытый: `rooms.setLead`. */
       makeLead: 'Make lead',
+      /** Диалог замены агента (`SwitchAgentDialog`); подсвечен у сессии в лимите, без входа или с удалённым провайдером. */
+      continueElsewhere: 'Continue on another provider…',
     },
     /** Меню строки комнаты по правой кнопке — `sidebar/RoomRowMenu.tsx`. */
     roomMenu: {
@@ -813,6 +825,13 @@ export const S = {
     deleteConfirm: (name: string): string => `Delete ${name}? Its sessions in history stay, but cannot be resumed.`,
     deleteFolder: 'Also delete its folder (history)',
     deleteConfirmButton: 'Delete',
+    /** Сессии удаляемого провайдера (спека 2026-10-30, 5.8): они не закрываются и ждут, пока их продолжат на другом. */
+    sessionsUse: (total: number, live: number): string =>
+      `${total} ${total === 1 ? 'session uses' : 'sessions use'} this account${live > 0 ? ` (${live} running)` : ''}. ${
+        total === 1 ? 'It will wait' : 'They will wait'
+      }; continue ${total === 1 ? 'it' : 'them'} on another provider.`,
+    sessionsMore: (n: number): string => `… and ${n} more`,
+    continueOn: 'Continue on…',
     cancel: 'Cancel',
     restartRequired: 'This host is too old to manage providers. Restart the host to update it.',
     restartHost: 'Restart host',
@@ -981,6 +1000,39 @@ export const S = {
         `A room runs at most ${limit} sessions at once; this one has ${needed}. Remove an agent or raise the limit in Settings → Agents.`,
     },
     /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
+    /** Диалог замены агента сессии — `components/dialogs/SwitchAgentDialog.tsx` (спека 2026-10-30, 5.7). */
+    switchAgent: {
+      title: 'Continue on another provider',
+      description: (label: string): string => `${label} keeps its place in Parley; only the agent behind it changes.`,
+      loading: 'Loading providers…',
+      targetGroup: 'Provider',
+      modelField: 'Model',
+      modelDefault: 'Default',
+      effortField: 'Effort',
+      effortDefault: 'Default',
+      carryField: 'Carry',
+      carryHandover: 'Handover summary (any provider)',
+      carryTranscript: 'Continue the conversation (same Claude account family)',
+      transcriptHint: 'The first turn on the new account rewrites the whole context into its cache.',
+      /** `Keeps:` и части — `keeps` ответа `switchOptions`. */
+      keeps: 'Keeps',
+      lead: (rooms: readonly string[]): string => `lead of ${rooms.join(', ')}`,
+      owner: (rooms: readonly string[]): string => `owner of ${rooms.join(', ')}`,
+      children: (n: number): string => `${n} child ${n === 1 ? 'session' : 'sessions'}`,
+      worktree: (branch: string): string => `worktree ${branch}`,
+      unread: (n: number): string => `${n} unread`,
+      blockers: 'Cannot continue right now',
+      busyTitle: 'The agent is not at its prompt',
+      busyHint: 'Stopping it interrupts what it is doing now.',
+      continue: 'Continue',
+      stopAndContinue: 'Stop and continue',
+      held: 'Waiting for folder trust',
+      failed: 'Could not continue the session',
+      limitsFive: (percent: number): string => `5h ${Math.round(percent)}%`,
+      limitsWeek: (percent: number): string => `week ${Math.round(percent)}%`,
+      /** Цель, чей провайдер сейчас у сессии, и причина, почему текущий не годится. */
+      current: 'current',
+    },
     mergeRoom: {
       title: 'New room',
       /** `S02 бэкенд and S03 ревью move into the room.` — ярлыки сессий идут как есть. */
@@ -1029,6 +1081,13 @@ export const S = {
       confirm: 'Trust',
       /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
       via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
+    },
+    /** Просьба агента продолжить сессию на другом провайдере (`request_agent_switch`, карточка `agent-switch`). */
+    agentSwitch: {
+      title: 'Continue on another provider?',
+      asks: (who: string, target: string, provider: string, reason: string): string => `${who} asks to continue ${target} on ${provider}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'} Allow stops ${target} now and continues it there.`,
+      allow: 'Allow',
+      deny: 'Deny',
     },
     /**
      * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
@@ -1109,6 +1168,7 @@ export const S = {
       pending: 'not launched',
       'folder-trust': 'waiting for folder trust',
       settling: 'batched, waits for a quiet room',
+      'provider-missing': 'Provider removed — continue the session on another provider',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
@@ -1672,6 +1732,25 @@ export const S = {
     waitingBanner: {
       text: 'Claude Code is waiting in the terminal',
       open: 'Open terminal',
+    },
+    /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
+    switchBanner: {
+      limit: (provider: string, until: string | null): string => (until === null ? `Out of ${provider} usage` : `Out of ${provider} usage until ${until}`),
+      signIn: (provider: string): string => `${provider} needs a sign-in`,
+      removed: (provider: string): string => `${provider} was removed from Parley`,
+      switching: (to: string): string => `Switching to ${to}…`,
+      action: 'Continue on another provider…',
+    },
+    /** Разделитель ленты в момент замены агента: `Continued on Codex · gpt-5 · 14:05 (Claude: usage limit)`. */
+    switchDivider: {
+      text: (to: string, model: string | null, time: string, from: string, reason: string): string =>
+        `Continued on ${[to, model, time].filter((part) => part !== null && part !== '').join(' · ')} (${from}: ${reason})`,
+      limit: 'usage limit',
+      signIn: 'sign-in needed',
+      providerMissing: 'provider removed',
+      manual: (requestedBy: string): string => `switched by ${requestedBy}`,
+      model: 'model changed',
+      you: 'you',
     },
     stop: 'Stop',
     stopTitle: 'Interrupt the turn (Esc in the terminal)',
@@ -2262,7 +2341,8 @@ export const S = {
     consentTrust: 'Trust',
     consentRequestedBy: (who: string, source: string): string => `requested by ${who} · ${source}`,
     /** Откуда запрос (`requestedBy.source`): `agent` — `create_session` агента, `resume` — подъём сессии, `launch` — запуск. */
-    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<ConsentCard['requestedBy']['source'], string>,
+    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<FolderTrustCard['requestedBy']['source'], string>,
+    consentAllow: 'Allow',
     consentDone: 'Done ✓',
     consentAnswered: 'Already answered',
     consentFailed: "Couldn't decide",

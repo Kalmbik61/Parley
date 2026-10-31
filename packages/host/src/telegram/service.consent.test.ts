@@ -348,3 +348,39 @@ describe('telegram: карточка согласия на папку', () => {
     expect(calls('answerCallbackQuery').at(-1)!.params.text).toBe(T.noLongerCurrent);
   });
 });
+
+describe('telegram: карточка agent-switch', () => {
+  const SWITCH: ConsentCard = {
+    id: 'c-05',
+    kind: 'agent-switch',
+    projectPath: '/Users/me/code/my_harnas',
+    ref: { projectPath: '/Users/me/code/my_harnas', workId: 'w-01', sessionId: 's-03' },
+    provider: 'codex',
+    providerLabel: 'Codex',
+    model: 'gpt-6-astra',
+    reason: 'the Claude limit is near',
+    requestedBy: { sessionId: 's-11', label: 'Greta' },
+    at: '2026-10-30T10:00:00Z',
+    state: 'pending',
+  };
+
+  it('уходит текстом «@s11 asks to continue @s03 on Codex (model): reason» с кнопками Allow/Deny', async () => {
+    await bootLinked();
+    const message = await sendCard(SWITCH);
+    expect(message.params.text).toBe(
+      '<b>Continue on another provider?</b>\n@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near. Allow stops @s03 now and continues it there.\nRequested by Greta · my_harnas',
+    );
+    const shortId = shortIdOf(message);
+    expect(buttons(message).map((b) => [b.text, b.callback_data])).toEqual([['Allow', `pc1:${shortId}:a`], ['Deny', `pc1:${shortId}:d`]]);
+  });
+
+  it('нажатие Allow: consents.decide(id, allow), квитанция «Allowed ✓»', async () => {
+    pending = [SWITCH];
+    await bootLinked();
+    const message = await sendCard(SWITCH);
+    push([tap(messageIdOf(shortIdOf(message)), `pc1:${shortIdOf(message)}:a`)]);
+    await settle();
+    expect(consents.decide).toHaveBeenCalledWith('c-05', 'allow');
+    expect(edits()[0]!.params.text).toBe(`${message.params.text}\n\nAllowed ✓`);
+  });
+});

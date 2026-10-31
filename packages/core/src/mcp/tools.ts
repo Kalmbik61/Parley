@@ -70,7 +70,7 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
-import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
+import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
@@ -112,9 +112,12 @@ const SETTLE_SLACK_MS = 20;
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
  * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
- * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает.
+ * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает. Идёт замена агента (спека
+ * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
+ * `stuck` снят, но работа у неё не кончилась.
  */
-function finishedState(session: WorkSession): string | null {
+export function finishedState(session: WorkSession): string | null {
+  if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
@@ -1106,6 +1109,10 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
+    // Ограда агента ещё раз — в той же записи, где письма помечаются: `wait_for`, начатый до замены агента, иначе забрал бы
+    // почту нового (спека передачи сессии 6.1). Отказ откатывает запись: письма остаются непрочитанными.
+    const revision = current.sessions.find((session) => session.id === sessionId)?.agentRevision ?? null;
+    if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
     const inbox = letters.unreadFor(sessionId);
     const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
@@ -1731,6 +1738,26 @@ export interface ToolRunner {
  * вызова и ответ агенту — текстом, а ошибки результатом с `isError`. Браузерных инструментов и `create_session` здесь
  * нет: им нужен канал агента к окну, и они остаются за сервером (`createParleyServer`).
  */
+/**
+ * Инструменты, которые ничего не пишут от имени сессии: их ограда агента (спека передачи сессии 6.1) не касается.
+ * `check_inbox` и `wait_for` сюда не входят — они помечают письма прочитанными.
+ */
+const AGENT_FENCE_FREE = new Set(['get_map', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
+
+export const STALE_AGENT = 'This session now continues with another agent: this process belongs to the previous one. Stop working and do not call Parley tools again.';
+
+/**
+ * Ограда записей прежнего агента (спека передачи сессии 6.1): у сессии, переведённой на другого агента, в карте
+ * `agentRevision`, и процесс с другой ревизией (или без неё — запущен до замены) — осиротевший сервер прежнего агента.
+ * Сессия без ревизии в карте не переводилась: ограды нет. Нет сессии в карте — решают сами инструменты.
+ */
+export async function staleAgent(context: McpContext): Promise<boolean> {
+  if (context.sessionId === null) return false;
+  const map = await readMap(context.projectPath, context.workId);
+  const current = map.sessions.find((session) => session.id === context.sessionId)?.agentRevision ?? null;
+  return current !== null && current !== context.agentRevision;
+}
+
 export function createToolRunner(context: McpContext): ToolRunner {
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
@@ -1749,6 +1776,7 @@ export function createToolRunner(context: McpContext): ToolRunner {
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBinding.rawBound || !threadBinding.proofBound) await bindCodexThread(context, meta, threadBinding);
       try {
+        if (!AGENT_FENCE_FREE.has(name) && await staleAgent(context)) return { content: [{ type: 'text', text: STALE_AGENT }], isError: true };
         const result = name === 'find_skill' ? await navigator!.find(args)
           : await dispatch(context, name, args, signal);
         // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
@@ -1806,7 +1834,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
+    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,
@@ -1820,6 +1848,11 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
         return sessionAgent === undefined
           ? { content: [{ type: 'text', text: SESSION_CREATION_UNAVAILABLE }], isError: true }
           : createSession(sessionAgent, args, extra.signal);
+      }
+      if (request.params.name === 'request_agent_switch') {
+        return sessionAgent === undefined
+          ? { content: [{ type: 'text', text: AGENT_SWITCH_UNAVAILABLE }], isError: true }
+          : requestAgentSwitch(sessionAgent, args, extra.signal);
       }
       if (request.params.name === 'create_swarm' || request.params.name === 'swarm_add') {
         return sessionAgent === undefined

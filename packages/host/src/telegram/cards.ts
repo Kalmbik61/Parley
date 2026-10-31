@@ -90,12 +90,19 @@ export function roomCardMessage(input: { roomTitle: string; where: string; propo
   };
 }
 
-/** Карточка согласия на папку (спека 2026-10-21, 4.4): Trust и Deny — те же коды `a` и `d`, что у разрешения в ленте. */
+/**
+ * Карточка согласия (спека 2026-10-21, 4.4): на папку — Trust и Deny, просьба агента продолжить сессию на другом
+ * провайдере — Allow и Deny; коды те же `a` и `d`, что у разрешения в ленте.
+ */
 export function consentCardMessage(input: { card: ConsentCard; projectName: string; requestedByLabel: string; shortId: string }): { text: string; keyboard: InlineKeyboard } {
-  const lines = [`<b>${escapeHtml(T.consentTitle)}</b>`, escapeHtml(input.card.folder), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))];
+  const { card } = input;
+  const lines =
+    card.kind === 'agent-switch'
+      ? [`<b>${escapeHtml(T.switchTitle)}</b>`, escapeHtml(T.switchAsks(card)), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))]
+      : [`<b>${escapeHtml(T.consentTitle)}</b>`, escapeHtml(card.folder), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))];
   return {
     text: lines.join('\n'),
-    keyboard: [[button(B.trust, pc1(input.shortId, CALLBACK_CODES.allow)), button(B.deny, pc1(input.shortId, CALLBACK_CODES.deny))]],
+    keyboard: [[button(card.kind === 'agent-switch' ? B.allow : B.trust, pc1(input.shortId, CALLBACK_CODES.allow)), button(B.deny, pc1(input.shortId, CALLBACK_CODES.deny))]],
   };
 }
 

@@ -6,6 +6,7 @@
 import type { LetterReads } from './letter-store.js';
 import { isCurrentMember, roomMembership } from './room-membership.js';
 import { roomLead } from './rooms.js';
+import { bindingUsage, currentSegmentUsage, sumSegments } from './usage-segments.js';
 import type { WorkMap, WorkSession } from './types.js';
 import { sumUsage, type KeyedUsage, type UsageSummary, type UsageTotal, type UsageWindow } from './usage-ledger.js';
 
@@ -16,7 +17,15 @@ export interface UsageResolver {
   /** Время первой и последней записи лога; `null` — лога нет (тогда берутся времена из карты). */
   bounds(session: WorkSession): { startedAt: string | null; endedAt: string | null } | null;
   /** Итог по логу за окна, с потомками; `null` — лога нет. */
-  slice(session: WorkSession, windows: readonly UsageWindow[]): Promise<UsageSummary | null>;
+  slice(
+    session: WorkSession,
+    windows: readonly UsageWindow[],
+    excludeIds?: ReadonlySet<string>,
+  ): Promise<UsageSummary | null>;
+  /** Стоимость за окно по логу провайдера (цена по прайсу); `null` — лог её не сообщает. */
+  cost?(session: WorkSession, window: UsageWindow): Promise<number | null>;
+  /** Нативные id ответов лога внутри окон (только Claude); `null` — лога нет или id не определить. */
+  ids?(session: WorkSession, windows: readonly UsageWindow[]): Promise<Set<string> | null>;
 }
 
 export interface RoomUsageMember {
@@ -119,8 +128,29 @@ export async function roomUsage(
       members.push({ ...base, provider: null, status: 'unavailable', reason: 'deleted', method: null, usage: null });
       continue;
     }
-    if (session.providerSessionId === null) {
+    const segmented = (session.previousAgents?.length ?? 0) > 0;
+    if (session.providerSessionId === null && !segmented) {
       members.push({ ...base, provider: session.provider, status: 'not-started', reason: null, method: null, usage: null });
+      continue;
+    }
+    if (segmented) {
+      // Сессию переводили (5.9): закрытые отрезки — из карты, текущий — срез лога после последней замены.
+      const closed = (session.previousAgents ?? []).filter((binding) =>
+        overlaps(periods, [{ from: binding.startedAt ?? '1970-01-01T00:00:00.000Z', to: binding.endedAt }]),
+      );
+      const parts = closed.map((binding) => {
+        const usage = bindingUsage(binding);
+        const from = binding.startedAt ?? '1970-01-01T00:00:00.000Z';
+        const inside = periods.some((period) => ms(period.from) <= ms(from) && end(period.to) >= ms(binding.endedAt));
+        return inside || usage.completeness !== 'complete' ? usage : { ...usage, completeness: 'partial' as const };
+      });
+      const current = session.providerSessionId === null ? null : await currentSegmentUsage(session, resolver, periods);
+      if (current !== null) parts.push(current);
+      members.push(
+        parts.length === 0
+          ? { ...base, provider: session.provider, status: 'unavailable', reason: 'log-missing', method: null, usage: null }
+          : { ...base, provider: session.provider, status: 'counted', reason: null, method: 'sliced', usage: sumSegments(parts) },
+      );
       continue;
     }
     const bounds = resolver.bounds(session) ?? { startedAt: session.startedAt, endedAt: session.endedAt };

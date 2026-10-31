@@ -35,6 +35,11 @@ import {
   linkSession,
   loadConfig,
   legacyUsage,
+  loadProviders,
+  providerLabel,
+  bindingUsage,
+  currentSegmentUsage,
+  sumSegments,
   openEvents,
   pickResetsAt,
   resetPointerLabel,
@@ -55,6 +60,7 @@ import {
   type SessionIndex,
   type SessionNeed,
   type TimelineReader,
+  type AgentBinding,
   type UsageResolver,
   type UsageSummary,
   type WorkEntry,
@@ -64,6 +70,7 @@ import {
   refKey,
   type EventData,
   type LiveMetrics,
+  type UsageSegment,
   type MailWait,
   type LiveTask,
   type SessionRef,
@@ -261,6 +268,11 @@ interface TerminalState {
   turnSeen: boolean;
   /** Когда запущен этот процесс, мс: ошибка хода в rollout старше него — прошлого процесса того же разговора. */
   startedAt: number;
+  /**
+   * Строк журнала хуков сессии на запуске: они — прошлых процессов (resume, прежний агент до замены). За ними
+   * ставится граница нового процесса, как у Claude (`withLaunchBoundary`): лимит или вопрос прошлого `need` не дают.
+   */
+  journalLength: number;
 }
 
 /**
@@ -576,7 +588,13 @@ export function createActivityService(
     if (terminal === undefined && session.provider !== 'codex') {
       return withLaunchBoundary(journal, launchBoundaryOf(session, key));
     }
-    let base = journal ?? [];
+    // Строки до запуска процесса Codex — прошлых процессов (прежний агент до замены, прошлый запуск): за ними граница
+    // нового процесса, как у Claude. Журнал короче записанного (переписан) — позиции не доверяем, границы нет.
+    const launch =
+      terminal !== undefined && terminal.journalLength > 0 && (journal?.length ?? 0) >= terminal.journalLength
+        ? { at: terminal.startedAt, journalLength: terminal.journalLength }
+        : null;
+    let base = withLaunchBoundary(journal, launch) ?? [];
     const last = terminal?.last;
     if (terminal === undefined || last === null || last === undefined) return base;
     // События ожидания человека идущего эпизода идут раньше последнего сигнала (`TerminalState.waiting`).
@@ -844,6 +862,87 @@ export function createActivityService(
     });
   }
 
+  const activityResolver = (): UsageResolver => ({
+    whole: (session) => wholeSessionUsage(selectedUsage(session), logIndex.index(session) !== undefined, session.provider),
+    bounds: (session) => {
+      const found = logIndex.index(session);
+      return found === undefined ? null : { startedAt: found.startedAt, endedAt: found.endedAt };
+    },
+    slice: async (session, windows, excludeIds) => (await logIndex.usageIn(session, windows, excludeIds)) ?? null,
+    cost: async (session, window) => (await logIndex.costIn(session, window)) ?? null,
+    ids: async (session, windows) => (await logIndex.idsIn(session, windows)) ?? null,
+  });
+
+  /** Расход текущего отрезка переведённой сессии: считается по логу асинхронно, метрики читают последнее значение. */
+  const currentSegments = new Map<string, { lastEnd: string; usage: UsageSummary | null; cost: number | null; at: number; running: boolean }>();
+  const providerLabels = new Map<string, string>();
+
+  function refreshCurrentSegment(ref: SessionRef, key: string, session: WorkSession): void {
+    const lastEnd = session.previousAgents?.at(-1)?.endedAt;
+    if (lastEnd === undefined) return;
+    const known = currentSegments.get(key);
+    if (known !== undefined && (known.running || (known.lastEnd === lastEnd && nowFn() - known.at < 2000))) return;
+    const entry = { lastEnd, usage: known?.usage ?? null, cost: known?.cost ?? null, at: nowFn(), running: true };
+    currentSegments.set(key, entry);
+    void (async () => {
+      try {
+        const registry = await loadProviders();
+        for (const id of new Set([session.provider, ...(session.previousAgents ?? []).map((item) => item.provider)])) {
+          const found = registry[id];
+          if (found !== undefined) providerLabels.set(id, providerLabel(found));
+        }
+        const resolver = activityResolver();
+        const usage = await currentSegmentUsage(session, resolver);
+        const cost = (await resolver.cost?.(session, { from: lastEnd, to: null })) ?? null;
+        const changed = JSON.stringify([usage, cost]) !== JSON.stringify([entry.usage, entry.cost]);
+        currentSegments.set(key, { lastEnd, usage, cost, at: nowFn(), running: false });
+        if (changed && !stopped) recompute(ref);
+      } catch (error) {
+        currentSegments.set(key, { lastEnd, usage: entry.usage, cost: entry.cost, at: nowFn(), running: false });
+        host.log.warn('расход текущего отрезка не посчитался', { sessionId: session.id, error: String(error) });
+      }
+    })();
+  }
+
+  function segmentsOf(
+    ref: SessionRef,
+    key: string,
+    session: WorkSession,
+  ): { list: UsageSegment[]; total: UsageSummary } | null {
+    const previous = session.previousAgents ?? [];
+    if (previous.length === 0) {
+      currentSegments.delete(key);
+      return null;
+    }
+    refreshCurrentSegment(ref, key, session);
+    const label = (id: string): string => providerLabels.get(id) ?? id;
+    const bare: AgentBinding = { ...previous[0]! };
+    delete bare.usage;
+    const unknown = bindingUsage(bare);
+    const current = currentSegments.get(key)?.usage ?? unknown;
+    const list: UsageSegment[] = [
+      ...previous.map((binding) => ({
+        provider: binding.provider,
+        providerLabel: label(binding.provider),
+        model: binding.model,
+        from: binding.startedAt,
+        to: binding.endedAt,
+        usage: bindingUsage(binding),
+        costUsd: binding.costUsd ?? null,
+      })),
+      {
+        provider: session.provider,
+        providerLabel: label(session.provider),
+        model: session.model ?? null,
+        from: previous.at(-1)!.endedAt,
+        to: null,
+        usage: current,
+        costUsd: currentSegments.get(key)?.cost ?? null,
+      },
+    ];
+    return { list, total: sumSegments(list.map((segment) => segment.usage)) };
+  }
+
   function metricsFor(
     ref: SessionRef,
     key: string,
@@ -854,7 +953,9 @@ export function createActivityService(
   ): LiveMetrics {
     // Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
     const snapshot = session.metrics;
-    const selected = selectedUsage(session);
+    // Сессию переводили (5.9): итог — сумма закрытых отрезков и текущего, а не весь лог последнего разговора.
+    const segments = segmentsOf(ref, key, session);
+    const selected = segments?.total ?? selectedUsage(session);
     const usage: UsageSummary = {
       ...selected,
       // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
@@ -865,6 +966,7 @@ export function createActivityService(
     const view = contextView(fill, compactions.get(key));
     return {
       usage,
+      ...(segments === null ? {} : { usageSegments: segments.list }),
       tokensIn: usage.input,
       tokensOut: usage.output,
       durationMs:
@@ -1559,16 +1661,7 @@ export function createActivityService(
     onLogChange(listener) {
       return logIndex.onChange(listener);
     },
-    usageResolver() {
-      return {
-        whole: (session) => wholeSessionUsage(selectedUsage(session), logIndex.index(session) !== undefined, session.provider),
-        bounds: (session) => {
-          const found = logIndex.index(session);
-          return found === undefined ? null : { startedAt: found.startedAt, endedAt: found.endedAt };
-        },
-        slice: async (session, windows) => (await logIndex.usageIn(session, windows)) ?? null,
-      };
-    },
+    usageResolver: activityResolver,
     logFile(ref) {
       const session = works
         .entry(ref.projectPath, ref.workId)
@@ -1607,6 +1700,7 @@ export function createActivityService(
         startupTimer: undefined,
         turnSeen: false,
         startedAt: nowFn(),
+        journalLength: journals.get(key)?.length ?? 0,
       };
       state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
       terminals.set(key, state);

@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import type { SessionRef } from './types.js';
 
 /** Согласие на папку (`trust.json`). Копия типа ядра: протокол берёт из core только типы, нужные снимкам. */
 export interface TrustRecord {
@@ -15,18 +16,41 @@ export interface TrustRecord {
   by: 'window' | 'island' | 'telegram';
 }
 
-/** Карточка согласия. Хранит хост (`consents.json`), в `consents.list` отдаются только ждущие. */
-export interface ConsentCard {
+/** Общие поля карточки согласия. */
+interface ConsentCardBase {
   /** `c-NN`, сквозной у хоста. */
   id: string;
-  kind: 'folder-trust';
-  /** realpath папки проекта. */
-  folder: string;
   projectPath: string;
-  requestedBy: { source: 'agent' | 'resume' | 'launch'; sessionId?: string; workId?: string; label?: string };
   at: string;
   state: 'pending' | 'allowed' | 'denied';
 }
+
+/** «Доверять ли папке агентам»: запуск Codex удерживается до решения. */
+export interface FolderTrustCard extends ConsentCardBase {
+  kind: 'folder-trust';
+  /** realpath папки проекта. */
+  folder: string;
+  requestedBy: { source: 'agent' | 'resume' | 'launch'; sessionId?: string; workId?: string; label?: string };
+}
+
+/**
+ * Агент просит продолжить сессию на другом провайдере (`request_agent_switch`): замену выполняет только `allow`
+ * человека. `id` карточки служит `requestId` замены. Окно, остров и Telegram, не знающие вида, его пропускают.
+ */
+export interface AgentSwitchCard extends ConsentCardBase {
+  kind: 'agent-switch';
+  /** Сессия, которую продолжают. */
+  ref: SessionRef;
+  provider: string;
+  /** Имя провайдера для людей (`providerLabel`). */
+  providerLabel: string;
+  model: string | null;
+  reason: string;
+  requestedBy: { sessionId: string; label: string };
+}
+
+/** Карточка согласия. Хранит хост (`consents.json`), в `consents.list` отдаются только ждущие. */
+export type ConsentCard = FolderTrustCard | AgentSwitchCard;
 
 export const consentMethodSchemas = {
   'consents.list': z.object({}),
