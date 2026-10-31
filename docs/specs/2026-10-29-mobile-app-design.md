@@ -1329,7 +1329,8 @@ Heartbeat (из RN нельзя слать WS ping, поэтому прикла�
 - присутствие — окно шлёт `presence` по сокету управления (9.3, 9.6);
 - переключатель «Allow creating sessions and rooms from the phone», по умолчанию включён (решение 5): пишет
   `remoteCreate` в конфиг хоста (`settings.set`); хост и мост отвергают `sessions.create`, `rooms.create` и
-  `rooms.send`, когда он выключен (4.2);
+  `rooms.send`, когда он выключен (4.2). Меняется только окном: правка файла конфигурации или переменной окружения
+  в обход `settings.set` подхватывается после перезапуска хоста (критик s-176, W10);
 - с этапа B — переключатель «Show on iPhone Lock Screen when this Mac is locked» (9.6);
 - тексты — `shared/strings.ts`, страж `english-ui`.
 
