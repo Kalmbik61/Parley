@@ -61,7 +61,10 @@ export type BlockReason = 'revoked' | 'reset' | 'update_phone' | 'update_mac';
 
 export interface SupervisorStatus {
   state: ConnectionState;
-  /** Последний отказ relay — только для плашки: неаутентифицирован, ни на что не влияет. Чистится в `ready`. */
+  /**
+   * Отказ relay текущей или последней неудачной попытки — только для плашки: неаутентифицирован, ни на что не
+   * влияет. Чистится в начале каждой попытки, так что устаревший отказ не переживает следующую неудачу.
+   */
   relayError: RelayErrorCode | null;
   blocked: BlockReason | null;
   /** Hello моста последнего подключения; остаётся на время переподключения. */
@@ -226,7 +229,7 @@ export class Supervisor {
       young: null,
     };
     this.#conn = conn;
-    this.#set({ state: 'connecting', retryAt: null });
+    this.#set({ state: 'connecting', relayError: null, retryAt: null });
     void this.#attempt(conn);
   }
 

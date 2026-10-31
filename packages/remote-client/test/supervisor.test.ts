@@ -318,6 +318,22 @@ describe('acceptance 4: unauthenticated vs authenticated signals', () => {
     expect(sup.status.state).toBe('waiting');
   });
 
+  it('a relay refusal does not outlive the next attempt: unknown_route, then a plain drop → no banner', async () => {
+    platform.jitterByte = 0xff;
+    platform.relay.mode = { error: 'unknown_route' };
+    sup.start();
+    await flush(200);
+    expect(sup.status).toMatchObject({ state: 'waiting', relayError: 'unknown_route' });
+
+    // Relay остановлен: следующая попытка обрывается без кадра `error`.
+    platform.relay.mode = 'silent';
+    await advance(retryDelay());
+    expect(sup.status).toMatchObject({ state: 'connecting', relayError: null });
+    platform.relay.sockets.at(-1)!.drop();
+    await flush(200);
+    expect(sup.status).toMatchObject({ state: 'waiting', relayError: null });
+  });
+
   it('`session.closing revoked` inside Noise → blocked; nothing reconnects until the human acts', async () => {
     await connect();
     bridge.last.event('session.closing', { reason: 'revoked' });
