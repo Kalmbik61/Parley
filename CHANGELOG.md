@@ -4,13 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.26.0
+
+A session can continue on another provider, finished turns in Chat fold their work into a header, `get_map` fits in an agent's answer, and Restart Host no longer hangs on a stuck host.
 
 ### Added
 
 - A session can continue on another provider: "Continue on another provider…" in the session menu, in the banner above the chat composer ("Out of … usage until …"), on the card of a session that is not running, and in the usage-limit notification opens a dialog to pick the provider, model and effort. The session keeps its id, rooms, leadership, child sessions, mail and worktree; only the agent behind it changes. The new agent gets a handover package as its first message (a brief from the map, the state of its obligations, the working copy and the tail of the previous conversation), the feed shows a "Continued on …" divider, and the room lead gets a letter from `parley`. Between Claude accounts the conversation itself continues: the new agent resumes a fork of the previous transcript with its full context (the first turn on the new account re-caches it), and the original stays untouched.
 - An agent can ask for such a switch with `request_agent_switch`: the request arrives as a consent card in the window, the island and Telegram, and nothing happens without the human's answer. Allow on the card stops the working agent and continues it on the chosen provider.
 - Session usage is split into segments by agent: the usage popover lists each provider, account and model the session ran on with its own tokens and cost, and the room total sums the segments.
+- **Finished turns fold in Chat.** A finished turn shows its prompt, a status line ("Completed in 2m 31s", or "Stopped" / "Failed") and the final answer; the work in between (tool calls, intermediate replies, subagents) folds under a header that names the kinds of work, for example "Read files, ran commands, edited files". "Finished turns" in Settings → Appearance picks Fold work (the default, replies stay visible), Final answer only, or Expanded (the previous flat feed). A running, stopped or failed turn never folds, and neither do permission, question and plan cards. ([#144](https://github.com/Kalmbik61/Parley/pull/144))
 
 ### Changed
 
@@ -22,6 +25,16 @@ All notable changes to Parley are documented in this file.
 - The session title in the chat toolbar is a plate hanging from the top edge of the panel, like a notch: the title is shown as written (no capitals, no letter spacing) in the app font, on an accent fill with smooth curved sides. Colours come from the new `--session-title-fill` / `--session-title-ink` tokens in both themes.
 - An agent can close the pages it opened in the browser panel with the new `browser_close` tool, so it can free a slot at the limit of 5 pages instead of asking the human. Pages the human opened or moved into the panel cannot be closed this way. Closing works like the cross on a page tab: the active page moves to a neighbour, the last page removes the panel, and keyboard focus and the active tab do not change.
 - An agent can close the sessions it created with `create_session`, and the sessions those created in turn, with `close_session` — without asking the human, once their work is accepted or no longer needed. Closing its own session still needs the human's consent. Sessions made by the human, by a colleague, or by a swarm, and swarm members, cannot be closed this way; the system insert, `read_guide` and the skill stub say so.
+- **`get_map` fits in an agent's answer.** Without arguments it returns an overview of at most 48 KiB: short rows for sessions, rooms and plans, each list with its total and a cursor for the next page (`get_map {field: "sessions", cursor}`), with the calling session, its rooms and their plans first. A cursor that no longer matches the map answers `stale-cursor`. Reads of one session or room work as before. Before, a large workspace produced a map of 185–233 KB that Claude Code saved to a file instead of reading it. ([#144](https://github.com/Kalmbik61/Parley/pull/144))
+
+### Fixed
+
+- **Restart Host no longer hangs on a stuck host.** It waited for the old host's answer to `host.shutdown` with no deadline, so a host whose socket stayed open but silent kept the restart waiting forever. Now it waits for the old host to exit up to a deadline, then stops it with SIGTERM and SIGKILL after checking that the process is still a Parley host, and connects to a new host; if the old host still does not exit, Restart Host reports an error instead of starting a second one. ([#144](https://github.com/Kalmbik61/Parley/pull/144))
+- Space on a focused button activates the button instead of jumping to the message field. ([#144](https://github.com/Kalmbik61/Parley/pull/144))
+
+### What is not proven yet
+
+- Restart Host on a really stuck host, an inline `get_map` in a large workspace and turn folding on long sessions are covered by tests only; they have not been checked live.
 
 ## 0.25.0
 
