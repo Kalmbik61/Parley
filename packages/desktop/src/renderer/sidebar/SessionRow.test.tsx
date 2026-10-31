@@ -1188,15 +1188,15 @@ describe('SessionRow — очередь машины', () => {
     });
   };
 
-  it('ожидающая запуска с queued (потолок 18/18): «queued · machine limit 18/18» вместо «not started»', () => {
+  it('ожидающая запуска с queued (потолок 18/18): «queued · limit 18/18» вместо «not started»', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'pending', queued: entry() }));
-    expect(screen.getByText('queued · machine limit 18/18')).toBeTruthy();
+    expect(screen.getByText('queued · limit 18/18')).toBeTruthy();
     expect(screen.queryByText(S.states.pending)).toBeNull();
   });
 
-  it('давление памяти: «queued · memory critical»', () => {
+  it('давление памяти: «queued · low memory»', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'pending', queued: entry({ reason: 'memory-critical' }) }));
-    expect(screen.getByText('queued · memory critical')).toBeTruthy();
+    expect(screen.getByText('queued · low memory')).toBeTruthy();
     expect(screen.queryByText(S.states.pending)).toBeNull();
   });
 
@@ -1213,7 +1213,7 @@ describe('SessionRow — очередь машины', () => {
         queued: entry({ class: 'mail', mode: 'resume', by: 'wake' }),
       }),
     );
-    expect(screen.getByText('queued · machine limit 18/18')).toBeTruthy();
+    expect(screen.getByText('queued · limit 18/18')).toBeTruthy();
     expect(screen.queryByText('asleep · idle')).toBeNull();
     const text = (await openTooltip()).textContent ?? '';
     expect(text).toContain(QUEUE_TIP);

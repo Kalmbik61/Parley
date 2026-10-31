@@ -199,12 +199,13 @@ export function autoSleepWord(reason: AutoSleepReason): string {
 
 /**
  * Слово состояния сессии, чей запуск ждёт слота машины (спека ёмкости 4.2): `queued` и в чём дело. Английское, как
- * `STATE_WORDS`. Потолок полон — «machine limit 18/18» (сколько CLI было живо и зарезервировано при постановке и
- * потолок), потолка в записи нет — без чисел; давление памяти `critical` — слово про память, потолок тут ни при чём.
+ * `STATE_WORDS`. Потолок полон — «limit 18/18» (сколько CLI было живо и зарезервировано при постановке и потолок),
+ * потолка в записи нет — «limit» без чисел; давление памяти `critical` — «low memory», потолок тут ни при чём. Слова
+ * короткие нарочно: слово в строке сессии не сжимается, а про слот на этой машине говорит тултип строки.
  */
 export function queuedWord(entry: Pick<QueuedLaunch, 'reason' | 'live' | 'limit'>): string {
-  if (entry.reason === 'memory-critical') return 'queued · memory critical';
-  return entry.limit === null ? 'queued · machine limit' : `queued · machine limit ${entry.live}/${entry.limit}`;
+  if (entry.reason === 'memory-critical') return 'queued · low memory';
+  return entry.limit === null ? 'queued · limit' : `queued · limit ${entry.live}/${entry.limit}`;
 }
 
 /** Подсказка тому, кто ждёт усыплённую хостом цель (`wait_for(<id>)`): ждать итога незачем, письмо её поднимет. */

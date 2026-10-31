@@ -126,17 +126,17 @@ describe('agentStatus: очередь машины', () => {
 
 describe('queuedWord: слово сессии в очереди машины', () => {
   it('потолок полон: причина и сколько живо из скольких', () => {
-    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: 18 })).toBe('queued · machine limit 18/18');
-    expect(queuedWord({ reason: 'machine-limit', live: 7, limit: 12 })).toBe('queued · machine limit 7/12');
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: 18 })).toBe('queued · limit 18/18');
+    expect(queuedWord({ reason: 'machine-limit', live: 7, limit: 12 })).toBe('queued · limit 7/12');
   });
 
   it('потолка нет — слово без чисел', () => {
-    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: null })).toBe('queued · machine limit');
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: null })).toBe('queued · limit');
   });
 
   it('давление памяти critical — слово про память, числа не нужны', () => {
-    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: 18 })).toBe('queued · memory critical');
-    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: null })).toBe('queued · memory critical');
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: 18 })).toBe('queued · low memory');
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: null })).toBe('queued · low memory');
   });
 });
 
