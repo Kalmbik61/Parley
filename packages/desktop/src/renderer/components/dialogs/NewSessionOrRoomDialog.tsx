@@ -419,7 +419,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
         label: multi ? '' : name.trim(),
         task: backlog ? task : '',
         // Участники комнаты — по настройке (хост её не отдал — решает сам), сессии без комнаты — только с галочкой.
-        lean: roomMode ? roomLean : lean ? true : null,
+        // Скрытый чекбокс (leanAgents === null) не отправляет прежнюю галочку.
+        lean: roomMode ? roomLean : lean && leanAgents !== null ? true : null,
         logFailures: !backlog,
         isCancelled: () => launch.cancelled,
         pinProvider: (key, provider) => updateAgent(key, { provider }),

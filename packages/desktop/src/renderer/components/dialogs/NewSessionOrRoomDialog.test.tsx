@@ -2320,6 +2320,28 @@ describe('NewSessionOrRoomDialog — Lean agent sessions (C2.2)', () => {
     expect(isChecked(leanBox())).toBe(false);
   });
 
+  it('галочка стояла, а новый мост не отдал leanAgents: чекбокс скрыт, Start session уходит без lean', async () => {
+    stubLean(true);
+    const onOpenChange = vi.fn();
+    const view = render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    expect(isChecked(leanBox())).toBe(true);
+    const next = createFakeBridge();
+    next.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+    next.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
+    next.setHandler('worktrees.available', async () => ({ available: true }));
+    next.setHandler('sessions.create', async (params) => ({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } }));
+    next.setHandler('settings.get', async () => ({ config: {} as never, locked: {} }));
+    view.rerender(<NewSessionOrRoomDialog open bridge={next} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    expect(screen.queryByRole('checkbox', { name: 'Lean session' })).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    const calls = next.calls.filter((call) => call.method === 'sessions.create');
+    expect(calls).toHaveLength(1);
+    expect('lean' in (calls[0]?.params as Record<string, unknown>)).toBe(false);
+  });
+
   it('одиночная сессия с галочкой уходит с lean: true', async () => {
     stubLean(false);
     const { onOpenChange } = await renderDialog();
