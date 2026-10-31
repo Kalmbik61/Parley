@@ -839,6 +839,7 @@ async function report(
   }
 
   const session = requireSession(map, sessionId);
+  const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
   return {
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
@@ -846,7 +847,35 @@ async function report(
     status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
+    ...(next !== null ? { next } : {}),
   };
+}
+
+/**
+ * Подсказка в ответ на `report(done)`, когда рабочее пространство разрешает агентам закрывать завершённые сессии:
+ * правила из брифа и гида агент забывает, а здесь они под рукой в момент действия. Ведущий живой открытой комнаты
+ * получает список завершивших участников (не закрытых и не из роя), остальные участники комнат и созданные сессии —
+ * напоминание закрыть себя последним вызовом; сессия, запущенная человеком без комнаты, — ничего.
+ */
+function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
+  if (map.work.closeFinished !== true) return null;
+  const rooms = map.rooms.filter((room) => !isRoomArchived(room) && isMember(room, sessionId));
+  const led = rooms.filter((room) => liveLead(map, room) === sessionId);
+  if (led.length > 0) {
+    const finished = map.sessions
+      .filter((row) =>
+        row.id !== sessionId && row.lifecycle !== 'closed' && row.result === 'done' && swarmOfSession(map, row.id) === null &&
+        led.some((room) => room.members.includes(row.id)))
+      .map((row) => row.id);
+    return finished.length > 0
+      ? `This workspace lets agents close finished sessions: once you have accepted their parts, close ${finished.join(', ')} with close_session.`
+      : null;
+  }
+  const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
+  if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
+    return 'This workspace lets agents close finished sessions: once your part is accepted, call close_session on yourself as your last call.';
+  }
+  return null;
 }
 
 /**

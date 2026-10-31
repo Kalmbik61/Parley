@@ -158,3 +158,72 @@ describe('close_session: право живого лида закрыть зав�
     expect(await work()).not.toHaveProperty('closeFinished');
   });
 });
+
+describe('report: подсказка закрыть завершённые сессии в ответе', () => {
+  const LEAD_HINT = (ids: string): string =>
+    `This workspace lets agents close finished sessions: once you have accepted their parts, close ${ids} with close_session.`;
+  const OWN_HINT = 'This workspace lets agents close finished sessions: once your part is accepted, call close_session on yourself as your last call.';
+
+  async function reportAs(sessionId: string, status: 'done' | 'progress' = 'done'): Promise<Record<string, unknown>> {
+    const result = await call(await connect(sessionId), 'report', { status, summary: 'итог' });
+    expect(result.isError, result.text).toBe(false);
+    return JSON.parse(result.text) as Record<string, unknown>;
+  }
+
+  /** s-01 — ведущий комнаты, s-02 и s-03 — участники; s-04 — сессия человека без комнаты. */
+  async function seed(options: { flag: boolean; archived?: boolean; finished?: string[] }): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      for (const label of ['ведущий', 'второй', 'третий', 'человека']) addSession(map, { provider: 'claude', label, task: 'x' });
+      addRoom(map, { title: 'Комната', creator: HUMAN, members: ['s-01', 's-02', 's-03'], lead: 's-01' });
+      for (const id of options.finished ?? []) setResult(map, id, 'done');
+      const room = map.rooms[0];
+      if (options.archived === true && room) room.archivedAt = new Date().toISOString();
+    });
+    if (options.flag) await setWorkCloseFinished(project, workId, true);
+  }
+
+  it('ведущий: подсказка называет завершивших участников по порядку карты', async () => {
+    await seed({ flag: true, finished: ['s-03', 's-02'] });
+    expect((await reportAs('s-01'))['next']).toBe(LEAD_HINT('s-02, s-03'));
+  });
+
+  it('ведущий без завершивших участников: поля нет', async () => {
+    await seed({ flag: true });
+    expect(await reportAs('s-01')).not.toHaveProperty('next');
+  });
+
+  it('участник комнаты, не ведущий: подсказка закрыть себя', async () => {
+    await seed({ flag: true });
+    expect((await reportAs('s-02'))['next']).toBe(OWN_HINT);
+  });
+
+  it('созданная сессия: подсказка закрыть себя', async () => {
+    await seed({ flag: true });
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'дитя', task: 'x', createdBy: 's-04' });
+    });
+    expect((await reportAs('s-05'))['next']).toBe(OWN_HINT);
+  });
+
+  it('сессия человека без комнаты и создателя: поля нет', async () => {
+    await seed({ flag: true });
+    expect(await reportAs('s-04')).not.toHaveProperty('next');
+  });
+
+  it('флаг выключен: поля нет ни у ведущего, ни у участника', async () => {
+    await seed({ flag: false, finished: ['s-02'] });
+    expect(await reportAs('s-01')).not.toHaveProperty('next');
+    expect(await reportAs('s-03')).not.toHaveProperty('next');
+  });
+
+  it('статус progress: поля нет', async () => {
+    await seed({ flag: true, finished: ['s-02'] });
+    expect(await reportAs('s-01', 'progress')).not.toHaveProperty('next');
+    expect(await reportAs('s-03', 'progress')).not.toHaveProperty('next');
+  });
+
+  it('ведущий архивной комнаты: подсказки ведущего нет', async () => {
+    await seed({ flag: true, archived: true, finished: ['s-02'] });
+    expect(await reportAs('s-01')).not.toHaveProperty('next');
+  });
+});
