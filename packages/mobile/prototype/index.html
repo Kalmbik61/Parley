@@ -1687,8 +1687,8 @@ function sessionScreen(r) {
     if (!note) bottom = pausedNote() + '<div class="row"><button class="btn pri" data-act="decide" data-id="' + id + '" data-v="answer"' + (ready() && questionComplete(id, c) && !busy ? '' : ' disabled') + '>' + (S.sendingV === id + 'answer' ? '<span class="spin"></span>' : 'Send answer') + '</button></div>';
   } else if (c && c.kind === 'plan') {
     body += sec('Plan') + '<div class="card static">' + md(c.plan) + itemNote(id) + '</div><div class="t-foot l2" style="margin:0 32px">To keep planning, answer at your Mac.</div>';
-    if (!note) bottom = pausedNote() + '<div class="row"><button class="btn pri" data-act="decide" data-id="' + id + '" data-v="auto"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'auto' ? '<span class="spin"></span>' : 'Approve, auto-accept edits') + '</button></div>' +
-      '<div class="row"><button class="btn" data-act="decide" data-id="' + id + '" data-v="manual"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'manual' ? '<span class="spin"></span>' : 'Approve, approve each edit') + '</button></div>';
+    if (!note) bottom = pausedNote() + '<div class="row"><button class="btn pri" data-act="decide" data-id="' + id + '" data-v="auto"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'auto' ? '<span class="spin"></span>' : approveGlyph() + 'Approve, auto-accept edits') + '</button></div>' +
+      '<div class="row"><button class="btn" data-act="decide" data-id="' + id + '" data-v="manual"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'manual' ? '<span class="spin"></span>' : approveGlyph() + 'Approve, approve each edit') + '</button></div>';
   } else if (c && (c.kind === 'blocked' || c.kind === 'limit')) {
     body += sec(c.kind === 'limit' ? 'Usage limit' : 'Waiting for you') + '<div class="card static"><div class="khead t-sub" style="color:var(--label)">' + ic(c.kind === 'limit' ? 'hourglass' : 'desktop', 22) + '<span class="kind">' + (c.kind === 'limit' ? h(c.reason) : 'Answer at your Mac') + '</span></div>' +
       '<div class="t-sub l2" style="margin-top:6px">' + (c.kind === 'limit' ? 'The session continues by itself after the reset, or switch the account at your Mac.' : 'This request can only be answered in the terminal on your Mac.') + '</div></div>';
@@ -1850,7 +1850,7 @@ function overlays() {
   }
   if (S.auth) {
     const au = S.auth;
-    const what = au.reason === 'accept' ? 'Confirm to accept the decision' : au.reason === 'settings' ? 'Confirm to turn off Face ID for approvals' : 'Confirm to allow';
+    const what = au.reason === 'accept' ? 'Confirm to accept the decision' : au.reason === 'plan' ? 'Confirm to approve the plan' : au.reason === 'settings' ? 'Confirm to turn off Face ID for approvals' : 'Confirm to allow';
     if (au.stage === 'scan' || au.stage === 'ok') {
       o += '<div class="dim" style="background:rgba(0,0,0,.12)"></div><div class="faceid" role="alert" aria-label="Face ID">' +
         '<span class="fglyph' + (au.stage === 'ok' ? ' ok' : '') + '">' + ic(au.stage === 'ok' ? 'checkCircle' : 'faceid', 64) + '</span><div style="margin-top:10px">Face ID</div></div>' +
@@ -1938,7 +1938,8 @@ function act(el, e) {
       if (!ready()) return;
       const v = el.dataset.v;
       const send = function () { S.itemState[id] = 'sending'; S.sendingV = id + v; later(700, function () { finishDecision(id, v); }); };
-      if (v === 'allow' || v === 'always') guardApproval('allow', send); else send();
+      // Allow, Always and every plan approval ask for Face ID (decision 6, B13); Deny and answers never ask.
+      if (v === 'allow' || v === 'always') guardApproval('allow', send); else if (v === 'auto' || v === 'manual') guardApproval('plan', send); else send();
       break;
     }
     case 'pick': {

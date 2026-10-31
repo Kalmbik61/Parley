@@ -638,7 +638,8 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   `circle`. Поле «Other» — свой ответ (≤ предела `FEED_DECISION_ANSWER_LIMIT`). Кнопка **Send answer** внизу
   активна, когда на каждый вопрос есть ответ.
 - **План.** Текст плана — Markdown во всю ширину, прокрутка. Внизу две кнопки, слова как в окне: **Approve,
-  auto-accept edits** (`borderedProminent`) и **Approve, approve each edit** (`bordered`). Вариант «отклонить»
+  auto-accept edits** (`borderedProminent`) и **Approve, approve each edit** (`bordered`), обе под Face ID, со значком
+  `faceid` (12a, В13). Вариант «отклонить»
   в CLI — ответ в терминале: ниже ссылка-подпись «To keep planning, answer at your Mac».
 - **Нет карточки при `blocked`** (Codex, экран без события) → карточка
   `[desktopcomputer] Answer at your Mac` с `needReason` и строкой «This request can only be answered in the
@@ -671,7 +672,7 @@ Markdown без HTML; удалённые картинки не грузятся 
 | Нет ждущих карточек | статус-капсула + Last reply; нижней панели нет |
 | Ждёт ответа (разрешение / вопрос / план) | карточка + нижняя панель действий |
 | Без карточки при `blocked` | «Answer at your Mac» |
-| Face ID (Allow, Always) | системный запрос Face ID поверх экрана; кнопки выключены, вызов ещё не ушёл (12a) |
+| Face ID (Allow, Always, одобрение плана) | системный запрос Face ID поверх экрана; кнопки выключены, вызов ещё не ушёл (12a) |
 | Face ID отменён или не прошёл | запроса нет, карточка на месте, кнопки снова доступны; тост «Face ID cancelled — nothing was sent» |
 | Отправка | нажатая кнопка — спиннер, остальные выключены |
 | `applied: true` | haptic, карточка сворачивается, капсула меняется на **Working** при следующем перечитывании |
@@ -884,14 +885,14 @@ Haptic `notification(error)` один раз при появлении.
 | Allow and don't ask again («Always») | да |
 | Accept решения комнаты (`rooms.resolveProposal` с `accept`) | да |
 | Выключить «Require Face ID to allow» в Settings | да |
-| Deny, Return for rework, ответ на вопрос, выбор плана, просмотр | нет |
-| Выбор плана `auto-accept` | нет — открытый вопрос В13 |
+| Одобрение плана — оба варианта: «Approve, auto-accept edits» и «Approve, approve each edit» (В13) | да |
+| Deny, Return for rework, ответ на вопрос, отказ от плана и отзыв на него (они — в терминале на Маке), просмотр | нет |
 
 **Поток.**
 1. Тап по Allow / Accept → кнопки выключаются, вызов **ещё не уходит**.
 2. `LocalAuthentication.authenticateAsync({ promptMessage, disableDeviceFallback: false })`. Системный запрос
    Face ID поверх экрана — своего оформления нет. `promptMessage` (виден при коде и Touch ID): «Confirm to allow» /
-   «Confirm to accept the decision» / «Confirm to turn off Face ID for approvals».
+   «Confirm to approve the plan» / «Confirm to accept the decision» / «Confirm to turn off Face ID for approvals».
 3. Успех → вызов уходит; дальше всё как раньше: спиннер, итог `applied` / `already answered` / `conflict` / `lost`.
 4. **Отмена** (свайп, «Cancel», уход из приложения) → вызова нет, карточка или решение на месте, кнопки снова
    доступны; тост «Face ID cancelled — nothing was sent» (2 с). Haptic приложения нет — системный уже был.
@@ -965,9 +966,8 @@ Haptic `notification(error)` один раз при появлении.
   этап B (статус и так говорит `failed` / `cancelled`).
 - **В12. Иконка роя в React Native.** Порт `swarm-comb.ts` требует рисования по пикселям: `react-native-skia`
   (новая зависимость, шейдер SkSL) или статичные кадры без анимации. Решение — за A15 и ведущим.
-- **В13. Face ID на выбор плана `auto-accept`.** «Approve, auto-accept edits» разрешает агенту править файлы без
-  дальнейших вопросов — по смыслу это одобрение. По решению 6 выбор плана идёт без Face ID. Добавить ли его в список
-  12a? Предложение: да, только для `auto-accept`; «approve each edit» — без запроса.
+- **В13. Face ID на одобрение плана** — решено человеком (2026-10-31, спека §11.4, `8b1a9d1f`): Face ID на любом
+  одобрении плана, и с `auto-accept`, и без; отказ от плана и отзыв на него Face ID не спрашивают.
 - **В14. Телефон без кода-пароля.** Если на iPhone нет ни Face ID, ни кода, `authenticateAsync` не может ничего
   спросить (`passcode_not_set`). Варианты: (а) одобрения идут без проверки, в Settings предупреждение «This iPhone has
   no passcode — approvals are not protected»; (б) Allow и Accept недоступны, пока не задан код. Предложение — (а):
