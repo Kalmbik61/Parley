@@ -103,6 +103,7 @@ import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
 import { limitReturnFromEnv } from './wake/limit-return.js';
@@ -607,6 +608,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(async () => wakeService.stop());
 
+  // Сон агентов (спека 2026-10-30, 4.1): усыпляет простаивающих агентов Claude Code, а письмо поднимает их будильником.
+  // Сжатие создаётся ниже: замыкание читает его позже, как у будильника.
+  const autoSleepService = createAutoSleepService(handle.context, {
+    works: worksService,
+    activity: activityService,
+    pty: ptyManager,
+    sessions: sessionsService,
+    wake: wakeService,
+    compacting: (ref) => compactionService?.holds(ref) === true,
+    config: async () => (await loadConfig()).config,
+  });
+  handle.context.onShutdown(async () => autoSleepService.stop());
+
   compactionService = createCompactionService({
     host: handle.context,
     pty: ptyManager,
@@ -919,6 +933,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   swarmsService.start();
   history.start();
   wakeService.start();
+  autoSleepService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.
   await limitsService.start();
