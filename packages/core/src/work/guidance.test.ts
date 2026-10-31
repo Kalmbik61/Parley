@@ -781,8 +781,11 @@ describe('бюджет вставки в байтах (P34)', () => {
 
   it('строка get_map не несёт каталог провайдеров: он приходит по field "providers" и описан в create_session', () => {
     const stable = stableGuidance();
-    expect(stable).toContain('get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts;');
+    expect(stable).toContain('get_map — call first: partial summaries;');
     expect(stable).not.toContain('unread counts and providers');
+    expect(stable).toContain('collections give totals/next');
+    expect(stable).toContain('sessions|rooms|plans|deletedSessions|unreadRooms');
+    expect(stable).toContain('{field:plan,id,rev}');
   });
 
   it('стабильная часть и вся вставка укладываются в байтовые потолки, а диагностика это видит', () => {

@@ -475,6 +475,53 @@ describe('read_guide', () => {
 });
 
 describe('get_map', () => {
+  it('измеряет весь MCP-ответ, страницы списков и прямую сессию вне обзора', async () => {
+    await updateMap(project, workId, (map) => {
+      for (let i = 0; i < 118; i += 1) addSession(map, { provider: 'codex', label: '\u0000"\\😀'.repeat(1000), task: 'задача'.repeat(1000) });
+    });
+    const client = await connect('s-01');
+    const result = await client.callTool({ name: 'get_map', arguments: {} });
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThanOrEqual(49152);
+    const overview = JSON.parse((result.content as { text: string }[])[0]!.text);
+    expect(overview.map.collections.sessions.total).toBe(119);
+    expect(overview.map.collections.sessions.complete).toBe(false);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await callOk(client, 'get_map', { field: 'sessions', maxBytes: 2048, ...(cursor === null ? {} : { cursor }) });
+      seen.push(...(page['items'] as { id: string }[]).map((row) => row.id));
+      cursor = (page['page'] as { next: string | null }).next;
+    } while (cursor !== null);
+    expect(new Set(seen).size).toBe(119);
+    expect(seen).toHaveLength(119);
+    const detail = await callOk(client, 'get_map', { session: 's-119' });
+    expect(detail['session']).toMatchObject({ id: 's-119' });
+    expect((await callOk(client, 'get_map', { session: 's-119', field: 'task' }))['text']).toContain('задача');
+  });
+
+  it('полный план читается по точной ревизии кусками; чужая комната скрыта', async () => {
+    await updateMap(project, workId, (map) => {
+      const room = addRoom(map, { title: 'План', creator: HUMAN, members: ['s-01'] });
+      map.plans = [{ id: 'pl-01', rev: 3, roomId: room.id, mode: 'checklist', status: 'active', goal: 'ц'.repeat(10000), backlog: [],
+        acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null,
+        items: [{ id: 1, title: 'проверка', owner: 's-01', scope: 'область', after: [], criteria: ['к'.repeat(10000)], verifier: null, status: 'waiting', evidence: { text: 'доказательство'.repeat(1000), artifacts: ['proof.txt'] }, note: null, log: [] }] }];
+    });
+    const client = await connect('s-01');
+    let text = '';
+    let cursor: string | null = null;
+    do {
+      const page = await callOk(client, 'get_map', { field: 'plan', id: 'pl-01', rev: 3, maxBytes: 2048, ...(cursor === null ? {} : { cursor }) });
+      expect(page).toMatchObject({ id: 'pl-01', rev: 3, status: 'active' });
+      text += page['text'];
+      cursor = page['next'] as string | null;
+    } while (cursor !== null);
+    expect(JSON.parse(text)).toEqual((await readMap(project, workId)).plans![0]);
+    expect(JSON.parse(text).items[0].criteria[0]).toHaveLength(10000);
+    expect((await call(client, 'get_map', { field: 'plan', id: 'pl-01', rev: 2 })).text).toContain('unknown-target');
+    const outsider = await connect(null);
+    expect((await call(outsider, 'get_map', { field: 'plan', id: 'pl-01', rev: 3 })).text).toContain('not available');
+  });
+
   it('без аргументов — карта и своя сессия, без providers и без note', async () => {
     const client = await connect('s-01');
     const result = await callOk(client, 'get_map');
@@ -3316,10 +3363,12 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     await setStuck('s-02', need());
 
     const { sessions } = (await callOk(lead, 'get_map'))['map'] as {
-      sessions: { id: string; stuck: SessionNeed | null }[];
+      sessions: { id: string; stuck: SessionNeed['kind'] | null }[];
     };
 
-    expect(sessions.find((item) => item.id === 's-02')?.stuck).toEqual(need());
+    expect(sessions.find((item) => item.id === 's-02')?.stuck).toBe(need().kind);
+    const detail = await callOk(lead, 'get_map', { session: 's-02' });
+    expect((detail['session'] as { stuck: SessionNeed }).stuck).toEqual(need());
     expect(sessions.find((item) => item.id === 's-03')?.stuck).toBeNull();
   });
 
