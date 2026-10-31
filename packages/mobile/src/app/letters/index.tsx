@@ -6,7 +6,7 @@ import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { workParam } from '../../nav/refs';
 import { selectLetters, timeLabel } from '../../letters/letters-model';
 import { openedLetters } from '../../letters/opened';
-import { useRemoteState } from '../../runtime/use-remote';
+import { useRemoteState } from '../../hooks/use-remote';
 import { spacing, typography, useColors } from '../../theme';
 
 export default function LettersScreen() {

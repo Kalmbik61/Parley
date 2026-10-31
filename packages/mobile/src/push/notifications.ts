@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { selectNeedsYouCount } from '@parley/remote-client';
-import { useRemoteState } from '../runtime/use-remote';
+import { useRemoteState } from '../hooks/use-remote';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { runtime } from '../runtime/instance';
 import { clearHostNotifications } from './clear';

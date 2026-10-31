@@ -4,6 +4,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { attentionOfSession, selectWorks, sessionKey, type RemoteState, type SessionRef } from '@parley/remote-client';
 import { ActiveCard, InfoCard } from '../../cards/CardViews';
+import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { capsuleOf, needReason } from '../../cards/status';
 import { timeAgo } from '../../cards/model';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -64,6 +65,9 @@ export default function SessionScreen() {
     load(ref);
     return () => client.refresher.setScreen({ kind: 'other' });
   }, [client, ref?.projectPath, ref?.workId, ref?.sessionId]);
+
+  const goneHere = useMemo(() => (state === null || ref === null ? [] : goneEntries(state).filter((g) => g.gone.sessionKey === sessionKey(ref))), [state, ref?.projectPath, ref?.workId, ref?.sessionId]);
+  useGoneDismiss(client, goneHere);
 
   const found = useMemo(() => {
     if (state === null || ref === null) return null;
@@ -145,6 +149,11 @@ export default function SessionScreen() {
           </View>
         )}
         <StatusCapsule capsule={capsule} />
+        {goneHere.length > 0 && (
+          <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center' }]}>
+            Answered at your Mac
+          </Text>
+        )}
         {loading && entry === undefined && <Skeleton rows={1} />}
         {loadFailed && first === undefined && (
           <View style={{ gap: 8, alignItems: 'center', paddingVertical: 8 }}>

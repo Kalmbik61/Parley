@@ -4,6 +4,7 @@ import {
   alwaysRules,
   canAlways,
   EMPTY_QUESTION_DRAFT,
+  fullCommand,
   gistView,
   questionDecision,
   runDecision,
@@ -111,5 +112,15 @@ describe('timeAgo', () => {
     expect(timeAgo('2026-10-31T10:00:00Z', now)).toBe('2 h');
     expect(timeAgo('2026-10-29T12:00:00Z', now)).toBe('2 d');
     expect(timeAgo(null, now)).toBeNull();
+  });
+});
+
+describe('fullCommand', () => {
+  it('returns the whole multi-line command, or null for non-command cards', () => {
+    const card = (toolInput: unknown) => ({ kind: 'permission', toolInput }) as unknown as FeedPermissionCard;
+    expect(fullCommand(card({ command: 'a\nb' }))).toBe('a\nb');
+    expect(fullCommand(card({ command: ['git', 'push'] }))).toBe('git push');
+    expect(fullCommand(card({ file_path: 'x' }))).toBeNull();
+    expect(fullCommand({ kind: 'plan' } as never)).toBeNull();
   });
 });
