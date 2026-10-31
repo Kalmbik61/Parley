@@ -2,7 +2,7 @@ import { humanDecisionOutcome, plainHumanMention } from './attention.js';
 import { markedExcerpt, textHash } from './context-budget.js';
 import type { LetterQuery } from './letter-store.js';
 import { isRoomArchived } from './rooms.js';
-import { reportedStatus } from './session-state.js';
+import { agentStatus } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
 import { HUMAN, type Message, type MapCompact, type MapCompactMail, type RoomPlan, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
 
@@ -749,7 +749,7 @@ export interface SessionTopology {
   contextFrom: string[];
   lifecycle: WorkSession['lifecycle'];
   result: WorkSession['result'];
-  /** Единый статус для разговора с человеком: `reportedStatus`. */
+  /** Единый статус для разговора с человеком: `agentStatus` (у усыплённой хостом — `asleep`). */
   status: string;
   resultAt: string | null;
   closedAt: string | null;
@@ -853,7 +853,7 @@ export function mapTopology(map: WorkMap, callerId: string | null, letters: Lett
       contextFrom: session.contextFrom,
       lifecycle: session.lifecycle,
       result: session.result,
-      status: reportedStatus(session),
+      status: agentStatus(session),
       resultAt: session.resultAt,
       closedAt: session.closedAt,
       startedAt: session.startedAt,

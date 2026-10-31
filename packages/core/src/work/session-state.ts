@@ -3,14 +3,15 @@
  * на хосте, бриф и инструменты MCP агентов. Раньше этот вывод жил в трёх местах и расходился: помощник считал
  * запущенную сессию выключенной. Теперь окно, помощник и бриф импортируют его отсюда.
  *
- * Модуль чистый: ни Node-импортов, ни значений из других файлов core (типы объявлены здесь; единственный
- * импорт — типа `NeedKind` из `stuck.ts`, он стирается при сборке). Поэтому его берёт и окно через подпуть
+ * Модуль чистый: ни Node-импортов, ни значений из других файлов core (типы объявлены здесь; единственные
+ * импорты — типы из `stuck.ts` и `types.ts`, они стираются при сборке). Поэтому его берёт и окно через подпуть
  * `@parley/core/session-state`, как `@parley/core/assistant`. В protocol его положить нельзя: protocol сам
  * зависит от core.
  *
  * Статус из двух осей выводится двумя способами, и оба нужны намеренно:
  * - `reportedStatus` — итог важнее процесса. Сессия, сдавшая `done`, показывается готовой, жив её процесс или нет.
- *   Так статус называют агенту бриф и MCP.
+ *   Так статус называют агенту бриф и MCP. Их слово — `agentStatus`: то же, но сессию, которую усыпил хост, оно
+ *   называет `asleep`, а не `exited` (спека сна агентов 4.1).
  * - `liveStatus` — у живой сессии итог не показываем: агент сдаёт `report` в конце каждого хода и остаётся жить,
  *   так что состояние ведёт activity. Итог видят только спящая и закрытая сессии. Так рисуют точку окно и помощник.
  *
@@ -21,6 +22,7 @@
  */
 
 import type { NeedKind, SessionNeed } from './stuck.js';
+import type { AutoSleep, AutoSleepReason } from './types.js';
 
 /**
  * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он собирается из двух осей функциями
@@ -69,6 +71,17 @@ export function reportedStatus(session: SessionAxes): SessionStatus {
     case 'closed':
       return session.result ?? 'exited';
   }
+}
+
+/**
+ * Статус для агентов (спека сна агентов 4.1): `reportedStatus`, но сессия, которую усыпил хост, без итога — `asleep`.
+ * Она не закончила и не умерла: процесса нет, а письмо её поднимет. `exited` остаётся остановленной человеком.
+ * Итог важнее сна, как и у `reportedStatus`. Решает только `sleeping`: отметку сна `transitionSession` снимает при
+ * подъёме и закрытии, а если она осталась, жизненный цикл главнее.
+ */
+export function agentStatus(session: SessionAxes & { autoSleep?: AutoSleep | null }): SessionStatus | 'asleep' {
+  if (session.lifecycle === 'sleeping' && session.result == null && session.autoSleep != null) return 'asleep';
+  return reportedStatus(session);
 }
 
 /**
@@ -156,3 +169,21 @@ export const NEED_WORDS: Readonly<Record<NeedKind, string>> = {
 export function needWord(kind: NeedKind): string {
   return NEED_WORDS[kind];
 }
+
+/**
+ * Слово состояния усыплённой хостом сессии по причине сна: `asleep` и в чём дело. Английские, как `STATE_WORDS`, и лежат
+ * рядом с ней, а не в строках окна.
+ */
+export const AUTO_SLEEP_WORDS: Readonly<Record<AutoSleepReason, string>> = {
+  idle: 'asleep · idle',
+  'swarm-done': 'asleep · swarm done',
+};
+
+/** Слово причины сна из таблицы `AUTO_SLEEP_WORDS`. */
+export function autoSleepWord(reason: AutoSleepReason): string {
+  return AUTO_SLEEP_WORDS[reason];
+}
+
+/** Подсказка тому, кто ждёт усыплённую хостом цель (`wait_for(<id>)`): ждать итога незачем, письмо её поднимет. */
+export const asleepHint = (target: string): string =>
+  `${target} is asleep until mail arrives: write to it, or wait for mail via inbox.`;

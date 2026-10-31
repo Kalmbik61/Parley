@@ -79,7 +79,7 @@ import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOO
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
-import { reportedStatus } from '../work/session-state.js';
+import { agentStatus, asleepHint } from '../work/session-state.js';
 import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
@@ -117,7 +117,8 @@ const SETTLE_SLACK_MS = 20;
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
  * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
- * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает. Идёт замена агента (спека
+ * процесса больше нет — ушла в `sleeping` или `closed`. Усыплённая хостом (`autoSleep`) — `asleep`: она не кончила
+ * и не умерла, письмо её поднимет (спека сна агентов 4.1). `null` — цель ещё работает. Идёт замена агента (спека
  * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
  * `stuck` снят, но работа у неё не кончилась.
  */
@@ -125,6 +126,7 @@ export function finishedState(session: WorkSession): string | null {
   if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
+  if (session.lifecycle === 'sleeping' && session.autoSleep != null) return 'asleep';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
     ? session.lifecycle
     : null;
@@ -713,7 +715,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       const withSummary = map.sessions.filter((session) => session.summary !== null);
       const { items, page } = pageBySeq(withSummary, {
         seq: (session) => seqOf(session.id, 's-'),
-        view: (session) => ({ id: session.id, label: session.label, status: reportedStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        view: (session) => ({ id: session.id, label: session.label, status: agentStatus(session), source: session.summarySource, text: session.summary ?? '' }),
         shrink: (view, limit) => shrinkSummary(view, limit),
         cursor: parseCursor(cursorRaw),
         maxBytes,
@@ -806,7 +808,7 @@ async function report(
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
     // харнесс ещё не отметил запущенной.
-    status: session.result ?? reportedStatus(session),
+    status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
   };
@@ -924,6 +926,9 @@ async function waitFor(
           hint: stuckHint(target, session.stuck, new Date()),
         };
       }
+      // Усыплённая хостом: итога не будет, пока её не разбудит письмо, а ждать её до таймаута впустую. Отвечаем сразу и вместо
+      // резюме и артефактов даём подсказку, что делать: писать ей или ждать почту.
+      if (state === 'asleep') return { state, sessionId: target, hint: asleepHint(target) };
       return state !== null
         ? {
             state,

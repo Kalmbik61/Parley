@@ -184,8 +184,12 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export {
+  AUTO_SLEEP_WORDS,
   NEED_WORDS,
   STATE_WORDS,
+  agentStatus,
+  asleepHint,
+  autoSleepWord,
   dotState,
   liveStatus,
   needWord,

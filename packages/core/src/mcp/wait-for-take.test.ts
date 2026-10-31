@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
+import { asleepHint } from '../work/session-state.js';
 import { createWork, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { unreadLetters, writeLetters, type NewLetter } from '../work/letter-store.js';
 import { HUMAN, type WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
-import { createToolRunner, type ToolRunner } from './tools.js';
+import { createToolRunner, finishedState, type ToolRunner } from './tools.js';
 
 /**
  * Порядок внутри `wait_for("inbox")`: письма забираются и отмечаются прочитанными ПОСЛЕ записи `ParleyWaitEnd` в журнал, а не
@@ -595,5 +596,118 @@ describe('отметка «засыпает»: письма не выдаютс�
 
     expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['письмо']);
     expect(unreadTexts()).toEqual([]);
+  });
+});
+
+describe('усыплённая хостом сессия в ответах инструментов: asleep, а не exited; wait_for(<id>) отвечает сразу, с подсказкой', () => {
+  const SLEPT = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null } as const;
+  /** Меняет сессию в карте так, как это делает хост: жизненный цикл, итог сна. По умолчанию — цель ожидания `s-02`. */
+  const patch = (patcher: (session: WorkSession) => void, id = 's-02'): Promise<unknown> =>
+    updateMap(project, workId, (map) => { patcher(map.sessions.find((session) => session.id === id)!); });
+  const sleepTarget = (): Promise<unknown> =>
+    patch((session) => {
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+    });
+  const waitForTarget = async (): Promise<Record<string, unknown>> => body(await runner.call('wait_for', { target: 's-02', timeoutSec: 30 }, undefined));
+
+  it('wait_for(<id>) на усыплённую хостом цель сразу отвечает asleep с подсказкой, без резюме и артефактов', async () => {
+    await sleepTarget();
+    const startedAt = Date.now();
+
+    expect(await waitForTarget()).toEqual({ state: 'asleep', sessionId: 's-02', hint: asleepHint('s-02') });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    // Ожидание не начиналось: в журнале нет ни одной строки.
+    expect(await journalLines()).toEqual([]);
+  });
+
+  it('цель заснула посреди ожидания: ожидание просыпается ответом asleep, а не таймаутом', async () => {
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => { started = resolve; });
+    journal.beforeLine = (line) => {
+      if (line.includes('ParleyWaitStart')) started();
+    };
+
+    const waiting = runner.call('wait_for', { target: 's-02', timeoutSec: 30 }, undefined);
+    await hasStarted;
+    const startedAt = Date.now();
+    await sleepTarget();
+
+    expect(body(await waiting)).toEqual({ state: 'asleep', sessionId: 's-02', hint: asleepHint('s-02') });
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect((await journalLines()).map((line) => line['hook_event_name'])).toEqual(['ParleyWaitStart', 'ParleyWaitEnd']);
+  });
+
+  it('итог цели важнее сна: done с резюме и артефактами', async () => {
+    await patch((session) => {
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+      session.result = 'done';
+      session.summary = 'готово';
+    });
+
+    expect(await waitForTarget()).toEqual({ state: 'done', sessionId: 's-02', summary: 'готово', artifacts: [] });
+  });
+
+  it('застрявшая цель важнее сна: stuck с подсказкой', async () => {
+    await patch((session) => {
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+      session.stuck = { kind: 'limit', since: '2026-10-31T11:00:00.000Z', detail: null, resetsAt: null, window: null, account: null };
+    });
+
+    const answer = await waitForTarget();
+
+    expect(answer).toMatchObject({ state: 'stuck', sessionId: 's-02' });
+    expect(answer['hint']).toEqual(expect.any(String));
+  });
+
+  it('остановленная человеком цель (sleeping без autoSleep) отвечает sleeping, как раньше', async () => {
+    await patch((session) => { session.lifecycle = 'sleeping'; });
+
+    expect(await waitForTarget()).toEqual({ state: 'sleeping', sessionId: 's-02', summary: null, artifacts: [] });
+  });
+
+  it('finishedState: замена агента первая, затем итог, stuck, сон по решению хоста и прежние sleeping/closed', () => {
+    const base = { result: null, stuck: null, lifecycle: 'sleeping', autoSleep: SLEPT } as unknown as WorkSession;
+    const switching = { id: 'req', to: 'custom-claude-2', since: '2026-10-31T12:00:00.000Z' };
+
+    // Между остановкой прежнего агента и стартом нового сессия sleeping, но работа не кончилась.
+    expect(finishedState({ ...base, switching })).toBeNull();
+    expect(finishedState({ ...base, switching, result: 'done' })).toBeNull();
+    expect(finishedState({ ...base, result: 'failed' })).toBe('failed');
+    expect(finishedState({ ...base, stuck: { kind: 'limit' } } as unknown as WorkSession)).toBe('stuck');
+    expect(finishedState(base)).toBe('asleep');
+    expect(finishedState({ ...base, autoSleep: null })).toBe('sleeping');
+    expect(finishedState({ ...base, lifecycle: 'closed' } as WorkSession)).toBe('closed');
+    expect(finishedState({ ...base, lifecycle: 'active' } as WorkSession)).toBeNull();
+  });
+
+  it('get_map summaries: статус усыплённой хостом сессии — asleep, остановленной человеком — exited', async () => {
+    await patch((session) => {
+      session.summary = 'план готов';
+      session.lifecycle = 'sleeping';
+    }, 's-01');
+    await patch((session) => {
+      session.summary = 'бэк готов';
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+    });
+
+    const summaries = body(await runner.call('get_map', { field: 'summaries' }, undefined))['summaries'] as { id: string; status: string }[];
+
+    expect(summaries.map((row) => [row.id, row.status])).toEqual([['s-01', 'exited'], ['s-02', 'asleep']]);
+  });
+
+  it('report позднего вызова усыплённой хостом сессии называет статус asleep, а не exited', async () => {
+    await patch((session) => {
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...SLEPT };
+    }, 's-01');
+
+    const answer = body(await runner.call('report', { status: 'progress', summary: 'ещё работаю' }, undefined));
+
+    expect(answer['status']).toBe('asleep');
   });
 });
