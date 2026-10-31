@@ -66,6 +66,8 @@ import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createCapacityService } from './capacity/capacity-service.js';
+import { createPressureSensor } from './capacity/memory-pressure.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createConsentsService } from './consents/consents-service.js';
 import { createHeldLaunchActions } from './consents/held-launches.js';
@@ -542,12 +544,31 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   });
   handle.context.onShutdown(async () => consentsService.stop());
+  // Датчик давления памяти (спека 2026-10-30, 4.2): раз в 10 с читает уровень. По нему сервис ёмкости пускает запуски или
+  // держит их в очереди, а сервис сна решает, пора ли усыплять простаивающих. Читать начинает перед будильником (ниже).
+  const pressureSensor = createPressureSensor();
+  handle.context.onShutdown(async () => pressureSensor.stop());
+  // Потолок машины (спека 2026-10-30, 4.2): допуск запусков, резерв слота и очередь. Заводится до сессий, они зовут его на
+  // каждом `launch`; продолжение очереди (`launch`, `retry`) и сон ради слота читают сервисы, созданные ниже, — привязка
+  // поздняя, как у согласий. Останавливается раньше `stopAll`, чтобы выходы процессов при остановке хоста не продвигали
+  // очередь.
+  const capacityService = createCapacityService(handle.context, {
+    pty: ptyManager,
+    works: worksService,
+    pressure: pressureSensor,
+    config: async () => (await loadConfig()).config,
+    launch: (ref, mode, choice) => sessionsService.launch(ref, mode, choice),
+    retry: (ref) => wakeService.retry(ref),
+    sleep: () => autoSleepService,
+  });
+  handle.context.onShutdown(async () => capacityService.stop());
   sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
     {
+      capacity: capacityService,
       consents: consentsService,
       hooks: hookServer,
       providerVersions,
@@ -621,6 +642,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     wake: wakeService,
     compacting: (ref) => compactionService?.holds(ref) === true,
     config: async () => (await loadConfig()).config,
+    // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
+    pressure: pressureSensor,
   });
   handle.context.onShutdown(async () => autoSleepService.stop());
 
@@ -664,9 +687,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     feed: feedService,
     send,
     launch: async (ref, mode, options) => {
+      const outcome = await sessionsService.launch(ref, mode, options);
       // Запуск Codex ждёт согласия человека на папку: письмо ассистента не доставлено, он скажет об этом и не отметит «sent».
-      if ((await sessionsService.launch(ref, mode, options)) === 'held') {
+      if (outcome === 'held') {
         throw new HostError('conflict', 'The session waits for the human to trust the folder. Send the message again after it is allowed.');
+      }
+      // Машине тесно: сессия стоит в очереди и стартует сама, а письмо ей пока уйти не может — так же.
+      if (outcome === 'queued') {
+        throw new HostError('conflict', 'This machine is at its agent limit: the session is queued and starts by itself when a slot frees. Send the message again after it starts.');
       }
     },
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
@@ -935,8 +963,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   autonomousEngine.start();
   swarmsService.start();
   history.start();
+  // Датчик начинает читать раньше будильника и сна, очередь стартует после них: уже первый проход насоса может и
+  // перепроверить письма (будильник), и усыпить простаивающего ради слота (сон).
+  pressureSensor.start();
   wakeService.start();
   autoSleepService.start();
+  // Очередь собирается из карт работ, прочитанных выше: запуски, что ждали слота до перезапуска хоста, продолжаются.
+  capacityService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.
   await limitsService.start();

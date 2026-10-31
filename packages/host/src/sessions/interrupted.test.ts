@@ -8,7 +8,7 @@ const event = (name: string, notificationType: string | null = null): EventRecor
   notificationType,
 });
 
-const entryOf = (sessions: Array<{ id: string; lifecycle: string; autoSleep?: object | null }>): WorkEntry =>
+const entryOf = (sessions: Array<{ id: string; lifecycle: string; autoSleep?: object | null; queued?: object | null }>): WorkEntry =>
   ({
     projectPath: '/tmp/p',
     map: { work: { id: 'w-01' }, sessions },
@@ -55,6 +55,21 @@ describe('findInterrupted', () => {
     ]);
 
     const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit'), event('ParleyWaitStart')]);
+
+    expect(refs.map((ref) => ref.sessionId)).toEqual(['s-02', 's-03']);
+  });
+
+  it('сессия в очереди машины не прервана: её продолжит очередь, поднимать её человеку не предлагают', async () => {
+    const queued = { class: 'agent', mode: 'resume', by: 'wake', at: '2026-10-31T12:00:00.000Z', reason: 'machine-limit', live: 18, limit: 18 };
+    const entry = entryOf([
+      // Запуск ждёт слота: журнал оборван посреди хода, но процесса не было и поднимет её очередь.
+      { id: 's-01', lifecycle: 'sleeping', queued },
+      { id: 's-02', lifecycle: 'sleeping' },
+      // Пустой ключ очереди ничего не меняет.
+      { id: 's-03', lifecycle: 'sleeping', queued: null },
+    ]);
+
+    const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit')]);
 
     expect(refs.map((ref) => ref.sessionId)).toEqual(['s-02', 's-03']);
   });

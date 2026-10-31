@@ -113,6 +113,34 @@ describe('create_swarm и swarm_add MCP', () => {
     expect(requests.every(request => (request.body as { op: string }).op === 'add')).toBe(true);
   });
 
+  it('queued в ответе create_swarm и swarm_add — вторым блоком фраза про очередь машины, как у create_session', async () => {
+    const queuedNote =
+      'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.';
+    const client = await connect(await startEndpoint());
+    answer.body = { ok: true, result: { swarmId: 'sw-01', queenSessionId: 's-02', queued: 'machine-limit' } };
+    const created = await call(client, 'create_swarm', CREATE);
+    expect(created.isError).not.toBe(true);
+    const [createdJson, createdNote, ...createdRest] = created.text.split('\n');
+    expect(JSON.parse(createdJson!)).toEqual({ swarmId: 'sw-01', queenSessionId: 's-02', queued: 'machine-limit' });
+    expect(createdNote).toBe(queuedNote);
+    expect(createdRest).toEqual([]);
+
+    answer.body = { ok: true, result: { sessionId: 's-03', member: 'Drone 1', queued: 'memory-critical' } };
+    const added = await call(client, 'swarm_add', ADD);
+    expect(added.isError).not.toBe(true);
+    const [addedJson, addedNote, ...addedRest] = added.text.split('\n');
+    expect(JSON.parse(addedJson!)).toEqual({ sessionId: 's-03', member: 'Drone 1', queued: 'memory-critical' });
+    expect(addedNote).toBe(queuedNote);
+    expect(addedRest).toEqual([]);
+  });
+
+  it('без queued, и с незнакомой причиной, рой отвечает одним блоком', async () => {
+    const client = await connect(await startEndpoint());
+    expect((await call(client, 'create_swarm', CREATE)).text).not.toContain('queued');
+    answer.body = { ok: true, result: { sessionId: 's-03', member: 'Drone 1', queued: 'something-new' } };
+    expect((await call(client, 'swarm_add', ADD)).text.split('\n')).toHaveLength(1);
+  });
+
   it('отказы хоста уходят текстом code: message', async () => {
     const client = await connect(await startEndpoint());
     answer.body = { ok: false, error: { code: 'not-queen', message: 'Only the queen of a swarm can add members to it.' } };

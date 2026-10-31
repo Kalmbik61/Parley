@@ -16,8 +16,11 @@ export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: str
 
 export type WorkStatus = 'active' | 'done' | 'archived';
 
-/** Почему хост усыпил сессию: простой или конец роя (спека сна агентов 2026-10-30, 4.1). */
-export type AutoSleepReason = 'idle' | 'swarm-done';
+/**
+ * Почему хост усыпил сессию: простой, конец роя, давление памяти или освобождение слота под запуск из очереди
+ * (спека сна агентов и ёмкости 2026-10-30, 4.1 и 4.2).
+ */
+export type AutoSleepReason = 'idle' | 'swarm-done' | 'pressure' | 'slot';
 
 /** Сон по решению хоста: что и когда решено. Поле `autoSleep` сессии; тот же вид у отметки `autoSleepPending`. */
 export interface AutoSleep {
@@ -26,6 +29,30 @@ export interface AutoSleep {
   at: string;
   /** Цель `wait_for(<id>)` в момент сна; `null` — ждала письма или не ждала. */
   waitTarget: string | null;
+}
+
+/** Давление памяти машины; `unknown` — данных нет, и он ведёт себя как `normal` (спека 4.2, «Давление памяти»). */
+export type MemoryPressure = 'normal' | 'warn' | 'critical' | 'unknown';
+
+/** Класс запуска для допуска под потолок машины (спека 4.2, «Классы запусков»); очередь движка не касается. */
+export type LaunchClass = 'human' | 'mail' | 'agent' | 'engine';
+
+/** Почему запуск встал в очередь: потолок живых CLI полон или давление памяти `critical`. */
+export type QueueReason = 'machine-limit' | 'memory-critical';
+
+/** Запись очереди машины в карте сессии (спека 4.2, «Очередь»): запуск отложен, процесса и worktree ещё нет. */
+export interface QueuedLaunch {
+  class: Exclude<LaunchClass, 'engine'>;
+  /** Вид отложенного запуска — с ним запуск и продолжится. */
+  mode: 'launch' | 'resume' | 'new';
+  /** `LaunchChoice.by` отложенного запуска: `human`, `wake` или id сессии. */
+  by: string;
+  /** Когда запуск впервые встал в очередь (ISO); при повторной постановке остаётся прежним. */
+  at: string;
+  reason: QueueReason;
+  /** Сколько CLI было живо и зарезервировано в момент постановки, и потолок: для слова «limit 18/18». */
+  live: number;
+  limit: number | null;
 }
 
 /**
@@ -237,6 +264,12 @@ export interface WorkSession {
   autoSleepPending?: AutoSleep | null;
   /** Человек запретил сон («Keep awake»); агент этот флаг не ставит. Нет поля — то же, что `false`. */
   keepAwake?: boolean;
+  /**
+   * Запуск ждёт свободного слота машины (спека 4.2, «Очередь»): процесса и worktree нет, а по записи хост после
+   * перезапуска собирает очередь заново. Пишет хост под замком карты; `transitionSession` снимает запись при подъёме
+   * и закрытии. Нет поля — то же, что `null`: сессия не в очереди, миграции карты не нужно.
+   */
+  queued?: QueuedLaunch | null;
 }
 
 /**

@@ -923,6 +923,197 @@ describe('SettingsDialog — Sleep idle agents after', () => {
   });
 });
 
+// Потолок CLI на машине и сон под давлением (план ёмкости 2, задача 10; спека 4.4): два поля вслед за «Sleep idle agents after».
+describe('SettingsDialog — потолок машины и сон под давлением', () => {
+  const PRESSURE_LABEL = 'Sleep idle agents sooner when the machine is busy (min, 1–60)';
+  const LIMIT_LABEL = 'Agents running at once on this machine (off, auto or 1–128)';
+  const LIMIT_HINT = 'Auto is 75% of RAM in GB. At the limit, agent launches wait in a queue; your own launches may go up to 2 over it.';
+  const WARNING = 'Sleep is off: idle agents keep their slots, so queued launches may wait a long time.';
+  // Как у хоста по умолчанию (спека 4.4): под давлением — 5 минут, потолок выключен.
+  const MACHINE = { ...CONFIG, sleepUnderPressureMinutes: 5, machineConcurrent: 'off' };
+
+  it('оба поля показывают значения конфига и стоят сразу после «Sleep idle agents after»; подсказка — под полем потолка', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({
+      config: { ...MACHINE, sleepAfterMinutes: 45, sleepUnderPressureMinutes: 10, machineConcurrent: 18 },
+      locked: {},
+    }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const pressure = (await screen.findByLabelText(PRESSURE_LABEL)) as HTMLInputElement;
+    const limit = screen.getByLabelText(LIMIT_LABEL) as HTMLInputElement;
+    expect(pressure.value).toBe('10');
+    expect(limit.value).toBe('18');
+    expect(pressure.disabled).toBe(false);
+    expect(limit.disabled).toBe(false);
+
+    const sleep = screen.getByLabelText('Sleep idle agents after (min, 0 = off)') as HTMLInputElement;
+    const fields = Array.from(screen.getByTestId('settings-pane').querySelectorAll('input'));
+    expect(fields.indexOf(pressure)).toBe(fields.indexOf(sleep) + 1);
+    expect(fields.indexOf(limit)).toBe(fields.indexOf(sleep) + 2);
+
+    // Подсказка — отдельная строка после поля, а не часть его подписи: подпись остаётся точной.
+    const hint = screen.getByText(LIMIT_HINT);
+    expect(limit.closest('label')?.contains(hint)).toBe(false);
+    expect(limit.closest('label')?.nextElementSibling).toBe(hint);
+  });
+
+  it('потолок «off» и «auto» показаны словами, как хранит конфиг', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: MACHINE, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    expect(((await screen.findByLabelText(LIMIT_LABEL)) as HTMLInputElement).value).toBe('off');
+    cleanup();
+
+    bridge.setHandler('settings.get', () => ({ config: { ...MACHINE, machineConcurrent: 'auto' }, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    expect(((await screen.findByLabelText(LIMIT_LABEL)) as HTMLInputElement).value).toBe('auto');
+  });
+
+  it('blur поля потолка со значением auto зовёт settings.set(machineConcurrent, auto)', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: MACHINE, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...MACHINE, [key]: value } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = await screen.findByLabelText(LIMIT_LABEL);
+    fireEvent.change(input, { target: { value: 'auto' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'machineConcurrent', value: 'auto' } }),
+    );
+  });
+
+  it('blur поля сна под давлением зовёт settings.set с ключом и текстом', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: MACHINE, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...MACHINE, [key]: Number(value) } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = await screen.findByLabelText(PRESSURE_LABEL);
+    fireEvent.change(input, { target: { value: '15' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'sleepUnderPressureMinutes', value: '15' } }),
+    );
+  });
+
+  it('отказ хоста по потолку — безопасный текст под полем, текст хоста в окно не попадает', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: MACHINE, locked: {} }));
+    bridge.setHandler('settings.set', () => {
+      throw { code: 'bad_request', message: 'machineConcurrent: expected "off", "auto" or an integer /private/path' };
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+      switchTo('Agents');
+      const input = await screen.findByLabelText(LIMIT_LABEL);
+      fireEvent.change(input, { target: { value: 'max' } });
+      fireEvent.blur(input);
+
+      await screen.findByText("Couldn't save settings: invalid request.");
+      expect(document.body.textContent).not.toContain('/private/path');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('задано переменной окружения: оба поля неактивны и подписаны именем переменной', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({
+      config: MACHINE,
+      locked: {
+        machineConcurrent: 'PARLEY_MACHINE_CONCURRENT',
+        sleepUnderPressureMinutes: 'PARLEY_SLEEP_UNDER_PRESSURE_MINUTES',
+      },
+    }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText(/set by PARLEY_MACHINE_CONCURRENT/);
+    expect(screen.getByText(/set by PARLEY_SLEEP_UNDER_PRESSURE_MINUTES/)).toBeTruthy();
+    // Подпись запертого поля несёт ещё и «(set by …)», поэтому ищем по началу.
+    expect((screen.getByLabelText(/^Agents running at once on this machine/) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/^Sleep idle agents sooner/) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  describe('предупреждение «Sleep is off»', () => {
+    it('потолок включён, сон выключен — предупреждение есть, и для числа, и для auto', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('settings.get', () => ({ config: { ...MACHINE, machineConcurrent: 12, sleepAfterMinutes: 0 }, locked: {} }));
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+      switchTo('Agents');
+      expect(await screen.findByText(WARNING)).toBeTruthy();
+      cleanup();
+
+      bridge.setHandler('settings.get', () => ({ config: { ...MACHINE, machineConcurrent: 'auto', sleepAfterMinutes: 0 }, locked: {} }));
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+      switchTo('Agents');
+      expect(await screen.findByText(WARNING)).toBeTruthy();
+    });
+
+    it('сон включён — предупреждения нет', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('settings.get', () => ({ config: { ...MACHINE, machineConcurrent: 12, sleepAfterMinutes: 60 }, locked: {} }));
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+      switchTo('Agents');
+      await screen.findByLabelText(LIMIT_LABEL);
+      expect(screen.queryByText(WARNING)).toBeNull();
+    });
+
+    it('потолок выключен — предупреждения нет, даже если и сон выключен', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('settings.get', () => ({ config: { ...MACHINE, machineConcurrent: 'off', sleepAfterMinutes: 0 }, locked: {} }));
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+      switchTo('Agents');
+      await screen.findByLabelText(LIMIT_LABEL);
+      expect(screen.queryByText(WARNING)).toBeNull();
+    });
+
+    it('человек включает потолок при выключенном сне — предупреждение появляется по ответу хоста', async () => {
+      const bridge = createFakeBridge();
+      bridge.setHandler('settings.get', () => ({ config: MACHINE, locked: {} }));
+      bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...MACHINE, [key]: value } }));
+      render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+      switchTo('Agents');
+      const input = await screen.findByLabelText(LIMIT_LABEL);
+      expect(screen.queryByText(WARNING)).toBeNull();
+      fireEvent.change(input, { target: { value: 'auto' } });
+      fireEvent.blur(input);
+
+      expect(await screen.findByText(WARNING)).toBeTruthy();
+    });
+  });
+
+  it('хост прежней версии ключей не знает — ни полей, ни подсказки, ни предупреждения; соседние на месте', async () => {
+    const bridge = createFakeBridge();
+    // CONFIG — как у хоста до плана ёмкости: сон выключен, а ключей потолка и порога давления нет.
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByLabelText(PRESSURE_LABEL)).toBeNull();
+    expect(screen.queryByLabelText(LIMIT_LABEL)).toBeNull();
+    expect(screen.queryByText(LIMIT_HINT)).toBeNull();
+    expect(screen.queryByText(WARNING)).toBeNull();
+    expect(screen.getByLabelText(/Sleep idle agents after/)).toBeTruthy();
+  });
+});
+
 describe('SettingsDialog — «Let agents use the browser» (спека браузера 4.8; этап B2)', () => {
   it('в секции Browser, включён по умолчанию; клик — app.saveUi с browser.agentsAllowed: false и зеркало ui', async () => {
     const bridge = createFakeBridge();

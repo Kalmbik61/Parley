@@ -15,13 +15,18 @@ import {
   transitionSession,
   updateMap,
 } from '@parley/core';
-import type { AutoSleep, LetterTx, SessionActivity, WorkMap, WorkSession } from '@parley/core';
+import type { AutoSleep, LetterTx, MemoryPressure, SessionActivity, WorkMap, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { PtyHandle } from '../pty/pty-manager.js';
-import { ALLOW_WAITER_SLEEP, AUTO_SLEEP_TICK_MS, createAutoSleepService } from './auto-sleep-service.js';
+import {
+  ALLOW_WAITER_SLEEP,
+  AUTO_SLEEP_TICK_MS,
+  PRESSURE_PACE_MS,
+  createAutoSleepService,
+} from './auto-sleep-service.js';
 import type { AutoSleepService, AutoSleepServiceDeps } from './auto-sleep-service.js';
 import { SURVIVOR_CHECK_MS } from './descendants.js';
 
@@ -38,6 +43,7 @@ let workId = '';
 /** Часы сервиса: тест двигает их сам, настоящее время идёт только для записей карты. */
 let clock = T0;
 let sleepAfterMinutes = 60;
+let sleepUnderPressureMinutes = 5;
 /** Живые PTY хоста; выход процесса убирает ручку отсюда. */
 let live: PtyHandle[] = [];
 let lives = new Map<string, SessionLive>();
@@ -66,6 +72,7 @@ beforeEach(async () => {
   workId = '';
   clock = T0;
   sleepAfterMinutes = 60;
+  sleepUnderPressureMinutes = 5;
   live = [];
   lives = new Map();
   listeners = [];
@@ -181,7 +188,7 @@ function boot(over: Partial<AutoSleepServiceDeps> = {}): AutoSleepService {
       },
     },
     compacting: (ref) => compacting.has(ref.sessionId),
-    config: async () => ({ sleepAfterMinutes }),
+    config: async () => ({ sleepAfterMinutes, sleepUnderPressureMinutes }),
     now: () => clock,
     // Настоящих процессов и `ps` в тестах нет: потомков и живых задаёт тест.
     descendants: async (rootPid) => {
@@ -718,14 +725,17 @@ describe('сервис сна агентов', () => {
   });
 
   it('изменение активности проверяет сессию сразу, а работающую — без чтения настроек', async () => {
-    const config = vi.fn(async () => ({ sleepAfterMinutes }));
+    const config = vi.fn(async () => ({ sleepAfterMinutes, sleepUnderPressureMinutes }));
     const ref = await startSession({ activity: workingActivity() });
     boot({ config });
+    // Единственное чтение — при start(): `slotCandidate` знает настройки до первого прохода.
+    await quiet();
+    expect(config).toHaveBeenCalledTimes(1);
     clock = T0 + 61 * MIN;
 
     publish(ref, workingActivity({ lastEventAt: iso(T0 + MIN) }));
     await quiet();
-    expect(config).not.toHaveBeenCalled();
+    expect(config).toHaveBeenCalledTimes(1);
     expect(stops).toEqual([]);
 
     // Ход окончился давно (T0): таймера ждать не надо.
@@ -1181,5 +1191,460 @@ describe('сервис сна: потомки после сна', () => {
 
     expect(stops).toEqual([]);
     expect(collected).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Сон по давлению и ради слота (спека 4.2)
+// ---------------------------------------------------------------------------------------------
+
+describe('сервис сна: по давлению и ради слота', () => {
+  /** «Сейчас» этих тестов: простой считается от него назад. */
+  const NOW = T0 + 40 * MIN;
+  /** Слушатели подставного датчика памяти: тест зовёт их сам, как датчик раз в 10 с. */
+  let readers: Array<(reading: { level: MemoryPressure }) => void> = [];
+
+  const sensor: NonNullable<AutoSleepServiceDeps['pressure']> = {
+    current: () => ({ level: 'normal' }),
+    onReading: (listener) => {
+      readers.push(listener);
+      return () => {
+        readers = readers.filter((item) => item !== listener);
+      };
+    },
+  };
+
+  beforeEach(() => {
+    readers = [];
+    clock = NOW;
+  });
+
+  /** Датчик прочитал давление `level` в момент `at` (часы теста); сервису даём закончить начатый сон. */
+  async function reading(level: MemoryPressure, at: number): Promise<void> {
+    clock = at;
+    for (const listener of readers) listener({ level });
+    await quiet();
+  }
+
+  /** Живая сессия, у которой ход кончился `minutes` минут назад от `NOW`. */
+  const idleFor = (minutes: number): Promise<SessionRef> =>
+    startSession({ activity: idleActivity(NOW - minutes * MIN) });
+
+  /** Подмена `stop`: процесс не выходит, пока тест не вызовет `release`. */
+  function holdStops(): () => void {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stopImpl = async (ref) => {
+      recordStop(ref);
+      await gate;
+      await exitProcess(ref);
+    };
+    return release;
+  }
+
+  it('темп сна по давлению: при warn 30 с, при critical 10 с', () => {
+    expect(PRESSURE_PACE_MS).toEqual({ warn: 30_000, critical: 10_000 });
+  });
+
+  it('при warn — не больше одной сессии за 30 с, самая давняя первой', async () => {
+    const middle = await idleFor(20);
+    const oldest = await idleFor(30);
+    const newest = await idleFor(10);
+    boot({ pressure: sensor });
+
+    await reading('warn', NOW);
+    expect(slept()).toEqual([oldest.sessionId]);
+    expect(sessionOf(oldest).autoSleep).toEqual({ reason: 'pressure', at: iso(NOW), waitTarget: null });
+    expect(sessionOf(oldest).history.at(-1)).toMatchObject({ event: 'sleeping', reason: 'pressure' });
+    expect(retries).toEqual([{ ref: oldest, lifecycle: 'sleeping' }]);
+    expect(logs).toContainEqual({
+      level: 'info',
+      msg: 'агент усыплён',
+      data: { ref: oldest, reason: 'pressure', idleMin: 30 },
+    });
+
+    // Следующая — не раньше чем через 30 с после прошлого сна по давлению.
+    await reading('warn', NOW + 10_000);
+    await reading('warn', NOW + PRESSURE_PACE_MS.warn - 1);
+    expect(slept()).toEqual([oldest.sessionId]);
+
+    await reading('warn', NOW + PRESSURE_PACE_MS.warn);
+    expect(slept()).toEqual([oldest.sessionId, middle.sessionId]);
+    expect(sessionOf(middle).autoSleep?.reason).toBe('pressure');
+    expect(sessionOf(newest).lifecycle).toBe('active');
+  });
+
+  it('при critical — одна сессия за 10 с', async () => {
+    const oldest = await idleFor(30);
+    const middle = await idleFor(20);
+    const newest = await idleFor(10);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical - 1);
+    expect(slept()).toEqual([oldest.sessionId]);
+
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical);
+    expect(slept()).toEqual([oldest.sessionId, middle.sessionId]);
+
+    await reading('critical', NOW + 2 * PRESSURE_PACE_MS.critical);
+    expect(slept()).toEqual([oldest.sessionId, middle.sessionId, newest.sessionId]);
+    expect(sessionOf(newest).autoSleep?.reason).toBe('pressure');
+  });
+
+  it.each<MemoryPressure>(['normal', 'unknown'])(
+    'при %s никто не засыпает: простой 30 мин меньше обычного порога 60',
+    async (level) => {
+      const ref = await idleFor(30);
+      boot({ pressure: sensor });
+
+      await reading(level, NOW);
+      await reading(level, NOW + PRESSURE_PACE_MS.warn);
+
+      expect(stops).toEqual([]);
+      expect(sessionOf(ref).lifecycle).toBe('active');
+    },
+  );
+
+  it('простой 4 мин при warn не засыпает, ровно на пороге в 5 мин — засыпает', async () => {
+    const ref = await idleFor(4);
+    boot({ pressure: sensor });
+
+    await reading('warn', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('warn', NOW + MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('порог давления берётся из настройки на каждом чтении', async () => {
+    sleepUnderPressureMinutes = 20;
+    const ref = await idleFor(10);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    sleepUnderPressureMinutes = 5;
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical);
+    expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('сон выключен: ни давления, ни слота', async () => {
+    sleepAfterMinutes = 0;
+    const ref = await idleFor(30);
+    const service = boot({ pressure: sensor });
+    await quiet();
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+
+    expect(stops).toEqual([]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+  });
+
+  it('Keep awake не засыпает и при critical', async () => {
+    const awake = await idleFor(30);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === awake.sessionId)!.keepAwake = true;
+    });
+    // Контроль: такая же, но без Keep awake, уснёт — значит, давление до сессий доходит.
+    const other = await idleFor(20);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    await reading('critical', NOW + 2 * PRESSURE_PACE_MS.critical);
+
+    expect(slept()).toEqual([other.sessionId]);
+    expect(sessionOf(awake).lifecycle).toBe('active');
+    expect(hasMarkKey(awake)).toBe(false);
+  });
+
+  // Работающих агентов хост не трогает никогда; полный набор причин проверяет `autoSleepVerdict` в core.
+  const untouched: Array<[string, (ref: SessionRef) => void | Promise<void>]> = [
+    [
+      'агент работает: ход не окончен',
+      (ref) => {
+        lives.set(refKey(ref), { activity: workingActivity(), metrics: null });
+      },
+    ],
+    [
+      'черновик человека в терминале',
+      (ref) => {
+        drafts.add(ref.sessionId);
+      },
+    ],
+    [
+      'работающая фоновая задача',
+      (ref) => {
+        lives.set(refKey(ref), {
+          activity: idleActivity(NOW - 30 * MIN, { runningBackground: ['shell'] }),
+          metrics: null,
+        });
+      },
+    ],
+    [
+      'сессия ждёт одобрения человека',
+      (ref) => {
+        const need = { kind: 'approval', since: iso(T0), detail: null, resetsAt: null, window: null, account: null } as const;
+        lives.set(refKey(ref), { activity: idleActivity(NOW - 30 * MIN, { activity: 'blocked', need }), metrics: null });
+      },
+    ],
+    [
+      'идёт замена агента (switching)',
+      async (ref) => {
+        await updateMap(project, workId, (map) => {
+          map.sessions.find((session) => session.id === ref.sessionId)!.switching = {
+            id: 'sw-01',
+            to: 'codex',
+            since: iso(T0),
+          };
+        });
+      },
+    ],
+  ];
+
+  it.each(untouched)('при critical и ради слота не усыпляет: %s', async (_name, protect) => {
+    const ref = await idleFor(30);
+    await protect(ref);
+    const service = boot({ pressure: sensor });
+    await quiet();
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+
+    expect(stops).toEqual([]);
+    expect(retries).toEqual([]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+    expect(hasMarkKey(ref)).toBe(false);
+  });
+
+  it('сессию с отметкой «засыпает» давление не берёт и отметку не снимает: это дело обычного прохода', async () => {
+    const ref = await startSession({
+      activity: idleActivity(NOW - 30 * MIN),
+      patch: (session) => {
+        session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget: null };
+      },
+    });
+    const service = boot({ pressure: sensor });
+    await quiet();
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+
+    expect(stops).toEqual([]);
+    expect(hasMarkKey(ref)).toBe(true);
+  });
+
+  it('просьба requestSleep остаётся за обычным проходом: давление такую сессию не берёт', async () => {
+    const queen = await idleFor(30);
+    drafts.add(queen.sessionId);
+    const service = boot({ pressure: sensor });
+    // Черновик не даёт уснуть сразу, и просьба остаётся ждать.
+    service.requestSleep(queen, 'swarm-done');
+    await quiet();
+    drafts.delete(queen.sessionId);
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(stops).toEqual([]);
+
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([queen.sessionId]);
+    expect(sessionOf(queen).autoSleep?.reason).toBe('swarm-done');
+  });
+
+  it('поднятая недавно не засыпает по давлению: часы простоя идут от запуска процесса', async () => {
+    const startedAt = NOW - MIN;
+    // Ход прошлого процесса кончился два часа назад, `SessionStart` его не обновляет; хуки нового процесса были.
+    const ref = await startSession({
+      startedAt,
+      activity: idleActivity(NOW - 120 * MIN, { lastEventAt: iso(startedAt + 1_000) }),
+    });
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', startedAt + 5 * MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).autoSleep?.reason).toBe('pressure');
+  });
+
+  // Ожидание длится не дольше 30 мин, и обычный порог такую сессию не берёт: её усыпляет только давление.
+  it.skipIf(!ALLOW_WAITER_SLEEP)('ждущая в wait_for засыпает по давлению: часы идут от начала ожидания', async () => {
+    const ref = await startSession({ activity: workingActivity() });
+    boot({ pressure: sensor });
+    clock = NOW - 10 * MIN;
+    publish(ref, waitingActivity('s-07'));
+    await quiet();
+
+    await reading('normal', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', NOW);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).autoSleep).toEqual({ reason: 'pressure', at: iso(NOW), waitTarget: 's-07' });
+  });
+
+  it('чтение датчика, пока прежнее ещё усыпляет, второй сессии не берёт', async () => {
+    const release = holdStops();
+    const oldest = await idleFor(30);
+    const next = await idleFor(20);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    // Процесс первой ещё не вышел, а темп считается от сна, которого ещё нет: без охраны взяли бы и вторую.
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical);
+    expect(slept()).toEqual([oldest.sessionId]);
+
+    release();
+    await quiet();
+    expect(sessionOf(oldest).lifecycle).toBe('sleeping');
+
+    await reading('critical', NOW + MIN);
+    expect(slept()).toEqual([oldest.sessionId, next.sessionId]);
+  });
+
+  it('stop() отписывает сервис от датчика: поздний вызов слушателя ничего не усыпляет', async () => {
+    const ref = await idleFor(30);
+    const service = boot({ pressure: sensor });
+    await quiet();
+    expect(readers).toHaveLength(1);
+    const listener = readers[0]!;
+
+    service.stop();
+    expect(readers).toHaveLength(0);
+    listener({ level: 'critical' });
+    await quiet();
+
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+    expect(stops).toEqual([]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+  });
+
+  it('freeSlot усыпляет самую давнюю с причиной slot и отвечает true; кандидатов нет — false', async () => {
+    const oldest = await idleFor(30);
+    const newest = await idleFor(10);
+    // Датчика нет: слот от давления не зависит. Прохода таймера тоже не было: настройки сервис читает при start().
+    const service = boot();
+    await quiet();
+
+    // Подсказка ничего не пишет.
+    expect(service.slotCandidate()).toBe(true);
+    expect(stops).toEqual([]);
+
+    expect(await service.freeSlot()).toBe(true);
+    expect(slept()).toEqual([oldest.sessionId]);
+    expect(sessionOf(oldest).autoSleep).toEqual({ reason: 'slot', at: iso(NOW), waitTarget: null });
+    expect(sessionOf(oldest).history.at(-1)).toMatchObject({ event: 'sleeping', reason: 'slot' });
+    expect(retries).toEqual([{ ref: oldest, lifecycle: 'sleeping' }]);
+
+    expect(await service.freeSlot()).toBe(true);
+    expect(slept()).toEqual([oldest.sessionId, newest.sessionId]);
+
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+    expect(slept()).toEqual([oldest.sessionId, newest.sessionId]);
+  });
+
+  it('простой короче порога давления слота не освобождает', async () => {
+    await idleFor(4);
+    const service = boot();
+    await quiet();
+
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+    expect(stops).toEqual([]);
+  });
+
+  it('сон отменился под замком карты — усыпляется следующий кандидат; отменили все — false', async () => {
+    const oldest = await idleFor(30);
+    const next = await idleFor(20);
+    // Снимок работ хоста отстал от базы: Keep awake у самой давней в нём ещё нет, а в базе уже есть.
+    const stale = readStoredMap(project, workId);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === oldest.sessionId)!.keepAwake = true;
+    });
+    const service = boot({
+      works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) },
+    });
+
+    expect(await service.freeSlot()).toBe(true);
+    expect(slept()).toEqual([next.sessionId]);
+    expect(sessionOf(next).autoSleep?.reason).toBe('slot');
+    expect(sessionOf(oldest).lifecycle).toBe('active');
+    expect(hasMarkKey(oldest)).toBe(false);
+    expect(logs).toContainEqual({
+      level: 'info',
+      msg: 'сон отменён под замком карты',
+      data: { ref: oldest, reason: 'slot', why: 'keep-awake' },
+    });
+
+    // Живая осталась одна, и под замком она отказывается снова.
+    expect(await service.freeSlot()).toBe(false);
+    expect(slept()).toEqual([next.sessionId]);
+  });
+
+  it('сессию, которую уже усыпляют, другой freeSlot не берёт', async () => {
+    const release = holdStops();
+    const oldest = await idleFor(30);
+    const next = await idleFor(20);
+    // Снимок работ хоста отстаёт от базы: отметки «засыпает» первой он ещё не видит,
+    // и от второй просьбы её спасает только `inWork`.
+    const stale = readStoredMap(project, workId);
+    const service = boot({
+      works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) },
+    });
+    await quiet();
+
+    const first = service.freeSlot();
+    await quiet();
+    const second = service.freeSlot();
+    await quiet();
+
+    // Вторая просьба взяла следующую по давности, а не ту, что уже усыпляется, и под замком карты её не пробовала.
+    expect(slept()).toEqual([oldest.sessionId, next.sessionId]);
+    expect(messagesOf('info')).not.toContain('сон отменён под замком карты');
+    expect(service.slotCandidate()).toBe(false);
+
+    release();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(sessionOf(oldest).lifecycle).toBe('sleeping');
+    expect(sessionOf(next).lifecycle).toBe('sleeping');
+  });
+
+  it('кандидат, взявшийся за работу, пока усыпляли прежнего, не засыпает: его решают заново', async () => {
+    // Первую остановка не берёт (`stop` вернулся, а процесс жив), и очередь доходит до второй.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stopImpl = async (ref) => {
+      recordStop(ref);
+      await gate;
+    };
+    const oldest = await idleFor(30);
+    const next = await idleFor(20);
+    const service = boot();
+    await quiet();
+
+    const freeing = service.freeSlot();
+    await quiet();
+    expect(slept()).toEqual([oldest.sessionId]);
+    // Пока первую останавливали, вторая начала ход: работающих агентов хост не трогает.
+    lives.set(refKey(next), { activity: workingActivity(), metrics: null });
+    release();
+
+    expect(await freeing).toBe(false);
+    expect(slept()).toEqual([oldest.sessionId]);
+    expect(sessionOf(next).lifecycle).toBe('active');
+    expect(hasMarkKey(next)).toBe(false);
   });
 });

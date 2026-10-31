@@ -28,6 +28,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const error = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
 const FOLDER_TRUST_HELD = 'The session waits for the human to trust the folder; it starts by itself after that.';
+const SESSION_QUEUED = 'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.';
+
+/**
+ * Вторым блоком к ответу о созданной сессии, когда хост поставил запуск в очередь машины (спека ёмкости 4.2): причина лежит в
+ * `result.queued`. Тот же ответ у `create_swarm` и `swarm_add`. Незнакомая причина фразы не получает.
+ */
+export const queuedNotes = (result: Record<string, unknown>): Array<{ type: 'text'; text: string }> =>
+  result.queued === 'machine-limit' || result.queued === 'memory-critical' ? [{ type: 'text', text: SESSION_QUEUED }] : [];
 
 /** The host derives the workspace from the token; the model cannot select a different scope. */
 export async function createSession(agent: AgentChannel, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
@@ -53,7 +61,7 @@ export async function createSession(agent: AgentChannel, args: Record<string, un
     if (body.result.held === 'folder-trust') {
       return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: FOLDER_TRUST_HELD }] };
     }
-    return { content: [{ type: 'text', text: JSON.stringify(body.result) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(body.result) }, ...queuedNotes(body.result)] };
   }
   if (isRecord(body) && body.ok === false && isRecord(body.error) && typeof body.error.code === 'string' && typeof body.error.message === 'string') {
     return error(`${body.error.code}: ${body.error.message}`);

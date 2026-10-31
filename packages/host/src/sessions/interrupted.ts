@@ -64,6 +64,8 @@ export async function findInterrupted(
       // Усыпил хост (спека сна агентов 4.1): процесс остановлен намеренно, пусть и посреди ожидания в wait_for, — это не
       // обрыв. Человеку поднимать её не предлагают: поднимет письмо.
       if (session.autoSleep != null) continue;
+      // Запуск ждёт слота машины (спека ёмкости 4.2): его продолжит очередь, человеку поднимать такую сессию не предлагают.
+      if (session.queued != null) continue;
       const ref: SessionRef = {
         projectPath: entry.projectPath,
         workId: entry.map.work.id,

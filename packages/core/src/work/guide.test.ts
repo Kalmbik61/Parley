@@ -86,6 +86,16 @@ describe('темы гида', () => {
     expect(lifecycle).toContain('A session Parley put to sleep is `sleeping` too: `wait_for` on it answers `asleep`, and mail wakes it.');
   });
 
+  it('тема lifecycle: сессия, ждущая слота машины, — queued: стартует сама, wait_for ждёт её как работающую', () => {
+    const lifecycle = (guideTopic('lifecycle') ?? '').replace(/\s+/g, ' ');
+    expect(lifecycle).toContain('`queued`');
+    expect(lifecycle).toContain(
+      'A session that waits for a free agent slot on this machine is `queued`: it starts by itself, and `wait_for` waits for it as for a running session.',
+    );
+    // Предложение про сон осталось на месте, а новое идёт в тот же абзац сразу за ним.
+    expect(lifecycle).toContain('and mail wakes it. A session that waits for a free agent slot');
+  });
+
   it('тема tools: wait_for("inbox") отдаёт письма прочитанными, ждать одним вызовом на 1500 с, check_inbox после него не нужен', () => {
     const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
 

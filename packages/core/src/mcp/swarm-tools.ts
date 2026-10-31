@@ -1,5 +1,6 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentChannel } from '../work/mcp-config.js';
+import { queuedNotes } from './session-tools.js';
 
 /** Спека роя v1, 4: в этом файле только константы инструментов и вызов канала хоста; правила — на хосте. */
 const HINTS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
@@ -77,7 +78,8 @@ async function swarmCall(
     const known = op === 'create'
       ? typeof result.swarmId === 'string' && typeof result.queenSessionId === 'string'
       : typeof result.sessionId === 'string' && typeof result.member === 'string';
-    if (known) return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    // Сессия роя (королева или участник) встала в очередь машины (спека ёмкости 4.2): она заведена, запуск ждёт слота, как у `create_session`.
+    if (known) return { content: [{ type: 'text', text: JSON.stringify(result) }, ...queuedNotes(result)] };
   }
   if (isRecord(body) && body.ok === false && isRecord(body.error) && typeof body.error.code === 'string' && typeof body.error.message === 'string') {
     return error(`${body.error.code}: ${body.error.message}`);

@@ -529,6 +529,8 @@ export const S = {
     asleepSession: 'Asleep',
     /** Строка тултипа сессии, которую усыпил хост (`autoSleep`, спека сна агентов 4.1): зачем она спит и чем её поднять. */
     autoSleepTooltip: 'Asleep to free memory. A message or Resume wakes it.',
+    /** Строка тултипа сессии, чей запуск ждёт слота машины (`queued`, спека ёмкости 4.2): чего ждёт и что поднимать её не нужно. */
+    queuedTooltip: 'Waiting for a free agent slot on this machine. It starts by itself when a slot frees.',
     /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
     removeFromList: 'Remove from list…',
     /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
@@ -1172,6 +1174,7 @@ export const S = {
       'folder-trust': 'waiting for folder trust',
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
+      queued: 'queued for a free agent slot',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
@@ -1266,6 +1269,12 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     sleepAfterMinutes: 'Sleep idle agents after (min, 0 = off)',
+    /** Потолок живых CLI на машине и порог сна, когда машине тесно (спека сна агентов и ёмкости, 4.4): подписи полей, подсказка и предупреждение. */
+    sleepUnderPressureMinutes: 'Sleep idle agents sooner when the machine is busy (min, 1–60)',
+    machineConcurrent: 'Agents running at once on this machine (off, auto or 1–128)',
+    machineConcurrentHint: 'Auto is 75% of RAM in GB. At the limit, agent launches wait in a queue; your own launches may go up to 2 over it.',
+    /** Потолок включён, а сон выключен: простаивающие агенты слотов не отдают, и очередь может стоять долго (спека 4.2, «Включение»). */
+    machineLimitWithoutSleep: 'Sleep is off: idle agents keep their slots, so queued launches may wait a long time.',
     /** Облегчённый запуск агентов комнат (спека «меньше ходов и легче контекст», C2.2). */
     leanAgents: 'Lean agent sessions',
     leanAgentsHint: 'Agents Parley starts for rooms run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
@@ -2912,6 +2921,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
   'swarm-done': 'swarm finished',
   'swarm-failed': "swarm didn't finish",
+  'machine-over-limit': 'started over the machine limit',
 };
 
 /**

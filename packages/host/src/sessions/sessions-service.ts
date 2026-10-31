@@ -23,16 +23,21 @@ import {
   collectHandover,
   freezeUsage,
   isRoomArchived,
+  launchClassOf,
   liveLead,
+  mergeQueued,
   PARLEY,
   parleyNote,
   providerLabel,
   switchBlockers,
   unreadLetters,
   type AgentBinding,
+  type LaunchClass,
   type LetterTx,
   type LimitAlternative,
+  type MachineTicket,
   type ProviderLimits,
+  type QueueReason,
   type WorkMap,
   limitsFromConfig,
   prepareSessionRole,
@@ -174,11 +179,18 @@ export interface CreateSessionInput {
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
 
-/** Исход `launch()`: `held` — запуск Codex остановлен до согласия человека на папку проекта (спека 2026-10-21, 4.2). */
-export type LaunchOutcome = 'started' | 'held';
+/**
+ * Исход `launch()`: `held` — запуск Codex остановлен до согласия человека на папку проекта (спека 2026-10-21, 4.2);
+ * `queued` — запуск ждёт свободного слота машины (спека ёмкости 2026-10-30, 4.2): процесса и worktree нет, запись очереди
+ * лежит в карте сессии, продолжит её сервис ёмкости.
+ */
+export type LaunchOutcome = 'started' | 'held' | 'queued';
 
-/** Созданная сессия; `held` — её запуск ждёт согласия на папку, запись `pending` уже в карте. */
-export type CreatedSession = SessionRef & { held?: 'folder-trust' };
+/**
+ * Созданная сессия; `held` — её запуск ждёт согласия на папку, `queued` — слота машины (причина очереди); запись
+ * `pending` уже в карте.
+ */
+export type CreatedSession = SessionRef & { held?: 'folder-trust'; queued?: QueueReason };
 
 /**
  * Попыток записать старт процесса в карту, пока база работ занята: подъём всей работы после перезапуска хоста
@@ -238,6 +250,11 @@ export interface LaunchChoice {
    * личному потолку `resumeRate`.
    */
   by?: string;
+  /**
+   * Класс запуска для очереди машины; нет — `launchClassOf(by)`. Будильник ставит `human`, если будит письмо человека:
+   * `by` у него всё равно `wake`.
+   */
+  launchClass?: LaunchClass;
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
   /** Пакет передачи при замене агента: первым сообщением `launch` после брифа. */
@@ -254,7 +271,8 @@ export interface SessionsService {
   create(input: CreateSessionInput): Promise<CreatedSession>;
   /**
    * `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. `held` — запуск Codex
-   * остановлен до согласия на папку (карточка заведена, бюджет не занят, ничего не создано); `started` — и при раннем
+   * остановлен до согласия на папку (карточка заведена, бюджет не занят, ничего не создано); `queued` — машине тесно:
+   * запуск встал в очередь (резерв работы снят, процесса и worktree нет, запись в карте); `started` — и при раннем
    * выходе (запуск уже идёт, процесс жив).
    */
   launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<LaunchOutcome>;
@@ -362,6 +380,16 @@ export interface SessionsFeedOptions {
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
   /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
   takeover?: SessionsTakeoverOptions;
+  /**
+   * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
+   * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
+   * worktree; нет сервиса — допуска нет (изолированные тесты).
+   */
+  capacity?: {
+    admit(request: { ref: SessionRef; launchClass: LaunchClass }): Promise<MachineTicket>;
+    settle(ref: SessionRef): void;
+    pump(): void;
+  };
 }
 
 
@@ -427,7 +455,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions } = feed;
+  const { hooks, providerVersions, capacity } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
@@ -771,9 +799,15 @@ export function createSessionsService(
     const timer = createStepTimer();
     let failed = true;
     let held = false;
+    // Запуск встал в очередь машины: в журнале шагов это не отказ.
+    let queued = false;
     let loggedProvider: string | undefined;
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
+    // Слот машины, взятый у сервиса ёмкости (`start` и `overflow`): держится до старта процесса или отказа запуска.
+    let machineReserved = false;
+    // Запуск прошёл сверх потолка машины: текст уведомления человеку готов, уходит после старта.
+    let overLimit: string | null = null;
     let processStarted = false;
     let agentChannel: { url: string; token: string } | undefined;
     try {
@@ -849,6 +883,53 @@ export function createSessionsService(
 
       // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
       attemptId = await timer.step('reserve', () => reserveLaunch(ref, session.parent, mode, options.by ?? 'human'));
+
+      // Потолок машины (спека ёмкости, 4.2) — после бюджета работы и тоже до worktree: очередь не оставляет ни каталога,
+      // ни скилла, ни процесса. Нет сервиса ёмкости — нет и допуска.
+      if (capacity !== undefined) {
+        const launchClass = options.launchClass ?? launchClassOf(options.by);
+        const ticket = await timer.step('machine', () => capacity.admit({ ref, launchClass }));
+        // Движок в очередь не встаёт: допуск отвечает ему `start`.
+        if (ticket.kind === 'queue' && launchClass !== 'engine') {
+          // Резерв работы снимается раньше записи очереди и насоса: насос может тут же продвинуть эту запись, а после его
+          // вызова `launch` ничего не ждёт и сразу отпускает ключ `launching` — иначе запуск насоса упёрся бы в него.
+          await settleLaunch(ref, attemptId, 'released');
+          attemptId = null;
+          await timer.step('queue', () => updateMap(
+            ref.projectPath,
+            ref.workId,
+            (current) => {
+              const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+              // Сессию успели закрыть или поднять другим путём: ждать слота нечему, а запись очереди так и осталась бы.
+              if (target === undefined || target.lifecycle === 'closed' || target.lifecycle === 'active') return;
+              target.queued = mergeQueued(target.queued, {
+                class: launchClass,
+                mode: requested,
+                by: options.by ?? 'human',
+                at: new Date().toISOString(),
+                reason: ticket.reason,
+                live: ticket.live,
+                limit: ticket.limit,
+              });
+            },
+            // Служебная запись, не событие работы: карточка работы не всплывает в сайдбаре.
+            { touch: false },
+          ));
+          host.log.info('запуск ждёт в очереди машины', {
+            ref, class: launchClass, reason: ticket.reason, live: ticket.live, limit: ticket.limit,
+          });
+          queued = true;
+          failed = false;
+          capacity.pump();
+          return 'queued';
+        }
+        machineReserved = true;
+        if (ticket.kind === 'overflow') {
+          overLimit = ticket.reason === 'machine-limit'
+            ? `${sessionTag(ref.sessionId)} started over the machine limit (${ticket.live + 1}/${ticket.limit})`
+            : `${sessionTag(ref.sessionId)} started while memory is critical`;
+        }
+      }
 
       // Worktree запланирован (`plannedWorktree` в `create()` или в старой карте
       // в core), но каталога на диске ещё нет — заводим его перед первым же
@@ -1054,6 +1135,11 @@ export function createSessionsService(
             provider: session.provider,
           });
           processStarted = true;
+          // Слот теперь держит сам процесс: резерв машины снимается сразу, пока его никто не посчитал дважды.
+          if (machineReserved) {
+            machineReserved = false;
+            capacity?.settle(ref);
+          }
           return spawned;
         });
       } catch (error) {
@@ -1108,6 +1194,10 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+      // Сверх потолка машины (спека ёмкости, 4.2): человеку — что запуск прошёл мимо очереди.
+      if (overLimit !== null) {
+        host.broadcast('host.notice', { kind: 'machine-over-limit', ref, text: overLimit, at: new Date().toISOString() });
+      }
       // Форк записывает разговор с первым ходом: копия транскрипта в папке цели уберётся, как только он появится.
       if (options.forkFrom !== undefined) {
         watchFork(ref, session.previousAgents?.at(-1)?.provider ?? session.provider, session.provider, options.forkFrom);
@@ -1130,6 +1220,9 @@ export function createSessionsService(
       if (agentChannel !== undefined && !processStarted) feed.agent?.unregister(ref);
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
+      // Слот машины, не дошедший до процесса, возвращается сервису ёмкости — после резерва работы: насос, которого этот
+      // вызов разбудит, не должен встретить в бюджете работы ещё не снятый резерв.
+      if (machineReserved) capacity?.settle(ref);
       host.log.info('запуск сессии: время шагов', {
         ref,
         mode,
@@ -1137,6 +1230,7 @@ export function createSessionsService(
         ...(loggedProvider === undefined ? {} : { provider: loggedProvider }),
         ...timer.result(),
         ...(held ? { held: true } : {}),
+        ...(queued ? { queued: true } : {}),
         ...(failed ? { failed: true } : {}),
       });
     }
@@ -1146,7 +1240,8 @@ export function createSessionsService(
    * Сессию, заведённую `sessions.create`, тут же откроют в терминале — в
    * отличие от той, что поднята письмом, отмечаем её увиденной сразу,
    * чтобы до первого `pty.attach` она не мигала непрочитанной. Запуск Codex, удержанный до согласия на папку,
-   * отдаёт `held`: запись `pending` в карте уже есть, процесс стартует сам после решения человека.
+   * отдаёт `held`: запись `pending` в карте уже есть, процесс стартует сам после решения человека. Запуск, вставший в
+   * очередь машины, отдаёт `queued` с причиной очереди: записано то же самое, процесс стартует, когда освободится слот.
    */
   async function createInteractive(
     ref: SessionRef,
@@ -1155,7 +1250,13 @@ export function createSessionsService(
   ): Promise<CreatedSession> {
     const outcome = await launch(ref, mode, choice);
     activity.markSeen(ref);
-    return outcome === 'held' ? { ...ref, held: 'folder-trust' } : ref;
+    if (outcome === 'held') return { ...ref, held: 'folder-trust' };
+    if (outcome === 'queued') {
+      // Причина — в записи очереди; записи нет (сессию успели поднять или закрыть) — потолок машины.
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+      return { ...ref, queued: session?.queued?.reason ?? 'machine-limit' };
+    }
+    return ref;
   }
 
   /**
@@ -1360,9 +1461,13 @@ export function createSessionsService(
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
       if (input.deferLaunch) return ref;
       const created = await timer.step('launch', () => createInteractive(ref, 'launch', choice));
-      // Согласие пропало между проверкой и запуском (отозвано): резерв, взятый при создании, возвращается.
+      // Согласие пропало между проверкой и запуском (отозвано) или запуск встал в очередь машины: резерв, взятый при
+      // создании, возвращается. `launchHeld` на очереди уже снял тот же резерв (`reserveAttempt` подхватывает ожидающий
+      // резерв этой сессии), так что строка — для ясности; повторное снятие безвредно.
       const reserved = admitted as { ref: SessionRef; attemptId: string } | undefined;
-      if (created.held !== undefined && reserved !== undefined) await settleLaunch(reserved.ref, reserved.attemptId, 'released');
+      if ((created.held !== undefined || created.queued !== undefined) && reserved !== undefined) {
+        await settleLaunch(reserved.ref, reserved.attemptId, 'released');
+      }
       return created;
     } catch (error) {
       if (input.swarm !== undefined && error instanceof ResourceDeniedError) throw swarmBudgetRefusal(error);
@@ -1827,6 +1932,16 @@ export function createSessionsService(
       pendingHandovers.set(key, handover);
 
       const by = request.by ?? 'human';
+      // Форка не будет: копия в папке цели убирается, привязка помечается пакетом передачи (5.4.1).
+      const dropFork = async (copied: CarriedTranscript): Promise<void> => {
+        await discardCopy(copied).catch((cleanup: unknown) => {
+          host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
+        });
+        await updateMap(ref.projectPath, ref.workId, (current) => {
+          const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+          if (last !== undefined) last.carried = 'handover';
+        });
+      };
       let outcome: LaunchOutcome;
       try {
         if (transcript === null) outcome = await launchHeld(ref, 'launch', { by, handover }, false);
@@ -1837,15 +1952,16 @@ export function createSessionsService(
           } catch (error) {
             // Форк не поднялся: копия убрана, новый агент стартует с пакетом передачи (5.4.1), и ответ это называет.
             host.log.warn('форк разговора не поднялся — запуск с пакетом передачи', { ref, error: String(error) });
-            await discardCopy(transcript).catch((cleanup: unknown) => {
-              host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
-            });
+            await dropFork(transcript);
             transcript = null;
-            await updateMap(ref.projectPath, ref.workId, (current) => {
-              const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
-              if (last !== undefined) last.carried = 'handover';
-            });
             outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+          }
+          // Запуск с форком встал в очередь машины: процесса и форка нет, а запись очереди помнит только вид запуска и `by`,
+          // без `forkFrom`. Продолжение поднимет нового агента пакетом передачи (`awaitingAgent`), поэтому копия не нужна,
+          // а записи и ответ должны говорить то же.
+          if (outcome === 'queued' && transcript !== null) {
+            await dropFork(transcript);
+            transcript = null;
           }
         }
       } catch (error) {
@@ -1859,7 +1975,8 @@ export function createSessionsService(
         });
         throw error;
       }
-      // `held`: запуск Codex ждёт согласия на папку; `switching` остаётся до решения, снимет его запуск после согласия.
+      // `held`: запуск Codex ждёт согласия на папку; `queued`: машине тесно, запуск ждёт слота в очереди. И там и там
+      // `switching` остаётся до старта нового агента, снимет его сам запуск (`finishSwitch`).
       return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
     } catch (error) {
       if (!applied) {

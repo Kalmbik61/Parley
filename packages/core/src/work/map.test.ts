@@ -14,7 +14,7 @@ import {
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
 import { memberState, swarmProgress, type WorkSwarm } from './swarms.js';
-import { HUMAN, type AutoSleep, type Room, type SessionLifecycle, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
+import { HUMAN, type AutoSleep, type QueuedLaunch, type Room, type SessionLifecycle, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
@@ -468,6 +468,62 @@ describe('transitionSession: сон по решению хоста', () => {
 
       expect('autoSleep' in session, to).toBe(false);
       expect('autoSleepPending' in session, to).toBe(false);
+    }
+  });
+});
+
+describe('transitionSession: запись очереди машины', () => {
+  const T = '2026-10-31T10:00:00.000Z';
+  const T2 = '2026-10-31T10:05:00.000Z';
+  const queued = (): QueuedLaunch => ({
+    class: 'agent',
+    mode: 'launch',
+    by: 's-02',
+    at: T,
+    reason: 'machine-limit',
+    live: 18,
+    limit: 18,
+  });
+
+  /** Карта с одной сессией `s-01` в заданном состоянии процесса; запись очереди есть, если её просят. */
+  const mapWith = (lifecycle: SessionLifecycle, withQueued = true): WorkMap => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    session.lifecycle = lifecycle;
+    if (withQueued) session.queued = queued();
+    return map;
+  };
+
+  it('active снимает queued: ключ уходит, null не пишется', () => {
+    // Отложенный первый запуск (pending) и отложенный подъём спящей (sleeping) начинаются одним переходом.
+    for (const lifecycle of ['pending', 'sleeping'] as const) {
+      const session = transitionSession(mapWith(lifecycle), 's-01', 'active', { at: T2 });
+
+      expect(session.queued, lifecycle).toBeUndefined();
+      expect('queued' in session, lifecycle).toBe(false);
+    }
+  });
+
+  it('closed снимает queued: ключ уходит, null не пишется', () => {
+    for (const lifecycle of ['pending', 'sleeping', 'active'] as const) {
+      const session = transitionSession(mapWith(lifecycle), 's-01', 'closed', { at: T2 });
+
+      expect(session.queued, lifecycle).toBeUndefined();
+      expect('queued' in session, lifecycle).toBe(false);
+    }
+  });
+
+  it('active → sleeping запись очереди не трогает', () => {
+    const session = transitionSession(mapWith('active'), 's-01', 'sleeping', { at: T2, exitCode: 0 });
+
+    expect(session.queued).toEqual(queued());
+  });
+
+  it('обычные переходы сессии, которую не ставили в очередь, ключа queued не заводят', () => {
+    for (const [from, to] of [['pending', 'active'], ['active', 'sleeping'], ['sleeping', 'active'], ['active', 'closed']] as const) {
+      const session = transitionSession(mapWith(from, false), 's-01', to, { at: T2 });
+
+      expect('queued' in session, `${from} → ${to}`).toBe(false);
     }
   });
 });

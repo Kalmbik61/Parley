@@ -55,6 +55,15 @@ describe('agent swarm endpoint', () => {
     expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ role: { source: 'builtin', name: 'verifier' } }));
   });
 
+  it('участник в очереди машины: queued в ответе — у королевы при create и у участника при add', async () => {
+    const { post, create: spawn, memberOf } = await setup();
+    spawn.mockResolvedValueOnce({ ...ref, sessionId: 's-02', queued: 'machine-limit' } as never);
+    expect(JSON.parse((await post(create)).body)).toEqual({ ok: true, result: { swarmId: 'sw-01', queenSessionId: 's-02', queued: 'machine-limit' } });
+    spawn.mockResolvedValueOnce({ ...ref, sessionId: 's-03', queued: 'memory-critical' } as never);
+    memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'drone', n: 2 });
+    expect(JSON.parse((await post(add)).body)).toEqual({ ok: true, result: { sessionId: 's-03', member: 'Drone 2', queued: 'memory-critical' } });
+  });
+
   it('отказы хоста: код — причина роя или resource-budget, иначе код ошибки', async () => {
     const { post, create: spawn } = await setup();
     spawn.mockRejectedValueOnce(new HostError('conflict', 'Only the queen of a swarm can add members to it.', { reason: 'not-queen' }));

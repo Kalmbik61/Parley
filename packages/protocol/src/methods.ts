@@ -489,8 +489,11 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
     keeps: { rooms: number; leads: string[]; owns: string[]; children: number; unread: number; worktree: string | null };
     blockers: string[];
   };
-  /** `held` — запуск ждёт согласия (папка Codex); `carried` — как передан контекст. */
-  'sessions.switchAgent': { outcome: 'started' | 'held'; carried: 'handover' | 'transcript' };
+  /**
+   * `held` — запуск ждёт согласия (папка Codex); `queued` — запуск ждёт свободного слота машины (очередь, спека ёмкости
+   * 4.2); `carried` — как передан контекст.
+   */
+  'sessions.switchAgent': { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;

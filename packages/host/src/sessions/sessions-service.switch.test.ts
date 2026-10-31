@@ -22,6 +22,7 @@ import {
   updateMap,
   writeCustomProviders,
   type CustomProviderRecord,
+  type MachineTicket,
   type SessionNeed,
   type WorkSession,
 } from '@parley/core';
@@ -669,6 +670,46 @@ describe('carry: transcript — продолжение разговора на �
     expect(existsSync(source)).toBe(true);
     expect(await sessionOf(ref)).toMatchObject({ provider: 'claude', lifecycle: 'active', switching: null });
     expect((await sessionOf(ref)).previousAgents?.[0]?.carried).toBe('handover');
+  });
+
+  it('потолок машины полон: замена с форком встаёт в очередь пакетом передачи — копия убрана, привязка и ответ говорят handover', async () => {
+    let ticket: MachineTicket = { kind: 'start', live: 0, limit: 2 };
+    const r = rig({ capacity: { admit: async () => ticket, settle() {}, pump() {} } });
+    const { ref } = await liveClaude(r);
+    const old = (await sessionOf(ref)).providerSessionId!;
+    const source = await transcriptOf(old);
+    const before = await sha(source);
+    // Потолок заполнился, пока агент жил: новому агенту места нет.
+    ticket = { kind: 'queue', reason: 'machine-limit', live: 2, limit: 2 };
+
+    expect(await r.sessions.switchAgent(ref, request('custom-claude-2', { carry: 'transcript' }))).toEqual({
+      outcome: 'queued',
+      carried: 'handover',
+    });
+
+    // Продолжение из очереди поднимет нового агента пакетом передачи (`awaitingAgent`), а не форком: записи говорят то же.
+    const queued = await sessionOf(ref);
+    expect(queued).toMatchObject({
+      provider: 'custom-claude-2',
+      lifecycle: 'sleeping',
+      switching: { to: 'custom-claude-2' },
+      queued: { reason: 'machine-limit' },
+    });
+    expect(queued.previousAgents?.[0]).toMatchObject({ providerSessionId: old, carried: 'handover' });
+    expect(r.pty.get(ref)).toBeUndefined();
+    // Копия в папке цели не осталась ни файлом, ни каталогом разговора; источник цел.
+    expect(existsSync(path.join(targetRoot(), slug, `${old}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(targetRoot(), slug, old))).toBe(false);
+    expect(await sha(source)).toBe(before);
+
+    // Слот освободился: очередь поднимает нового агента с пакетом передачи, без форка.
+    ticket = { kind: 'start', live: 0, limit: 2 };
+    await r.sessions.launch(ref, 'resume', { by: 'human' });
+    const { launch } = launches.at(-1)!;
+    expect(launch.provider).toBe('custom-claude-2');
+    expect(launch.args).not.toContain('--fork-session');
+    expect(launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
+    expect(await sessionOf(ref)).toMatchObject({ lifecycle: 'active', switching: null });
   });
 
   it('удалённый аккаунт Claude: перенос из его оставшейся папки; switchOptions предлагает transcript', async () => {

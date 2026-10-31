@@ -145,7 +145,8 @@ called), \`active\` (the process is running), \`sleeping\` (no process, but the 
 reachable, and a message will wake it), \`closed\` (closed explicitly, receives no more
 messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
 \`failed\`; empty until the first \`report\`. A session Parley put to sleep is \`sleeping\` too: \`wait_for\` on it
-answers \`asleep\`, and mail wakes it.
+answers \`asleep\`, and mail wakes it. A session that waits for a free agent slot on this machine is \`queued\`: it
+starts by itself, and \`wait_for\` waits for it as for a running session.
 
 A result does not change the process: after \`report(done)\` the session stays \`active\` —
 the result is handed in, and you are still reachable and answer new messages. It does not

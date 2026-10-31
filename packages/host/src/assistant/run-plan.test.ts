@@ -221,6 +221,22 @@ describe('runPlan: создание агента', () => {
     expect(exec.resume).toHaveBeenCalledWith(known('s-06', 'S06 Nik').ref, 'Carry on.');
   });
 
+  it('queued у создания агента — шаг сделан с пометкой очереди, план идёт дальше', async () => {
+    exec.createSession.mockImplementationOnce(async ({ workId }) => {
+      w2?.sessions.push(session('s-01', 'Alice', 'pending'));
+      return { ref: ref(workId, 's-01'), held: false, queued: 'machine-limit' };
+    });
+    const report = await run([createWork, createAgent('Alice')]);
+    expect(report).toMatchObject({ status: 'done', notes: ['Alice is queued for a free agent slot; it starts by itself'] });
+  });
+
+  it('queued у wake — пометка очереди с просьбой повторить текст', async () => {
+    exec.resume.mockResolvedValueOnce('queued');
+    const report = await run([{ do: 'wake', session: known('s-06', 'S06 Nik'), text: 'Carry on.' }]);
+    expect(report).toMatchObject({ status: 'done', notes: ['S06 Nik is queued for a free agent slot; send the text again after it starts'] });
+    expect(exec.resume).toHaveBeenCalledWith(known('s-06', 'S06 Nik').ref, 'Carry on.');
+  });
+
   it('упавший запуск — остановка с пометкой о записи pending', async () => {
     exec.createSession.mockImplementationOnce(async () => {
       w2?.sessions.push(session('s-01', 'Alice', 'pending'));
