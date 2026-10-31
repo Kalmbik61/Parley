@@ -1,9 +1,10 @@
 // Decision (D1 §10.1): accept or return a room's proposal. Both go with the shown `rev`; Accept asks Face ID.
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { approve } from '../auth/instance';
+import { DEMO } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
@@ -49,7 +50,7 @@ export default function DecisionScreen() {
     return () => clearTimeout(t);
   }, [done, router]);
 
-  const online = supervisor?.state === 'ready';
+  const online = supervisor?.state === 'ready' || DEMO;
   const shown: Proposal | null = view?.kind === 'pending' || view?.kind === 'unconfirmed' ? view.shown : null;
 
   const send = async (action: 'accept' | 'return') => {
@@ -75,11 +76,9 @@ export default function DecisionScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
+      <Stack.Screen options={{ title: done ? '' : title, headerBackTitle: 'Inbox' }} />
       <ConnectionBanner />
-      <ScrollView contentContainerStyle={styles.body}>
-        <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, { color: colors.label }]}>
-          {done ? '' : title}
-        </Text>
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         {room && work ? (
           <Text allowFontScaling style={[typography.subheadline, { color: colors.label2 }]}>
             {room.title} · {work.title}

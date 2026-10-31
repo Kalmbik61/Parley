@@ -1,5 +1,5 @@
 // Letters (D1 §10.2): direct letters to the human, read-only.
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -16,14 +16,12 @@ export default function LettersScreen() {
   const rows = remote ? selectLetters(remote, openedLetters.snapshot()) : [];
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
+      <Stack.Screen options={{ title: 'Letters', headerBackTitle: 'Inbox' }} />
       <ConnectionBanner />
       <FlatList
         data={rows}
         keyExtractor={(r) => r.key}
         contentInsetAdjustmentBehavior="automatic"
-        ListHeaderComponent={
-          <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, { color: colors.label, marginBottom: 8 }]}>Letters</Text>
-        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <SymbolView name="envelope.open" tintColor={colors.idle} size={48} />

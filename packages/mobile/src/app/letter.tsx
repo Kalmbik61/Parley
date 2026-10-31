@@ -1,5 +1,5 @@
 // Letter (D1 §10.2): one direct letter, read-only. The full text comes by `context.letter` when the list holds a cut one.
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text } from 'react-native';
 import { workKeyOf } from '@parley/remote-client';
@@ -41,8 +41,9 @@ export default function LetterScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
+      <Stack.Screen options={{ title: 'Letter', headerBackTitle: 'Letters' }} />
       <ConnectionBanner />
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         {message === undefined ? (
           <Text allowFontScaling style={[typography.body, { color: colors.label2 }]}>{remote?.snapshot ? 'This letter was deleted' : ''}</Text>
         ) : (
