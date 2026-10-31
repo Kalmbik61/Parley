@@ -445,7 +445,7 @@ describe('WakeService: окно тишины, запись одних писем
     await rig.advance(SECOND + PAST);
     await rig.flush(() => rig.launch.mock.calls.length > 0);
     expect(rig.launch).toHaveBeenCalledTimes(1);
-    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(1) });
+    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(1), launchClass: 'mail' });
   });
 
   it('запись одних писем: адресное письмо будит сразу', async () => {
@@ -596,7 +596,7 @@ describe('WakeService: окно тишины у спящей сессии', () =
     await rig.flush(() => rig.launch.mock.calls.length > 0);
     expect(take).toHaveBeenCalledTimes(1);
     expect(rig.launch).toHaveBeenCalledTimes(1);
-    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(1) });
+    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(1), launchClass: 'mail' });
   });
 
   it('срочное письмо поднимает спящую сразу и берёт раннюю заметку с собой', async () => {
@@ -608,7 +608,7 @@ describe('WakeService: окно тишины у спящей сессии', () =
     rig.send(rig.ids[0]!, { kind: 'question' });
     await rig.flush(() => rig.launch.mock.calls.length > 0);
     expect(rig.launch).toHaveBeenCalledTimes(1);
-    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(2) });
+    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(2), launchClass: 'mail' });
   });
 
   it('settleMs из настроек будильника доходит и до ветки без процесса', async () => {
