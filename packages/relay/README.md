@@ -6,7 +6,13 @@ Noise, end to end). Spec: `docs/specs/2026-10-29-mobile-app-design.md` §6.
 
 - `/v1/host` (bridge control), `/v1/accept` (bridge stream), `/v1/connect` (phone), `GET /v1/health`.
 - State: a JSON file (`DATA_FILE`, default `./data/relay.json`, mode 0600, atomic write) with the sha256 of each
-  route secret and of each device token. Offers and streams live in memory.
+  route secret and of each device token. Writes are deferred by 1 s and flushed on stop; a crash loses at most that
+  second, which the bridge restores with its next `hello` and `devices`. Offers and streams live in memory.
+- Routes are collected hourly: a route without devices whose bridge has been away for 24 h, and any route whose
+  bridge has been away for 30 days. A returning bridge recreates its route with the same `hello`.
+- Limits per client address (IPv6: per /64; `::ffff:` mapped addresses count as IPv4): at most 32 open
+  connections (upgrades included, beyond that HTTP 429), plus the frame limits of spec §6.4. The first frame on a
+  new socket must arrive within 5 s.
 - Config (environment): `PORT` (8787), `HOST` (`127.0.0.1`), `DATA_FILE`, `TRUST_PROXY=1` (client IP = last
   `x-forwarded-for` entry; only behind a proxy).
 

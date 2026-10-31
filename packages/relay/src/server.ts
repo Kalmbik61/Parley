@@ -10,6 +10,7 @@ import {
 } from '@parley/protocol/remote';
 import { WebSocket, WebSocketServer } from 'ws';
 import { handleHttp } from './health.js';
+import { ipKey } from './ip.js';
 import { Limiter } from './limits.js';
 import { createLogger, type Logger } from './log.js';
 import { DEFAULT_TIMING, Heartbeat, closeSoft, splice, type Timing } from './pipe.js';
@@ -22,6 +23,14 @@ import {
   type Host,
 } from './routes.js';
 import { MAX_ROUTES, type Store } from './store.js';
+
+/**
+ * Одновременных соединений с одного адреса (IPv6 — с одной /64), считая upgrade (ревью A4, M1). Мост и телефоны за
+ * одним NAT в пике: управление, до 10 потоков `accept` и до 10 телефонов — 21; 32 оставляют запас.
+ */
+export const MAX_CONNECTIONS_PER_IP = 32;
+/** Сборка мусора маршрутов раз в час. */
+export const GC_INTERVAL_MS = 3_600_000;
 
 /** Бинарный кадр ≤ 65 535 + 64 байт (спека 6.4); больше — закрытие соединения. */
 export const MAX_FRAME_BYTES = 65_535 + 64;
@@ -38,6 +47,7 @@ export interface RelayOptions {
   trustProxy?: boolean;
   timing?: Partial<Timing>;
   maxConnections?: number;
+  maxConnectionsPerIp?: number;
   now?: () => number;
 }
 
@@ -55,7 +65,7 @@ function clientIp(req: http.IncomingMessage, trustProxy: boolean): string {
     const last = (Array.isArray(xff) ? xff.join(',') : xff)?.split(',').pop()?.trim();
     if (last) ip = last;
   }
-  return ip.replace(/^::ffff:/, '');
+  return ipKey(ip);
 }
 
 function sendJson(ws: WebSocket, body: object): void {
@@ -84,6 +94,7 @@ export function createRelay(opts: RelayOptions): Relay {
   const timing: Timing = { ...DEFAULT_TIMING, ...opts.timing };
   const now = opts.now ?? Date.now;
   const maxConnections = opts.maxConnections ?? 2000;
+  const maxPerIp = opts.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP;
   const trustProxy = opts.trustProxy ?? false;
   const registry = new Registry();
   const heartbeat = new Heartbeat(timing, now);
@@ -97,6 +108,13 @@ export function createRelay(opts: RelayOptions): Relay {
     connect: new WebSocketServer(wssOpts),
   };
   let open = 0;
+  const openPerIp = new Map<string, number>();
+  const gc = (): void => {
+    const removed = store.gc((route) => registry.host(route) !== undefined);
+    if (removed > 0) log('routes_gc', { removed });
+  };
+  const gcTimer = setInterval(gc, GC_INTERVAL_MS);
+  gcTimer.unref();
 
   /** Ждёт первый кадр; пришло что-то другое или время вышло — `bad_request`. */
   function firstFrame(ws: WebSocket, max: number, onFrame: (json: unknown) => void): void {
@@ -117,11 +135,15 @@ export function createRelay(opts: RelayOptions): Relay {
     ws.on('close', () => {
       if (host && registry.host(host.routeId) === host) {
         registry.detach(host);
+        // Отсчёт простоя маршрута для сборки мусора — с ухода моста, а не с его `hello`.
+        store.touch(host.routeId);
         log('host_offline');
       }
     });
 
     const handle = (json: unknown): void => {
+      // Вытесненный управляющий сокет ещё открыт, но говорить за маршрут больше не может (ревью A4, m6).
+      if (host && registry.host(host.routeId) !== host) return;
       const parsed = hostFrame.safeParse(json);
       if (!parsed.success) return fail(ws, 'bad_request');
       const f = parsed.data;
@@ -152,6 +174,7 @@ export function createRelay(opts: RelayOptions): Relay {
         store.touch(route);
       } else {
         if (presented === null) return fail(ws, 'bad_request');
+        if (store.routeCount() >= MAX_ROUTES) gc();
         if (store.routeCount() >= MAX_ROUTES || !limiter.hit('newRoute', ip)) return fail(ws, 'rate_limited');
         store.createRoute(route, b64urlEncode(presented));
         log('route_created');
@@ -268,9 +291,28 @@ export function createRelay(opts: RelayOptions): Relay {
       return;
     }
     const ip = clientIp(req, trustProxy);
+    const fromIp = openPerIp.get(ip) ?? 0;
+    if (fromIp >= maxPerIp) {
+      log('rejected', { reason: 'max_per_ip' });
+      socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    // Счёт — до upgrade и по TCP-сокету: параллельные upgrade не проскакивают сверх пределов, а сорванный
+    // upgrade всё равно освобождает место.
+    open++;
+    openPerIp.set(ip, fromIp + 1);
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      open--;
+      const n = (openPerIp.get(ip) ?? 1) - 1;
+      if (n > 0) openPerIp.set(ip, n);
+      else openPerIp.delete(ip);
+    };
+    socket.once('close', release);
     wss[kind].handleUpgrade(req, socket, head, (ws) => {
-      open++;
-      ws.on('close', () => open--);
+      ws.on('close', release);
       ws.on('error', () => {});
       heartbeat.add(ws);
       if (kind === 'host') onHost(ws, ip);
@@ -286,6 +328,8 @@ export function createRelay(opts: RelayOptions): Relay {
     close: () =>
       new Promise<void>((resolve) => {
         heartbeat.stop();
+        clearInterval(gcTimer);
+        store.flush();
         for (const w of Object.values(wss)) for (const c of w.clients) c.terminate();
         server.closeAllConnections();
         server.close(() => resolve());

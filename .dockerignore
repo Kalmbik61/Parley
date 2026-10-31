@@ -1,0 +1,8 @@
+# Docker build context for packages/relay and packages/push-gateway (built from the repository root).
+.git
+.parley
+.omc
+**/node_modules
+**/dist
+**/out
+**/*.tsbuildinfo

@@ -7,12 +7,14 @@ import { join } from 'node:path';
 import { b64urlEncode } from '@parley/protocol/remote';
 import { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ipKey } from '../src/ip.js';
 import { Limiter } from '../src/limits.js';
 import { createLogger } from '../src/log.js';
 import { lanAddress, loadConfig } from '../src/main.js';
 import { hashMatches, sha256OfB64 } from '../src/routes.js';
+import { DEFAULT_TIMING } from '../src/pipe.js';
 import { createRelay, MAX_FRAME_BYTES, type Relay, type RelayOptions } from '../src/server.js';
-import { Store } from '../src/store.js';
+import { EMPTY_ROUTE_TTL_MS, ROUTE_TTL_MS, Store } from '../src/store.js';
 
 const id = (n: number): string => b64urlEncode(randomBytes(n));
 const sha = (b64: string): string => b64urlEncode(createHash('sha256').update(Buffer.from(b64, 'base64url')).digest());
@@ -132,6 +134,8 @@ describe('routes (acceptance 1)', () => {
     expect(await again.json()).toEqual({ v: 1, t: 'ok' });
     expect(await b.host.closed).toBe(4000);
 
+    // Запись отложена; остановка relay её сбрасывает.
+    env.store.flush();
     expect(statSync(join(dir, 'relay.json')).mode & 0o777).toBe(0o600);
     await env.relay.close();
     relays = [];
@@ -150,6 +154,7 @@ describe('routes (acceptance 1)', () => {
     const b = await bridge(env);
     const token = id(32);
     await setDevices(env, b, [{ device: id(16), token }]);
+    env.store.flush();
     const raw = (await import('node:fs')).readFileSync(join(dir, 'relay.json'), 'utf8');
     expect(raw).not.toContain(b.secret);
     expect(raw).not.toContain(token);
@@ -315,6 +320,21 @@ describe('pipe (acceptance 4)', () => {
     acc.ws.send(down);
     const gotDown = await phone.next();
     expect(Buffer.compare(gotDown.data, down)).toBe(0);
+  });
+
+  it('a slow receiver pauses the sender instead of closing the pipe (review m7)', async () => {
+    const env = await start();
+    const { phone, acc } = await piped(env);
+    // Мост не читает: очередь relay к нему растёт, и relay перестаёт читать телефон.
+    acc.ws.pause();
+    const frame = randomBytes(64 * 1024);
+    const total = 256;
+    for (let i = 0; i < total; i++) phone.ws.send(frame);
+    await sleep(300);
+    expect(phone.ws.readyState).toBe(WebSocket.OPEN);
+    expect(acc.ws.readyState).toBe(WebSocket.OPEN);
+    acc.ws.resume();
+    for (let i = 0; i < total; i++) expect((await acc.next(5000)).data.length).toBe(frame.length);
   });
 
   it('closing one side closes the other, from either side', async () => {
@@ -526,5 +546,161 @@ describe('hash compare', () => {
     expect(hashMatches(sha(tok), sha256OfB64(id(32)))).toBe(false);
     expect(hashMatches(undefined, sha256OfB64(tok))).toBe(false);
     expect(hashMatches(sha(tok), null)).toBe(false);
+  });
+});
+
+describe('review fixes (A4 M1, M2, m6, m8)', () => {
+  const xff = (ip: string) => ({ headers: { 'x-forwarded-for': ip } });
+
+  it('M1: at most N open connections per address; IPv6 counts per /64; a closed one frees its place', async () => {
+    const env = await start({ trustProxy: true, maxConnectionsPerIp: 2 });
+    const a1 = await connectTo(env.base, '/v1/connect', xff('203.0.113.5'));
+    await connectTo(env.base, '/v1/connect', xff('::ffff:203.0.113.5'));
+    const over = new Client(`${env.base}/v1/connect`, xff('203.0.113.5'));
+    clients.push(over);
+    await expect(over.opened()).rejects.toThrow(/429/);
+    await connectTo(env.base, '/v1/connect', xff('203.0.113.6'));
+
+    await connectTo(env.base, '/v1/connect', xff('2001:db8:1:2::1'));
+    await connectTo(env.base, '/v1/connect', xff('2001:db8:1:2:aaaa:bbbb:cccc:dddd'));
+    const v6 = new Client(`${env.base}/v1/connect`, xff('2001:db8:1:2::ffff'));
+    clients.push(v6);
+    await expect(v6.opened()).rejects.toThrow(/429/);
+    await connectTo(env.base, '/v1/connect', xff('2001:db8:1:3::1'));
+
+    a1.ws.close();
+    await a1.closed;
+    let reopened: Client | null = null;
+    for (let i = 0; i < 50 && reopened === null; i++) {
+      await sleep(10);
+      const c = new Client(`${env.base}/v1/connect`, xff('203.0.113.5'));
+      clients.push(c);
+      reopened = await c.opened().catch(() => null);
+    }
+    expect(reopened).not.toBeNull();
+  });
+
+  it('M1: parallel upgrades do not slip past the cap; a failed upgrade frees its place', async () => {
+    const env = await start({ maxConnections: 2 });
+    const burst = Array.from({ length: 8 }, () => {
+      const c = new Client(`${env.base}/v1/connect`);
+      clients.push(c);
+      return c.opened().then(
+        () => true,
+        () => false,
+      );
+    });
+    expect((await Promise.all(burst)).filter(Boolean)).toHaveLength(2);
+    for (const c of clients) c.ws.terminate();
+    await sleep(50);
+
+    // Upgrade с неверным ключом сорван (400): место освобождается.
+    const port = (env.relay.server.address() as AddressInfo).port;
+    for (let i = 0; i < 3; i++) {
+      const status = await new Promise<number>((resolve) => {
+        const req = http.request({
+          port,
+          host: '127.0.0.1',
+          path: '/v1/connect',
+          headers: { connection: 'upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'bad' },
+        });
+        req.on('response', (r) => resolve(r.statusCode ?? 0));
+        req.on('error', () => resolve(0));
+        req.end();
+      });
+      expect(status).toBe(400);
+    }
+    await sleep(50);
+    await connectTo(env.base, '/v1/connect');
+    await connectTo(env.base, '/v1/connect');
+  });
+
+  it('M1: the first frame must come within 5 s', () => {
+    expect(DEFAULT_TIMING.firstFrameMs).toBe(5_000);
+  });
+
+  it('M2: limiter and connection keys fold IPv6 to /64 and ::ffff: to IPv4', () => {
+    expect(ipKey('203.0.113.5')).toBe('203.0.113.5');
+    expect(ipKey('::ffff:203.0.113.5')).toBe('203.0.113.5');
+    expect(ipKey('::ffff:cb00:7105')).toBe('203.0.113.5');
+    expect(ipKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
+    expect(ipKey('2001:0db8:0001:0002::1')).toBe('2001:db8:1:2::/64');
+    expect(ipKey('[2001:db8::1%en0]')).toBe('2001:db8:0:0::/64');
+    expect(ipKey('::1')).toBe('0:0:0:0::/64');
+    expect(ipKey('unknown')).toBe('unknown');
+  });
+
+  it('M2: new routes from one /64 share the daily limit', async () => {
+    const env = await start({ trustProxy: true });
+    const codes: unknown[] = [];
+    for (let i = 0; i < 6; i++) {
+      const h = await connectTo(env.base, '/v1/host', xff(`2001:db8:5:6::${i + 1}`));
+      h.send({ v: 1, t: 'hello', route: id(16), secret: id(32) });
+      codes.push((await h.json()).t === 'ok' ? 'ok' : 'refused');
+    }
+    expect(codes).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'refused']);
+  });
+
+  it('M2: routes are collected: empty after 24 h, any after 30 days, never while the bridge is attached', () => {
+    let t = 1_000_000;
+    const store = new Store(null, () => t);
+    store.createRoute('empty', 'h');
+    store.createRoute('used', 'h');
+    store.replaceDevices('used', [{ device: 'd', tokenHash: 'x' }]);
+    store.createRoute('attached', 'h');
+    const attached = (r: string) => r === 'attached';
+    t += EMPTY_ROUTE_TTL_MS - 1;
+    expect(store.gc(attached)).toBe(0);
+    t += 1;
+    expect(store.gc(attached)).toBe(1);
+    expect(store.route('empty')).toBeUndefined();
+    t += ROUTE_TTL_MS;
+    expect(store.gc(attached)).toBe(1);
+    expect(store.route('used')).toBeUndefined();
+    expect(store.devicesOf('used')).toEqual([]);
+    expect(store.route('attached')).toBeDefined();
+  });
+
+  it('M2: a bridge leaving restarts the idle clock of its route', async () => {
+    let t = Date.now();
+    const env = await start({ now: () => t, store: new Store(join(dir, 'relay.json'), () => t) });
+    const b = await bridge(env);
+    t += 2 * EMPTY_ROUTE_TTL_MS;
+    b.host.ws.close();
+    await b.host.closed;
+    for (let i = 0; i < 50 && env.store.route(b.route)!.lastSeen !== t; i++) await sleep(5);
+    expect(env.store.route(b.route)!.lastSeen).toBe(t);
+    expect(env.store.gc(() => false)).toBe(0);
+  });
+
+  it('m8: writes are deferred and batched; flush writes at once', async () => {
+    const file = join(dir, 'deferred.json');
+    const store = new Store(file, Date.now, () => {}, 50);
+    store.createRoute('r1', 'h');
+    store.touch('r1');
+    store.replaceDevices('r1', []);
+    expect(() => statSync(file)).toThrow();
+    await sleep(120);
+    expect(statSync(file).size).toBeGreaterThan(0);
+    store.createRoute('r2', 'h');
+    store.flush();
+    expect(new Store(file).route('r2')).toBeDefined();
+  });
+
+  it('m6: a displaced control socket can no longer replace the device list', async () => {
+    const env = await start();
+    const b = await bridge(env);
+    const d = { device: id(16), token: id(32) };
+    // Старый мост не читает: он не видит закрытия 4000 и продолжает слать кадры, пока relay ждёт ответного close.
+    b.host.ws.pause();
+    const again = await connectTo(env.base, '/v1/host');
+    again.send({ v: 1, t: 'hello', route: b.route, secret: b.secret });
+    expect(await again.json()).toEqual({ v: 1, t: 'ok' });
+    await setDevices(env, { ...b, host: again }, [d]);
+    b.host.send({ v: 1, t: 'devices', list: [] });
+    b.host.send({ v: 1, t: 'offer', lookup: id(16), exp: Date.now() + 60_000 });
+    await sleep(50);
+    expect(env.store.devicesOf(b.route)).toHaveLength(1);
+    expect(env.relay.registry.offerCount()).toBe(0);
   });
 });

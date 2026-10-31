@@ -56,7 +56,12 @@ function main(): void {
     process.exit(1);
   }
   const apns = createApnsClient({ topic: cfg.topic, jwt });
-  const server = createGatewayServer({ apns, limiter: new Limiter(), trustProxy: cfg.trustProxy });
+  const server = createGatewayServer({
+    apns,
+    limiter: new Limiter(),
+    trustProxy: cfg.trustProxy,
+    log: (line) => console.log(line),
+  });
   server.listen(cfg.port, cfg.host, () => console.log('push-gateway: listening'));
   const stop = () => {
     apns.close();

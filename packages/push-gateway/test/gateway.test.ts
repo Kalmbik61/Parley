@@ -4,7 +4,7 @@ import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApnsClient } from '../src/apns.js';
-import { createJwtProvider, JWT_TTL_MS } from '../src/jwt.js';
+import { createJwtProvider, JWT_MIN_REFRESH_MS, JWT_TTL_MS } from '../src/jwt.js';
 import { Limiter } from '../src/limits.js';
 import { loadConfig } from '../src/main.js';
 import { createGatewayServer, MAX_BODY_BYTES } from '../src/server.js';
@@ -28,6 +28,9 @@ const keyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 let apnsServer: http2.Http2Server;
 let seen: Seen[];
 let apnsStatus: number;
+let apnsReason: string;
+/** Ответы APNs по очереди; пустая очередь — `apnsStatus` / `apnsReason`. */
+let apnsQueue: Array<[number, string]>;
 let apnsHost: string;
 let gateway: http.Server;
 let base: string;
@@ -41,14 +44,27 @@ const listen = (s: { listen: (...a: never[]) => unknown }): Promise<number> =>
     );
   });
 
-async function start(limiter = new Limiter()): Promise<void> {
-  const jwt = createJwtProvider({ keyPem, keyId: KEY_ID, teamId: TEAM_ID });
+async function start(
+  limiter = new Limiter(),
+  extra: { monotonic?: () => number; log?: (l: string) => void; trustProxy?: boolean } = {},
+): Promise<void> {
+  const jwt = createJwtProvider({
+    keyPem,
+    keyId: KEY_ID,
+    teamId: TEAM_ID,
+    ...(extra.monotonic ? { monotonic: extra.monotonic } : {}),
+  });
   apns = createApnsClient({
     topic: TOPIC,
     jwt,
     origins: { sandbox: apnsHost, production: apnsHost },
   });
-  gateway = createGatewayServer({ apns, limiter });
+  gateway = createGatewayServer({
+    apns,
+    limiter,
+    ...(extra.log ? { log: extra.log } : {}),
+    ...(extra.trustProxy ? { trustProxy: true } : {}),
+  });
   base = `http://127.0.0.1:${await listen(gateway)}`;
 }
 
@@ -64,6 +80,8 @@ const valid = { v: 1, token: TOKEN, env: 'sandbox', count: 3, route: ROUTE_A };
 beforeEach(async () => {
   seen = [];
   apnsStatus = 200;
+  apnsReason = 'x';
+  apnsQueue = [];
   logged = [];
   for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void logged.push(a.join(' ')));
@@ -81,8 +99,9 @@ beforeEach(async () => {
         body: Buffer.concat(chunks).toString(),
         path: req.url ?? '',
       });
-      res.writeHead(apnsStatus);
-      res.end(apnsStatus === 200 ? '' : '{"reason":"x"}');
+      const [status, reason] = apnsQueue.shift() ?? [apnsStatus, apnsReason];
+      res.writeHead(status);
+      res.end(status === 200 ? '' : JSON.stringify({ reason }));
     });
   });
   apnsHost = `http://127.0.0.1:${await listen(apnsServer)}`;
@@ -221,7 +240,7 @@ describe('limits', () => {
 describe('jwt', () => {
   it('verifies with the public key, reused for 50 min, refreshed after', () => {
     let t = 1_700_000_000_000;
-    const get = createJwtProvider({ keyPem, keyId: KEY_ID, teamId: TEAM_ID, now: () => t });
+    const get = createJwtProvider({ keyPem, keyId: KEY_ID, teamId: TEAM_ID, now: () => t, monotonic: () => t });
     const first = get();
     const [h, p, s] = first.split('.') as [string, string, string];
     expect(JSON.parse(Buffer.from(h, 'base64url').toString())).toEqual({ alg: 'ES256', kid: KEY_ID });
@@ -255,6 +274,93 @@ describe('jwt', () => {
     } catch (e) {
       expect(String(e)).not.toContain('garbage-secret');
     }
+  });
+});
+
+describe('review fixes (A5 M3, M4, m1, m2)', () => {
+  const closeGateway = () => new Promise<void>((r) => gateway.close(() => r()));
+
+  it('M3: the token age is monotonic: the wall clock stepping back does not keep an old token', () => {
+    let wall = 1_700_000_000_000;
+    let mono = 0;
+    const get = createJwtProvider({ keyPem, keyId: KEY_ID, teamId: TEAM_ID, now: () => wall, monotonic: () => mono });
+    const first = get();
+    wall -= 2 * 3_600_000;
+    mono += JWT_TTL_MS;
+    expect(get()).not.toBe(first);
+  });
+
+  it('M3: refresh() drops a token only when it is at least 20 min old', () => {
+    let mono = 0;
+    const get = createJwtProvider({ keyPem, keyId: KEY_ID, teamId: TEAM_ID, monotonic: () => mono });
+    const first = get();
+    mono += JWT_MIN_REFRESH_MS - 1;
+    expect(get.refresh()).toBe(false);
+    expect(get()).toBe(first);
+    mono += 1;
+    expect(get.refresh()).toBe(true);
+    expect(get()).not.toBe(first);
+  });
+
+  it('M3: 403 ExpiredProviderToken → new JWT and one retry; the log has status and reason, never the token', async () => {
+    let mono = 0;
+    const lines: string[] = [];
+    await start(new Limiter(), { monotonic: () => mono, log: (l) => lines.push(l) });
+    expect((await post(valid)).status).toBe(200);
+    mono += JWT_MIN_REFRESH_MS;
+    apnsQueue = [[403, 'ExpiredProviderToken']];
+    expect((await post({ ...valid, token: 'cd'.repeat(32) })).status).toBe(200);
+    expect(seen).toHaveLength(3);
+    expect(seen[2]!.headers.authorization).not.toBe(seen[1]!.headers.authorization);
+    expect(seen[1]!.headers.authorization).toBe(seen[0]!.headers.authorization);
+
+    // Токен свежий (моложе 20 мин) — без повтора: 502.
+    apnsQueue = [[403, 'InvalidProviderToken']];
+    expect((await post({ ...valid, token: 'ef'.repeat(32) })).status).toBe(502);
+    expect(seen).toHaveLength(4);
+
+    await closeGateway();
+    const out = lines.join('\n');
+    expect(out).toContain('403 ExpiredProviderToken x1');
+    expect(out).toContain('403 InvalidProviderToken x1');
+    expect(out).toContain('200 - x2');
+    for (const needle of [TOKEN, 'cd'.repeat(32), ROUTE_A, 'bearer', '127.0.0.1']) expect(out).not.toContain(needle);
+  });
+
+  it('M4: the token is lowercased before the limiter and APNs', async () => {
+    await start();
+    expect((await post({ ...valid, token: TOKEN.toUpperCase() })).status).toBe(200);
+    expect((await post(valid)).status).toBe(429);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.path).toBe(`/3/device/${TOKEN}`);
+  });
+
+  it('m2: token reasons → 410, gateway configuration reasons → 502, other 400 → 400', async () => {
+    await start();
+    apnsQueue = [
+      [400, 'BadDeviceToken'],
+      [400, 'DeviceTokenNotForTopic'],
+      [400, 'BadTopic'],
+      [400, 'TopicDisallowed'],
+      [400, 'PayloadEmpty'],
+    ];
+    const codes: number[] = [];
+    for (const t of ['01', '02', '03', '04', '05']) codes.push((await post({ ...valid, token: t.repeat(32) })).status);
+    expect(codes).toEqual([410, 410, 502, 502, 400]);
+  });
+
+  it('m1: behind a proxy the IP limit counts an IPv6 /64 as one client', async () => {
+    await start(new Limiter({ ipPerHour: 2 }), { trustProxy: true });
+    const from = (ip: string) =>
+      fetch(`${base}/v1/push`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+        body: JSON.stringify({ nope: 1 }),
+      });
+    expect((await from('2001:db8:7:8::1')).status).toBe(400);
+    expect((await from('2001:db8:7:8::2')).status).toBe(400);
+    expect((await from('2001:db8:7:8:ffff::3')).status).toBe(429);
+    expect((await from('2001:db8:7:9::1')).status).toBe(400);
   });
 });
 
