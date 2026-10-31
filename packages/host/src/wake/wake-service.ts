@@ -3,7 +3,7 @@
  * агента ждёт непрочитанное письмо, хост сам печатает в его терминал текст
  * указателя и, если человек за это время не начал печатать своё, нажимает
  * Enter. Спящую сессию письмо поднимает: `resume` с указателем первым ходом,
- * не чаще `resumeRate` в час (спека 7.2, 7.4).
+ * не чаще `resumeRate` в час (спека 7.2, 7.4); усыплённую хостом — без этого лимита (спека сна агентов 4.1).
  *
  * Правило «печатать, поднимать или нет» — чистая `deliveryAction` из core;
  * сервис здесь решает, КОГДА её позвать (по событиям `works`/`activity`/`draft`
@@ -228,6 +228,12 @@ interface AttemptState {
    * процесс тоже снимает его: сессию подняли другим путём.
    */
   trustHeld: boolean;
+  /**
+   * Под текущий подъём взят слот часа (`limiter.tryTake`) и ещё не возвращён: вернуть (`releaseSlot`) можно только
+   * взятый. Сессия, которую усыпил хост, слот не берёт (спека сна агентов 4.1), и возвращать ей нечего: иначе возврат
+   * списал бы чужой подъём из счёта часа.
+   */
+  slotTaken: boolean;
   /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
   pasteRetry: NodeJS.Timeout | undefined;
   /** Пересчёт по сроку окна тишины (`settling`): один на сессию, новый срок заменяет старый. */
@@ -342,6 +348,7 @@ export function createWakeService(
         providerCheck: null,
         budgetDeniedAt: null,
         trustHeld: false,
+        slotTaken: false,
         pasteRetry: undefined,
         settleTimer: undefined,
         pasteRetries: 0,
@@ -483,7 +490,8 @@ export function createWakeService(
   /**
    * Первая встреча с работой: её непрочитанные у неживых считаются указанными.
    * Зовётся из самого пересчёта, а не только из подписки на работы: активность
-   * узнаёт о новой работе раньше будильника и зовёт пересчёт первой.
+   * узнаёт о новой работе раньше будильника и зовёт пересчёт первой. Кроме усыплённых хостом (`autoSleep`):
+   * их письма ждали подъёма, а не остановил их человек, — после перезапуска хоста они поднимают сессию (спека сна агентов 4.1).
    */
   function ensureKnown(entry: WorkEntry): void {
     const wk = workKeyOf(entry.projectPath, entry.map.work.id);
@@ -491,7 +499,7 @@ export function createWakeService(
     knownWorks.add(wk);
     for (const session of entry.map.sessions) {
       const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-      if (pty.get(ref) === undefined) markUnreadPointed(ref, stateFor(refKey(ref)), true);
+      if (pty.get(ref) === undefined && session.autoSleep == null) markUnreadPointed(ref, stateFor(refKey(ref)), true);
     }
   }
 
@@ -539,6 +547,13 @@ export function createWakeService(
     notice('resume-failed', ref, text);
   }
 
+  /** Возвращает слот часа, если под этот подъём он был взят: подъёма не было, и час не должен платить за него. */
+  function releaseSlot(ref: SessionRef, state: AttemptState): void {
+    if (!state.slotTaken) return;
+    state.slotTaken = false;
+    limiter.release(ref);
+  }
+
   /**
    * Поднимает спящую: указатель последним аргументом, если провайдер его
    * принимает (`{prompt}` в `resumeArgs`), иначе — без промпта и с печатью
@@ -561,7 +576,7 @@ export function createWakeService(
       if (template === undefined || (session.providerSessionId === null && !awaiting)) {
         state.resumeUnavailable = true;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
-        limiter.release(ref);
+        releaseSlot(ref, state);
         // Окно уже видит «resuming»: пересчёт покажет, что письма ждут (`sleeping`). `resuming` снимается до него, иначе
         // пересчёт снова записал бы «resuming».
         state.resuming = false;
@@ -591,7 +606,7 @@ export function createWakeService(
         state.earlyExit = undefined;
         state.resumedAt = null;
         state.pointerAfter = null;
-        limiter.release(ref);
+        releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
         state.trustHeld = true;
         // `resuming` снимается до публикации: вложенный пересчёт, который она вызывает, иначе записал бы «resuming».
@@ -610,7 +625,7 @@ export function createWakeService(
       if (isResourceDenial(error)) {
         // Бюджет работы отказал до запуска: процесса нет, слот не получен. Это не сбой подъёма — письма остаются
         // непрочитанными и ждут, а счёт часа возвращается, чтобы отказ не расходовал его впустую.
-        limiter.release(ref);
+        releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
         state.budgetDeniedAt = Date.now();
         limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
@@ -1012,8 +1027,12 @@ export function createWakeService(
         state.trustHeld || (state.budgetDeniedAt !== null && Date.now() - state.budgetDeniedAt < BUDGET_RETRY_MS);
       // Подъём хотели, но удержание согласия не пускает: письма ждут человека, а не часовой лимит.
       const trustBlocked = action.kind === 'resume' && state.trustHeld;
-      if (action.kind === 'resume' && (backedOff || !limiter.tryTake(ref))) {
-        action = deliveryAction({ ...input, resumeAllowed: false });
+      if (action.kind === 'resume') {
+        // Подъём усыплённой хостом вызван решением хоста, а лимит часа защищает от агентов, будящих друг друга: слот под
+        // него не берётся (спека сна агентов 4.1). Остановленную человеком считают по-старому.
+        const hostSlept = session.autoSleep != null;
+        state.slotTaken = !backedOff && !hostSlept && limiter.tryTake(ref);
+        if (backedOff || !(hostSlept || state.slotTaken)) action = deliveryAction({ ...input, resumeAllowed: false });
       }
       if (action.kind === 'resume') {
         void resumeSession(ref, session, state, { ...action, ...traceOf(input.unread, action.letterIds) });
