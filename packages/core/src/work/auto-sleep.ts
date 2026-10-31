@@ -142,3 +142,13 @@ export function deliveredSince(letters: Pick<LetterTx, 'query'>, sessionId: stri
     letters.query({ limit: 50, newestFirst: true }).some(delivered)
   );
 }
+
+/**
+ * Сессии не выдают письма (`check_inbox`, `wait_for`): хост усыпляет её — стоит отметка «засыпает»
+ * (`autoSleepPending`) — или уже усыпил, а процесс, не успевший остановиться, ещё зовёт инструменты (`sleeping` с
+ * `autoSleep`). Письма остаются непрочитанными и поднимут сессию после сна: отданное письмо модель получила бы за миг до
+ * остановки и не прочла бы. Остановленная человеком (`sleeping` без `autoSleep`) не огорожена, её правила прежние.
+ */
+export function inboxFenced(session: WorkSession): boolean {
+  return session.autoSleepPending != null || (session.lifecycle === 'sleeping' && session.autoSleep != null);
+}

@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
-import { autoSleepVerdict, deliveredSince, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
+import { autoSleepVerdict, deliveredSince, inboxFenced, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
 import { closeWorkDb } from './db.js';
 import { mapLetterTx, writeLetters } from './letter-store.js';
 import { addRoom } from './rooms.js';
 import { createWork, updateMap } from './store.js';
 import type { SessionNeed } from './stuck.js';
-import type { AutoSleep, WindowWorkMap } from './types.js';
+import type { AutoSleep, WindowWorkMap, WorkSession } from './types.js';
 
 const MIN = 60_000;
 const NOW = Date.parse('2026-10-31T12:00:00.000Z');
@@ -379,5 +379,35 @@ describe('deliveredSince: письма в настоящем хранилище'
       deliveredSince(letters, 's-01', iso(NOW - MIN)),
     ]);
     expect([afterBoth, afterBroadcast, afterAll]).toEqual([true, true, false]);
+  });
+});
+
+describe('inboxFenced: когда сессии не выдают письма', () => {
+  const sessionOf = (patch: Partial<WorkSession>): WorkSession => ({ id: 's-01', lifecycle: 'active', ...patch }) as WorkSession;
+
+  it('отметка «засыпает» — огорожена, в любом жизненном цикле', () => {
+    for (const lifecycle of ['active', 'sleeping'] as const) {
+      expect(inboxFenced(sessionOf({ lifecycle, autoSleepPending: MARK }))).toBe(true);
+    }
+  });
+
+  it('спит по решению хоста (sleeping и autoSleep) — огорожена: защита от позднего вызова оборванного процесса', () => {
+    expect(inboxFenced(sessionOf({ lifecycle: 'sleeping', autoSleep: MARK }))).toBe(true);
+  });
+
+  it('остановлена человеком (sleeping без autoSleep) — нет', () => {
+    expect(inboxFenced(sessionOf({ lifecycle: 'sleeping' }))).toBe(false);
+    expect(inboxFenced(sessionOf({ lifecycle: 'sleeping', autoSleep: null }))).toBe(false);
+  });
+
+  it('autoSleep без sleeping — нет: подъём и закрытие его снимают, остаток письма не задерживает', () => {
+    for (const lifecycle of ['active', 'closed', 'pending'] as const) {
+      expect(inboxFenced(sessionOf({ lifecycle, autoSleep: MARK }))).toBe(false);
+    }
+  });
+
+  it('обычная активная сессия и пустые ключи сна — нет', () => {
+    expect(inboxFenced(sessionOf({}))).toBe(false);
+    expect(inboxFenced(sessionOf({ autoSleepPending: null, autoSleep: null }))).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { unreadLetters, writeLetters, type NewLetter } from '../work/letter-store.js';
-import { HUMAN } from '../work/types.js';
+import { HUMAN, type WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
 import { createToolRunner, type ToolRunner } from './tools.js';
 
@@ -454,5 +454,146 @@ describe('wait_for("inbox"): окно тишины — несрочные пис
 
     expect(body(await waitInbox(0.4))).toEqual({ state: 'running' });
     expect(unreadTexts()).toEqual(['заметка']);
+  });
+});
+
+describe('отметка «засыпает»: письма не выдаются — они поднимут сессию после сна', () => {
+  const MARK = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null } as const;
+  /** Меняет `s-01` в карте так, как это делает хост: отметка сна, жизненный цикл, итог сна. */
+  const patchSession = (patch: (session: WorkSession) => void): Promise<unknown> =>
+    updateMap(project, workId, (map) => { patch(map.sessions.find((session) => session.id === 's-01')!); });
+  const markPending = (): Promise<unknown> => patchSession((session) => { session.autoSleepPending = { ...MARK }; });
+
+  it('check_inbox при отметке сна отдаёт пусто и не помечает письма', async () => {
+    await addLetter('письмо');
+    await markPending();
+
+    expect(body(await runner.call('check_inbox', {}, undefined))).toEqual({ messages: [] });
+    expect(unreadTexts()).toEqual(['письмо']);
+  });
+
+  it('wait_for("inbox") при отметке сна сразу отвечает running и не помечает письма', async () => {
+    await addLetter('письмо');
+    await markPending();
+    const startedAt = Date.now();
+
+    expect(body(await runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined))).toEqual({ state: 'running' });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(unreadTexts()).toEqual(['письмо']);
+    // Ожидание не начиналось: в журнале нет ни одной строки.
+    expect(await journalLines()).toEqual([]);
+  });
+
+  it('wait_for("inbox") при отметке сна и пустом ящике тоже отвечает running сразу, не дожидаясь таймаута', async () => {
+    await markPending();
+    const startedAt = Date.now();
+
+    expect(body(await runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined))).toEqual({ state: 'running' });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(await journalLines()).toEqual([]);
+  });
+
+  it('отметка поставлена посреди ожидания: пришедшее письмо не выдаётся, ответ running сразу, Start и End парой', async () => {
+    let started!: () => void;
+    const hasStarted = new Promise<void>((resolve) => { started = resolve; });
+    journal.beforeLine = (line) => {
+      if (line.includes('ParleyWaitStart')) started();
+    };
+
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    await hasStarted;
+    await markPending();
+    await addLetter('письмо');
+    const startedAt = Date.now();
+
+    expect(body(await waiting)).toEqual({ state: 'running' });
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(unreadTexts()).toEqual(['письмо']);
+    expect((await journalLines()).map((line) => line['hook_event_name'])).toEqual(['ParleyWaitStart', 'ParleyWaitEnd']);
+  });
+
+  it('отметка поставлена в окне между находкой письма и забором: письмо не помечается, ответ running сразу', async () => {
+    // `ParleyWaitEnd` пишется после находки письма и до `takeInbox`: хост успевает поставить отметку именно здесь. Опрос карты —
+    // минута, будит ожидание только сигнал: без проверки перед забором пустой забор ушёл бы в паузу на `pollMs` и вызов провисел бы.
+    const subscribed = { listener: null as (() => void) | null };
+    runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, pollMs: 60_000, mapChanges: (onChange) => {
+      subscribed.listener = onChange;
+      return () => { subscribed.listener = null; };
+    } });
+    journal.beforeLine = async (line) => {
+      if (line.includes('ParleyWaitEnd')) await markPending();
+    };
+
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    await vi.waitFor(() => expect(subscribed.listener).not.toBeNull(), { timeout: 2000, interval: 10 });
+    await addLetter('письмо');
+    subscribed.listener!();
+    const startedAt = Date.now();
+
+    expect(body(await waiting)).toEqual({ state: 'running' });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(unreadTexts()).toEqual(['письмо']);
+  });
+
+  it('wait_for(<id>) огороженной сессии тоже сразу отвечает running, даже если у цели есть итог', async () => {
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === 's-02')!.result = 'done';
+    });
+    await markPending();
+
+    expect(body(await runner.call('wait_for', { target: 's-02', timeoutSec: 30 }, undefined))).toEqual({ state: 'running' });
+  });
+
+  it('усыплённую хостом (sleeping и autoSleep) поздний вызов оборванного процесса тоже не обслуживает', async () => {
+    await addLetter('письмо');
+    await patchSession((session) => {
+      session.lifecycle = 'sleeping';
+      session.autoSleep = { ...MARK };
+    });
+
+    expect(body(await runner.call('check_inbox', {}, undefined))).toEqual({ messages: [] });
+    expect(unreadTexts()).toEqual(['письмо']);
+  });
+
+  it('остановленная человеком (sleeping без autoSleep) не огорожена: выдача прежняя', async () => {
+    await addLetter('письмо');
+    await patchSession((session) => { session.lifecycle = 'sleeping'; });
+
+    expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('без отметки выдача прежняя: пустые ключи сна не огораживают', async () => {
+    await addLetter('письмо');
+    await patchSession((session) => {
+      session.autoSleepPending = null;
+      session.autoSleep = null;
+    });
+
+    expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('wait_for("inbox") без отметки отдаёт письмо и помечает его, как раньше', async () => {
+    await addLetter('письмо');
+
+    const answer = body(await runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined));
+
+    expect(answer['state']).toBe('message');
+    expect(textsOf(answer)).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
+  });
+
+  it('хост отменил сон и снял отметку: письмо, которое ждало, выдаётся', async () => {
+    await addLetter('письмо');
+    await markPending();
+    expect(body(await runner.call('check_inbox', {}, undefined))).toEqual({ messages: [] });
+
+    await patchSession((session) => { delete session.autoSleepPending; });
+
+    expect(textsOf(body(await runner.call('check_inbox', {}, undefined)))).toEqual(['письмо']);
+    expect(unreadTexts()).toEqual([]);
   });
 });

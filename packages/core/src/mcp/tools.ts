@@ -29,6 +29,7 @@ import {
   supportsEffort,
 } from '../providers.js';
 import { roleSummaries, sessionRoleCatalog } from '../work/agents.js';
+import { inboxFenced } from '../work/auto-sleep.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
@@ -81,7 +82,7 @@ import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, i
 import { reportedStatus } from '../work/session-state.js';
 import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
-import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
 import {
   HUMAN,
@@ -866,6 +867,15 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  /**
+   * Хост усыпляет эту сессию или уже усыпил (`inboxFenced`): письма ей не выдаются, ожидание отвечает `running`. Синхронно
+   * и без копии карты: от проверки отмены до ответа ниже `await` быть не должно.
+   */
+  const fenced = (): boolean =>
+    viewMap(context.projectPath, context.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      return session !== undefined && inboxFenced(session);
+    });
   /** Сколько ещё ждать тишины по этим письмам, мс; 0 — доставлять сейчас (окно и потолок — из контекста, для тестов). */
   const settleDelay = (unread: readonly Message[]): number =>
     settleDelayMs(unread, sessionId, Date.now(), context.settleMs, context.settleMaxMs);
@@ -970,6 +980,8 @@ async function waitFor(
   // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
   const cancelled = (): boolean => signal?.aborted === true;
   for (;;) {
+    // Отметка «засыпает»: письма остаются непрочитанными, ждать их незачем — сессию остановят. Ни одной строки журнала.
+    if (fenced()) return { state: 'running' };
     const timeLeftMs = Math.max(endsAt - Date.now(), 0);
     // Письма лежат, но пачка не устоялась: проба из-за этого не сработает до смены карты, а срок идёт по часам. Поэтому ждём
     // не дольше срока и пересчитываем (не раньше, чем кончится таймаут вызова).
@@ -994,6 +1006,8 @@ async function waitFor(
     // Брошенный вызов: ход сессии кончился или начался заново после старта вызова (человек прервал ход, а клиент отмену не
     // прислал — Codex). Агент ответа не увидит; письмо остаётся непрочитанным, и хост напечатает на него указатель.
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
+    // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
+    if (fenced()) return { state: 'running' };
     const messages = takeInbox(context, sessionId);
     if (messages.length > 0) return { state: 'message', messages };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
@@ -1133,6 +1147,9 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
     // почту нового (спека передачи сессии 6.1). Отказ откатывает запись: письма остаются непрочитанными.
     const revision = current.sessions.find((session) => session.id === sessionId)?.agentRevision ?? null;
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
+    // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
+    // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
+    if (inboxFenced(requireSession(current, sessionId))) return [];
     const inbox = letters.unreadFor(sessionId);
     const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
