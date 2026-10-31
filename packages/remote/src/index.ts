@@ -15,3 +15,7 @@ export * from './relay-link.js';
 export * from './sessions.js';
 export * from './pairing.js';
 export * from './access.js';
+export * from './config.js';
+export * from './push.js';
+export * from './push-gateway-client.js';
+export * from './bridge.js';

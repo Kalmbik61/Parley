@@ -27,6 +27,8 @@ export interface PushNotifierOptions {
 export interface PushNotifier {
   /** Окно сообщает присутствие; `null` — окно закрыто или управляющее соединение ушло. */
   setPresence(presence: Presence): void;
+  /** Тестовый push на одно устройство (`push.test`): число — текущее, не меньше 1; присутствие не проверяется. */
+  test(deviceId: string): Promise<'sent' | 'no-token' | 'no-gateway' | 'failed'>;
   stop(): void;
 }
 
@@ -172,6 +174,13 @@ export function createPushNotifier(options: PushNotifierOptions): PushNotifier {
   return {
     setPresence(next) {
       presence = next;
+    },
+    async test(deviceId) {
+      const d = devices.get(deviceId);
+      if (d?.push === undefined) return 'no-token';
+      if (gateway === null) return 'no-gateway';
+      const result = await gateway.send({ token: d.push.apnsToken, env: d.push.env, count: Math.max(1, needsYouCount(works(), activityOf)), route: options.routeId() });
+      return result === 'sent' ? 'sent' : 'failed';
     },
     stop() {
       unsubscribe();

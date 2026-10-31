@@ -31,13 +31,15 @@ import type { BridgeLog } from './log.js';
 
 /** Постоянные поля `hello` моста (спека 8.2); `host` и `epoch` берутся у `HostLink`. */
 export interface BridgeInfo {
-  hostId: string;
+  /** Функция — `hostId` меняется после сброса ключа (спека 7.9). */
+  hostId: string | (() => string);
   hostName: string;
   bridgeVersion: string;
   /** Версия хоста, если известна (`host.info`); иначе `null`. */
   hostVersion?: () => string | null;
   minClient: string;
-  relays: string[];
+  /** Функция — адрес relay меняется командой `configure` без перезапуска. */
+  relays: string[] | (() => string[]);
 }
 
 export interface BridgeOptions {
@@ -295,7 +297,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       return {
         protocol: REMOTE_PROTOCOL,
         minClient: info.minClient,
-        hostId: info.hostId,
+        hostId: typeof info.hostId === 'function' ? info.hostId() : info.hostId,
         hostName: info.hostName,
         bridgeVersion: info.bridgeVersion,
         hostVersion: info.hostVersion?.() ?? null,
@@ -304,7 +306,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         stage: 'A',
         methods: [...hostMethods(), ...LOCAL_METHODS],
         events: [...REMOTE_EVENTS, ...Object.keys(bridgeEventSchemas)],
-        relays: info.relays,
+        relays: typeof info.relays === 'function' ? info.relays() : info.relays,
         serverTime: Date.now(),
       };
     },
