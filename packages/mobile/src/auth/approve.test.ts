@@ -125,3 +125,22 @@ describe('no device passcode', () => {
     expect(c.decide).not.toHaveBeenCalled();
   });
 });
+
+describe('the "Require Face ID to allow" setting covers approvals only', () => {
+  it.each(['launch', 'letter', 'disable'] as const)('%s asks even with the setting off', async (kind) => {
+    const a = auth(true);
+    expect(await gate(a, false)(kind)).toBe('ok');
+    expect(a.authenticateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['allow', 'plan', 'accept'] as const)('%s does not ask with the setting off', async (kind) => {
+    const a = auth(false);
+    expect(await gate(a, false)(kind)).toBe('ok');
+    expect(a.authenticateAsync).not.toHaveBeenCalled();
+  });
+
+  it('a launch with the setting off and a cancelled prompt sends nothing', async () => {
+    expect(await gate(auth(false), false)('launch')).toBe('cancelled');
+    expect(await gate(auth(false), false)('letter')).toBe('cancelled');
+  });
+});
