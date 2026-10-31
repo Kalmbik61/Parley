@@ -239,6 +239,21 @@ describe('machineAdmission', () => {
     ['агент, потолок выключен (limit null) и давление critical', input({ launchClass: 'agent', occupied: 50, limit: null, pressure: 'critical' }), { kind: 'start' }],
     ['агент, слот свободен, но впереди в очереди один', input({ launchClass: 'agent', occupied: 1, limit: 2, ahead: 1 }), { kind: 'queue', reason: 'machine-limit' }],
     ['человек, слот свободен (1/2)', input({ launchClass: 'human', occupied: 1, limit: 2 }), { kind: 'start' }],
+    [
+      'человек, слот свободен, но впереди в очереди один: не обгоняет, а встаёт следом',
+      input({ launchClass: 'human', occupied: 1, limit: 2, ahead: 1 }),
+      { kind: 'queue', reason: 'machine-limit' },
+    ],
+    [
+      'человек, слота нет (2/2) и впереди один: сверх потолка всё равно можно',
+      input({ launchClass: 'human', occupied: 2, limit: 2, ahead: 1 }),
+      { kind: 'overflow', reason: 'machine-limit' },
+    ],
+    [
+      'человек, давление critical и впереди один: слота нет, сверх потолка можно',
+      input({ launchClass: 'human', occupied: 0, limit: 18, pressure: 'critical', ahead: 1 }),
+      { kind: 'overflow', reason: 'memory-critical' },
+    ],
   ];
 
   it.each(table)('%s', (_title, given, expected) => {

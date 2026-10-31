@@ -94,16 +94,21 @@ export type Admission =
  * Решение допуска (спека 4.2, «Допуск запуска»). Правила идут по порядку, первое сработавшее и есть ответ:
  * 1. движок — старт: очередь его не касается;
  * 2. потолок выключен — старт: выключенный потолок отключает весь допуск, давление тоже;
- * 3. слот свободен, давление не `critical`, впереди в очереди никого — старт;
- * 4. причина: `critical` — `memory-critical`, иначе `machine-limit`;
- * 5. человек, у которого сверх потолка живо меньше `HUMAN_OVERFLOW`, — старт сверх потолка с этой причиной;
+ * 3. слот свободен (занято меньше потолка, давление не `critical`): впереди в очереди никого — старт, иначе очередь
+ *    с причиной `machine-limit`, любому классу и человеку тоже: кто встал раньше, идёт первым, а этот запуск стартует
+ *    следом;
+ * 4. слота нет; причина: `critical` — `memory-critical`, иначе `machine-limit`;
+ * 5. слота нет, запуск человека и сверх потолка живо меньше `HUMAN_OVERFLOW` — старт сверх потолка с этой причиной;
  * 6. иначе — очередь с этой причиной.
  * Сон ради слота (спека, «Допуск запуска», пункт 2) в функцию не входит: ему нужны часы и остановка процесса, то есть хост.
  */
 export function machineAdmission(input: AdmissionInput): Admission {
   if (input.launchClass === 'engine') return { kind: 'start' };
   if (input.limit === null) return { kind: 'start' };
-  if (input.occupied < input.limit && input.pressure !== 'critical' && input.ahead === 0) return { kind: 'start' };
+  const slotFree = input.occupied < input.limit && input.pressure !== 'critical';
+  if (slotFree && input.ahead === 0) return { kind: 'start' };
+  // Слот есть, но впереди ждут: сверх потолка не идёт никто, даже человек — он идёт только тогда, когда слота нет.
+  if (slotFree) return { kind: 'queue', reason: 'machine-limit' };
   const reason: QueueReason = input.pressure === 'critical' ? 'memory-critical' : 'machine-limit';
   if (input.launchClass === 'human' && input.overflowLive < HUMAN_OVERFLOW) return { kind: 'overflow', reason };
   return { kind: 'queue', reason };
