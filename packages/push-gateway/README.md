@@ -3,6 +3,17 @@
 A small stateless service that turns a "needs you" signal from a Parley bridge into an APNs alert for the
 Parley iOS app. It runs on the app author's server, because only the owner of the app's APNs key can push to it.
 
+**Status.** The gateway is built and tested against a local mock of APNs, but it is not deployed: it starts after the
+Apple Developer account for the app is paid, and until then Parley has no gateway address built in
+(`DEFAULT_PUSH_GATEWAY_URL` in `packages/remote/src/push-gateway-client.ts` is `null`), so no bridge sends a push.
+Someone who builds the app under their own bundle ID and APNs key runs their own copy and sets `pushGatewayUrl` in
+`~/.parley/remote/remote.json`. This file was checked against the code (limits, answers, configuration and the logged
+summary) when the Remote access docs were written; a live push to a device is still unchecked (plan step A24).
+
+A push reaches a phone only while the Mac is awake, Parley runs with Remote access on and this gateway is reachable.
+It is one service for every user: if it is down nobody gets a push, while connecting, answering and pairing keep
+working because they do not go through it.
+
 ## API
 
 - `GET /v1/health` → `200 {"ok":true}`.

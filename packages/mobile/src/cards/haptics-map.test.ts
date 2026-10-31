@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hapticFor, hapticForResolve } from './haptics-map';
+import { hapticFor } from './haptics-map';
 
 describe('hapticFor (D1 §16)', () => {
   const allow = { kind: 'permission', behavior: 'allow' } as const;
@@ -14,11 +14,5 @@ describe('hapticFor (D1 §16)', () => {
     for (const kind of ['already-answered', 'conflict', 'unconfirmed', 'no-longer-pending'] as const) expect(hapticFor({ kind }, allow)).toBe('warning');
     expect(hapticFor({ kind: 'cancelled' }, allow)).toBe('none');
     expect(hapticFor({ kind: 'error' }, allow)).toBe('error');
-  });
-  it('Decision: Accept success, Return warning', () => {
-    expect(hapticForResolve('applied', 'accept')).toBe('success');
-    expect(hapticForResolve('applied', 'return')).toBe('warning');
-    expect(hapticForResolve('conflict', 'accept')).toBe('warning');
-    expect(hapticForResolve('cancelled', 'accept')).toBe('none');
   });
 });

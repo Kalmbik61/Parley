@@ -8,6 +8,7 @@ import { goneEntries, useGoneDismiss, type GoneEntry } from '../../cards/gone';
 import { InboxRow, GoneRow } from '../../cards/InboxRow';
 import { fullCommand } from '../../cards/model';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
+import { haptic } from '../../haptics';
 import { useDemoData } from '../../hooks/use-demo';
 import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-remote';
 import { sessionParam, workParam } from '../../nav/refs';
@@ -72,7 +73,10 @@ export default function InboxScreen() {
     const names = hosts.map((h) => hostNames[h.hostId] ?? h.hostName);
     ActionSheetIOS.showActionSheetWithOptions({ options: [...names, 'Cancel'], cancelButtonIndex: names.length, title: 'Mac' }, (i) => {
       const h = hosts[i];
-      if (h !== undefined && h.hostId !== host?.hostId) void runtime.selectHost(h.hostId);
+      if (h !== undefined && h.hostId !== host?.hostId) {
+        haptic.selection();
+        void runtime.selectHost(h.hostId);
+      }
     });
   };
 
