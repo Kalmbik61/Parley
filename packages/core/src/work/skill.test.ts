@@ -138,7 +138,7 @@ describe('заглушка скилла parley: тело', () => {
     expect(body).toMatch(
       /Answering a particular message in a room — above all the human's question — pass `replyTo` with its id: the window shows a quote of it above your answer\./,
     );
-    expect(body).toMatch(/The human is not a session: answer the human in the room without `to`\./);
+    expect(body).toMatch(/The human is not a session: answer the human in the room without `to`; outside a room, answer a direct letter from the human with `send_message\(to: "human"\)`\./);
     expect(body).toMatch(
       /Write `@human` as plain text, and only when you need the human's answer or attention: it notifies the human\./,
     );
