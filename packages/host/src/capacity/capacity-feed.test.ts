@@ -17,6 +17,7 @@ let machineConcurrent: 'off' | 'auto' | number = 4;
 let sleepAfterMinutes = 60;
 let sleepUnderPressureMinutes = 5;
 let exitListeners: Array<() => void> = [];
+let startListeners: Array<() => void> = [];
 let worksListeners: Array<() => void> = [];
 let readingListeners: Array<() => void> = [];
 let broadcasts: Array<{ event: string; data: CapacitySnapshot }> = [];
@@ -46,7 +47,10 @@ function make(over: Partial<CapacityFeedDeps> = {}): CapacityFeed {
       onReading: (listener) => unsubscribe(readingListeners, () => listener(reading)),
     },
     works: { onChange: (listener) => unsubscribe(worksListeners, listener) },
-    pty: { on: ((event: string, listener: () => void) => unsubscribe(exitListeners, listener)) as never },
+    pty: {
+      on: ((event: string, listener: () => void) =>
+        unsubscribe(event === 'start' ? startListeners : exitListeners, listener)) as never,
+    },
     config: async () => ({ machineConcurrent, sleepAfterMinutes, sleepUnderPressureMinutes }),
     totalMemBytes: 16 * GB,
     ...over,
@@ -68,6 +72,7 @@ beforeEach(() => {
   sleepAfterMinutes = 60;
   sleepUnderPressureMinutes = 5;
   exitListeners = [];
+  startListeners = [];
   worksListeners = [];
   readingListeners = [];
   broadcasts = [];
@@ -149,6 +154,7 @@ describe('лента ёмкости: рассылка', () => {
     made.stop();
 
     expect(exitListeners).toHaveLength(0);
+    expect(startListeners).toHaveLength(0);
     expect(worksListeners).toHaveLength(0);
     expect(readingListeners).toHaveLength(0);
 
@@ -165,6 +171,56 @@ describe('лента ёмкости: рассылка', () => {
 
     await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS * 2);
     expect(broadcasts).toEqual([]);
+  });
+
+  it('старт процесса PTY ставит рассылку: слот занят, числа сменились', async () => {
+    const made = make();
+    made.start();
+
+    occupied = 4;
+    fire(startListeners);
+    await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS);
+
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]!.data.machine.live).toBe(4);
+  });
+
+  it('stop посреди снимка: уже считающийся снимок не рассылается', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const made = make({
+      config: async () => {
+        await gate;
+        return { machineConcurrent, sleepAfterMinutes, sleepUnderPressureMinutes };
+      },
+    });
+    made.start();
+
+    fire(worksListeners);
+    await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS);
+    made.stop();
+    release!();
+    await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS);
+
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('stop, затем start: прежний снимок рассылается заново', async () => {
+    const made = make();
+    made.start();
+    fire(worksListeners);
+    await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS);
+    expect(broadcasts).toHaveLength(1);
+
+    made.stop();
+    made.start();
+    fire(worksListeners);
+    await vi.advanceTimersByTimeAsync(CAPACITY_PUBLISH_MS);
+
+    expect(broadcasts).toHaveLength(2);
+    expect(broadcasts[1]!.data).toEqual(broadcasts[0]!.data);
   });
 
   it('ошибка снимка — предупреждение в журнал, без исключения; следующее событие пробует снова', async () => {
