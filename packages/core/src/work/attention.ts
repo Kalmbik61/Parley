@@ -51,7 +51,7 @@ export function sessionNeed(session: Pick<WorkSession, 'lifecycle'>, live: Sessi
 }
 
 /** Таблица спеки 7.1. */
-export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
+export function sessionAttention(session: Pick<WorkSession, 'lifecycle'>, live: SessionActivity | null): Attention {
   if (session.lifecycle === 'closed') return 'off';
   // pending и sleeping: процесса нет, но сессия не закрыта.
   if (session.lifecycle !== 'active') return 'idle';
@@ -132,4 +132,88 @@ export function plainHumanMention(text: string): boolean {
 export function humanDecisionOutcome(text: string): 'accepted' | 'returned' | null {
   if (text === ACCEPTED_LETTER) return 'accepted';
   return text.startsWith(RETURNED_LETTER) ? 'returned' : null;
+}
+
+// ---- «Нужен ты» для телефона: бейдж приложения и повод push (спека мобильного приложения 9.2) ----
+
+/**
+ * Вход счётчика «нужен ты»: поля работы, одинаковые у карты хоста (`needsYouWorkOfMap`) и у проекции для телефона
+ * (`RemoteWork`: `id` → `workId`, `archived`, `proposal`, число непрочитанных прямых писем). Окну счётчик не нужен: его
+ * бейдж считает упоминания и `unseen` иначе.
+ */
+export interface NeedsYouWork {
+  projectPath: string;
+  workId: string;
+  sessions: ReadonlyArray<{ id: string; lifecycle: WorkSession['lifecycle'] }>;
+  rooms: ReadonlyArray<{ id: string; archived: boolean; proposal: { id: string; rev: number } | null }>;
+  /** Непрочитанные человеком прямые письма работы (`rooms[''].unread` карты v2; у v1 — `unread.letters`). */
+  unreadLetters: number;
+}
+
+/** Последняя активность сессии: `null` — записи нет. */
+export type NeedsYouActivity = (projectPath: string, workId: string, sessionId: string) => SessionActivity | null;
+
+/** Пункт счётчика. Ключи без номера входа: его ведёт тот, кто шлёт push (мост помнит, сколько раз сессия входила в `needs-you`). */
+export type NeedsYouItem =
+  | { kind: 'session'; key: string; projectPath: string; workId: string; sessionId: string }
+  | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; proposalId: string; rev: number }
+  | { kind: 'letters'; key: string; projectPath: string; workId: string; unread: number };
+
+/**
+ * Ждущие человека пункты: сессии с `sessionAttention === 'needs-you'` (`blocked` или `need`), открытые комнаты с решением
+ * (`roomAwaitsDecision`) и, по одному пункту на работу, непрочитанные прямые письма. Упоминания `@human` в комнатах не входят.
+ */
+export function needsYouItems(works: readonly NeedsYouWork[], activityOf: NeedsYouActivity): NeedsYouItem[] {
+  const items: NeedsYouItem[] = [];
+  for (const work of works) {
+    const { projectPath, workId } = work;
+    for (const session of work.sessions) {
+      if (sessionAttention(session, activityOf(projectPath, workId, session.id)) === 'needs-you') {
+        items.push({ kind: 'session', key: `session:${projectPath}\u0000${workId}\u0000${session.id}`, projectPath, workId, sessionId: session.id });
+      }
+    }
+    for (const room of work.rooms) {
+      if (room.archived || room.proposal === null) continue;
+      items.push({
+        kind: 'room',
+        key: `room:${projectPath}/${workId}/${room.id}:${room.proposal.id}:${room.proposal.rev}`,
+        projectPath,
+        workId,
+        roomId: room.id,
+        proposalId: room.proposal.id,
+        rev: room.proposal.rev,
+      });
+    }
+    if (work.unreadLetters > 0) items.push({ kind: 'letters', key: `letters:${projectPath}/${workId}`, projectPath, workId, unread: work.unreadLetters });
+  }
+  return items;
+}
+
+/** Число в push и на бейдже: сессии и решения по одному, письма — их число. */
+export function needsYouCount(works: readonly NeedsYouWork[], activityOf: NeedsYouActivity): number {
+  return needsYouItems(works, activityOf).reduce((sum, item) => sum + (item.kind === 'letters' ? item.unread : 1), 0);
+}
+
+/** Карта хоста → вход счётчика. Непрочитанные письма — как в проекции: счётчик компактной карты, без неё — по письмам. */
+export function needsYouWorkOfMap(projectPath: string, map: WindowWorkMap): NeedsYouWork {
+  const compact = map.compact;
+  const unreadLetters =
+    compact === undefined
+      ? humanUnreadLetters(map).length
+      : compact.version === 2
+        ? (compact.rooms['']?.unread ?? 0)
+        : compact.messages.rooms[''] === undefined
+          ? 0
+          : compact.unread.letters;
+  return {
+    projectPath,
+    workId: map.work.id,
+    sessions: map.sessions,
+    rooms: map.rooms.map((room) => ({
+      id: room.id,
+      archived: isArchived(room),
+      proposal: room.proposal ? { id: room.proposal.id, rev: room.proposal.rev } : null,
+    })),
+    unreadLetters,
+  };
 }

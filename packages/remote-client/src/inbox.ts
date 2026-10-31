@@ -1,7 +1,7 @@
 // Inbox: что ждёт человека на хосте (спека §11.2 п. 2, D1 §7). Только по полям проекции и кэшу активности.
-import type { FeedCard, Message, WorkSession } from '@parley/core';
+import type { FeedCard, Message } from '@parley/core';
 import { cardGist, type CardGist } from '@parley/core/card-gist';
-import { isHumanUnread, sessionAttention, type Attention } from '@parley/core/attention';
+import { isHumanUnread, needsYouCount, sessionAttention, type Attention, type NeedsYouWork } from '@parley/core/attention';
 import type { RemoteRoom, RemoteSession, RemoteWork } from '@parley/protocol/remote';
 import { sessionKey, workKeyOf, type RemoteState, type SessionRef } from './state.js';
 
@@ -59,7 +59,7 @@ export type InboxItem =
 /** Внимание по таблице спеки 7.1 для сессии проекции; из сессии нужен один `lifecycle`. */
 export function attentionOfSession(state: RemoteState, ref: SessionRef, session: RemoteSession): Attention {
   const live = state.activity[sessionKey(ref)]?.activity ?? null;
-  return sessionAttention({ lifecycle: session.lifecycle } as WorkSession, live);
+  return sessionAttention(session, live);
 }
 
 const needOf = (state: RemoteState, key: string, session: RemoteSession): RemoteNeed | null => {
@@ -167,14 +167,16 @@ export function selectInbox(state: RemoteState): InboxItem[] {
 }
 
 /**
- * Бейдж «нужен ты» (спека §9.2): сессии `needs-you`, комнаты с ждущим решением и непрочитанные прямые письма
- * (число из снимка или `rooms.mail`). Упоминания в комнатах не считаются.
+ * Бейдж «нужен ты» (спека §9.2): та же функция `needsYouCount`, что считает число в push на мосте, поэтому бейдж вкладки
+ * равен числу в уведомлении. Входы — проекция и кэш активности; письма — число из последнего снимка или `rooms.mail`.
  */
 export function selectNeedsYouCount(state: RemoteState): number {
-  let n = needsYouSessions(state).length;
-  for (const work of state.snapshot?.works ?? []) {
-    n += work.rooms.filter(roomAwaits).length;
-    n += state.letterUnread[workKeyOf(work.projectPath, work.id)] ?? 0;
-  }
-  return n;
+  const works: NeedsYouWork[] = (state.snapshot?.works ?? []).map((w) => ({
+    projectPath: w.projectPath,
+    workId: w.id,
+    sessions: w.sessions,
+    rooms: w.rooms,
+    unreadLetters: state.letterUnread[workKeyOf(w.projectPath, w.id)] ?? 0,
+  }));
+  return needsYouCount(works, (projectPath, workId, sessionId) => state.activity[sessionKey({ projectPath, workId, sessionId })]?.activity ?? null);
 }
