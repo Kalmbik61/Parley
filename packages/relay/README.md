@@ -12,8 +12,10 @@ Noise, end to end). Spec: `docs/specs/2026-10-29-mobile-app-design.md` §6.
   bridge has been away for 30 days. A returning bridge recreates its route with the same `hello`. A route collected
   with devices leaves a tombstone for a year: until then only its old secret can recreate it, because phones and
   the push gateway know the route id.
-- At most 10 000 routes. When the table is full, a new route evicts the least recently seen route that has no
-  devices and no attached bridge; routes with devices or a bridge are never evicted. If none can go, `rate_limited`.
+- At most 10 000 routes. When the table is full, a new route evicts the least recently seen route without an
+  attached bridge, routes without devices first. An evicted route with devices leaves the same tombstone, so its
+  bridge recreates it with its next `hello` and resends `devices`. Routes with an attached bridge are never
+  evicted; if every route has one, `rate_limited`.
 - Limits per client address (IPv6: per /64; `::ffff:` mapped addresses count as IPv4): at most 32 open
   connections (upgrades included, beyond that HTTP 429), plus the frame limits of spec §6.4. The first frame on a
   new socket must arrive within 5 s. Everyone behind one carrier-grade NAT or one shared /64 shares these limits;

@@ -706,7 +706,7 @@ describe('review fixes (A4 M1, M2, m6, m8)', () => {
 });
 
 describe('review fixes, wave 3 (M2, m14)', () => {
-  it('M2: a full table evicts the oldest empty route without a bridge, never one with devices or a bridge', async () => {
+  it('M2: a full table evicts the oldest empty route first, before older routes with devices, never one with a bridge', async () => {
     let t = 1_000_000;
     const env = await start({ store: new Store(null, () => t) });
     const attached = await bridge(env);
@@ -728,16 +728,48 @@ describe('review fixes, wave 3 (M2, m14)', () => {
     expect(env.logs.some((l) => l.includes('"routes_gc"') && l.includes('"full"'))).toBe(true);
   });
 
-  it('M2: a full table with nothing to evict refuses the new route', async () => {
-    const env = await start({ store: new Store(null) });
-    for (let i = 0; i < MAX_ROUTES; i++) {
-      env.store.createRoute(`r${i}`, 'h');
-      env.store.replaceDevices(`r${i}`, [{ device: 'd', tokenHash: 'x' }]);
+  it('M2: a full table of detached routes with fake devices evicts the oldest to a tombstone; its owner restores it', async () => {
+    let t = 1_000_000;
+    const env = await start({ store: new Store(null, () => t) });
+    const owner = await bridge(env);
+    await setDevices(env, owner, [{ device: id(16), token: id(32) }]);
+    owner.host.ws.close();
+    await owner.host.closed;
+    for (let i = 0; i < 50 && env.relay.registry.host(owner.route) !== undefined; i++) await sleep(5);
+    t += 1;
+    for (let i = env.store.routeCount(); i < MAX_ROUTES; i++) {
+      env.store.createRoute(`fake-${i}`, 'h');
+      env.store.replaceDevices(`fake-${i}`, [{ device: 'd', tokenHash: 'x' }]);
     }
-    const h = await connectTo(env.base, '/v1/host');
-    h.send({ v: 1, t: 'hello', route: id(16), secret: id(32) });
-    expect(await h.json()).toMatchObject({ t: 'error', code: 'rate_limited' });
+
+    const newcomer = await bridge(env);
+    expect(env.store.route(newcomer.route)).toBeDefined();
+    expect(env.store.route(owner.route)).toBeUndefined();
+    expect(env.store.tombstone(owner.route)).toBe(sha(owner.secret));
     expect(env.store.routeCount()).toBe(MAX_ROUTES);
+
+    const thief = await connectTo(env.base, '/v1/host');
+    thief.send({ v: 1, t: 'hello', route: owner.route, secret: id(32) });
+    expect(await thief.json()).toMatchObject({ t: 'error', code: 'unknown_route' });
+
+    const back = await bridge(env, owner.route, owner.secret);
+    expect(env.store.route(owner.route)!.secretHash).toBe(sha(owner.secret));
+    await setDevices(env, back, [{ device: id(16), token: id(32) }]);
+    // Место для него освободил следующий давний маршрут без моста; мосты newcomer и owner на месте.
+    expect(env.store.route(newcomer.route)).toBeDefined();
+    expect(env.store.routeCount()).toBe(MAX_ROUTES);
+  });
+
+  it('M2: only routes with an attached bridge are never evicted', () => {
+    const store = new Store(null);
+    store.createRoute('a', 'h');
+    store.createRoute('b', 'h');
+    store.replaceDevices('b', [{ device: 'd', tokenHash: 'x' }]);
+    expect(store.evict(() => true)).toBe(false);
+    expect(store.evict((r) => r === 'a')).toBe(true);
+    expect(store.route('b')).toBeUndefined();
+    expect(store.tombstone('b')).toBe('h');
+    expect(store.evict((r) => r === 'a')).toBe(false);
   });
 
   it('m14: a route collected with devices can be recreated only with its old secret, for a year', async () => {
