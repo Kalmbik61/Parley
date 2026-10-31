@@ -330,7 +330,7 @@ async function findSentLetter(rpc: Rpc, params: SendRoomMessageParams, startedAt
 /**
  * Письмо в комнату. Текст лежит в черновике (`state.drafts`) с начала отправки и уходит из него только после `sent`:
  * отказ и потеря ответа оставляют письмо человеку. После потери ответа лента комнаты проверяется: письмо уже там — итог
- * `sent`. Само письмо не повторяется.
+ * `sent`; пока связи нет, чтение повторяется с отступом до срока вызова моста. Само письмо не повторяется.
  */
 export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: SendRoomMessageParams): Promise<SendRoomMessageOutcome> {
   const epoch = store.getState().epoch;
@@ -356,8 +356,15 @@ export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, env: ActionE
     const rejected = rejection(error);
     if (rejected !== null) return rejected;
   }
-  const letter = await findSentLetter(rpc, params, startedAt);
-  return letter === null ? { outcome: 'lost' } : sent(letter.id);
+  // Связь после обрыва ещё может быть закрыта: читаем ленту с отступом до срока вызова моста, пока письмо не найдётся.
+  const deadline = startedAt + BRIDGE_CALL_DEADLINE_MS + 2000;
+  for (let attempt = 0; ; attempt++) {
+    const letter = await findSentLetter(rpc, params, startedAt);
+    if (letter !== null) return sent(letter.id);
+    const wait = REREAD_BACKOFF_MS[Math.min(attempt, REREAD_BACKOFF_MS.length - 1)] ?? 5000;
+    if (env.now() + wait > deadline) return { outcome: 'lost' };
+    await env.sleep(wait);
+  }
 }
 
 /** Каталог провайдеров для диалога запуска; `false` — не загрузился (метода нет, обрыв). */

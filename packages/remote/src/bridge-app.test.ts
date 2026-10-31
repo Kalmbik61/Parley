@@ -190,7 +190,7 @@ describe('dispatcher', () => {
     const resolvers: ((v: unknown) => void)[] = [];
     host.handler = () => new Promise((r) => resolvers.push(r));
     call('d1', '1', 'host.info');
-    call('d2', '1', 'feed.snapshot');
+    call('d2', '1', 'feed.snapshot', { ref: ref('s-1'), scope: 'attention' });
     await flush();
     resolvers[1]!({ from: 'second' });
     resolvers[0]!({ from: 'first' });
@@ -220,7 +220,7 @@ describe('dispatcher', () => {
 
   it('allows at most 16 requests in flight', async () => {
     host.handler = () => new Promise(() => {});
-    for (let i = 0; i < 17; i++) call('d1', `i${i}`, 'works.list');
+    for (let i = 0; i < 17; i++) call('d1', `i${i}`, 'host.info');
     await flush();
     expect(host.calls).toHaveLength(16);
     expect(sessions.of('d1').find((f) => f.id === 'i16')).toMatchObject({ error: { code: 'rate_limited' } });
@@ -228,13 +228,13 @@ describe('dispatcher', () => {
 
   it('5. a frame over 64 KiB closes the session', async () => {
     dispatcher.onFrame('d1', new Uint8Array(64 * 1024 + 1));
-    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'shutdown' }]);
+    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'protocol' }]);
     expect(host.calls).toEqual([]);
   });
 
   it('a malformed frame closes the session', () => {
     dispatcher.onFrame('d1', enc.encode('{"id":1}'));
-    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'shutdown' }]);
+    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'protocol' }]);
   });
 
   it('6. host down: phones get bridge.status offline, calls get host_offline', async () => {
@@ -258,17 +258,17 @@ describe('dispatcher', () => {
     host.handler = async () => {
       throw new HostCallError('conflict', 'busy now', { reason: 'busy', extra: 1 });
     };
-    call('d1', 'a', 'works.list');
+    call('d1', 'a', 'host.info');
     host.handler = async () => {
       throw new HostCallError('internal', 'boom', { reason: 'secret-path', path: '/x' });
     };
     await flush();
-    call('d1', 'b', 'works.list');
+    call('d1', 'b', 'host.info');
     host.handler = async () => {
       throw new Error('/Users/x/secret');
     };
     await flush();
-    call('d1', 'c', 'works.list');
+    call('d1', 'c', 'host.info');
     await flush();
     expect(sessions.of('d1').find((f) => f.id === 'a')).toEqual({ id: 'a', error: { code: 'conflict', message: 'busy now', data: { reason: 'busy', extra: 1 } } });
     expect(sessions.of('d1').find((f) => f.id === 'b')).toEqual({ id: 'b', error: { code: 'internal', message: 'boom' } });
@@ -276,15 +276,91 @@ describe('dispatcher', () => {
   });
 
   it('audits mutating calls without their text, and not reads', async () => {
-    call('d1', 'a', 'feed.decide', { ref: 's-1', choice: 'allow', note: 'private words here that are long enough' });
+    call('d1', 'a', 'feed.decide', { ref: ref('s-1'), cardId: 'c-1', decision: { kind: 'permission', behavior: 'allow', always: true, message: 'private words here that are long enough' } });
     call('d1', 'b', 'works.list');
     await flush();
     expect(audits).toHaveLength(1);
-    expect(audits[0]).toMatchObject({ kind: 'call', method: 'feed.decide', deviceId: 'd1', deviceName: 'Phone 1', outcome: 'ok' });
+    expect(audits[0]).toMatchObject({ kind: 'call', method: 'feed.decide', deviceId: 'd1', deviceName: 'Phone 1', outcome: 'ok', target: 's-1' });
     expect(JSON.stringify(audits)).not.toContain('private words');
-    expect(audits[0]!.detail).toContain('choice=allow');
-    expect(audits[0]!.detail).toMatch(/note:len=\d+,sha256=/);
+    expect(audits[0]!.detail).toContain('cardId=c-1');
+    expect(audits[0]!.detail).toContain('kind=permission');
+    expect(audits[0]!.detail).toContain('behavior=allow');
+    expect(audits[0]!.detail).toContain('always=true');
+    expect(audits[0]!.detail).toMatch(/message:len=\d+,sha256=/);
   });
+
+  it('W4: a feed.decide answer to a question is audited by the length and hash of the answers only', async () => {
+    call('d1', 'a', 'feed.decide', { ref: ref('s-1'), cardId: 'c-2', decision: { kind: 'question', answers: { q1: 'my secret answer' } } });
+    call('d1', 'b', 'feed.decide', { ref: ref('s-1'), cardId: 'c-3', decision: { kind: 'plan', choice: 'manual' } });
+    await flush();
+    expect(JSON.stringify(audits)).not.toContain('secret answer');
+    expect(audits[0]!.detail).toMatch(/answers:len=\d+,sha256=/);
+    expect(audits[1]).toMatchObject({ target: 's-1' });
+    expect(audits[1]!.detail).toContain('choice=manual');
+  });
+
+  it('W7: feed.snapshot from a phone only with scope attention', async () => {
+    call('d1', 'a', 'feed.snapshot', { ref: ref('s-1') });
+    call('d1', 'b', 'feed.snapshot', { ref: ref('s-1'), scope: 'attention', agentId: 'x' });
+    call('d1', 'c', 'feed.snapshot', { ref: ref('s-1'), scope: 'attention' });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'a')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(sessions.of('d1').find((f) => f.id === 'b')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(sessions.of('d1').find((f) => f.id === 'c')).toMatchObject({ result: { ok: true } });
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.snapshot']);
+  });
+
+  it('W3: reads are limited per device (120 a minute), the window slides', async () => {
+    for (let i = 0; i < 121; i++) {
+      call('d1', `r${i}`, 'host.info');
+      await flush();
+    }
+    expect(sessions.of('d1').filter((f) => f.error?.code === 'rate_limited')).toHaveLength(1);
+    expect(sessions.of('d1').find((f) => f.id === 'r120')).toMatchObject({ error: { code: 'rate_limited' } });
+    await vi.advanceTimersByTimeAsync(61_000);
+    call('d1', 'later', 'host.info');
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'later')).toMatchObject({ result: { ok: true } });
+  });
+
+  it('W5: push.register is limited to 10 a minute, and an unchanged token is not written again', async () => {
+    const reg = (id: string, token: string | null) => call('d1', id, 'push.register', { apnsToken: token, env: 'sandbox' });
+    let writes = 0;
+    const set = sessions.setPush.bind(sessions);
+    sessions.setPush = async (d, v) => {
+      writes++;
+      return set(d, v);
+    };
+    reg('a', 'ab'.repeat(32));
+    await flush();
+    reg('b', 'ab'.repeat(32));
+    await flush();
+    expect(writes).toBe(1);
+    expect(sessions.of('d1').find((f) => f.id === 'b')).toEqual({ id: 'b', result: {} });
+    reg('c', 'cd'.repeat(32));
+    await flush();
+    expect(writes).toBe(2);
+    for (let i = 0; i < 12; i++) reg(`x${i}`, i % 2 ? 'ab'.repeat(32) : 'cd'.repeat(32));
+    await flush();
+    expect(sessions.of('d1').filter((f) => f.error?.code === 'rate_limited').length).toBeGreaterThan(0);
+    // Токен в журнале не появляется, лимит не трогает ping.
+    call('d1', 'p', 'ping', {});
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'p')).toEqual({ id: 'p', result: {} });
+  });
+
+  it('W5: bridge methods count as in flight', async () => {
+    sessions.setPush = () => new Promise(() => {});
+    host.handler = () => new Promise(() => {});
+    for (let i = 0; i < 10; i++) call('d1', `h${i}`, 'push.register', { apnsToken: i.toString(16).padStart(2, '0').repeat(32), env: 'sandbox' });
+    for (let i = 0; i < 6; i++) call('d1', `i${i}`, 'host.info');
+    await flush();
+    expect(host.calls).toHaveLength(6);
+    call('d1', 'ping', 'ping', {});
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'ping')).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+
 
   it('bridge methods: ping, client.info, push.register never reach the host', async () => {
     call('d1', '1', 'ping', {});
@@ -320,28 +396,44 @@ describe('dispatcher', () => {
 });
 
 describe('works.list from a phone', () => {
-  it('is answered with the projection, never the raw host snapshot', async () => {
+  it('W3: is answered with the projection of the epoch snapshot, without calling the host', async () => {
     online(3);
     dispatcher.onOpen('d1');
-    host.handler = async () => snap(7);
+    host.handler = async () => snap(99);
     call('d1', 'w', 'works.list');
     await flush();
+    expect(host.calls).toEqual([]);
     const reply = sessions.of('d1').find((f) => f.id === 'w')!;
     expect(remoteWorksSnapshotSchema.safeParse(reply.result).success).toBe(true);
-    expect(reply.result.revision).toBe(7);
+    expect(reply.result.revision).toBe(3);
     expect(JSON.stringify(reply)).not.toMatch(/"(task|summary|plans|planEffects|resources|branches)"/);
     expect(JSON.stringify(reply)).not.toContain('SECRET');
+    host.works(4);
+    call('d1', 'w2', 'works.list');
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'w2')!.result.revision).toBe(4);
   });
 
-  it('a result that cannot be projected is an internal error, not the raw result', async () => {
+  it('a snapshot that cannot be projected is an internal error, not the raw one', async () => {
     online(3);
     dispatcher.onOpen('d1');
-    host.handler = async () => ({ entries: 'bad', secret: 'SECRET' });
+    host.snapshot = { entries: 'bad', secret: 'SECRET' } as unknown as WorksSnapshot;
     call('d1', 'w', 'works.list');
     await flush();
     const reply = sessions.of('d1').find((f) => f.id === 'w')!;
     expect(reply.error?.code).toBe('internal');
     expect(JSON.stringify(reply)).not.toContain('SECRET');
+  });
+});
+
+describe('W6: initial state when the projection fails', () => {
+  it('the phone still gets bridge.status and the session is closed so it reconnects', () => {
+    host.connect('b:1');
+    host.status = 'online';
+    host.snapshot = { entries: 'bad' } as unknown as WorksSnapshot;
+    dispatcher.onOpen('d1');
+    expect(sessions.of('d1')[0]).toEqual({ event: 'bridge.status', data: { host: 'online', epoch: 'b:1' } });
+    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'protocol' }]);
   });
 });
 
@@ -363,9 +455,9 @@ describe('A8b: host methods of the epoch', () => {
     online();
     dispatcher.onOpen('d1');
     call('d1', 'a', 'feed.decide', {});
-    call('d1', 'b', 'works.list');
+    call('d1', 'b', 'host.info');
     await flush();
-    expect(host.calls.map((c) => c.method)).toEqual(['works.list']);
+    expect(host.calls.map((c) => c.method)).toEqual(['host.info']);
     expect(sessions.of('d1').find((f) => f.id === 'a')).toMatchObject({ error: { code: 'unknown_method' } });
     expect(audits[0]).toMatchObject({ kind: 'call-refused', method: 'feed.decide' });
   });

@@ -393,3 +393,18 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);
   });
 });
+
+describe('bridge reads in stage A (wave 3)', () => {
+  const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+  it('W7: feed.snapshot only with scope attention and without agentId', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention' })).toBe(true);
+    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention', agentId: 'a1' })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', { scope: 'attention' })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', null)).toBe(false);
+  });
+  it('W12: session.closing knows the protocol reason', () => {
+    expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'protocol' }).success).toBe(true);
+    expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'nope' }).success).toBe(false);
+  });
+});

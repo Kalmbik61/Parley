@@ -12,6 +12,8 @@ export interface LocalMethodContext {
   push: Pick<PhoneSessions, 'setPush'>;
   /** Куда сохранить `client.info` (только в памяти моста, для журнала и диагностики). */
   setClientInfo(info: ClientInfo): void;
+  /** Ключ последней принятой регистрации push этой сессии; `push.register` с тем же ключом файл не пишет. */
+  pushKey: { get(): string | undefined; set(key: string): void };
 }
 
 export class LocalMethodError extends Error {
@@ -42,7 +44,10 @@ export async function callLocalMethod(method: string, params: unknown, ctx: Loca
       const parsed = bridgeMethodSchemas['push.register'].safeParse(params);
       if (!parsed.success) throw new LocalMethodError('bad_request');
       const { apnsToken, env } = parsed.data;
+      const key = `${env}:${apnsToken ?? ''}`;
+      if (ctx.pushKey.get() === key) return {};
       await ctx.push.setPush(ctx.deviceId, apnsToken === null ? null : { apnsToken, env });
+      ctx.pushKey.set(key);
       return {};
     }
     default:

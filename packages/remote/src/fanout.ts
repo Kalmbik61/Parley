@@ -94,7 +94,11 @@ export function createFanout(options: FanoutOptions): Fanout {
     try {
       projected = projectWorksSnapshot(snapshot);
     } catch (error) {
+      // Телефон не остаётся без единого кадра: статус уходит, сессия закрывается, и он переподключится с отступом.
       log.error('fanout.projection_failed', { error });
+      sendStatus(deviceId, phone);
+      drop(deviceId);
+      sessions.close(deviceId, 'protocol');
       return;
     }
     sendStatus(deviceId, phone);
