@@ -55,6 +55,9 @@ test.describe('Settings → Remote access', () => {
     await window.getByRole('tab', { name: 'Remote access' }).click();
     await expect(window.getByTestId('remote-section')).toBeVisible();
     await expect(window.getByTestId('remote-status')).toContainText('Remote access is off');
+    // The tab highlight and the focus ring of the previous tab animate; the shot is taken once they have settled.
+    await window.mouse.move(5, 5);
+    await window.waitForTimeout(600);
     await shot('1-settings-off');
 
     // On: the launcher starts the stub as a separate process and connects to its control socket.

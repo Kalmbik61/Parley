@@ -5,11 +5,13 @@ import type { ControlClient } from './remote-control.js';
 import { ControlCallError } from './remote-control.js';
 import type { RemoteLauncher } from './remote-launcher.js';
 
-function setup(opts: { enabled?: boolean } = {}) {
+function setup(opts: { enabled?: boolean; startDelayMs?: number; reconnectDelaysMs?: number[] } = {}) {
   const calls: Array<{ method: string; params: unknown }> = [];
   const listeners = new Set<(event: string, data: unknown) => void>();
   const closers = new Set<() => void>();
   let connected = false;
+  let starts = 0;
+  let stops = 0;
   const client: ControlClient = {
     connect: async () => void (connected = true),
     isConnected: () => connected,
@@ -28,8 +30,15 @@ function setup(opts: { enabled?: boolean } = {}) {
   };
   const launcher: RemoteLauncher = {
     client,
-    start: async () => void (connected = true),
-    stop: async () => void (connected = false),
+    start: async () => {
+      starts += 1;
+      if (opts.startDelayMs) await new Promise((resolve) => setTimeout(resolve, opts.startDelayMs));
+      connected = true;
+    },
+    stop: async () => {
+      stops += 1;
+      connected = false;
+    },
     detach: () => void (connected = false),
   };
   const events: RemoteEvent[] = [];
@@ -41,8 +50,9 @@ function setup(opts: { enabled?: boolean } = {}) {
     saveEnabled: async (value) => void (stored = value),
     broadcast: (event) => events.push(event),
     qrDataUrl: async (text) => `data:image/png;base64,${text}`,
+    ...(opts.reconnectDelaysMs ? { reconnectDelaysMs: opts.reconnectDelaysMs } : {}),
   });
-  return { service, calls, events, listeners, closers, stored: () => stored };
+  return { service, calls, events, listeners, closers, stored: () => stored, counts: () => ({ starts, stops }), client };
 }
 
 describe('remote service', () => {
@@ -90,5 +100,43 @@ describe('remote service', () => {
     const last = t.events.at(-1);
     expect(last).toMatchObject({ event: 'state', data: { process: 'error' } });
     vi.useRealTimers();
+  });
+
+  it('switching off while the bridge is still starting ends with the bridge stopped', async () => {
+    const t = setup({ startDelayMs: 50 });
+    const on = t.service.call('setEnabled', { enabled: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const off = t.service.call('setEnabled', { enabled: false });
+    await Promise.all([on, off]);
+    expect((await t.service.call('state', {})).process).toBe('off');
+    expect(t.counts().stops).toBeGreaterThan(0);
+    expect(t.client.isConnected()).toBe(false);
+  });
+
+  it('at launch with the switch off, stops a bridge left running by an earlier window', async () => {
+    const t = setup({ enabled: false });
+    await t.service.init();
+    expect(t.counts()).toEqual({ starts: 0, stops: 1 });
+  });
+
+  it('a dropped control socket is reconnected with a backoff while the switch is on', async () => {
+    const t = setup({ reconnectDelaysMs: [10] });
+    await t.service.call('setEnabled', { enabled: true });
+    expect(t.counts().starts).toBe(1);
+    for (const l of t.closers) l();
+    expect(t.events.at(-1)).toMatchObject({ data: { process: 'error' } });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(t.counts().starts).toBe(2);
+    expect((await t.service.call('state', {})).process).toBe('running');
+    t.service.dispose();
+  });
+
+  it('configure drops a scheme and refuses a path, before the bridge is asked', async () => {
+    const t = setup();
+    await t.service.call('setEnabled', { enabled: true });
+    await t.service.call('configure', { relayUrl: 'wss://relay.example.com' });
+    expect(t.calls.find((c) => c.method === 'configure')?.params).toEqual({ relayUrl: 'relay.example.com' });
+    await expect(t.service.call('configure', { relayUrl: 'relay.example.com/x' })).rejects.toMatchObject({ code: 'bad_request' });
+    expect(t.calls.filter((c) => c.method === 'configure')).toHaveLength(1);
   });
 });

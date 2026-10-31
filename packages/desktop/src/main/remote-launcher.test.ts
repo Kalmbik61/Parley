@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LineDecoder } from '@parley/protocol';
 import { bridgePaths, createRemoteLauncher, resolveBridgeEntry } from './remote-launcher.js';
+import type { BridgeProcesses } from './remote-launcher.js';
 import { createControlClient, startPresence, type PowerMonitorLike } from './remote-control.js';
 
 /** A stub of the bridge: the control socket of spec 5.3 — token file, `hello`, `stop`, a few methods, events. */
@@ -67,6 +68,10 @@ describe('bridge paths', () => {
     expect(paths.controlToken).toBe('/h/remote/control.token');
   });
 
+  it('resolves the dev entry through the workspace package @parley/remote', () => {
+    expect(resolveBridgeEntry({ packaged: false, resourcesPath: '/R' })).toMatch(/packages\/remote\/dist\/main\.js$/);
+  });
+
   it('resolves the packaged entry under Resources/remote', () => {
     expect(resolveBridgeEntry({ packaged: true, resourcesPath: '/R' })).toBe('/R/remote/dist/main.js');
   });
@@ -122,7 +127,60 @@ describe('remote launcher', () => {
   });
 });
 
+describe('remote launcher: stop without a connection', () => {
+  it('connects first so that `stop` reaches a bridge the window is not connected to', async () => {
+    const stub = await stubBridge(dir, 'tok');
+    const launcher = createRemoteLauncher({ paths: stub.paths, spawn: async () => null });
+    expect(launcher.client.isConnected()).toBe(false);
+    await launcher.stop();
+    expect(stub.calls.map((call) => call.method)).toEqual(['stop']);
+    await stub.close();
+  });
+
+  function processes(options: { pid: number | null; bridge: boolean; diesOnTerm: boolean }) {
+    const signals: string[] = [];
+    let alive = true;
+    const fake: BridgeProcesses = {
+      readPid: async () => options.pid,
+      isBridge: async () => options.bridge,
+      alive: () => alive,
+      signal: (_pid, signal) => {
+        signals.push(signal);
+        if (signal === 'SIGKILL' || options.diesOnTerm) alive = false;
+      },
+    };
+    return { fake, signals };
+  }
+
+  it('with no control socket ends the process named by bridge.pid: SIGTERM, then SIGKILL after the grace period', async () => {
+    const p = processes({ pid: 4242, bridge: true, diesOnTerm: false });
+    await createRemoteLauncher({ paths: bridgePaths(dir), spawn: async () => null, processes: p.fake, pollMs: 5, killGraceMs: 30 }).stop();
+    expect(p.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    const quick = processes({ pid: 4242, bridge: true, diesOnTerm: true });
+    await createRemoteLauncher({ paths: bridgePaths(dir), spawn: async () => null, processes: quick.fake, pollMs: 5, killGraceMs: 30 }).stop();
+    expect(quick.signals).toEqual(['SIGTERM']);
+  });
+
+  it('does not signal a pid that is not a bridge, or when there is no pid file', async () => {
+    const stranger = processes({ pid: 4242, bridge: false, diesOnTerm: true });
+    await createRemoteLauncher({ paths: bridgePaths(dir), spawn: async () => null, processes: stranger.fake }).stop();
+    const none = processes({ pid: null, bridge: true, diesOnTerm: true });
+    await createRemoteLauncher({ paths: bridgePaths(dir), spawn: async () => null, processes: none.fake }).stop();
+    expect(stranger.signals).toEqual([]);
+    expect(none.signals).toEqual([]);
+  });
+});
+
 describe('control client', () => {
+  it('two concurrent connect() calls share one socket', async () => {
+    const stub = await stubBridge(dir, 'tok');
+    const client = createControlClient({ socketPath: stub.paths.controlSocket, tokenPath: stub.paths.controlToken });
+    await Promise.all([client.connect(), client.connect()]);
+    expect(client.isConnected()).toBe(true);
+    client.close();
+    await stub.close();
+  });
+
   it('rejects a wrong token', async () => {
     const stub = await stubBridge(dir, 'right');
     await writeFile(stub.paths.controlToken, 'wrong');

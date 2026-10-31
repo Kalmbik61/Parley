@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
@@ -38,11 +40,52 @@ export function resolveBridgeEntry(options: { packaged: boolean; resourcesPath: 
   return require.resolve('@parley/remote/main');
 }
 
+/** What the launcher needs to find and end a bridge it has no control socket to (spec 5.1: the bridge outlives the window). */
+export interface BridgeProcesses {
+  /** pid from `bridge.pid`, `null` — no file. */
+  readPid(): Promise<number | null>;
+  /** Is this pid a bridge process? A stale pid file may name an unrelated process. */
+  isBridge(pid: number): Promise<boolean>;
+  alive(pid: number): boolean;
+  signal(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void;
+}
+
+export function systemBridgeProcesses(pidFile: string): BridgeProcesses {
+  return {
+    async readPid() {
+      const pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim());
+      return Number.isInteger(pid) && pid > 1 ? pid : null;
+    },
+    isBridge: (pid) =>
+      new Promise((resolve) => {
+        execFile('ps', ['-p', String(pid), '-o', 'command='], (error, stdout) => resolve(error === null && /remote[\\/](dist[\\/])?main\.js|parley-remote/.test(stdout)));
+      }),
+    alive(pid) {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    signal(pid, signal) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // Already gone.
+      }
+    },
+  };
+}
+
 export interface RemoteLauncherOptions {
   paths: BridgePaths;
   /** Starts the bridge process (like `spawnHost`); `null` — it cannot be started, the reason is reported by the caller. */
   spawn: () => Promise<SpawnedHost | null>;
   createClient?: () => ControlClient;
+  processes?: BridgeProcesses;
+  /** How long a bridge without a control socket gets to exit on SIGTERM before SIGKILL. */
+  killGraceMs?: number;
   startTimeoutMs?: number;
   pollMs?: number;
 }
@@ -63,6 +106,8 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
     createControlClient({ socketPath: options.paths.controlSocket, tokenPath: options.paths.controlToken });
   const timeoutMs = options.startTimeoutMs ?? 10_000;
   const pollMs = options.pollMs ?? 100;
+  const processes = options.processes ?? systemBridgeProcesses(options.paths.pid);
+  const killGraceMs = options.killGraceMs ?? 3000;
   let spawned: SpawnedHost | null = null;
   let starting: Promise<void> | null = null;
 
@@ -100,14 +145,25 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
       return starting;
     },
     async stop() {
+      // The window may not be connected (a start still in flight, a dropped socket, a bridge left by an earlier
+      // window): connect first, so `stop` reaches it; with no control socket end the process by `bridge.pid`.
+      if (!client.isConnected()) await tryConnect();
       if (client.isConnected()) {
         try {
           await client.call('stop');
         } catch {
           // The bridge may close the socket while stopping; nothing more to ask.
         }
+        client.close();
+        return;
       }
       client.close();
+      const pid = await processes.readPid();
+      if (pid === null || !(await processes.isBridge(pid))) return;
+      processes.signal(pid, 'SIGTERM');
+      const deadline = Date.now() + killGraceMs;
+      while (processes.alive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
+      if (processes.alive(pid)) processes.signal(pid, 'SIGKILL');
     },
     detach() {
       client.close();
