@@ -415,8 +415,12 @@ Unix-сокет, токен как у хоста; клиент — только 
     seenAt}]`;
   - сессия: `id`, `label`, `provider`, `model`, `role` (имя), `parent`, `createdBy`, `lifecycle`, `result`,
     `stuck`, `lastEvent {event, at}` (последняя запись `history`), `startedAt`, `resultAt`;
-  - комната: `id`, `title`, `ownerId`, `members`, `lead`, `mode`, `archived`, `proposal`,
-    `messages: {total, unread} | null`.
+  - комната: `id`, `title`, `ownerId`, `members`, `lead`, `mode`, `archived`, `messages: {total, unread} | null`,
+    `proposal: {id, kind, from, text, rev, at, planId, planRev} | null` — без `plan`: план комнаты несёт
+    автономные проверки (`argv`, `cwd`, `env`), попытки и журналы. `planId` и `planRev` — личность плана
+    (`planRefOf` ядра), их телефон передаёт в `rooms.resolveProposal` (критик s-176, M1; правки 13);
+  - `stuck` сессии — явный выбор полей; его `detail` (команда или текст вопроса) — единственный текст, кроме
+    заголовков и `proposal.text`, который идёт телефону (правки 13).
 
   `createdBy`, `ownerId` и `swarms` нужны, чтобы экран работы строил то же дерево, что сайдбар окна: подсессии под
   создателем, комнаты под владельцем, рои под создателем (запрос человека к прототипу D1, 2026-10-31). У роя нет
@@ -1632,3 +1636,11 @@ Wi-Fi и запас фона ждут прогона на iPhone. Протоко
 | 12.3 | Face ID на каждый запуск и каждое письмо | 11.2 п. 9; 11.4; 14; 16 (решение 5) |
 
 Правка 4.3 идёт на критика старшего уровня.
+
+**Правки 13 — ревью критика s-176 (A1, A1b, A2, A6a, A6b), 2026-10-31.** Ревью:
+`docs/audits/2026-10-31/mobile-stage-a-critic-A1-A2-A6.md`.
+
+| № | Находка | Что изменено |
+|---|---|---|
+| 13.1 | M1: `proposal.plan` уносил на телефон план с `argv`/`env` проверок | 5.5: `proposal` в проекции без `plan`, с `planId`/`planRev` |
+| 13.2 | m8: `stuck` копировался ссылкой | 5.5: явный выбор полей, `stuck.detail` — разрешённый текст |
