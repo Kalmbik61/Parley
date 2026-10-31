@@ -18,6 +18,8 @@ export interface Colors {
   danger: string;
   warningBg: string;
   neutralBg: string;
+  /** Tree guide lines of D1 §8.2. */
+  treeLine: string;
 }
 
 export const lightColors: Colors = {
@@ -38,6 +40,7 @@ export const lightColors: Colors = {
   danger: '#D70015',
   warningBg: '#FFF4E5',
   neutralBg: '#E5E5EA',
+  treeLine: 'rgba(60,60,67,0.30)',
 };
 
 export const darkColors: Colors = {
@@ -58,6 +61,7 @@ export const darkColors: Colors = {
   danger: '#FF453A',
   warningBg: '#3A2A12',
   neutralBg: '#2C2C2E',
+  treeLine: 'rgba(235,235,245,0.26)',
 };
 
 /** D1 §17.3. Grid 4 pt. */
