@@ -34,6 +34,7 @@ import {
   controlConfigureParams,
   controlStatusResult,
   pairFailedEvent,
+  pairOfferClosedEvent,
   pairRequestEvent,
   routeIdSchema,
 } from './index.js';
@@ -383,6 +384,10 @@ describe('hardened strings and frames (critic A1)', () => {
   it('pairing failure reason and relay lists are checked', () => {
     expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'bad-psk' }).success).toBe(true);
     expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'because' }).success).toBe(false);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'bad-psk' }).success).toBe(true);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'used' }).success).toBe(true);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'expired' }).success).toBe(false);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'used', requestId: id16 }).success).toBe(false);
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);

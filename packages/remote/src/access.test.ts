@@ -1,6 +1,6 @@
 // A7 acceptance: the bridge's access layer against the real relay (A4) and a test phone on @parley/noise.
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,6 +32,7 @@ import { createSessionHandler } from './dispatch.js';
 import { HostCallError, type HostLink, type HostLinkEvent } from './host-link.js';
 import { createLog } from './log.js';
 import { connectPrologue } from './sessions.js';
+import { hostIdFor, type BridgeKeys } from './keys.js';
 import type { SessionHandler } from './session-contract.js';
 
 const EMPTY = new Uint8Array(0);
@@ -259,6 +260,7 @@ async function makeFixture(): Promise<Fixture> {
   return fx;
 }
 
+const hostIdOf = (k: BridgeKeys): string => hostIdFor(k.hsPub);
 const auditRecords = (): AuditRecord[] => f.audit.tail(200);
 const eventsOf = <E extends keyof ControlEvents>(e: E): ControlEvents[E][] =>
   f.events.filter((x) => x.event === e).map((x) => x.data as ControlEvents[E]);
@@ -275,6 +277,19 @@ const devicesOnDisk = (): { deviceId: string; state: string }[] => {
 };
 const relayHasDevice = (deviceId: string): boolean =>
   f.store.deviceHash(f.access.keys().routeId, deviceId) !== undefined;
+
+/** Holds every `devices.persist()` until `release()`, as a slow fsync would; `restore()` undoes it. */
+function holdPersist() {
+  const store = f.access.devices;
+  const persist = store.persist.bind(store);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  store.persist = async () => {
+    await gate;
+    return persist();
+  };
+  return { release, restore: () => (store.persist = persist) };
+}
 
 /** Starts a pairing up to `pair.request`; returns the phone side ready for credentials. */
 async function startPairing(qr: string, ds = generateKeyPair()) {
@@ -426,6 +441,7 @@ describe('pairing', () => {
       'pair-request',
       'pair-allowed',
     ]);
+    expect(eventsOf('pair.offerClosed')).toEqual([{ reason: 'used' }]);
   });
 
   it('2: wrong psk burns the offer; the second msg1 gets offer_closed; pair-failed bad-psk', async () => {
@@ -436,6 +452,9 @@ describe('pairing', () => {
     expect(await wire.next()).toBeNull(); // closed, no msg2
     await until(() => auditRecords().some((r) => r.kind === 'pair-failed'));
     expect(auditRecords().find((r) => r.kind === 'pair-failed')?.detail).toBe('bad-psk');
+    // No request yet, so no pair.failed; the window still learns the QR is burned (critic m2).
+    expect(eventsOf('pair.offerClosed')).toEqual([{ reason: 'bad-psk' }]);
+    expect(eventsOf('pair.failed')).toEqual([]);
 
     const second = await dial(f.relayUrl, { v: 1, t: 'pair', lookup: lookupOf(qr) });
     expect(second.status).toBe('offer_closed');
@@ -532,6 +551,43 @@ describe('pairing', () => {
         .filter((r) => r.kind === 'pair-failed')
         .map((r) => r.detail),
     ).toEqual(['no-ack']);
+  });
+
+  it('a failed device write on «Allow» ends the request and removes the device (critic m4)', async () => {
+    const { qr } = await f.access.handlers['pair.start']();
+    const p = await startPairing(qr);
+    const store = f.access.devices;
+    const persist = store.persist.bind(store);
+    let failures = 1;
+    store.persist = () => (failures-- > 0 ? Promise.reject(new Error('disk full')) : persist());
+    await expect(
+      f.access.handlers['pair.answer']({ requestId: p.request.requestId, allow: true }),
+    ).rejects.toThrow('disk full');
+    store.persist = persist;
+    expect(eventsOf('pair.failed')).toEqual([
+      { requestId: p.request.requestId, reason: 'offer_closed' },
+    ]);
+    expect(store.list()).toEqual([]);
+    expect(store.relayList()).toEqual([]);
+    expect(await p.channel.recv()).toBeNull(); // no credentials
+    expect(auditRecords().find((r) => r.kind === 'pair-failed')?.detail).toBe('storage');
+  });
+
+  it('revoke while the activation is being written → no pair.done for the removed device', async () => {
+    const { qr } = await f.access.handlers['pair.start']();
+    const p = await startPairing(qr);
+    await f.access.handlers['pair.answer']({ requestId: p.request.requestId, allow: true });
+    const creds = (await p.channel.recv()) as { deviceId: string };
+    const held = holdPersist();
+    p.channel.send({ t: 'paired' });
+    await sleep(50); // activation is waiting for its write
+    const revoking = f.access.handlers['devices.revoke']({ deviceId: creds.deviceId });
+    held.release();
+    await revoking;
+    held.restore();
+    await f.access.devices.flush();
+    expect(eventsOf('pair.done')).toEqual([]);
+    expect(devicesOnDisk()).toEqual([]);
   });
 
   it('deny → pair.failed denied, no device', async () => {
@@ -684,6 +740,25 @@ describe('revoke and reset', () => {
     expect(f.app.frames).toEqual([]);
   });
 
+  it('a phone frame during the revoke write does not lose session.closing revoked (critic m1)', async () => {
+    const d = await pairDevice();
+    const s = await connect(d);
+    const held = holdPersist();
+    const revoking = f.access.handlers['devices.revoke']({ deviceId: d.deviceId });
+    s.channel!.send({ id: 'hb', method: 'ping', params: {} }); // a heartbeat while the file is written
+    await sleep(100);
+    expect(f.app.frames.some((x) => (x.frame as { id?: string }).id === 'hb')).toBe(false);
+    expect(f.app.closed).toEqual([d.deviceId]); // A8 stops routing at once
+    held.release();
+    await revoking;
+    held.restore();
+    expect(await s.channel!.recv()).toEqual({
+      event: 'session.closing',
+      data: { reason: 'revoked' },
+    });
+    expect(await s.channel!.recv()).toBeNull();
+  });
+
   it('11: revoke with a relay that does not answer → the window gets its answer; next handshake → unknown-key', async () => {
     const d = await pairDevice();
     // The relay stops reading the bridge's control socket: the new device list never lands.
@@ -765,6 +840,45 @@ describe('revoke and reset', () => {
     // A new QR pairs and connects.
     const fresh = await pairDevice();
     expect(fresh.routeId).toBe(keys.routeId);
+    expect((await connect(fresh)).channel).not.toBeNull();
+  });
+});
+
+describe('reset that cannot finish its writes (critic m3)', () => {
+  it('reset_failed: the old identity stays in memory, no streams and no offers until a reset succeeds', async () => {
+    const d = await pairDevice();
+    const stale = f.store.deviceHash(d.routeId, d.deviceId)!;
+    const before = f.access.keys();
+    const keysFile = path.join(f.dir, 'remote', 'keys.json');
+    rmSync(keysFile);
+    mkdirSync(path.join(keysFile, 'blocked'), { recursive: true }); // the rename onto keys.json fails
+
+    await expect(f.access.handlers.reset()).rejects.toMatchObject({ code: 'reset_failed' });
+    expect(f.access.keys().routeId).toBe(before.routeId);
+    expect(f.access.hostId).toBe(hostIdOf(before));
+    expect(devicesOnDisk()).toEqual([]); // access is cut on disk already
+    expect(auditRecords().some((r) => r.kind === 'reset' && r.outcome === 'failed')).toBe(true);
+    await expect(f.access.handlers['pair.start']()).rejects.toMatchObject({
+      code: 'reset_failed',
+    });
+    // Even a relay that still admits the phone gets no stream from the bridge.
+    await until(() => !relayHasDevice(d.deviceId));
+    f.store.replaceDevices(d.routeId, [{ device: d.deviceId, tokenHash: stale }]);
+    const r = await connect(d, { confirm: false });
+    expect(r.status).not.toBe('ready');
+    expect(auditRecords().some((x) => x.kind === 'connect-refused')).toBe(false);
+
+    // The disk is writable again: a second reset goes through and pairing works on the new route.
+    rmSync(keysFile, { recursive: true });
+    await f.access.handlers.reset();
+    const after = f.access.keys();
+    expect(after.routeId).not.toBe(before.routeId);
+    expect((JSON.parse(readFileSync(keysFile, 'utf8')) as { routeId: string }).routeId).toBe(
+      after.routeId,
+    );
+    await until(() => f.relay.registry.host(after.routeId) !== undefined);
+    const fresh = await pairDevice();
+    expect(fresh.routeId).toBe(after.routeId);
     expect((await connect(fresh)).channel).not.toBeNull();
   });
 });

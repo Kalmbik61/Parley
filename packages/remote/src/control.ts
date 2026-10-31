@@ -12,6 +12,7 @@ import {
   pairAnswerParams,
   pairDoneEvent,
   pairFailedEvent,
+  pairOfferClosedEvent,
   pairRequestEvent,
   pairStartResult,
 } from '@parley/protocol/remote';
@@ -63,6 +64,7 @@ export interface ControlEvents {
   'pair.request': z.infer<typeof pairRequestEvent>;
   'pair.done': z.infer<typeof pairDoneEvent>;
   'pair.failed': z.infer<typeof pairFailedEvent>;
+  'pair.offerClosed': z.infer<typeof pairOfferClosedEvent>;
 }
 
 export interface ControlServerOptions {

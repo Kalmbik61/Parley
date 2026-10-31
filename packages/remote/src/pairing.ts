@@ -18,7 +18,7 @@ import { MAX_DEVICES } from './devices.js';
 import { hostIdFor, tokenHash, type BridgeKeys } from './keys.js';
 import type { BridgeLog } from './log.js';
 import type { RelayIncoming, RelayLink } from './relay-link.js';
-import { firstMessage, NoiseChannel } from './sessions.js';
+import { firstMessage, NoiseChannel, PendingAccepts } from './sessions.js';
 
 export const PAIR_PROLOGUE = new TextEncoder().encode('parley-pair/1');
 const encoder = new TextEncoder();
@@ -80,6 +80,8 @@ export interface PairingOptions {
   removeDevice(deviceId: string): Promise<void>;
   timing?: Partial<PairingTiming>;
   now?: () => number;
+  /** Shared with connection sessions: streams accepted from the relay and still waiting for msg1. */
+  pending?: PendingAccepts;
 }
 
 /**
@@ -117,6 +119,7 @@ export class Pairing {
   readonly #o: PairingOptions;
   readonly #t: PairingTiming;
   readonly #now: () => number;
+  readonly #pending: PendingAccepts;
   #offer: Offer | null = null;
   #request: PairRequest | null = null;
 
@@ -124,6 +127,7 @@ export class Pairing {
     this.#o = options;
     this.#t = { ...DEFAULT_PAIRING_TIMING, ...options.timing };
     this.#now = options.now ?? Date.now;
+    this.#pending = options.pending ?? new PendingAccepts();
   }
 
   /** `pair.start`: a new one-shot offer; any earlier offer and unanswered request become stale. */
@@ -193,13 +197,19 @@ export class Pairing {
   async handleIncoming(incoming: RelayIncoming): Promise<void> {
     const offer = this.#offer;
     if (!offer || offer.consumed || offer.exp <= this.#now()) return;
-    const ws = this.#o.link.accept(incoming.stream);
+    if (!this.#pending.take(this.#o.log)) return;
     let msg1: Uint8Array;
+    let ws: WebSocket;
     try {
-      msg1 = await firstMessage(ws, this.#t.msg1Ms);
-    } catch {
-      ws.terminate();
-      return;
+      ws = this.#o.link.accept(incoming.stream);
+      try {
+        msg1 = await firstMessage(ws, this.#t.msg1Ms);
+      } catch {
+        ws.terminate();
+        return;
+      }
+    } finally {
+      this.#pending.release();
     }
     this.#onMsg1(ws, offer, msg1);
   }
@@ -231,8 +241,11 @@ export class Pairing {
         outcome: 'failed',
         detail: badPsk ? 'bad-psk' : 'bad-msg1',
       });
+      // There is no request yet, so no `pair.failed`; the window still learns the QR is dead (critic m2 on A7).
+      this.#o.emit('pair.offerClosed', { reason: badPsk ? 'bad-psk' : 'used' });
       return void ws.close(1000);
     }
+    this.#o.emit('pair.offerClosed', { reason: 'used' });
 
     // msg2 at once and empty of access (spec §7.4); the SAS comes from the finished handshake.
     ws.send(hs.writeMessage(encoder.encode(JSON.stringify({ v: 1 }))), { binary: true });
@@ -286,17 +299,24 @@ export class Pairing {
     const deviceId = b64urlEncode(randomBytes(16));
     const relayToken = b64urlEncode(randomBytes(32));
     r.deviceId = deviceId;
-    await this.#o.devices.add({
-      deviceId,
-      dsPub: b64urlEncode(r.dsPub),
-      name: r.name,
-      platform: r.platform,
-      pairedAt: this.#now(),
-      lastSeen: null,
-      lastTs: 0,
-      relayTokenHash: tokenHash(relayToken),
-      state: 'pending',
-    });
+    try {
+      await this.#o.devices.add({
+        deviceId,
+        dsPub: b64urlEncode(r.dsPub),
+        name: r.name,
+        platform: r.platform,
+        pairedAt: this.#now(),
+        lastSeen: null,
+        lastTs: 0,
+        relayTokenHash: tokenHash(relayToken),
+        state: 'pending',
+      });
+    } catch (error) {
+      // The record is in memory (and in the relay list) but not on disk: remove it and end the request, so it does
+      // not hang in `answered` with no timer (critic m4 on A7). The window hears the error from `pair.answer`.
+      if (!ended(r)) await this.#removeAndFail(r, deviceId, 'storage');
+      throw error;
+    }
     if (ended(r)) return; // revoked, reset or closed while writing: that path removes the device
     this.#o.audit.append({
       kind: 'pair-allowed',
@@ -350,8 +370,9 @@ export class Pairing {
     this.#clear(r);
     void this.#o.devices.activate(deviceId).then(
       (active) => {
-        if (!active) return;
-        this.#o.emit('pair.done', { requestId: r.requestId, deviceId });
+        // Revoked while the activation was being written: no «Phone connected ✓» for a removed device.
+        if (active && this.#o.devices.get(deviceId)?.state === 'active')
+          this.#o.emit('pair.done', { requestId: r.requestId, deviceId });
         r.channel.end();
       },
       (error: unknown) => {

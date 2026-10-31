@@ -18,7 +18,7 @@ import type { BridgeLog } from './log.js';
 import { Pairing, type PairingTiming } from './pairing.js';
 import { createRelayLink, type RelayLink, type RelayState } from './relay-link.js';
 import type { PhoneSessions, SessionHandler } from './session-contract.js';
-import { SessionManager, type SessionTiming } from './sessions.js';
+import { PendingAccepts, SessionManager, type SessionTiming } from './sessions.js';
 
 export interface RemoteAccessOptions {
   keysFile: string;
@@ -76,6 +76,8 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
       link?.sendDevices(list) ?? Promise.resolve(false),
   };
 
+  /** One cap for every stream waiting for msg1, connection or pairing (critic m5 on A7). */
+  const pending = new PendingAccepts();
   const sessions = new SessionManager({
     keys: () => keys,
     devices,
@@ -83,7 +85,14 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
     audit,
     log,
     timing: options.timing ?? {},
+    pending,
   });
+  /**
+   * `resetting` — a reset is writing its files; `failed` — the last reset did not get both files on disk. Until a
+   * reset succeeds the bridge takes no streams and opens no offer: memory has no devices and the old identity, the
+   * disk may hold either (critic m3 on A7).
+   */
+  let resetState: 'ok' | 'resetting' | 'failed' = 'ok';
 
   /** Revoke order (spec §7.9): memory now → disk → `session.closing` → relay, in the background. */
   async function removeDevice(deviceId: string, reason: 'revoked' | 'pairing'): Promise<boolean> {
@@ -122,31 +131,46 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
       await removeDevice(deviceId, 'pairing');
     },
     timing: options.timing ?? {},
+    pending,
   });
 
   async function reset(): Promise<void> {
-    // 1. every device and session dead now; the offer and any request end.
+    if (resetState === 'resetting') throw new ControlError('busy', 'a reset is in progress');
+    // 1. every device and session dead now; the offer and any request end; no new streams until the files are
+    // written.
+    resetState = 'resetting';
     devices.invalidateAll();
     const affected = sessions.allSessions();
     pairing.abort('reset');
     const next = newBridgeKeys();
-    keys = next; // new handshakes use the new HS from here on
     log.addSecret(next.routeSecret);
+    let cleared: Promise<boolean> = Promise.resolve(false);
     try {
-      // 2. disk: devices first (access cut), then the new identity.
+      // 2. disk: devices first (access cut), then the new identity. Memory takes the new keys and route only once
+      // both are written: a bridge restarted after a half-done reset never runs an identity the window did not get.
       await devices.persist();
       await writeBridgeKeys(options.keysFile, next);
-      audit.append({ kind: 'reset', outcome: 'ok' });
+    } catch (error) {
+      resetState = 'failed';
+      log.error('reset.failed', { error });
+      audit.append({ kind: 'reset', outcome: 'failed' });
+      throw new ControlError('reset_failed', 'reset failed');
     } finally {
       sessions.closeSessions(affected, 'reset'); // 3.
-      // 4. the old route keeps no devices; then the link moves to the new route.
-      const current = link;
-      if (current) void current.sendDevices([]).finally(() => current.reconnect());
+      // 4. the route the link holds keeps no devices.
+      cleared = linkCalls.sendDevices([]);
     }
+    keys = next;
+    resetState = 'ok';
+    audit.append({ kind: 'reset', outcome: 'ok' });
+    void cleared.finally(() => link?.reconnect()); // then the link moves to the new route
   }
 
   const handlers: ControlHandlers = {
-    'pair.start': () => pairing.start(),
+    'pair.start': async () => {
+      if (resetState !== 'ok') throw new ControlError('reset_failed', 'reset failed');
+      return pairing.start();
+    },
     'pair.cancel': () => pairing.cancel(),
     'pair.answer': ({ requestId, allow }) => pairing.answer(requestId, allow),
     'devices.list': async (): Promise<ControlDeviceInfo[]> =>
@@ -173,6 +197,7 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
       route: () => ({ routeId: keys.routeId, routeSecret: keys.routeSecret }),
       devices: () => devices.relayList(),
       onIncoming: (incoming) => {
+        if (resetState !== 'ok') return; // not accepted: the relay answers the phone after its wait
         const run =
           incoming.kind === 'pair'
             ? pairing.handleIncoming(incoming)
