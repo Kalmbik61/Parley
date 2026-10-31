@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
+import type { WorksSnapshot } from '@parley/protocol';
 import {
   REMOTE_EVENTS,
   REMOTE_METHODS,
@@ -7,6 +8,7 @@ import {
   appRequestFrame,
   bridgeEventSchemas,
   checkRemoteParams,
+  projectWorksSnapshot,
 } from '@parley/protocol/remote';
 import type { BridgeHello } from '@parley/protocol/remote';
 import type { AuditLog } from './audit.js';
@@ -51,6 +53,11 @@ interface DeviceState {
 const decoder = new TextDecoder();
 const KNOWN_REASONS: ReadonlySet<string> = new Set(Object.values(HOST_ERROR_REASONS));
 const STAGE_METHODS: ReadonlySet<string> = new Set(REMOTE_METHODS);
+
+/** Ответы хоста, которые телефону идут только в проекции: сырой `works.list` несёт планы и `argv`/`env` проверок. */
+const RESULT_PROJECTIONS: Readonly<Record<string, (result: unknown) => unknown>> = {
+  'works.list': (result) => projectWorksSnapshot(result as WorksSnapshot),
+};
 
 /** Только известный `reason` хоста идёт телефону в `data`; остальное отбрасывается. */
 function safeErrorData(data: unknown): { data: unknown } | Record<string, never> {
@@ -188,7 +195,9 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
 
     state.inFlight++;
     try {
-      const result = await host.call(method, params ?? {});
+      const raw = await host.call(method, params ?? {});
+      // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
+      const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;
       if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, target: targetOf(params), outcome: 'ok', detail: describeParams(params) });
       reply(deviceId, id, { result });
     } catch (error) {

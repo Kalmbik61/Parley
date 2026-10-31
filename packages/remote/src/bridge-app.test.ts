@@ -190,7 +190,7 @@ describe('dispatcher', () => {
     const resolvers: ((v: unknown) => void)[] = [];
     host.handler = () => new Promise((r) => resolvers.push(r));
     call('d1', '1', 'host.info');
-    call('d2', '1', 'works.list');
+    call('d2', '1', 'feed.snapshot');
     await flush();
     resolvers[1]!({ from: 'second' });
     resolvers[0]!({ from: 'first' });
@@ -313,9 +313,35 @@ describe('dispatcher', () => {
 
   it('a response above 8 MiB becomes too_large', async () => {
     host.handler = async () => 'x'.repeat(8 * 1024 * 1024 + 10);
-    call('d1', 'big', 'works.list');
+    call('d1', 'big', 'context.text');
     await flush();
     expect(sessions.of('d1').at(-1)).toEqual({ id: 'big', error: { code: 'too_large', message: 'response is too large' } });
+  });
+});
+
+describe('works.list from a phone', () => {
+  it('is answered with the projection, never the raw host snapshot', async () => {
+    online(3);
+    dispatcher.onOpen('d1');
+    host.handler = async () => snap(7);
+    call('d1', 'w', 'works.list');
+    await flush();
+    const reply = sessions.of('d1').find((f) => f.id === 'w')!;
+    expect(remoteWorksSnapshotSchema.safeParse(reply.result).success).toBe(true);
+    expect(reply.result.revision).toBe(7);
+    expect(JSON.stringify(reply)).not.toMatch(/"(task|summary|plans|planEffects|resources|branches)"/);
+    expect(JSON.stringify(reply)).not.toContain('SECRET');
+  });
+
+  it('a result that cannot be projected is an internal error, not the raw result', async () => {
+    online(3);
+    dispatcher.onOpen('d1');
+    host.handler = async () => ({ entries: 'bad', secret: 'SECRET' });
+    call('d1', 'w', 'works.list');
+    await flush();
+    const reply = sessions.of('d1').find((f) => f.id === 'w')!;
+    expect(reply.error?.code).toBe('internal');
+    expect(JSON.stringify(reply)).not.toContain('SECRET');
   });
 });
 
