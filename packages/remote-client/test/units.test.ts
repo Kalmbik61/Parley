@@ -90,6 +90,15 @@ describe('HostStore', () => {
     await expect(store.nextTs('missing', 1)).rejects.toThrow();
   });
 
+  it('wipeAll removes every record, including broken ones', async () => {
+    const platform = makePlatform();
+    const store = new HostStore(platform.keyStore);
+    await store.put(new FakeBridge().enroll());
+    platform.keys.records.set('broken', '{"hostId":"broken"}');
+    await store.wipeAll();
+    expect(platform.keys.records.size).toBe(0);
+  });
+
   it('encodeTs is 8 bytes big-endian', () => {
     expect([...encodeTs(0x0102_0304_0506)]).toEqual([0, 0, 1, 2, 3, 4, 5, 6]);
   });
