@@ -1932,6 +1932,16 @@ export function createSessionsService(
       pendingHandovers.set(key, handover);
 
       const by = request.by ?? 'human';
+      // Форка не будет: копия в папке цели убирается, привязка помечается пакетом передачи (5.4.1).
+      const dropFork = async (copied: CarriedTranscript): Promise<void> => {
+        await discardCopy(copied).catch((cleanup: unknown) => {
+          host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
+        });
+        await updateMap(ref.projectPath, ref.workId, (current) => {
+          const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
+          if (last !== undefined) last.carried = 'handover';
+        });
+      };
       let outcome: LaunchOutcome;
       try {
         if (transcript === null) outcome = await launchHeld(ref, 'launch', { by, handover }, false);
@@ -1942,15 +1952,16 @@ export function createSessionsService(
           } catch (error) {
             // Форк не поднялся: копия убрана, новый агент стартует с пакетом передачи (5.4.1), и ответ это называет.
             host.log.warn('форк разговора не поднялся — запуск с пакетом передачи', { ref, error: String(error) });
-            await discardCopy(transcript).catch((cleanup: unknown) => {
-              host.log.warn('копия транскрипта не убралась', { ref, error: String(cleanup) });
-            });
+            await dropFork(transcript);
             transcript = null;
-            await updateMap(ref.projectPath, ref.workId, (current) => {
-              const last = current.sessions.find((candidate) => candidate.id === ref.sessionId)?.previousAgents?.at(-1);
-              if (last !== undefined) last.carried = 'handover';
-            });
             outcome = await launchHeld(ref, 'launch', { by, handover }, false);
+          }
+          // Запуск с форком встал в очередь машины: процесса и форка нет, а запись очереди помнит только вид запуска и `by`,
+          // без `forkFrom`. Продолжение поднимет нового агента пакетом передачи (`awaitingAgent`), поэтому копия не нужна,
+          // а записи и ответ должны говорить то же.
+          if (outcome === 'queued' && transcript !== null) {
+            await dropFork(transcript);
+            transcript = null;
           }
         }
       } catch (error) {
