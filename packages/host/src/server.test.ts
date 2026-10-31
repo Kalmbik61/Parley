@@ -5,7 +5,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addSession, createWork, updateMap, workPaths } from '@parley/core';
-import { BROWSER_AGENT_FEATURE, METHODS, NOTIFICATIONS, PROTOCOL_VERSION } from '@parley/protocol';
+import {
+  ASSISTANT_ACTIONS_FEATURE,
+  BROWSER_AGENT_FEATURE,
+  COMPACT_WORKS_FEATURE,
+  METHODS,
+  NOTIFICATIONS,
+  PROTOCOL_VERSION,
+  ROOMS_MAIL_FEATURE,
+  encodeLine,
+} from '@parley/protocol';
+import { REMOTE_EVENTS, REMOTE_METHODS, REMOTE_POLICY_FEATURE } from '@parley/protocol/remote';
 import type { SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
 import type { RawMessage, TestClient } from '../test/helpers.js';
@@ -15,6 +25,7 @@ import { hostPaths } from './paths.js';
 import { createHostServer, SLOW_REQUEST_MS } from './server.js';
 import { HostError } from './errors.js';
 import type { HostContext } from './context.js';
+import type { Client } from './client.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -476,5 +487,264 @@ describe('медленные запросы', () => {
     expect(second.id).toBe(904);
     expect(log.warn).toHaveBeenCalled();
     close();
+  });
+});
+
+describe('роль remote: белый список этапа A (спека мобильного приложения 4.1–4.3)', () => {
+  const remoteAdvertised = new Set<string>(['hello', ...REMOTE_METHODS]);
+
+  /** Сообщения до ответа с этим `id` включительно: события, пришедшие раньше, видны все. */
+  async function collectUntil(client: TestClient, id: number): Promise<RawMessage[]> {
+    const seen: RawMessage[] = [];
+    for (;;) {
+      const message = await client.next();
+      seen.push(message);
+      if (message.id === id) return seen;
+    }
+  }
+
+  async function connectAs(home: string, token: string, client: string, features?: string[]) {
+    const socket = connectRaw(hostPaths(home).socket);
+    await waitConnected(socket.socket);
+    const answer = await hello(socket, token, { client, ...(features === undefined ? {} : { features }) });
+    return { client: socket, answer: answer.result as { methods: string[]; features: string[] } };
+  }
+
+  it('hello: methods ⊆ REMOTE_METHODS ∪ {hello}, features содержит remote-policy-1; desktop видит все методы', async () => {
+    const { home, token } = await boot();
+    const remote = await connectAs(home, token, 'remote');
+    expect(remote.answer.methods.length).toBeGreaterThan(1);
+    for (const name of remote.answer.methods) expect(remoteAdvertised.has(name)).toBe(true);
+    expect(remote.answer.methods).toContain('hello');
+    expect(remote.answer.methods).toContain('works.list');
+    expect(remote.answer.features).toContain(REMOTE_POLICY_FEATURE);
+
+    const desktop = await connectAs(home, token, 'desktop');
+    expect(desktop.answer.methods).toEqual(protocolMethods());
+    expect(desktop.answer.features).toContain(REMOTE_POLICY_FEATURE);
+    remote.client.close();
+    desktop.client.close();
+  });
+
+  it('settings.set — unknown_method, works.list — результат', async () => {
+    const { home, token } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    client.send({ id: 10, method: 'settings.set', params: { key: 'telegram.enabled', value: 'true' } });
+    expect((await client.next()).error).toMatchObject({ code: 'unknown_method' });
+    client.send({ id: 11, method: 'works.list', params: {} });
+    const listed = (await collectUntil(client, 11)).at(-1);
+    expect(listed?.error).toBeUndefined();
+    expect(listed?.result).toBeDefined();
+    client.close();
+  });
+
+  it('каждый метод протокола вне REMOTE_METHODS — unknown_method при любых параметрах, до схемы', async () => {
+    const { home, token, running } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    const allowed = new Set<string>(REMOTE_METHODS);
+    const forbidden = Object.keys(METHODS).filter((name) => !allowed.has(name));
+    expect(forbidden).toContain('host.shutdown');
+    let id = 1000;
+    for (const method of forbidden) {
+      id += 1;
+      // Параметры, не проходящие ни одну схему: ответ — unknown_method, а не bad_request с текстом схемы.
+      client.send({ id, method, params: { '__no_such_field__': 1 } });
+      const answer = (await collectUntil(client, id)).at(-1);
+      expect(answer?.error, method).toMatchObject({ code: 'unknown_method' });
+    }
+    // Хост жив: host.shutdown до обработчика не дошёл.
+    expect(running.context.clients()).toHaveLength(1);
+    client.close();
+  });
+
+  it('повторный hello не меняет роль: ответ unknown_method, settings.set по-прежнему закрыт', async () => {
+    const { home, token, running } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    client.send({ id: 20, method: 'hello', params: { token, protocol: PROTOCOL_VERSION, client: 'desktop' } });
+    expect((await collectUntil(client, 20)).at(-1)?.error).toMatchObject({ code: 'unknown_method' });
+    client.send({ id: 21, method: 'settings.set', params: { key: 'k', value: 'v' } });
+    expect((await collectUntil(client, 21)).at(-1)?.error).toMatchObject({ code: 'unknown_method' });
+    expect(running.context.clients().map((entry) => entry.role)).toEqual(['remote']);
+    client.close();
+  });
+
+  it('broadcast: telegram.changed и feed.changed (и готовой строкой) не доходят, works.changed доходит; feed.changed через client.send отфильтрован', async () => {
+    const { home, token, running } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    const registered = running.context.clients().find((entry) => entry.role === 'remote');
+    expect(registered).toBeDefined();
+
+    running.context.broadcast('telegram.changed', { marker: 'forbidden-1' } as never);
+    const feedData = { marker: 'forbidden-2' };
+    running.context.broadcast('feed.changed', feedData as never, undefined, encodeLine({ event: 'feed.changed', data: feedData } as never));
+    registered?.send({ event: 'feed.changed', data: { marker: 'forbidden-3' } } as never);
+    registered?.sendLine?.(encodeLine({ event: 'pty.output', data: { marker: 'forbidden-4' } } as never));
+    running.context.broadcast('works.changed', { marker: 'allowed' } as never);
+    client.send({ id: 30, method: 'host.info', params: {} });
+
+    const seen = await collectUntil(client, 30);
+    const events = seen.filter((message) => message.event !== undefined);
+    for (const message of events) expect((REMOTE_EVENTS as readonly string[]).includes(message.event as string)).toBe(true);
+    expect(JSON.stringify(seen)).not.toContain('forbidden-');
+    expect(events).toContainEqual({ event: 'works.changed', data: { marker: 'allowed' } });
+    client.close();
+  });
+
+  it('признаки remote — только compact-works и rooms-mail: заявленный browser-agent / assistant-actions не делает мост окном', async () => {
+    const { home, token, running } = await boot();
+    const { client } = await connectAs(home, token, 'remote', [
+      BROWSER_AGENT_FEATURE,
+      `${BROWSER_AGENT_FEATURE}:open`,
+      ASSISTANT_ACTIONS_FEATURE,
+      COMPACT_WORKS_FEATURE,
+      ROOMS_MAIL_FEATURE,
+    ]);
+    const [registered] = running.context.clients();
+    expect(registered?.role).toBe('remote');
+    expect([...(registered?.features ?? [])].sort()).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE].sort());
+    // Те же условия, по которым хост выбирает окно для операций браузера и решает, показаны ли действия ассистента.
+    expect(running.context.clients().filter((entry) => entry.features.has(BROWSER_AGENT_FEATURE))).toEqual([]);
+    expect(running.context.clients().some((entry) => entry.features.has(ASSISTANT_ACTIONS_FEATURE))).toBe(false);
+
+    // Полный клиент заявляет то же — и получает всё заявленное.
+    const desktop = await connectAs(home, token, 'desktop', [BROWSER_AGENT_FEATURE, ASSISTANT_ACTIONS_FEATURE]);
+    const full = running.context.clients().find((entry) => entry.role === undefined);
+    expect(full?.features.has(BROWSER_AGENT_FEATURE)).toBe(true);
+    expect(full?.features.has(ASSISTANT_ACTIONS_FEATURE)).toBe(true);
+    client.close();
+    desktop.client.close();
+  });
+
+  describe('сервер со шпионами', () => {
+    async function spyServer() {
+      const home = await tempHome();
+      homes.push(home);
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const context = { version: 'test', log, liveSessions: () => 0 } as unknown as HostContext;
+      const resolveProposal = vi.fn(async () => ({ messageId: 'm-1' }));
+      const settingsSet = vi.fn(async () => ({}));
+      const ptyInput = vi.fn();
+      const ptyResize = vi.fn();
+      const registered: Client[] = [];
+      const server = createHostServer({
+        context,
+        token: 't',
+        helloTimeoutMs: 5000,
+        methodHandlers: { 'rooms.resolveProposal': resolveProposal as never, 'settings.set': settingsSet as never, 'host.info': (async () => ({})) as never },
+        notificationHandlers: { 'pty.input': ptyInput as never, 'pty.resize': ptyResize as never },
+        registerClient: (client) => registered.push(client),
+        unregisterClient: () => {},
+      });
+      const socketPath = path.join(home, 'spy.sock');
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      const connect = async (name?: string): Promise<TestClient> => {
+        const client = connectRaw(socketPath);
+        await waitConnected(client.socket);
+        if (name !== undefined) await hello(client, 't', { client: name });
+        return client;
+      };
+      return { log, resolveProposal, settingsSet, ptyInput, ptyResize, registered, connect, close: () => server.close() };
+    }
+
+    const proposal = { projectPath: '/p', workId: 'w-1', roomId: 'r-1', proposalId: 'm-1', action: 'accept' };
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+
+    it('rooms.resolveProposal без rev — bad_request, обработчик не вызван; с rev — вызван; у desktop без rev — вызван', async () => {
+      const spies = await spyServer();
+      const remote = await spies.connect('remote');
+      remote.send({ id: 40, method: 'rooms.resolveProposal', params: proposal });
+      expect((await remote.next()).error).toMatchObject({ code: 'bad_request' });
+      expect(spies.resolveProposal).not.toHaveBeenCalled();
+      remote.send({ id: 41, method: 'rooms.resolveProposal', params: { ...proposal, rev: 0 } });
+      expect((await remote.next()).result).toEqual({ messageId: 'm-1' });
+      expect(spies.resolveProposal).toHaveBeenCalledTimes(1);
+
+      const desktop = await spies.connect('desktop');
+      desktop.send({ id: 42, method: 'rooms.resolveProposal', params: proposal });
+      expect((await desktop.next()).result).toEqual({ messageId: 'm-1' });
+      expect(spies.resolveProposal).toHaveBeenCalledTimes(2);
+      remote.close();
+      desktop.close();
+      spies.close();
+    });
+
+    it('уведомления pty.input и pty.resize от remote до обработчика не доходят и пишутся в лог; от desktop — доходят', async () => {
+      const spies = await spyServer();
+      const remote = await spies.connect('remote');
+      remote.send({ method: 'pty.input', params: { ref, data: 'rm -rf ~\r' } });
+      remote.send({ method: 'pty.resize', params: { ref, cols: 80, rows: 24 } });
+      // Уведомление с нечисловым id — тоже уведомление, а не запрос в обход списка.
+      remote.send({ id: 'x', method: 'pty.input', params: { ref, data: 'x' } });
+      remote.send({ id: 43, method: 'host.info', params: {} });
+      expect((await remote.next()).id).toBe(43);
+      expect(spies.ptyInput).not.toHaveBeenCalled();
+      expect(spies.ptyResize).not.toHaveBeenCalled();
+      const dropped = spies.log.warn.mock.calls.map((call) => (call[1] as { method?: string }).method);
+      expect(dropped).toEqual(['pty.input', 'pty.resize', 'pty.input']);
+
+      const desktop = await spies.connect('desktop');
+      desktop.send({ method: 'pty.input', params: { ref, data: 'x' } });
+      desktop.send({ method: 'pty.resize', params: { ref, cols: 80, rows: 24 } });
+      desktop.send({ id: 44, method: 'host.info', params: {} });
+      expect((await desktop.next()).id).toBe(44);
+      expect(spies.ptyInput).toHaveBeenCalledTimes(1);
+      expect(spies.ptyResize).toHaveBeenCalledTimes(1);
+      remote.close();
+      desktop.close();
+      spies.close();
+    });
+
+    it('запрос с id-уведомлением (pty.input с числовым id) от remote — unknown_method, обработчик не вызван', async () => {
+      const spies = await spyServer();
+      const remote = await spies.connect('remote');
+      remote.send({ id: 45, method: 'pty.input', params: { ref, data: 'x' } });
+      expect((await remote.next()).error).toMatchObject({ code: 'unknown_method' });
+      expect(spies.ptyInput).not.toHaveBeenCalled();
+      remote.close();
+      spies.close();
+    });
+
+    it('имена со свойств прототипа (constructor, toString, __proto__) от remote — unknown_method или лог, до parseIncoming', async () => {
+      const spies = await spyServer();
+      const remote = await spies.connect('remote');
+      let id = 50;
+      for (const method of ['constructor', 'toString', '__proto__']) {
+        id += 1;
+        remote.send({ id, method, params: {} });
+        expect((await remote.next()).error).toMatchObject({ code: 'unknown_method' });
+        remote.send({ method, params: {} });
+      }
+      remote.send({ id: 59, method: 'host.info', params: {} });
+      expect((await remote.next()).id).toBe(59);
+      expect(spies.log.warn).toHaveBeenCalledTimes(3);
+      remote.close();
+      spies.close();
+    });
+
+    it('отклонённый hello — конец: верный hello следом в том же чанке не регистрирует клиента', async () => {
+      const spies = await spyServer();
+      const client = await spies.connect();
+      const bad = { id: 1, method: 'hello', params: { token: 'не-тот', protocol: PROTOCOL_VERSION, client: 'remote' } };
+      const good = { id: 2, method: 'hello', params: { token: 't', protocol: PROTOCOL_VERSION, client: 'desktop' } };
+      const settings = { id: 3, method: 'settings.set', params: { key: 'k', value: 'v' } };
+      client.socket.write(`${JSON.stringify(bad)}\n${JSON.stringify(good)}\n${JSON.stringify(settings)}\n`);
+      expect((await client.next()).error).toMatchObject({ code: 'unauthorized' });
+      await waitClosed(client.socket);
+      expect(spies.registered).toEqual([]);
+      expect(spies.settingsSet).not.toHaveBeenCalled();
+      spies.close();
+    });
+
+    it('кадр до hello отклонён — следующий hello в том же чанке не принят', async () => {
+      const spies = await spyServer();
+      const client = await spies.connect();
+      const early = { method: 'pty.input', params: { ref, data: 'x' } };
+      const good = { id: 2, method: 'hello', params: { token: 't', protocol: PROTOCOL_VERSION, client: 'desktop' } };
+      client.socket.write(`${JSON.stringify(early)}\n${JSON.stringify(good)}\n`);
+      await waitClosed(client.socket);
+      expect(spies.registered).toEqual([]);
+      expect(spies.ptyInput).not.toHaveBeenCalled();
+      spies.close();
+    });
   });
 });
