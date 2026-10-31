@@ -106,6 +106,8 @@ test.describe('ёмкость машины в строке статуса', () =
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText(/^Memory: warn/)).toBeVisible();
     await expect(dialog.getByText('Live: 3 of 2')).toBeVisible();
+    // Анимация открытия поповера закончена: иначе снимок ловит его полупрозрачным.
+    await expect(dialog).toHaveCSS('opacity', '1');
     await window.screenshot({ path: test.info().outputPath('capacity-1440x900.png') });
   });
 
@@ -144,6 +146,8 @@ test.describe('ёмкость машины в строке статуса', () =
       await expect(dialog).toBeVisible();
       await expect(dialog.getByText(/^Memory: warn/)).toBeVisible();
       await expect(dialog).toBeInViewport({ ratio: 1 });
+      // Анимация открытия поповера закончена: иначе снимок ловит его полупрозрачным.
+      await expect(dialog).toHaveCSS('opacity', '1');
       await window.screenshot({ path: test.info().outputPath(`capacity-800x500-dpr${dpr}.png`) });
     });
   }
