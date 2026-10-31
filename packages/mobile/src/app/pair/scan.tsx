@@ -7,6 +7,7 @@ import { SymbolView } from 'expo-symbols';
 import { PlainButton, PrimaryButton } from '../../components/ui';
 import { haptic } from '../../haptics';
 import { pairing } from '../../pairing/instance';
+import { LINK_MESSAGES } from '../../pairing/session';
 import { typography, useColors } from '../../theme';
 
 export default function Scanner() {
@@ -14,20 +15,21 @@ export default function Scanner() {
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [torch, setTorch] = useState(false);
-  const [notParley, setNotParley] = useState(false);
+  const [rejected, setRejected] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState(false);
   const [pasted, setPasted] = useState('');
   const handled = useRef(false);
 
   const accept = (data: string): void => {
     if (handled.current) return;
-    if (pairing.fromScan(data)) {
+    const check = pairing.fromScan(data);
+    if (check === 'ok') {
       handled.current = true;
       haptic.qrRecognized();
       router.replace('/pair/flow');
     } else {
-      setNotParley(true);
-      setTimeout(() => setNotParley(false), 2500);
+      setRejected(LINK_MESSAGES[check]);
+      setTimeout(() => setRejected(null), check === 'private-relay' ? 6000 : 2500);
     }
   };
 
@@ -104,10 +106,10 @@ export default function Scanner() {
             Point at the QR code on your Mac
           </Text>
         </View>
-        {notParley && (
+        {rejected !== null && (
           <View style={[styles.toast, { backgroundColor: colors.warningBg }]} accessibilityLiveRegion="polite">
             <Text allowFontScaling style={[typography.subheadline, { color: colors.label }]}>
-              This isn't a Parley pairing code
+              {rejected}
             </Text>
           </View>
         )}

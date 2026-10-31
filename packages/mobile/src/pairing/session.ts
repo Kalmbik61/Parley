@@ -7,7 +7,16 @@ import {
   type HostRecord,
   type PairOptions,
 } from '@parley/remote-client';
-import { parsePairUrl } from '@parley/protocol/remote';
+import { isPrivateRelayHost, parsePairUrl } from '@parley/protocol/remote';
+
+/** `private-relay`: a valid code whose relay is on a private network, refused by a release build (spec §6.6). */
+export type LinkCheck = 'ok' | 'not-parley' | 'private-relay';
+
+export const LINK_MESSAGES: Record<Exclude<LinkCheck, 'ok'>, string> = {
+  'not-parley': "This isn't a Parley pairing code",
+  'private-relay':
+    'This code points to a relay on a private network. This build only connects to public relays — set up a relay with a public address on your Mac.',
+};
 
 export type PairFailureKind = 'denied' | 'timeout' | 'offer_closed' | 'relay' | 'other';
 
@@ -41,6 +50,8 @@ export interface PairDeps {
   haptic: { sasShown(): void; paired(): void };
   app: string;
   platformName: string;
+  /** Developer build: a private-address relay is allowed (`platform.allowLocalRelay`). */
+  allowLocalRelay: boolean;
 }
 
 export const DEVICE_NAME_MAX = 40;
@@ -61,6 +72,8 @@ export function describeFailure(error: unknown, relay: string | null): PairFailu
         action: 'Scan again',
         note: 'If your Mac shows a pairing request you did not make, it is another phone: click Deny on the Mac.',
       };
+    case 'bad_qr':
+      return { kind: 'other', icon: 'qrcode', title: "This code can't be used", body: LINK_MESSAGES['private-relay'], action: 'Scan again', note: null };
     case 'relay':
     case 'connection':
       return { kind: 'relay', icon: 'antenna.radiowaves.left.and.right.slash', title: "Can't reach relay", body: relay ?? 'The relay address from the code', action: 'Try again', note: null };
@@ -92,19 +105,37 @@ export class PairingSession {
   }
 
   /** A QR the person scanned in the app: straight to the device name. `false` — not a Parley code. */
-  fromScan(url: string): boolean {
-    if (!isPairUrl(url)) return false;
+  fromScan(url: string): LinkCheck {
+    const check = this.#check(url);
+    if (check !== 'ok') return check;
     this.#abort?.abort();
     this.#set({ step: 'name', url });
-    return true;
+    return 'ok';
+  }
+
+  /** A pairing is under way whose loss the person would notice (D1 §6): a new link must ask first. */
+  isBusy(): boolean {
+    const step = this.#state.step;
+    return step === 'name' || step === 'connecting' || step === 'sas' || step === 'confirm-link';
   }
 
   /** A `parley://pair` link from outside the app: the confirm screen first, never skipped. `false` — malformed. */
-  fromLink(url: string): boolean {
-    if (!isPairUrl(url)) return false;
+  fromLink(url: string): LinkCheck {
+    const check = this.#check(url);
+    if (check !== 'ok') return check;
     this.#abort?.abort();
     this.#set({ step: 'confirm-link', url });
-    return true;
+    return 'ok';
+  }
+
+  #check(url: string): LinkCheck {
+    let offer;
+    try {
+      offer = parsePairUrl(url.trim());
+    } catch {
+      return 'not-parley';
+    }
+    return !this.#deps.allowLocalRelay && isPrivateRelayHost(offer.r) ? 'private-relay' : 'ok';
   }
 
   /** Developer build only: shows a given step without a Mac, for screenshots and design review. */
@@ -175,15 +206,6 @@ export class PairingSession {
   /** Leave the flow after the last step. */
   finish(): void {
     this.#set({ step: 'idle' });
-  }
-}
-
-function isPairUrl(url: string): boolean {
-  try {
-    parsePairUrl(url.trim());
-    return true;
-  } catch {
-    return false;
   }
 }
 
