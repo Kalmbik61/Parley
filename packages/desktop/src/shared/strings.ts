@@ -2623,6 +2623,30 @@ export const S = {
     ].join('\n'),
   },
 
+  /** Ёмкость машины (спека сна агентов и ёмкости, 4.5): сегмент строки статуса и поповер с очередью запусков. */
+  capacity: {
+    /** Полный текст: «Agents 17/18 · 3 queued · memory warn»; потолок выключен — «Agents 17», нормы памяти не пишем. */
+    segment: (machine: { live: number; limit: number | null; queued: number; pressure: string }): string => {
+      const parts = [machine.limit === null ? `Agents ${machine.live}` : `Agents ${machine.live}/${machine.limit}`];
+      if (machine.queued > 0) parts.push(`${machine.queued} queued`);
+      if (machine.pressure === 'warn' || machine.pressure === 'critical') parts.push(`memory ${machine.pressure}`);
+      return parts.join(' · ');
+    },
+    /** Короткая форма узкого окна: «17/18» или «17». */
+    segmentShort: (machine: { live: number; limit: number | null }): string =>
+      machine.limit === null ? `${machine.live}` : `${machine.live}/${machine.limit}`,
+    title: 'Agents on this machine',
+    live: (machine: { live: number; limit: number | null }): string =>
+      machine.limit === null ? `Live: ${machine.live}, no limit` : `Live: ${machine.live} of ${machine.limit}`,
+    memory: (machine: { pressure: string; swapGb: number | null }): string =>
+      `Memory: ${machine.pressure}${machine.swapGb === null ? '' : ` · swap ${machine.swapGb} GB`}`,
+    sleep: (minutes: number | null): string => (minutes === null ? 'Sleep is off' : `Idle agents sleep after ${minutes} min`),
+    noQueue: 'No launches are waiting.',
+    waiting: (n: number): string => `Waiting for a slot (${n})`,
+    waited: (ms: number): string => (ms < 60_000 ? 'for <1 min' : `for ${Math.floor(ms / 60_000)} min`),
+    openLimits: 'Limits in Settings',
+  },
+
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
   assistant: {
     ask: 'Ask the assistant',
