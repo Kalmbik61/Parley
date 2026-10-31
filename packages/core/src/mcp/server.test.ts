@@ -391,7 +391,7 @@ describe('список инструментов', () => {
     const closeSession = tools.find((tool) => tool.name === 'close_session');
 
     expect(report?.description).toMatch(/stays reachable/);
-    expect(closeSession?.description).toMatch(/only after the human's explicit consent/);
+    expect(closeSession?.description).toMatch(/after the human's explicit consent/);
   });
 
   it('wait_for предупреждает: сдавшей report сессии — ждать через inbox, не по id', async () => {

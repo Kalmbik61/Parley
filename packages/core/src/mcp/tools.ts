@@ -587,11 +587,11 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close yourself only after the human's explicit consent; ones you created: when accepted.",
+      "Close yourself after the human's explicit consent or, if work.closeFinished, once accepted; ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Yours or one you created; with closeFinished, a finished member of the room you lead.' },
+        target: { type: 'string', description: 'Yours, one you created, or (closeFinished) a finished member of your room.' },
       },
       required: ['target'],
     },
@@ -868,12 +868,12 @@ function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
         led.some((room) => room.members.includes(row.id)))
       .map((row) => row.id);
     return finished.length > 0
-      ? `This workspace lets agents close finished sessions: once you have accepted their parts, close ${finished.join(', ')} with close_session.`
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, close ${finished.join(', ')} with close_session; the tool allows it.`
       : null;
   }
   const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
   if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
-    return 'This workspace lets agents close finished sessions: once your part is accepted, call close_session on yourself as your last call.';
+    return "The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session on yourself as your last call.";
   }
   return null;
 }

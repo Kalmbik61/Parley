@@ -105,7 +105,7 @@ describe('заглушка скилла parley: тело', () => {
     );
     expect(body).toMatch(/do not start the work before acceptance/);
     expect(body).toMatch(/Only the lead can bring one more session into a room — `add_to_room`/);
-    expect(body).toMatch(/`close_session` — your own session only after the human's explicit consent; sessions you created/);
+    expect(body).toMatch(/`close_session` — your own session only after the human's explicit consent; `closeFinished` in `work` \(`get_map`\) is that consent: then close yourself once your part is accepted \(`report` first\), and a room lead closes its room's finished members\. Sessions you created \(and their descendants\) you may close yourself when their work is accepted or not needed; never the human's or a swarm's, and a colleague's only as its room lead with `closeFinished`\. Stage 1/);
     expect(body).toMatch(/Before finishing, call `report`/);
   });
 

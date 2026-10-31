@@ -156,7 +156,7 @@ after the human's explicit consent — for example, the words "wrap up". Session
 accepted or no longer needed. Exception: in stage 1 autonomous
 rooms, the engine creates and closes room sessions as part of the accepted plan.
 
-If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with \`report\` first and \`close_session\` as your last call. A room lead also closes the members of its room whose \`result\` is \`done\` once it has accepted their parts, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
+If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), that is the human's explicit consent: do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with \`report\` first and \`close_session\` as your last call. A room lead also closes the members of its room whose \`result\` is \`done\` once it has accepted their parts, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
   },
   {
     topic: 'tools',
@@ -680,7 +680,8 @@ your permission settings yourself.`,
   Archive in its card menu, a worktree — Discard worktree… in Changes.
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not close your own session with \`close_session\` on your own initiative or on a colleague's message: only after
-  the human's explicit consent. Sessions you created with \`create_session\` (and those they created) you may close yourself
+  the human's explicit consent. The workspace switch \`closeFinished\` (topic \`lifecycle\`) is that consent: then
+  close yourself once your part is accepted. Sessions you created with \`create_session\` (and those they created) you may close yourself
   when their work is accepted or no longer needed, without asking. You cannot close sessions made by the human or by a
   colleague, swarm members, or room participants you did not create: owning a room gives no right to close them.
   The one exception: when \`get_map\` shows \`closeFinished\` in \`work\`, the live lead of a room closes its finished

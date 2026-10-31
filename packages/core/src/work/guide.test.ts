@@ -89,12 +89,15 @@ describe('темы гида', () => {
   it('тема lifecycle: при closeFinished не ждать «wrap up», report первым, close_session последним (sg-12)', () => {
     const lifecycle = (guideTopic('lifecycle') ?? '').replace(/\s+/g, ' ');
     expect(lifecycle).toContain(
-      'If the human lets agents close finished sessions (`get_map` shows `closeFinished: true` in `work`), do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with `report` first and `close_session` as your last call. A room lead also closes the members of its room whose `result` is `done` once it has accepted their parts, and closes itself after the human accepts the room\'s completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".',
+      'If the human lets agents close finished sessions (`get_map` shows `closeFinished: true` in `work`), that is the human\'s explicit consent: do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with `report` first and `close_session` as your last call. A room lead also closes the members of its room whose `result` is `done` once it has accepted their parts, and closes itself after the human accepts the room\'s completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".',
     );
   });
 
   it('тема rules: исключение для лида комнаты при closeFinished', () => {
     const rules = (guideTopic('rules') ?? '').replace(/\s+/g, ' ');
+    expect(rules).toContain(
+      "only after the human's explicit consent. The workspace switch `closeFinished` (topic `lifecycle`) is that consent: then close yourself once your part is accepted.",
+    );
     expect(rules).toContain(
       'owning a room gives no right to close them. The one exception: when `get_map` shows `closeFinished` in `work`, the live lead of a room closes its finished members (topic `lifecycle`).',
     );

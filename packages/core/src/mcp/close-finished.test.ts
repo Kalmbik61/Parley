@@ -161,8 +161,8 @@ describe('close_session: право живого лида закрыть зав�
 
 describe('report: подсказка закрыть завершённые сессии в ответе', () => {
   const LEAD_HINT = (ids: string): string =>
-    `This workspace lets agents close finished sessions: once you have accepted their parts, close ${ids} with close_session.`;
-  const OWN_HINT = 'This workspace lets agents close finished sessions: once your part is accepted, call close_session on yourself as your last call.';
+    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, close ${ids} with close_session; the tool allows it.`;
+  const OWN_HINT = "The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session on yourself as your last call.";
 
   async function reportAs(sessionId: string, status: 'done' | 'progress' = 'done'): Promise<Record<string, unknown>> {
     const result = await call(await connect(sessionId), 'report', { status, summary: 'итог' });
