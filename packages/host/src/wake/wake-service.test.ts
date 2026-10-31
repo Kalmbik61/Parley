@@ -1345,19 +1345,20 @@ describe('WakeService: подъём в очереди машины (спека �
     expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'mail' });
   }, 30_000);
 
-  it('2: класс запуска в очереди — письмо агента даёт mail, письмо человека в пачке — human', async () => {
+  it('2: класс запуска считается по всем будящим письмам: письмо человека и более новое письмо агента дают human', async () => {
     const { workId, target, sender } = await sleepingPair();
     const ref = { projectPath: project, workId, sessionId: target };
     const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
-    const { wake } = await resumeRig({}, (real) => ({ ...real, launch }));
+    const { activity, wake } = await resumeRig({}, (real) => ({ ...real, launch }));
 
-    await sendLetter(workId, target, 'от агента', sender);
-    await waitFor(() => launch.mock.calls.length === 1, 5000);
-    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'mail' });
-
-    // Письмо человека пришло, пока подъём в очереди: следующая попытка несёт оба письма, и класс — по самому важному.
     await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+
+    // Письмо агента пришло позже, но подъём уже стоит классом human: новой попытки нет, а когда очередь позовёт `retry`,
+    // пачка несёт оба письма, и среди них по-прежнему письмо человека.
+    await sendLetter(workId, target, 'от агента', sender);
     await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
     wake.retry(ref);
     await waitFor(() => launch.mock.calls.length === 2, 5000);
     expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'human' });
@@ -1393,6 +1394,70 @@ describe('WakeService: подъём в очереди машины (спека �
     await sendLetter(workId, target, 'пришло после Stop', sender);
     await waitFor(() => launch.mock.calls.length === 2, 5000);
   }, 30_000);
+
+  it('5: подъём стоит в очереди классом mail, и пришло письмо человека — новая попытка сразу, классом human, без retry', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от агента', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'mail' });
+
+    // Письмо человека не ждёт `retry` в хвосте писем: класс выше, и очередь поднимет запись (`mergeQueued`).
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => launch.mock.calls.length === 2, 5000);
+    expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'human' });
+
+    // Очередь снова ответила `queued`: теперь подъём стоит классом human, и ещё письма новых попыток не рождают.
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    await sendLetter(workId, target, 'ещё от агента', sender);
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(2);
+  }, 30_000);
+
+  it('6: подъём стоит в очереди классом human, и пришло ещё письмо человека — новой попытки нет', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'human' });
+
+    // Класс уже высший: запись очереди держит место, и второе письмо человека новой попытки не просит.
+    await sendLetter(workId, target, 'ещё от человека', HUMAN);
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('queued');
+    expect(notices('resume-limit')).toEqual([]);
+  }, 20_000);
+
+  it('7: письмо человека, помеченное удалённым, класс не поднимает — подъём остаётся в очереди, новых попыток нет', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    let other = '';
+    await updateMap(project, workId, (map) => {
+      other = addSession(map, { provider: 'claude', label: 'третья', task: 'ждать' }).id;
+    });
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от агента', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+
+    // Письмо человека двоим, и второго адресата удаляют: письмо помечено `deleted` и у `target` остаётся непрочитанным,
+    // но будильник его не считает (`deliveryAction`) — значит, и класс запуска от него не растёт.
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: HUMAN, to: [target, other], text: 'от человека двоим' });
+      letters.flagDeleted(other);
+    });
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('queued');
+  }, 20_000);
 });
 
 /**

@@ -232,11 +232,12 @@ interface AttemptState {
    */
   trustHeld: boolean;
   /**
-   * Подъём стоит в очереди машины (`launch` → `queued`, спека сна агентов 4.2): письма ждут, а не считаются указанными, и
-   * новых попыток нет, пока очередь не позовёт `retry` (иначе каждое событие карты заново ставило бы запись). Живой
-   * процесс тоже снимает флаг: сессию подняли другим путём.
+   * Класс, которым подъём стоит в очереди машины (`launch` → `queued`, спека сна агентов 4.2); `null` — не стоит. Письма
+   * ждут, а не считаются указанными, и новых попыток нет, пока очередь не позовёт `retry` (иначе каждое событие карты
+   * заново ставило бы запись). Исключение — письмо человека поверх класса `mail`: класс выше, и подъём пробуется сразу
+   * (`recompute`). Живой процесс тоже снимает очередь: сессию подняли другим путём.
    */
-  queued: boolean;
+  queued: 'human' | 'mail' | null;
   /**
    * Под текущий подъём взят слот часа (`limiter.tryTake`) и ещё не возвращён: вернуть (`releaseSlot`) можно только
    * взятый. Сессия, которую усыпил хост, слот не берёт (спека сна агентов 4.1), и возвращать ей нечего: иначе возврат
@@ -357,7 +358,7 @@ export function createWakeService(
         providerCheck: null,
         budgetDeniedAt: null,
         trustHeld: false,
-        queued: false,
+        queued: null,
         slotTaken: false,
         pasteRetry: undefined,
         settleTimer: undefined,
@@ -638,7 +639,7 @@ export function createWakeService(
         releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
         if (outcome === 'held') state.trustHeld = true;
-        else state.queued = true;
+        else state.queued = action.launchClass;
         // `resuming` снимается до публикации: вложенный пересчёт, который она вызывает, иначе записал бы «resuming».
         state.resuming = false;
         publishWaiting(ref, state, outcome === 'held' ? 'folder-trust' : 'queued');
@@ -1050,17 +1051,24 @@ export function createWakeService(
         now: Date.now(),
         ...settle,
       };
+      // Подъём стоит в очереди классом `mail`, а теперь его будит и письмо человека (спека сна агентов 4.2): класс выше,
+      // и ждать `retry` значило бы отдать это письмо в хвост очереди писем. Очередь снимается — новая попытка идёт сразу,
+      // классом `human`, и запись очереди поднимет класс (`mergeQueued`). Подъём, уже стоящий как `human`, ждёт, как был.
+      // Удалённые письма не в счёт, как и у `deliveryAction`: иначе такая попытка шла бы по кругу на каждое событие карты.
+      if (state.queued === 'mail' && input.unread.some((message) => message.from === HUMAN && message.deleted !== true)) {
+        state.queued = null;
+      }
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
       let action = deliveryAction(input);
       const backedOff =
         state.trustHeld ||
-        state.queued ||
+        state.queued !== null ||
         (state.budgetDeniedAt !== null && Date.now() - state.budgetDeniedAt < BUDGET_RETRY_MS);
       // Подъём хотели, но его не пускает удержание согласия (письма ждут человека) или очередь машины (письма ждут
       // слота): это не часовой лимит.
       const heldWait: MailWait | null =
-        action.kind !== 'resume' ? null : state.trustHeld ? 'folder-trust' : state.queued ? 'queued' : null;
+        action.kind !== 'resume' ? null : state.trustHeld ? 'folder-trust' : state.queued !== null ? 'queued' : null;
       if (action.kind === 'resume') {
         // Подъём усыплённой хостом вызван решением хоста, а лимит часа защищает от агентов, будящих друг друга: слот под
         // него не берётся (спека сна агентов 4.1). Остановленную человеком считают по-старому.
@@ -1100,7 +1108,7 @@ export function createWakeService(
     // Процесс поднят — человеком или нами: следующий сон снова можно будить письмом.
     state.resumeUnavailable = false;
     state.trustHeld = false;
-    state.queued = false;
+    state.queued = null;
     const live = activity.get(ref);
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
@@ -1266,7 +1274,7 @@ export function createWakeService(
     retry(ref) {
       const state = stateFor(refKey(ref));
       state.trustHeld = false;
-      state.queued = false;
+      state.queued = null;
       state.budgetDeniedAt = null;
       // Спящая сессия без процесса: каждое её непрочитанное письмо снова свежее — именно это и делает будильник при
       // подъёме. Без этого после перезапуска хоста старт (`ensureKnown`) уже записал бы такие письма как указанные, и
@@ -1287,7 +1295,7 @@ export function createWakeService(
       state.earlyExit = undefined;
       state.resumeUnavailable = false;
       state.trustHeld = false;
-      state.queued = false;
+      state.queued = null;
       state.budgetDeniedAt = null;
       state.returns = 0;
       state.returnTurn = null;
