@@ -1,6 +1,7 @@
 // Проекция снимка works.list для телефона (спека мобильного приложения §5.5, итог S7 §7.3).
 // Тип хоста — только `import type`: код входа исполняется в Hermes и браузере, значений из корня протокола здесь нет.
 import { z } from 'zod';
+import type { SwarmCreator } from '@parley/core';
 import type { WorksSnapshot } from '../types.js';
 
 const isoOrNull = z.string().nullable();
@@ -35,19 +36,19 @@ export const remoteSessionSchema = z.strictObject({
 });
 
 /**
- * Решение комнаты — та же форма, что `Proposal` хоста. `plan` (`RoomPlan`) — вложенная структура плана, которую телефону
- * нужно только донести целиком: схема принимает её как `z.unknown()`, чтобы любой план хоста проходил проверку.
+ * Решение комнаты для телефона: без `plan`. План несёт автономные проверки (`argv`, `cwd`, `env`), попытки и журналы —
+ * на телефон идёт только его личность (`planId`, `planRev`) по правилу `planRefOf` хоста. `kind` без поля у хоста — `null`
+ * (решение прежнего вида).
  */
 export const remoteProposalSchema = z.strictObject({
-  kind: z.enum(['decision', 'completion']).optional(),
-  plan: z.unknown().optional(),
-  planId: z.string().optional(),
-  planRev: z.number().optional(),
   id: z.string(),
+  kind: z.enum(['decision', 'completion']).nullable(),
   from: z.string(),
   text: z.string(),
   rev: z.number(),
   at: z.string(),
+  planId: z.string().nullable(),
+  planRev: z.number().nullable(),
 });
 
 const counters = z.strictObject({ total: z.number(), unread: z.number() });
@@ -132,6 +133,40 @@ function channelCounters(compact: Compact, id: string): { total: number; unread:
   return { total: c.total, unread: id === '' ? compact.unread.letters : (compact.unread.rooms[id] ?? 0) };
 }
 
+type Creator = RemoteWork['swarms'][number]['creator'];
+
+/** Создатель роя: явный выбор полей по виду. */
+function projectCreator(c: SwarmCreator): Creator {
+  switch (c.kind) {
+    case 'session':
+      return { kind: 'session', sessionId: c.sessionId };
+    case 'room':
+      return { kind: 'room', roomId: c.roomId };
+    default:
+      return { kind: 'human' };
+  }
+}
+
+type HostProposal = NonNullable<Entry['map']['rooms'][number]['proposal']>;
+
+/** Те же правила, что `planRefOf` в core (значения из корня core в Hermes не тянем): встроенный план главнее полей. */
+function projectProposal(p: HostProposal | null | undefined): RemoteRoom['proposal'] {
+  if (!p) return null;
+  const planId = p.plan?.id ?? p.planId;
+  const planRev = p.plan?.rev ?? p.planRev;
+  const ref = planId === undefined || planRev === undefined ? null : { planId, planRev };
+  return {
+    id: p.id,
+    kind: p.kind ?? null,
+    from: p.from,
+    text: p.text,
+    rev: p.rev,
+    at: p.at,
+    planId: ref?.planId ?? null,
+    planRev: ref?.planRev ?? null,
+  };
+}
+
 /** Проекция снимка хоста для телефона: порядок работ — порядок `entries`, без `task`, `summary`, `history`, метрик и планов. */
 export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapshot {
   return {
@@ -156,7 +191,16 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
             createdBy: s.createdBy ?? null,
             lifecycle: s.lifecycle,
             result: s.result ?? null,
-            stuck: s.stuck ?? null,
+            stuck: s.stuck
+              ? {
+                  kind: s.stuck.kind,
+                  since: s.stuck.since,
+                  detail: s.stuck.detail ?? null,
+                  resetsAt: s.stuck.resetsAt ?? null,
+                  window: s.stuck.window ?? null,
+                  account: s.stuck.account ?? null,
+                }
+              : null,
             lastEvent: le ? { event: le.event, at: le.at } : null,
             startedAt: s.startedAt ?? null,
             resultAt: s.resultAt ?? null,
@@ -165,7 +209,7 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
         swarms: (m.swarms ?? []).map((w) => ({
           id: w.id,
           tag: w.tag,
-          creator: w.creator,
+          creator: projectCreator(w.creator),
           queen: w.queen,
           members: w.members.map((x) => ({ sessionId: x.sessionId, role: x.role, n: x.n, handedAt: x.handedAt })),
           status: w.status,
@@ -181,7 +225,7 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
           ownerId: r.ownerId ?? null,
           mode: r.mode ?? null,
           archived: r.archivedAt != null,
-          proposal: r.proposal ?? null,
+          proposal: projectProposal(r.proposal),
           messages: channelCounters(m.compact, r.id),
         })),
       };

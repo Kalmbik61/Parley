@@ -30,6 +30,12 @@ import {
   appRequestFrame,
   connectFrame,
   hostHelloFrame,
+  relayIncomingFrame,
+  controlConfigureParams,
+  controlStatusResult,
+  pairFailedEvent,
+  pairRequestEvent,
+  routeIdSchema,
 } from './index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -228,5 +234,52 @@ console.log('ok');`;
         } else expect(spec).toBe('zod');
       }
     }
+  });
+});
+
+describe('hardened strings and frames (critic A1)', () => {
+  const id16 = b64urlEncode(bytes(16, 3));
+  it('relay address in configure and status is host[:port]', () => {
+    expect(controlConfigureParams.safeParse({ relayUrl: 'relay.example.com:8787' }).success).toBe(true);
+    for (const relayUrl of ['wss://relay.example.com', 'a b', 'relay/path', 'user@host', 'host:99999', 'a'.repeat(65)]) {
+      expect(controlConfigureParams.safeParse({ relayUrl }).success, relayUrl).toBe(false);
+    }
+    const status = { running: true, host: 'online', relay: 'connected', devices: 0, version: '1' };
+    expect(controlStatusResult.safeParse({ ...status, relayUrl: null }).success).toBe(true);
+    expect(controlStatusResult.safeParse({ ...status, relayUrl: 'not a host' }).success).toBe(false);
+  });
+
+  it('phone strings: no control or bidi characters, trimmed', () => {
+    const msg = (name: string) => pairMsg1Payload.safeParse({ v: 1, name, platform: 'ios', app: '1.0.0' });
+    expect(msg('iPhone')).toMatchObject({ success: true });
+    expect(msg('  iPhone  ').data?.name).toBe('iPhone');
+    for (const name of ['a\nb', 'a\u202Eb', 'a\u2028b', 'a\u0000b', '   ']) expect(msg(name).success, JSON.stringify(name)).toBe(false);
+    expect(bridgeMethodSchemas['client.info'].safeParse({ app: 'Parley', version: '1.0.0', platform: 'ios\u200F' }).success).toBe(false);
+    expect(bridgeMethodSchemas['client.info'].safeParse({ app: 'Parley', version: '1.0.0', platform: 'ios' }).success).toBe(true);
+    const req = { requestId: id16, name: 'x\u202E', platform: 'ios', sas: '123456', fingerprint: 'f', expiresAt: 1 };
+    expect(pairRequestEvent.safeParse(req).success).toBe(false);
+  });
+
+  it('incoming: connect needs device, pair has none', () => {
+    const base = { v: 1, t: 'incoming', stream: 'x' };
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'connect', device: id16 }).success).toBe(true);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'connect' }).success).toBe(false);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'pair' }).success).toBe(true);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'pair', device: id16 }).success).toBe(false);
+  });
+
+  it('ids and tokens must be canonical base64url', () => {
+    expect(routeIdSchema.safeParse(id16).success).toBe(true);
+    // 22 знака, но последний несёт ненулевые лишние биты: в байты та же строка не вернётся.
+    expect(routeIdSchema.safeParse('A'.repeat(22)).success).toBe(true);
+    expect(routeIdSchema.safeParse('A'.repeat(21) + 'B').success).toBe(false);
+  });
+
+  it('pairing failure reason and relay lists are checked', () => {
+    expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'bad-psk' }).success).toBe(true);
+    expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'because' }).success).toBe(false);
+    const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
+    expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
+    expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);
   });
 });

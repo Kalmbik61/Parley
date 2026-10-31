@@ -34,8 +34,11 @@ export const room = (id: string, over: Partial<RemoteRoom> = {}): RemoteRoom => 
   ...over,
 });
 
-export const proposal = (id: string, rev: number, text: string, at = '2026-10-31T10:00:00.000Z') => ({
+export const proposal = (id: string, rev: number, text: string, at = '2026-10-31T10:00:00.000Z'): NonNullable<RemoteRoom['proposal']> => ({
   id,
+  kind: 'decision',
+  planId: null,
+  planRev: null,
   from: 's-1',
   text,
   rev,

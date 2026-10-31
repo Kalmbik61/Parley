@@ -28,7 +28,7 @@ const fixture = {
           {
             id: 'r-01', title: 'Room', creator: 's-01', ownerId: 's-01', members: ['s-01'], createdAt: 'x', lead: 's-01', mode: 'free',
             archivedAt: '2026-10-02T00:00:00Z', memberLog: [],
-            proposal: { kind: 'decision', id: 'p-01', from: 's-01', text: 'go', rev: 0, at: 't', plan: { anything: 1 } },
+            proposal: { kind: 'decision', id: 'p-01', from: 's-01', text: 'go', rev: 0, at: 't', plan: { id: 'pl-3', rev: 4, autonomous: { checks: [{ argv: ['rm'], env: { K: 'v' } }] }, log: ['x'] } },
           },
         ],
         plans: [{}], planEffects: [], resources: {},
@@ -56,10 +56,10 @@ const fixture = {
   ],
 } as unknown as WorksSnapshot;
 
-const FORBIDDEN = ['task', 'summary', 'history', 'metrics', 'agentPlan', 'plans', 'planEffects', 'resources', 'branches'];
+const FORBIDDEN = ['task', 'summary', 'history', 'metrics', 'agentPlan', 'plans', 'planEffects', 'resources', 'branches', 'plan', 'env', 'argv', 'autonomous', 'log'];
 const keys = (v: unknown, out: string[] = []): string[] => {
   if (Array.isArray(v)) v.forEach((x) => keys(x, out));
-  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.push(k); if (k !== 'plan') keys(x, out); }
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { out.push(k); keys(x, out); }
   return out;
 };
 
@@ -84,7 +84,7 @@ describe('projectWorksSnapshot', () => {
     expect(w.sessions[1]).toMatchObject({ lifecycle: 'closed', result: 'done', role: null, model: null, stuck: { kind: 'limit' } });
     expect(w.rooms[0]).toEqual({
       id: 'r-01', title: 'Room', members: ['s-01'], lead: 's-01', ownerId: 's-01', mode: 'free', archived: true,
-      proposal: { kind: 'decision', id: 'p-01', from: 's-01', text: 'go', rev: 0, at: 't', plan: { anything: 1 } },
+      proposal: { kind: 'decision', id: 'p-01', from: 's-01', text: 'go', rev: 0, at: 't', planId: 'pl-3', planRev: 4 },
       messages: { total: 3, unread: 1 },
     });
   });
@@ -107,6 +107,25 @@ describe('projectWorksSnapshot', () => {
     expect(w2.rooms[0]).toMatchObject({ messages: null, archived: false, mode: null, lead: null, proposal: null });
     const noRev = projectWorksSnapshot({ entries: [], branches: {} });
     expect(noRev).toEqual({ revision: 0, works: [] });
+  });
+
+  it('copies stuck, swarm creator and proposal by explicit fields; new host fields do not leak', () => {
+    const e = structuredClone(fixture.entries[0]!) as unknown as { map: { sessions: Array<{ stuck?: Record<string, unknown> }>; swarms: Array<{ creator: Record<string, unknown> }>; rooms: Array<{ proposal?: Record<string, unknown> }> } };
+    e.map.sessions[1]!.stuck!.leak = 'x';
+    e.map.swarms[0]!.creator.leak = 'x';
+    e.map.rooms[0]!.proposal!.leak = 'x';
+    const out = projectWorksSnapshot({ entries: [e as never], branches: {} });
+    expect(remoteWorksSnapshotSchema.safeParse(out).success).toBe(true);
+    expect(JSON.stringify(out)).not.toContain('leak');
+    expect(out.works[0]!.rooms[0]!.proposal).toEqual({ id: 'p-01', kind: 'decision', from: 's-01', text: 'go', rev: 0, at: 't', planId: 'pl-3', planRev: 4 });
+  });
+
+  it('proposal without a plan or kind: nulls; planId/planRev fields are used when no embedded plan', () => {
+    const e = structuredClone(fixture.entries[0]!) as unknown as { map: { rooms: Array<{ proposal?: Record<string, unknown> }> } };
+    e.map.rooms[0]!.proposal = { id: 'p-02', from: 's-01', text: 't', rev: 1, at: 'a' };
+    expect(projectWorksSnapshot({ entries: [structuredClone(e) as never], branches: {} }).works[0]!.rooms[0]!.proposal).toMatchObject({ kind: null, planId: null, planRev: null });
+    e.map.rooms[0]!.proposal = { kind: 'completion', id: 'p-03', from: 's-01', text: 't', rev: 2, at: 'a', planId: 'pl-9', planRev: 5 };
+    expect(projectWorksSnapshot({ entries: [e as never], branches: {} }).works[0]!.rooms[0]!.proposal).toMatchObject({ kind: 'completion', planId: 'pl-9', planRev: 5 });
   });
 
   it('reads counters of a version 1 compact', () => {
