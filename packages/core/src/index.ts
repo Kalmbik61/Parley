@@ -547,6 +547,18 @@ export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export { autoSleepVerdict, deliveredSince, inboxFenced } from './work/auto-sleep.js';
 export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict } from './work/auto-sleep.js';
 export {
+  AUTO_MACHINE_SHARE,
+  HUMAN_OVERFLOW,
+  QUEUE_ORDER,
+  compareQueued,
+  launchClassOf,
+  machineAdmission,
+  machineLimit,
+  mergeQueued,
+  queuedAhead,
+} from './work/machine-capacity.js';
+export type { Admission, AdmissionInput, MachineTicket } from './work/machine-capacity.js';
+export {
   START_TOLERANCE_MS,
   checkSession,
   hasLiveProcess,
