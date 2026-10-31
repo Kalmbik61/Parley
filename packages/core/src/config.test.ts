@@ -541,6 +541,28 @@ describe('parseSetting', () => {
     expect(fromEnv.fromEnv).toContain('resumeRate');
   });
 
+  it('parseSetting resumeRate: пустая строка и пробелы — ошибка, а не 0 (Number("") === 0)', () => {
+    for (const blank of ['', '  ']) {
+      expect(parseSetting('resumeRate', blank)).toEqual({
+        error: 'resumeRate: expected an integer from 0 to 60',
+      });
+    }
+  });
+
+  it('PARLEY_RESUME_RATE из пробелов — жалоба, значение по умолчанию, ключ не заперт', async () => {
+    // Number('  ') === 0: без проверки такая переменная молча заперла бы будильник на «выключен».
+    const loaded = await loadConfig(file(), { PARLEY_RESUME_RATE: '  ' });
+    expect(loaded.config.resumeRate).toBe(6);
+    expect(loaded.warning).toBe('PARLEY_RESUME_RATE: expected an integer from 0 to 60');
+    expect(loaded.fromEnv).toEqual([]);
+
+    // Значение из файла пробелы тоже не сбрасывают в ноль.
+    await write({ resumeRate: 3 });
+    const withFile = await loadConfig(file(), { PARLEY_RESUME_RATE: '  ' });
+    expect(withFile.config.resumeRate).toBe(3);
+    expect(withFile.warning).toBe('PARLEY_RESUME_RATE: expected an integer from 0 to 60');
+  });
+
   it('agentSkills — булев ключ: да/нет теми же словами', () => {
     expect(parseSetting('agentSkills', 'false')).toEqual({ value: false });
     expect(parseSetting('agentSkills', '1')).toEqual({ value: true });
