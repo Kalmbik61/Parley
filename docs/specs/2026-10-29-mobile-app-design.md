@@ -377,12 +377,19 @@ Unix-сокет, токен как у хоста; клиент — только 
   (≈ 17,6 КБ сжатых). И начальный снимок (выше), и каждое `works.changed` мост проецирует сам. Склейка и
   сравнение по `revision` остаются. Дельты в этапе A не обязательны — оптимизация по замеру на мобильной сети
   (A18b).
-- **Проекция снимка** (`@parley/protocol/remote`; поля — ровно замеренные в спайке, итог S7 §7.3):
+- **Проекция снимка** (`@parley/protocol/remote`; поля замеренные в спайке, итог S7 §7.3, плюс связи для дерева
+  сайдбара — правки 9):
   - снимок: `revision` и работы в порядке `entries` (порядок сайдбара); `branches` не идут;
-  - работа: `projectPath`, `id`, `title`, `status`, `messages: {direct: {total, unread} | null, inline}`;
-  - сессия: `id`, `label`, `provider`, `model`, `role` (имя), `parent`, `lifecycle`, `result`, `stuck`,
-    `lastEvent {event, at}` (последняя запись `history`), `startedAt`, `resultAt`;
-  - комната: `id`, `title`, `members`, `lead`, `mode`, `archived`, `proposal`, `messages: {total, unread} | null`.
+  - работа: `projectPath`, `id`, `title`, `status`, `messages: {direct: {total, unread} | null, inline}`,
+    `swarms: [{id, tag, creator, queen, members: [{sessionId, role, n, handedAt}], status, createdAt, endedAt}]`;
+  - сессия: `id`, `label`, `provider`, `model`, `role` (имя), `parent`, `createdBy`, `lifecycle`, `result`,
+    `stuck`, `lastEvent {event, at}` (последняя запись `history`), `startedAt`, `resultAt`;
+  - комната: `id`, `title`, `ownerId`, `members`, `lead`, `mode`, `archived`, `proposal`,
+    `messages: {total, unread} | null`.
+
+  `createdBy`, `ownerId` и `swarms` нужны, чтобы экран работы строил то же дерево, что сайдбар окна: подсессии под
+  создателем, комнаты под владельцем, рои под создателем (запрос человека к прототипу D1, 2026-10-31). У роя нет
+  текстов: ни `objective`, ни `result`, ни `failure`.
 
   Текстов задач и итогов сессий, истории, метрик, планов и ресурсов телефон не получает. Новое поле в проекции —
   правка этого списка и `@parley/protocol/remote`, а не протокола хоста.
@@ -1526,3 +1533,10 @@ Wi-Fi и запас фона ждут прогона на iPhone. Протоко
 | 8.2 | Поля проекции — ровно замеренные в спайке; у комнаты есть `title` | 5.5 («Проекция снимка», новый пункт) |
 | 8.3 | Источник векторов `IKpsk0` — 6 сверенных векторов, а не cacophony / snow | 15 |
 | 8.4 | Решение 8: iOS 17+ | шапка; 16 |
+
+**Правки 9 — запрос человека к прототипу D1, 2026-10-31.** Подсессии, подкомнаты и рои показываются под своей
+главной сессией, как в сайдбаре окна.
+
+| № | Запрос | Что изменено |
+|---|---|---|
+| 9.1 | Дерево работы как в сайдбаре: связи `createdBy`, `ownerId`, рои | 5.5 («Проекция снимка»): сессия + `createdBy`, комната + `ownerId`, работа + `swarms` без текстов |

@@ -220,7 +220,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
 
 - **Объём** (спека §5.5 «Проекция снимка», итог S7 §7.3).
   - zod-схема `remoteWorksSnapshotSchema` и тип `RemoteWorksSnapshot`: ровно поля спеки §5.5, у записей
-    `strictObject`; `proposal` комнаты — та же форма, что у хоста.
+    `strictObject`; `proposal` комнаты — та же форма, что у хоста. Связи дерева сайдбара — `createdBy` у сессии,
+    `ownerId` у комнаты, `swarms` у работы без текстов роя (правки 8).
   - Чистая функция `projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapshot` — тип хоста только через
     `import type`. Порядок работ — порядок `entries`; `lastEvent` — последняя запись `history`; `role` — имя;
     `archived` — `archivedAt != null`; счётчики — из `compact.rooms`.
@@ -230,8 +231,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
 - **Приёмка** (кейсы `vitest`):
   1. Фикстура снимка с двумя работами, закрытой и активной сессией, архивной комнатой с `proposal` → проекция
      проходит `remoteWorksSnapshotSchema`, поля и порядок совпадают с ожидаемыми.
-  2. В проекции нет `task`, `summary`, `history`, `metrics`, `agentPlan`, `plans`, `planEffects`, `swarms`,
-     `resources`, `branches` — проверка обходом ключей.
+  2. В проекции нет `task`, `summary`, `history`, `metrics`, `agentPlan`, `plans`, `planEffects`, `resources`,
+     `branches`, а у роёв — `objective`, `result`, `failure` — проверка обходом ключей.
   3. Пустая `history` → `lastEvent: null`; нет `compact` → счётчики `null`; нет `revision` → `revision: 0`.
   4. Импорт `dist/remote/index.js` без `Buffer` и граф импортов — как A1 п. 4 (существующий тест проходит).
 - **Проверка.** `pnpm --filter @parley/protocol build`; `pnpm --filter @parley/protocol test`; `pnpm exec eslint packages/protocol`.
@@ -1140,3 +1141,10 @@ Android не удалён, а отложен (Р3, правки 5). Блок п�
 | № | Решение | Что изменено |
 |---|---|---|
 | 7.1 | Проверки S1–S4 на устройстве — в приёмке A20 | S7 («Итог»); **A20: пп. 16–21 (новые)** и правило их приёмки; итог S7 §8 |
+
+**Правки 8 — запрос человека к прототипу D1, 2026-10-31** (спека §20, правки 9). Экран работы строит то же дерево,
+что сайдбар окна.
+
+| № | Запрос | Что изменено |
+|---|---|---|
+| 8.1 | Подсессии, подкомнаты и рои — под главной сессией | A1b: в проекции `createdBy`, `ownerId`, `swarms` без текстов; приёмка п. 2 |
