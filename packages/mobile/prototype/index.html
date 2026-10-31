@@ -309,6 +309,24 @@ textarea.field { min-height: 160px; resize: none; }
 .tgl { border: 0; background: none; color: var(--label3); width: 44px; height: 44px; margin: -10px -8px -10px 0; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
 .morelink { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--tint); font-weight: 600; }
 .comb { display: block; }
+/* Face ID / passcode (system UI stand-ins) */
+.btn .ic { margin-right: -2px; }
+.faceid { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 160px; height: 160px; border-radius: 30px; z-index: 53;
+  background: rgba(40,40,42,.82); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); color: #fff; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; font-weight: 600; font-size: 15px; animation: pop .25s; }
+.fglyph { display: flex; animation: pulse 1.1s ease-in-out infinite; }
+.fglyph.ok { color: #30D158; animation: none; }
+.authsim { position: absolute; left: 0; right: 0; top: calc(50% + 96px); text-align: center; z-index: 53; }
+.authsim button { font: inherit; font-size: 12px; border: 0; border-radius: 10px; padding: 4px 10px; background: rgba(0,0,0,.55); color: #fff; cursor: pointer; }
+.alert .abtns.vert { flex-direction: column; }
+.alert .abtns.vert button + button { border-left: 0; border-top: .5px solid var(--sep); }
+.passcode { position: absolute; inset: 0; z-index: 55; background: #121214; color: #fff; display: flex; flex-direction: column; align-items: center; }
+.pdots { display: flex; gap: 16px; margin: 26px 0 40px; }
+.pdot2 { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid #fff; }
+.pdot2.on { background: #fff; }
+.pkeys { display: grid; grid-template-columns: repeat(3, 78px); gap: 16px 26px; }
+.pkey { width: 78px; height: 78px; border-radius: 50%; border: 0; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: 32px; cursor: pointer; }
+.pcancel { margin-top: 28px; border: 0; background: none; color: #fff; font: inherit; font-size: 17px; cursor: pointer; }
 .sline { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .sdots { display: inline-flex; gap: 3px; align-items: center; }
 .sdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--label2); box-sizing: border-box; }
@@ -394,6 +412,8 @@ const P = {
   signal: '<path d="M4 18v-2M9 18v-5M14 18V9M19 18V5" stroke-width="2.6"/>',
   zzz: '<path d="M4 6h5l-5 6h5M13 11h4l-4 5h4"/>',
   hash: '<path d="M10 3 8 21M16 3l-2 18M4.5 8.5h16M3.5 15.5h16"/>',
+  faceid: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12.5 9v4.2h-1.2M9.3 16.2a4.2 4.2 0 0 0 5.4 0"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   teamDown: '<path d="M6 4v8a4 4 0 0 0 4 4h9"/><path d="m15 12 4 4-4 4"/>',
   teamUp: '<path d="M18 20v-8a4 4 0 0 0-4-4H6"/><path d="m10 4-4 4 4 4"/>',
 };
@@ -407,7 +427,7 @@ const SF = { tray: 'tray.fill', stack: 'square.stack.3d.up.fill', gear: 'gearsha
   triangle: 'exclamationmark.triangle', shield: 'exclamationmark.shield', octagon: 'xmark.octagon', clock: 'clock.badge.exclamationmark',
   question: 'questionmark.circle', photo: 'photo', flashlight: 'flashlight.off.fill', videoSlash: 'video.slash',
   uturn: 'arrow.uturn.backward.circle', ellipsis: 'ellipsis', appDown: 'arrow.down.app', conflict: 'exclamationmark.arrow.triangle.2.circlepath',
-  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz', hash: 'number',
+  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz', hash: 'number', faceid: 'faceid', lock: 'lock.fill',
   teamDown: 'arrow.turn.down.right', teamUp: 'arrow.turn.left.up' };
 function ic(name, size, extra) {
   const s = size || 20;
@@ -504,12 +524,31 @@ const S = {
   theme: 'light', conn: 'ready', scenario: 'normal', fs: 1, rm: false, hostCount: 2, cur: 0,
   flow: null, tab: 'inbox', stacks: { inbox: [{ s: 'inbox' }], works: [{ s: 'works' }], settings: [{ s: 'settings' }] },
   gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, open: {}, hier: 'cards',
-  sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120,
+  sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120, faceIdReq: 'on', bio: 'faceid', nextAuth: 'success', auth: null,
   pairName: 'iPhone 16 Pro', retryIn: 12, scrollTop: 0,
 };
 const timers = [];
 function later(ms, fn) { const t = setTimeout(function () { fn(); render(); }, ms); timers.push(t); return t; }
 function clearFlowTimers() { while (timers.length) clearTimeout(timers.pop()); }
+/* Face ID before an approving action (spec 11.4, decision 6): Allow (incl. Always and inline Allow) and Accept.
+   Deny, Return for rework, answers and viewing never ask. Not enrolled → device passcode. Cancel → nothing is sent. */
+function guarded() { return S.faceIdReq === 'on'; }
+function approveGlyph() { return guarded() ? ic(S.bio === 'faceid' ? 'faceid' : 'lock', 18) : ''; }
+function guardApproval(reason, proceed) {
+  if (!guarded()) { proceed(); return; }
+  S.auth = { stage: S.bio === 'faceid' ? 'scan' : 'passcode', reason: reason, proceed: proceed, digits: 0 };
+  if (S.auth.stage === 'scan') runFaceId();
+}
+function runFaceId() {
+  const auth = S.auth;
+  later(900, function () {
+    if (S.auth !== auth) return;
+    if (S.nextAuth === 'success') { auth.stage = 'ok'; later(350, function () { if (S.auth === auth) { S.auth = null; auth.proceed(); } }); }
+    else if (S.nextAuth === 'cancel') cancelAuth();
+    else auth.stage = 'failed';
+  });
+}
+function cancelAuth() { S.auth = null; toast((S.bio === 'faceid' ? 'Face ID' : 'Passcode') + ' cancelled — nothing was sent', S.bio === 'faceid' ? 'faceid' : 'lock'); }
 function haptic(kind) { S.haptic = kind; later(1200, function () { if (S.haptic === kind) S.haptic = null; }); }
 function toast(text, icon) { S.toast = { text: text, icon: icon || null }; later(2000, function () { S.toast = null; }); }
 
@@ -698,7 +737,7 @@ function inboxRow(it) {
     const note = itemNote(it.id);
     if (!note) {
       if (c.kind === 'permission') acts = '<div class="acts"><button class="btn sm" data-act="decide" data-id="' + it.id + '" data-v="deny"' + dis() + (st === 'sending' ? ' disabled' : '') + '>' + (S.sendingV === it.id + 'deny' ? '<span class="spin"></span>' : 'Deny') +
-        '</button><button class="btn sm pri" data-act="decide" data-id="' + it.id + '" data-v="allow"' + dis() + (st === 'sending' ? ' disabled' : '') + '>' + (S.sendingV === it.id + 'allow' ? '<span class="spin"></span>' : 'Allow') + '</button></div>';
+        '</button><button class="btn sm pri" data-act="decide" data-id="' + it.id + '" data-v="allow"' + dis() + (st === 'sending' ? ' disabled' : '') + '>' + (S.sendingV === it.id + 'allow' ? '<span class="spin"></span>' : approveGlyph() + 'Allow') + '</button></div>';
       else if (c.kind === 'question') acts = '<div class="acts right"><span class="link t-sub">Answer' + ic('chevR', 16) + '</span></div>';
       else if (c.kind === 'plan') acts = '<div class="acts right"><span class="link t-sub">Review' + ic('chevR', 16) + '</span></div>';
       else acts = '<div class="acts right"><span class="t-foot l2">' + (c.kind === 'limit' ? 'Nothing to answer' : 'Answer at your Mac') + '</span></div>';
@@ -1640,9 +1679,9 @@ function sessionScreen(r) {
   const note = id ? itemNote(id) : '';
   if (c && c.kind === 'permission') {
     body += permissionBlock(id, c);
-    if (!note) bottom = pausedNote() + (c.suggest ? '<div class="row"><button class="btn" data-act="decide" data-id="' + id + '" data-v="always"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'always' ? '<span class="spin"></span>' : "Allow and don't ask again") + '</button></div><div class="rule t-cap l2">Adds the rule: ' + h(c.suggest) + '</div>' : '') +
+    if (!note) bottom = pausedNote() + (c.suggest ? '<div class="row"><button class="btn" data-act="decide" data-id="' + id + '" data-v="always"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'always' ? '<span class="spin"></span>' : approveGlyph() + "Allow and don't ask again") + '</button></div><div class="rule t-cap l2">Adds the rule: ' + h(c.suggest) + '</div>' : '') +
       '<div class="row"><button class="btn" data-act="decide" data-id="' + id + '" data-v="deny"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'deny' ? '<span class="spin"></span>' : 'Deny') + '</button>' +
-      '<button class="btn pri" data-act="decide" data-id="' + id + '" data-v="allow"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'allow' ? '<span class="spin"></span>' : 'Allow') + '</button></div>';
+      '<button class="btn pri" data-act="decide" data-id="' + id + '" data-v="allow"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === id + 'allow' ? '<span class="spin"></span>' : approveGlyph() + 'Allow') + '</button></div>';
   } else if (c && c.kind === 'question') {
     body += questionBlock(id, c);
     if (!note) bottom = pausedNote() + '<div class="row"><button class="btn pri" data-act="decide" data-id="' + id + '" data-v="answer"' + (ready() && questionComplete(id, c) && !busy ? '' : ' disabled') + '>' + (S.sendingV === id + 'answer' ? '<span class="spin"></span>' : 'Send answer') + '</button></div>';
@@ -1676,7 +1715,7 @@ function decisionScreen(r) {
   body += '<div class="card static">' + md(ds.conflict ? d.text3 : d.text) + '</div>';
   const busy = S.sendingV && S.sendingV.indexOf(r.id) === 0;
   const bottom = pausedNote() + '<div class="row"><button class="btn" data-act="returnSheet" data-id="' + r.id + '"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === r.id + 'return' ? '<span class="spin"></span>' : 'Return for rework') + '</button>' +
-    '<button class="btn pri" data-act="accept" data-id="' + r.id + '"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === r.id + 'accept' ? '<span class="spin"></span>' : 'Accept') + '</button></div>';
+    '<button class="btn pri" data-act="accept" data-id="' + r.id + '"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === r.id + 'accept' ? '<span class="spin"></span>' : approveGlyph() + 'Accept') + '</button></div>';
   return { body: body, bottom: bottom };
 }
 
@@ -1708,6 +1747,12 @@ function settingsScreen() {
       '<div class="grow"><div class="t-body ellips">' + h(hh.name) + '</div><div class="t-foot l2">' + st + '</div></div>' + (cur ? '<span style="color:var(--tint)">' + ic('check', 20) + '</span>' : '') +
       '<span class="chev" data-act="openHost" data-i="' + i + '" aria-label="Details">' + ic('chevR', 16) + '</span></div>';
   }).join('') + '<div class="cell ind" data-act="pairAnother" role="button"><span style="color:var(--tint)">' + ic('plus', 24) + '</span><div class="grow t-body" style="color:var(--tint)">Pair another Mac</div></div></div>';
+  const bioName = S.bio === 'faceid' ? 'Face ID' : 'passcode';
+  body += sec('Security') + '<div class="group"><div class="cell" data-act="toggleFaceId" role="switch" aria-checked="' + (S.faceIdReq === 'on') + '">' +
+    '<span style="color:var(--tint);display:flex">' + ic(S.bio === 'faceid' ? 'faceid' : 'lock', 22) + '</span><div class="grow"><div class="t-body">Require Face ID to allow</div>' +
+    (S.bio === 'faceid' ? '' : '<div class="t-foot l2">Face ID isn\'t set up — your passcode is used</div>') + '</div>' + toggle(S.faceIdReq === 'on') + '</div></div>' +
+    '<div class="t-foot l2" style="margin:8px 32px">' + (S.faceIdReq === 'on' ? 'Parley asks for ' + bioName + ' before Allow and Accept. Deny, Return for rework, answers and viewing never ask.' :
+      'Allow and Accept are sent without ' + bioName + '. Anyone holding this unlocked iPhone can approve.') + '</div>';
   body += sec('Notifications') + '<div class="group">';
   if (S.notif === 'unavailable') body += '<div class="cell static"><div class="grow t-body l2">Notifications unavailable on this build</div></div>';
   else if (S.notif === 'denied') body += '<div class="cell static"><div class="grow"><div class="t-body">Notifications</div><div class="t-foot l2">Turned off in iOS Settings</div></div><button class="btn sm" style="flex:none" data-act="noop">Open Settings</button></div>';
@@ -1803,6 +1848,24 @@ function overlays() {
     o += '<div class="dim"></div><div class="alert" role="alertdialog"><div class="ab"><div class="t-head">' + h(a.title) + '</div><div class="t-foot" style="margin-top:4px">' + h(a.text) + '</div></div>' +
       '<div class="abtns"><button data-act="alertCancel">Cancel</button><button class="' + (a.destr ? 'destr' : '') + '" data-act="alertOk" style="font-weight:600">' + h(a.ok) + '</button></div></div>';
   }
+  if (S.auth) {
+    const au = S.auth;
+    const what = au.reason === 'accept' ? 'Confirm to accept the decision' : au.reason === 'settings' ? 'Confirm to turn off Face ID for approvals' : 'Confirm to allow';
+    if (au.stage === 'scan' || au.stage === 'ok') {
+      o += '<div class="dim" style="background:rgba(0,0,0,.12)"></div><div class="faceid" role="alert" aria-label="Face ID">' +
+        '<span class="fglyph' + (au.stage === 'ok' ? ' ok' : '') + '">' + ic(au.stage === 'ok' ? 'checkCircle' : 'faceid', 64) + '</span><div style="margin-top:10px">Face ID</div></div>' +
+        '<div class="authsim"><button data-act="authCancel">Cancel (simulate)</button></div>';
+    } else if (au.stage === 'failed') {
+      o += '<div class="dim"></div><div class="alert" role="alertdialog"><div class="ab"><div class="t-head">Face Not Recognized</div><div class="t-foot" style="margin-top:4px">' + h(what) + '</div></div>' +
+        '<div class="abtns vert"><button data-act="authRetry">Try Face ID Again</button><button data-act="authPasscode">Enter Passcode</button><button data-act="authCancel" style="font-weight:600">Cancel</button></div></div>';
+    } else if (au.stage === 'passcode') {
+      let dots = ''; for (let i = 0; i < 6; i++) dots += '<i class="pdot2' + (i < au.digits ? ' on' : '') + '"></i>';
+      let keys = ''; ['1','2','3','4','5','6','7','8','9','','0',''].forEach(function (k) { keys += k ? '<button class="pkey" data-act="pin">' + k + '</button>' : '<span></span>'; });
+      o += '<div class="passcode" role="dialog" aria-label="Enter iPhone Passcode"><div class="t-head" style="margin-top:120px">Enter iPhone Passcode</div>' +
+        '<div class="t-foot" style="opacity:.75;margin-top:6px">“Parley” — ' + h(what) + '</div><div class="pdots">' + dots + '</div><div class="pkeys">' + keys + '</div>' +
+        '<button class="pcancel" data-act="authCancel">Cancel</button></div>';
+    }
+  }
   if (S.toast) o += '<div class="toast" role="status">' + (S.toast.icon ? ic(S.toast.icon, 18) : '') + h(S.toast.text) + '</div>';
   if (S.haptic) o += '<div class="haptic" title="expo-haptics">haptic: ' + S.haptic + '</div>';
   return o;
@@ -1873,8 +1936,10 @@ function act(el, e) {
     case 'flowcancel': clearFlowTimers(); S.flow = S.hostCount === 0 ? 'welcome' : null; break;
     case 'decide': {
       if (!ready()) return;
-      const v = el.dataset.v; S.itemState[id] = 'sending'; S.sendingV = id + v;
-      later(700, function () { finishDecision(id, v); }); break;
+      const v = el.dataset.v;
+      const send = function () { S.itemState[id] = 'sending'; S.sendingV = id + v; later(700, function () { finishDecision(id, v); }); };
+      if (v === 'allow' || v === 'always') guardApproval('allow', send); else send();
+      break;
     }
     case 'pick': {
       const q = +el.dataset.q, l = el.dataset.l, c = CARDS[id];
@@ -1887,6 +1952,7 @@ function act(el, e) {
       if (!ready()) return;
       const ds = S.dec[id]; const which = a === 'accept' ? 'accept' : 'return';
       if (a === 'sendReturn') { const t = document.getElementById('retNote'); ds.note = t ? t.value : ds.note; }
+      const sendIt = function () {
       S.sendingV = id + which;
       later(800, function () {
         S.sendingV = null; S.sheet = null;
@@ -1895,8 +1961,20 @@ function act(el, e) {
         else if (S.next === 'lost') { S.conn = 'updating'; later(1600, function () { S.conn = 'ready'; ds.unconfirmed = true; S.itemState.unconfirmedDec = 'unconfirmed'; haptic('warning'); }); return; }
         else { ds.result = which === 'accept' ? 'accepted' : 'returned'; haptic(which === 'accept' ? 'success' : 'warning'); }
         later(1200, function () { S.gone[id] = true; if (topRoute().s === 'decision') pop(); });
-      }); break;
+      });
+      };
+      if (which === 'accept') guardApproval('accept', sendIt); else sendIt();
+      break;
     }
+    case 'authCancel': cancelAuth(); break;
+    case 'authRetry': if (S.auth) { S.auth.stage = 'scan'; runFaceId(); } break;
+    case 'authPasscode': if (S.auth) { S.auth.stage = 'passcode'; S.auth.digits = 0; } break;
+    case 'pin': if (S.auth && S.auth.stage === 'passcode') { S.auth.digits += 1; if (S.auth.digits >= 6) { const auth = S.auth; later(250, function () { if (S.auth === auth) { S.auth = null; auth.proceed(); } }); } } break;
+    case 'toggleFaceId':
+      // Turning the guard off is itself guarded: a thief must not switch it off first.
+      if (S.faceIdReq === 'on') guardApproval('settings', function () { S.faceIdReq = 'off'; });
+      else S.faceIdReq = 'on';
+      break;
     case 'returnSheet': S.sheet = { kind: 'return', id: id }; break;
     case 'renameSheet': S.sheet = { kind: 'rename', i: +el.dataset.i }; break;
     case 'saveRename': { const f = document.getElementById('renameField'); if (f && f.value.trim()) HOSTS[+el.dataset.i].name = f.value.trim(); S.sheet = null; break; }
@@ -1981,6 +2059,10 @@ const JUMPS = [
   ['Settings: Host', function () { go('settings', [{ s: 'host', i: 0 }]); }],
   ['Settings: Remove alert', function () { go('settings', [{ s: 'host', i: 0 }]); S.alert = { title: 'Remove ' + HOSTS[0].name + '?', text: 'The keys on this phone are erased. Your Mac keeps listing this phone until you revoke it there.', ok: 'Remove', destr: true, i: 0 }; }],
   ['Settings: Diagnostics', function () { go('settings', [{ s: 'diag' }]); }],
+  ['Face ID: Allow on Session (prompt)', function () { go('inbox', [{ s: 'session', id: 's-176' }]); S.nextAuth = 'success'; S.auth = { stage: 'scan', reason: 'allow', proceed: function () {}, digits: 0 }; }],
+  ['Face ID: not recognized (alert)', function () { go('inbox', [{ s: 'session', id: 's-176' }]); S.auth = { stage: 'failed', reason: 'allow', proceed: function () {}, digits: 0 }; }],
+  ['Face ID: passcode fallback', function () { go('inbox', [{ s: 'decision', id: 'd1' }]); S.auth = { stage: 'passcode', reason: 'accept', proceed: function () {}, digits: 2 }; }],
+  ['Settings: Require Face ID to allow', function () { go('settings', []); }],
   ['Settings: Choose a Mac menu', function () { go('inbox', []); S.sheet = { kind: 'hosts' }; }],
 ];
 function go(tab, rest) { S.flow = null; if (S.hostCount === 0) S.hostCount = 1; S.tab = tab; S.stacks[tab] = [S.stacks[tab][0]].concat(rest); S.sheet = null; S.alert = null; S.scrollTop = 0; }
@@ -2001,6 +2083,9 @@ function renderPanel() {
     '<label class="flag"><input type="checkbox" id="pRm"' + (S.rm ? ' checked' : '') + '> Reduce Motion</label>' +
     '<label>Work screen hierarchy</label>' + seg('hier', [['cards', 'Team cards'], ['lines', 'Tree lines only']], S.hier) +
     '<label>Paired Macs</label>' + seg('hostCount', [[1, 'One'], [2, 'Two']], S.hostCount) +
+    '<label>Approvals (decision 6)</label>' + seg('bio', [['faceid', 'Face ID'], ['none', 'Not enrolled → passcode']], S.bio) +
+    '<div style="height:6px"></div>' + seg('nextAuth', [['success', 'Next: success'], ['cancel', 'Cancel'], ['fail', 'Fail']], S.nextAuth) +
+    '<div style="height:6px"></div>' + seg('faceIdReq', [['on', 'Require on'], ['off', 'Off']], S.faceIdReq) +
     '<label>Notifications</label>' + seg('notif', [['on', 'On'], ['denied', 'Off in iOS'], ['unavailable', 'No push build']], S.notif) +
     '<label for="pNext">Next answer result</label><select id="pNext">' + opt([['applied', 'applied: true'], ['already', 'applied: false (already answered)'], ['lost', 'connection_lost → re-read'], ['conflict', 'conflict (decisions only)']], S.next) + '</select>' +
     '<button id="pAnsweredMac">Simulate: answered at your Mac</button>' +

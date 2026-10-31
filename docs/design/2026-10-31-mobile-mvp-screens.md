@@ -334,7 +334,8 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 - «Always» в Inbox нет никогда: только на экране сессии, где видно всё правило (§11.2 п. 4).
 - Под работой у карточки сессии — строка происхождения (9): `↰ Greta › # iOS app: stage A`, `footnote`
   `secondaryLabel`, без ссылок (тап по карточке и так ведёт в сессию). У главной сессии строки нет.
-- Allow в строке — для быстрых разрешений; полный вход карточки и последний ответ модели — на Session.
+- Allow в строке — для быстрых разрешений; полный вход карточки и последний ответ модели — на Session. Allow в строке —
+  под Face ID, как на экране сессии (раздел 12a); Deny — без запроса.
 - Свайп строки влево — нет (случайный свайп в списке решений опасен).
 - Контекстное меню (долгое нажатие): Open session, Open work, Copy command (только `run`).
 
@@ -630,6 +631,8 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   (`bordered`), **Allow** (`borderedProminent`), над ними — **Allow and don't ask again** (`bordered`, во всю
   ширину) **только** при непустом `permission_suggestions` (приёмка A15, кейс); под ней мелко «Adds the rule:
   Bash(pnpm lint:*)». Перед «Always» нет алерта: правило видно на кнопке.
+  **Allow** и **Allow and don't ask again** — под Face ID (раздел 12a): на кнопке слева значок `faceid` (или
+  `lock.fill`, когда биометрия не настроена), пока настройка включена. **Deny** — без запроса.
 - **Вопрос.** Для каждого вопроса — `header` (капсула), текст, варианты как строки сгруппированного списка с
   описанием второй строкой. Один выбор — галочка `checkmark`; `multiSelect` — `checkmark.circle.fill` /
   `circle`. Поле «Other» — свой ответ (≤ предела `FEED_DECISION_ANSWER_LIMIT`). Кнопка **Send answer** внизу
@@ -668,6 +671,8 @@ Markdown без HTML; удалённые картинки не грузятся 
 | Нет ждущих карточек | статус-капсула + Last reply; нижней панели нет |
 | Ждёт ответа (разрешение / вопрос / план) | карточка + нижняя панель действий |
 | Без карточки при `blocked` | «Answer at your Mac» |
+| Face ID (Allow, Always) | системный запрос Face ID поверх экрана; кнопки выключены, вызов ещё не ушёл (12a) |
+| Face ID отменён или не прошёл | запроса нет, карточка на месте, кнопки снова доступны; тост «Face ID cancelled — nothing was sent» |
 | Отправка | нажатая кнопка — спиннер, остальные выключены |
 | `applied: true` | haptic, карточка сворачивается, капсула меняется на **Working** при следующем перечитывании |
 | `applied: false` | «Already answered at your Mac» (капсула-тост 2 с), карточка уходит |
@@ -713,12 +718,14 @@ Markdown без HTML; удалённые картинки не грузятся 
 ```
 
 - Оба действия уходят с `rev` показанной ревизии (приёмка A16, кейс).
+- **Accept** — под Face ID (раздел 12a), на кнопке значок `faceid`; **Return for rework** — без запроса.
 - Haptic: Accept → `notification(success)`, Return → `notification(warning)` после ответа хоста.
 
 | Состояние | Что видно |
 |---|---|
 | Загрузка | шапка, скелет текста |
 | Ждёт ответа | текст + две кнопки |
+| Face ID (Accept) | системный запрос поверх экрана; ничего не отправлено. Отмена — решение на месте, тост «Face ID cancelled — nothing was sent» |
 | Отправка | спиннер в нажатой кнопке, вторая выключена; sheet закрывается только по итогу |
 | `applied` | haptic, экран: `checkmark.seal.fill` «Accepted» / `arrow.uturn.backward.circle` «Returned for rework», через 1 с — назад |
 | **`conflict`** | баннер сверху `exclamationmark.arrow.triangle.2.circlepath` «The lead changed the decision — review the new text», новый текст, ревизия «rev 3» подсвечена; прежнее нажатие **не применяется**, кнопки снова доступны; заметка Return, если была, сохраняется в sheet. Вызов не повторяется сам |
@@ -774,6 +781,11 @@ Inbox (с числом непрочитанных) и строки писем в
 │ │ Not connected             │ │
 │ ├───────────────────────────┤ │
 │ │ [plus] Pair another Mac   │ │
+│ └───────────────────────────┘ │
+│ SECURITY                      │
+│ ┌───────────────────────────┐ │
+│ │ [faceid] Require Face ID  │ │  ← по умолчанию включено (12a)
+│ │ to allow            [on]  │ │
 │ └───────────────────────────┘ │
 │ NOTIFICATIONS                 │
 │ ┌───────────────────────────┐ │
@@ -835,6 +847,18 @@ Haptic `notification(error)` один раз при появлении.
   Mac», «This phone needs a newer Parley on your Mac.»
 - Оба — `blocked`: прошлого снимка не показываем, решения невозможны.
 
+### 11.6 Безопасность: «Require Face ID to allow»
+
+Секция **Security** над уведомлениями, одна строка:
+- `faceid` **Require Face ID to allow** — переключатель, **по умолчанию включён** (решение 6). На iPhone с Touch ID —
+  «Require Touch ID to allow» и `touchid` (`supportedAuthenticationTypesAsync`). Биометрия не настроена — подпись
+  второй строкой «Face ID isn't set up — your passcode is used», значок `lock.fill`.
+- Подпись под секцией: включено — «Parley asks for Face ID before Allow and Accept. Deny, Return for rework, answers
+  and viewing never ask.»; выключено — «Allow and Accept are sent without Face ID. Anyone holding this unlocked
+  iPhone can approve.»
+- **Выключение — само под Face ID**: иначе чужие руки сначала выключат защиту, потом одобрят. Включение — сразу.
+- Настройка локальная (Keychain/SecureStore приложения), мост и хост о ней не знают.
+
 ---
 
 ## 12. Push (A16, §9)
@@ -849,6 +873,46 @@ Haptic `notification(error)` один раз при появлении.
 
 ---
 
+## 12a. Face ID на одобрение (решение 6, спека §11.4)
+
+Защита от чужих рук на разблокированном телефоне, а не граница доступа: проверка только на телефоне, мост и хост о ней
+не знают.
+
+| Действие | Face ID |
+|---|---|
+| Allow разрешения — на экране сессии и прямо в Inbox | да |
+| Allow and don't ask again («Always») | да |
+| Accept решения комнаты (`rooms.resolveProposal` с `accept`) | да |
+| Выключить «Require Face ID to allow» в Settings | да |
+| Deny, Return for rework, ответ на вопрос, выбор плана, просмотр | нет |
+| Выбор плана `auto-accept` | нет — открытый вопрос В13 |
+
+**Поток.**
+1. Тап по Allow / Accept → кнопки выключаются, вызов **ещё не уходит**.
+2. `LocalAuthentication.authenticateAsync({ promptMessage, disableDeviceFallback: false })`. Системный запрос
+   Face ID поверх экрана — своего оформления нет. `promptMessage` (виден при коде и Touch ID): «Confirm to allow» /
+   «Confirm to accept the decision» / «Confirm to turn off Face ID for approvals».
+3. Успех → вызов уходит; дальше всё как раньше: спиннер, итог `applied` / `already answered` / `conflict` / `lost`.
+4. **Отмена** (свайп, «Cancel», уход из приложения) → вызова нет, карточка или решение на месте, кнопки снова
+   доступны; тост «Face ID cancelled — nothing was sent» (2 с). Haptic приложения нет — системный уже был.
+5. **Лицо не узнано** → системный алерт «Face Not Recognized»: **Try Face ID Again** / **Enter Passcode** /
+   **Cancel**. Код устройства — системный экран «Enter iPhone Passcode» с той же причиной. Успех кода = успех Face ID.
+6. **Биометрия не настроена** (`isEnrolledAsync` → false) → сразу системный экран кода устройства.
+7. Между запросом и ответом карточку могли закрыть на Маке: перечитывание 10.3 продолжается; если карточки нет —
+   после успеха Face ID вызов не уходит, показывается «Answered at your Mac».
+
+**Детали.**
+- `NSFaceIDUsageDescription`: «Parley uses Face ID to confirm approvals.» Первый запрос iOS — системное
+  разрешение на Face ID; отказ → дальше только код устройства.
+- Пока системный запрос на экране, приложение в `AppState: inactive`, не `background`: супервизор подключения (§10.2)
+  не считает это уходом в фон и не рвёт соединение.
+- Соединения нет (плашка «Updating…») — кнопки выключены, Face ID не спрашивается: спрашивать ради вызова, который не
+  уйдёт, нельзя.
+- Face ID спрашивается на каждое одобрение, без «окна доверия» на N секунд (`LAContext.touchIDAuthenticationAllowableReuseDuration` = 0):
+  иначе второе одобрение после первого прошло бы без проверки.
+
+---
+
 ## 13. Прототип
 
 `packages/mobile/prototype/index.html` — один файл, инлайн CSS и JS, без сборки и без сети. Открывается напрямую
@@ -856,6 +920,7 @@ Haptic `notification(error)` один раз при появлении.
 
 - Рамка iPhone 393×852 pt, остров, индикатор Home.
 - Панель справа: тема (Light / Dark / System), вид команд на экране работы (Team cards / Tree lines only, В10),
+  одобрения под Face ID (Face ID / не настроен → код; следующий исход: успех / отмена / сбой; защита вкл / выкл),
   состояние подключения (все строки раздела 4), сценарий данных
   (обычный / пусто / загрузка / ошибка), размер шрифта (Default / XL — проверка Dynamic Type), Reduce Motion,
   кнопки «Simulate: answered at Mac», «Simulate: conflict», «Simulate: lost», переход к любому экрану.
@@ -890,8 +955,8 @@ Haptic `notification(error)` один раз при появлении.
 - **В8. Акцент.** Терракотовый акцент Parley (`#C67139`) на белом даёт 3,6:1 — мало для текста. Макеты берут
   затемнённый `#A8531E` (5,4:1) в светлой теме и `#E08A52` в тёмной. Подходит ли, или акцентом iOS-приложения
   оставить системный синий?
-- **В9. Биометрия.** Решение 6 (§16) — по умолчанию выключена в этапе A; макеты без Face ID. Если включить —
-  перед Allow / Accept системный запрос Face ID, кнопка показывает `faceid`.
+- **В9. Биометрия** — решено человеком (решение 6, 2026-10-31): Face ID перед Allow и Accept, запасной путь — код
+  устройства, настройка «Require Face ID to allow» включена по умолчанию (раздел 12a).
 - **В10. Вид команд на экране работы.** Макет по умолчанию — **Team cards**: карточка на главную сессию, шапка с
   аватаром, линии и контейнеры комнат и роёв. Альтернатива **Tree lines only** — то же одним списком, как карточка
   сайдбара (переключатель в прототипе). По умолчанию — Team cards: граница команды видна без чтения линий.
@@ -900,6 +965,13 @@ Haptic `notification(error)` один раз при появлении.
   этап B (статус и так говорит `failed` / `cancelled`).
 - **В12. Иконка роя в React Native.** Порт `swarm-comb.ts` требует рисования по пикселям: `react-native-skia`
   (новая зависимость, шейдер SkSL) или статичные кадры без анимации. Решение — за A15 и ведущим.
+- **В13. Face ID на выбор плана `auto-accept`.** «Approve, auto-accept edits» разрешает агенту править файлы без
+  дальнейших вопросов — по смыслу это одобрение. По решению 6 выбор плана идёт без Face ID. Добавить ли его в список
+  12a? Предложение: да, только для `auto-accept`; «approve each edit» — без запроса.
+- **В14. Телефон без кода-пароля.** Если на iPhone нет ни Face ID, ни кода, `authenticateAsync` не может ничего
+  спросить (`passcode_not_set`). Варианты: (а) одобрения идут без проверки, в Settings предупреждение «This iPhone has
+  no passcode — approvals are not protected»; (б) Allow и Accept недоступны, пока не задан код. Предложение — (а):
+  без кода телефон и так открыт любому.
 
 ---
 
@@ -945,6 +1017,8 @@ Haptic `notification(error)` один раз при появлении.
 | Paired | `checkmark.circle.fill` | multicolor, `symbolEffect(.drawOn)` на iOS 26, иначе `.bounce` |
 | Отказ / таймаут | `xmark.octagon` / `clock.badge.exclamationmark` | regular |
 | Уведомления | `bell.badge` | multicolor |
+| Face ID на кнопках Allow / Accept и в Settings | `faceid` (на Touch ID — `touchid`) | regular |
+| Код устройства (биометрия не настроена) | `lock.fill` | regular |
 | Updating | `arrow.triangle.2.circlepath` | `symbolEffect(.rotate)` |
 | Нет сети | `wifi.slash` | regular |
 | Relay недоступен | `antenna.radiowaves.left.and.right.slash` | regular |
@@ -972,6 +1046,8 @@ Haptic `notification(error)` один раз при появлении.
 | Новая карточка на открытом экране сессии | `selectionAsync()` | лёгкое «появилось» |
 | Remove хоста подтверждён | `notificationAsync(Warning)` | разрушительное действие |
 | Нажатие кнопки решения (до ответа) | нет | haptic — на итог, не на нажатие, иначе ложное «принято» |
+| Запрос Face ID, лицо не узнано | нет своего | системный запрос даёт свой отклик; второй сбивал бы |
+| Face ID отменён | нет | ничего не произошло — и отклика нет |
 | Pull-to-refresh | системный (`refreshControl`) | не дублируем |
 
 Haptics только на переднем плане и при включённой системной настройке (expo-haptics её уважает).
@@ -1061,6 +1137,8 @@ SF Pro через системный шрифт, только стили Dynamic
 - Код SAS — по цифрам; таймер — `accessibilityLabel` «1 minute 54 seconds left», обновление не объявляется.
 - Итоги решений («Allowed», «Already answered at your Mac») объявляются `announceForAccessibility`.
 - Выключенные кнопки — `accessibilityState.disabled` и подсказка «Reconnecting — actions are paused».
+- Кнопки под Face ID: `accessibilityLabel` «Allow», `accessibilityHint` «Requires Face ID»; отмена Face ID
+  объявляется «Face ID cancelled, nothing was sent».
 - Заголовки секций — `accessibilityRole="header"`, чтобы ротор «Заголовки» работал.
 - Увеличенный контраст (`Increase Contrast`): системные цвета подстраиваются сами; у `tint` — вариант `#8C4519` /
   `#F09A62`.
@@ -1072,6 +1150,6 @@ SF Pro через системный шрифт, только стили Dynamic
 | Задача | Разделы |
 |---|---|
 | A13 | 1, 3 (вкладки, стек), 4 (компонент плашки), 17 (токены темы), 18 |
-| A14 | 4, 6, 11 |
-| A15 | 7, 8, 9, 16 |
-| A16 | 10, 11.2, 12 |
+| A14 | 4, 6, 11 (в том числе 11.6) |
+| A15 | 7, 8, 9, 12a, 16 |
+| A16 | 10, 11.2, 12, 12a |
