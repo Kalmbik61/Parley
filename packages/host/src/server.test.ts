@@ -921,7 +921,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         ['context.letter', { projectPath: '/p', workId: 'w-01', id: 'm-1' }],
         ['context.text', { projectPath: '/p', workId: 'w-01', ref: { kind: 'goal' } }],
         ['roles.list', { projectPath: '/p' }],
-        ['feed.snapshot', { ref }],
+        ['feed.snapshot', { ref, scope: 'attention' }],
         ['feed.decide', { ref, cardId: 'c-1', decision: { kind: 'permission', behavior: 'deny' } }],
         ['rooms.resolveProposal', { projectPath: '/p', workId: 'w-01', roomId: 'r-1', proposalId: 'm-1', action: 'accept', rev: 0 }],
       ];
@@ -993,7 +993,14 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         }
         expect((await answer(remote, ++id, 'roles.list', { projectPath: '/p', ref: { projectPath: '/other', workId: 'w-01', sessionId: 's-01' } })).error)
           .toMatchObject({ code: 'bad_request' });
-        expect((await answer(remote, ++id, 'feed.snapshot', { ref: { ...ref, workId: 'w-02' } })).error).toMatchObject({ code: 'bad_request' });
+        expect((await answer(remote, ++id, 'feed.snapshot', { ref: { ...ref, workId: 'w-02' }, scope: 'attention' })).error).toMatchObject({
+          code: 'bad_request',
+          message: 'unknown project or work',
+        });
+        // Без `scope: 'attention'` снимок отвергает правило параметров этапа A — раньше проверки проекта.
+        const ruled = await answer(remote, ++id, 'feed.snapshot', { ref });
+        expect(ruled.error).toMatchObject({ code: 'bad_request' });
+        expect(ruled.error?.message).not.toBe('unknown project or work');
         expect(s.spies['roles.list']).toHaveBeenCalledTimes(1);
         expect(s.spies['feed.snapshot']).toHaveBeenCalledTimes(1);
         s.close();
