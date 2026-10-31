@@ -39,6 +39,7 @@ import type { WorkLayout } from '../shared/layout-types.js';
 import type { NotesFile } from '../shared/notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from '../shared/recipe-save.js';
 import type { RemoteCallName, RemoteCalls, RemoteEvent } from '../shared/remote-types.js';
+import type { RelaySetupCallName, RelaySetupCalls, RelaySetupEvent } from '../shared/relay-setup-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type {
   DownloadProgress,
@@ -161,6 +162,10 @@ ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
   for (const listener of windowFocusListeners) listener(focused);
 });
 
+const relaySetupListeners = new Set<(event: RelaySetupEvent) => void>();
+ipcRenderer.on('relay-setup:event', (_event, payload: RelaySetupEvent) => {
+  for (const listener of relaySetupListeners) listener(payload);
+});
 const remoteListeners = new Set<(event: RemoteEvent) => void>();
 ipcRenderer.on('remote:event', (_event, payload: RemoteEvent) => {
   for (const listener of remoteListeners) listener(payload);
@@ -343,6 +348,14 @@ const bridge = {
     on: (listener: (event: RemoteEvent) => void) => {
       remoteListeners.add(listener);
       return () => remoteListeners.delete(listener);
+    },
+  },
+  relaySetup: {
+    call: <N extends RelaySetupCallName>(name: N, params: RelaySetupCalls[N]['params']) =>
+      ipcRenderer.invoke('relay-setup:call', name, params) as Promise<RelaySetupCalls[N]['result']>,
+    on: (listener: (event: RelaySetupEvent) => void) => {
+      relaySetupListeners.add(listener);
+      return () => relaySetupListeners.delete(listener);
     },
   },
   files: {
