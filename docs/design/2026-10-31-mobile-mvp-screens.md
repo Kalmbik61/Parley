@@ -50,6 +50,7 @@
 | `@parley/core/attention`, `session-state` | `sessionAttention` → `needs-you` / `unseen` / `working` / `idle` / `off`; порядок как в сайдбаре окна; `needsYouCount` |
 | `@parley/core/stuck` `needReason` | одна строка причины «нужен ты» (`Waiting for your approval: …`, `Asked you a question in its terminal`, лимит с временем сброса) |
 | `rooms.mail`, `context.messages`, `context.letter` | письма человеку: список и текст |
+| `providers.list`, `roles.list` (решение человека: запуск в MVP) | провайдеры, модели и уровни усилия, готовность провайдера, роли — для листа New session (8.4) |
 | hello моста, `bridge.status` | `host` (`starting` / `online` / `offline` / `incompatible`), `epoch`, `minClient`, `hostName`, версии |
 | супервизор `remote-client` (§10.2) | `idle` / `connecting` / `handshaking` / `ready` / `waiting` / `offline` / `blocked` |
 
@@ -82,6 +83,7 @@
                  │    └─ кнопка ✉ в панели навигации ─▶ Letters ─▶ Letter
                  │
                  ├─ Works (вкладка 2): секции по проектам
+                 │    ├─ «+» ─▶ New session / New room (sheet, 8.4) ─▶ Session или Work
                  │    └─ Work: карточки команд (главная сессия → её сессии, комнаты, рои) ─▶ Session
                  │            ├─ шапка команды, комната, рой — свернуть / развернуть
                  │            ├─ «N more under …» ─▶ Session этой сессии (секция Team)
@@ -576,6 +578,98 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 - дерево глубже трёх уровней — ссылка «N more under …» вместо строк;
 - новая сессия в снимке — встаёт на место по порядку без анимации сдвига всего списка (fade 150 мс самой строки).
 
+### 8.4 New session / New room — запуск с телефона
+
+Решение человека 2026-10-31 (решение 5, спека §4.2 «Запуск с телефона», §11.2 п. 9, §11.4, §12; `b47befcb`):
+телефон в MVP заводит сессии и комнаты и пишет письмо в комнату (`sessions.create`, `rooms.create`, `rooms.send`,
+`providers.list`, `roles.list`). На Маке один переключатель «Allow creating sessions and rooms from the phone»,
+**по умолчанию включён**. Face ID — перед каждым запуском и каждой отправкой (12a). Хост — власть: правила параметров,
+известные проекты и работы, лимиты.
+
+**Вход.** Кнопка `plus` в панели навигации Works (воркспейс по умолчанию — первый активный) и экрана воркспейса (этот
+воркспейс). Кнопка есть, **только если методы есть в hello моста**: переключатель на Маке выключен — кнопки нет.
+Без связи кнопка выключена. Лист — системный sheet на большую высоту; сверху сегменты **Session | Room**. Свайп вниз
+с введённым текстом спрашивает «Discard this draft?».
+
+**New session.**
+
+```
+│ Cancel        New session         │
+│ [  Session  |  Room  ]            │
+│ WORKSPACE                         │
+│ │ Improvements                ⌄ │ │  ← существующие неархивные работы из проекции, по проектам
+│ AGENT                             │
+│ │ [ Claude |  Codex ]           │ │  ← провайдер (providers.list); не готовый — выключен
+│ │ Model                  opus ⌄ │ │  ← модели провайдера
+│ │ Role                   None ⌄ │ │  ← roles.list
+│ SESSION NAME  [Optional        ]  │  ← label 1–64; пусто — роль или «New session»
+│ TASK                              │
+│ │ What should the agent do?     │ │  ← обязательна, до 16 КБ
+│ │ ⑂ Own worktree          [off] │ │
+├───────────────────────────────────┤
+│   One session in Improvements     │
+│ [ (faceid) Start session        ] │
+```
+
+- Уходит `sessions.create {projectPath, workId, provider, label, task, parent: null, model, role?, worktree}`.
+  Усилия, `agent` и облегчённого запуска на телефоне нет: хост отвечает на них `bad_request` (4.2). Модель и усилие
+  по умолчанию — настройки Мака.
+- После ответа `{ref}` — лист закрывается, тост «Session started», экран новой сессии.
+
+**New room.**
+
+```
+│ Cancel          New room          │
+│ [  Session  |  Room  ]            │
+│ WORKSPACE     Improvements      ⌄ │
+│ ROOM NAME   [What the agents will discuss] │  ← обязателен, 1–128
+│ MODE   [ Free | Checklist | Verified ]     │  ← autonomous — только на Маке
+│ MEMBERS · ★ LEAD                  │
+│ │ ◉ Greta            feature-lead ★│ │  ← сессии этой работы (живые, не участники роёв)
+│ │ ◉ Astra-browser    architect   ☆│ │
+│ │ ○ Changelog-writer writer       │ │
+│ NEW AGENTS                        │
+│ │ [ Claude | Codex ]   ☆   ⊗     │ │  ← новые агенты: провайдер, модель, роль
+│ ╭ ⊕ New agent ╮                   │
+├───────────────────────────────────┤
+│   Room with 3 agents in Improvements │
+│ [ (faceid) Create room          ] │
+```
+
+- Участники — сессии этой работы: отмеченные существующие и новые агенты. Новые запускаются тихо
+  (`sessions.create` с пустой задачей), затем `rooms.create {title, members, lead, quiet: true, mode}`. Ведущий — звезда
+  у отмеченного участника; без выбора — первый. `autonomous`, рецепты и `origin` с телефона закрыты (хост:
+  `bad_request`): подпись под режимами «Autonomous rooms are created on your Mac».
+- Подсказки режимов: Free — «The lead brings you a decision when the agents agree»; Checklist — «The lead proposes a
+  plan of items; you accept it, then the room works through it»; Verified — «Like Checklist, and a verifier checks
+  each item».
+- **Шаг 2 — первое письмо** (`rooms.send`, задача тихой комнаты). Тот же лист: `checkmark.circle.fill` «Room created»,
+  `# Release review · 3 agents · verified`, поле «First message» (до 16 КБ, обязательно для отправки), подпись «The room
+  started quietly: this message is its task. Every agent in the room gets it.», кнопка «(faceid) Send to the room».
+  Face ID — второй раз: правило «каждая отправка». «Later» слева закрывает лист без письма — комната ждёт задачу,
+  тост «Write the task in the room on your Mac».
+- После отправки — экран воркспейса, комната развёрнута в своей команде.
+
+**Состояния.**
+
+| Состояние | Что видно |
+|---|---|
+| Переключатель на Маке выключен | кнопки `plus` нет (методов нет в hello моста) |
+| Переключатель выключили, пока лист открыт (`unknown_method`) | лист остаётся, над кнопкой «Creating sessions and rooms from the phone is turned off on your Mac.», haptic `error` |
+| Загрузка `providers.list` / `roles.list` | сегменты и меню — скелет; кнопка запуска выключена |
+| Провайдер не готов | его сегмент выключен, подпись причины от хоста («Codex isn't signed in on your Mac») |
+| Нет задачи (сессия), нет названия или участников (комната), нет текста письма | кнопка выключена |
+| Face ID | системный запрос (12a); отмена — лист и черновик на месте, ничего не создано и не отправлено |
+| Отправка | спиннер в кнопке, лист не закрывается |
+| Успех — сессия | haptic `success`, тост «Session started», экран новой сессии |
+| Успех — комната | haptic `success`, шаг 2 «Room created» |
+| Успех — первое письмо | haptic `success`, тост «Task sent to the room», экран воркспейса |
+| Отказ хоста: лимит, правило запуска, неверный выбор (`bad_request`) | haptic `error`, лист остаётся, текст хоста как есть над кнопкой |
+| Ошибка на середине комнаты (агенты запущены, комната не создана) | лист остаётся, «2 agents started, the room was not created: <причина>»; запущенные сессии видны в воркспейсе |
+| Связь пропала во время отправки (`lost`) | вызов не повторяется; после переподключения — перечитывание снимка: создано → переход к созданному, нет → черновик и «We couldn't confirm» |
+| Офлайн | `plus` выключен; открытый лист — кнопка выключена, «Reconnecting — actions are paused» |
+
+
 ---
 
 ## 9. Session (A15, §11.2 п. 4, §10.3, §11.4)
@@ -883,6 +977,7 @@ Haptic `notification(error)` один раз при появлении.
 |---|---|
 | Allow разрешения — на экране сессии и прямо в Inbox | да |
 | Allow and don't ask again («Always») | да |
+| Start session, Create room, первое письмо в комнату (8.4; `rooms.send` — каждая отправка) | да |
 | Accept решения комнаты (`rooms.resolveProposal` с `accept`) | да |
 | Выключить «Require Face ID to allow» в Settings | да |
 | Одобрение плана — оба варианта: «Approve, auto-accept edits» и «Approve, approve each edit» (В13) | да |
@@ -943,7 +1038,8 @@ Haptic `notification(error)` один раз при появлении.
   письмо остаётся в бейдже и push-счётчике, пока его не прочтут на Маке. Варианты: (а) так и оставить, письмо
   уходит в Inbox вниз с отметкой «Opened on this phone» — по умолчанию; (б) перенести `mail.markRead` в этап A.
 - **В4. Комната без решения.** В этапе A у телефона нет ленты комнаты: тап по такой комнате ничего не открывает.
-  Достаточно ли этого, или нужен экран комнаты только для чтения (`context.messages` по комнате)?
+  Достаточно ли этого, или нужен экран комнаты только для чтения (`context.messages` по комнате)? С `rooms.send` в этапе A —
+  см. В17.
 - **В5. Переключатель уведомлений.** Выключить push можно двумя способами: (а) телефон шлёт
   `push.register {apnsToken: null}` и мост перестаёт слать — честно и экономно, по умолчанию; (б) только скрывать
   на телефоне. (а) требует, чтобы `push.register` с `null` значил «не слать», — так и в A16.
@@ -972,6 +1068,13 @@ Haptic `notification(error)` один раз при появлении.
   спросить (`passcode_not_set`). Варианты: (а) одобрения идут без проверки, в Settings предупреждение «This iPhone has
   no passcode — approvals are not protected»; (б) Allow и Accept недоступны, пока не задан код. Предложение — (а):
   без кода телефон и так открыт любому.
+- **В15. Задача комнаты с телефона** — решено (решение 5, `b47befcb`): `rooms.send` в этапе A, письмо в комнату,
+  в том числе первое — задача тихой комнаты; Face ID на каждую отправку.
+- **В16. Что ещё из диалога окна** — решено там же: режимы комнаты на телефоне — `free`, `checklist`, `verified`;
+  `autonomous`, рецепты и `origin` — только окно; усилия, `agent` и облегчённого запуска с телефона нет.
+- **В17. Экран комнаты.** `rooms.send` теперь в этапе A, а читать ленту комнаты позволяет `context.messages`. Нужен ли
+  в MVP экран комнаты с лентой и полем письма (тогда закрывается и В4), или письмо в комнату пока только первое — из
+  листа New room?
 
 ---
 
@@ -1018,6 +1121,13 @@ Haptic `notification(error)` один раз при появлении.
 | Отказ / таймаут | `xmark.octagon` / `clock.badge.exclamationmark` | regular |
 | Уведомления | `bell.badge` | multicolor |
 | Face ID на кнопках Allow / Accept и в Settings | `faceid` (на Touch ID — `touchid`) | regular |
+| New session / New room (панель навигации) | `plus` | regular |
+| Ведущий комнаты в листе New room | `star.fill` / `star` | акцент / `tertiaryLabel` |
+| Участник отмечен / нет | `checkmark.circle.fill` / `circle` | акцент |
+| Убрать нового агента | `xmark.circle` | `tertiaryLabel` |
+| New agent | `plus.circle` | акцент |
+| Own worktree | `arrow.triangle.branch` | акцент |
+| «Room created» | `person.2` | regular |
 | Код устройства (биометрия не настроена) | `lock.fill` | regular |
 | Updating | `arrow.triangle.2.circlepath` | `symbolEffect(.rotate)` |
 | Нет сети | `wifi.slash` | regular |
@@ -1048,6 +1158,10 @@ Haptic `notification(error)` один раз при появлении.
 | Нажатие кнопки решения (до ответа) | нет | haptic — на итог, не на нажатие, иначе ложное «принято» |
 | Запрос Face ID, лицо не узнано | нет своего | системный запрос даёт свой отклик; второй сбивал бы |
 | Face ID отменён | нет | ничего не произошло — и отклика нет |
+| Сессия или комната запущена | `notificationAsync(Success)` | итог запуска |
+| Запуск отклонён хостом | `notificationAsync(Error)` | действие не применилось |
+| Session / Room, провайдер, режим, участник, ведущий в листе | `selectionAsync()` | выбор |
+| Запуск отклонён хостом или выключен на Маке | `notificationAsync(Error)` | действие не применилось |
 | Pull-to-refresh | системный (`refreshControl`) | не дублируем |
 
 Haptics только на переднем плане и при включённой системной настройке (expo-haptics её уважает).
@@ -1137,6 +1251,8 @@ SF Pro через системный шрифт, только стили Dynamic
 - Код SAS — по цифрам; таймер — `accessibilityLabel` «1 minute 54 seconds left», обновление не объявляется.
 - Итоги решений («Allowed», «Already answered at your Mac») объявляются `announceForAccessibility`.
 - Выключенные кнопки — `accessibilityState.disabled` и подсказка «Reconnecting — actions are paused».
+- Лист New session: агенты — группы с заголовком «Agent 1, lead»; звезда — кнопка «Make lead»; итог запуска
+  объявляется «Session started» / «Room created».
 - Кнопки под Face ID: `accessibilityLabel` «Allow», `accessibilityHint` «Requires Face ID»; отмена Face ID
   объявляется «Face ID cancelled, nothing was sent».
 - Заголовки секций — `accessibilityRole="header"`, чтобы ротор «Заголовки» работал.
@@ -1151,5 +1267,5 @@ SF Pro через системный шрифт, только стили Dynamic
 |---|---|
 | A13 | 1, 3 (вкладки, стек), 4 (компонент плашки), 17 (токены темы), 18 |
 | A14 | 4, 6, 11 (в том числе 11.6) |
-| A15 | 7, 8, 9, 12a, 16 |
+| A15 | 7, 8 (в том числе 8.4), 9, 12a, 16 |
 | A16 | 10, 11.2, 12, 12a |
