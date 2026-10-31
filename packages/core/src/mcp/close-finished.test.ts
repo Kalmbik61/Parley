@@ -161,8 +161,9 @@ describe('close_session: право живого лида закрыть зав�
 
 describe('report: подсказка закрыть завершённые сессии в ответе', () => {
   const LEAD_HINT = (ids: string): string =>
-    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, close ${ids} with close_session; the tool allows it.`;
-  const OWN_HINT = "The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session on yourself as your last call.";
+    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${ids}; the tool allows it.`;
+  const OWN_HINT = (id: string): string =>
+    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${id}" as your last call.`;
 
   async function reportAs(sessionId: string, status: 'done' | 'progress' = 'done'): Promise<Record<string, unknown>> {
     const result = await call(await connect(sessionId), 'report', { status, summary: 'итог' });
@@ -194,7 +195,7 @@ describe('report: подсказка закрыть завершённые се�
 
   it('участник комнаты, не ведущий: подсказка закрыть себя', async () => {
     await seed({ flag: true });
-    expect((await reportAs('s-02'))['next']).toBe(OWN_HINT);
+    expect((await reportAs('s-02'))['next']).toBe(OWN_HINT('s-02'));
   });
 
   it('созданная сессия: подсказка закрыть себя', async () => {
@@ -202,7 +203,7 @@ describe('report: подсказка закрыть завершённые се�
     await updateMap(project, workId, (map) => {
       addSession(map, { provider: 'claude', label: 'дитя', task: 'x', createdBy: 's-04' });
     });
-    expect((await reportAs('s-05'))['next']).toBe(OWN_HINT);
+    expect((await reportAs('s-05'))['next']).toBe(OWN_HINT('s-05'));
   });
 
   it('сессия человека без комнаты и создателя: поля нет', async () => {

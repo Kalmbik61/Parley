@@ -868,12 +868,12 @@ function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
         led.some((room) => room.members.includes(row.id)))
       .map((row) => row.id);
     return finished.length > 0
-      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, close ${finished.join(', ')} with close_session; the tool allows it.`
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${finished.join(', ')}; the tool allows it.`
       : null;
   }
   const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
   if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
-    return "The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session on yourself as your last call.";
+    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${sessionId}" as your last call.`;
   }
   return null;
 }
