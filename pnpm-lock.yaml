@@ -327,6 +327,9 @@ importers:
       '@parley/relay':
         specifier: workspace:*
         version: link:../relay
+      '@parley/remote-client':
+        specifier: workspace:*
+        version: link:../remote-client
       '@types/ws':
         specifier: ^8.5.12
         version: 8.18.2

@@ -73,6 +73,8 @@ export interface ControlServerOptions {
   audit: AuditLog;
   log: BridgeLog;
   callbacks: ControlCallbacks;
+  /** Число аутентифицированных соединений окна изменилось (присутствие без окна — `null`, спека 9.3). */
+  onClientsChanged?: (count: number) => void;
   helloTimeoutMs?: number;
 }
 
@@ -213,7 +215,7 @@ export function createControlServer(options: ControlServerOptions): ControlServe
     socket.on('error', () => {});
     socket.on('close', () => {
       clearTimeout(timer);
-      clients.delete(socket);
+      if (clients.delete(socket)) options.onClientsChanged?.(clients.size);
     });
 
     const handle = async (raw: unknown): Promise<void> => {
@@ -235,6 +237,7 @@ export function createControlServer(options: ControlServerOptions): ControlServe
         authed = true;
         clearTimeout(timer);
         clients.add(socket);
+        options.onClientsChanged?.(clients.size);
         await send(socket, { id, result: OK });
         return;
       }
@@ -297,8 +300,10 @@ export function createControlServer(options: ControlServerOptions): ControlServe
       await chmod(options.socketPath, 0o600);
     },
     async close() {
+      const had = clients.size;
       for (const socket of clients) socket.destroy();
       clients.clear();
+      if (had > 0) options.onClientsChanged?.(0);
       const closing = server;
       server = null;
       if (closing) await new Promise<void>((resolve) => closing.close(() => resolve()));

@@ -44,6 +44,10 @@ export interface RemoteAccess {
   setSessionHandler(handler: SessionHandler): void;
   readonly devices: DeviceStore;
   readonly relayState: RelayState;
+  /** Адрес relay сейчас (`host[:port]`); `null` — не настроен. */
+  readonly relay: string | null;
+  /** Новый адрес relay без перезапуска: ожидающий паринг прерывается, связь со старым закрывается, с новым — открывается. */
+  setRelay(relay: string | null): Promise<void>;
   readonly hostId: string;
   keys(): BridgeKeys;
   start(): void;
@@ -65,7 +69,8 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
   );
   const resolve =
     options.resolveRelayUrl ?? ((relay: string) => relayUrlFor(relay, { allowLocal: true }));
-  const relayUrl = options.relay === null ? null : resolve(options.relay);
+  let relay = options.relay;
+  let started = false;
 
   // Pairing and sessions talk to the link only through these calls; a bridge without a relay has no streams.
   let link: RelayLink | null = null;
@@ -122,7 +127,7 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
     keys: () => keys,
     devices,
     link: linkCalls,
-    relay: () => options.relay,
+    relay: () => relay,
     hostName: options.hostName,
     audit,
     log,
@@ -191,9 +196,9 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
     reset,
   };
 
-  if (relayUrl !== null) {
-    link = createRelayLink({
-      relayUrl,
+  function buildLink(address: string): RelayLink {
+    return createRelayLink({
+      relayUrl: resolve(address),
       route: () => ({ routeId: keys.routeId, routeSecret: keys.routeSecret }),
       devices: () => devices.relayList(),
       onIncoming: (incoming) => {
@@ -208,6 +213,7 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
       ...(options.relayBackoff ? { backoff: options.relayBackoff } : {}),
     });
   }
+  if (relay !== null) link = buildLink(relay);
 
   return {
     handlers,
@@ -217,14 +223,29 @@ export async function openRemoteAccess(options: RemoteAccessOptions): Promise<Re
     get relayState(): RelayState {
       return link?.state ?? 'stopped';
     },
+    get relay() {
+      return relay;
+    },
+    async setRelay(next) {
+      if (next === relay) return;
+      // Устройства со старого relay не теряются, но связь к ним идёт через новый адрес: ожидающий паринг и оффер кончаются.
+      pairing.abort('relay-changed');
+      const old = link;
+      relay = next;
+      link = next === null ? null : buildLink(next);
+      await old?.stop();
+      if (started) link?.start();
+    },
     get hostId() {
       return hostIdFor(keys.hsPub);
     },
     keys: () => keys,
     start() {
+      started = true;
       link?.start();
     },
     async stop() {
+      started = false;
       sessions.stopAccepting();
       pairing.abort('shutdown');
       sessions.closeAll('shutdown');

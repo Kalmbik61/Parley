@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./main": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -23,6 +24,10 @@
   },
   "devDependencies": {
     "@parley/relay": "workspace:*",
-    "@types/ws": "^8.5.12"
+    "@types/ws": "^8.5.12",
+    "@parley/remote-client": "workspace:*"
+  },
+  "bin": {
+    "parley-remote": "./dist/main.js"
   }
 }
