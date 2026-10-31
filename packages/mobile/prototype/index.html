@@ -308,9 +308,23 @@ textarea.field { min-height: 160px; resize: none; }
 .teamline { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--tint); font-weight: 600; }
 .tgl { border: 0; background: none; color: var(--label3); width: 44px; height: 44px; margin: -10px -8px -10px 0; display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
 .morelink { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--tint); font-weight: 600; }
-.hxrow { display: inline-flex; gap: 3px; }
-.hx { width: 10px; height: 11px; background: var(--idle); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
-.hx.working { background: var(--tint); } .hx.done { background: var(--ok); } .hx.failed { background: var(--danger); } .hx.needs { background: var(--needsDot); }
+.comb { display: block; }
+.sline { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.sdots { display: inline-flex; gap: 3px; align-items: center; }
+.sdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--label2); box-sizing: border-box; }
+.sdot.handed { background: var(--label); border-color: var(--label); }
+.sdot.handedmuted { background: var(--label2); border-color: var(--label2); }
+.sdot.failed { background: var(--tint); border-color: var(--tint); }
+.sdot.working { background: var(--label); border-color: var(--label); animation: pulse 1.6s ease-in-out infinite; }
+.scount { font-weight: 600; font-variant-numeric: tabular-nums; }
+.stimer { font-variant-numeric: tabular-nums; }
+.send { display: inline-flex; } .send.ok { color: var(--ok); } .send.bad { color: var(--tint); }
+.bubble.swarm.muted { opacity: .7; }
+.smembers { margin: 0 10px 8px 23px; border-left: 1.5px solid var(--line); padding-left: 6px; }
+.smember { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 6px; border-radius: 10px; cursor: pointer; }
+.smark { width: 16px; display: inline-flex; justify-content: center; flex: none; font-size: 12px; }
+.sfail { color: var(--tint); font-weight: 600; }
+.soutcome { margin: 4px 0 2px 6px; background: var(--surface); border-radius: 10px; padding: 8px 10px; }
 .crumb { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; color: var(--label2); margin-top: 4px; }
 .crumb .csep { color: var(--label3); }
 .crumb .clink { color: var(--tint); font-weight: 600; cursor: pointer; }
@@ -380,7 +394,6 @@ const P = {
   signal: '<path d="M4 18v-2M9 18v-5M14 18V9M19 18V5" stroke-width="2.6"/>',
   zzz: '<path d="M4 6h5l-5 6h5M13 11h4l-4 5h4"/>',
   hash: '<path d="M10 3 8 21M16 3l-2 18M4.5 8.5h16M3.5 15.5h16"/>',
-  hexgrid: '<path d="M12 2.5 20.5 7.3v9.4L12 21.5 3.5 16.7V7.3z"/><circle cx="12" cy="9" r="1.6"/><circle cx="8.8" cy="14.2" r="1.6"/><circle cx="15.2" cy="14.2" r="1.6"/>',
   teamDown: '<path d="M6 4v8a4 4 0 0 0 4 4h9"/><path d="m15 12 4 4-4 4"/>',
   teamUp: '<path d="M18 20v-8a4 4 0 0 0-4-4H6"/><path d="m10 4-4 4 4 4"/>',
 };
@@ -394,7 +407,7 @@ const SF = { tray: 'tray.fill', stack: 'square.stack.3d.up.fill', gear: 'gearsha
   triangle: 'exclamationmark.triangle', shield: 'exclamationmark.shield', octagon: 'xmark.octagon', clock: 'clock.badge.exclamationmark',
   question: 'questionmark.circle', photo: 'photo', flashlight: 'flashlight.off.fill', videoSlash: 'video.slash',
   uturn: 'arrow.uturn.backward.circle', ellipsis: 'ellipsis', appDown: 'arrow.down.app', conflict: 'exclamationmark.arrow.triangle.2.circlepath',
-  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz', hash: 'number', hexgrid: 'circle.hexagongrid',
+  battery: 'battery.100', signal: 'cellularbars', zzz: 'zzz', hash: 'number',
   teamDown: 'arrow.turn.down.right', teamUp: 'arrow.turn.left.up' };
 function ic(name, size, extra) {
   const s = size || 20;
@@ -460,12 +473,12 @@ const WORKS = [
       { id: 's-204', createdBy: 's-201', label: 'Drone 3', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
       { id: 's-205', createdBy: 's-201', label: 'Drone 4', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
       { id: 's-206', createdBy: 's-201', label: 'Drone 5', role: 'drone', model: 'sonnet', att: 'working', line: 'Working', since: '12 min' },
-      { id: 's-207', createdBy: 's-201', label: 'Verifier 1', role: 'verifier', model: 'opus', att: 'idle', line: 'Waiting for the drones', since: '12 min' },
+      { id: 's-207', createdBy: 's-201', label: 'Verifier 1', role: 'verifier', model: 'opus', att: 'idle', pending: true, line: 'Not started yet', since: '12 min' },
     ], rooms: [
       { id: 'r-12', title: 'Browser', members: ['s-12', 's-13'], lead: 's-12', ownerId: null, unread: 0 },
       { id: 'r-18', title: 'iOS app: stage A (no device)', members: ['s-174', 's-175', 's-176', 's-177'], lead: 's-174', ownerId: 's-11', decision: 'd1', unread: 3 },
     ], swarms: [
-      { id: 'sw-02', tag: 'Research', creator: { kind: 'session', sessionId: 's-11' }, queen: 's-201', status: 'running', age: '12 min', members: [
+      { id: 'sw-02', tag: 'Research', creator: { kind: 'session', sessionId: 's-11' }, queen: 's-201', status: 'running', startedMs: Date.now() - 12 * 60000 - 4000, members: [
         { sessionId: 's-201', role: 'queen', n: 1 }, { sessionId: 's-202', role: 'drone', n: 1, handed: true }, { sessionId: 's-203', role: 'drone', n: 2, handed: true },
         { sessionId: 's-204', role: 'drone', n: 3 }, { sessionId: 's-205', role: 'drone', n: 4 }, { sessionId: 's-206', role: 'drone', n: 5 },
         { sessionId: 's-207', role: 'verifier', n: 1 } ] },
@@ -822,7 +835,7 @@ function ancestry(sessionId) {
     const sw = swarmOfMember(w, cur.id);
     const room = homeRoom(w, cur.id);
     if (sw) {
-      parts.unshift({ label: 'Swarm · ' + sw.tag, kind: 'swarm' });
+      parts.unshift({ label: 'Swarm [' + sw.tag + ']', kind: 'swarm' });
       if (sw.creator.kind === 'session') up = sw.creator.sessionId;
       else if (sw.creator.kind === 'room') {
         const cr = w.rooms.find(function (x) { return x.id === sw.creator.roomId; });
@@ -915,27 +928,560 @@ function roomRow(row, guides) {
   if (open) html += row.members.map(function (m) { return memberRow(m, { lead: m.id === room.lead }); }).join('');
   return html + '</div></div>';
 }
+/* ---------- swarm: the window's SwarmRow (sidebar/SwarmRow.tsx, lib/swarm-view.ts; swarm spec v1 7.1, 7.5) ---------- */
+const SWARM_WORD = { queen: { cutting: 'cutting the task…', waiting: 'waiting for hand-ins…', collecting: 'collecting…', handed: 'handed in ✓' },
+  member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', failed: 'failed', closed: 'closed' } };
+const isSwarmTerminal = function (st) { return st === 'done' || st === 'failed' || st === 'cancelled'; };
+/* core memberState: handed stays handed; a cancelled or failed swarm closes the rest; no session or a failed one — failed. */
+function memberState(sw, m, sess) {
+  if (m.handed) return 'handed';
+  if (sw.status === 'failed' || sw.status === 'cancelled') return 'closed';
+  if (!sess || sess.att === 'failed') return 'failed';
+  if (sess.pending) return 'waiting';
+  return 'working';
+}
+function swarmProgress(sw) {
+  const workers = sw.members.filter(function (m) { return m.role !== 'queen'; });
+  return { handed: workers.filter(function (m) { return m.handed; }).length, total: workers.length };
+}
+function memberTitle(m) { return m.role === 'queen' ? 'Queen' : m.role === 'drone' ? 'Drone ' + m.n : 'Verifier'; }
+function memberWord(sw, m, state) {
+  if (m.role === 'queen') {
+    if (sw.status === 'done') return SWARM_WORD.queen.handed;
+    if (sw.status === 'failed' || sw.status === 'cancelled') return sw.status;
+    if (state === 'failed') return SWARM_WORD.member.failed;
+    if (state === 'waiting') return SWARM_WORD.member.waiting;
+    if (sw.status === 'collecting') return SWARM_WORD.queen.collecting;
+    return sw.members.some(function (x) { return x.role !== 'queen'; }) ? SWARM_WORD.queen.waiting : SWARM_WORD.queen.cutting;
+  }
+  if (state === 'working') return m.role === 'drone' ? SWARM_WORD.member.drone : SWARM_WORD.member.verifier;
+  return SWARM_WORD.member[state];
+}
+function formatSwarmTimer(ms) {
+  const total = Math.floor(Math.max(0, ms) / 1000), hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), seconds = String(total % 60).padStart(2, '0');
+  return hours > 0 ? hours + ':' + String(minutes).padStart(2, '0') + ':' + seconds : minutes + ':' + seconds;
+}
+function swarmElapsed(sw) { return (sw.endedMs || Date.now()) - sw.startedMs; }
+/* The live "honeycomb of drops" icon: a canvas filled by the comb engine after each render (combTick). */
+function combIcon(sw, size, still) {
+  const pr = still ? nominalSwarm(sw.status) : swarmProgress(sw);
+  return '<canvas class="comb" width="' + size * 2 + '" height="' + size * 2 + '" style="width:' + size + 'px;height:' + size + 'px" data-comb="' + sw.id + (still ? ':still' : '') +
+    '" data-status="' + sw.status + '" data-handed="' + pr.handed + '" data-total="' + pr.total + '" aria-hidden="true"></canvas>';
+}
+function nominalSwarm(status) { return status === 'running' || status === 'collecting' ? { handed: 1, total: 3 } : { handed: 3, total: 3 }; }
 function swarmRow(row, guides) {
   const sw = row.sw;
-  const open = isOpen('swarm:' + sw.id, row.members.some(function (x) { return sessAtt(x.s) === 'needs'; }));
-  const queen = row.members.find(function (x) { return x.m.role === 'queen'; });
-  const drones = row.members.filter(function (x) { return x.m.role === 'drone'; });
-  const verifiers = row.members.filter(function (x) { return x.m.role === 'verifier'; });
-  const handed = drones.filter(function (x) { return x.m.handed; }).length;
-  const working = drones.filter(function (x) { return !x.m.handed && sessAtt(x.s) === 'working'; }).length;
-  const droneMarks = drones.map(function (x) { return x.m.handed ? '<span class="hx done" title="Drone ' + x.m.n + ' handed in"></span>' : '<span class="hx ' + sessAtt(x.s) + '" title="Drone ' + x.m.n + '"></span>'; }).join('');
+  const views = row.members.slice().sort(function (a, b) { const r = { queen: 0, drone: 1, verifier: 2 }; return r[a.m.role] - r[b.m.role] || a.m.n - b.m.n; })
+    .map(function (x) { return { m: x.m, s: x.s, state: memberState(sw, x.m, x.s) }; });
+  // Collapsed by default, as in the window; opens by itself only when a member needs the human.
+  const open = isOpen('swarm:' + sw.id, views.some(function (v) { return sessAtt(v.s) === 'needs'; }));
+  const pr = swarmProgress(sw), terminal = isSwarmTerminal(sw.status);
+  const dots = views.filter(function (v) { return v.m.role !== 'queen'; }).map(function (v) {
+    return '<i class="sdot ' + (v.state === 'handed' ? 'handed' : v.state === 'failed' ? 'failed' : 'open') + '"></i>'; }).join('');
+  const end = sw.status === 'done' ? '<span class="send ok">' + ic('check', 13) + '</span>' : sw.status === 'failed' ? '<span class="send bad">' + ic('triangle', 13) + '</span>' :
+    sw.status === 'cancelled' ? '<span class="send l2">' + ic('xCircle', 13) + '</span>' : '';
+  const title = 'Swarm [' + sw.tag + '] · ' + sw.status;
   let html = '<div class="trow bubblerow" style="--d:' + row.depth + '">' + guidesHtml(guides, row.depth) +
-    '<div class="bubble swarm"><div class="bhead" data-act="toggle" data-k="swarm:' + sw.id + '" data-open="' + open + '" role="button" aria-expanded="' + open + '" aria-label="' +
-    h('Swarm ' + sw.tag + ', ' + sw.status + ', ' + drones.length + ' drones, ' + working + ' working, ' + handed + ' handed in') + '">' +
-    '<span class="bicon" style="color:var(--tint)">' + ic('hexgrid', 20) + '</span>' +
-    '<div class="grow"><div class="t-sub" style="font-weight:600">Swarm · ' + h(sw.tag) + '</div>' +
-    '<div class="mdots"><span class="hxrow">' + droneMarks + '</span><span class="t-foot l2">' + drones.length + ' drones · ' + working + ' working · ' + handed + ' handed in</span></div>' +
-    '<div class="t-foot l2" style="margin-top:2px">' + (sw.status === 'running' ? 'Running' : sw.status) + ' · ' + sw.age + (verifiers.length ? ' · ' + verifiers.length + ' verifier' : '') + '</div></div>' +
+    '<div class="bubble swarm' + (terminal && sw.status !== 'done' ? ' muted' : '') + '"><div class="bhead" data-act="toggle" data-k="swarm:' + sw.id + '" data-open="' + open + '" role="button" aria-expanded="' + open + '" aria-label="' +
+    h(title + ', ' + pr.handed + ' of ' + pr.total + ' handed in') + '">' +
+    '<span class="bicon">' + combIcon(sw, 24, false) + '</span>' +
+    '<div class="grow"><div class="t-sub ellips"><span style="font-weight:600">Swarm</span> <span class="l2">[' + h(sw.tag) + ']</span></div>' +
+    '<div class="sline"><span class="sdots" aria-hidden="true">' + dots + '</span><span class="scount t-foot" title="' + pr.handed + ' of ' + pr.total + ' handed in">' + (pr.total === 0 ? '…' : pr.handed + '/' + pr.total) + '</span>' + end +
+    '<span class="stimer t-foot l2" data-swarm-timer="' + sw.id + '">' + formatSwarmTimer(swarmElapsed(sw)) + '</span></div></div>' +
     '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
-  if (queen) html += memberRow(queen.s, { role: 'Queen' });
-  if (open) html += drones.concat(verifiers).map(function (x) { return memberRow(x.s, { role: x.m.role === 'drone' ? 'Drone ' + x.m.n : 'Verifier' }); }).join('');
+  if (open) {
+    html += '<div class="smembers" role="group">' + views.map(function (v) {
+      const word = memberWord(sw, v.m, v.state);
+      const mark = v.m.role === 'queen' ? '<span class="crown">👑</span>' : '<i class="sdot ' + (v.state === 'working' ? 'working' : v.state === 'handed' ? 'handedmuted' : v.state === 'failed' ? 'failed' : 'open') + '"></i>';
+      return '<div class="smember' + (v.state === 'handed' || v.state === 'closed' ? ' l2' : '') + '" data-act="openSession" data-id="' + v.s.id + '" role="button" aria-label="' + h(memberTitle(v.m) + ': ' + word) + '">' +
+        '<span class="smark">' + mark + '</span><span class="grow ellips t-sub">' + memberTitle(v.m) + '</span><span class="t-foot ' + (v.state === 'failed' ? 'sfail' : 'l2') + '">' + h(word) + '</span></div>';
+    }).join('') + (terminal ? '<div class="soutcome t-foot"><b>Result</b><div class="l2">The queen\'s summary is on your Mac.</div></div>' : '') + '</div>';
+  }
   return html + '</div></div>';
 }
+
+/* Comb engine: swarm-comb.ts of the window, ported verbatim (types stripped). One icon object per swarm and size, so
+   a hand-in plays its drop flight even though the page re-renders the canvas. At most 3 live icons, ~12 fps. */
+const Comb = (function () {
+/**
+ * Живая иконка роя «Соты из капель» (спека роя v1, 7.5). Без React и зависимостей: canvas 2D и ImageData, один объект
+ * на иконку. Эталон — модуль `comb-icon.js` из передачи дизайна (раунд 3, вариант 2), перенесён как есть, с типами.
+ *
+ * Ячеек столько, сколько трутней и проверяющих (до семи), полные — сдавшие. Мёд — 3D-материал: поле расстояний до
+ * фигур с мягким слиянием (капля перетекает в ячейку), скруглённый скос, свет сверху-слева, блик и тёплый «просвет».
+ *
+ *   const icon = createCombIcon({ size: 16, theme: 'dark' });
+ *   icon.set({ status, handed, total }, performance.now());   // на каждую смену данных роя
+ *   icon.frame(ctx, performance.now(), reducedMotion);        // живой рой — с частотой иконки, реакции — пока
+ *                                                             // needsFrame(now)
+ * Холст: ширина и высота — size × devicePixelRatio, CSS-размер — size; трансформацию ставит модуль. `ctx` null —
+ * только состояние, без рисования (тесты в jsdom).
+ */
+const TAU = Math.PI * 2;
+const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2);
+const out3 = (t) => 1 - Math.pow(1 - t, 3);
+/** Пружина с перелётом: `resp` — период, с; `z` — затухание. */
+function spring(e, resp, z) {
+    if (e <= 0)
+        return 0;
+    if (e > 4)
+        return 1;
+    const w = TAU / resp, wd = w * Math.sqrt(1 - z * z);
+    return 1 - Math.exp(-z * w * e) * (Math.cos(wd * e) + ((z * w) / wd) * Math.sin(wd * e));
+}
+/** Тайминги, с. */
+const FLY = 0.45; // капля летит к своей ячейке
+const SETTLE = 1; // долетев, перетекает из круга в шестиугольник
+const DONE = 1.6; // реакция «готово» целиком: свет, волна, искры
+const COLLECT_DELAY = 0.8; // «сводит» начинается, когда долетела последняя капля
+const FLASH = 0.3; // reduce motion: вспышка яркости вместо реакции
+/** Окно: светлая и тёмная тема; остров всегда тёмный. На тёмном — ореол, на светлом — тёмная кромка у мёда. */
+const PALETTE = {
+    dark: { glow: true, halo: '#EFB05C', wax: '#D9B56C', cellTop: '#140d07', cellBot: '#30211a', grey: '#8b8479', spark: '#FFE2A0', flash: '' },
+    light: { glow: false, halo: '', wax: '#A87532', cellTop: '#e2cca2', cellBot: '#f7ead0', grey: '#82796a', spark: '#B2622D', flash: '#8C491A' },
+};
+/** Мёд: тень, мёд, свет, свечение на просвет; серый — сбой и отмена (мёд «засахарился»). */
+const MAT = {
+    gold: { deep: [138, 64, 14], mid: [234, 156, 46], lit: [255, 212, 124], glow: [255, 190, 84], spec: 1 },
+    grey: { deep: [78, 74, 70], mid: [146, 140, 132], lit: [192, 186, 176], glow: [146, 140, 132], spec: 0.3 },
+};
+/** Тёмная кромка мёда на светлом фоне: без неё светлый край сливается с сайдбаром. */
+const RIM = [96, 50, 14];
+/** Ячейки вершиной вверх в единицах апофемы со стенкой: центр, потом кольцо — соты растут кучно. */
+const HEX7 = [[0, 0], [2, 0], [1, -1.7320508], [-1, -1.7320508], [-2, 0], [-1, 1.7320508], [1, 1.7320508]];
+/** Раскладка `count` ячеек (1..7) по центру холста: апофема `a` и центры ячеек, CSS px. */
+function combLayout(count, S) {
+    const cells = HEX7.slice(0, Math.max(1, Math.min(7, count)));
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const [x, y] of cells) {
+        x0 = Math.min(x0, x - 1);
+        x1 = Math.max(x1, x + 1);
+        y0 = Math.min(y0, y - 1.1547);
+        y1 = Math.max(y1, y + 1.1547);
+    }
+    const a = Math.min((0.84 * S) / (x1 - x0), (0.84 * S) / (y1 - y0), 0.2 * S);
+    const ox = S / 2 - ((x0 + x1) / 2) * a, oy = S / 2 - ((y0 + y1) / 2) * a;
+    return { a, pos: cells.map(([x, y]) => [ox + x * a, oy + y * a]) };
+}
+/**
+ * Мягкий шестиугольник вершиной вверх, `a` — апофема: 8-норма проекций на нормали трёх граней. Углы скругляются
+ * сами, а у скоса нет рёбер от углов — мёд выглядит подушкой, а не гранёным камнем. Внутри — минус.
+ */
+function sdHex(x, y, a) {
+    const p1 = x, p2 = 0.5 * x + 0.8660254 * y, p3 = 0.5 * x - 0.8660254 * y;
+    let s1 = p1 * p1, s2 = p2 * p2, s3 = p3 * p3;
+    s1 *= s1;
+    s2 *= s2;
+    s3 *= s3;
+    s1 *= s1;
+    s2 *= s2;
+    s3 *= s3;
+    return Math.sqrt(Math.sqrt(Math.sqrt(s1 + s2 + s3))) - a;
+}
+/** Мягкое объединение: в зоне `k` формы сливаются жидким мостиком. */
+function smin(a, b, k) {
+    const h = Math.max(k - Math.abs(a - b), 0) / k;
+    return Math.min(a, b) - h * h * k * 0.25;
+}
+function sdShape(s, x, y) {
+    const dx = (x - s.x) / s.sx, dy = (y - s.y) / s.sy;
+    const dc = Math.sqrt(dx * dx + dy * dy) - s.R;
+    let d = s.u <= 0 ? dc : s.u >= 1 ? sdHex(dx, dy, s.a) : dc + (sdHex(dx, dy, s.a) - dc) * s.u;
+    d *= s.sx < s.sy ? s.sx : s.sy;
+    if (s.lv) {
+        const l = s.lv(x) - y;
+        if (l > d)
+            d = l;
+    }
+    return d;
+}
+/** Высота скоса 0..1: четверть окружности от края до глубины B. */
+function bevelH(d, B) {
+    const t = -d / B;
+    if (t <= 0)
+        return 0;
+    if (t >= 1)
+        return 1;
+    const u = 1 - t;
+    return Math.sqrt(1 - u * u);
+}
+const cellHoney = (x, y, a, o) => ({ x, y, a, R: a * 1.02, u: 1, sx: 1, sy: 1, k: 0, lv: null, b0: 0, b1: 0, b2: 0, b3: 0, ...o });
+const dropHoney = (x, y, r, k) => ({ x, y, a: r, R: r, u: 0, sx: 1, sy: 1, k, lv: null, b0: 0, b1: 0, b2: 0, b3: 0 });
+/** Рисует мёд: расстояния в рамке фигур, затем нормаль по скосу и свет; результат — поверх через `drawImage`. */
+function honey3d(c, S, shapes, mem, grey, rim, la, B) {
+    if (!shapes.length)
+        return;
+    const W = c.canvas.width, H = c.canvas.height, dpr = W / S;
+    if (!mem.m || mem.m.W !== W || mem.m.H !== H) {
+        const off = document.createElement('canvas');
+        off.width = W;
+        off.height = H;
+        const octx = off.getContext('2d');
+        if (octx === null)
+            return;
+        mem.m = { W, H, D: new Float32Array(W * H), off, octx, img: octx.createImageData(W, H) };
+    }
+    const { D, img } = mem.m;
+    const px = img.data, pad = B + 2 / dpr;
+    px.fill(0);
+    let X0 = 1e9, Y0 = 1e9, X1 = -1e9, Y1 = -1e9;
+    for (const s of shapes) {
+        const e = Math.max(s.R, s.u > 0 ? s.a * 1.155 : 0) * Math.max(s.sx, s.sy) + s.k + pad;
+        s.b0 = s.x - e;
+        s.b1 = s.x + e;
+        s.b2 = s.y - e;
+        s.b3 = s.y + e;
+        X0 = Math.min(X0, s.b0);
+        X1 = Math.max(X1, s.b1);
+        Y0 = Math.min(Y0, s.b2);
+        Y1 = Math.max(Y1, s.b3);
+    }
+    const bx0 = Math.max(0, Math.floor(X0 * dpr)), bx1 = Math.min(W - 1, Math.ceil(X1 * dpr));
+    const by0 = Math.max(0, Math.floor(Y0 * dpr)), by1 = Math.min(H - 1, Math.ceil(Y1 * dpr));
+    if (bx1 < bx0 || by1 < by0)
+        return;
+    for (let y = by0; y <= by1; y++) {
+        const cy = (y + 0.5) / dpr;
+        for (let x = bx0, i = y * W + bx0; x <= bx1; x++, i++) {
+            const cx = (x + 0.5) / dpr;
+            let d = 1e9;
+            for (const s of shapes) {
+                if (cx < s.b0 || cx > s.b1 || cy < s.b2 || cy > s.b3)
+                    continue;
+                const ds = sdShape(s, cx, cy);
+                d = s.k > 0 ? smin(d, ds, s.k) : ds < d ? ds : d;
+            }
+            D[i] = d;
+        }
+    }
+    const M = grey ? MAT.grey : MAT.gold;
+    const lx = 0.62 * Math.cos(la), ly = 0.62 * Math.sin(la), lz = 0.78;
+    const hl = Math.hypot(lx, ly, lz + 1), hx = lx / hl, hy = ly / hl, hz = (lz + 1) / hl;
+    const slope = (B * dpr) / 2, spA = M.spec * 255;
+    // Значения массива расстояний внутри рамки всегда заданы: границы рамки учтены в обходе.
+    const at = (j) => D[j];
+    for (let y = by0; y <= by1; y++) {
+        for (let x = bx0, i = y * W + bx0; x <= bx1; x++, i++) {
+            const d = at(i);
+            if (d > 0.7 / dpr)
+                continue;
+            const h0 = bevelH(d, B);
+            const gx = (bevelH(x < bx1 ? at(i + 1) : d, B) - bevelH(x > bx0 ? at(i - 1) : d, B)) * slope;
+            const gy = (bevelH(y < by1 ? at(i + W) : d, B) - bevelH(y > by0 ? at(i - W) : d, B)) * slope;
+            const inv = 1 / Math.sqrt(gx * gx + gy * gy + 1);
+            const nx = -gx * inv, ny = -gy * inv, nz = inv;
+            const dif = nx * lx + ny * ly + nz * lz;
+            let sp = nx * hx + ny * hy + nz * hz;
+            sp = sp > 0 ? sp : 0;
+            sp *= sp;
+            sp *= sp;
+            sp *= sp;
+            sp *= sp;
+            sp *= sp;
+            const back = nx * lx + ny * ly;
+            const tr = (back < 0 ? -back : 0) * (1 - h0) * 0.75;
+            const k1 = clamp(0.18 + dif * 0.95), k2 = clamp((dif - 0.72) * 2.4, 0, 0.7);
+            let r = M.deep[0] + (M.mid[0] - M.deep[0]) * k1, g = M.deep[1] + (M.mid[1] - M.deep[1]) * k1, b = M.deep[2] + (M.mid[2] - M.deep[2]) * k1;
+            r += (M.lit[0] - r) * k2;
+            g += (M.lit[1] - g) * k2;
+            b += (M.lit[2] - b) * k2;
+            r += (M.glow[0] - r) * tr;
+            g += (M.glow[1] - g) * tr;
+            b += (M.glow[2] - b) * tr;
+            r += spA * sp;
+            g += spA * sp;
+            b += spA * sp;
+            if (rim) {
+                // 1 на самом краю, 0 в 1,4 пикселя внутри.
+                const e = clamp(1 + (d * dpr) / 1.4) * 0.6;
+                r += (RIM[0] - r) * e;
+                g += (RIM[1] - g) * e;
+                b += (RIM[2] - b) * e;
+            }
+            const a = 0.5 - d * dpr, q = i * 4;
+            px[q] = r > 255 ? 255 : r;
+            px[q + 1] = g > 255 ? 255 : g;
+            px[q + 2] = b > 255 ? 255 : b;
+            px[q + 3] = a <= 0 ? 0 : a >= 1 ? 255 : a * 255;
+        }
+    }
+    mem.m.octx.putImageData(img, 0, 0);
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(mem.m.off, 0, 0);
+    c.restore();
+}
+/** Шестиугольник вершиной вверх, R — до вершины. */
+function hexPath(c, x, y, R) {
+    c.beginPath();
+    for (let j = 0; j < 6; j++) {
+        const a = -Math.PI / 2 + (j * Math.PI) / 3;
+        if (j)
+            c.lineTo(x + R * Math.cos(a), y + R * Math.sin(a));
+        else
+            c.moveTo(x + R * Math.cos(a), y + R * Math.sin(a));
+    }
+    c.closePath();
+}
+/** Воск и пустые ячейки — вектором, под мёдом; пустая ячейка темнее сверху, видна глубина. */
+function waxComb(c, pos, a, wall, P, grey) {
+    const Ro = a / 0.8660254 + 0.3, Ri = (a - wall) / 0.8660254;
+    c.fillStyle = grey ? P.grey : P.wax;
+    for (const [x, y] of pos) {
+        hexPath(c, x, y, Ro);
+        c.fill();
+    }
+    for (const [x, y] of pos) {
+        const g = c.createLinearGradient(0, y - Ri, 0, y + Ri);
+        g.addColorStop(0, P.cellTop);
+        g.addColorStop(1, P.cellBot);
+        c.fillStyle = g;
+        hexPath(c, x, y, Ri);
+        c.fill();
+    }
+}
+const glowCache = new Map();
+/** Мягкий ореол за сотами на тёмном фоне (спрайт на цвет). */
+function glow(c, x, y, R, hex, a) {
+    let s = glowCache.get(hex);
+    if (s === undefined) {
+        const sprite = document.createElement('canvas');
+        sprite.width = sprite.height = 64;
+        const g = sprite.getContext('2d');
+        if (g === null)
+            return;
+        const n = parseInt(hex.slice(1), 16), rgb = `${n >> 16},${(n >> 8) & 255},${n & 255}`;
+        const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gr.addColorStop(0, `rgba(${rgb},1)`);
+        gr.addColorStop(0.3, `rgba(${rgb},.42)`);
+        gr.addColorStop(1, `rgba(${rgb},0)`);
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 64, 64);
+        glowCache.set(hex, sprite);
+        s = sprite;
+    }
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = a;
+    c.drawImage(s, x - R, y - R, 2 * R, 2 * R);
+    c.restore();
+}
+/** Искры «готово»: через `delay` разлетаются от центра и гаснут; в мелких размерах — точки. */
+function sparks(c, S, de, color, delay) {
+    const u = clamp((de - delay) / 0.8);
+    if (u <= 0 || u >= 1)
+        return;
+    c.fillStyle = color;
+    c.globalAlpha = Math.sin(Math.PI * u);
+    for (let j = 0; j < 5; j++) {
+        const a = -Math.PI / 2 + (TAU * j) / 5 + 0.45, r = S * lerp(0.38, 0.5, out3(u));
+        const x = S / 2 + r * Math.cos(a), y = S / 2 + r * Math.sin(a);
+        c.beginPath();
+        if (S < 22)
+            c.arc(x, y, Math.max(0.55, S * 0.04), 0, TAU);
+        else {
+            const q = S * 0.075 * (1 - 0.4 * u);
+            c.moveTo(x, y - q);
+            c.quadraticCurveTo(x, y, x + q, y);
+            c.quadraticCurveTo(x, y, x, y + q);
+            c.quadraticCurveTo(x, y, x - q, y);
+            c.quadraticCurveTo(x, y, x, y - q);
+        }
+        c.fill();
+    }
+    c.globalAlpha = 1;
+}
+/**
+ * Иконка: `size` — сторона, CSS px; `theme` — 'dark' или 'light'. Первый `set` показывает состояние без реакций;
+ * дальше рост `handed` — капля сдавшего летит в свою ячейку, переход в `done` — реакция «готово»; `failed` и
+ * `cancelled` — серые статичные соты.
+ */
+function createCombIcon({ size, theme }) {
+    const S = size, P = PALETTE[theme];
+    const s = { shown: false, status: 'running', n: 1, k: 0, handAt: -1e9, doneAt: -1e9, collAt: -1e9, flashAt: -1e9, pFrom: 0, pTo: 0, pAt: -1e9, pHand: false };
+    const mem = {};
+    function set(next, nowMs) {
+        const t = nowMs / 1000, n = Math.max(1, next.total), k = clamp(next.handed, 0, n);
+        if (!s.shown || n !== s.n) {
+            // Первый показ и смена числа участников — без реакций.
+            Object.assign(s, { shown: true, status: next.status, n, k, pFrom: k / n, pTo: k / n, pAt: -1e9, pHand: false });
+            return;
+        }
+        if (k > s.k)
+            Object.assign(s, { k, handAt: t, flashAt: t, pFrom: s.pTo, pTo: k / n, pAt: t, pHand: true });
+        else if (k < s.k)
+            Object.assign(s, { k, pFrom: k / n, pTo: k / n, pHand: false });
+        if (next.status !== s.status) {
+            if (next.status === 'collecting')
+                s.collAt = s.pHand && t - s.handAt < COLLECT_DELAY ? s.handAt + COLLECT_DELAY : t;
+            if (next.status === 'done') {
+                Object.assign(s, { doneAt: t, flashAt: t });
+                if (s.k < n)
+                    Object.assign(s, { k: n, pFrom: s.pTo, pTo: 1, pAt: t, pHand: false });
+            }
+            s.status = next.status;
+        }
+    }
+    function needsFrame(nowMs) {
+        const t = nowMs / 1000;
+        return (s.pHand && t - s.handAt < FLY + SETTLE) || t - s.pAt < 1.2 || (s.status === 'done' && t - s.doneAt < DONE) || t - s.flashAt < FLASH;
+    }
+    function frame(c, nowMs, reducedMotion) {
+        if (!c || !s.shown)
+            return;
+        const t = nowMs / 1000, R = reducedMotion === true, dpr = c.canvas.width / S;
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+        c.globalAlpha = 1;
+        c.globalCompositeOperation = 'source-over';
+        c.clearRect(0, 0, S, S);
+        const status = s.status === 'cancelled' ? 'failed' : s.status;
+        const collE = status === 'collecting' ? (R ? 1e9 : t - s.collAt) : -1;
+        const failed = status === 'failed', done = status === 'done', coll = collE >= 0;
+        const de = done ? (R ? 1e9 : t - s.doneAt) : 1e9;
+        const handE = R || !s.pHand ? 1e9 : t - s.handAt;
+        const tt = R ? 0 : t; // reduce motion: время стоит, капли на своих местах через равные углы
+        const small = S < 22, m = S / 2;
+        const prog = (delay, resp, z) => (R ? s.k / s.n : lerp(s.pFrom, s.pTo, spring(t - s.pAt - (s.pHand ? delay : 0), resp, z)));
+        const nc = Math.min(s.n, 7);
+        const { a, pos } = combLayout(nc, S);
+        // Раскладка отдаёт ровно `nc` центров: индексы ниже не выходят за них.
+        const cell = (j) => pos[j];
+        const wall = Math.max(0.45, a * 0.1), ain = a - wall - Math.max(0.25, a * 0.05);
+        if (P.glow && !failed)
+            glow(c, m, m, S * 0.5, P.halo, 0.1);
+        waxComb(c, pos, a, wall, P, failed);
+        // Полные ячейки; при n > 7 последняя наполняется частично. Новая — пока перетекает из капли — рисуется ниже.
+        let full = s.k, part = 0;
+        if (s.n > 7) {
+            const f = clamp(prog(FLY, 0.6, 0.5)) * 7;
+            full = Math.floor(f);
+            part = f - full;
+        }
+        if (done) {
+            full = nc;
+            part = 0;
+        }
+        const newest = s.n <= 7 && !done && !failed && handE < FLY + SETTLE ? s.k - 1 : -1;
+        // Волна «желе» на «готово»: кольцо вздрагивает на 0,1 с позже центра.
+        const jelly = (j) => {
+            if (!done || R)
+                return 1;
+            const e = de - 0.1 - (j === 0 ? 0 : 0.1);
+            return e < 0 || e > 0.7 ? 1 : 1 + 0.13 * Math.sin((Math.PI * e) / 0.28) * Math.exp(-e * 4);
+        };
+        const shapes = [];
+        for (let j = 0; j < full; j++) {
+            if (j === newest)
+                continue;
+            const q = jelly(j);
+            shapes.push(cellHoney(cell(j)[0], cell(j)[1], ain, { sx: 2 - q, sy: q }));
+        }
+        if (part > 0.01 && full < nc) {
+            const [x, y] = cell(full), y0 = y + (ain / 0.8660254) * (1 - 2 * part);
+            shapes.push(cellHoney(x, y, ain, { lv: (xx) => y0 + (R ? 0 : S * 0.01 * Math.sin((xx / S) * 12 + tt * 3)) }));
+        }
+        // Капли несдавших кружат вокруг сот: не больше 4 в мелких размерах и 5 в крупных, у каждой свой слот;
+        // новая проявляется в освободившемся слоте.
+        const SL = Math.min(s.n, small ? 4 : 5), dr = Math.max(0.9, S * 0.062);
+        const dropPos = (i, at) => {
+            const j = i % SL, ang = -Math.PI / 2 + (TAU * j) / SL + 0.3 + at * 0.5, q = 1 + 0.03 * Math.sin(at * 1.7 + j * 2.1);
+            // Орбита с «дыханием» не выходит за холст: 0,425·1,03 + радиус капли ≤ 0,5.
+            return [m + Math.cos(ang) * S * 0.425 * q, m + Math.sin(ang) * S * 0.405 * q];
+        };
+        if (!failed && !done) {
+            for (let i = s.k; i < Math.min(s.n, s.k + SL); i++) {
+                const [x, y] = dropPos(i, tt), g = i === s.k + SL - 1 && handE < 0.6 ? clamp(handE / 0.6) : 1;
+                if (g > 0.05)
+                    shapes.push(dropHoney(x, y, dr * g, S * 0.09));
+            }
+            // Сдавший летит к своей ячейке, а долетев, расплющивается и перетекает из круга в шестиугольник.
+            if (s.k > 0 && handE < FLY + SETTLE) {
+                const target = newest >= 0 ? cell(newest) : cell(Math.min(full, nc - 1));
+                if (handE < FLY) {
+                    const [x0, y0] = dropPos(s.k - 1, s.handAt), u = (handE / FLY) ** 2;
+                    shapes.push(dropHoney(lerp(x0, target[0], u), lerp(y0, target[1], u), dr, S * 0.09));
+                }
+                else if (newest >= 0) {
+                    const e = handE - FLY, g = spring(e, 0.45, 0.42), mu = clamp(spring(e - 0.06, 0.5, 0.5));
+                    const sq = 1 - 0.2 * Math.exp(-e * 6) * Math.cos(e * 24);
+                    shapes.push(cellHoney(target[0], target[1], ain, { R: lerp(dr, ain * 1.02, g), u: mu, sx: 2 - sq, sy: sq, k: S * 0.07 * (1 - mu) }));
+                }
+            }
+        }
+        // Свет: обычно сверху-слева; пока королева сводит, обходит соты по кругу; на «готово» — один полный оборот.
+        let la = -2.2;
+        if (coll && !R)
+            la += collE * 1.4;
+        if (done && !R && de < 1.4)
+            la += TAU * ease(clamp(de / 1.1));
+        honey3d(c, S, shapes, mem, failed, !P.glow, la, Math.max(0.9, S * 0.075));
+        if (done && !R)
+            sparks(c, S, de, P.spark, 0.5);
+        // Reduce motion: вместо движения — вспышка яркости 300 мс, как у движка острова.
+        const fe = t - s.flashAt;
+        if (R && fe >= 0 && fe < FLASH) {
+            const f = Math.sin((Math.PI * fe) / FLASH);
+            c.save();
+            c.setTransform(1, 0, 0, 1, 0, 0);
+            if (P.glow) {
+                c.globalCompositeOperation = 'lighter';
+                c.globalAlpha = 0.6 * f;
+                c.drawImage(c.canvas, 0, 0);
+            }
+            else {
+                c.globalCompositeOperation = 'source-atop';
+                c.globalAlpha = 0.45 * f;
+                c.fillStyle = P.flash;
+                c.fillRect(0, 0, c.canvas.width, c.canvas.height);
+            }
+            c.restore();
+        }
+    }
+    return { set, needsFrame, frame };
+}
+
+return { createCombIcon: createCombIcon };
+})();
+const combIcons = {};
+let combLast = 0;
+function combTick(now) {
+  requestAnimationFrame(combTick);
+  const canvases = document.querySelectorAll('#phone canvas.comb');
+  const theme = document.getElementById('phone').classList.contains('dark') ? 'dark' : 'light';
+  const lively = now - combLast >= 1000 / 12 - 2;
+  if (lively) combLast = now;
+  let slots = 3;
+  canvases.forEach(function (cv) {
+    const key = cv.dataset.comb + '/' + cv.width + '/' + theme;
+    let icon = combIcons[key];
+    if (!icon) icon = combIcons[key] = Comb.createCombIcon({ size: cv.width / 2, theme: theme });
+    icon.set({ status: cv.dataset.status, handed: +cv.dataset.handed, total: +cv.dataset.total }, now);
+    const still = cv.dataset.comb.indexOf(':still') > 0;
+    const live = !still && !S.rm && !isSwarmTerminal(cv.dataset.status) && slots > 0;
+    if (live) slots -= 1;
+    if (!cv._drawn || icon.needsFrame(now) || (live && lively)) { icon.frame(cv.getContext('2d'), now, S.rm); cv._drawn = true; }
+  });
+  if (lively) document.querySelectorAll('#phone [data-swarm-timer]').forEach(function (el) {
+    const sw = (WORKS.find(function (w) { return (w.swarms || []).some(function (x) { return x.id === el.dataset.swarmTimer; }); }) || { swarms: [] }).swarms.find(function (x) { return x.id === el.dataset.swarmTimer; });
+    if (sw) el.textContent = formatSwarmTimer(swarmElapsed(sw));
+  });
+}
+requestAnimationFrame(combTick);
+/* Prototype: the next drone hands in; then the queen collects; then the swarm is done. */
+function swarmStep() {
+  const sw = WORKS[0].swarms[0];
+  const next = sw.members.find(function (m) { return m.role !== 'queen' && !m.handed; });
+  if (next) {
+    next.handed = true;
+    const s = WORKS[0].sessions.find(function (x) { return x.id === next.sessionId; });
+    if (s) { s.att = 'done'; s.pending = false; s.line = 'Handed in · just now'; }
+    if (!sw.members.some(function (m) { return m.role !== 'queen' && !m.handed; })) sw.status = 'collecting';
+  } else if (sw.status === 'collecting') { sw.status = 'done'; sw.endedMs = Date.now(); }
+  else { sw.status = 'running'; sw.endedMs = null; sw.members.forEach(function (m, i) { if (m.role !== 'queen') m.handed = i <= 2; }); }
+}
+
 function rowHtml(row, guides) {
   const html = row.kind === 'session' ? sessionRow(row, guides) : row.kind === 'room' ? roomRow(row, guides) : swarmRow(row, guides);
   // "Tree lines only": a band between top-level rows marks where one main session's tree ends.
@@ -964,7 +1510,7 @@ function teamHeader(team, open) {
   const dots = open ? '' : '<div class="mdots">' + team.rows.slice(1).map(function (r) {
     if (r.kind === 'session') return attDot(sessAtt(r.s));
     if (r.kind === 'room') return '<span class="mini" style="color:' + (roomDecision(r.room) ? 'var(--tint)' : 'var(--label2)') + '">' + ic(roomDecision(r.room) ? 'seal' : 'hash', 12) + '</span>';
-    return '<span class="mini" style="color:var(--tint)">' + ic('hexgrid', 12) + '</span>';
+    return '<span class="mini">' + combIcon(r.sw, 14, true) + '</span>';
   }).join('') + '</div>';
   return '<div class="trow thead" style="--d:0" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' +
     h(s.label + ', main session. ' + ATT_WORD[att] + '. Team: ' + counts + (team.needs ? ', ' + team.needs + ' need you' : '') + (open ? ', expanded' : ', collapsed')) + '">' + g +
@@ -1458,6 +2004,7 @@ function renderPanel() {
     '<label>Notifications</label>' + seg('notif', [['on', 'On'], ['denied', 'Off in iOS'], ['unavailable', 'No push build']], S.notif) +
     '<label for="pNext">Next answer result</label><select id="pNext">' + opt([['applied', 'applied: true'], ['already', 'applied: false (already answered)'], ['lost', 'connection_lost → re-read'], ['conflict', 'conflict (decisions only)']], S.next) + '</select>' +
     '<button id="pAnsweredMac">Simulate: answered at your Mac</button>' +
+    '<button id="pSwarm">Simulate: next drone hands in</button>' +
     (S.flow === 'sas' ? '<label>Mac answers</label><div class="row"><button data-mac="paired">Allow</button><button data-mac="denied">Deny</button></div><div class="row"><button data-mac="timeout">Timeout</button><button data-mac="offerClosed">Code used</button></div>' : '') +
     '<label for="pJump">Go to screen</label><select id="pJump"><option value="">— choose —</option>' + JUMPS.map(function (j, i) { return '<option value="' + i + '">' + h(j[0]) + '</option>'; }).join('') + '</select>' +
     '<div class="hint">Haptics show as a purple “haptic:” tag on the phone. SF Symbols are SVG stand-ins; hover an icon for the symbol name.</div>' +
@@ -1477,6 +2024,7 @@ document.getElementById('panel').addEventListener('click', function (e) {
     if (id) { S.itemState[id] = 'answeredMac'; later(2000, function () { S.itemState[id] = 'leaving'; }); later(2300, function () { S.gone[id] = true; S.itemState[id] = undefined; }); }
     render(); return;
   }
+  if (b.id === 'pSwarm') { swarmStep(); render(); return; }
   if (b.id === 'pReset') { location.reload(); }
 });
 document.getElementById('panel').addEventListener('change', function (e) {
