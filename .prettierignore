@@ -8,3 +8,6 @@ pnpm-lock.yaml
 docs/
 RUN.md
 tools/claude-export.mjs
+
+# Тест-векторы Noise: байты сверяются по sha256, переформатировать нельзя
+packages/noise/test/vectors/*.json

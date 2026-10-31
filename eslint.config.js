@@ -66,6 +66,18 @@ export default tseslint.config(
     files: ['packages/protocol/src/remote/**/*.test.ts'],
     rules: { 'no-restricted-globals': 'off', 'no-restricted-imports': 'off' },
   },
+  // `@parley/noise` идёт в Hermes и браузер, как вход remote: без Buffer, process и node:* (план §0, A3).
+  {
+    files: ['packages/noise/src/**'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        { name: 'Buffer', message: 'Hermes and browsers have no Buffer; use Uint8Array.' },
+        { name: 'process', message: 'Hermes and browsers have no process.' },
+      ],
+      'no-restricted-imports': ['error', { patterns: [{ group: ['node:*'], message: 'No Node built-ins in @parley/noise.' }] }],
+    },
+  },
   // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
     files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],
