@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { HostRecord, KeyStore, Platform } from '@parley/remote-client';
 import { withSeedHost } from '../dev/seed-host';
+import { LocalSettings } from '../settings/local-settings';
+import { memoryStore } from '../settings/memory-store';
 import { AppRuntime } from './runtime';
 
 describe('AppRuntime.start', () => {
@@ -17,6 +19,7 @@ describe('AppRuntime.start', () => {
       platform: { keyStore } as unknown as Platform,
       marker: { exists: () => marked, create: () => void (marked = true) },
       client: { app: 'parley-mobile', version: '0.1.0', platform: 'ios' },
+      settings: new LocalSettings(memoryStore()),
     });
     await rt.start();
     await rt.start();
@@ -33,6 +36,7 @@ describe('AppRuntime.start', () => {
       platform: { keyStore } as unknown as Platform,
       marker: { exists: () => (n++, true), create: () => undefined },
       client: { app: 'parley-mobile', version: '0.1.0', platform: 'ios' },
+      settings: new LocalSettings(memoryStore()),
     });
     await rt.start();
     rt.stop();
@@ -65,5 +69,47 @@ describe('withSeedHost', () => {
     expect((await keys.list()).map((r) => r.hostId)).toEqual(['real']);
     await keys.remove('dev-seed');
     expect(records.has('dev-seed')).toBe(false);
+  });
+});
+
+describe('AppRuntime hosts', () => {
+  const rec = (id: string): HostRecord =>
+    ({
+      hostId: id,
+      hostName: `Mac ${id}`,
+      hsPub: 'A'.repeat(43),
+      relay: 'relay.example.com',
+      relays: [],
+      routeId: 'A'.repeat(22),
+      deviceId: 'A'.repeat(22),
+      relayToken: 'A'.repeat(43),
+      dsPriv: 'A'.repeat(43),
+      dsPub: 'A'.repeat(43),
+      lastTs: 0,
+      pairedAt: 0,
+    }) satisfies HostRecord;
+
+  it('lists hosts, keeps the remembered one current, renames locally and removes by erasing keys', async () => {
+    const records = new Map([['a', rec('a')], ['b', rec('b')]]);
+    const removed: string[] = [];
+    const keyStore: KeyStore = {
+      list: async () => [...records.values()],
+      put: async (r) => void records.set(r.hostId, r),
+      remove: async (id) => (removed.push(id), void records.delete(id)),
+    };
+    const settings = new LocalSettings(memoryStore());
+    await settings.setCurrentHostId('b');
+    const rt = new AppRuntime({
+      platform: { keyStore, appState: { get: () => 'active', subscribe: () => () => undefined } } as unknown as Platform,
+      marker: { exists: () => true, create: () => undefined },
+      client: { app: 'parley-mobile', version: '0.1.0', platform: 'ios' },
+      settings,
+    });
+    await rt.renameHost('a', ' Studio ');
+    expect(rt.getState().hostNames).toEqual({ a: 'Studio' });
+    await rt.removeHost('a');
+    expect(removed).toEqual(['a']);
+    expect(rt.getState().hosts.map((h) => h.hostId)).toEqual(['b']);
+    expect(rt.getState().hostNames).toEqual({});
   });
 });

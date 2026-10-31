@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
+import { confirmRemove } from '../hosts/confirm-remove';
+import { displayName } from '../settings/local-settings';
 import { runtime } from '../runtime/instance';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { typography, useColors } from '../theme';
@@ -30,9 +33,10 @@ function useReduceMotion(): boolean {
   return reduce;
 }
 
-/** One line under the navigation bar (D1 §4). A14 wires "Pair again"/"Remove" and the tap to Diagnostics. */
+/** One line under the navigation bar (D1 §4). "Pair again" scans a new code, "Remove" asks first, a tap opens Diagnostics. */
 export function ConnectionBanner({ onAction }: { onAction?: (action: BannerAction) => void }) {
   const colors = useColors();
+  const router = useRouter();
   const state = useRuntimeState();
   const base: Omit<BannerInput, 'now'> = {
     supervisor: state.supervisor,
@@ -76,11 +80,17 @@ export function ConnectionBanner({ onAction }: { onAction?: (action: BannerActio
   if (!visible || banner === null) return null;
   const onPress = (a: BannerAction): void => {
     if (a === 'retry') runtime.retry();
+    if (a === 'pair-again') router.push('/pair/scan');
+    if (a === 'remove' && state.host !== null) {
+      confirmRemove(state.host.hostId, displayName(state.host, state.hostNames));
+    }
     onAction?.(a);
   };
   return (
-    <View
+    <Pressable
       accessibilityLiveRegion="polite"
+      accessibilityHint="Opens Diagnostics"
+      onPress={() => router.push('/settings/diagnostics')}
       style={[styles.bar, { backgroundColor: banner.tone === 'warning' ? colors.warningBg : colors.neutralBg }]}
     >
       <View style={styles.icon}>
@@ -107,7 +117,7 @@ export function ConnectionBanner({ onAction }: { onAction?: (action: BannerActio
           </Text>
         </Pressable>
       ))}
-    </View>
+    </Pressable>
   );
 }
 
