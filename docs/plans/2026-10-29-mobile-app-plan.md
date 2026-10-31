@@ -572,8 +572,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
     - диалог запроса с SAS и «Codes match — Allow» / «Deny»; ответ несёт `requestId` своего диалога;
       `stale_request` и истечение срока закрывают диалог; «Phone connected ✓»;
     - Devices с «Revoke», «Revoke all and reset key» с подтверждением;
-    - переключатель «Allow creating sessions from the phone», по умолчанию включён: пишет `remoteSessionCreate`
-      хоста (решение 5, правки 10; спека §12);
+    - переключатель «Allow creating sessions and rooms from the phone», по умолчанию включён: пишет `remoteCreate`
+      хоста (решение 5, правки 10–11; спека §12);
     - Activity.
   - Присутствие из `powerMonitor.getSystemIdleState(60)` раз в 15 с и на смену.
   - Тексты — в `shared/strings.ts`.
@@ -780,76 +780,88 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
 - **Проверка.** `pnpm --filter @parley/mobile typecheck`; `pnpm --filter @parley/mobile test`; `pnpm exec eslint packages/mobile`; скриншоты;
   живой push и Face ID на устройстве — A20.
 
-#### A25. Запуск сессии с телефона — сводка (решение 5, правки 10)
+#### A25. Запуск сессий и комнат с телефона — сводка (решение 5, правки 10–11)
 
-Решение человека 2026-10-31: `sessions.create` с телефона — в этапе A (спека §4.2 «`sessions.create` с телефона»,
-§11.2 п. 9, §11.4, §12, §14, §16 решение 5). Принятые задачи не переделываются: поверх них идут малые задачи A1c,
-A2b, A8b, A12b, экран A26 и правки A10, A17, A20.
+Решение человека 2026-10-31: `sessions.create`, `rooms.create` с `roles.list` и `rooms.send` (письмо в комнату, в
+том числе первое — задача тихой комнаты) — в этапе A. Один переключатель в окне, по умолчанию включён; Face ID на
+каждый запуск и каждое письмо; хост — власть (спека §4.2 «Запуск с телефона», §4.3, §11.2 п. 9, §11.4, §12, §14,
+§16 решение 5). Принятые задачи не переделываются: поверх них идут малые задачи A1c, A2b, A8b, A12b, экраны A26 и
+правки A10, A17, A20.
 
-#### A1c. `@parley/protocol/remote`: `sessions.create` и `providers.list` в этапе A
+#### A1c. `@parley/protocol/remote`: запуск с телефона в этапе A
 
-- **Объём.** `REMOTE_STAGES.A.methods` + `sessions.create`, `providers.list`; из B убрать `providers.list`, у C
-  методов сверх B нет. Правило `REMOTE_PARAM_RULES['sessions.create']` по спеке §4.2: ключи только `projectPath`,
-  `workId`, `provider`, `label`, `task`, `parent`, `model`, `worktree`; `workId` — непустая строка; `parent: null`;
-  `label` 1–64 знака; `task` ≤ 16 КБ (UTF-8).
+- **Объём.** `REMOTE_STAGES.A.methods` + `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`,
+  `roles.list`; из B убрать `rooms.send` и `providers.list`; у C методов сверх B нет. `REMOTE_FORBIDDEN` без
+  `rooms.create`. Правила `REMOTE_PARAM_RULES` по спеке §4.2:
+  - `sessions.create`: ключи `projectPath`, `workId`, `provider`, `label`, `task`, `parent`, `model`, `role`,
+    `worktree`; `workId` — непустая строка; `parent: null`; `label` 1–64; `task` ≤ 16 КБ;
+  - `rooms.create`: ключи `projectPath`, `workId`, `title`, `members`, `lead`, `quiet`, `mode`; `title` 1–128;
+    `members` 1–16 строк; `mode` ∈ {`free`, `checklist`, `verified`};
+  - `rooms.send`: `roomId` — непустая строка; `kind` ∈ {`note`, `question`}; `text` ≤ 16 КБ (правило этапа B
+    переезжает).
 - **Файлы.** `packages/protocol/src/remote/allowlist.ts`, тесты рядом.
 - **Зависит.** A1.
-- **Приёмка** (кейсы): правило пропускает полный допустимый набор и отвергает `role`, `agent`, `effort`, `lean`,
-  `workId: null`, `parent` не `null`, `task` 16 КБ + 1 байт, `label` 65 знаков; прежние тесты A1 и A1b проходят
-  (пересечение с `REMOTE_FORBIDDEN` пусто, имена есть в `METHODS`).
+- **Приёмка** (кейсы): правила пропускают допустимые наборы и отвергают `agent`, `effort`, `lean`,
+  `workId: null`, `parent` не `null`, `task` 16 КБ + 1 байт, `label` 65 знаков; `rooms.create` с `mode:
+  'autonomous'`, `recipe`, `origin`, 17 участниками; `rooms.send` с `roomId: null` и `kind: 'decision'`; прежние
+  тесты A1 и A1b проходят (пересечение с `REMOTE_FORBIDDEN` пусто, имена есть в `METHODS`).
 - **Проверка.** `pnpm --filter @parley/protocol build`; `pnpm --filter @parley/protocol test`; `pnpm exec eslint packages/protocol`.
 
-#### A2b. Хост: `sessions.create` для роли `remote` — senior-only
+#### A2b. Хост: запуск с телефона для роли `remote` — senior-only
 
-- **Почему senior.** Граница доступа хоста: запуск агента с телефона (спека §14).
-- **Объём.** Настройка `remoteSessionCreate` в конфиге хоста (по умолчанию `true`, ключ для `settings.set`). Для
-  роли `remote`: выключена → `sessions.create` нет в `hello.methods` и вызов → `unknown_method`; `projectPath` не
-  известный хосту проект или `workId` не существующая неархивная работа этого проекта → `bad_request`, обработчик
-  не вызван. Смена настройки закрывает соединения клиентов `remote`. Лимиты и правила запуска — прежние.
+- **Почему senior.** Граница доступа хоста: запуск агентов и комнат с телефона (спека §14).
+- **Объём.** Настройка `remoteCreate` в конфиге хоста (по умолчанию `true`, ключ для `settings.set`). Для роли
+  `remote`: выключена → `sessions.create`, `rooms.create`, `rooms.send` нет в `hello.methods`, вызов →
+  `unknown_method`; `projectPath` не известный хосту проект или `workId` не существующая неархивная работа этого
+  проекта → `bad_request`, обработчик не вызван; правила участников, ведущего и комнаты — как для окна. Смена
+  настройки закрывает соединения клиентов `remote`. Лимиты и правила запуска — прежние.
 - **Файлы.** `packages/host/src/server.ts`, конфиг (`packages/core/src/config.ts`), тесты хоста.
 - **Зависит.** A1c, A2.
-- **Приёмка** (кейсы): включено → сессия создаётся, `hello.methods` содержит метод; выключено → `unknown_method`,
-  метода нет в `hello.methods`; чужой `projectPath` и архивная работа → `bad_request` (шпион обработчика);
-  `role`/`agent` отвергаются правилом A1c; смена настройки закрывает сокет клиента `remote`, полный клиент не
-  тронут; лимит сессий хоста срабатывает для `remote` так же, как для окна; прежние тесты хоста проходят.
+- **Приёмка** (кейсы): включено → сессия и комната создаются, письмо в комнату уходит, `hello.methods` содержит
+  все три метода; выключено → `unknown_method` на каждый, методов нет в `hello.methods`; чужой `projectPath` и
+  архивная работа → `bad_request` (шпион обработчика); `agent`, `autonomous`, `recipe` отвергаются правилами A1c;
+  смена настройки закрывает сокет клиента `remote`, полный клиент не тронут; лимит сессий хоста срабатывает для
+  `remote` так же, как для окна; прежние тесты хоста проходят.
 - **Проверка.** `pnpm --filter @parley/host build`; `pnpm --filter @parley/host test`; `pnpm exec eslint packages/host`. Ревью критика старшего уровня.
 
-#### A8b. Мост: методы хоста эпохи и `sessions.create`
+#### A8b. Мост: методы хоста эпохи и запуск с телефона
 
 - **Объём.** `HostLink` отдаёт `hello.methods` эпохи. Диспетчер A8 пропускает только пересечение
   `REMOTE_METHODS` и `hello.methods`; hello моста телефону — то же пересечение плюс методы моста. Набор методов
-  новой эпохи отличается от прошлой → `session.closing rekey` всем телефонам. `sessions.create` — изменяющий
-  вызов (лимит A8), журнал `call` с `target` = работа.
+  новой эпохи отличается от прошлой → `session.closing rekey` всем телефонам. `sessions.create`, `rooms.create`,
+  `rooms.send` — изменяющие вызовы (лимит A8), журнал `call` с `target` = работа или комната.
 - **Файлы.** `packages/remote/src/{host-link,dispatch,fanout}.ts`, тесты.
 - **Зависит.** A8, A1c.
-- **Приёмка** (кейсы): хост без `sessions.create` в `hello.methods` → вызов телефона → `unknown_method`, к хосту
-  не ушёл; хост с методом → вызов дошёл, ответ `{ref}` телефону; смена набора методов между эпохами → телефоны
-  получают `session.closing rekey`; hello моста содержит метод только при его наличии у хоста.
+- **Приёмка** (кейсы): хост без метода в `hello.methods` → вызов телефона → `unknown_method`, к хосту не ушёл;
+  хост с методом → вызов дошёл, ответ телефону; смена набора методов между эпохами → телефоны получают
+  `session.closing rekey`; hello моста содержит метод только при его наличии у хоста.
 - **Проверка.** `pnpm --filter @parley/remote build`; `pnpm --filter @parley/remote test`; `pnpm exec eslint packages/remote`.
 
-#### A12b. `remote-client`: действие `createSession`
+#### A12b. `remote-client`: действия запуска и письма
 
-- **Объём.** Действие `createSession(params)` с итогами `created {ref}` | `rejected {code, message}` | `lost`;
-  после `lost` — перечитать снимок работ и найти новую сессию в выбранной работе, иначе итог
-  `unknown` («Check your Mac — the session may have started»). Вызов не повторяется. Производная «можно ли
-  запускать» — по `methods` из hello моста.
-- **Файлы.** `packages/remote-client/src/actions.ts`, тесты.
+- **Объём.** Действия `createSession`, `createRoom`, `sendRoomMessage` с итогами `created {ref}` / `sent` |
+  `rejected {code, message}` | `lost`; после `lost` — перечитать снимок работ и найти новую сессию или комнату,
+  иначе итог `unknown`; письмо после `lost` остаётся черновиком. Вызовы не повторяются. Производные «можно ли
+  запускать / писать» — по `methods` из hello моста; каталоги из `providers.list` и `roles.list`.
+- **Файлы.** `packages/remote-client/src/actions.ts` (+ состояние каталогов), тесты.
 - **Зависит.** A12, A1c.
-- **Приёмка** (кейсы): `{ref}` → `created`; `unknown_method` → `rejected` с кодом (для текста «turned off on your
-  Mac»); `connection_lost` → нет повтора, перечитывание, `created` или `unknown`; без метода в hello производная
-  — `false`.
+- **Приёмка** (кейсы): ответ хоста → `created` / `sent`; `unknown_method` → `rejected` с кодом;
+  `connection_lost` → нет повтора, перечитывание, `created` или `unknown`, черновик письма цел; без метода в hello
+  производная — `false`.
 - **Проверка.** `pnpm --filter @parley/remote-client build`; `pnpm --filter @parley/remote-client test`; `pnpm exec eslint packages/remote-client`.
 
-#### A26. Приложение: экран New session
+#### A26. Приложение: экраны New session и New room
 
-- **Объём** (спека §11.2 п. 9, §11.4; макет D1). Кнопка запуска видна только при методе в hello моста. Выбор
-  проекта и работы из проекции, провайдера и модели из `providers.list`, текст задачи, имя, worktree. Face ID через
-  `approve()` из A16 перед отправкой. После `created` — экран новой сессии; отказы — читаемые состояния.
-- **Файлы.** `packages/mobile/app/new-session.tsx` (или по структуре A13), тесты.
+- **Объём** (спека §11.2 п. 9, §11.4; макеты D1). Кнопки видны только при методе в hello моста. New session:
+  проект и работа из проекции, провайдер и модель из `providers.list`, роль из `roles.list`, текст задачи, имя,
+  worktree; после `created` — экран новой сессии. New room: название, участники из сессий работы, ведущий, тихий
+  старт, режим без `autonomous`; после создания — первое письмо в комнату. Face ID через `approve()` из A16 перед
+  каждым запуском и письмом. Отказы — читаемые состояния.
+- **Файлы.** `packages/mobile/app/new-session.tsx`, `app/new-room.tsx` (или по структуре A13), тесты.
 - **Зависит.** A12b, A13, A16 (`approve()`), D1.
-- **Приёмка.** Кейсы: без метода в hello кнопки нет; отмена Face ID — вызова нет; `created` открывает сессию;
-  `unknown_method` → «Creating sessions from the phone is turned off on your Mac»; ошибка лимита хоста — текст
-  хоста. Экран по макету D1.
+- **Приёмка.** Кейсы: без метода в hello кнопок нет; отмена Face ID — вызова нет; `created` открывает сессию или
+  комнату; первое письмо уходит с Face ID; `unknown_method` → «Creating sessions and rooms from the phone is turned
+  off on your Mac»; ошибка лимита хоста — текст хоста. Экраны по макетам D1.
 - **Проверка.** `pnpm --filter @parley/mobile typecheck`; `pnpm --filter @parley/mobile test`; `pnpm exec eslint packages/mobile`; скриншоты.
 
 #### A17. Сквозной и пограничный тесты — ревью senior
@@ -862,8 +874,9 @@ A2b, A8b, A12b, экран A26 и правки A10, A17, A20.
     - белый список против `REMOTE_FORBIDDEN`;
     - хост с ролью `remote` (из A2);
     - мост в этапе A не открывает TCP-слушателей — шпион на `net.Server.prototype.listen`: только unix-путь;
-    - `sessions.create` (правки 10): с выключенным переключателем хоста телефон получает `unknown_method`, с
-      включённым — сессию; чужой `projectPath` → `bad_request`.
+    - запуск с телефона (правки 10–11): с выключенным переключателем хоста `sessions.create`, `rooms.create` и
+      `rooms.send` дают `unknown_method`, с включённым — сессию, комнату и письмо; чужой `projectPath` →
+      `bad_request`; `rooms.create` с `autonomous` → `bad_request`.
   - Режим внешнего relay: `PARLEY_E2E_RELAY_URL` — подмножество сценария против развёрнутого узла вместо
     локального; без переменной режим пропускается. Что проверяет каждый режим:
 
@@ -1004,8 +1017,9 @@ A2b, A8b, A12b, экран A26 и правки A10, A17, A20.
   22. Face ID на одобрение (Р6, правки 9): Allow, Accept и одобрение плана (в том числе с `auto-accept`) спрашивают
       Face ID, Deny и отклонение нет; отмена Face ID ничего не
       шлёт; без настроенной биометрии работает код телефона; выключенная настройка снимает запрос.
-  23. Запуск сессии с телефона (решение 5, правки 10): Face ID перед запуском, отмена ничего не шлёт; новая сессия
-      открыта на телефоне и видна в окне; выключенный переключатель в окне прячет кнопку и отвергает вызов.
+  23. Запуск с телефона (решение 5, правки 10–11): Face ID перед запуском сессии, комнаты и перед письмом, отмена
+      ничего не шлёт; новая сессия и комната с первым письмом видны на телефоне и в окне; выключенный переключатель
+      в окне прячет кнопки и отвергает вызовы.
 - **Файлы.** `docs/audits/2026-11-XX/mobile-mvp-acceptance.md`.
 - **Зависит.** A13–A18b, A23. Мак — собранный `.app` из A23, не dev-сборка.
 - **Приёмка.**
@@ -1052,7 +1066,7 @@ A2b, A8b, A12b, экран A26 и правки A10, A17, A20.
 | Задача | Причина |
 |---|---|
 | A2 | граница доступа хоста |
-| A2b | граница доступа хоста: запуск агента с телефона |
+| A2b | граница доступа хоста: запуск агентов и комнат с телефона |
 | A3 | крипто: своя машина Noise |
 | A7 | крипто-протокол моста и выдача сессии к хосту |
 | A11 | восстановление связи и крипто на клиенте |
@@ -1115,7 +1129,7 @@ A5 и A18a идут вне критического пути.
 | Этап B: B11 | Р4 — открытый вопрос: должна ли релизная сборка без сервера работать в той же сети Wi-Fi |
 | A16 (биометрия, бывший B13) | Р6 решено 2026-10-31: в этапе A, по умолчанию включена (правки 9) |
 | Этап B: B16 | Р10 — что видно на плашке Live Activity |
-| A1c, A2b, A8b, A12b, A26 | Р5 решено 2026-10-31: `sessions.create` в этапе A (правки 10) |
+| A1c, A2b, A8b, A12b, A26 | Р5 решено 2026-10-31: запуск сессий и комнат и письмо в комнату — в этапе A (правки 10–11) |
 | Этап C: C1 | Р5 — `pty.input` по-прежнему вне объёма |
 
 ### 2.5 Отложено: Android (после приёмки этапа A)
@@ -1258,3 +1272,9 @@ Android не удалён, а отложен (Р3, правки 5). Блок п�
 | № | Решение | Что изменено |
 |---|---|---|
 | 10.1 | `sessions.create` и `providers.list` в белом списке A; хост — власть; переключатель в окне по умолчанию включён; Face ID на каждый запуск; экран запуска | **A25 (сводка), A1c, A2b (senior-only), A8b, A12b, A26 — новые**; A10 (переключатель); A17 (пограничный тест); A20 п. 23; 2.2; 2.3; 2.4 |
+
+**Правки 11 — окончательная версия решения 5, 2026-10-31** (спека §20, правки 12). К сессиям добавлены комнаты.
+
+| № | Решение | Что изменено |
+|---|---|---|
+| 11.1 | `rooms.create`, `roles.list`, `rooms.send` — в этапе A; один переключатель `remoteCreate`, по умолчанию включён; Face ID на каждый запуск и письмо; `rooms.create` убран из запрещённых | A25; A1c; A2b; A8b; A12b; A26 (экраны New session и New room); A10; A17; A20 п. 23; 2.2; 2.4 |
