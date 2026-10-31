@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { parleyHome } from '@parley/core';
+import { parleyHome } from '@parley/core/home';
 
 /** Файлы моста: всё лежит в `<дом>/remote/` (спека 5.2). */
 export interface RemotePaths {
@@ -13,6 +13,7 @@ export interface RemotePaths {
   controlToken: string;
   pid: string;
   log: string;
+  logArchive: string;
 }
 
 /** `sockaddr_un.sun_path` на macOS — 104 байта с нулём; берём 103. */
@@ -32,6 +33,7 @@ export function remotePaths(home: string = parleyHome()): RemotePaths {
     controlToken: path.join(dir, 'control.token'),
     pid: path.join(dir, 'bridge.pid'),
     log: path.join(dir, 'bridge.log'),
+    logArchive: path.join(dir, 'bridge.log.1'),
   };
   if (Buffer.byteLength(paths.controlSocket) > MAX_SOCKET_PATH_BYTES) {
     throw new Error(`control socket path is longer than ${MAX_SOCKET_PATH_BYTES} bytes`);

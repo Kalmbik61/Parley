@@ -99,6 +99,16 @@ export default tseslint.config(
       ],
     },
   },
+  // Мост грузит только подпути `@parley/core/*`: корень тянет `node:sqlite` и печатает ExperimentalWarning на каждом старте.
+  {
+    files: ['packages/remote/src/**'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { paths: [{ name: '@parley/core', message: 'Use @parley/core/* subpaths (the root pulls node:sqlite).', allowTypeImports: true }] },
+      ],
+    },
+  },
   // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
     files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],

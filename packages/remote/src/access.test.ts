@@ -553,6 +553,32 @@ describe('pairing', () => {
     ).toEqual(['no-ack']);
   });
 
+  it('pair.start between credentials and paired does not drop the approved device (critic wave 4, m6)', async () => {
+    const { qr } = await f.access.handlers['pair.start']();
+    const p = await startPairing(qr);
+    await f.access.handlers['pair.answer']({ requestId: p.request.requestId, allow: true });
+    const creds = (await p.channel.recv()) as { deviceId: string };
+    // «Новый QR» в окне, пока кадр `paired` ещё в пути: устройство остаётся, оффер новый.
+    const next = await f.access.handlers['pair.start']();
+    expect(next.qr).not.toBe(qr);
+    expect(devicesOnDisk()).toEqual([expect.objectContaining({ deviceId: creds.deviceId })]);
+    p.channel.send({ t: 'paired' });
+    await until(() => eventsOf('pair.done').find((d) => d.deviceId === creds.deviceId));
+    expect(devicesOnDisk()).toEqual([expect.objectContaining({ deviceId: creds.deviceId, state: 'active' })]);
+    expect(eventsOf('pair.failed')).toEqual([]);
+    // Новый оффер открыт: следующий телефон проходит до запроса.
+    const second = await startPairing(next.qr);
+    expect(second.request.requestId).not.toBe(p.request.requestId);
+  });
+
+  it('pair.cancel still ends a request that is waiting for the human', async () => {
+    const { qr } = await f.access.handlers['pair.start']();
+    const p = await startPairing(qr);
+    await f.access.handlers['pair.cancel']();
+    await until(() => eventsOf('pair.failed').length === 1);
+    expect(eventsOf('pair.failed')[0]).toMatchObject({ requestId: p.request.requestId, reason: 'offer_closed' });
+  });
+
   it('a failed device write on «Allow» ends the request and removes the device (critic m4)', async () => {
     const { qr } = await f.access.handlers['pair.start']();
     const p = await startPairing(qr);

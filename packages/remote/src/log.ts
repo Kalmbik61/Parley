@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, closeSync, openSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, existsSync, openSync, renameSync, statSync } from 'node:fs';
 import { ensureDirSync } from './files-sync.js';
 
 /** Поля, значения которых никогда не пишутся: секреты, payload и тексты. */
@@ -12,8 +12,14 @@ export interface BridgeLog {
   addSecret(value: string): void;
 }
 
+/** Размер, после которого `bridge.log` становится архивом (как у журнала `audit.jsonl`). */
+export const LOG_MAX_BYTES = 5 * 1024 * 1024;
+
 export interface LogOptions {
   file: string;
+  /** Архив: прежний лог при переполнении, один файл (прежний архив теряется). По умолчанию `<file>.1`. */
+  archive?: string;
+  maxBytes?: number;
   now?: () => Date;
 }
 
@@ -33,6 +39,8 @@ function scalar(value: unknown, redact: (text: string) => string): string | numb
 export function createLog(options: LogOptions): BridgeLog {
   const now = options.now ?? (() => new Date());
   const secrets = new Set<string>();
+  const archive = options.archive ?? `${options.file}.1`;
+  const maxBytes = options.maxBytes ?? LOG_MAX_BYTES;
 
   function redact(text: string): string {
     let out = text;
@@ -48,6 +56,8 @@ export function createLog(options: LogOptions): BridgeLog {
     const line = redact(JSON.stringify(entry));
     try {
       ensureDirSync(options.file);
+      const size = existsSync(options.file) ? statSync(options.file).size : 0;
+      if (size > 0 && size + Buffer.byteLength(line) + 1 > maxBytes) renameSync(options.file, archive);
       const fd = openSync(options.file, 'a', 0o600);
       try {
         appendFileSync(fd, `${line}\n`);

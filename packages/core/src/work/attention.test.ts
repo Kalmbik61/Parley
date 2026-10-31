@@ -217,7 +217,7 @@ describe('needsYouItems / needsYouCount (спека мобильного при�
     room({ id: 'r-2', proposal: { id: 'p-2', rev: 0 }, archivedAt: '2026-10-01T00:00:00Z' }),
     room({ id: 'r-3', proposal: null }),
   ];
-  const map = { work: { id: 'w-1' }, sessions, rooms, messages } as unknown as WindowWorkMap;
+  const map = { work: { id: 'w-1', status: 'active' }, sessions, rooms, messages } as unknown as WindowWorkMap;
   const activityOf = (_p: string, _w: string, id: string) => lives[id] ?? null;
 
   it('счёт равен сумме предикатов окна на тех же данных', () => {
@@ -234,8 +234,8 @@ describe('needsYouItems / needsYouCount (спека мобильного при�
     expect(items.map((i) => i.key)).toEqual([
       'session:/p\u0000w-1\u0000s-blocked',
       'session:/p\u0000w-1\u0000s-limit',
-      'room:/p/w-1/r-1:p-1:2',
-      'letters:/p/w-1',
+      'room:/p\u0000w-1\u0000r-1:p-1:2',
+      'letters:/p\u0000w-1',
     ]);
     expect(items.at(-1)).toMatchObject({ kind: 'letters', unread: 1 });
   });
@@ -246,6 +246,13 @@ describe('needsYouItems / needsYouCount (спека мобильного при�
     const b = needsYouItems([needsYouWorkOfMap('/p', bump)], () => null);
     expect(needsYouCount([needsYouWorkOfMap('/p', map)], () => null)).toBe(needsYouCount([needsYouWorkOfMap('/p', bump)], () => null));
     expect(a.find((i) => i.kind === 'room')?.key).not.toBe(b.find((i) => i.kind === 'room')?.key);
+  });
+
+  it('архивная работа в счёт не входит: ни сессии, ни решения, ни письма (как бейдж окна)', () => {
+    const archived = { ...map, work: { id: 'w-1', status: 'archived' } } as unknown as WindowWorkMap;
+    expect(needsYouWorkOfMap('/p', archived).archived).toBe(true);
+    expect(needsYouItems([needsYouWorkOfMap('/p', archived)], activityOf)).toEqual([]);
+    expect(needsYouCount([needsYouWorkOfMap('/p', archived), needsYouWorkOfMap('/q', map)], activityOf)).toBe(4);
   });
 
   it('счётчик писем берётся из компактной карты: v2 — rooms[""].unread, v1 — unread.letters; без записи канала — 0', () => {

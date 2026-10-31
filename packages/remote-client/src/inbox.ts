@@ -174,6 +174,7 @@ export function selectNeedsYouCount(state: RemoteState): number {
   const works: NeedsYouWork[] = (state.snapshot?.works ?? []).map((w) => ({
     projectPath: w.projectPath,
     workId: w.id,
+    archived: w.status === 'archived',
     sessions: w.sessions,
     rooms: w.rooms,
     unreadLetters: state.letterUnread[workKeyOf(w.projectPath, w.id)] ?? 0,

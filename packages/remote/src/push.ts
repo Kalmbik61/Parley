@@ -35,8 +35,8 @@ export interface PushNotifier {
 /**
  * Повод для push (спека 9.2): в множестве ключей ждущих пунктов эпохи появился ключ, которого не было.
  *  - сессия: `session:<project>␀<work>␀<session>:<n>`, `n` растёт на каждый вход в `needs-you`;
- *  - решение комнаты: `room:<project>/<work>/<room>:<proposalId>:<rev>`;
- *  - письмо: `letter:<project>/<work>:<messageId>` — из `rooms.mail`.
+ *  - решение комнаты: `room:<project>␀<work>␀<room>:<proposalId>:<rev>`;
+ *  - письмо: `letter:<project>␀<work>␀<messageId>` — из `rooms.mail`.
  * Уход пункта и падение счётчика push не дают. Первая картина эпохи — база: ждавшее при подключении push не даёт.
  * Пачка 3 с → проверка присутствия → по одному `POST /v1/push` на устройство с токеном; 410 стирает токен через
  * `DeviceStore` (единственный писатель `devices.json`); недоступный шлюз — пропуск без повтора, запись в лог.
@@ -113,7 +113,7 @@ export function createPushNotifier(options: PushNotifierOptions): PushNotifier {
     letterUnread.set(workKey(event.projectPath, event.workId), event.unread.letters);
     for (const room of event.rooms) {
       if (room.roomId !== null) continue;
-      const keyOf = (id: string): string => `letter:${event.projectPath}/${event.workId}:${id}`;
+      const keyOf = (id: string): string => `letter:${event.projectPath}\u0000${event.workId}\u0000${id}`;
       for (const letter of room.letters) if (isHumanUnread(letter)) letterKeys.add(keyOf(letter.id));
       for (const read of room.reads) if (read.reader === 'human') letterKeys.delete(keyOf(read.id));
       for (const id of room.deleted) letterKeys.delete(keyOf(id));
