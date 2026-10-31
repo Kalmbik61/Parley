@@ -54,7 +54,7 @@ export interface ControlCallbacks {
   status(): z.infer<typeof controlStatusResult>;
   configure(params: z.infer<typeof controlConfigureParams>): Promise<void>;
   presence(params: z.infer<typeof controlPresenceParams>): void;
-  pushTest(): Promise<void>;
+  pushTest(params: z.infer<typeof controlRevokeParams>): Promise<void>;
   /** Вызывается после ответа окну. */
   stop(): void | Promise<void>;
 }
@@ -139,8 +139,7 @@ export function createControlServer(options: ControlServerOptions): ControlServe
           callbacks.presence(parse(controlPresenceParams));
           return { result: OK };
         case 'push.test':
-          parse(empty);
-          await callbacks.pushTest();
+          await callbacks.pushTest(parse(controlRevokeParams));
           return { result: OK };
         case 'stop':
           parse(empty);
@@ -180,13 +179,34 @@ export function createControlServer(options: ControlServerOptions): ControlServe
     }
   }
 
-  function send(socket: net.Socket, message: unknown): void {
-    if (socket.writable) socket.write(`${JSON.stringify(message)}\n`);
+  /** Промис завершается, когда ответ записан в сокет (или сокет уже закрыт). */
+  function send(socket: net.Socket, message: unknown): Promise<void> {
+    return new Promise((resolve) => {
+      if (!socket.writable) return resolve();
+      socket.write(`${JSON.stringify(message)}\n`, () => resolve());
+    });
+  }
+
+  /** Запросы всех соединений, которые ещё идут: `stop` дожидается их перед остановкой. */
+  const running = new Set<Promise<void>>();
+  let stopping = false;
+
+  /** Сокет с живым слушателем: второй экземпляр моста его не затирает. */
+  function isLive(socketPath: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probe = net.connect(socketPath);
+      probe.once('connect', () => {
+        probe.destroy();
+        resolve(true);
+      });
+      probe.once('error', () => resolve(false));
+    });
   }
 
   function onConnection(socket: net.Socket): void {
     const decoder = new LineDecoder();
     let authed = false;
+    let chain: Promise<void> = Promise.resolve();
     const timer = setTimeout(() => socket.destroy(), options.helloTimeoutMs ?? 5000);
     socket.on('error', () => {});
     socket.on('close', () => {
@@ -195,29 +215,45 @@ export function createControlServer(options: ControlServerOptions): ControlServe
     });
 
     const handle = async (raw: unknown): Promise<void> => {
+      // Запросы одного соединения идут по очереди: ответы не обгоняют друг друга.
       const msg = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
       const id = msg && typeof msg.id === 'number' ? msg.id : null;
       if (!msg || id === null || typeof msg.method !== 'string') {
-        if (id !== null) send(socket, { id, error: { code: 'bad_request', message: 'malformed request' } });
+        if (id !== null) await send(socket, { id, error: { code: 'bad_request', message: 'malformed request' } });
         if (!authed) socket.end();
         return;
       }
       if (!authed) {
         const hello = msg.method === 'hello' ? helloParams.safeParse(msg.params) : null;
         if (!hello?.success || !tokensEqual(hello.data.token, token)) {
-          send(socket, { id, error: { code: 'unauthorized', message: 'invalid token' } });
+          await send(socket, { id, error: { code: 'unauthorized', message: 'invalid token' } });
           socket.end();
           return;
         }
         authed = true;
         clearTimeout(timer);
         clients.add(socket);
-        send(socket, { id, result: OK });
+        await send(socket, { id, result: OK });
         return;
       }
-      const reply = await dispatch(msg.method, msg.params);
-      send(socket, { id, ...reply });
+      if (stopping) {
+        await send(socket, { id, error: { code: 'stopping', message: 'the bridge is stopping' } });
+        return;
+      }
+      const work = dispatch(msg.method, msg.params);
+      const tracked = work.then(() => undefined);
+      running.add(tracked);
+      let reply: Reply;
+      try {
+        reply = await work;
+      } finally {
+        running.delete(tracked);
+      }
+      if (msg.method === 'stop' && 'result' in reply) stopping = true;
+      await send(socket, { id, ...reply });
       if (msg.method === 'stop' && 'result' in reply) {
+        // Ответ записан; ждём запросы других соединений, потом остановка.
+        await Promise.allSettled([...running]);
         try {
           await callbacks.stop();
         } catch (error) {
@@ -234,14 +270,16 @@ export function createControlServer(options: ControlServerOptions): ControlServe
         socket.destroy();
         return;
       }
-      for (const raw of messages) void handle(raw);
+      for (const raw of messages) chain = chain.then(() => handle(raw)).catch((error: unknown) => log.error('control.handle-failed', { error }));
     });
   }
 
   return {
     async start() {
       await ensureDir(options.socketPath.slice(0, options.socketPath.lastIndexOf('/')) || '/');
+      if (await isLive(options.socketPath)) throw new Error('control socket is already in use by another bridge');
       await rm(options.socketPath, { force: true });
+      stopping = false;
       token = randomBytes(32).toString('hex');
       log.addSecret(token);
       await writeFileAtomic(options.tokenPath, token);

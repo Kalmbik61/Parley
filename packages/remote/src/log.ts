@@ -17,9 +17,13 @@ export interface LogOptions {
   now?: () => Date;
 }
 
-function scalar(value: unknown): string | number | boolean | null {
+function scalar(value: unknown, redact: (text: string) => string): string | number | boolean | null {
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return value.length > 200 ? `${value.slice(0, 200)}…` : value;
+  if (typeof value === 'string') {
+    // Сначала вырезаем секреты, потом обрезаем: иначе на границе остаётся начало секрета.
+    const clean = redact(value);
+    return clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
+  }
   // Ошибки: только имя и код, не сообщение — оно может нести значение.
   if (value instanceof Error) return `${value.name}${(value as NodeJS.ErrnoException).code ? `:${(value as NodeJS.ErrnoException).code}` : ''}`;
   return '[object]';
@@ -30,13 +34,18 @@ export function createLog(options: LogOptions): BridgeLog {
   const now = options.now ?? (() => new Date());
   const secrets = new Set<string>();
 
+  function redact(text: string): string {
+    let out = text;
+    for (const secret of secrets) out = out.split(secret).join('[redacted]');
+    return out;
+  }
+
   function write(level: string, event: string, fields: Record<string, unknown> = {}): void {
     const entry: Record<string, unknown> = { at: now().toISOString(), level, event };
     for (const [key, value] of Object.entries(fields)) {
-      entry[key] = SECRET_KEY.test(key) ? '[redacted]' : scalar(value);
+      entry[key] = SECRET_KEY.test(key) ? '[redacted]' : scalar(value, redact);
     }
-    let line = JSON.stringify(entry);
-    for (const secret of secrets) line = line.split(secret).join('[redacted]');
+    const line = redact(JSON.stringify(entry));
     try {
       ensureDirSync(options.file);
       const fd = openSync(options.file, 'a', 0o600);

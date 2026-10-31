@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -53,7 +54,7 @@ describe('audit', () => {
     const paths = remotePaths(home);
     const audit = createAuditLog({ file: paths.audit, archive: paths.auditArchive, maxBytes: 5 * 1024 * 1024 });
     const detail = 'x'.repeat(100_000);
-    for (let i = 0; i < 60; i++) audit.append({ kind: 'call', outcome: 'ok', detail: `${i}:${detail}` });
+    for (let i = 0; i < 60; i++) audit.append({ kind: 'call', outcome: detail, detail: `${i}:` });
     const size = (await stat(paths.audit)).size;
     expect(size).toBeLessThanOrEqual(5 * 1024 * 1024);
     expect((await stat(paths.auditArchive)).size).toBeGreaterThan(0);
@@ -62,11 +63,21 @@ describe('audit', () => {
     expect(tail).toHaveLength(3);
     expect(tail.at(-1)?.detail?.startsWith('59:')).toBe(true);
   });
+
+  it('clips detail and target to 256 characters', () => {
+    const paths = remotePaths(home);
+    const audit = createAuditLog({ file: paths.audit, archive: paths.auditArchive });
+    audit.append({ kind: 'call', outcome: 'ok', detail: 'd'.repeat(5000), target: 't'.repeat(5000) });
+    const [record] = audit.tail(1);
+    expect(record!.detail!.length).toBeLessThanOrEqual(257);
+    expect(record!.target!.length).toBeLessThanOrEqual(257);
+  });
 });
 
 describe('control socket', () => {
   let server: ControlServer;
   let stopped = 0;
+  const pushed: unknown[] = [];
   let sockPath: string;
   let token: string;
 
@@ -84,7 +95,9 @@ describe('control socket', () => {
         status: () => ({ running: true, host: 'online', relay: 'connected', relayUrl: null, devices: 0, version: '1' }),
         configure: async () => {},
         presence: () => {},
-        pushTest: async () => {},
+        pushTest: async (params) => {
+          pushed.push(params);
+        },
         stop: () => {
           stopped++;
         },
@@ -217,6 +230,79 @@ describe('control socket', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(stopped).toBe(1);
     c.socket.destroy();
+  });
+
+  it('m1: requests of one connection run in order; stop waits for requests of other connections', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    server.register({
+      'devices.list': async () => {
+        order.push('list-start');
+        await new Promise<void>((r) => (release = r));
+        order.push('list-end');
+        return [];
+      },
+      'devices.revoke': async () => {
+        order.push('revoke');
+      },
+    });
+    const a = await authed();
+    a.send({ id: 2, method: 'devices.list' });
+    a.send({ id: 3, method: 'devices.revoke', params: { deviceId: 'A'.repeat(22) } });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(order).toEqual(['list-start']); // revoke ждёт
+    const b = await authed();
+    b.send({ id: 2, method: 'stop' });
+    expect((await b.next()).result).toEqual({ ok: true });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(0); // идущий list ещё не закончен
+    release();
+    expect((await a.next()).id).toBe(2);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(1);
+    expect(order[1]).toBe('list-end');
+    a.socket.destroy();
+    b.socket.destroy();
+  });
+
+  it('m2: push.test takes {deviceId}', async () => {
+    const c = await authed();
+    c.send({ id: 2, method: 'push.test', params: { deviceId: 'A'.repeat(22) } });
+    expect((await c.next()).result).toEqual({ ok: true });
+    expect(pushed).toEqual([{ deviceId: 'A'.repeat(22) }]);
+    c.send({ id: 3, method: 'push.test', params: {} });
+    expect(((await c.next()).error as { code: string }).code).toBe('bad_request');
+    c.socket.destroy();
+  });
+
+  it('m12: a second bridge does not take over a live control socket', async () => {
+    const paths = remotePaths(home);
+    const second = createControlServer({
+      socketPath: paths.controlSocket,
+      tokenPath: paths.controlToken,
+      audit: createAuditLog({ file: paths.audit, archive: paths.auditArchive }),
+      log: createLog({ file: paths.log }),
+      callbacks: {
+        status: () => ({ running: true, host: 'online', relay: 'connected', relayUrl: null, devices: 0, version: '1' }),
+        configure: async () => {},
+        presence: () => {},
+        pushTest: async () => {},
+        stop: () => {},
+      },
+    });
+    await expect(second.start()).rejects.toThrow(/already in use/);
+    const c = await authed(); // первый жив и токен прежний
+    c.socket.destroy();
+  });
+
+  it('m11: a secret on the truncation boundary leaves no prefix in the log', () => {
+    const paths = remotePaths(home);
+    const log = createLog({ file: paths.log });
+    const secret = 'S3CRET-VALUE-0123456789';
+    log.addSecret(secret);
+    log.info('x', { note: `${'a'.repeat(190)}${secret}` });
+    const text = readFileSync(paths.log, 'utf8');
+    expect(text).not.toContain('S3CRET');
   });
 
   it('the run log never contains control.token', async () => {
