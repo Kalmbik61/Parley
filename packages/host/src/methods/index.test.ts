@@ -50,6 +50,28 @@ it('registers the window-only decisions list and room history actions', () => {
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('capacity.get регистрируется, только если лента ёмкости передана', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const capacityFeed = { snapshot: vi.fn() };
+  expect(createHostHandlers({ ...deps, capacityFeed }).methods['capacity.get']).toBeTypeOf('function');
+  expect(createHostHandlers(deps).methods['capacity.get']).toBeUndefined();
+});
+
+it('capacity.get до worksReady не трогает ленту; после — отдаёт её снимок', async () => {
+  let markReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const { deps } = fakeDeps(ready);
+  const snapshot = vi.fn(async () => ({ machine: { live: 1, limit: null, queued: 0, pressure: 'normal', swapGb: null, sleepMinutes: null }, queue: [] }));
+  const handlers = createHostHandlers({ ...deps, capacityFeed: { snapshot } as unknown as MethodDeps['capacityFeed'] });
+  const pending = handlers.methods['capacity.get']!({} as never, {} as RequestInfo);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(snapshot).not.toHaveBeenCalled();
+  markReady();
+  await expect(pending).resolves.toMatchObject({ machine: { live: 1 } });
+});
+
 it('assistant.* регистрируются, только если сервис помощника передан', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const assistant = {} as unknown as AssistantService;
@@ -188,6 +210,7 @@ describe('методы на старте хоста ждут первого чт
         'plans.cancel',
         'plans.retryEffects',
         'works.list',
+        'capacity.get',
         'decisions.list',
         'sessions.create',
         'sessions.resume',

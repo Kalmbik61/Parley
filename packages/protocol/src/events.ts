@@ -7,6 +7,7 @@ import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
 import type { FeedDecisions } from './feed.js';
 import type {
+  CapacitySnapshot,
   HostNotice,
   LiveMetrics,
   ProviderLimits,
@@ -28,6 +29,8 @@ export interface Events {
   'pty.exit': { ref: SessionRef; exitCode: number; signal: number | null };
   'host.notice': HostNotice;
   'wake.changed': { paused: boolean };
+  /** Изменились числа ёмкости машины или очередь запусков (не чаще раза в `CAPACITY_PUBLISH_MS` хоста). */
+  'capacity.changed': CapacitySnapshot;
   /**
    * Изменилось то, что окна знают о провайдере: сохранённый ключ или исход его явной проверки
    * (`providers.list.check`). Каждое окно перечитывает `providers.list`.

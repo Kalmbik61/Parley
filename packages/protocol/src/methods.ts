@@ -40,7 +40,7 @@ import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -221,6 +221,7 @@ export const METHODS = {
   'wake.pause': z.object({}),
   'wake.resume': z.object({}),
   'wake.state': z.object({}),
+  'capacity.get': z.object({}),
   'settings.get': z.object({}),
   'settings.set': z.object({ key: z.string(), value: z.string() }),
   'rooms.create': z.object({
@@ -507,6 +508,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'wake.pause': { paused: boolean };
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };
+  'capacity.get': CapacitySnapshot;
   'settings.get': { config: ParleyConfig; locked: Record<string, string> };
   'settings.set': { config: ParleyConfig };
   'rooms.create': { roomId: string };

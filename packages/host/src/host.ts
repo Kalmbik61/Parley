@@ -66,6 +66,7 @@ import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createCapacityFeed } from './capacity/capacity-feed.js';
 import { createCapacityService } from './capacity/capacity-service.js';
 import { createPressureSensor } from './capacity/memory-pressure.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
@@ -562,6 +563,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sleep: () => autoSleepService,
   });
   handle.context.onShutdown(async () => capacityService.stop());
+  // Числа ёмкости для окна (спека 2026-10-30, 4.5): снимок по запросу и рассылка `capacity.changed`.
+  const capacityFeed = createCapacityFeed(handle.context, {
+    capacity: capacityService,
+    pressure: pressureSensor,
+    works: worksService,
+    pty: ptyManager,
+    config: async () => (await loadConfig()).config,
+  });
+  handle.context.onShutdown(async () => capacityFeed.stop());
   sessionsService = createSessionsService(
     handle.context,
     worksService,
@@ -842,6 +852,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,
+    capacityFeed,
     compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
@@ -970,6 +981,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   autoSleepService.start();
   // Очередь собирается из карт работ, прочитанных выше: запуски, что ждали слота до перезапуска хоста, продолжаются.
   capacityService.start();
+  capacityFeed.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.
   await limitsService.start();

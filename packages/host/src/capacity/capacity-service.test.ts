@@ -799,6 +799,27 @@ describe('сервис ёмкости: settle и выход процесса', (
     expect((await service.admit({ ref: fresh(3), launchClass: 'agent' })).kind).toBe('start');
   });
 
+  it('occupied: живые PTY и резервы, одна сессия один раз', async () => {
+    machineConcurrent = 8;
+    const [first] = startLive(2);
+    const service = boot();
+    expect(service.occupied()).toBe(2);
+
+    // Запуск с резервом: слот за ним, процесса ещё нет.
+    const reserved = fresh(1);
+    expect((await service.admit({ ref: reserved, launchClass: 'agent' })).kind).toBe('start');
+    expect(service.occupied()).toBe(3);
+
+    // Процесс стартовал, резерв ещё не снят: у сессии есть и то и другое, считается она один раз.
+    live.push(handleOf(reserved));
+    expect(service.occupied()).toBe(3);
+
+    service.settle(reserved);
+    expect(service.occupied()).toBe(3);
+    exitPty(first!);
+    expect(service.occupied()).toBe(2);
+  });
+
   it('выход процесса снимает «сверх потолка»; settle без процесса — тоже', async () => {
     machineConcurrent = 1;
     startLive(1);

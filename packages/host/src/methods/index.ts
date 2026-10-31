@@ -4,6 +4,7 @@ import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, Notificatio
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
+import type { CapacityFeed } from '../capacity/capacity-feed.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler, RequestInfo } from '../context.js';
@@ -35,6 +36,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createAssistantHandlers } from './assistant.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
+import { createCapacityHandlers } from './capacity.js';
 import { createConsentHandlers } from './consents.js';
 import { contextLetter, contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
@@ -137,6 +139,8 @@ export interface MethodDeps {
   telegram?: TelegramService;
   /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
   consents?: ConsentsService;
+  /** Лента ёмкости машины (спека 2026-10-30, 4.5); без неё метода `capacity.get` у хоста нет. */
+  capacityFeed?: Pick<CapacityFeed, 'snapshot'>;
 }
 
 /** Сколько знаков сообщения окна доходит агенту. */
@@ -163,6 +167,7 @@ export const WORKS_GATED_METHODS = [
   'plans.cancel',
   'plans.retryEffects',
   'works.list',
+  'capacity.get',
   'decisions.list',
   'sessions.create',
   'sessions.resume',
@@ -235,6 +240,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
+    // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.
+    ...(deps.capacityFeed === undefined ? {} : { 'capacity.get': createCapacityHandlers({ capacityFeed: deps.capacityFeed }).capacityGet as AnyHandler }),
     // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.
     ...(deps.consents === undefined ? {} : createConsentHandlers({ consents: deps.consents, home: parleyHome() })),
     'host.info': hostInfo as AnyHandler,

@@ -219,6 +219,8 @@ describe('список методов в hello', () => {
     expect(methods).toContain('rooms.reopen');
     // Расход токенов комнаты: без метода окно значок не показывает (useHostSupports).
     expect(methods).toContain('rooms.usage');
+    // Ёмкость машины (спека 2026-10-30, 4.5): без метода окно сегмент «Agents» не показывает.
+    expect(methods).toContain('capacity.get');
     // Согласия на папку для Codex (спека 2026-10-21, 4.4): без них окно, остров и Settings → Projects молчат.
     for (const name of ['consents.list', 'consents.decide', 'trust.list', 'trust.check', 'trust.grant', 'trust.revoke']) {
       expect(methods).toContain(name);

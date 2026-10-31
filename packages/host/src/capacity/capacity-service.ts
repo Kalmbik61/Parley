@@ -104,6 +104,8 @@ export interface CapacityService {
   pump(): void;
   /** Записи очереди по порядку `compareQueued` — из снимка работ, без архивных работ. */
   queue(): Array<{ ref: SessionRef; queued: QueuedLaunch }>;
+  /** Сессии, занимающие слот: живые PTY и запуски с резервом, без повторов (тот же счёт, что у допуска). */
+  occupied(): number;
 }
 
 /** Запись очереди со своим ключом `refKey`. */
@@ -539,5 +541,7 @@ export function createCapacityService(host: HostContext, deps: CapacityDeps): Ca
     pump,
 
     queue,
+
+    occupied: () => occupiedKeys().size,
   };
 }
