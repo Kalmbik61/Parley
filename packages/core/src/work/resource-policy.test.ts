@@ -54,6 +54,23 @@ function addActive(map: WorkMap): string {
   return session.id;
 }
 
+/** Сессия, которую усыпил хост: `autoSleep` ставит `transitionSession` из отметки «засыпает» при уходе в `sleeping`. */
+function addHostSlept(map: WorkMap): string {
+  const session = addSession(map, { provider: 'claude', label: 'z', task: 't' });
+  transitionSession(map, session.id, 'active');
+  session.autoSleepPending = { reason: 'idle', at: iso(NOW), waitTarget: null };
+  transitionSession(map, session.id, 'sleeping');
+  return session.id;
+}
+
+/** Сессия, которую остановил человек: ушла в `sleeping` без отметки, `autoSleep` пуст. */
+function addHumanStopped(map: WorkMap): string {
+  const session = addSession(map, { provider: 'claude', label: 'h', task: 't' });
+  transitionSession(map, session.id, 'active');
+  transitionSession(map, session.id, 'sleeping');
+  return session.id;
+}
+
 const denied = (run: () => void): ResourceDeniedError => {
   try {
     run();
@@ -158,6 +175,115 @@ describe('reserveAttempt: окно запусков, слоты и повтор'
     const other = addActive(map);
     denied(() => reserveAttempt(map, { kind: 'launch', actor: 'human', session: other, owner, limits: limits({ workLaunches: 1 }), now: NOW }));
     expect(map.resources?.attempts.map((attempt) => attempt.session)).toEqual([session]);
+  });
+});
+
+describe('reserveAttempt: подъём сессии, которую усыпил хост, идёт вне окон запусков', () => {
+  const owner = 'host-A';
+  /** Подъём будильником, как его берёт `sessions-service`: с порогом `resumeRate`, исход — `spent`. */
+  const wake = (map: WorkMap, session: string, patch: Partial<ResourceLimits>, at: number) => {
+    const attempt = reserveAttempt(map, { kind: 'resume', actor: 'wake', session, owner, limits: limits(patch), sessionResumeRate: 6, now: at });
+    settleAttempt(map, attempt.id, owner, 'spent', at);
+    return attempt;
+  };
+
+  it('усыплённую хостом будильник поднимает сверх resumeRate', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    // Семь подъёмов за час при пороге шесть: все резервы взяты, у каждой попытки отметка «вне окна».
+    const attempts = Array.from({ length: 7 }, (_, i) => wake(map, target, {}, NOW + i));
+    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(7).fill(true));
+    expect(map.resources?.attempts).toHaveLength(7);
+  });
+
+  it('подъёмы после сна не тратят workLaunches и roomLaunches', () => {
+    const map = emptyMap();
+    const sleeper = addHostSlept(map);
+    const peer = addActive(map);
+    const fresh = addSession(map, { provider: 'claude', label: 'n', task: 't' }).id;
+    const other = addSession(map, { provider: 'claude', label: 'o', task: 't' }).id;
+    const room = addRoom(map, { title: 'r', creator: peer, members: [sleeper, peer, fresh, other] }).id;
+    // Шестьдесят подъёмов при умолчаниях: окно работы (60) и окно комнаты (20) исчерпали бы их задолго до конца.
+    for (let i = 0; i < 60; i += 1) wake(map, sleeper, {}, NOW + i);
+    const status = resourceStatus(map, limits(), NOW + 100, room);
+    expect([status.work.launches.used, status.room?.launches.used]).toEqual([0, 0]);
+
+    // Обычный запуск проходит под порогом в единицу и сам окно по-прежнему тратит: следующий отказан.
+    const tight = limits({ workLaunches: 1, roomLaunches: 1 });
+    const launch = reserveAttempt(map, { kind: 'launch', actor: 'human', session: fresh, owner, limits: tight, now: NOW + 100 });
+    expect(launch.windowFree).toBeUndefined();
+    settleAttempt(map, launch.id, owner, 'spent', NOW + 100);
+    const refusal = denied(() => reserveAttempt(map, { kind: 'launch', actor: 'human', session: other, owner, limits: tight, now: NOW + 101 }));
+    expect([refusal.code, refusal.scope, refusal.used]).toEqual(['launches', 'work', 1]);
+  });
+
+  it('слоты одновременных сессий подъём после сна занимает', () => {
+    const map = emptyMap();
+    addActive(map);
+    addActive(map);
+    const first = addHostSlept(map);
+    const second = addHostSlept(map);
+    // В работе места на двоих, и оба заняты: подъём отказан по слотам, карта не тронута.
+    const full = denied(() =>
+      reserveAttempt(map, { kind: 'resume', actor: 'wake', session: first, owner, limits: limits({ workConcurrent: 2 }), sessionResumeRate: 6, now: NOW }),
+    );
+    expect([full.code, full.scope, full.used, full.limit]).toEqual(['concurrent', 'work', 2, 2]);
+    expect(map.resources?.attempts).toHaveLength(0);
+
+    // Место есть — подъём берёт слот до исхода, и следующий упирается в него.
+    const three = limits({ workConcurrent: 3 });
+    const taken = reserveAttempt(map, { kind: 'resume', actor: 'wake', session: first, owner, limits: three, sessionResumeRate: 6, now: NOW });
+    expect(taken.windowFree).toBe(true);
+    const next = denied(() => reserveAttempt(map, { kind: 'resume', actor: 'wake', session: second, owner, limits: three, sessionResumeRate: 6, now: NOW }));
+    expect([next.code, next.scope, next.used]).toEqual(['concurrent', 'work', 3]);
+
+    // Слоты комнаты тоже: в комнате места на одного, и его держит живой участник.
+    const mate = addActive(map);
+    const sleeper = addHostSlept(map);
+    addRoom(map, { title: 'r', creator: mate, members: [mate, sleeper] });
+    const inRoom = denied(() =>
+      reserveAttempt(map, { kind: 'resume', actor: 'wake', session: sleeper, owner, limits: limits({ workConcurrent: 50, roomConcurrent: 1 }), sessionResumeRate: 6, now: NOW }),
+    );
+    expect([inRoom.code, inRoom.scope]).toEqual(['concurrent', 'room']);
+  });
+
+  it('остановленную человеком будильник считает по-старому', () => {
+    const map = emptyMap();
+    const target = addHumanStopped(map);
+    // Шесть подъёмов за час — порог; у них нет отметки «вне окна», они считаются в окне.
+    const attempts = Array.from({ length: 6 }, (_, i) => wake(map, target, {}, NOW + i));
+    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(6).fill(undefined));
+    const refusal = denied(() => wake(map, target, {}, NOW + 10));
+    expect([refusal.code, refusal.scope, refusal.limit]).toEqual(['resume-rate', 'session', 6]);
+  });
+
+  it('усыплённую хостом сессию, поднятую не будильником, окна считают как обычно', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    const one = limits({ workLaunches: 1 });
+    // Resume человеком — его действие, а не решение хоста: попытка без отметки, окно запусков её считает.
+    const first = reserveAttempt(map, { kind: 'resume', actor: 'human', session: target, owner, limits: one, now: NOW });
+    expect(first.windowFree).toBeUndefined();
+    settleAttempt(map, first.id, owner, 'spent', NOW);
+    const refusal = denied(() => reserveAttempt(map, { kind: 'resume', actor: 'human', session: target, owner, limits: one, now: NOW + 1 }));
+    expect([refusal.code, refusal.scope]).toEqual(['launches', 'work']);
+  });
+
+  it('validateResources: windowFree — только true, иначе карта не читается', () => {
+    const ledger = (extra: Record<string, unknown>) => ({
+      ...emptyMap(),
+      resources: {
+        seq: 1,
+        spawned: 0,
+        spawnedByRoom: {},
+        attempts: [{ id: 'a-0001', kind: 'resume', state: 'spent', at: iso(NOW), actor: 'wake', session: 's-01', room: null, owner: 'host-A', ...extra }],
+      },
+    });
+    expect(parseMap(JSON.stringify(ledger({ windowFree: true })), 'map.json').resources?.attempts[0]?.windowFree).toBe(true);
+    expect(parseMap(JSON.stringify(ledger({})), 'map.json').resources?.attempts[0]?.windowFree).toBeUndefined();
+    for (const bad of [false, 'true', 1, null]) {
+      expect(() => parseMap(JSON.stringify(ledger({ windowFree: bad })), 'map.json')).toThrow('invalid resource ledger');
+    }
   });
 });
 

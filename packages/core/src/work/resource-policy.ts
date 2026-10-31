@@ -254,9 +254,10 @@ function occupied(map: WorkMap): Set<string> {
   return ids;
 }
 
+// Подъёмы после сна по решению хоста (`windowFree`) вне окна: ни `resumeRate`, ни `workLaunches`/`roomLaunches` их не считают.
 const launchAttempts = (map: WorkMap, now: number): ResourceAttempt[] =>
   (map.resources?.attempts ?? []).filter(
-    (attempt) => attempt.kind !== 'spawn' && attempt.state !== 'released' && within(attempt.at, now),
+    (attempt) => attempt.kind !== 'spawn' && attempt.windowFree !== true && attempt.state !== 'released' && within(attempt.at, now),
   );
 
 const inRoom = (map: WorkMap, ids: Iterable<string>, roomId: string): number => {
@@ -293,8 +294,9 @@ export function attemptKindFor(map: WorkMap, sessionId: string, mode: 'launch' |
 
 /**
  * Резерв слота под запуск или возобновление: окно запусков, слоты одновременных сессий, при возобновлении будильником
- * ещё и частота по самой сессии. Нерешённый резерв той же сессии — повтор прежней попытки: его подхватывает новый
- * владелец, второй раз он не списывается. Отказ — исключение, карта не меняется.
+ * ещё и частота по самой сессии. Подъём будильником сессии, которую усыпил хост, окна и частоту не тратит
+ * (`windowFree`), слоты занимает как обычно. Нерешённый резерв той же сессии — повтор прежней попытки: его подхватывает
+ * новый владелец, второй раз он не списывается. Отказ — исключение, карта не меняется.
  */
 export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceAttempt {
   const now = request.now ?? Date.now();
@@ -313,16 +315,22 @@ export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceA
 
   const room = roomOfSession(map, session);
 
-  if (request.kind === 'resume' && request.sessionResumeRate !== undefined) {
-    const taken = launchAttempts(map, now).filter((attempt) => attempt.kind === 'resume' && attempt.session === session).length;
-    if (taken >= request.sessionResumeRate) throw new ResourceDeniedError('resume-rate', 'session', taken, request.sessionResumeRate);
-  }
+  // Будильник поднимает сессию, которую усыпил хост: подъём вызвало решение хоста, а не агенты, будящие друг друга, и
+  // число таких подъёмов уже ограничено лимитами писем. Окна и частота его не касаются, слоты одновременных — да.
+  const autoWake = request.actor === 'wake' && map.sessions.find((candidate) => candidate.id === session)?.autoSleep != null;
 
-  const recent = launchAttempts(map, now);
-  if (recent.length >= limits.workLaunches) throw new ResourceDeniedError('launches', 'work', recent.length, limits.workLaunches);
-  if (room !== null) {
-    const recentInRoom = recent.filter((attempt) => attempt.room === room).length;
-    if (recentInRoom >= limits.roomLaunches) throw new ResourceDeniedError('launches', 'room', recentInRoom, limits.roomLaunches);
+  if (!autoWake) {
+    if (request.kind === 'resume' && request.sessionResumeRate !== undefined) {
+      const taken = launchAttempts(map, now).filter((attempt) => attempt.kind === 'resume' && attempt.session === session).length;
+      if (taken >= request.sessionResumeRate) throw new ResourceDeniedError('resume-rate', 'session', taken, request.sessionResumeRate);
+    }
+
+    const recent = launchAttempts(map, now);
+    if (recent.length >= limits.workLaunches) throw new ResourceDeniedError('launches', 'work', recent.length, limits.workLaunches);
+    if (room !== null) {
+      const recentInRoom = recent.filter((attempt) => attempt.room === room).length;
+      if (recentInRoom >= limits.roomLaunches) throw new ResourceDeniedError('launches', 'room', recentInRoom, limits.roomLaunches);
+    }
   }
 
   const others = occupied(map);
@@ -343,6 +351,7 @@ export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceA
     room,
     owner: request.owner,
   };
+  if (autoWake) attempt.windowFree = true;
   resources.attempts.push(attempt);
   return attempt;
 }
@@ -611,7 +620,8 @@ export function validateResources(map: WorkMap): void {
       typeof row['id'] !== 'string' || !['spawn', 'launch', 'resume', 'retry'].includes(String(row['kind'])) ||
       !['reserved', 'spent', 'released'].includes(String(row['state'])) || typeof row['at'] !== 'string' ||
       !Number.isFinite(Date.parse(row['at'])) || typeof row['actor'] !== 'string' || typeof row['session'] !== 'string' ||
-      (row['room'] !== null && typeof row['room'] !== 'string') || typeof row['owner'] !== 'string'
+      (row['room'] !== null && typeof row['room'] !== 'string') || typeof row['owner'] !== 'string' ||
+      (row['windowFree'] !== undefined && row['windowFree'] !== true)
     ) return bad();
   }
 }
