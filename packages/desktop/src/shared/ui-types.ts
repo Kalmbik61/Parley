@@ -114,6 +114,8 @@ export interface UiFile {
    * `false` — окно в сеть за версией не ходит и тоста не показывает.
    */
   checkForUpdates: boolean;
+  /** Switch «Remote access» in Settings (mobile spec 12): the window starts the bridge at launch while it is on. */
+  remoteAccess: boolean;
   /**
    * Версия, чей тост человек закрыл («Later», «Download» или смахнул): о ней больше не напоминаем, а о более
    * новой — да. `null` — ничего не закрыто.
@@ -145,6 +147,7 @@ export const DEFAULT_UI: UiFile = {
   filesShowIgnored: false,
   lastProvider: null,
   checkForUpdates: true,
+  remoteAccess: false,
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null, agentsAllowed: true },
@@ -386,6 +389,7 @@ export function normalizeUi(raw: unknown): UiFile {
       typeof source.lastProvider === 'string' ? source.lastProvider : DEFAULT_UI.lastProvider,
     checkForUpdates:
       typeof source.checkForUpdates === 'boolean' ? source.checkForUpdates : DEFAULT_UI.checkForUpdates,
+    remoteAccess: typeof source.remoteAccess === 'boolean' ? source.remoteAccess : DEFAULT_UI.remoteAccess,
     dismissedUpdate:
       typeof source.dismissedUpdate === 'string' ? source.dismissedUpdate : DEFAULT_UI.dismissedUpdate,
     voice: normalizeVoice(source.voice),

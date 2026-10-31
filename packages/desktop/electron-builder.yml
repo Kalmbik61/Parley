@@ -16,8 +16,10 @@ files:
   - out/renderer/**
   - package.json
   - '!node_modules/@parley/host/**'
+  - '!node_modules/@parley/remote/**'
   - '!node_modules/node-pty/**'
   - '!node_modules/.pnpm/@parley+host@**'
+  - '!node_modules/.pnpm/@parley+remote@**'
   - '!node_modules/.pnpm/node-pty@**'
 # node-pty хоста собран под системный Node (спека §3.2) — Electron его вообще
 # не грузит, поэтому пересобирать нативные модули под ABI Electron незачем.
