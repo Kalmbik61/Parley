@@ -434,14 +434,21 @@ export function checkSwarmSpawn(map: WorkMap, limits: ResourceLimits, request: S
     }
   }
   if (swarm !== null) {
-    // Заказанный, но не стартовавший участник занимает место и без родителя: `occupied` берёт `pending` только с ним.
-    // Сдавший места не держит: его сессию хост закрывает следом (спека роя, 5).
-    const busy = occupied(map);
-    for (const session of map.sessions) if (session.lifecycle === 'pending') busy.add(session.id);
-    const used = swarm.members.filter((member) => member.handedAt === null && busy.has(member.sessionId)).length;
+    const used = swarmBusy(map, swarm);
     if (used >= limits.swarmConcurrent) return new ResourceDeniedError('swarm-concurrent', 'swarm', used, limits.swarmConcurrent);
   }
   return null;
+}
+
+/**
+ * Живые и заказанные участники роя, не сдавшие итог: тот же подсчёт, что в `checkSwarmSpawn`.
+ * Заказанный, но не стартовавший участник занимает место и без родителя: `occupied` берёт `pending` только с ним.
+ * Сдавший места не держит: его сессию хост закрывает следом (спека роя, 5).
+ */
+export function swarmBusy(map: WorkMap, swarm: WorkSwarm): number {
+  const busy = occupied(map);
+  for (const session of map.sessions) if (session.lifecycle === 'pending') busy.add(session.id);
+  return swarm.members.filter((member) => member.handedAt === null && busy.has(member.sessionId)).length;
 }
 
 export interface MessageRequest {

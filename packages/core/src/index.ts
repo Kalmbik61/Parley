@@ -755,6 +755,7 @@ export {
   roomOfSession,
   settleAttempt,
   settleByEvidence,
+  swarmBusy,
   teamStartFits,
 } from './work/resource-policy.js';
 export type {
@@ -769,6 +770,16 @@ export type {
   SwarmSpawnRequest,
 } from './work/resource-policy.js';
 export type { CreationKind, ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+
+export { capacityReport, machineCapacity } from './work/capacity-report.js';
+export type {
+  CapacityFacts,
+  CapacityLimit,
+  CapacityReport,
+  CapacityReportInput,
+  MachineCapacity,
+  MachineInput,
+} from './work/capacity-report.js';
 
 export {
   SWARM_OBJECTIVE_MAX,
