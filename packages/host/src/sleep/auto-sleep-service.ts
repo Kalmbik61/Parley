@@ -12,6 +12,9 @@
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
  *
+ * Между шагами 1 и 2 хост запоминает потомков процесса агента, а через `SURVIVOR_CHECK_MS` после сна пишет в журнал тех, кто
+ * ещё жив (спека, 4.6). Хост ничего не убивает: общие сервисы и чужие процессы трогать нельзя, записи нужны этапу 3.
+ *
  * Усыплённый на `wait_for(<id>)` сам не узнает, что с целью ожидания стало: процесса у него нет. Сервис следит за целью по
  * снимку работ и, когда `wait_for` ответил бы на неё сразу (итог, `stuck`, сон по решению хоста, закрытие, удаление), пишет
  * спящему системное письмо; оно поднимает сессию обычным путём будильника. Цель, остановленную человеком, письмом не
@@ -43,6 +46,7 @@ import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { SURVIVOR_CHECK_MS, alivePids, descendantPids } from './descendants.js';
 
 /**
  * Ждущих в `wait_for` усыплять (итог спайка, задача 0 плана сна). Спайк пройден 2026-10-31: процесс claude, остановленный
@@ -73,6 +77,10 @@ export interface AutoSleepServiceDeps {
   /** Часы; тесты подставляют свои. */
   now?: () => number;
   tickMs?: number;
+  /** Потомки процесса (pid), которых запоминают до остановки (`descendantPids`); тесты обходятся без настоящих процессов. */
+  descendants?: (rootPid: number) => Promise<number[]>;
+  /** Жив ли процесс с таким pid (`process.kill(pid, 0)`); тесты подставляют свой. */
+  isAlive?: (pid: number) => boolean;
 }
 
 export interface AutoSleepService {
@@ -126,6 +134,7 @@ function waiterLetter(targetId: string, state: string): string {
 export function createAutoSleepService(host: HostContext, deps: AutoSleepServiceDeps): AutoSleepService {
   const now = deps.now ?? Date.now;
   const tickMs = deps.tickMs ?? AUTO_SLEEP_TICK_MS;
+  const collectDescendants = deps.descendants ?? descendantPids;
 
   /**
    * Начало текущего `wait_for` сессии, как его увидел хост (мс), и цель ожидания; ключ — `refKey`. Время строки журнала
@@ -137,6 +146,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   const requested = new Map<string, AutoSleepReason>();
   /** Сессии, которые проверяются или усыпляются сейчас: вторая проверка той же сессии не начинается. */
   const inWork = new Set<string>();
+  /** Таймеры проверки выживших потомков, по одному на сон; `stop()` их снимает. */
+  const survivorTimers = new Set<ReturnType<typeof setTimeout>>();
 
   let stopped = true;
   let ticking = false;
@@ -222,6 +233,22 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     return dropped;
   }
 
+  /**
+   * Через `SURVIVOR_CHECK_MS` после сна пишет в журнал потомков агента, что остались живы (спека 4.6); не пережил никто —
+   * не пишет ничего. Ничего не убивает.
+   */
+  function watchSurvivors(ref: SessionRef, pids: readonly number[]): void {
+    // Сервис остановлен, пока сессию усыпляли: журнал после остановки не пишем.
+    if (stopped) return;
+    const survivorTimer = setTimeout(() => {
+      survivorTimers.delete(survivorTimer);
+      const survivors = alivePids(pids, deps.isAlive);
+      if (survivors.length > 0) host.log.warn('потомки пережили сон агента', { ref, pids: survivors });
+    }, SURVIVOR_CHECK_MS);
+    survivorTimer.unref();
+    survivorTimers.add(survivorTimer);
+  }
+
   /** Усыпляет сессию (шаги 1–4). `true` — сессия ушла в сон. */
   async function sleepSession(ref: SessionRef, plan: Plan): Promise<boolean> {
     const idleSince = new Date(plan.idleSince).toISOString();
@@ -251,6 +278,10 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       return false;
     }
 
+    // Потомков CLI запоминаем до остановки: когда родитель выйдет, их усыновит init, и родство пропадёт (спека 4.6).
+    const rootPid = deps.pty.get(ref)?.pid;
+    const descendants = rootPid === undefined ? [] : await collectDescendants(rootPid);
+
     // 2. Тот же `stop`, что у кнопки Stop: ждёт выхода процесса и записи перехода в `sleeping`.
     try {
       await deps.sessions.stop(ref);
@@ -273,6 +304,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       reason: plan.reason,
       idleMin: Math.round((now() - plan.idleSince) / 60_000),
     });
+    watchSurvivors(ref, descendants);
     return true;
   }
 
@@ -424,6 +456,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       unsubscribeWorks = null;
       if (timer !== null) clearInterval(timer);
       timer = null;
+      for (const survivorTimer of survivorTimers) clearTimeout(survivorTimer);
+      survivorTimers.clear();
       waits.clear();
       requested.clear();
     },

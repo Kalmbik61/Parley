@@ -23,6 +23,7 @@ import type { HostContext } from '../context.js';
 import type { PtyHandle } from '../pty/pty-manager.js';
 import { ALLOW_WAITER_SLEEP, AUTO_SLEEP_TICK_MS, createAutoSleepService } from './auto-sleep-service.js';
 import type { AutoSleepService, AutoSleepServiceDeps } from './auto-sleep-service.js';
+import { SURVIVOR_CHECK_MS } from './descendants.js';
 
 const MIN = 60_000;
 /** Конец хода всех сессий теста; часы теста (`clock`) уходят от него вперёд. */
@@ -52,6 +53,11 @@ let pointers = new Set<string>();
 let compacting = new Set<string>();
 let logs: Array<{ level: LogLevel; msg: string; data: Record<string, unknown> }> = [];
 let stoppers: Array<() => void> = [];
+/** Потомки процесса сессии, какими их отдаёт подделка `descendants`, и те pid, что «живы» для подделки `isAlive`. */
+let descendantsOf: number[] = [];
+let aliveSet = new Set<number>();
+/** Вызовы `descendants`: pid корня, стояла ли в карте отметка «засыпает» и сколько раз к этому моменту звали `stop`. */
+let collected: Array<{ rootPid: number; marked: boolean; stops: number }> = [];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-sleep-home-'));
@@ -71,6 +77,9 @@ beforeEach(async () => {
   compacting = new Set();
   logs = [];
   stoppers = [];
+  descendantsOf = [];
+  aliveSet = new Set();
+  collected = [];
   stopImpl = defaultStop;
   // Таймеры фальшивые, диск настоящий: `setImmediate` остаётся живым. Время решений — через `now` сервиса.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -174,6 +183,13 @@ function boot(over: Partial<AutoSleepServiceDeps> = {}): AutoSleepService {
     compacting: (ref) => compacting.has(ref.sessionId),
     config: async () => ({ sleepAfterMinutes }),
     now: () => clock,
+    // Настоящих процессов и `ps` в тестах нет: потомков и живых задаёт тест.
+    descendants: async (rootPid) => {
+      const marked = readStoredMap(project, workId).sessions.some((session) => session.autoSleepPending != null);
+      collected.push({ rootPid, marked, stops: stops.length });
+      return descendantsOf;
+    },
+    isAlive: (pid) => aliveSet.has(pid),
     ...over,
   });
   service.start();
@@ -1033,5 +1049,137 @@ describe('сервис сна: усыплённый ждал другую сес
     await advance(AUTO_SLEEP_TICK_MS);
 
     expect(systemLetters()).toEqual([]);
+  });
+});
+
+describe('сервис сна: потомки после сна', () => {
+  const SURVIVORS = 'потомки пережили сон агента';
+  /** Записи журнала о пережившем потомке. */
+  const survivorLogs = () => logs.filter((entry) => entry.msg === SURVIVORS);
+
+  /** Сессия, которая простояла дольше порога и засыпает на первом проходе сервиса. */
+  async function sleepFirstPass(): Promise<{ ref: SessionRef; service: AutoSleepService }> {
+    const ref = await startSession();
+    const service = boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+    return { ref, service };
+  }
+
+  it('потомков собирают по pid процесса сессии после отметки «засыпает» и до stop', async () => {
+    descendantsOf = [11, 12];
+    await sleepFirstPass();
+
+    expect(collected).toEqual([{ rootPid: 4242, marked: true, stops: 0 }]);
+  });
+
+  it('потомки пережили сон: через SURVIVOR_CHECK_MS один warn с pid выживших, не всех собранных', async () => {
+    descendantsOf = [11, 12, 13];
+    // 13 вышел вместе с агентом; 99 живёт, но потомком не был.
+    aliveSet = new Set([11, 12, 99]);
+    const { ref } = await sleepFirstPass();
+
+    await advance(SURVIVOR_CHECK_MS - 1_000);
+    expect(survivorLogs()).toEqual([]);
+
+    await advance(1_000);
+    expect(survivorLogs()).toEqual([{ level: 'warn', msg: SURVIVORS, data: { ref, pids: [11, 12] } }]);
+
+    // Проверка одна на сон: дальше сервис о них не пишет.
+    await advance(SURVIVOR_CHECK_MS);
+    expect(survivorLogs()).toHaveLength(1);
+  });
+
+  it('никто не пережил сон — в журнал ничего не пишется', async () => {
+    descendantsOf = [11, 12];
+    await sleepFirstPass();
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('у агента без потомков журнал пуст, как бы ни шли часы', async () => {
+    aliveSet = new Set([11]);
+    await sleepFirstPass();
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('stop() сервиса до проверки снимает таймер: warn не пишется', async () => {
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const { service } = await sleepFirstPass();
+
+    service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('stop() сервиса, пока сессию ещё усыпляют, таймер выживших не заводит', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stopImpl = async (ref) => {
+      recordStop(ref);
+      await gate;
+      await exitProcess(ref);
+    };
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const ref = await startSession();
+    const service = boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+
+    service.stop();
+    release();
+    await quiet();
+    expect(sessionOf(ref).lifecycle).toBe('sleeping');
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('сессия осталась active — сна не было, и выживших никто не ищет', async () => {
+    // `stop` вернулся, а процесс жив: сон не удался, потомки на месте и так.
+    stopImpl = async (ref) => {
+      recordStop(ref);
+    };
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const ref = await startSession();
+    boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('сон отменён под замком карты — потомков не собирают: ps зря не зовут', async () => {
+    const ref = await startSession();
+    // Снимок работ хоста отстал от базы: Keep awake в нём ещё нет, а в базе уже есть.
+    const stale = readStoredMap(project, workId);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === ref.sessionId)!.keepAwake = true;
+    });
+    boot({ works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) } });
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(stops).toEqual([]);
+    expect(collected).toEqual([]);
   });
 });
