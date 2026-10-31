@@ -15,11 +15,16 @@ const A_METHODS = [
   'context.messages',
   'context.letter',
   'context.text',
+  // Запуск с телефона (решение 5, правки 11–12): хост пускает их только при включённом `remoteCreate`.
+  'sessions.create',
+  'rooms.create',
+  'rooms.send',
+  'providers.list',
+  'roles.list',
 ] as const;
 const A_EVENTS = ['works.changed', 'rooms.mail', 'activity.changed', 'host.notice'] as const;
 
 const B_METHODS = [
-  'rooms.send',
   'mail.markRead',
   'sessions.resume',
   'sessions.stop',
@@ -31,7 +36,6 @@ const B_METHODS = [
   'pty.detach',
   'consents.list',
   'consents.decide',
-  'providers.list',
   'rooms.usage',
 ] as const;
 const B_NOTIFICATIONS = ['activity.seen'] as const;
@@ -44,15 +48,13 @@ const B_EVENTS = [
   'providers.limitsChanged',
 ] as const;
 
-const C_METHODS = ['sessions.create'] as const;
-
 export interface RemoteStageLists<M extends string, N extends string, E extends string> {
   readonly methods: readonly M[];
   readonly notifications: readonly N[];
   readonly events: readonly E[];
 }
 
-/** Списки накопительные: этап B содержит этап A. Этап C добавляет `sessions.create` (за переключателем в окне). */
+/** Списки накопительные: этап B содержит этап A. У этапа C методов сверх B нет: `sessions.create` переехал в A. */
 export const REMOTE_STAGES = {
   A: { methods: A_METHODS, notifications: [], events: A_EVENTS },
   B: {
@@ -61,7 +63,7 @@ export const REMOTE_STAGES = {
     events: [...A_EVENTS, ...B_EVENTS],
   },
   C: {
-    methods: [...A_METHODS, ...B_METHODS, ...C_METHODS],
+    methods: [...A_METHODS, ...B_METHODS],
     notifications: B_NOTIFICATIONS,
     events: [...A_EVENTS, ...B_EVENTS],
   },
@@ -97,7 +99,6 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'sessions.cancelCompact',
   'sessions.resumeInterrupted',
   'sessions.rename',
-  'rooms.create',
   'rooms.addMember',
   'rooms.setLead',
   'rooms.setOwner',
@@ -153,6 +154,47 @@ function record(params: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Только эти ключи (спека 4.2: лишний ключ → `bad_request`). */
+function onlyKeys(p: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(p).every(key => allowed.has(key));
+}
+
+function textUpTo(value: unknown, bytes: number): boolean {
+  return typeof value === 'string' && utf8Length(value) <= bytes;
+}
+
+/** Длина в знаках (кодовых точках), не в единицах UTF-16. */
+function charsBetween(value: unknown, min: number, max: number): boolean {
+  if (typeof value !== 'string') return false;
+  const n = Array.from(value).length;
+  return n >= min && n <= max;
+}
+
+const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
+  'projectPath',
+  'workId',
+  'provider',
+  'label',
+  'task',
+  'parent',
+  'model',
+  'role',
+  'worktree',
+]);
+const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
+  'projectPath',
+  'workId',
+  'title',
+  'members',
+  'lead',
+  'quiet',
+  'mode',
+]);
+const ROOM_MODES: ReadonlySet<unknown> = new Set(['free', 'checklist', 'verified']);
+export const REMOTE_LABEL_MAX = 64;
+export const REMOTE_ROOM_TITLE_MAX = 128;
+export const REMOTE_ROOM_MEMBERS_MAX = 16;
+
 /** Правило параметров: `true` — пропустить, `false` — `bad_request`. */
 export type RemoteParamRule = (params: unknown) => boolean;
 
@@ -162,16 +204,45 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
     const p = record(params);
     return p !== null && typeof p.rev === 'number' && Number.isInteger(p.rev) && p.rev >= 0;
   },
-  // Этап B.
+  // Запуск с телефона (спека 4.2): новую работу, дочернюю сессию, `agent`, `effort` и `lean` с телефона не задать.
+  'sessions.create': params => {
+    const p = record(params);
+    return (
+      p !== null &&
+      onlyKeys(p, SESSION_CREATE_KEYS) &&
+      typeof p.workId === 'string' &&
+      p.workId.length > 0 &&
+      p.parent === null &&
+      charsBetween(p.label, 1, REMOTE_LABEL_MAX) &&
+      textUpTo(p.task, REMOTE_TEXT_LIMIT_BYTES)
+    );
+  },
+  // `autonomous`, `recipe` и `origin` — только из окна: автономный режим и рецепт несут команды проверок.
+  'rooms.create': params => {
+    const p = record(params);
+    return (
+      p !== null &&
+      onlyKeys(p, ROOM_CREATE_KEYS) &&
+      charsBetween(p.title, 1, REMOTE_ROOM_TITLE_MAX) &&
+      Array.isArray(p.members) &&
+      p.members.length >= 1 &&
+      p.members.length <= REMOTE_ROOM_MEMBERS_MAX &&
+      p.members.every(member => typeof member === 'string') &&
+      (p.mode === undefined || ROOM_MODES.has(p.mode))
+    );
+  },
+  // Только письмо в комнату (прямые письма сессиям — этап B) и без решений.
   'rooms.send': params => {
     const p = record(params);
     return (
       p !== null &&
+      typeof p.roomId === 'string' &&
+      p.roomId.length > 0 &&
       (p.kind === 'note' || p.kind === 'question') &&
-      typeof p.text === 'string' &&
-      utf8Length(p.text) <= REMOTE_TEXT_LIMIT_BYTES
+      textUpTo(p.text, REMOTE_TEXT_LIMIT_BYTES)
     );
   },
+  // Этап B.
   'pty.send': params => {
     const p = record(params);
     return p !== null && typeof p.text === 'string' && utf8Length(p.text) <= REMOTE_TEXT_LIMIT_BYTES;
