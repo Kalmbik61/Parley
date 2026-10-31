@@ -61,14 +61,17 @@ function safeErrorData(data: unknown): { data: unknown } | Record<string, never>
   return {};
 }
 
-/** Для журнала: короткие значения как есть, тексты — длиной и хэшем (спека 5.8). Тексты в журнал не попадают. */
+/** Ключи, значения которых безопасно писать в журнал как есть: выбор решения, режим, номера. Остальные строки — только длина и хэш. */
+const PLAIN_KEYS: ReadonlySet<string> = new Set(['rev', 'choice', 'decision', 'kind', 'mode', 'always', 'allow', 'approve', 'provider', 'model', 'role']);
+
+/** Для журнала: числа и флаги, выбор решения; тексты — длиной и хэшем (спека 5.8). Сами тексты в журнал не попадают. */
 function describeParams(params: unknown): string | undefined {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) return undefined;
   const parts: string[] = [];
   for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
     if (typeof value === 'number' || typeof value === 'boolean') parts.push(`${key}=${value}`);
     else if (typeof value === 'string') {
-      if (value.length <= 24 && /^[\w.:-]*$/.test(value)) parts.push(`${key}=${value}`);
+      if (PLAIN_KEYS.has(key) && value.length <= 24 && /^[\w.:-]*$/.test(value)) parts.push(`${key}=${value}`);
       else parts.push(`${key}:len=${Buffer.byteLength(value)},sha256=${createHash('sha256').update(value).digest('hex').slice(0, 12)}`);
     }
   }
@@ -78,7 +81,7 @@ function describeParams(params: unknown): string | undefined {
 function targetOf(params: unknown): string | undefined {
   if (typeof params !== 'object' || params === null) return undefined;
   const p = params as Record<string, unknown>;
-  for (const key of ['proposalId', 'roomId', 'sessionId', 'id']) {
+  for (const key of ['roomId', 'proposalId', 'workId', 'sessionId', 'id']) {
     if (typeof p[key] === 'string' && (p[key] as string).length <= 128) return p[key] as string;
   }
   return undefined;
@@ -105,6 +108,25 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
     audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail });
   }
+
+  /** Методы, которые телефон может звать в эту эпоху: белый список этапа ∩ `hello.methods` хоста. */
+  function hostMethods(): string[] {
+    const offered = host.methods;
+    return offered === null ? [] : REMOTE_METHODS.filter((m) => offered.includes(m));
+  }
+  const methodsKey = (): string => hostMethods().join(',');
+  /** Набор методов в `hello` телефона на момент рукопожатия. */
+  const helloKeys = new Map<string, string>();
+
+  /** Набор методов эпохи отличается от того, что телефон получил в `hello`: `rekey`, он переподключится и увидит новый. */
+  function rekeyIfStale(deviceId: string): void {
+    const seen = helloKeys.get(deviceId);
+    if (seen === undefined || host.status !== 'online' || seen === methodsKey()) return;
+    sessions.close(deviceId, 'rekey');
+  }
+  const unsubscribe = host.subscribe((event) => {
+    if (event.type === 'status' && event.status === 'online') for (const deviceId of [...devices.keys()]) rekeyIfStale(deviceId);
+  });
 
   /** Нарушение протокола: в `PhoneSessions.close` нет отдельной причины, берём `shutdown`. */
   function close(deviceId: string): void {
@@ -135,8 +157,9 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       return;
     }
 
-    // Белый список и правила параметров: хост политику повторяет, но мост отсекает первым.
-    if (!STAGE_METHODS.has(method)) {
+    // Белый список этапа ∩ `hello.methods` хоста этой эпохи (A8b); правила параметров. Хост политику повторяет,
+    // но мост отсекает первым. Пока методов эпохи нет (хост не `online`), решает `host_offline` ниже.
+    if (!STAGE_METHODS.has(method) || (host.methods !== null && !host.methods.includes(method))) {
       refuse(deviceId, state, method, params, 'unknown_method');
       fail(deviceId, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
       return;
@@ -182,7 +205,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   }
 
   return {
-    hello(): BridgeHello {
+    hello(deviceId): BridgeHello {
+      helloKeys.set(deviceId, methodsKey());
       return {
         protocol: REMOTE_PROTOCOL,
         minClient: info.minClient,
@@ -193,7 +217,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         host: host.status,
         epoch: host.epoch,
         stage: 'A',
-        methods: [...REMOTE_METHODS, ...LOCAL_METHODS],
+        methods: [...hostMethods(), ...LOCAL_METHODS],
         events: [...REMOTE_EVENTS, ...Object.keys(bridgeEventSchemas)],
         relays: info.relays,
         serverTime: Date.now(),
@@ -202,10 +226,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     onOpen(deviceId) {
       devices.set(deviceId, { name: options.deviceName?.(deviceId) ?? '', inFlight: 0 });
       fanout.sessionActive(deviceId);
+      rekeyIfStale(deviceId);
     },
     onClose(deviceId) {
       devices.delete(deviceId);
       limiter.forget(deviceId);
+      helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);
     },
     onFrame(deviceId, frame) {
@@ -232,6 +258,9 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       const { id, method, params } = parsed.data;
       void handle(deviceId, state, id, method, params);
     },
-    stop: () => fanout.stop(),
+    stop() {
+      unsubscribe();
+      fanout.stop();
+    },
   };
 }

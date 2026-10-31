@@ -16,6 +16,10 @@ interface Stub {
   /** Что стаб шлёт сразу после ответа на hello. */
   replay: unknown[];
   features: string[];
+  methods: string[];
+  callError: { code: string; message: string; data?: unknown } | null;
+  /** Строка, которую стаб шлёт вместо ответа на works.list (для предела строки). */
+  hugeWorksList: boolean;
   /** Ответ на works.list; функция получает кадр и сокет. */
   onWorksList: (reply: (result: unknown) => void, socket: net.Socket, id: number) => void;
   broadcast(msg: unknown): void;
@@ -56,6 +60,9 @@ async function startStub(init: Partial<Stub> = {}): Promise<Stub> {
     conns: new Set(),
     replay: [],
     features: ['remote-policy-1', 'compact-works'],
+    methods: ['works.list', 'feed.decide'],
+    callError: null,
+    hugeWorksList: false,
     onWorksList: (reply) => reply(snap(1)),
     broadcast(msg) {
       for (const c of stub.conns) c.write(`${JSON.stringify(msg)}\n`);
@@ -78,13 +85,15 @@ async function startStub(init: Partial<Stub> = {}): Promise<Stub> {
         if (m.method === 'hello') {
           stub.hellos.push(m.params);
           c.write(
-            `${JSON.stringify({ id: m.id, result: { features: stub.features } })}\n` +
+            `${JSON.stringify({ id: m.id, result: { features: stub.features, methods: stub.methods } })}\n` +
               stub.replay.map((e) => `${JSON.stringify(e)}\n`).join(''),
           );
         } else if (m.method === 'works.list') {
           stub.worksListCalls++;
-          stub.onWorksList(send, c, m.id);
-        } else send({ ok: true });
+          if (stub.hugeWorksList) c.write(`${'x'.repeat(9 * 1024 * 1024)}\n`);
+          else stub.onWorksList(send, c, m.id);
+        } else if (stub.callError) c.write(`${JSON.stringify({ id: m.id, error: stub.callError })}\n`);
+        else send({ ok: true });
       }
     });
   });
@@ -235,5 +244,81 @@ describe('HostLink', () => {
     const log = await readFile(logFile, 'utf8').catch(() => '');
     expect(log).not.toContain('secret-token');
     expect(log).not.toContain('host.token');
+  });
+  it('M2: events in the same chunk as a hello without remote-policy-1 reach nobody', async () => {
+    await startStub({ features: ['compact-works'], replay: [act('s1', 'busy'), { event: 'settings.changed', data: {} }] });
+    const link = newLink();
+    const seen: string[] = [];
+    link.subscribe((e) => {
+      if (e.type === 'host') seen.push(e.event);
+    });
+    link.start();
+    await until(() => link.status === 'incompatible');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen).toEqual([]);
+    expect(link.activity.size).toBe(0);
+    expect(link.methods).toBeNull();
+  });
+
+  it('exposes hello.methods of the epoch and drops them with the epoch', async () => {
+    const stub = await startStub();
+    const link = newLink();
+    link.start();
+    await until(() => link.status === 'online');
+    expect(link.methods).toEqual(['works.list', 'feed.decide']);
+    await stub.close();
+    stubs.pop();
+    await until(() => link.status === 'offline');
+    expect(link.methods).toBeNull();
+  });
+
+  it('M3: stop() while connecting leaves no live connection and no online status', async () => {
+    const stub = await startStub();
+    const link = newLink();
+    link.start();
+    await link.stop();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(link.status).toBe('offline');
+    expect(stub.hellos).toHaveLength(0);
+    await expect(link.call('works.list')).rejects.toMatchObject({ code: 'host_offline' });
+  });
+
+  it('M3: start -> stop -> start while the token is read gives one connection', async () => {
+    const stub = await startStub();
+    const link = newLink();
+    link.start();
+    await link.stop();
+    link.start();
+    await until(() => link.status === 'online');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stub.hellos).toHaveLength(1);
+    expect(stub.conns.size).toBe(1);
+  });
+
+  it('retries when the host is down at start', async () => {
+    const link = newLink();
+    link.start();
+    await new Promise((r) => setTimeout(r, 80));
+    const stub = await startStub();
+    await until(() => link.status === 'online');
+    expect(stub.hellos).toHaveLength(1);
+  });
+
+  it('m9: HostCallError keeps the host error data', async () => {
+    const stub = await startStub();
+    const link = newLink();
+    link.start();
+    await until(() => link.status === 'online');
+    stub.callError = { code: 'conflict', message: 'busy', data: { reason: 'busy' } };
+    await expect(link.call('feed.decide', {})).rejects.toMatchObject({ code: 'conflict', data: { reason: 'busy' } });
+  });
+
+  it('m10: a line over the limit is logged and reported as failure, not silent', async () => {
+    await startStub({ hugeWorksList: true });
+    const link = newLink();
+    link.start();
+    await until(() => link.failure === 'line_too_long');
+    expect(link.status).not.toBe('online');
+    expect(await readFile(logFile, 'utf8')).toContain('host.line_too_long');
   });
 });

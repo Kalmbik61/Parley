@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- кадры в тестах разбираются как JSON */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorksSnapshot } from '@parley/protocol';
-import { bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
+import { REMOTE_METHODS, bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
 import type { AuditInput, AuditLog } from './audit.js';
 import { createSessionHandler } from './dispatch.js';
 import { HostCallError, refKey } from './host-link.js';
@@ -45,6 +45,9 @@ const act = (sessionId: string, activity: string) => ({ ref: ref(sessionId), act
 class FakeHost implements HostLink {
   status: HostLinkStatus = 'offline';
   epoch: string | null = null;
+  methods: string[] | null = null;
+  failure: 'line_too_long' | null = null;
+  hostMethodSet: string[] = [...REMOTE_METHODS];
   snapshot: WorksSnapshot | null = null;
   activity = new Map<string, ActivityEntry>();
   calls: { method: string; params: unknown }[] = [];
@@ -67,6 +70,7 @@ class FakeHost implements HostLink {
   /** Подключение к хосту: новая эпоха, загрузка. */
   connect(epoch: string) {
     this.epoch = epoch;
+    this.methods = this.hostMethodSet;
     this.snapshot = null;
     this.activity = new Map();
     this.emit({ type: 'status', status: this.status, epoch });
@@ -81,6 +85,7 @@ class FakeHost implements HostLink {
   }
   drop(status: HostLinkStatus = 'offline') {
     this.status = status;
+    this.methods = null;
     this.snapshot = null;
     this.activity = new Map();
     this.emit({ type: 'status', status, epoch: this.epoch });
@@ -323,6 +328,78 @@ describe('hello', () => {
     expect(hello.methods).toEqual(expect.arrayContaining(['works.list', 'feed.decide', 'ping', 'push.register']));
     expect(hello.methods).not.toContain('settings.set');
     expect(hello.events).toEqual(expect.arrayContaining(['works.changed', 'bridge.status', 'activity.snapshot']));
+  });
+});
+
+describe('A8b: host methods of the epoch', () => {
+  it('a method the host did not offer is unknown_method and never reaches the host', async () => {
+    host.hostMethodSet = REMOTE_METHODS.filter((m) => m !== 'feed.decide');
+    online();
+    dispatcher.onOpen('d1');
+    call('d1', 'a', 'feed.decide', {});
+    call('d1', 'b', 'works.list');
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['works.list']);
+    expect(sessions.of('d1').find((f) => f.id === 'a')).toMatchObject({ error: { code: 'unknown_method' } });
+    expect(audits[0]).toMatchObject({ kind: 'call-refused', method: 'feed.decide' });
+  });
+
+  it('hello lists a method only if the host offers it', () => {
+    host.hostMethodSet = REMOTE_METHODS.filter((m) => m !== 'feed.decide');
+    online();
+    const hello = dispatcher.hello('d1');
+    expect(hello.methods).toContain('works.list');
+    expect(hello.methods).not.toContain('feed.decide');
+    expect(hello.methods).toContain('ping');
+  });
+
+  it('hello while the host is not online offers bridge methods only', () => {
+    expect(dispatcher.hello('d1').methods).toEqual(['ping', 'client.info', 'push.register']);
+  });
+
+  it('a different method set in a new epoch closes every phone with rekey', () => {
+    online();
+    dispatcher.hello('d1');
+    dispatcher.onOpen('d1');
+    dispatcher.hello('d2');
+    dispatcher.onOpen('d2');
+    host.drop('offline');
+    host.hostMethodSet = REMOTE_METHODS.filter((m) => m !== 'feed.decide');
+    host.connect('b:2');
+    host.load(1);
+    expect(sessions.closed).toEqual([
+      { deviceId: 'd1', reason: 'rekey' },
+      { deviceId: 'd2', reason: 'rekey' },
+    ]);
+  });
+
+  it('the same method set in a new epoch keeps the phones', () => {
+    online();
+    dispatcher.hello('d1');
+    dispatcher.onOpen('d1');
+    host.drop('offline');
+    host.connect('b:2');
+    host.load(1);
+    expect(sessions.closed).toEqual([]);
+  });
+
+  it('a phone that got hello before the host loaded is rekeyed once the host is online', () => {
+    dispatcher.hello('d1'); // хост ещё не подключён: методов хоста в hello нет
+    dispatcher.onOpen('d1');
+    host.connect('b:1');
+    host.load(1);
+    expect(sessions.closed).toEqual([{ deviceId: 'd1', reason: 'rekey' }]);
+  });
+
+  it('launch methods are mutating: limited and audited with the work or room as target', async () => {
+    host.hostMethodSet = [...REMOTE_METHODS, 'rooms.send'];
+    online();
+    dispatcher.onOpen('d1');
+    // `rooms.send` ещё не в белом списке этапа A (A1c): мост не пропускает его, даже если хост предложил.
+    call('d1', 'a', 'rooms.send', { roomId: 'r-1', kind: 'note', text: 'secret words' });
+    await flush();
+    expect(host.calls).toEqual([]);
+    expect(JSON.stringify(audits)).not.toContain('secret words');
   });
 });
 

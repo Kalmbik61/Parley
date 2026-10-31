@@ -6,8 +6,17 @@ export const MAX_IN_FLIGHT = 16;
 export const MUTATING_PER_MINUTE = 30;
 export const COALESCE_MS = 1000;
 
-/** Изменяющие методы этапа A (спека 5.7). Этап B добавит записи таблицы 4.2. */
-export const MUTATING_METHODS: ReadonlySet<string> = new Set(['feed.decide', 'rooms.resolveProposal']);
+/**
+ * Изменяющие методы этапа A (спека 5.7): решения и запуск с телефона (`sessions.create`, `rooms.create`, `rooms.send`,
+ * правки 10–11). Этап B добавит записи таблицы 4.2. Метод, которого нет в белом списке, всё равно отказывается раньше.
+ */
+export const MUTATING_METHODS: ReadonlySet<string> = new Set([
+  'feed.decide',
+  'rooms.resolveProposal',
+  'sessions.create',
+  'rooms.create',
+  'rooms.send',
+]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */
 export function createRateLimiter(max: number, windowMs: number, now: () => number = Date.now) {
