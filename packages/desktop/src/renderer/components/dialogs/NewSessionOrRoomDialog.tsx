@@ -56,8 +56,8 @@
  *
  * Lean-режим (C2.2): участники комнаты уходят в `sessions.create` с `lean` из настройки `leanAgents` (читается при
  * открытии вместе с порогами; не пришла к «Create room» — комната спрашивает её ещё раз, и всё равно нет — поля нет,
- * решает хост), одиночная сессия и сессии без комнаты — со своим флажком «Lean session» (по умолчанию снят; без галочки
- * поля нет).
+ * решает хост), одиночная сессия и сессии без комнаты — со своим флажком «Lean session» (по умолчанию он по `leanAgents`, пока
+ * человек его не тронул; без галочки поля нет).
  * Флажок виден, только когда хост отдал `leanAgents`: старый хост поле `lean` отбрасывает, и галочка бы врала.
  *
  * Бюджет работы (P37): пороги читаются из настроек при открытии, занятое — из карты выбранной работы. Подвал показывает,
@@ -167,8 +167,10 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
   // Корень git для Autonomous: null — ответа нет (ждём, сбой, старый хост без gitRoot) и подсказки тоже нет.
   const [gitRoot, setGitRoot] = useState<boolean | null>(null);
-  /** «Lean session» одиночной сессии: по умолчанию снят. У комнаты вместо него настройка `leanAgents`. */
+  /** «Lean session» одиночной сессии: начальное значение — настройка `leanAgents`, пока человек не тронул галочку. У комнаты вместо него сама настройка. */
   const [lean, setLean] = useState(false);
+  /** Человек менял галочку в этом открытии: пришедшие позже настройки её не перезаписывают. */
+  const leanTouchedRef = useRef(false);
   /** `leanAgents` из настроек этого открытия; `null` — хост её не отдал (старый хост) или ответ не пришёл. */
   const [leanAgents, setLeanAgents] = useState<boolean | null>(null);
   /** Каталог рецептов проекта; `null` — не загружен или хост рецептов не знает: выбора рецепта тогда нет. */
@@ -216,6 +218,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
     setWorkChoice(work === null ? null : workKey(work.projectPath, work.workId));
     setWorktree(false);
     setLean(false);
+    leanTouchedRef.current = false;
     setRecipeId(null);
     setMode('free');
     setSaving(false);
@@ -237,7 +240,10 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
       .then(({ config }) => {
         if (stale) return;
         if (RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number')) setLimits(limitsFromConfig(config));
-        if (typeof config.leanAgents === 'boolean') setLeanAgents(config.leanAgents);
+        if (typeof config.leanAgents === 'boolean') {
+          setLeanAgents(config.leanAgents);
+          if (!leanTouchedRef.current) setLean(config.leanAgents);
+        }
       })
       .catch(() => {
         // Без порогов подвал бюджета не показывается, а решает хост.
@@ -629,7 +635,14 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
             {roomMode || leanAgents === null ? null : (
               <span className="flex items-center gap-1">
                 <label className="flex items-center gap-2">
-                  <Checkbox checked={lean} disabled={groupLocked} onCheckedChange={(value) => setLean(value === true)} />
+                  <Checkbox
+                    checked={lean}
+                    disabled={groupLocked}
+                    onCheckedChange={(value) => {
+                      leanTouchedRef.current = true;
+                      setLean(value === true);
+                    }}
+                  />
                   {text.leanSession}
                 </label>
                 <FieldHint field={text.leanSession} text={text.hints.leanSession} />
