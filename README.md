@@ -8,7 +8,8 @@
 Parley coordinates agent CLIs (Claude Code, Codex, and GLM through Claude Code) in the
 `Parley.app` window — an Electron app on top of a local `parley-host` process. The window and
 the host are connected by a unix socket with its own handshake token; nothing is reachable
-from the network. Parley works locally: it is not a server and not a web app.
+from the network. Parley works locally: it is not a server and not a web app. The one optional
+exception is [Remote access](#remote-access-mobile), which is off until you turn it on.
 
 In the window: a sidebar of project workspaces with a tree of their sessions and rooms;
 tabs for the terminal, rooms (a conversation of several agents and a decision that waits
@@ -126,7 +127,10 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
   to the Anthropic or OpenAI APIs.
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
   telemetry. Parley's own requests are a once-a-day release check on GitHub (you can turn it
-  off) and, for GLM, a quota query to Z.ai.
+  off) and, for GLM, a quota query to Z.ai. With **Remote access** on, the separate bridge
+  process also connects out to the relay you chose (and, when push works, to the push gateway);
+  the window itself makes one more kind of connection, over SSH, only while you run the relay
+  setup wizard. Remote access is off by default and listens on no port.
 - **Agents talk through Parley.** Every agent gets Parley's MCP server: it reads the shared
   workspace map, sends and reads messages, and proposes decisions. When mail comes, the host
   types a short pointer into the agent's terminal, only after the agent has finished its turn.
@@ -199,6 +203,92 @@ Once a day Parley checks GitHub for a new release and shows a toast when one is 
 off in Settings → Notifications); it does not update itself. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
 app in Applications and run the `xattr` command again: macOS treats every unsigned build as a
 new app. Your data lives outside the app and stays.
+
+## Remote access (mobile)
+
+> **Beta.** Off by default. Today this is built and tested without a phone in the loop: the checks
+> on a real iPhone, on a relay on your own server and over a mobile network, and push notifications
+> (they need an Apple Developer account for the app), are **not done yet**. Treat it as untested
+> on devices until the release notes say otherwise.
+
+The Parley iOS app (iPhone, iOS 17 or later) shows what waits for you on this Mac and lets you
+answer it from the phone: allow or deny a permission, answer a question, approve a plan, accept
+or send back a room's decision, read letters from your agents. With the switch below, it can also
+start a session or a room and send a message into a room.
+
+### What a paired phone can do — read this first
+
+A paired phone can do what you do when you type to an agent. If someone gets hold of an
+unlocked paired phone, that is code running on this Mac by the agents' hands. That is why
+pairing needs your confirmation on the Mac, every mutating action is written to a log on the Mac,
+a phone can be revoked in one click, there are rate limits, and the whole feature has a switch.
+
+Things the phone cannot do at all: change Parley's settings, stop the host, delete or rename
+works, sessions and rooms, close sessions, run git or worktree operations, add or remove
+providers' keys, and type into a terminal (no keystrokes, no resize). Everything not on the
+allow-list is refused by the host, not only by the phone.
+
+Two guards on the phone itself: the app asks for **Face ID** (or the device passcode if Face ID
+is not set up) before **Allow**, **Accept** and every plan approval, and before every session or
+room it starts and every message it sends into a room. Deny, Return for rework, answers to
+questions and plain viewing never ask. Settings → Security → "Require Face ID to allow" removes the
+prompt for Allow, Accept and plan approvals only — launches and room messages always ask — and
+turning it off asks Face ID too. This guards against someone else's hands on your unlocked phone;
+it is not an access boundary, because the Mac does not know about it.
+
+### How it connects
+
+```
+iPhone app ◀── end-to-end encrypted ──▶ relay (your server) ◀── outgoing WSS ── Parley bridge ──▶ parley-host
+```
+
+- The **bridge** is a separate process started by the window only while Remote access is on. It
+  only connects out (WSS to the relay you entered); it listens on no network port, only on a
+  unix control socket for the window.
+- The **relay** is a small service you run on your own server (see
+  [`packages/relay`](packages/relay/README.md)). Everything except the frames that join two
+  sockets is inside an end-to-end Noise session between your phone and your Mac; the relay never
+  sees text, decisions, work names, paths or push tokens. It sees network addresses, timing, frame
+  sizes, the route id and the device id. A compromised relay can stop the service and collect
+  that metadata; it cannot reach your Mac.
+- Each user runs their own relay; there is no shared relay.
+- Pairing: the Mac shows a one-time QR code (it expires in two minutes); the phone scans it, both
+  show a short comparison code, and you press "Codes match — Allow" on the Mac. If the codes differ, press Deny.
+- A Mac pairs with up to 5 phones; a phone can hold several Macs and shows one at a time.
+- Credentials are untouched: the bridge never reads provider logins, the Keychain or other APIs.
+
+### Notifications (push) — limits
+
+Push is **not available yet**: it needs the app's push gateway, which runs on the app author's
+server and starts after the Apple Developer account is paid. Until then no build sends push, and
+an iPhone installed on a free Personal Team has none at all ("Notifications unavailable on this
+build" in the app's Settings); everything else works. When it is on:
+
+- A push arrives only while the **Mac is awake**, Parley is running with Remote access on, and the
+  gateway is reachable. Parley cannot wake a sleeping Mac.
+- **One gateway for everyone.** If it is down, no push arrives for anyone; connecting, answering and
+  pairing keep working. Builds under your own bundle ID and APNs key can point at their own
+  gateway with `pushGatewayUrl` in `~/.parley/remote/remote.json`.
+- The gateway sees the device's push token, the route id, the number of waiting items and your IP
+  address, and stores none of it (see [`packages/push-gateway`](packages/push-gateway/README.md)).
+  The text is always "Parley — N waiting": no names, texts, commands or paths.
+- No push while you are active at the Mac; it is sent when the Mac is idle or locked (and always
+  when the window is not running). Only a new waiting item sends one.
+
+### Turn it on, revoke it
+
+1. Get a relay: on your own server with [the wizard or by hand](packages/relay/README.md), or for
+   development a local relay on the Mac's network (plain `ws://`, no TLS — never for real use).
+2. Settings → Remote access: switch "Remote access (beta)" on, enter the relay address, press Check.
+3. "Pair a device" shows the QR; scan it in the app, compare the codes, press "Codes match — Allow".
+4. The same screen has "Allow creating sessions and rooms from the phone" (on by default): turn
+   it off and the phone can read and answer but cannot start agents or send tasks to rooms.
+
+To cut a phone off, press **Revoke** next to it under Devices: its connections are closed at once
+and it can never reconnect. If you lose a phone and do not know what else leaked, use **Revoke all
+and reset key**: every phone must be paired again. Removing a Mac inside the app only forgets it on
+the phone; revoking on the Mac is what takes access away. The Activity list shows the last 200
+actions the bridge handled. Turning the switch off stops the bridge.
 
 ## Requirements
 
