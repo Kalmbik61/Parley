@@ -13,9 +13,3 @@ export async function biometryKind(): Promise<BiometryKind> {
 }
 
 export const biometryLabel = (k: BiometryKind): string => (k === 'touchid' ? 'Touch ID' : 'Face ID');
-
-/** Asks for biometry (device passcode as fallback); `true` — confirmed. */
-export async function confirmDisable(): Promise<boolean> {
-  const r = await LocalAuthentication.authenticateAsync({ promptMessage: 'Turn off the approval check', disableDeviceFallback: false });
-  return r.success;
-}

@@ -62,11 +62,20 @@ export function installDemo(client: RemoteClient): void {
   act(ref('a13'), 'blocked', { kind: 'question', since: ago(5), detail: null, resetsAt: null, window: null, account: null });
   act(ref('greta'), 'unseen');
   act(ref('drone1'), 'working');
+  const letter = (id: string, from: string, text: string, min: number, read: boolean) =>
+    ({ id, roomId: null, from, to: ['human'], at: ago(min), text, kind: 'note', readBy: read ? { human: ago(min - 1) } : {} }) as never;
+  store.dispatch({
+    t: 'messages', projectPath: P, workId: 'w1', roomId: null, epoch: 'demo',
+    messages: [
+      letter('m1', 'Greta', '## PR #143 is ready\nThe projection fix is merged.\n- tests green\n- lint green', 20, false),
+      letter('m2', 'Mobile-D1-designer', 'S7 draft is committed; screens follow the mockups.', 1500, true),
+    ],
+  });
   store.dispatch({ t: 'cards.loaded', ref: ref('d1'), epoch: 'demo', items: [permission], at: Date.now() });
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
 
-/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -79,6 +88,12 @@ export function demoRoute(name: unknown): string | null {
       return s('d1');
     case 'question':
       return s('a13');
+    case 'decision':
+      return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
+    case 'letters':
+      return '/letters';
+    case 'letter':
+      return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':
       return s('greta');
     default:

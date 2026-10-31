@@ -1,4 +1,4 @@
-// Notification permission (D1 §6.6, §11.2). Whether push reaches this build is A16's call; `pushAvailable` is its hook.
+// Notification permission (D1 §6.6, §11.2).
 import * as Notifications from 'expo-notifications';
 
 import type { Permission } from './row';
@@ -15,4 +15,3 @@ export async function requestPermission(): Promise<Permission> {
 }
 
 /** Stage A, Personal Team builds have no APNs token. A16 replaces this with the real check. */
-export const pushAvailable = (): boolean => true;

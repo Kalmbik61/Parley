@@ -1,6 +1,9 @@
 import '../polyfills';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { cardsApprove } from '../auth/instance';
+import { ApproveContext } from '../cards/approve-context';
+import { useClearOnOpen, usePushTaps } from '../push/notifications';
 import { runtime } from '../runtime/instance';
 import { useRuntimeState } from '../runtime/use-runtime';
 
@@ -8,6 +11,8 @@ export default function RootLayout() {
   const { phase, hosts } = useRuntimeState();
   const segments = useSegments();
   const router = useRouter();
+  usePushTaps(router);
+  useClearOnOpen();
   useEffect(() => {
     void runtime.start();
     return () => runtime.stop();
@@ -23,6 +28,7 @@ export default function RootLayout() {
     if (devRoute && phase === 'ready') router.replace(devRoute as never);
   }, [devRoute, phase, router]);
   return (
+    <ApproveContext.Provider value={cardsApprove}>
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
@@ -30,5 +36,6 @@ export default function RootLayout() {
         options={{ headerShown: false, presentation: 'fullScreenModal', gestureEnabled: false }}
       />
     </Stack>
+    </ApproveContext.Provider>
   );
 }

@@ -2,6 +2,8 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
+import * as Notifications from 'expo-notifications';
+import { registerPush } from '../push/register';
 import { seedHostFromEnv } from '../dev/seed-host';
 import { createPlatform } from '../platform';
 import { LocalSettings } from '../settings/local-settings';
@@ -26,6 +28,14 @@ export const runtime = new AppRuntime({
   },
   settings: new LocalSettings(SecureStore, { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY }),
   client: { app: 'parley-mobile', version, platform: 'ios' },
+  registerPush: (call) => registerPush({ getToken: () => Notifications.getDevicePushTokenAsync(), call, env: __DEV__ ? 'sandbox' : 'production' }),
   seedHost: __DEV__ && typeof devRelay === 'string' ? seedHostFromEnv(devRelay, platform.random) : null,
 });
 relayHost = () => runtime.relayHost;
+
+// A new APNs token goes to the bridge at once (spec §9.1).
+try {
+  Notifications.addPushTokenListener(() => runtime.registerPush());
+} catch {
+  // No push on this build.
+}

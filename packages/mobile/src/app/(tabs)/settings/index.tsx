@@ -1,17 +1,18 @@
 // Settings (D1 §11): Macs, Security, Notifications, About.
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, Linking, ScrollView, StyleSheet } from 'react-native';
+import { approve } from '../../../auth/instance';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { ConnectionBanner } from '../../../components/ConnectionBanner';
 import { Row, Section } from '../../../components/ui';
 import { haptic } from '../../../haptics';
-import { getPermission, pushAvailable, requestPermission } from '../../../notifications/permission';
+import { getPermission, requestPermission } from '../../../notifications/permission';
 import { notificationRow, type Permission } from '../../../notifications/row';
 import { runtime } from '../../../runtime/instance';
 import { useRuntimeState } from '../../../runtime/use-runtime';
 import { displayName } from '../../../settings/local-settings';
-import { biometryKind, biometryLabel, confirmDisable, type BiometryKind } from '../../../settings/biometric';
+import { biometryKind, biometryLabel, type BiometryKind } from '../../../settings/biometric';
 import { useColors } from '../../../theme';
 import { hostStatusLine } from '../../../hosts/status-line';
 
@@ -44,11 +45,11 @@ export default function SettingsScreen() {
   }, [ready, state.host?.hostId]);
 
   const label = biometryLabel(kind);
-  const row = notificationRow({ permission, enabled: notifOn, pushAvailable: pushAvailable() });
+  const row = notificationRow({ permission, enabled: notifOn, pushAvailable: state.pushAvailability !== 'unavailable' });
   const version = Constants.expoConfig?.version ?? '0.0.0';
 
   const toggleBiometric = async (on: boolean): Promise<void> => {
-    if (!on && !(await confirmDisable())) return; // turning protection off is itself protected
+    if (!on && (await approve('disable')) !== 'ok') return; // turning protection off is itself protected
     setBiometric(on);
     await runtime.setRequireBiometric(on);
   };

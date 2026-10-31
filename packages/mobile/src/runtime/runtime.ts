@@ -13,6 +13,7 @@ import {
 } from '@parley/remote-client';
 import { withSeedHost } from '../dev/seed-host';
 import { wipeOnFirstRun, type InstallMarker } from '../platform/first-run';
+import type { PushAvailability } from '../push/register';
 import type { LocalSettings } from '../settings/local-settings';
 
 export interface RuntimeState {
@@ -31,6 +32,8 @@ export interface RuntimeState {
   lastUpdatedAt: number | null;
   /** Host status from the bridge (`bridge.status`), mirrored so the banner re-renders on change. */
   hostStatus: HostStatus | null;
+  /** Result of the last `push.register` (A16); Settings shows "Notifications unavailable on this build". */
+  pushAvailability: PushAvailability;
 }
 
 export interface RuntimeDeps {
@@ -43,6 +46,8 @@ export interface RuntimeDeps {
    * (`withSeedHost` in `src/dev/seed-host.ts`). It is never written to the Keychain.
    */
   seedHost?: HostRecord | null;
+  /** A16: runs after every transition to `ready`; resolves with what was registered. Must not throw. */
+  registerPush?: (call: (method: string, params: unknown) => Promise<unknown>) => Promise<PushAvailability>;
 }
 
 export class AppRuntime {
@@ -62,6 +67,7 @@ export class AppRuntime {
     waitingSince: null,
     lastUpdatedAt: null,
     hostStatus: null,
+    pushAvailability: 'unknown',
   };
   #started: Promise<void> | null = null;
   #supervisor: Supervisor | null = null;
@@ -216,6 +222,7 @@ export class AppRuntime {
       platform.appState.subscribe((s) => client.refresher.setForeground(s === 'active')),
       supervisor.subscribe((status) => {
         const ready = status.state === 'ready';
+        if (ready && this.#state.supervisor?.state !== 'ready') this.registerPush();
         client.refresher.setConnected(ready);
         client.setBridgeMethods(ready ? (status.hello?.methods ?? null) : null);
         const failing = status.state === 'waiting' || status.state === 'offline';
@@ -236,6 +243,19 @@ export class AppRuntime {
     this.#supervisor?.stop();
     this.#supervisor = null;
     for (const off of this.#teardown.splice(0)) off();
+  }
+
+  /** `push.register` now if connected (after `ready`, and when APNs hands out a new token). */
+  registerPush(): void {
+    const supervisor = this.#supervisor;
+    if (!supervisor || supervisor.status.state !== 'ready' || !this.#deps.registerPush) return;
+    void this.#deps.registerPush((m, p) => supervisor.call(m, p)).then((pushAvailability) => this.#set({ pushAvailability }));
+  }
+
+  /** A read-only bridge call for screens (e.g. `context.letter`); rejects when not connected. */
+  call(method: string, params?: unknown): Promise<unknown> {
+    if (!this.#supervisor) return Promise.reject(new Error('not connected'));
+    return this.#supervisor.call(method, params);
   }
 
   /** "Retry" on the banner. */
