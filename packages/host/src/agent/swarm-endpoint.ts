@@ -68,7 +68,9 @@ export function createSwarmEndpoint(options: {
               projectPath: ref.projectPath, workId: ref.workId, requestedBy: ref.sessionId, parent: null,
               provider: args['provider'] as string, label: op === 'add' ? args['label'] as string | undefined ?? '' : '',
               task: (op === 'create' ? args['objective'] : args['task']) as string,
-              lean: config.leanAgents,
+              // Королева всегда облегчённая: она только координирует, MCP человека ей не нужны, а диалог «new MCP servers found»
+              // держал её до ответа человека (b-013). Участники из `swarm_add` — по настройке `leanAgents`.
+              lean: op === 'create' ? true : config.leanAgents,
               swarm: op === 'create' ? { kind: 'create', tag: args['tag'] as string, objective: args['objective'] as string } : { kind: 'add', role: args['role'] as 'drone' | 'verifier' },
               ...(roleOf === undefined ? {} : { role: roleFromId(roleOf as string) }),
               ...(args['model'] === undefined ? {} : { model: args['model'] as string | null }),

@@ -44,6 +44,13 @@ describe('swarms.create', () => {
     expect(input).not.toHaveProperty('effort');
   });
 
+  it('королева облегчённая всегда: sessions.create получает lean: true (настройка leanAgents не читается)', async () => {
+    const work = await createWork(project, { title: 'Swarm', goal: '' });
+    const sessions = fakeSessions();
+    await createSwarmsCreate(sessions)({ projectPath: project, workId: work.work.id, tag: 'Audit', objective: 'Check', provider: 'claude' }, {} as never);
+    expect(sessions.create.mock.calls[0]![0]).toMatchObject({ lean: true });
+  });
+
   it('работы нет — not_found, сессия не создаётся', async () => {
     const sessions = fakeSessions();
     await expect(createSwarmsCreate(sessions)({ projectPath: project, workId: 'w-nope', tag: 'T', objective: 'o', provider: 'claude' }, {} as never))
