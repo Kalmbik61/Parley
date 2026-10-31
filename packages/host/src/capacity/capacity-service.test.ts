@@ -336,6 +336,36 @@ function admittingLaunch(serviceOf: () => CapacityService): typeof launchImpl {
 }
 
 /**
+ * Как `admittingLaunch`, но допуск записи начинается только после её ворот (`gateOf`): это окно между продвижением записи
+ * насосом и её собственным допуском, в которое успевает прийти чужой запуск. `tickets` — ответы допуска по id сессии.
+ */
+function gatedLaunch(
+  serviceOf: () => CapacityService,
+  gateOf: (ref: SessionRef) => Promise<void>,
+  tickets: Map<string, string>,
+): typeof launchImpl {
+  return async (ref) => {
+    await gateOf(ref);
+    const service = serviceOf();
+    const ticket = await service.admit({ ref, launchClass: 'agent' });
+    tickets.set(ref.sessionId, ticket.kind);
+    if (ticket.kind === 'queue') return 'queued';
+    await startedLaunch(ref);
+    service.settle(ref);
+    return 'started';
+  };
+}
+
+/** Ворота, которые тест открывает сам. */
+function openGate(): { gate: Promise<void>; open: () => void } {
+  let open = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { gate, open };
+}
+
+/**
  * Запись, которую насос продвинул, а допуск вернул в очередь: потолок 1 занят, `slotCandidate()` обещает кандидата, а
  * `freeSlot()` под замком карты никого усыпить не может. Возвращается, когда первый запуск уже вернулся с `queued`.
  */
@@ -690,6 +720,68 @@ describe('сервис ёмкости: новый запуск не обгоня
     expect(await service.admit({ ref: late, launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
     expect(await service.admit({ ref: early, launchClass: 'agent' })).toMatchObject({ kind: 'start' });
   });
+
+  it('голова очереди в продвижении, её допуск ещё не вызван: новый агент встаёт за ней, а её допуск получает старт', async () => {
+    machineConcurrent = 1;
+    const [busy] = startLive(1);
+    const head = await enqueue({ class: 'agent', by: 's-01' });
+    const { gate, open } = openGate();
+    const tickets = new Map<string, string>();
+    launchImpl = gatedLaunch(() => service, () => gate, tickets);
+    const service = boot();
+    await quiet();
+    expect(launches).toEqual([]);
+
+    // Слот освободился для головы: насос продвинул её, а её допуск ещё не вызван.
+    exitPty(busy!);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+
+    // Новый агент пришёл раньше её допуска: слот освобождён для головы, обогнать её он не может.
+    expect(await service.admit({ ref: fresh(1), launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
+
+    open();
+    await vi.waitFor(() => expect(isQueued(head)).toBe(false));
+    expect(tickets.get(head.sessionId)).toBe('start');
+  });
+
+  it('две продвигаемые записи не блокируют друг друга: при двух свободных слотах обе получают старт', async () => {
+    machineConcurrent = 2;
+    const busy = startLive(2);
+    const first = await enqueue({ class: 'agent', by: 's-01', at: T0 + 1 });
+    const second = await enqueue({ class: 'agent', by: 's-01', at: T0 + 2 });
+    const gates = new Map([
+      [first.sessionId, openGate()],
+      [second.sessionId, openGate()],
+    ]);
+    const tickets = new Map<string, string>();
+    launchImpl = gatedLaunch(() => service, (ref) => gates.get(ref.sessionId)!.gate, tickets);
+    const service = boot();
+    await quiet();
+
+    exitPty(...busy);
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+    // Допуск второй записи приходит раньше допуска первой: та ещё в продвижении, но другую продвигаемую запись не блокирует.
+    gates.get(second.sessionId)!.open();
+    await vi.waitFor(() => expect(tickets.get(second.sessionId)).toBe('start'));
+    gates.get(first.sessionId)!.open();
+    await vi.waitFor(() => expect(tickets.get(first.sessionId)).toBe('start'));
+  });
+
+  it('новый человек идёт впереди продвигаемого агента: класс важнее времени', async () => {
+    machineConcurrent = 2;
+    const [busy] = startLive(2);
+    await enqueue({ class: 'agent', by: 's-01', at: T0 });
+    const { gate } = openGate();
+    launchImpl = gatedLaunch(() => service, () => gate, new Map());
+    const service = boot();
+    await quiet();
+
+    exitPty(busy!);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+
+    // Агент старше по времени, но он позади человека по классу: слот свободен, впереди никого.
+    expect(await service.admit({ ref: fresh(1), launchClass: 'human' })).toMatchObject({ kind: 'start' });
+  });
 });
 
 describe('сервис ёмкости: settle и выход процесса', () => {
@@ -938,16 +1030,17 @@ describe('сервис ёмкости: продвижение очереди', (
 });
 
 describe('сервис ёмкости: запись, которая не держит очередь', () => {
-  it('подъём письмом в продвижении: запись не держит запуски позади; ответ queue возвращает её в очередь', async () => {
+  it('подъём письмом в продвижении: новый агент встаёт за ним, человек идёт впереди; ответ queue возвращает запись в очередь', async () => {
     machineConcurrent = 3;
     startLive(1);
     const mail = await enqueue({ class: 'mail', mode: 'resume', by: 'wake', at: T0 });
     const service = boot();
     await vi.waitFor(() => expect(retries).toEqual([mail]));
 
-    // `retry` ушёл, будильник ещё не дошёл до `launch`: запись в продвижении и очередь не держит.
-    expect(await service.admit({ ref: fresh(1), launchClass: 'agent' })).toMatchObject({ kind: 'start' });
-    service.settle(fresh(1));
+    // `retry` ушёл, будильник ещё не дошёл до `launch`: слот освобождён записи, новый агент встаёт за ней, человек — впереди.
+    expect(await service.admit({ ref: fresh(1), launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
+    expect(await service.admit({ ref: fresh(2), launchClass: 'human' })).toMatchObject({ kind: 'start' });
+    service.settle(fresh(2));
     // Пока запись в продвижении, насос её не трогает.
     worksChanged();
     await quiet();
@@ -956,7 +1049,7 @@ describe('сервис ёмкости: запись, которая не дер�
     // Будильник дошёл до `launch`, а места нет: ответ queue снимает запись с продвижения, она ждёт своей очереди.
     startLive(2);
     expect(await service.admit({ ref: mail, launchClass: 'mail' })).toMatchObject({ kind: 'queue' });
-    expect(await service.admit({ ref: fresh(2), launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
+    expect(await service.admit({ ref: fresh(3), launchClass: 'agent' })).toMatchObject({ kind: 'queue' });
     // Освободился слот — запись идёт заново.
     exitPty(live[0]!);
     await vi.waitFor(() => expect(retries).toEqual([mail, mail]));
