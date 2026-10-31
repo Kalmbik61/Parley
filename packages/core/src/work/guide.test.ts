@@ -5,6 +5,14 @@ import { GUIDE, GUIDE_TOPICS, guide, guideTopic } from './guide.js';
 const bodies = (): string[] => GUIDE_TOPICS.map((item) => (guideTopic(item.topic) ?? '').trimEnd());
 
 describe('темы гида', () => {
+  it('объясняет частичный обзор и продолжение списков/точной ревизии плана', () => {
+    const tools = guideTopic('tools');
+    expect(tools).toContain('48 KiB MCP-result ceiling');
+    expect(tools).toContain('collections[field]');
+    expect(tools).toContain('"sessions" | "rooms" | "plans" | "deletedSessions" | "unreadRooms"');
+    expect(tools).toContain('{field: "plan", id: "pl-01", rev: 0}');
+    expect(tools).toContain('stale cursor requires restarting without cursor');
+  });
   it('имя темы — латиница строчными, без повторов; у каждой есть строка «что внутри»', () => {
     const names = GUIDE_TOPICS.map((item) => item.topic);
 

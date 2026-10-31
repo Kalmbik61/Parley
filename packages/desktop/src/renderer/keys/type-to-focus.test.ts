@@ -18,6 +18,19 @@ describe('shouldTypeToFocus', () => {
     expect(shouldTypeToFocus(key({ key: 'A' }), 'other', false, false)).toBe(true);
   });
 
+  it('пробел на кнопке, role=button или summary — нет (нажимает её); другие символы и прочие элементы — да', () => {
+    const on = (html: string): Element => {
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      return host.firstElementChild!.querySelector('span') ?? host.firstElementChild!;
+    };
+    for (const html of ['<button></button>', '<button><span></span></button>', '<div role="button"></div>', '<summary></summary>']) {
+      expect(shouldTypeToFocus(key({ key: ' ' }), 'other', false, false, on(html)), html).toBe(false);
+    }
+    expect(shouldTypeToFocus(key({ key: 'a' }), 'other', false, false, on('<button></button>'))).toBe(true);
+    expect(shouldTypeToFocus(key({ key: ' ' }), 'other', false, false, on('<div></div>'))).toBe(true);
+  });
+
   it('⌘, ⌃, ⌥ — нет', () => {
     expect(shouldTypeToFocus(key({ metaKey: true }), 'other', false, false)).toBe(false);
     expect(shouldTypeToFocus(key({ ctrlKey: true }), 'other', false, false)).toBe(false);

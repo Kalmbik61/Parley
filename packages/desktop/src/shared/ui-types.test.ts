@@ -293,6 +293,24 @@ describe('normalizeUi: помощник', () => {
   });
 });
 
+describe('chatFold (план 2026-10-30)', () => {
+  it('по умолчанию replies; файл без ключа читается с умолчанием', () => {
+    expect(DEFAULT_UI.chatFold).toBe('replies');
+    expect(normalizeUi({ version: 1, appearance: 'dark' }).chatFold).toBe('replies');
+  });
+
+  it('допустимые значения сохраняются, чужие — по умолчанию', () => {
+    for (const mode of ['off', 'replies', 'final']) expect(normalizeUi({ chatFold: mode }).chatFold).toBe(mode);
+    for (const garbage of ['fold', '', 1, null, {}, ['off']]) {
+      expect(normalizeUi({ chatFold: garbage }).chatFold, JSON.stringify(garbage)).toBe('replies');
+    }
+  });
+
+  it('патч меняет режим и не трогает остальное', () => {
+    expect(normalizeUi(mergeUiPatch(DEFAULT_UI, { chatFold: 'final' }))).toEqual({ ...DEFAULT_UI, chatFold: 'final' });
+  });
+});
+
 // Спека архива комнат и проектов, 6.3: проекты, убранные из списка пунктом «Remove from list…».
 describe('hiddenProjects (спека архива, 6.3)', () => {
   it('по умолчанию пусто; файл прежней версии без ключа читается с пустым списком', () => {

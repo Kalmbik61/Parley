@@ -30,7 +30,7 @@ import { RESOURCE_LIMIT_BOUNDS, RESOURCE_LIMIT_KEYS } from '@parley/core/resourc
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
-import type { Appearance, IslandSoundPalette, IslandSoundUi, UiFile } from '../../../shared/ui-types.js';
+import type { Appearance, ChatFold, IslandSoundPalette, IslandSoundUi, UiFile } from '../../../shared/ui-types.js';
 import type { AssistantShortcutStatus } from '../../../shared/island.js';
 import { playCue } from '../../island/sound/synth.js';
 import { useUiStore, type SettingsSection } from '../../store/ui.js';
@@ -282,7 +282,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsList>
 
           <div data-testid="settings-pane" className="min-h-0 flex-1 overflow-y-auto pr-1">
-          <TabsContent value="appearance" className="mt-0">
+          <TabsContent value="appearance" className="mt-0 flex flex-col gap-4">
             {uiLoaded ? (
               <ToggleGroup
                 type="single"
@@ -295,6 +295,23 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                 <ToggleGroupItem value="dark">{S.settings.appearanceDark}</ToggleGroupItem>
                 <ToggleGroupItem value="light">{S.settings.appearanceLight}</ToggleGroupItem>
               </ToggleGroup>
+            ) : null}
+            {uiLoaded ? (
+              <div className="flex flex-col gap-1 text-sm">
+                <span id="finished-turns-label">{S.settings.finishedTurns}</span>
+                <ToggleGroup
+                  type="single"
+                  aria-labelledby="finished-turns-label"
+                  value={ui.chatFold}
+                  onValueChange={(value) => {
+                    if (value !== '') patchUi({ chatFold: value as ChatFold });
+                  }}
+                >
+                  <ToggleGroupItem value="off">{S.settings.finishedTurnsExpanded}</ToggleGroupItem>
+                  <ToggleGroupItem value="replies">{S.settings.finishedTurnsFold}</ToggleGroupItem>
+                  <ToggleGroupItem value="final">{S.settings.finishedTurnsFinal}</ToggleGroupItem>
+                </ToggleGroup>
+              </div>
             ) : null}
           </TabsContent>
 

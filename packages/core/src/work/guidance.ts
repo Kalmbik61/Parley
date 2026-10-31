@@ -104,7 +104,7 @@ const MEMORY_HINT = ' Memory: remember one lasting project fact or lesson (the h
 export function stableGuidance({ skillNavigator = false, skillList, toolProfile }: Pick<GuidanceOptions, 'skillNavigator' | 'skillList' | 'toolProfile'> = {}): string {
   const lines = [
     'You are inside Parley; coordinate through the tools of the parley MCP server.',
-    'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
+    'get_map — call first: partial summaries; collections give totals/next. Continue field sessions|rooms|plans|deletedSessions|unreadRooms with cursor; detail {session}/{room}/{field:plan,id,rev}; long fields via field/cursor.',
     'report — done or failed hands in the result, the session stays reachable and does not close itself; progress — a summary.',
     'create_session — launch a new peer in the current workspace. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate. Implementation: standard-tier models (Executor); strong ones plan, lead, review.',
     // Одно длинное ожидание вместо цепочки коротких: каждый вызов и каждая реплика «жду» — полный ход модели.

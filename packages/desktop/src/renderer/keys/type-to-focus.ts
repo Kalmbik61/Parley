@@ -54,8 +54,11 @@ export function shouldTypeToFocus(
   context: FocusContext,
   paletteOpen: boolean,
   hasOpenDialog: boolean,
+  active: Element | null = null,
 ): boolean {
   if (event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey) return false;
   if (event.isComposing || event.repeat) return false;
+  // Пробел на кнопке нажимает её, а не начинает набор: иначе фокус уходил бы в поле, и кнопку не нажать с клавиатуры.
+  if (event.key === ' ' && active?.closest('button, [role="button"], summary') != null) return false;
   return context === 'other' && !paletteOpen && !hasOpenDialog;
 }

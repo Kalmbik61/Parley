@@ -270,7 +270,21 @@ describe('ChatView — лента', () => {
     setFeed([prompt('p1', 'hi'), text('t1', 'hello there'), turn('u1')]);
     expect(screen.getByTestId('chat-prompt').textContent).toContain('hi');
     expect(screen.getByTestId('chat-text').textContent).toContain('hello there');
+    // Законченный ход по умолчанию свёрнут: вместо черты «Turn finished» — строка статуса.
+    expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.fold.completed('1s'));
+  });
+
+  it('режим «Finished turns» из настроек доходит до ленты: Expanded показывает вызовы и черту, Fold work — свёртку', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    const call: FeedItem = { id: 'c1', at: AT, kind: 'tool', toolUseId: 'c1', name: 'Read', input: {}, status: 'done' };
+    const items = [prompt('p1', 'hi'), call, text('t1', 'hello there'), turn('u1')];
+    setFeed(items);
+    expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.fold.completed('1s'));
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    act(() => useUiStore.setState({ ui: { ...useUiStore.getState().ui, chatFold: 'off' } }));
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(1);
     expect(screen.getByTestId('chat-turn').textContent).toBe(S.chat.turn('1s'));
+    act(() => useUiStore.setState({ ui: { ...useUiStore.getState().ui, chatFold: 'replies' } }));
   });
 
   it('у низа — новое прижимается к низу; прокрутили вверх — не дёргаем, «Jump to latest» возвращает', () => {
@@ -1800,8 +1814,10 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     await act(async () => {});
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(KEY, 'g1');
-    // Первая работающая — четвёртая строка: три по 100px над ней.
-    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 300 }));
+    // Ход законченный, карточка в свёрнутой группе: лента раскрывает группу и едет к шестой строке (prompt, статус, текст,
+    // заголовок группы, a0, a1). Над ней четыре замеренные строки по 100px и a0, которую только что показали и ещё
+    // не измерили, — она в оценке 56px.
+    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 456 }));
     expect(useChatUiStore.getState().reveal).toBeNull();
     // Прилипание к низу снято: человек читает выше.
     expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
@@ -1876,7 +1892,8 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(useChatUiStore.getState().reveal).toMatchObject({ agentId: 'g1' });
     setFeed([prompt('p1', 'go'), agent('a1', 'g1'), turn('u1')], 2);
     await act(async () => {});
-    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 100 }));
+    // prompt, статус хода и заголовок раскрытой группы — три строки над карточкой.
+    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 300 }));
     expect(useChatUiStore.getState().reveal).toBeNull();
   });
 

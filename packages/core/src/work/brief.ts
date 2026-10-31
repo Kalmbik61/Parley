@@ -146,7 +146,7 @@ export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads
       const lead = liveLead(map, room);
       lines.push(`- ${room.id} "${field('title', room.title, CONTEXT_LIMITS.label, `get_map {room: "${room.id}"}`)}" — lead: ${lead ?? 'none'}`);
     }
-    if (ownedRooms.length > MAX_PARTICIPANTS) lines.push(`- … and ${ownedRooms.length - MAX_PARTICIPANTS} more: get_map`);
+    if (ownedRooms.length > MAX_PARTICIPANTS) lines.push(`- … and ${ownedRooms.length - MAX_PARTICIPANTS} more: get_map {field: "rooms"}`);
     lines.push('');
   }
   if (colleagues.length > 0 || rooms.length > 0) {
@@ -164,7 +164,7 @@ export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads
       lines.push(`- ${mate.id} — ${field('label', mate.label, CONTEXT_LIMITS.label, `get_map {session: "${mate.id}"}`)}${mark}`);
     }
     if (colleagues.length > MAX_COLLEAGUES) {
-      lines.push(`- … and ${colleagues.length - MAX_COLLEAGUES} more: get_map`);
+      lines.push(`- … and ${colleagues.length - MAX_COLLEAGUES} more: get_map {field: "sessions"}`);
     }
     for (const room of rooms) {
       // Рабочий состав явный; владение само по себе не делает сессию участником.

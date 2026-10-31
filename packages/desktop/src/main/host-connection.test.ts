@@ -26,6 +26,10 @@ interface FakeServerOptions {
   shutdownHangs?: boolean;
   /** На `host.info` не отвечает вовсе. */
   infoHangs?: boolean;
+  /** Подключения для управляемого выхода фейкового процесса. */
+  sockets?: Socket[];
+  /** Рукопожатие зависло, но shutdown хост ещё принимает. */
+  helloHangs?: boolean;
 }
 
 /**
@@ -40,12 +44,15 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
   const protocolOk = options.protocolOk ?? true;
   return new Promise((resolve, reject) => {
     const server = createServer((socket: Socket) => {
+      options.sockets?.push(socket);
+      socket.on('error', () => {});
       const decoder = new LineDecoder();
       socket.on('data', (chunk: Buffer) => {
         for (const raw of decoder.push(chunk)) {
           options.received?.push(raw);
           const message = raw as { id?: number; method?: string };
           if (message.method === 'hello' && typeof message.id === 'number') {
+            if (options.helloHangs) continue;
             if (!protocolOk) {
               socket.write(
                 encodeLine({
@@ -96,6 +103,9 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                 },
               }),
             );
+          }
+          if (message.method === 'browser.agentResult' && typeof message.id === 'number') {
+            socket.write(encodeLine({ id: message.id, result: { ok: true } }));
           }
         }
       });
@@ -684,6 +694,7 @@ describe('операции агента над браузером (этап B2, 
         { opId: 'op-2', ok: false, error: { code: 'unsupported', message: 'boom' } },
       ]),
     );
+    await vi.waitFor(() => expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]));
     connection.close();
     server.close();
   });
@@ -873,5 +884,253 @@ describe('HostConnection: остановка хоста при выходе', ()
     const alive = fakeProcesses(() => true);
     const other = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes: alive.processes });
     await expect(other.liveSessions(200)).resolves.toBeNull();
+  });
+});
+
+/** Короткие сроки и вымышленные pid: проверяем остановку, не посылая сигналы процессам машины. */
+describe('HostConnection: ограниченный Restart Host', () => {
+  let home: string;
+  let paths: HostPaths;
+  let connection: HostConnection;
+  let servers: Server[];
+  let sockets: Socket[];
+  const deadlines = { timeoutMs: 60, killGraceMs: 40, killWaitMs: 40 };
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hr-'));
+    paths = {
+      dir: path.join(home, 'host'), socket: path.join(home, 'host', 'host.sock'),
+      token: path.join(home, 'host', 'host.token'), pid: path.join(home, 'host', 'host.pid'),
+      log: path.join(home, 'host', 'host.log'),
+    };
+    servers = [];
+    sockets = [];
+    await writeToken(paths);
+  });
+
+  afterEach(async () => {
+    connection?.close();
+    for (const socket of sockets) socket.destroy();
+    for (const server of servers) server.close();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function host(options: FakeServerOptions = {}) {
+    const server = await startFakeServer(paths, { ...options, sockets });
+    servers.push(server);
+    return server;
+  }
+
+  function processes() {
+    let alive = true;
+    let isHost = true;
+    const signals: NodeJS.Signals[] = [];
+    return {
+      signals,
+      exit() {
+        alive = false;
+        for (const socket of sockets) socket.destroy();
+        for (const server of servers) server.close();
+      },
+      foreign() { isHost = false; },
+      hooks: {
+        isAlive: vi.fn(() => alive),
+        isHost: vi.fn(() => isHost),
+        kill: vi.fn((_pid: number, signal: NodeJS.Signals) => { signals.push(signal); }),
+      },
+    };
+  }
+
+  function replacement(proc: ReturnType<typeof processes>) {
+    return vi.fn(async () => {
+      expect(proc.hooks.isAlive()).toBe(false);
+      await host({ pid: 999_202 });
+      return null;
+    });
+  }
+
+  it('молчащий shutdown: TERM, KILL, подтверждённый выход и ровно одно новое подключение', async () => {
+    const received: unknown[] = [];
+    await host({ pid: 999_201, shutdownHangs: true, received });
+    const proc = processes();
+    proc.hooks.kill.mockImplementation((_pid, signal) => {
+      proc.signals.push(signal);
+      if (signal === 'SIGKILL') proc.exit();
+    });
+    const spawn = replacement(proc);
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const pending = connection.call('pty.send', {}).catch((error: Error) => error);
+    const started = Date.now();
+    const first = connection.restartHost(deadlines);
+    const second = connection.restartHost(deadlines);
+    expect(second).toBe(first);
+    await Promise.all([first, connection.connect()]);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(proc.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(proc.hooks.kill.mock.calls).toEqual([[999_201, 'SIGTERM'], [999_201, 'SIGKILL']]);
+    expect(received.filter((raw) => (raw as { method: string }).method === 'host.shutdown')).toHaveLength(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(await pending).toBeInstanceOf(Error);
+    expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]);
+  });
+
+  it.each(['reply', 'socket'] as const)('одного %s недостаточно: живой старый pid после KILL даёт ограниченный отказ', async (mode) => {
+    await host({ pid: 999_201, ignoreShutdown: mode === 'reply' });
+    const proc = processes();
+    const spawn = vi.fn();
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const started = Date.now();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/exit|teardown/i);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(proc.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    await settle(600);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]);
+  });
+
+  it.each(['graceful', 'term'] as const)('%s: после подтверждённого выхода лишних сигналов нет', async (mode) => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); proc.exit(); });
+    const spawn = replacement(proc);
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const timer = mode === 'graceful' ? setTimeout(() => proc.exit(), 20) : undefined;
+    try { await connection.restartHost(deadlines); } finally { clearTimeout(timer); }
+    expect(proc.signals).toEqual(mode === 'term' ? ['SIGTERM'] : []);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['close', 'stop'] as const)('%s во время teardown отменяет restart без нового процесса', async (mode) => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    const spawn = vi.fn();
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const restart = connection.restartHost(deadlines);
+    const rejected = expect(restart).rejects.toThrow();
+    if (mode === 'close') connection.close();
+    else await connection.stopHost({ timeoutMs: 20, killGraceMs: 20 });
+    await rejected;
+    await settle(600);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('restart во время зависшего hello: старое рукопожатие отменено, shutdown отправлен, второго spawn нет', async () => {
+    const received: unknown[] = [];
+    await host({ helloHangs: true, received });
+    const spawn = vi.fn(async () => { await host(); return null; });
+    connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 500 });
+    const connecting = connection.connect().catch((error: Error) => error);
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    await connection.restartHost(deadlines);
+    expect(await connecting).toBeInstanceOf(Error);
+    expect(received.filter((raw) => (raw as { method: string }).method === 'host.shutdown')).toHaveLength(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('restart при незавершённом spawn ограниченно отказывает, поздний результат не запускает новую петлю', async () => {
+    let finish!: (host: null) => void;
+    const spawn = vi.fn(() => new Promise<null>((resolve) => { finish = resolve; }));
+    connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 200 });
+    const connecting = connection.connect().catch((error: Error) => error);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    const started = Date.now();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/pending spawn/);
+    expect(Date.now() - started).toBeLessThan(2000);
+    finish(null);
+    expect(await connecting).toBeInstanceOf(Error);
+    await settle(600);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]);
+  });
+
+  it.each(['SIGTERM', 'SIGKILL'] as const)('pid перешёл чужому процессу перед %s: этот сигнал не отправляется', async (signalToSkip) => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    const replacePid = () => {
+      proc.foreign();
+      for (const socket of sockets) socket.destroy();
+      for (const server of servers) server.close();
+    };
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); replacePid(); });
+    const spawn = vi.fn(async () => { await host(); return null; });
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const timer = signalToSkip === 'SIGTERM' ? setTimeout(replacePid, 20) : undefined;
+    try { await connection.restartHost(deadlines); } finally { clearTimeout(timer); }
+    expect(proc.signals).toEqual(signalToSkip === 'SIGTERM' ? [] : ['SIGTERM']);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('неизвестный/чужой pid и открытый сокет: ограниченный отказ без сигналов и автоповтора', async () => {
+    const received: unknown[] = [];
+    await host({ pid: 999_201, shutdownHangs: true, received });
+    const proc = processes();
+    proc.foreign();
+    const spawn = vi.fn();
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/without a host PID/);
+    await expect(connection.connect()).rejects.toThrow(/unresolved/);
+    // Собственное destroy после отказа не превращается в доказательство выхода при следующем restart.
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/without a host PID/);
+    await settle(600);
+    expect(proc.signals).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(received.filter((raw) => (raw as { method: string }).method === 'hello')).toHaveLength(1);
+  });
+
+  it.each(['mismatch', 'foreign-hello'] as const)('%s: только проверенный pid-файл используется для сигналов', async (mode) => {
+    await host({ pid: 999_299, protocolOk: mode !== 'mismatch', shutdownHangs: true });
+    await writeFile(paths.pid, '999201\n2026-10-30T00:00:00.000Z\n');
+    const proc = processes();
+    proc.hooks.isHost.mockImplementation((pid?: number) => pid === 999_201);
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); proc.exit(); });
+    const spawn = replacement(proc);
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    await connection.restartHost(deadlines);
+    expect(proc.hooks.kill).toHaveBeenCalledTimes(1);
+    expect(proc.hooks.kill).toHaveBeenCalledWith(999_201, 'SIGTERM');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('после отказа старый pid не забыт: следующий restart снова проверяет его и может завершиться', async () => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    const spawn = replacement(proc);
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/did not exit/);
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); proc.exit(); });
+    await connection.restartHost(deadlines);
+    expect(proc.signals).toEqual(['SIGTERM', 'SIGKILL', 'SIGTERM']);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['close', 'stop'] as const)('%s во время нового hello запрещает позднее подключение и автоповтор', async (mode) => {
+    const received: unknown[] = [];
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); proc.exit(); });
+    const spawn = vi.fn(async () => { await host({ helloHangs: true, received }); return null; });
+    const statuses: string[] = [];
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const restart = connection.restartHost(deadlines);
+    const rejected = expect(restart).rejects.toThrow();
+    await vi.waitFor(() => expect(received).toHaveLength(1), { timeout: 2000 });
+    connection.onStatus((status) => statuses.push(status.state));
+    if (mode === 'close') connection.close();
+    else await connection.stopHost({ timeoutMs: 20, killGraceMs: 20 });
+    await rejected;
+    await settle(600);
+    expect(statuses).not.toContain('connected');
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]);
   });
 });

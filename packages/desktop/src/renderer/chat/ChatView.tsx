@@ -197,6 +197,7 @@ function noteOf(feed: FeedEntry | null): string | null {
 
 export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, sendDeps, provider, storedModel, storedEffort }: ChatViewProps): JSX.Element {
   const feed = useFeed(sessionRef);
+  const chatFold = useUiStore((state) => state.ui.chatFold);
   const codex = provider === 'codex';
   const items = feed?.items ?? NO_ITEMS;
   const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
@@ -496,6 +497,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
             {...(showWorking ? { working: { since: turnStart } } : {})}
             {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
+            fold={chatFold}
           />
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}

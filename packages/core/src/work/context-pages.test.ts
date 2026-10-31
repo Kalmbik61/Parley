@@ -28,6 +28,9 @@ import {
   seqOf,
   textPage,
   viewBytes,
+  mapOverview,
+  topologyListPage,
+  mcpResultBytes,
 } from './context-pages.js';
 import { closeWorkDb, workDb } from './db.js';
 import { mapLetterReader, storeLetterReader, writeLetters, type LetterQuery } from './letter-store.js';
@@ -72,6 +75,111 @@ function fill(map: WorkMap, count: number, textLength: number, init: Partial<Par
 
 const frameBytes = (value: unknown): number => Buffer.byteLength(`${JSON.stringify(value)}\n`, 'utf8');
 const ids = (messages: readonly { id: string }[]): string[] => messages.map((message) => message.id);
+
+describe('бюджет агентской карты', () => {
+  it.each([0, 119, 1000])('весь MCP-ответ при %i сессиях укладывается в 48 КиБ', (count) => {
+    const map = emptyMap();
+    for (let i = 0; i < count; i += 1) {
+      const session = addSession(map, { provider: 'codex', label: '\u0000"\\😀'.repeat(500), task: 'я'.repeat(10000) });
+      session.contextFrom = Array(100).fill('s-01');
+      session.summary = '\ud800\n'.repeat(5000);
+      session.worktree = { path: 'x'.repeat(10000), branch: 'b', base: 'master' };
+      addRoom(map, { creator: HUMAN, title: 'р'.repeat(1000), members: [session.id] });
+    }
+    map.work.deletedSessions = Array.from({ length: 1000 }, (_, i) => `s-${i + 2000}`);
+    const result = mapOverview(map, 's-01', mapLetterReader(map));
+    expect(mcpResultBytes(result)).toBeLessThanOrEqual(49152);
+    expect(result.map.collections.sessions.total).toBe(count);
+    expect(result.map.collections.deletedSessions.total).toBe(1000);
+    expect(result.map.sessions[0]?.id).toBe(count === 0 ? undefined : 's-01');
+  });
+
+  it('обход полон; курсоры связаны с запросом, читателем, работой и содержимым', () => {
+    const map = emptyMap();
+    for (let i = 0; i < 119; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(1000) });
+    const letters = mapLetterReader(map);
+    map.sessions[0]!.model = 'model'.repeat(1000);
+    map.sessions[0]!.effort = 'high';
+    const stats = vi.spyOn(letters, 'channelStats');
+    const unread = vi.spyOn(letters, 'unreadCount');
+    const overview = mapOverview(map, 's-80', letters);
+    expect(stats).toHaveBeenCalledTimes(1);
+    expect(unread).toHaveBeenCalledTimes(1);
+    const continued = overview.map.sessions.map((row) => row.id);
+    let overviewCursor = overview.map.collections.sessions.next;
+    expect(overviewCursor).not.toBeNull();
+    while (overviewCursor !== null) {
+      const page = topologyListPage(map, 's-80', letters, { field: 'sessions', cursor: overviewCursor });
+      continued.push(...page.items.map((row) => row.id));
+      overviewCursor = page.page.next;
+    }
+    expect(continued).toHaveLength(119);
+    expect(new Set(continued).size).toBe(119);
+    expect(JSON.stringify(continued)).not.toContain('model');
+    const models = topologyListPage(map, 's-01', letters, { field: 'sessions' });
+    expect(models.items[0]).toMatchObject({ effort: 'high' });
+    expect((models.items[0]!.model as string).length).toBeLessThan(100);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = topologyListPage(map, 's-80', letters, { field: 'sessions', maxBytes: 2048, ...(cursor ? { cursor } : {}) });
+      expect(mcpResultBytes(result)).toBeLessThanOrEqual(2048);
+      seen.push(...result.items.map((item) => (item as { id: string }).id));
+      cursor = result.page.next ?? undefined;
+    } while (cursor);
+    expect(seen[0]).toBe('s-80');
+    expect(new Set(seen).size).toBe(119);
+    expect(seen).toHaveLength(119);
+    const first = topologyListPage(map, 's-80', letters, { field: 'sessions', maxBytes: 2048 });
+    const next = first.page.next!;
+    for (const options of [{ field: 'rooms' as const }, { field: 'sessions' as const, maxBytes: 4096 }]) {
+      expect(() => topologyListPage(map, 's-80', letters, { maxBytes: 2048, ...options, cursor: next })).toThrow('invalid-cursor');
+    }
+    expect(() => topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('invalid-cursor');
+    expect(() => topologyListPage({ ...map, work: { ...map.work, id: 'w-9999' } }, 's-80', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('invalid-cursor');
+    map.sessions[0]!.label = 'другое содержимое с прежним updatedAt';
+    expect(() => topologyListPage(map, 's-80', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('stale-cursor');
+    expect(() => topologyListPage(map, 's-80', letters, { field: 'sessions', cursor: 'broken' })).toThrow('invalid-cursor');
+  });
+
+  it('растущие планы, метаданные и непрочитанные комнаты не раздувают обзор; все списки достижимы', () => {
+    const map = baseMap() as WindowWorkMap;
+    const huge = '\u0000\\"😀\ud800'.repeat(1000);
+    map.sessions[0]!.role = { source: 'builtin', name: huge };
+    map.sessions[0]!.stuck = { kind: 'approval', since: 'x', detail: huge, resetsAt: null, window: null, account: null };
+    map.sessions[0]!.worktree = { path: huge, branch: huge, base: huge };
+    map.rooms[0]!.members = Array(1000).fill('s-01');
+    map.rooms[0]!.recipe = { id: 'project:x', name: huge, playbook: 'SECRET' };
+    map.rooms[0]!.proposal = { id: 'p-01', from: 's-01', rev: 0, at: 'x', text: huge };
+    map.rooms = Array.from({ length: 119 }, (_, i) => ({ ...map.rooms[0]!, id: `r-${i + 1}` }));
+    map.work.deletedSessions = Array.from({ length: 1000 }, (_, i) => `s-${i + 2000}`);
+    map.plans = Array.from({ length: 119 }, (_, i) => ({ id: `pl-${i + 1}`, roomId: 'r-01', rev: i, status: 'active', mode: 'checklist', goal: huge, backlog: [],
+      acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null,
+      items: [{ id: 1, owner: 's-01', title: huge, scope: huge, criteria: [huge], after: [], verifier: null, status: 'waiting', evidence: { text: huge, artifacts: Array(100).fill('evidence') }, note: huge,
+        log: Array.from({ length: 100 }, () => ({ at: 'x', by: 's-01', status: 'waiting', note: huge.slice(0, 64) })) }] }));
+    const reader = mapLetterReader(map);
+    const unread = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`r-${i + 1}`, 1]));
+    const letters = { ...reader, unreadCount: () => ({ total: 1000, byRoom: unread }) };
+    const result = mapOverview(map, 's-01', letters);
+    expect(mcpResultBytes(result)).toBeLessThanOrEqual(49152);
+    expect(result.map.collections.plans.total).toBe(119);
+    expect(result.map.collections.unreadRooms.total).toBe(1000);
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    for (const field of ['rooms', 'plans', 'unreadRooms', 'deletedSessions'] as const) {
+      const seen: unknown[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = topologyListPage(map, 's-01', letters, { field, maxBytes: field === 'rooms' ? 4096 : 49152, ...(cursor ? { cursor } : {}) });
+        seen.push(...page.items.map((r) => r.id));
+        cursor = page.page.next ?? undefined;
+      } while (cursor);
+      expect(new Set(seen).size).toBe(result.map.collections[field].total);
+    }
+    const first = topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048 });
+    map.plans.pop();
+    expect(() => topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048, cursor: first.page.next! })).toThrow('stale-cursor');
+  });
+});
 
 describe('курсор', () => {
   it('разбирается и называет ошибку понятно', () => {
