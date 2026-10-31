@@ -30,6 +30,8 @@ export class HostCallError extends Error {
   constructor(
     readonly code: string,
     message: string = code,
+    /** `error.data` хоста как есть; наружу к телефону идёт только при известном `reason` (A8). */
+    readonly data?: unknown,
   ) {
     super(message);
     this.name = 'HostCallError';
@@ -257,14 +259,14 @@ export function createHostLink(options: HostLinkOptions): HostLink {
         return;
       }
       for (const raw of messages) {
-        const msg = raw as { id?: unknown; result?: unknown; error?: { code?: string; message?: string }; event?: unknown; data?: unknown };
+        const msg = raw as { id?: unknown; result?: unknown; error?: { code?: string; message?: string; data?: unknown }; event?: unknown; data?: unknown };
         if (typeof msg !== 'object' || msg === null) continue;
         if (typeof msg.id === 'number') {
           const entry = pending.get(msg.id);
           if (!entry) continue;
           pending.delete(msg.id);
           if (entry.timer) clearTimeout(entry.timer);
-          if (msg.error) entry.reject(new HostCallError(msg.error.code ?? 'host_error', msg.error.message));
+          if (msg.error) entry.reject(new HostCallError(msg.error.code ?? 'host_error', msg.error.message, msg.error.data));
           else entry.resolve(msg.result);
         } else if (typeof msg.event === 'string') {
           handleEvent(msg.event, msg.data);
