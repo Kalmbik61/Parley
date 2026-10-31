@@ -909,6 +909,7 @@ describe('SettingsDialog — навигация слева (живая пров�
       'Browser',
       'Voice',
       'Assistant',
+      'Remote access',
     ]);
 
     const pane = screen.getByTestId('settings-pane');

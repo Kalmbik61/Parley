@@ -51,6 +51,7 @@ import type { NotesFile } from '../../shared/notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from '../../shared/recipe-save.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
+import type { RemoteCallName, RemoteCalls, RemoteEvent } from '../../shared/remote-types.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
@@ -67,6 +68,11 @@ export interface FakeBridge extends ParleyBridge {
   ): void;
   /** Уведомления, отправленные наружу (`notify`), — для проверки, что дошло. */
   readonly notified: Array<{ method: NotificationName; params: unknown }>;
+  /** Handler of a `remote.call` (Settings → Remote access); without one the call is rejected. */
+  setRemoteHandler<N extends RemoteCallName>(name: N, handler: (params: RemoteCalls[N]['params']) => RemoteCalls[N]['result'] | Promise<RemoteCalls[N]['result']>): void;
+  /** Calls of `remote.call` in order. */
+  readonly remoteCalls: Array<{ name: RemoteCallName; params: unknown }>;
+  emitRemote(event: RemoteEvent): void;
   /** Вызовы `call` — для проверки, что и с какими параметрами позвали. */
   readonly calls: Array<{ method: MethodName; params: unknown }>;
   emit<E extends EventName>(event: E, data: EventData<E>): void;
@@ -420,7 +426,29 @@ export function createFakeBridge(): FakeBridge {
   let activitySnapshot: Array<EventData<'activity.changed'>> = [];
   let noticesSnapshot: HostNotice[] = [];
 
+  const remoteHandlers = new Map<string, (params: never) => unknown>();
+  const remoteListeners = new Set<(event: RemoteEvent) => void>();
+  const remoteCalls: Array<{ name: RemoteCallName; params: unknown }> = [];
   const bridge: FakeBridge = {
+    setRemoteHandler: (name, handler) => {
+      remoteHandlers.set(name, handler as (params: never) => unknown);
+    },
+    remoteCalls,
+    emitRemote: (event) => {
+      for (const listener of remoteListeners) listener(event);
+    },
+    remote: {
+      call: async (name, params) => {
+        remoteCalls.push({ name, params });
+        const handler = remoteHandlers.get(name);
+        if (!handler) throw new Error(`no remote handler for ${name}`);
+        return (await handler(params as never)) as never;
+      },
+      on: (listener) => {
+        remoteListeners.add(listener);
+        return () => remoteListeners.delete(listener);
+      },
+    },
     setHandler: (method, handler) => {
       handlers.set(method, handler as Handler);
     },

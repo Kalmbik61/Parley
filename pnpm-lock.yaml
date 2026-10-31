@@ -62,6 +62,12 @@ importers:
       '@parley/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@parley/remote':
+        specifier: workspace:*
+        version: link:../remote
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
     devDependencies:
       '@dnd-kit/core':
         specifier: ^6.3.1
@@ -183,9 +189,6 @@ importers:
       pdfjs-dist:
         specifier: ^6.3.289
         version: 6.3.289
-      qrcode:
-        specifier: 1.5.4
-        version: 1.5.4
       react:
         specifier: ^18
         version: 18.3.1

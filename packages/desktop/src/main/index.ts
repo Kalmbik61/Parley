@@ -83,6 +83,8 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { createRemoteLauncher, bridgePaths, resolveBridgeEntry } from './remote-launcher.js';
+import { createRemoteService, registerRemoteIpc } from './remote-ipc.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
 import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assistant-mirror.js';
@@ -894,6 +896,39 @@ if (!gotLock) {
         }
       });
     }
+    // Settings → Remote access: the bridge is a separate process started like the host; the window talks to it only
+    // through the local control socket (mobile spec 5.1, 12).
+    const bridge = bridgePaths();
+    const remoteService = createRemoteService({
+      launcher: createRemoteLauncher({
+        paths: bridge,
+        spawn: async () => {
+          const nodeBin = await resolveNodeBin(shellEnv.env, { packaged: app.isPackaged, resourcesPath: process.resourcesPath });
+          if (nodeBin === null) return null;
+          try {
+            const entry =
+              switches.bridgeEntry ?? resolveBridgeEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath });
+            return spawnHost({ env: shellEnv.env, entry, nodeBin, stderrFile: path.join(bridge.dir, 'bridge.err') });
+          } catch (err) {
+            console.error('[parley] failed to start the bridge', err);
+            return null;
+          }
+        },
+      }),
+      powerMonitor,
+      loadEnabled: async () => (await uiStore.load()).remoteAccess,
+      saveEnabled: async (enabled) => {
+        await uiStore.save({ remoteAccess: enabled });
+      },
+      broadcast: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('remote:event', event);
+        }
+      },
+    });
+    registerRemoteIpc(ipcMain, remoteService);
+    void remoteService.init();
+    app.on('before-quit', () => remoteService.dispose());
     registerIpc({
       ipcMain,
       connection,

@@ -38,6 +38,7 @@ import type {
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { NotesFile } from '../shared/notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from '../shared/recipe-save.js';
+import type { RemoteCallName, RemoteCalls, RemoteEvent } from '../shared/remote-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type {
   DownloadProgress,
@@ -158,6 +159,11 @@ ipcRenderer.on('browser:agent-resize', (_event, e: AgentResize) => {
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
   for (const listener of windowFocusListeners) listener(focused);
+});
+
+const remoteListeners = new Set<(event: RemoteEvent) => void>();
+ipcRenderer.on('remote:event', (_event, payload: RemoteEvent) => {
+  for (const listener of remoteListeners) listener(payload);
 });
 
 ipcRenderer.on('app:update-available', (_event, info: UpdateInfo) => {
@@ -329,6 +335,14 @@ const bridge = {
         })
         .catch(() => {});
       return () => updateListeners.delete(listener);
+    },
+  },
+  remote: {
+    call: <N extends RemoteCallName>(name: N, params: RemoteCalls[N]['params']) =>
+      ipcRenderer.invoke('remote:call', name, params) as Promise<RemoteCalls[N]['result']>,
+    on: (listener: (event: RemoteEvent) => void) => {
+      remoteListeners.add(listener);
+      return () => remoteListeners.delete(listener);
     },
   },
   files: {

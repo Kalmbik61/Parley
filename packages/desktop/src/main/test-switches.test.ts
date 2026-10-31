@@ -118,6 +118,8 @@ describe('testSwitches', () => {
     // Прежнее имя — запасное, пустое — не задано.
     expect(testSwitches({ HARNAS_APP_DATA: '/tmp/old' }, false).appData).toBe('/tmp/old');
     expect(testSwitches({ PARLEY_APP_DATA: '' }, false).appData).toBeUndefined();
+    expect(testSwitches({ PARLEY_BRIDGE_ENTRY: '/stub.mjs' }, false).bridgeEntry).toBe('/stub.mjs');
+    expect(testSwitches({ PARLEY_BRIDGE_ENTRY: '/stub.mjs' }, true).bridgeEntry).toBeUndefined();
     expect(testSwitches({}, false).appData).toBeUndefined();
   });
 
