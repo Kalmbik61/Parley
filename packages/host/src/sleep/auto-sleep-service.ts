@@ -12,13 +12,15 @@
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
  *
- * Усыплённый на `wait_for(<id>)` сам не узнает, что цель кончила: процесса у него нет. Сервис следит за целью по снимку
- * работ и пишет спящему системное письмо; оно поднимает сессию обычным путём будильника.
+ * Усыплённый на `wait_for(<id>)` сам не узнает, что с целью ожидания стало: процесса у него нет. Сервис следит за целью по
+ * снимку работ и, когда `wait_for` ответил бы на неё сразу (итог, `stuck`, сон, остановка, закрытие, удаление), пишет
+ * спящему системное письмо; оно поднимает сессию обычным путём будильника.
  */
 
 import {
   autoSleepVerdict,
   deliveredSince,
+  finishedState,
   hookedSince,
   isClaudeCode,
   sessionTag,
@@ -99,14 +101,23 @@ function sinceLaunch(activity: SessionActivity | null, startedAt: number): Sessi
 }
 
 /**
- * Чем кончила цель ожидания (`wait_for(<id>)`): итогом, `stuck`, `closed` или `deleted` (в карте её нет). `null` — ещё не
- * кончила; уход цели в сон без итога концом не считается.
+ * Что ответил бы `wait_for(<id>)` на цель ожидания прямо сейчас. Правило то же, что у вызова (`finishedState` из core): итог,
+ * `stuck`, `asleep` (усыплена хостом), `sleeping` (остановлена), `closed`; `deleted` — цели нет в карте. `null` — цель
+ * работает или идёт замена агента: ждать дальше.
  */
-function finishOf(target: WorkSession | undefined): string | null {
-  if (target === undefined) return 'deleted';
-  if (target.result !== null) return target.result;
-  if ((target.stuck ?? null) !== null) return 'stuck';
-  return target.lifecycle === 'closed' ? 'closed' : null;
+function targetState(target: WorkSession | undefined): string | null {
+  return target === undefined ? 'deleted' : finishedState(target);
+}
+
+/**
+ * Письмо ждавшему о состоянии цели (`targetState`). Уснувшая и остановленная цель итога не сдаст, пока её не разбудят: письмо
+ * говорит, что делать, в духе `asleepHint`.
+ */
+function waiterLetter(targetId: string, state: string): string {
+  const tag = sessionTag(targetId);
+  if (state === 'asleep') return `${tag} is asleep: write to it to wake it, or wait for mail via inbox.`;
+  if (state === 'sleeping') return `${tag} was stopped: write to it to wake it.`;
+  return `${tag} finished: ${state}`;
 }
 
 export function createAutoSleepService(host: HostContext, deps: AutoSleepServiceDeps): AutoSleepService {
@@ -263,7 +274,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   }
 
   /**
-   * Пишет усыплённому письмо о том, что кончила цель его `wait_for(<id>)`, и снимает цель ожидания. Одна запись, решающая
+   * Пишет усыплённому письмо о том, что стало с целью его `wait_for(<id>)`, и снимает цель ожидания. Одна запись, решающая
    * проверка под замком карты: снимок работ отстаёт от базы, и за это время сессию могли поднять или письмо могла записать
    * другая проверка — тогда не пишется ничего. Не бросает: сбой одной записи не должен остановить проход по остальным.
    */
@@ -276,13 +287,13 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
         (map, letters) => {
           const sleeper = map.sessions.find((candidate) => candidate.id === ref.sessionId);
           if (sleeper?.lifecycle !== 'sleeping' || sleeper.autoSleep?.waitTarget !== targetId) return;
-          const state = finishOf(map.sessions.find((candidate) => candidate.id === targetId));
+          const state = targetState(map.sessions.find((candidate) => candidate.id === targetId));
           if (state === null) return;
           letters.add({
             roomId: null,
             from: SYSTEM,
             to: [ref.sessionId],
-            text: `${sessionTag(targetId)} finished: ${state}`,
+            text: waiterLetter(targetId, state),
             kind: 'note',
           });
           // Причина и время сна остаются: сессия спит по-прежнему, письмо поднимет её будильником.
@@ -297,7 +308,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       return;
     }
     if (done.state !== null) {
-      host.log.info('цель ожидания усыплённого закончила, ему записано письмо', {
+      host.log.info('усыплённому записано письмо о цели его ожидания', {
         ref,
         target: targetId,
         state: done.state,
@@ -306,8 +317,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   }
 
   /**
-   * Проход по снимку работ: каждому `sleeping` с целью ожидания, чья цель кончила (`finishOf`), — письмо. У спящих нет PTY,
-   * поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
+   * Проход по снимку работ: каждому `sleeping` с целью ожидания, которая уже не работает (`targetState`), — письмо. У спящих
+   * нет PTY, поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
    */
   async function notifyWaiters(): Promise<void> {
     if (stopped) return;
@@ -315,7 +326,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       for (const session of entry.map.sessions) {
         const targetId = session.lifecycle === 'sleeping' ? session.autoSleep?.waitTarget : null;
         if (targetId == null) continue;
-        if (finishOf(entry.map.sessions.find((candidate) => candidate.id === targetId)) === null) continue;
+        if (targetState(entry.map.sessions.find((candidate) => candidate.id === targetId)) === null) continue;
         if (stopped) return;
         await notifyWaiter({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, targetId);
       }
