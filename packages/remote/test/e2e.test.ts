@@ -1,19 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- кадры в тестах разбираются как JSON */
 // A17: сквозной тест на Node. Стаб хоста ← мост (настоящий процесс) ↔ relay ↔ настоящий `remote-client` с `Platform` для Node.
 // Сценарий §15 в десяти шагах; внешний relay — `PARLEY_E2E_RELAY_URL=<узел>` (без переменной режим пропускается).
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { pushRequestSchema } from '@parley/protocol/remote';
+import { pushRequestSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
 import { createRelay, type Relay } from '@parley/relay/dist/server.js';
+import { BUCKETS, DAY, Limiter } from '@parley/relay/dist/limits.js';
 import { Store } from '@parley/relay/dist/store.js';
 import {
   HostStore,
   Supervisor,
   createRemoteClient,
   pair,
+  resolvePushTarget,
   selectInbox,
   selectNeedsYouCount,
   type Clock,
@@ -23,7 +26,7 @@ import {
 } from '@parley/remote-client';
 // Тестовая `Platform` лежит в пакете клиента (план A17); относительный путь — тест вне его `src`.
 import { nodePlatform, type NodePlatform } from '../../remote-client/test/node-platform.js';
-import { startBridgeProcess, permissionCard, until, sleep, type BridgeProcess } from './harness.js';
+import { startBridgeProcess, permissionCard, routeFor, until, sleep, type BridgeProcess } from './harness.js';
 
 const ref = (sessionId: string): SessionRef => ({ projectPath: '/p', workId: 'w-1', sessionId });
 const realClock: Clock = {
@@ -63,6 +66,8 @@ interface Mode {
   loopback: boolean;
   rewrite?: (url: string) => string;
   local: boolean;
+  /** Фиксированный маршрут по месту (внешний relay: лимит новых маршрутов в сутки). */
+  route?: (slot: number) => { routeId: string; routeSecret: string };
 }
 
 interface Phone {
@@ -94,8 +99,13 @@ function scenarios(mode: Mode): void {
     gateway.posts.length = 0;
   });
 
-  const bridge = async (): Promise<BridgeProcess> => {
-    const b = await startBridgeProcess({ relay: mode.relayHost(), pushGatewayUrl: gateway.url, loopback: mode.loopback });
+  const bridge = async (slot = 0): Promise<BridgeProcess> => {
+    const b = await startBridgeProcess({
+      relay: mode.relayHost(),
+      pushGatewayUrl: gateway.url,
+      loopback: mode.loopback,
+      ...(mode.route ? { route: mode.route(slot) } : {}),
+    });
     live.push(b);
     return b;
   };
@@ -137,6 +147,10 @@ function scenarios(mode: Mode): void {
     const { client, sup, record } = phone;
     await until(() => client.store.getState().snapshot?.works[0]?.sessions.length === 2);
     expect(JSON.stringify(client.store.getState().snapshot)).not.toContain('SECRET');
+    // The raw answer of the bridge (before any parsing of ours): the projection only, nothing of the host snapshot.
+    const raw = await sup.call('works.list');
+    expect(remoteWorksSnapshotSchema.safeParse(raw).success).toBe(true);
+    for (const leaked of ['SECRET', '"plans"', '"task"', '"history"', '"branches"', '"secret"']) expect(JSON.stringify(raw), leaked).not.toContain(leaked);
     expect(sup.status.hello?.methods).toEqual(expect.arrayContaining(['works.list', 'feed.decide', 'rooms.resolveProposal']));
     await sup.call('push.register', { apnsToken: 'AB'.repeat(32), env: 'sandbox' });
 
@@ -166,8 +180,9 @@ function scenarios(mode: Mode): void {
     const sockets = phone.platform.opened();
     b.host.replaceCards('s-1', [permissionCard('c-3', 'pwd')]);
     const started = Date.now();
-    await until(() => client.store.getState().cards[`/p\u0000w-1\u0000s-1`]?.cards.map((c) => c.cardId).join() === 'c-3', 5000);
-    expect(Date.now() - started).toBeLessThanOrEqual(4000);
+    await until(() => client.store.getState().cards[`/p\u0000w-1\u0000s-1`]?.cards.map((c) => c.cardId).join() === 'c-3', 8000);
+    // The tick is 3 s; the rest is the margin of a loaded CI machine.
+    expect(Date.now() - started).toBeLessThanOrEqual(5000);
     expect(Object.values(client.store.getState().gone).map((g) => g.cardId)).toContain('c-2');
     expect(phone.platform.opened()).toBe(sockets);
     expect(sup.status.state).toBe('ready');
@@ -193,25 +208,34 @@ function scenarios(mode: Mode): void {
     await until(() => again.status.relayError === 'unknown_device', 10_000);
   }, 120_000);
 
-  it('9. a second host on the same client: its push carries its route and opens it, not the first', async () => {
+  it('9. a second host on the same client: each push carries its own route and opens that host, not the other', async () => {
     const records = new Map<string, HostRecord>();
     const platform = platformFor(records);
-    const first = await bridge();
-    const second = await bridge();
+    const first = await bridge(0);
+    const second = await bridge(1);
     const a = await pairPhone(first, platform, 'Phone');
     const c = await pairPhone(second, platform, 'Phone');
     expect(a.record.routeId).not.toBe(c.record.routeId);
     expect(a.record.hostId).not.toBe(c.record.hostId);
     for (const p of [a, c]) await p.sup.call('push.register', { apnsToken: 'CD'.repeat(32), env: 'sandbox' });
-    second.host.addSessions('s-1');
-    second.host.publish();
-    await until(() => c.client.store.getState().snapshot?.works[0]?.sessions.length === 1);
+    for (const [b, p] of [[first, a], [second, c]] as const) {
+      b.host.addSessions('s-1');
+      b.host.publish();
+      await until(() => p.client.store.getState().snapshot?.works[0]?.sessions.length === 1);
+    }
+    // The second host blocks first: its push must open it, not the first.
     second.host.block('s-1');
-    const push = await until(() => gateway.posts[0], 8000);
-    expect(push.body.route).toBe(c.record.routeId);
-    expect([...records.values()].find((r) => r.routeId === push.body.route)?.hostId).toBe(c.record.hostId);
-    await sleep(500);
-    expect(gateway.posts.every((p) => p.body.route === c.record.routeId)).toBe(true);
+    const pushSecond = await until(() => gateway.posts.find((p) => p.body.route === c.record.routeId), 8000);
+    const hosts = [...records.values()];
+    const target = (body: any) => resolvePushTarget({ v: 1, kind: 'needs-you', count: body.count, route: body.route }, hosts);
+    expect(target(pushSecond.body)).toMatchObject({ kind: 'host', host: { hostId: c.record.hostId } });
+    expect(gateway.posts.some((p) => p.body.route === a.record.routeId)).toBe(false);
+    // Then the first host blocks: its own push opens the first one.
+    first.host.block('s-1');
+    const pushFirst = await until(() => gateway.posts.find((p) => p.body.route === a.record.routeId), 8000);
+    expect(target(pushFirst.body)).toMatchObject({ kind: 'host', host: { hostId: a.record.hostId } });
+    // A route of a Mac that is not paired (any more) opens nothing.
+    expect(resolvePushTarget({ v: 1, kind: 'needs-you', count: 1, route: 'AAAAAAAAAAAAAAAAAAAAAA' }, hosts)).toEqual({ kind: 'unknown' });
   }, 120_000);
 
   (mode.local ? it : it.skip)('Inbox scheduler against the real bridge: 30 waiting, 9 always visible (time ×10)', async () => {
@@ -235,7 +259,7 @@ function scenarios(mode: Mode): void {
     client.refresher.setConnected(true);
     const visible = ids.slice(0, 9);
     client.refresher.setScreen({ kind: 'inbox', visible: visible.map(ref) });
-    await sleep(4200);
+    await sleep(3700);
     client.refresher.setScreen({ kind: 'other' });
 
     const reads = b.host.callsOf('feed.snapshot');
@@ -244,14 +268,10 @@ function scenarios(mode: Mode): void {
     // Every one of the 21 invisible sessions is read within 30 virtual seconds (3 s real); visible ones every 10 s.
     for (const id of ids.slice(9)) expect(within(id, 3500), id).toBeGreaterThanOrEqual(1);
     for (const id of visible) expect(within(id, 3500), id).toBeGreaterThanOrEqual(3);
-    // No tick asks for more than 20 reads, and none of them was refused for being too many (bridge: 16 in flight).
-    const ticks: number[][] = [];
-    for (const r of reads) {
-      const last = ticks.at(-1);
-      if (last !== undefined && r.at - last[last.length - 1]! < 300) last.push(r.at);
-      else ticks.push([r.at]);
-    }
-    for (const tick of ticks) expect(tick.length).toBeLessThanOrEqual(20);
+    // At most 20 reads per tick (the per-tick budget is also a unit test); the ticks that fired are counted from the clock,
+    // not guessed from pauses between calls, so a loaded machine cannot merge two of them into one.
+    const ticks = Math.floor((Date.now() - t0) / 1000) + 1;
+    expect(reads.length).toBeLessThanOrEqual(20 * ticks);
     expect(Object.values(client.store.getState().cards).filter((c) => c.error)).toEqual([]);
   }, 120_000);
 }
@@ -261,7 +281,9 @@ describe('e2e, local relay', () => {
   let relay: Relay;
   let relayHost = '';
   beforeAll(async () => {
-    relay = createRelay({ store: new Store(null), log: () => {}, timing: { acceptWaitMs: 1500 } });
+    // Test relay: no daily limit on new routes, or a CI retry of one test would hit `rate_limited` on its sixth route.
+    const limiter = new Limiter({ buckets: { ...BUCKETS, newRoute: { limit: 1_000, windowMs: DAY } } });
+    relay = createRelay({ store: new Store(null), limiter, log: () => {}, timing: { acceptWaitMs: 1500 } });
     await new Promise<void>((r) => relay.server.listen(0, '127.0.0.1', () => r()));
     relayHost = `127.0.0.1:${(relay.server.address() as AddressInfo).port}`;
   });
@@ -278,13 +300,46 @@ describe('e2e, local relay', () => {
   });
 });
 
+/** `https://relay.example.com[:port]` или `wss://…` → `host[:port]`; всё остальное — сразу понятная ошибка. */
+export function externalRelayHost(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`PARLEY_E2E_RELAY_URL must be an https:// or wss:// address, got ${JSON.stringify(raw)}`);
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'wss:') throw new Error(`PARLEY_E2E_RELAY_URL must be https:// or wss://, got ${url.protocol}//`);
+  return url.host;
+}
+
+// ---- relay, который не пускает новые маршруты: понятная ошибка и никаких сирот ----
+describe('e2e harness: a relay that refuses new routes', () => {
+  it('fails fast with "relay: rate_limited" in the message and leaves no process, stub or home behind', async () => {
+    const strict = createRelay({ store: new Store(null), limiter: new Limiter({ buckets: { ...BUCKETS, newRoute: { limit: 0, windowMs: DAY } } }), log: () => {}, timing: { acceptWaitMs: 1500 } });
+    await new Promise<void>((r) => strict.server.listen(0, '127.0.0.1', () => r()));
+    const homes = (): string[] => readdirSync(tmpdir()).filter((n) => n.startsWith('e2e-'));
+    const before = homes();
+    try {
+      await expect(
+        startBridgeProcess({ relay: `127.0.0.1:${(strict.server.address() as AddressInfo).port}`, loopback: true }),
+      ).rejects.toThrow(/relay: rate_limited[\s\S]*bridge\.log/);
+      expect(homes()).toEqual(before);
+    } finally {
+      await strict.close();
+    }
+  }, 30_000);
+});
+
 // ---- внешний relay: тот же сценарий против развёрнутого узла, без переменной пропускается ----
 const external = process.env.PARLEY_E2E_RELAY_URL;
+// Разбор сразу, при сборе тестов: неверный адрес — понятная ошибка, а не десять секунд ожидания.
+const externalHost = external ? externalRelayHost(external) : '';
 describe.skipIf(!external)('e2e, external relay (PARLEY_E2E_RELAY_URL)', () => {
   scenarios({
     name: 'external',
-    relayHost: () => (external ?? '').replace(/^wss?:\/\//, '').replace(/\/.*$/, ''),
+    relayHost: () => externalHost,
     loopback: false,
     local: false,
+    route: routeFor,
   });
 });

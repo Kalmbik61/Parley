@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- кадры хоста в тесте разбираются как JSON */
 // A17: пограничный тест рамки (спека §2, §4, §15). Белый список против запретного списка; настоящий хост с ролью `remote`,
 // к которому ходит тот же `HostLink`, что у моста; запуск с телефона за переключателем хоста; мост без TCP-слушателей.
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -12,6 +13,8 @@ import {
   isRemoteForbidden,
 } from '@parley/protocol/remote';
 // Хост берётся из сборки по пути: у пакета `@parley/host` в `exports` только корень и `main`, а корень тянет `node-pty`.
+import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
 import { createHostServer } from '../../host/dist/server.js';
 import { startBridge } from '../src/bridge.js';
 import { HostCallError, createHostLink } from '../src/host-link.js';
@@ -41,6 +44,30 @@ describe('белый список против запретного списка
       expect(isRemoteForbidden(name), name).toBe(true);
       for (const [stage, lists] of stages) expect([...lists.methods, ...lists.notifications] as string[], `${stage}: ${name}`).not.toContain(name);
     }
+  });
+
+  // Эти методы хоста пока не отнесены ни к этапам, ни к запретным: решение по ним впереди. Новый метод хоста сюда не попадёт сам —
+  // тест ниже упадёт, пока кто-то не решит, куда он идёт (этап, REMOTE_FORBIDDEN или этот список с причиной в коммите).
+  const NOT_DECIDED: readonly string[] = [
+    'decisions.list', 'feed.progress', 'history.search', 'providers.authStatus', 'providers.cancelSignIn', 'providers.deleteCustom',
+    'providers.saveCustom', 'providers.signIn', 'providers.signInInput', 'providers.signInResize', 'providers.signOut', 'recipes.list',
+    'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare', 'sessions.interrupted', 'sessions.switchAgent',
+    'sessions.switchOptions', 'swarms.cancel', 'swarms.create', 'swarms.seen',
+  ];
+  /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
+  const HANDSHAKE = new Set(['hello']);
+
+  it('каждый метод и уведомление хоста отнесены: в списке этапа, в запретных или в явном списке «ещё не решено»', () => {
+    const inStage = new Set<string>(stages.flatMap(([, l]) => [...l.methods, ...l.notifications]));
+    const all = [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)];
+    const unclassified = all.filter((name) => !HANDSHAKE.has(name) && !inStage.has(name) && !isRemoteForbidden(name)).sort();
+    // Новый метод хоста валит тест, пока для него нет решения.
+    expect(unclassified).toEqual([...NOT_DECIDED].sort());
+    // «Не решено» не значит «открыто»: этих методов нет ни в одном этапе и они не запрещены явно.
+    for (const name of NOT_DECIDED) expect(inStage.has(name) || isRemoteForbidden(name), name).toBe(false);
+    // Каждое имя этапа существует в протоколе хоста.
+    for (const name of inStage) expect(all, name).toContain(name);
+    expect(HANDSHAKE.has('hello') && all.includes('hello')).toBe(true);
   });
 
   it('этап C сверх B методов не добавляет; B содержит A; в этапе A есть запуск, а `rooms.create` не запрещён', () => {
@@ -117,7 +144,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
     link.start();
     closers.push(() => link.stop());
     await until(() => link.status === 'online');
-    return { link, spies, pty, policy };
+    return { link, spies, pty, policy, socketPath };
   }
 
   const codeOf = async (p: Promise<unknown>): Promise<string> => {
@@ -134,11 +161,32 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
 
   it('методы, которых нет в белом списке, до обработчика не доходят', async () => {
     const h = await hostWith({ enabled: true, open: true });
-    for (const method of ['settings.set', 'works.create', 'sessions.delete']) expect(await codeOf(h.link.call(method, {})), method).toBe('unknown_method');
-    expect(h.spies['settings.set']).not.toHaveBeenCalled();
-    expect(h.spies['works.create']).not.toHaveBeenCalled();
-    expect(h.spies['sessions.delete']).not.toHaveBeenCalled();
+    // Все методы хоста вне списка этапа A (в том числе «ещё не решено»), а не три вручную выбранных.
+    const open = new Set<string>(REMOTE_STAGES.A.methods);
+    const outside = Object.keys(METHODS).filter((name) => name !== 'hello' && !open.has(name));
+    expect(outside.length).toBeGreaterThan(100);
+    for (const method of outside) expect(await codeOf(h.link.call(method, {})), method).toBe('unknown_method');
+    for (const name of ['settings.set', 'works.create', 'sessions.delete'] as const) expect(h.spies[name], name).not.toHaveBeenCalled();
+  });
+
+  it('уведомления pty.input и pty.resize от remote до обработчика не доходят', async () => {
+    const h = await hostWith({ enabled: true, open: true });
+    const socket = net.connect(h.socketPath);
+    await new Promise<void>((r) => socket.once('connect', () => r()));
+    const lines: any[] = [];
+    const decoder = new LineDecoder();
+    socket.on('data', (chunk) => lines.push(...(decoder.push(chunk) as any[])));
+    const send = (frame: object) => socket.write(`${JSON.stringify(frame)}\n`);
+    send({ id: 1, method: 'hello', params: { token: 't', protocol: PROTOCOL_VERSION, client: 'remote' } });
+    await until(() => lines.some((l) => l.id === 1));
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+    send({ method: 'pty.input', params: { ref, data: 'rm -rf ~\r' } });
+    send({ method: 'pty.resize', params: { ref, cols: 80, rows: 24 } });
+    send({ id: 2, method: 'host.info', params: {} }); // ответ на него приходит после уведомлений: порядок соединения сохраняется
+    await until(() => lines.some((l) => l.id === 2));
     expect(h.pty.input).not.toHaveBeenCalled();
+    expect(h.pty.resize).not.toHaveBeenCalled();
+    socket.destroy();
   });
 
   it('hello хоста для remote: методы ⊆ белый список этапа A', async () => {
