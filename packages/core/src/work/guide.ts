@@ -144,7 +144,8 @@ A session has two independent axes. \`lifecycle\` says whether the process is al
 called), \`active\` (the process is running), \`sleeping\` (no process, but the session is
 reachable, and a message will wake it), \`closed\` (closed explicitly, receives no more
 messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
-\`failed\`; empty until the first \`report\`.
+\`failed\`; empty until the first \`report\`. A session Parley put to sleep is \`sleeping\` too: \`wait_for\` on it
+answers \`asleep\`, and mail wakes it.
 
 A result does not change the process: after \`report(done)\` the session stays \`active\` —
 the result is handed in, and you are still reachable and answer new messages. It does not
@@ -252,7 +253,8 @@ while it is \`running\`.
 The answer \`state: deleted\` means the human deleted the session: there is
 nothing left to wait for, re-plan the work without it. The answer \`state: "stuck"\` means the
 session waits for the human (an approval, a question, a usage limit, a sign-in): do not call
-\`wait_for\` for it again, see topic \`stuck\`. An unknown id is an error right
+\`wait_for\` for it again, see topic \`stuck\`. The answer \`state: "asleep"\` means Parley put the
+session to sleep: mail wakes it, so write to it or wait for mail via \`"inbox"\`. An unknown id is an error right
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
 Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message.
