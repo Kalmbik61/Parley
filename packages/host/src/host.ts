@@ -577,7 +577,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
-  const swarmsService = createSwarmsService(handle.context, worksService, sessionsService);
+  // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
+  const swarmsService = createSwarmsService(handle.context, worksService, sessionsService, {}, {
+    requestSleep: (ref, reason) => autoSleepService.requestSleep(ref, reason),
+  });
   handle.context.onShutdown(() => swarmsService.stop());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
