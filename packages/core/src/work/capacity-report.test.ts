@@ -232,6 +232,17 @@ describe('capacityReport', () => {
     }
   });
 
+  it('swarm: сдавший участник уходит из live, но остаётся в members', () => {
+    const map = emptyMap();
+    const ids = [addActive(map), addActive(map), addActive(map), addActive(map)];
+    const swarm = swarmOf(ids);
+    map.swarms = [swarm];
+    expect(report(map, ids[0]!, null).swarm).toMatchObject({ live: '4/8', members: '4/16' });
+
+    swarm.members.find((member) => member.sessionId === ids[3])!.handedAt = AT;
+    expect(report(map, ids[0]!, null).swarm).toMatchObject({ live: '3/8', members: '4/16' });
+  });
+
   it('you: подсессии по createdBy, закрытые не в счёт; wakesHour считает только подъёмы письмом за час без windowFree', () => {
     const map = emptyMap();
     const me = addActive(map);
@@ -265,6 +276,16 @@ describe('capacityReport', () => {
       wakesHour: '2/6',
       keepAwake: true,
     });
+  });
+
+  it('you: подсессия в pending и в очереди одновременно — в очереди, а не работает', () => {
+    const map = emptyMap();
+    const me = addActive(map);
+    const waiting = addSession(map, { provider: 'claude', label: 'p', task: 't', createdBy: me });
+    waiting.queued = queuedLaunch();
+    addSession(map, { provider: 'claude', label: 'p2', task: 't', createdBy: me });
+
+    expect(report(map, me, null).you?.children).toEqual({ running: 1, asleep: 0, queued: 1 });
   });
 
   it('you: null без сессии и для сессии, которой нет в карте', () => {
@@ -384,6 +405,55 @@ describe('capacityReport', () => {
       expect(tight.hint).toBe('2 more can start now; after that roomConcurrent refuses new sessions.');
       // Остаток работы тоже 2: ничья, работа идёт раньше комнаты.
       expect(report(map, me, null, { roomConcurrent: 4, workConcurrent: 5 })).toMatchObject({ canStart: 2, limitedBy: 'workConcurrent' });
+    });
+
+    describe('комната: запуски и новые сессии', () => {
+      /** Комната из двух живых (я и соседний); в журнале запуск комнаты и десять созданий в ней. */
+      const roomed = (): { map: WindowWorkMap; me: string; roomId: string } => {
+        const { map, me } = base();
+        const room = addRoom(map, { title: 'r', creator: me, members: [me, map.sessions[1]!.id] });
+        withAttempts(
+          map,
+          [attempt({ session: me, room: room.id })],
+          Array.from({ length: 10 }, () => ({ kind: 'session' as const, room: room.id })),
+        );
+        return { map, me, roomId: room.id };
+      };
+
+      it('roomLaunches: остаток комнаты 2 меньше остатков работы', () => {
+        const { map, me } = roomed();
+        const result = report(map, me, null, { roomLaunches: 3 });
+        expect(result).toMatchObject({ canStart: 2, limitedBy: 'roomLaunches' });
+        expect(result.hint).toBe('2 more can start now; after that roomLaunches refuses new sessions.');
+        expect(result.room?.launchesHour).toBe('1/3');
+      });
+
+      it('roomNewSessions: остаток комнаты 2 меньше остатков работы', () => {
+        const { map, me } = roomed();
+        const result = report(map, me, null, { roomNewSessions: 12 });
+        expect(result).toMatchObject({ canStart: 2, limitedBy: 'roomNewSessions' });
+        expect(result.hint).toBe('2 more can start now; after that roomNewSessions refuses new sessions.');
+      });
+
+      it('ничья комнаты с работой: работа идёт раньше', () => {
+        const { map, me } = roomed();
+        expect(report(map, me, null, { roomLaunches: 3, workLaunches: 3 })).toMatchObject({ canStart: 2, limitedBy: 'workLaunches' });
+        // Десять созданий в комнате — и десять в работе: остаток workNewSessions 12 − 10 = 2, как у комнаты.
+        expect(report(map, me, null, { roomNewSessions: 12, workNewSessions: 12 })).toMatchObject({
+          canStart: 2, limitedBy: 'workNewSessions',
+        });
+      });
+
+      it('ничья внутри комнаты: roomConcurrent раньше roomLaunches и roomNewSessions', () => {
+        const { map, me } = roomed();
+        // В комнате двое живых: roomConcurrent 4 даёт остаток 2, как roomLaunches 3 (один запуск) и roomNewSessions 12.
+        expect(report(map, me, null, { roomConcurrent: 4, roomLaunches: 3, roomNewSessions: 12 })).toMatchObject({
+          canStart: 2, limitedBy: 'roomConcurrent',
+        });
+        expect(report(map, me, null, { roomConcurrent: 12, roomLaunches: 3, roomNewSessions: 12 })).toMatchObject({
+          canStart: 2, limitedBy: 'roomLaunches',
+        });
+      });
     });
   });
 
