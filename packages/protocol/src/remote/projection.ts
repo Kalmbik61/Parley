@@ -23,6 +23,8 @@ export const remoteSessionSchema = z.strictObject({
   /** Только `role.name`. */
   role: z.string().nullable(),
   parent: z.string().nullable(),
+  /** Сессия, завёдшая эту через `create_session`; нет поля у хоста — `null`. */
+  createdBy: z.string().nullable(),
   lifecycle: z.enum(['pending', 'active', 'sleeping', 'closed']),
   result: z.enum(['done', 'failed']).nullable(),
   stuck: remoteStuckSchema.nullable(),
@@ -55,11 +57,39 @@ export const remoteRoomSchema = z.strictObject({
   title: z.string(),
   members: z.array(z.string()),
   lead: z.string().nullable(),
+  /** Владелец комнаты; нет поля у хоста — `null`. */
+  ownerId: z.string().nullable(),
   mode: z.enum(['free', 'checklist', 'verified', 'autonomous']).nullable(),
   /** `archivedAt != null`. */
   archived: z.boolean(),
   proposal: remoteProposalSchema.nullable(),
   messages: counters.nullable(),
+});
+
+/** Кто завёл рой (`SwarmCreator` хоста). */
+const remoteSwarmCreatorSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('session'), sessionId: z.string() }),
+  z.strictObject({ kind: z.literal('room'), roomId: z.string() }),
+  z.strictObject({ kind: z.literal('human') }),
+]);
+
+/** Рой без `objective`, `result`, `failure`, `seenAt`, `expiredAt` и `addedAt` участников. */
+export const remoteSwarmSchema = z.strictObject({
+  id: z.string(),
+  tag: z.string(),
+  creator: remoteSwarmCreatorSchema,
+  queen: z.string(),
+  members: z.array(
+    z.strictObject({
+      sessionId: z.string(),
+      role: z.enum(['queen', 'drone', 'verifier']),
+      n: z.number(),
+      handedAt: z.string().nullable(),
+    }),
+  ),
+  status: z.enum(['running', 'collecting', 'done', 'failed', 'cancelled']),
+  createdAt: z.string(),
+  endedAt: z.string().nullable(),
 });
 
 export const remoteWorkSchema = z.strictObject({
@@ -70,6 +100,7 @@ export const remoteWorkSchema = z.strictObject({
   messages: z.strictObject({ direct: counters.nullable(), inline: z.number() }),
   sessions: z.array(remoteSessionSchema),
   rooms: z.array(remoteRoomSchema),
+  swarms: z.array(remoteSwarmSchema),
 });
 
 export const remoteWorksSnapshotSchema = z.strictObject({
@@ -121,6 +152,7 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
             model: s.model ?? null,
             role: s.role?.name ?? null,
             parent: s.parent ?? null,
+            createdBy: s.createdBy ?? null,
             lifecycle: s.lifecycle,
             result: s.result ?? null,
             stuck: s.stuck ?? null,
@@ -129,11 +161,22 @@ export function projectWorksSnapshot(snapshot: WorksSnapshot): RemoteWorksSnapsh
             resultAt: s.resultAt ?? null,
           };
         }),
+        swarms: (m.swarms ?? []).map((w) => ({
+          id: w.id,
+          tag: w.tag,
+          creator: w.creator,
+          queen: w.queen,
+          members: w.members.map((x) => ({ sessionId: x.sessionId, role: x.role, n: x.n, handedAt: x.handedAt })),
+          status: w.status,
+          createdAt: w.createdAt,
+          endedAt: w.endedAt,
+        })),
         rooms: m.rooms.map((r) => ({
           id: r.id,
           title: r.title,
           members: r.members,
           lead: r.lead ?? null,
+          ownerId: r.ownerId ?? null,
           mode: r.mode ?? null,
           archived: r.archivedAt != null,
           proposal: r.proposal ?? null,
