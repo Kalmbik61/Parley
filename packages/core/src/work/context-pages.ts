@@ -1096,6 +1096,7 @@ export function mapOverview(map: WorkMap, caller: string | null, letters: Letter
       schemaVersion: 3,
       work: { id: map.work.id, title: bounded(map.work.title, 256, 'title', cut), goal: bounded(map.work.goal, 256, 'goal', cut), status: map.work.status,
         createdAt: summaryText(map.work.createdAt), updatedAt: summaryText(map.work.updatedAt), deletedSessions: pages.deletedSessions.items.map((r) => r.id),
+        ...(map.work.closeFinished === true ? { closeFinished: true } : {}),
         ...(Object.keys(cut).length === 0 ? {} : { cut }) },
       sessions: pages.sessions.items, rooms: pages.rooms.items, plans: pages.plans.items,
       messages: { ...totalsOf(stats), direct: stats[''] ?? { total: 0, latestId: null },

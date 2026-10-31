@@ -591,7 +591,7 @@ export const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Yours or one you created.' },
+        target: { type: 'string', description: 'Yours or one you created; with closeFinished, a finished member of the room you lead.' },
       },
       required: ['target'],
     },
@@ -1354,14 +1354,20 @@ async function closeSession(
   const target = stringArg(args, 'target');
 
   await updateMap(context.projectPath, context.workId, (current) => {
-    requireSession(current, target);
+    const targetSession = requireSession(current, target);
     if (target !== sessionId) {
       if (swarmOfSession(current, target) !== null) {
         throw new Error(`close_session cannot close ${target}: it is a swarm member; only the human cancels a swarm`);
       }
-      if (!isCreatedDescendant(current, sessionId, target)) {
+      // Право лида (sg-12): флаг разрешения включён, вызывающий — живой лид комнаты, цель — её участник с итогом `done`.
+      // Участника роя отсекла проверка выше.
+      const finishedMemberOfLedRoom =
+        current.work.closeFinished === true &&
+        targetSession.result === 'done' &&
+        current.rooms.some((room) => !isRoomArchived(room) && liveLead(current, room) === sessionId && isMember(room, target));
+      if (!isCreatedDescendant(current, sessionId, target) && !finishedMemberOfLedRoom) {
         throw new Error(
-          `close_session can only close the calling session or a session it created (${target} is not one of them)`,
+          `close_session can only close the calling session, a session it created, or — when the workspace lets agents close finished sessions — a finished member of the room it leads (${target} is not one of them)`,
         );
       }
     }

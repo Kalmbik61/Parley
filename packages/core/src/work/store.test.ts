@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { contextFile } from '../context-fill.js';
 import { addAutonomousRoom, autonomousMap } from '../../test/autonomous-map.js';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
-import { addMessage, addSession } from './map.js';
+import { addMessage, addSession, parseMap } from './map.js';
 import { letterById, letterCount, readLetters, unreadCount, unreadLetters, writeLetters } from './letter-store.js';
 import { isDirectorySync } from './state-dir.js';
 import type { Message, Room, WindowWorkMap, WorkMap } from './types.js';
@@ -32,6 +32,7 @@ import {
   readWorksIndex,
   renameWork,
   replaceStoredMap,
+  setWorkCloseFinished,
   setWorkStatus,
   updateMap,
   parleyHome,
@@ -1763,6 +1764,48 @@ describe('setWorkStatus', () => {
     expect(disk.work.status).toBe('archived');
     expect(disk.work.updatedAt).toBe(old);
     expect((await readWorksIndex()).works[0]).toMatchObject({ status: 'archived', updatedAt: old });
+  });
+});
+
+describe('setWorkCloseFinished', () => {
+  it('true ставит разрешение, false удаляет поле; updatedAt стоит на месте', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const old = await ageWork('w-0001');
+
+    await setWorkCloseFinished(project, 'w-0001', true);
+    const on = await readMap(project, 'w-0001');
+    expect(on.work.closeFinished).toBe(true);
+    expect(on.work.updatedAt).toBe(old);
+
+    await setWorkCloseFinished(project, 'w-0001', false);
+    const off = await readMap(project, 'w-0001');
+    expect(off.work).not.toHaveProperty('closeFinished');
+    expect(off.work.updatedAt).toBe(old);
+  });
+
+  it('работы нет — WorkNotFoundError, как у setWorkStatus', async () => {
+    await expect(setWorkCloseFinished(project, 'w-0042', true)).rejects.toBeInstanceOf(WorkNotFoundError);
+  });
+});
+
+describe('closeFinished в разборе карты', () => {
+  const mapWith = (closeFinished: unknown): string =>
+    JSON.stringify({
+      schemaVersion: 2,
+      work: { id: 'w-0001', title: 'T', goal: '', status: 'active', createdAt: 'x', updatedAt: 'x', closeFinished },
+      sessions: [],
+      rooms: [],
+      messages: [],
+    });
+
+  it('boolean и отсутствие поля проходят', () => {
+    expect(parseMap(mapWith(true), 'map.json').work.closeFinished).toBe(true);
+    expect(parseMap(mapWith(false), 'map.json').work.closeFinished).toBe(false);
+    expect(parseMap(mapWith(undefined), 'map.json').work).not.toHaveProperty('closeFinished');
+  });
+
+  it.each(['yes', 1, null, {}])('значение %j — ошибка разбора', (value) => {
+    expect(() => parseMap(mapWith(value), 'map.json')).toThrow(/cannot be parsed: unexpected shape/);
   });
 });
 

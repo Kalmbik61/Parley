@@ -213,7 +213,7 @@ describe('заглушка и гид согласованы', () => {
     try {
       const tools = new Set((await client.listTools()).tools.map((tool) => tool.name));
       // Слова в кавычках, которые не инструменты: аргументы (`topic` у read_guide, `to` у send_message), виды писем,
-      // имя сервера и темы гида.
+      // имя сервера, раздел карты `work` и темы гида.
       const notTools = new Set([
         'topic',
         'to',
@@ -221,6 +221,7 @@ describe('заглушка и гид согласованы', () => {
         'note',
         'decision',
         'parley',
+        'work',
         ...GUIDE_TOPICS.map((item) => item.topic),
       ]);
       const named = [...SKILL_MD.matchAll(/`([a-z]+(?:_[a-z]+)*)`/g)]

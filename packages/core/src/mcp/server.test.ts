@@ -1126,7 +1126,7 @@ describe('close_session', () => {
 
     const foreign = await call(child, 'close_session', { target: 's-01' });
     expect(foreign.isError).toBe(true);
-    expect(foreign.text).toContain('the calling session or a session it created');
+    expect(foreign.text).toContain('the calling session, a session it created, or');
     const human = await call(await connect('s-01'), 'close_session', { target: 's-04' });
     expect(human.isError).toBe(true);
     expect(human.text).toContain('s-04 is not one of them');

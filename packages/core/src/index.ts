@@ -339,6 +339,7 @@ export {
   readWorksIndex,
   renameWork,
   replaceStoredMap,
+  setWorkCloseFinished,
   setWorkStatus,
   updateMap,
   viewMap,
