@@ -381,7 +381,8 @@ Unix-сокет, токен как у хоста; клиент — только 
   сайдбара — правки 9):
   - снимок: `revision` и работы в порядке `entries` (порядок сайдбара); `branches` не идут;
   - работа: `projectPath`, `id`, `title`, `status`, `messages: {direct: {total, unread} | null, inline}`,
-    `swarms: [{id, tag, creator, queen, members: [{sessionId, role, n, handedAt}], status, createdAt, endedAt}]`;
+    `swarms: [{id, tag, creator, queen, members: [{sessionId, role, n, handedAt}], status, createdAt, endedAt,
+    seenAt}]`;
   - сессия: `id`, `label`, `provider`, `model`, `role` (имя), `parent`, `createdBy`, `lifecycle`, `result`,
     `stuck`, `lastEvent {event, at}` (последняя запись `history`), `startedAt`, `resultAt`;
   - комната: `id`, `title`, `ownerId`, `members`, `lead`, `mode`, `archived`, `proposal`,
@@ -389,7 +390,8 @@ Unix-сокет, токен как у хоста; клиент — только 
 
   `createdBy`, `ownerId` и `swarms` нужны, чтобы экран работы строил то же дерево, что сайдбар окна: подсессии под
   создателем, комнаты под владельцем, рои под создателем (запрос человека к прототипу D1, 2026-10-31). У роя нет
-  текстов: ни `objective`, ни `result`, ни `failure`.
+  текстов: ни `objective`, ни `result`, ни `failure`; `seenAt` — метка без текста, чтобы телефон прятал
+  просмотренные рои, как окно.
 
   Текстов задач и итогов сессий, истории, метрик, планов и ресурсов телефон не получает. Новое поле в проекции —
   правка этого списка и `@parley/protocol/remote`, а не протокола хоста.
@@ -1539,4 +1541,4 @@ Wi-Fi и запас фона ждут прогона на iPhone. Протоко
 
 | № | Запрос | Что изменено |
 |---|---|---|
-| 9.1 | Дерево работы как в сайдбаре: связи `createdBy`, `ownerId`, рои | 5.5 («Проекция снимка»): сессия + `createdBy`, комната + `ownerId`, работа + `swarms` без текстов |
+| 9.1 | Дерево работы как в сайдбаре: связи `createdBy`, `ownerId`, рои | 5.5 («Проекция снимка»): сессия + `createdBy`, комната + `ownerId`, работа + `swarms` без текстов, с `seenAt` |
