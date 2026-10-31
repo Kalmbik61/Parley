@@ -1715,6 +1715,30 @@ describe('ChatView — очередь отправки', () => {
     expect(sentTexts()).toEqual([]);
   });
 
+  it('во время сжатия сообщение держит окно: серое с «Send now» и ×; сжатие кончилось — уходит один раз', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    const compaction = (phase: 'running' | 'compacted'): void => {
+      const metrics = { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, compaction: phase };
+      useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle', { metrics })]), loaded: true });
+    };
+    goLive();
+    compaction('running');
+    renderBody(makeSession('s-01', 'S01'));
+    // Хост напечатал `/compact`: слэш-команда и заметка сжатия хода не открывают.
+    setFeed([prompt('p0', 'go'), turn('u0'), prompt('p1', '/compact'), { id: 'n1', at: AT, kind: 'notice', notice: { type: 'compact', phase: 'pre', trigger: 'manual' } }]);
+    type('later');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('waiting');
+    expect(within(grey).getByRole('button', { name: S.outbox.sendNow })).not.toBeNull();
+    expect(within(grey).getByRole('button', { name: S.outbox.remove })).not.toBeNull();
+    expect(sentTexts()).toEqual([]);
+    act(() => compaction('compacted'));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['later']);
+  });
+
   it('«Send now» отдаёт ждущее сообщение в CLI во время хода; ход закрылся — второе уходит само', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     goLive();

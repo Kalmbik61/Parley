@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
-import { refKey, type SessionRef } from '@parley/protocol';
+import { refKey, type CompactionPhase, type LiveMetrics, type SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import type { OutboxItem } from '../lib/outbox.js';
 import { useActivityStore } from '../store/activity.js';
@@ -247,6 +247,52 @@ describe('chatOutbox — затвор на время хода', () => {
     useFeedStore.setState({ feeds: {} });
     await flush();
     expect(sentTexts()).toEqual([]);
+  });
+
+  describe('сжатие контекста (metrics.compaction)', () => {
+    const compactNotice = (id: string, phase: 'pre' | 'post'): FeedItem => ({ id, at: AT, kind: 'notice', notice: { type: 'compact', phase, trigger: 'manual' } });
+    // Хост напечатал `/compact`: в ленте слэш-команда и заметка сжатия, хода по ней нет (`turnActive` — false).
+    const compactFeed = [prompt('p0', 'go'), turn('u0'), prompt('p1', '/compact'), compactNotice('n1', 'pre')];
+    const compaction = (phase: CompactionPhase | null): void => {
+      const metrics: LiveMetrics = { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, compaction: phase };
+      useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle', { metrics })]), loaded: true });
+    };
+
+    it.each([
+      { phase: 'pending' as const, feed: [prompt('p0', 'go'), turn('u0')] },
+      { phase: 'running' as const, feed: compactFeed },
+    ])('сжатие $phase: сообщение ждёт окном, а не в полёте, — pty.send не зовётся', async ({ phase, feed }) => {
+      live();
+      setFeed(feed);
+      compaction(phase);
+      chatOutbox.enqueue(KEY, payload('later'));
+      await vi.advanceTimersByTimeAsync(CHAT_RETRY_MS * 3);
+      expect(sentTexts()).toEqual([]);
+      expect(chatOutbox.items(KEY).map((entry) => entry.status)).toEqual(['pending']);
+      expect(chatOutbox.store.getState().flying[KEY]).toBeUndefined();
+    });
+
+    it('сжатие кончилось — ждавшее сообщение уходит ровно один раз', async () => {
+      live();
+      // Пока сжатие держит сессию (`sessions.exclusive`), хост отказывает `blocked`.
+      let held = true;
+      bridge.setHandler('pty.send', () => (held ? { inserted: false, submitted: false, reason: 'blocked' } : { inserted: true, submitted: true, reason: null }));
+      setFeed(compactFeed);
+      compaction('running');
+      chatOutbox.enqueue(KEY, payload('later'));
+      await flush();
+      expect(sentTexts()).toEqual([]);
+      held = false;
+      setFeed([...compactFeed, compactNotice('n2', 'post')]);
+      compaction('compacted');
+      await flush();
+      expect(sentTexts()).toEqual(['later']);
+      expect(chatOutbox.items(KEY)).toEqual([]);
+      setFeed([...compactFeed, compactNotice('n2', 'post'), prompt('p2', 'later'), turn('u2')]);
+      compaction(null);
+      await vi.advanceTimersByTimeAsync(CHAT_AWAIT_PROMPT_MS + CHAT_RETRY_MS);
+      expect(sentTexts()).toEqual(['later']);
+    });
   });
 
   it('лента грузится (loading), активность idle: сообщение уходит', async () => {

@@ -12,6 +12,10 @@
  * на эту паузу. Пока ленты нет или она ещё не готова (вкладку Chat закрыли, снимок грузится), о ходе судим по
  * активности сессии (`working` без `heldByBackground`).
  *
+ * Так же затвор держит сообщение, пока сжатие контекста ждёт или идёт (`metrics.compaction`, спека 2026-10-15, 5.4):
+ * слэш-команда `/compact` хода в ленте не открывает, а хост держит сессию замком, и `pty.send` отказал бы `blocked` —
+ * сообщение висело бы «Sending…» без «Send now» и ×. Сжатие кончилось — сообщение уходит само.
+ *
  * Сама очередь повторяет только `busy` (через `CHAT_RETRY_MS`) и `blocked` (не раньше чем через `CHAT_RETRY_MS` и когда
  * сессия выйдет из `blocked`). Это сознательное исключение из правила «никаких автоповторов» `terminal/send.ts`:
  * повторяется только то, что человек уже отправил. Пауза у `blocked` нужна и тогда, когда окно `blocked` не видит:
@@ -83,10 +87,17 @@ function workingNow(ref: SessionRef): boolean {
   return activity?.activity === 'working' && !activity.heldByBackground;
 }
 
-/** Ход у живой сессии идёт или она ещё ждёт промпт только что отправленного сообщения. */
+/** Сжатие контекста сессии ждёт или идёт — то, о котором знает хост. */
+function compacting(ref: SessionRef): boolean {
+  const phase = activityFor(useActivityStore.getState().byRef, ref)?.metrics?.compaction;
+  return phase === 'pending' || phase === 'running';
+}
+
+/** Ход у живой сессии идёт, сжатие ждёт или идёт, или она ещё ждёт промпт только что отправленного сообщения. */
 function sessionBusy(key: string, ref: SessionRef): boolean {
   const entry = useWorksStore.getState().entries.find((e) => e.projectPath === ref.projectPath && e.map.work.id === ref.workId);
   if (entry?.map.sessions.find((session) => session.id === ref.sessionId)?.lifecycle !== 'active') return false;
+  if (compacting(ref)) return true;
   const feed = useFeedStore.getState().feeds[key];
   const feedItems = feed?.items ?? NO_ITEMS;
   // Ленты нет или она не готова (вкладку Chat закрыли и стор её забыл, либо снимок ещё грузится) — судим по активности сессии.
