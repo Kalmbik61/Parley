@@ -83,6 +83,16 @@ describe('граница отправки клиента remote (спека мо
     expect(remoteMayReceive({ event: 5 })).toBe(false);
   });
 
+  it('remoteMayReceive: ответ — ровно одно из result / error и без method', () => {
+    expect(remoteMayReceive({ id: 1, result: null })).toBe(true);
+    expect(remoteMayReceive({ id: 1, result: undefined })).toBe(true);
+    expect(remoteMayReceive({ id: 1, error: { code: 'x', message: 'y' } })).toBe(true);
+    expect(remoteMayReceive({ id: 1 })).toBe(false);
+    expect(remoteMayReceive({ id: 1, result: 1, error: { code: 'x', message: 'y' } })).toBe(false);
+    expect(remoteMayReceive({ id: 1, method: 'settings.set', params: {} })).toBe(false);
+    expect(remoteMayReceive({ id: 1, method: 'x', result: 1 })).toBe(false);
+  });
+
   it('клиент без роли — полный: все события и строки уходят как есть', () => {
     const { socket, written } = fakeSocket();
     const client = createClient(socket, 'desktop', ['compact-works']);
