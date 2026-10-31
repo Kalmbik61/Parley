@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RemoteClient, ResolveOutcome } from '@parley/remote-client';
-import { canSendReturn, submitDecision, type Proposal } from './decision-flow';
+import { canSendReturn, hapticFor, submitDecision, type Proposal } from './decision-flow';
 
 const p = (rev: number, text = 'old'): Proposal => ({ id: 'p1', kind: null, from: 's-174', text, rev, at: 'x', planId: null, planRev: null });
 const input = { projectPath: '/p', workId: 'w', roomId: 'r', shown: p(2) };
@@ -35,7 +35,7 @@ describe('submitDecision', () => {
   });
   it('Face ID cancel on accept sends nothing', async () => {
     const c = mk({ outcome: 'applied' });
-    expect(await submitDecision(c, async () => 'cancelled', { ...input, action: 'accept' })).toEqual({ kind: 'cancelled' });
+    expect(await submitDecision(c, async () => 'cancelled', { ...input, action: 'accept' })).toEqual({ kind: 'cancelled', reason: 'cancelled' });
     expect(c.resolveProposal).not.toHaveBeenCalled();
   });
   it('return does not ask Face ID', async () => {
@@ -48,5 +48,15 @@ describe('submitDecision', () => {
     expect(canSendReturn('  ')).toBe(false);
     expect(canSendReturn('a'.repeat(4000))).toBe(true);
     expect(canSendReturn('a'.repeat(4001))).toBe(false);
+  });
+});
+
+describe('hapticFor (D1 §16)', () => {
+  it('Accept success, Return/conflict/lost warning, cancelled none', () => {
+    expect(hapticFor({ kind: 'view', view: { kind: 'accepted' } })).toBe('success');
+    expect(hapticFor({ kind: 'view', view: { kind: 'returned' } })).toBe('warning');
+    expect(hapticFor({ kind: 'view', view: { kind: 'pending', shown: p(3), conflict: true } })).toBe('warning');
+    expect(hapticFor({ kind: 'view', view: { kind: 'unconfirmed', shown: p(2) } })).toBe('warning');
+    expect(hapticFor({ kind: 'cancelled', reason: 'cancelled' })).toBeNull();
   });
 });

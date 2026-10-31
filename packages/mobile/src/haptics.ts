@@ -6,6 +6,7 @@ export const haptic = {
   sasShown: () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium),
   paired: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   selection: () => void Haptics.selectionAsync(),
+  success: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
   warning: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning),
   error: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
 };

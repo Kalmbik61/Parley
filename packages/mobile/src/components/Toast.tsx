@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { typography, useColors } from '../theme';
 
 export const FACE_ID_CANCELLED = 'Face ID cancelled — nothing was sent';
+export const NO_PASSCODE = 'Set a device passcode to approve from the phone';
 
 /** A 2 s toast (D1 §12a). */
 export function useToast(): { message: string | null; show: (m: string) => void } {

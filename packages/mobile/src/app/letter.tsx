@@ -42,8 +42,8 @@ export default function LetterScreen() {
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
       <Stack.Screen options={{ title: 'Letter', headerBackTitle: 'Letters' }} />
-      <ConnectionBanner />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
+        <ConnectionBanner />
         {message === undefined ? (
           <Text allowFontScaling style={[typography.body, { color: colors.label2 }]}>{remote?.snapshot ? 'This letter was deleted' : ''}</Text>
         ) : (

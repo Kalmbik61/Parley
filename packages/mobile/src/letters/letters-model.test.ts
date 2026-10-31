@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { initialRemoteState, workKeyOf, type RemoteState } from '@parley/remote-client';
-import { selectLetters } from './letters-model';
+import { plainPreview, selectLetters } from './letters-model';
 
 const msg = (id: string, at: string, read = false) =>
   ({ id, roomId: null, from: 'Greta', to: ['human'], at, text: id, kind: 'note', readBy: read ? { human: at } : {} }) as never;
@@ -17,5 +17,11 @@ describe('selectLetters', () => {
   it('a letter opened on the phone sinks but stays', () => {
     const rows = selectLetters(state, new Set(['b']));
     expect(rows.map((r) => [r.message.id, r.unread])).toEqual([['a', true], ['c', false], ['b', false]]);
+  });
+});
+
+describe('plainPreview', () => {
+  it('drops Markdown marks and joins lines', () => {
+    expect(plainPreview('## PR #143 is ready\nSee [the PR](https://x.y/z) and `code`\n- **bold** item')).toBe('PR #143 is ready See the PR and code bold item');
   });
 });

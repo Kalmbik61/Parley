@@ -45,14 +45,14 @@ describe('Face ID gate on feed.decide', () => {
   it('cancel or failure sends nothing and the card stays', async () => {
     const c = client();
     const r = await gatedDecide(asClient(c), gate(auth(false)), ref, 'c1', { kind: 'permission', behavior: 'allow' });
-    expect(r).toEqual({ cancelled: true });
+    expect(r).toEqual({ cancelled: true, reason: 'cancelled' });
     expect(c.decide).not.toHaveBeenCalled();
   });
 
   it('an authentication error counts as cancel', async () => {
     const c = client();
     const a: LocalAuth = { authenticateAsync: async () => { throw new Error('boom'); } };
-    expect(await gatedDecide(asClient(c), gate(a), ref, 'c1', { kind: 'plan', choice: 'manual' })).toEqual({ cancelled: true });
+    expect(await gatedDecide(asClient(c), gate(a), ref, 'c1', { kind: 'plan', choice: 'manual' })).toEqual({ cancelled: true, reason: 'cancelled' });
     expect(c.decide).not.toHaveBeenCalled();
   });
 
@@ -100,7 +100,7 @@ describe('Face ID gate on rooms.resolveProposal', () => {
   });
   it('cancelled accept sends nothing', async () => {
     const c = client();
-    expect(await gatedResolve(asClient(c), gate(auth(false)), { ...base, action: 'accept' })).toEqual({ cancelled: true });
+    expect(await gatedResolve(asClient(c), gate(auth(false)), { ...base, action: 'accept' })).toEqual({ cancelled: true, reason: 'cancelled' });
     expect(c.resolveProposal).not.toHaveBeenCalled();
   });
 });
@@ -113,5 +113,15 @@ describe('turning the setting off', () => {
   });
   it('cancel keeps it', async () => {
     expect(await gate(auth(false))('disable')).toBe('cancelled');
+  });
+});
+
+describe('no device passcode', () => {
+  it('is told apart from a cancel and still sends nothing', async () => {
+    const a: LocalAuth = { authenticateAsync: async () => ({ success: false, error: 'passcode_not_set' }) };
+    const c = client();
+    const r = await gatedDecide(asClient(c), gate(a), ref, 'c1', { kind: 'permission', behavior: 'allow' });
+    expect(r).toEqual({ cancelled: true, reason: 'no-passcode' });
+    expect(c.decide).not.toHaveBeenCalled();
   });
 });
