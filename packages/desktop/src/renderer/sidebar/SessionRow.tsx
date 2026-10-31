@@ -17,7 +17,9 @@
  *
  * Спящей сессии, которую усыпил хост (`autoSleep`, спека сна агентов 4.1), слово `asleep` заменяет слово причины сна
  * (`asleep · idle`, `asleep · swarm done`; `autoSleepWord` из core), а тултип строки добавляет, зачем она спит и чем её
- * поднять. Остановленная человеком (`autoSleep` нет) осталась как была. Нужен человек (`need`) — он важнее причины сна.
+ * поднять. Итог важнее сна, как в `agentStatus` (единый источник статусов): сессия, сдавшая `done`/`failed`, остаётся со
+ * словом итога, а объяснение в тултипе есть у любой усыплённой хостом. Остановленная человеком (`autoSleep` нет) осталась
+ * как была. Нужен человек (`need`) — он важнее причины сна.
  *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
@@ -52,7 +54,7 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { autoSleepWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { agentStatus, autoSleepWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
@@ -217,13 +219,15 @@ export const SessionRow = memo(function SessionRow({
   // такой сессии — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`).
   const need = sessionNeed(session, live);
   const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
-  // Усыплённая хостом: слово причины сна вместо `asleep`. `need` у спящей всегда `null` (`sessionNeed`), но первым в
-  // выборе слова остаётся он. Нет `autoSleep` (или `null`) — сессию остановил человек: слово состояния, как раньше.
+  // Усыплённая хостом (`hostSleep`): слово причины сна вместо `asleep`, а тултип объясняет сон при любом итоге. `need` у
+  // спящей всегда `null` (`sessionNeed`), но первым в выборе слова остаётся он. Итог важнее сна, как у агентов: слово сна —
+  // там, где им статус `asleep` (`agentStatus`, единый источник), а сессия с итогом остаётся со словом итога. Нет
+  // `autoSleep` (или `null`) — сессию остановил человек: слово состояния, как раньше.
   const hostSleep = need === null && session.lifecycle === 'sleeping' ? (session.autoSleep ?? null) : null;
   const word =
     need !== null
       ? needLabel(need, now.getTime())
-      : hostSleep !== null
+      : hostSleep !== null && agentStatus(session) === 'asleep'
         ? autoSleepWord(hostSleep.reason)
         : stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);

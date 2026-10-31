@@ -1104,6 +1104,17 @@ describe('SessionRow — сон по решению хоста', () => {
     expect(screen.queryByText(S.states.asleep)).toBeNull();
   });
 
+  // Итог важнее сна, как в `agentStatus` (единый источник статусов): агент, сдавший `report` перед сном, остаётся «done».
+  it('усыплённая хостом, но с итогом: слово итога (done, failed), 💤 на месте', () => {
+    for (const result of ['done', 'failed'] as const) {
+      renderRow({ ...asleepBy('idle'), result });
+      expect(screen.getByText(S.states[result])).toBeTruthy();
+      expect(screen.queryByText('asleep · idle')).toBeNull();
+      expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+      cleanup();
+    }
+  });
+
   it('остановленная человеком (autoSleep нет или null): «asleep», как раньше', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
     expect(screen.getByText('asleep')).toBeTruthy();
@@ -1129,6 +1140,13 @@ describe('SessionRow — сон по решению хоста', () => {
   it('тултип усыплённой хостом объясняет сон и чем её будить', async () => {
     renderRow(asleepBy('idle'));
     expect((await openTooltip()).textContent).toContain('Asleep to free memory. A message or Resume wakes it.');
+  });
+
+  it('тултип усыплённой хостом с итогом: объяснение сна есть и при слове итога', async () => {
+    renderRow({ ...asleepBy('idle'), result: 'done' });
+    const text = (await openTooltip()).textContent ?? '';
+    expect(text).toContain('Asleep to free memory. A message or Resume wakes it.');
+    expect(text).toContain(S.states.done);
   });
 
   it('тултип остановленной человеком этого объяснения не несёт', async () => {
