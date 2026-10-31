@@ -44,7 +44,7 @@ describe('swarms.create', () => {
     expect(input).not.toHaveProperty('effort');
   });
 
-  it('королева облегчённая всегда: sessions.create получает lean: true (настройка leanAgents не читается)', async () => {
+  it('королева роя: sessions.create получает lean: true', async () => {
     const work = await createWork(project, { title: 'Swarm', goal: '' });
     const sessions = fakeSessions();
     await createSwarmsCreate(sessions)({ projectPath: project, workId: work.work.id, tag: 'Audit', objective: 'Check', provider: 'claude' }, {} as never);
