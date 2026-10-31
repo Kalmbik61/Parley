@@ -24,7 +24,7 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
+import type { ProviderLimits, SessionActivity, SessionNeed, WorkSession } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
@@ -1410,6 +1410,78 @@ describe('WakeService: усыплённая хостом сессия (сон а
     expect(limiter.tryTake(ref)).toBe(true);
     expect(limiter.tryTake(ref)).toBe(false);
   }, 20_000);
+
+  /**
+   * Живая сессия получает письмо, и её процесс останавливают: настоящий `sessions.stop`, выход процесса и запись `sleeping` в карту.
+   * `mark` — хост уже поставил отметку «засыпает» (`autoSleepPending`), письмо ограда не выдаёт, и оно остаётся непрочитанным;
+   * иначе остановка — как кнопка Stop человека. `hooks` — хуки доходят, и будильник успевает напечатать указатель в умирающий
+   * процесс: письмо уже «указано», но агент его так и не прочёл.
+   */
+  async function stoppedWithLetter(options: { mark: boolean; hooks: boolean }) {
+    if (options.hooks) setEnv('STUB_READY_HOOK', '1');
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const session = (): WorkSession | undefined => readStoredMap(project, workId).sessions.find((candidate) => candidate.id === target);
+    const launch = vi.fn(async () => 'started' as const);
+    const { sessions, stream } = await resumeRig({}, withLaunch(launch));
+    await sessions.launch(ref, 'resume', { by: 'human' });
+    await waitFor(() => sessions.live(ref) && stream().includes('STUB READY') && session()?.lifecycle === 'active', 5000);
+
+    if (options.mark) {
+      await updateMap(project, workId, (map) => {
+        const found = map.sessions.find((candidate) => candidate.id === target);
+        if (found !== undefined) found.autoSleepPending = { reason: 'idle', at: new Date().toISOString(), waitTarget: null };
+      });
+    }
+    await sendLetter(workId, target, 'пришло перед остановкой', sender);
+    if (options.hooks) await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
+    else await settle(200);
+    // До остановки подъёма нет: живую письмо не поднимает.
+    expect(launch).not.toHaveBeenCalled();
+
+    await sessions.stop(ref);
+    return { launch, ref, workId, target, sender, session };
+  }
+
+  it('15: письмо пришло, пока стояла отметка «засыпает»: процесс вышел, карта стала sleeping и autoSleep — сессию поднимает указатель', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: false });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1) });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+    expect(session()).not.toHaveProperty('autoSleepPending');
+  }, 30_000);
+
+  it('16: то же, но указатель успел уйти в умирающий процесс: письмо снова указывается, сессию поднимает', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: true });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1) });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+  }, 30_000);
+
+  it('17: то же без отметки (Stop человека): письмо, лежавшее при выходе, сессию не поднимает, как и раньше; новое письмо поднимает', async () => {
+    const { launch, workId, target, sender, session } = await stoppedWithLetter({ mark: false, hooks: false });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+    expect(session()?.lifecycle).toBe('sleeping');
+    expect(session()?.autoSleep ?? null).toBeNull();
+
+    // Контроль: стенд исправен, подъём не заперт навсегда.
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
+
+  it('18: Stop человека после того, как указатель ушёл в процесс: письмо считается указанным, подъёма нет', async () => {
+    const { launch, workId, target, sender } = await stoppedWithLetter({ mark: false, hooks: true });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
 });
 
 /** Работа с тремя живыми сессиями хоста; `events/` заведён, как при настоящем запуске. */

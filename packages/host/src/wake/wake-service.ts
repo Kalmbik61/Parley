@@ -33,6 +33,7 @@ import {
   resumablePlanLetter,
   unreadCount,
   unreadLetters,
+  viewMap,
   workPaths,
   writeLetters,
   type DeliveryAction,
@@ -484,6 +485,22 @@ export function createWakeService(
       if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId, (id) => letterById(entry.projectPath, entry.map.work.id, id))) {
         state.pointed.add(message.id);
       }
+    }
+  }
+
+  /**
+   * Хост усыпляет сессию (отметка `autoSleepPending`) или уже усыпил (`autoSleep`): спека сна агентов 4.1. Смотрим карту в базе,
+   * а не снимок службы работ: снимок отстаёт от записи на окно сбора, а процесс останавливают сразу за отметкой. Карта не
+   * прочиталась (работу сняли) — не усыпляет: остальное решит прежнее правило.
+   */
+  function hostSleeps(ref: SessionRef): boolean {
+    try {
+      return viewMap(ref.projectPath, ref.workId, (map) => {
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+        return session !== undefined && (session.autoSleepPending != null || session.autoSleep != null);
+      });
+    } catch {
+      return false;
     }
   }
 
@@ -1301,8 +1318,11 @@ export function createWakeService(
         state.pointerAfter = null;
         // Уснувшую будят новые письма, а не те, что лежали при выходе: иначе
         // «Остановить» при непрочитанном тут же поднимало бы сессию обратно, а
-        // провалившийся подъём без промпта повторялся бы до конца лимита.
-        markUnreadPointed(ref, state);
+        // провалившийся подъём без промпта повторялся бы до конца лимита. Кроме усыплённой хостом (спека сна агентов 4.1):
+        // письма, что пришли, пока их держала ограда, агент не прочёл, и они ждут подъёма, а не «лежали». Указанными
+        // их не считаем, а указатели, ушедшие в умирающий процесс, забываем: письма поднимут сессию обычным путём.
+        if (hostSleeps(ref)) state.pointed.clear();
+        else markUnreadPointed(ref, state);
 
         const resumedAt = state.resumedAt;
         state.resumedAt = null;
