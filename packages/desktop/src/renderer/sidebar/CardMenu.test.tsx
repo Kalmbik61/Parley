@@ -231,6 +231,68 @@ describe('CardMenu — статус (тесты 16, 19, решение 2)', () =
   });
 });
 
+describe('CardMenu — Agents close finished sessions', () => {
+  const item = (): HTMLElement => screen.getByRole('menuitemcheckbox', { name: 'Agents close finished sessions' });
+  const withFlag = (closeFinished: boolean): WindowWorkEntry => ({
+    ...entry,
+    map: { ...entry.map, work: { ...entry.map.work, ...(closeFinished ? { closeFinished } : {}) } },
+  });
+
+  it('пункт отражает флаг работы и несёт подсказку', () => {
+    renderMenu(withFlag(true));
+    openMenu();
+    expect(item().getAttribute('aria-checked')).toBe('true');
+    expect(item().getAttribute('title')).toBe(
+      'Agents in this workspace close their own sessions once their part is accepted, and a room lead closes the room\'s finished members. Sessions you start yourself still wait for you.',
+    );
+    cleanup();
+
+    renderMenu(withFlag(false));
+    openMenu();
+    expect(item().getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('клик зовёт works.setCloseFinished с обратным значением', async () => {
+    bridge.setHandler('works.setCloseFinished', () => ({ ok: true as const }));
+    renderMenu(withFlag(false));
+    openMenu();
+    fireEvent.click(item());
+    await flush();
+    expect(bridge.calls).toEqual([
+      { method: 'works.setCloseFinished', params: { projectPath: '/tmp/proj', workId: 'w-01', closeFinished: true } },
+    ]);
+    cleanup();
+    bridge.calls.splice(0);
+
+    renderMenu(withFlag(true));
+    openMenu();
+    fireEvent.click(item());
+    await flush();
+    expect(bridge.calls).toEqual([
+      { method: 'works.setCloseFinished', params: { projectPath: '/tmp/proj', workId: 'w-01', closeFinished: false } },
+    ]);
+  });
+
+  it('отказ хоста — тост с действием', async () => {
+    bridge.setHandler('works.setCloseFinished', () => {
+      throw encodeIpcError({ code: 'not_found', message: 'нет такой работы' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderMenu();
+    openMenu();
+    fireEvent.click(item());
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't change whether agents close finished sessions: not found."));
+    warn.mockRestore();
+  });
+
+  it('хост без works.setCloseFinished — пункта нет', () => {
+    act(() => bridge.setHostMethods(REQUIRED_METHODS.filter((method) => method !== 'works.setCloseFinished')));
+    renderMenu();
+    openMenu();
+    expect(screen.queryByText('Agents close finished sessions')).toBeNull();
+  });
+});
+
 describe('CardMenu — прочие пункты', () => {
   it('New session — диалог 1.5 этой работы одним агентом (тест 15); New room — тот же диалог, открытый комнатой (два агента)', () => {
     renderMenu();

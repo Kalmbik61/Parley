@@ -4,6 +4,7 @@ import {
   isAlive,
   readMap,
   renameWork,
+  setWorkCloseFinished,
   setWorkStatus,
   WorkNotFoundError,
   workExists,
@@ -94,5 +95,11 @@ export const worksRename: Handler<'works.rename'> = async (params) => {
 export const worksSetStatus: Handler<'works.setStatus'> = async (params) => {
   requireWork(params.projectPath, params.workId);
   await setWorkStatus(params.projectPath, params.workId, params.status).catch(notFoundOnGone);
+  return { ok: true };
+};
+
+export const worksSetCloseFinished: Handler<'works.setCloseFinished'> = async (params) => {
+  requireWork(params.projectPath, params.workId);
+  await setWorkCloseFinished(params.projectPath, params.workId, params.closeFinished).catch(notFoundOnGone);
   return { ok: true };
 };

@@ -210,6 +210,22 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
+  it('works.setCloseFinished ставит и снимает флаг в карте', async () => {
+    const { client, dir, workId } = await withWork();
+
+    client.send({ id: 2, method: 'works.setCloseFinished', params: { projectPath: dir, workId, closeFinished: true } });
+    expect((await reply(client, 2)).result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).work.closeFinished).toBe(true);
+
+    client.send({ id: 3, method: 'works.setCloseFinished', params: { projectPath: dir, workId, closeFinished: false } });
+    expect((await reply(client, 3)).result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).work.closeFinished).toBeUndefined();
+
+    client.send({ id: 4, method: 'works.setCloseFinished', params: { projectPath: dir, workId: 'w-9999', closeFinished: true } });
+    expect((await reply(client, 4)).error?.code).toBe('not_found');
+    client.close();
+  });
+
   it('несуществующая работа — not_found, а не internal', async () => {
     const { client, dir } = await withWork();
 

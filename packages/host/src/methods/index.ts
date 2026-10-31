@@ -78,7 +78,7 @@ import { settingsGet, settingsSet } from './settings.js';
 import { createSwarmsCreate, swarmsCancel, swarmsSeen } from './swarms.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, createWorksDelete, worksList, worksRename, worksSetStatus } from './works.js';
+import { worksCreate, createWorksDelete, worksList, worksRename, worksSetCloseFinished, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -255,6 +255,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
+    'works.setCloseFinished': worksSetCloseFinished as AnyHandler,
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,

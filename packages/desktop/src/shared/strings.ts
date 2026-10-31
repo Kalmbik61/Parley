@@ -653,6 +653,10 @@ export const S = {
     markDone: 'Mark as done',
     reopen: 'Reopen',
     archive: 'Archive',
+    /** Флажок: `works.setCloseFinished`, план 4. */
+    closeFinished: 'Agents close finished sessions',
+    closeFinishedHint:
+      "Agents in this workspace close their own sessions once their part is accepted, and a room lead closes the room's finished members. Sessions you start yourself still wait for you.",
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
     archiveConfirmDescription: 'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
@@ -2458,6 +2462,7 @@ export const S = {
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',
       archiveWorkspace: 'archive workspace',
+      setCloseFinished: 'change whether agents close finished sessions',
       deleteWorkspace: 'delete workspace',
       renameRoom: 'rename room',
       renameSession: 'rename session',
