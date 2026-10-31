@@ -936,7 +936,7 @@ describe('HostConnection: ограниченный Restart Host', () => {
       foreign() { isHost = false; },
       hooks: {
         isAlive: vi.fn(() => alive),
-        isHost: vi.fn((_pid: number) => isHost),
+        isHost: vi.fn(() => isHost),
         kill: vi.fn((_pid: number, signal: NodeJS.Signals) => { signals.push(signal); }),
       },
     };
