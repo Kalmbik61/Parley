@@ -21,6 +21,12 @@
  * словом итога, а объяснение в тултипе есть у любой усыплённой хостом. Остановленная человеком (`autoSleep` нет) осталась
  * как была. Нужен человек (`need`) — он важнее причины сна.
  *
+ * Сессии, чей запуск ждёт слота машины (`queued`, спека ёмкости 4.2 и 4.5), слово очереди с причиной и числами
+ * (`queued · machine limit 18/18`, `queued · memory critical`; `queuedWord` из core) заменяет слово состояния, а тултип
+ * строки говорит, чего она ждёт. Итог важнее очереди, как в `agentStatus`: сессия с итогом остаётся со словом итога, но
+ * тултип очереди есть у любой, чей запуск ждёт. Очередь важнее причины сна: письмо, поднявшее усыплённую в очередь,
+ * уже разбудило её, и «Resume wakes it» её не касается.
+ *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
  * остальных активатор выключен и курсор `not-allowed`. Атрибуты @dnd-kit (`role`,
@@ -54,7 +60,7 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { agentStatus, autoSleepWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { agentStatus, autoSleepWord, queuedWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
@@ -224,12 +230,18 @@ export const SessionRow = memo(function SessionRow({
   // там, где им статус `asleep` (`agentStatus`, единый источник), а сессия с итогом остаётся со словом итога. Нет
   // `autoSleep` (или `null`) — сессию остановил человек: слово состояния, как раньше.
   const hostSleep = need === null && session.lifecycle === 'sleeping' ? (session.autoSleep ?? null) : null;
+  // Запуск ждёт слота машины (`queued`): запись очереди решает только у `pending` и `sleeping`, как в `agentStatus` — у
+  // живой и закрытой её снимает `transitionSession`, а если она осталась, жизненный цикл главнее. Слово очереди — там,
+  // где `agentStatus` называет сессию `queued` (с итогом остаётся слово итога); тултип очереди — при любом итоге, как у сна.
+  const queued = session.lifecycle === 'pending' || session.lifecycle === 'sleeping' ? (session.queued ?? null) : null;
   const word =
     need !== null
       ? needLabel(need, now.getTime())
-      : hostSleep !== null && agentStatus(session) === 'asleep'
-        ? autoSleepWord(hostSleep.reason)
-        : stateWord(state, session.lifecycle);
+      : queued !== null && agentStatus(session) === 'queued'
+        ? queuedWord(queued)
+        : hostSleep !== null && agentStatus(session) === 'asleep'
+          ? autoSleepWord(hostSleep.reason)
+          : stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
@@ -406,7 +418,7 @@ export const SessionRow = memo(function SessionRow({
           activity={activity}
           word={word}
           needTip={need === null ? null : needTooltip(need)}
-          sleepTip={hostSleep === null ? null : S.sidebar.autoSleepTooltip}
+          sleepTip={queued !== null ? S.sidebar.queuedTooltip : hostSleep === null ? null : S.sidebar.autoSleepTooltip}
         />
       </HoverCardContent>
     </HoverCard>
@@ -425,7 +437,7 @@ function SessionTooltip({
   word: string;
   /** Чего ждёт сессия от человека (`needTooltip`); `null` — ничего. */
   needTip: string | null;
-  /** Почему спит сессия, которую усыпил хост, и чем её поднять; `null` — сессию усыпил не хост. */
+  /** Почему у сессии нет процесса и чем её поднять: её усыпил хост или её запуск ждёт слота машины; `null` — объяснять нечего. */
   sleepTip: string | null;
 }): JSX.Element {
   const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;
