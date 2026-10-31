@@ -3,6 +3,7 @@
 export type LogEvent =
   | 'listening'
   | 'route_created'
+  | 'routes_gc'
   | 'host_online'
   | 'host_offline'
   | 'pipe_open'
@@ -11,7 +12,7 @@ export type LogEvent =
   | 'store_error'
   | 'stopped';
 
-export type LogFields = Partial<Record<'code' | 'reason' | 'mode' | 'bytes', string | number>>;
+export type LogFields = Partial<Record<'code' | 'reason' | 'mode' | 'bytes' | 'removed', string | number>>;
 export type Logger = (event: LogEvent, fields?: LogFields) => void;
 
 export function createLogger(sink: (line: string) => void = (l) => console.log(l)): Logger {

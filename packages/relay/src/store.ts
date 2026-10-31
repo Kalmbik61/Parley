@@ -21,17 +21,26 @@ interface Snapshot {
 
 export const MAX_ROUTES = 10_000;
 export const MAX_DEVICES_PER_ROUTE = 64;
+/** Маршрут без устройств, к которому не было моста сутки, — мусор (ревью A4, M2). */
+export const EMPTY_ROUTE_TTL_MS = 24 * 3_600_000;
+/** Маршрут, мост которого не появлялся 30 дней, удаляется; вернувшийся мост создаст его заново тем же `hello`. */
+export const ROUTE_TTL_MS = 30 * 24 * 3_600_000;
+/** Запись на диск отложена: всплеск `hello` и `devices` даёт одну запись (ревью A4, M2, m8). */
+export const WRITE_DELAY_MS = 1_000;
 
 /** `path = null` — только память (dev-relay: мост сам шлёт `hello` и `devices` после перезапуска). */
 export class Store {
   private routes = new Map<string, RouteRecord>();
   private devices = new Map<string, DeviceRecord[]>();
+  private dirty = false;
+  private timer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly path: string | null,
     private readonly now: () => number = Date.now,
     /** Ошибка записи не роняет relay: состояние остаётся в памяти, код ошибки уходит в журнал. */
     private readonly onError: (code: string) => void = () => {},
+    private readonly writeDelayMs: number = WRITE_DELAY_MS,
   ) {
     if (path === null) return;
     let text: string;
@@ -93,8 +102,33 @@ export class Store {
     this.persist();
   }
 
-  private persist(): void {
-    if (this.path === null) return;
+  /**
+   * Сборка мусора: маршруты без устройств, не видевшие моста `EMPTY_ROUTE_TTL_MS`, и любые маршруты, не видевшие
+   * его `ROUTE_TTL_MS`. Маршрут с подключённым мостом не трогается. Возвращает число удалённых.
+   */
+  gc(attached: (routeId: string) => boolean): number {
+    const t = this.now();
+    let removed = 0;
+    for (const [id, r] of this.routes) {
+      if (attached(id)) continue;
+      const idle = t - r.lastSeen;
+      const empty = (this.devices.get(id)?.length ?? 0) === 0;
+      if (idle >= ROUTE_TTL_MS || (empty && idle >= EMPTY_ROUTE_TTL_MS)) {
+        this.routes.delete(id);
+        this.devices.delete(id);
+        removed++;
+      }
+    }
+    if (removed > 0) this.persist();
+    return removed;
+  }
+
+  /** Немедленная запись отложенных изменений (остановка relay). */
+  flush(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    if (!this.dirty || this.path === null) return;
+    this.dirty = false;
     const snap: Snapshot = {
       v: 1,
       routes: Object.fromEntries(this.routes),
@@ -103,8 +137,18 @@ export class Store {
     try {
       this.write(snap, this.path);
     } catch (e) {
+      // Следующее изменение или остановка повторят запись.
+      this.dirty = true;
       this.onError((e as NodeJS.ErrnoException).code ?? 'EIO');
     }
+  }
+
+  private persist(): void {
+    if (this.path === null) return;
+    this.dirty = true;
+    if (this.timer !== null) return;
+    this.timer = setTimeout(() => this.flush(), this.writeDelayMs);
+    this.timer.unref();
   }
 
   private write(snap: Snapshot, path: string): void {

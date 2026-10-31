@@ -2,6 +2,10 @@
 import { WebSocket } from 'ws';
 
 export const MAX_BUFFERED = 4 * 1024 * 1024;
+/** Получатель не успевает: чтение у отправителя ставится на паузу (ревью A4, m7)… */
+export const PAUSE_BUFFERED = 256 * 1024;
+/** …и снимается, когда очередь получателя опустилась ниже. */
+export const RESUME_BUFFERED = 64 * 1024;
 
 export interface Timing {
   /** Ожидание `accept` от моста после `incoming`. */
@@ -18,7 +22,7 @@ export interface Timing {
 
 export const DEFAULT_TIMING: Timing = {
   acceptWaitMs: 10_000,
-  firstFrameMs: 10_000,
+  firstFrameMs: 5_000,
   pingMs: 25_000,
   idleMs: 60_000,
   pipeMaxMs: 2 * 3_600_000,
@@ -96,11 +100,22 @@ export function splice(a: WebSocket, b: WebSocket, opts: { maxLifeMs: number; on
   const life = setTimeout(() => shutdown(1000), opts.maxLifeMs);
   life.unref();
   const forward = (from: WebSocket, to: WebSocket): void => {
+    let paused = false;
     from.on('message', (data, isBinary) => {
       if (!isBinary) return shutdown(1003);
       if (to.readyState !== WebSocket.OPEN) return;
+      // Жёсткий потолок остаётся на случай кадров, пришедших уже после паузы.
       if (to.bufferedAmount > MAX_BUFFERED) return shutdown(1013);
-      to.send(data, { binary: true });
+      to.send(data, { binary: true }, () => {
+        if (paused && !closed && to.bufferedAmount < RESUME_BUFFERED) {
+          paused = false;
+          from.resume();
+        }
+      });
+      if (!paused && to.bufferedAmount > PAUSE_BUFFERED) {
+        paused = true;
+        from.pause();
+      }
     });
     from.on('close', () => shutdown());
     from.on('error', () => shutdown());
