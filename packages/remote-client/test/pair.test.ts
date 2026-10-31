@@ -179,6 +179,41 @@ describe('pair', () => {
     expect(opts.onSas).not.toHaveBeenCalled();
   });
 
+  it('m10: re-pairing that fails before `paired` restores the previous record of that Mac', async () => {
+    const old = { ...bridge.enroll(), lastTs: 5 };
+    await platform.keyStore.put(old);
+    const put = platform.keys.put.bind(platform.keys);
+    platform.keys.put = async (record) => {
+      await put(record);
+      // Relay закрывает сокет между записью и `paired`.
+      if (record.deviceId !== old.deviceId) bridge.last.drop();
+    };
+    const p = failure(pair(platform, store, qrFor(bridge), options()));
+    await flush();
+    bridge.last.allow();
+    expect((await p).code).toBe('connection');
+    expect(await store.get(bridge.hostId)).toEqual(old);
+  });
+
+  it('m10: a first pairing that fails before `paired` leaves no record', async () => {
+    const put = platform.keys.put.bind(platform.keys);
+    platform.keys.put = async (record) => {
+      await put(record);
+      bridge.last.drop();
+    };
+    const p = failure(pair(platform, store, qrFor(bridge), options()));
+    await flush();
+    bridge.last.allow();
+    expect((await p).code).toBe('connection');
+    expect(platform.keys.records.size).toBe(0);
+  });
+
+  it('m13: an invalid platform or app name → protocol error, no socket', async () => {
+    const bad = { ...options(), platformName: 'x'.repeat(33) };
+    expect((await failure(pair(platform, store, qrFor(bridge), bad))).code).toBe('protocol');
+    expect(platform.relay.sockets).toHaveLength(0);
+  });
+
   it('error messages carry no secret from the QR', async () => {
     const qr = qrFor(bridge);
     const s = new URL(qr.replace('parley://', 'https://x/')).searchParams.get('s')!;

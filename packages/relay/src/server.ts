@@ -109,8 +109,9 @@ export function createRelay(opts: RelayOptions): Relay {
   };
   let open = 0;
   const openPerIp = new Map<string, number>();
+  const attached = (route: string): boolean => registry.host(route) !== undefined;
   const gc = (): void => {
-    const removed = store.gc((route) => registry.host(route) !== undefined);
+    const removed = store.gc(attached);
     if (removed > 0) log('routes_gc', { removed });
   };
   const gcTimer = setInterval(gc, GC_INTERVAL_MS);
@@ -174,8 +175,16 @@ export function createRelay(opts: RelayOptions): Relay {
         store.touch(route);
       } else {
         if (presented === null) return fail(ws, 'bad_request');
+        // Маршрут, удалённый сборкой мусора с устройствами, пересоздаёт только прежний секрет (m14).
+        const grave = store.tombstone(route);
+        if (grave !== undefined && !hashMatches(grave, presented)) return fail(ws, 'unknown_route');
+        if (!limiter.hit('newRoute', ip)) return fail(ws, 'rate_limited');
         if (store.routeCount() >= MAX_ROUTES) gc();
-        if (store.routeCount() >= MAX_ROUTES || !limiter.hit('newRoute', ip)) return fail(ws, 'rate_limited');
+        if (store.routeCount() >= MAX_ROUTES) {
+          // Полная таблица не отказывает владельцу: уходит самый старый пустой маршрут без моста (M2).
+          if (!store.evictEmpty(attached)) return fail(ws, 'rate_limited');
+          log('routes_gc', { removed: 1, reason: 'full' });
+        }
         store.createRoute(route, b64urlEncode(presented));
         log('route_created');
       }
