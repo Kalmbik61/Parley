@@ -229,7 +229,8 @@ export class SessionManager implements PhoneSessions {
   /** `incoming {kind: 'connect'}` from the relay. */
   async handleIncoming(incoming: RelayIncoming): Promise<void> {
     const claimed = incoming.device;
-    if (!this.#accepting || claimed === undefined) return;
+    // The relay must name the device (critic m5): without it the DS_pub ↔ deviceId check (§7.5) has nothing to bind.
+    if (!this.#accepting || incoming.kind !== 'connect' || claimed === undefined) return;
     if (this.#limiter.blocked(claimed)) {
       // Not accepted: the relay answers the phone itself after its wait.
       this.#o.audit.append({

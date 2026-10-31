@@ -159,7 +159,11 @@ export class DeviceStore {
     return true;
   }
 
-  /** Writes the current memory state; writes are serialized and each one carries the latest state. */
+  /**
+   * Writes the current memory state. Writes go through one queue and each one serializes memory when it runs, so
+   * the last write always matches memory: a deferred `lastTs` write cannot bring back a device revoked meanwhile
+   * (critic m13). There is no read-modify-write of the file: memory is the only source.
+   */
   persist(): Promise<void> {
     const run = this.#chain.then(() => this.#write());
     this.#chain = run.catch(() => {});
