@@ -51,7 +51,9 @@ const { send, receive } = phone.split(); // CipherState pair for this side
   (`'nonce'`).
 - `FrameCodec({ maxFrame, compressMin?, chunkSize? })` — application frames ⇄ transport plaintexts (§7.7):
   `[flags][chunk]`, flag bit 0 = last chunk, bit 1 = `deflate-raw` (via `fflate`) on every chunk of the frame.
-  Every encrypted message is ≤ 65 535 bytes. `encode(frame)` returns the plaintexts to encrypt;
+  Every encrypted message is ≤ 65 535 bytes. `encode(frame, { compress? })` returns the plaintexts to encrypt;
+  pass `compress: false` for frames carrying secrets (credentials, tokens) — compression next to
+  attacker-influenced text leaks length (CRIME);
   `decode(plaintext)` returns the frame on its last chunk, otherwise `null`. `maxFrame` is the ceiling of a
   received frame after decompression (spec §5.7: 64 KiB on the bridge, 8 MiB on the phone); it is enforced
   while inflating, so a deflate bomb fails after about `maxFrame` bytes, not after inflating it all.

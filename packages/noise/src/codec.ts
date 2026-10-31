@@ -50,16 +50,23 @@ export class FrameCodec {
     if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK) {
       throw new NoiseError('size', 'chunkSize out of range');
     }
+    // Infinity is allowed (never compress); NaN or a negative value would silently change behaviour.
+    if (!(compressMin >= 0))
+      throw new NoiseError('size', 'compressMin must be a non-negative number');
     this.#maxFrame = maxFrame;
     this.#compressMin = compressMin;
     this.#chunkSize = chunkSize;
   }
 
-  /** Transport plaintexts for one application frame; the frame itself is not modified. */
-  encode(frame: Uint8Array): Uint8Array[] {
+  /**
+   * Transport plaintexts for one application frame; the frame itself is not modified. Pass `{compress: false}`
+   * for frames that carry secrets (tokens, credentials): compressing a secret next to attacker-influenced text
+   * leaks it through the length (CRIME-style).
+   */
+  encode(frame: Uint8Array, options: { compress?: boolean } = {}): Uint8Array[] {
     let body = frame;
     let flags = 0;
-    if (frame.length >= this.#compressMin) {
+    if (options.compress !== false && frame.length >= this.#compressMin) {
       const packed = deflateSync(frame);
       if (packed.length < frame.length) {
         body = packed;

@@ -292,7 +292,8 @@ export class Pairing {
       relayToken,
       relays: relay ? [relay] : [],
     };
-    if (!r.channel.send(encoder.encode(JSON.stringify(credentials)))) {
+    // Never compressed: the frame carries the relay token (critic m5 on A3).
+    if (!r.channel.send(encoder.encode(JSON.stringify(credentials)), { compress: false })) {
       return this.#failAfterAllow(r, 'no-ack');
     }
     const ack = setTimeout(() => this.#failAfterAllow(r, 'no-ack'), this.#t.ackMs);

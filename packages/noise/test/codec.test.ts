@@ -159,7 +159,20 @@ describe('FrameCodec', () => {
     ).toBe('frame');
   });
 
+  it('compress: false sends a compressible frame as is', () => {
+    const frame = jsonLike(10_000);
+    const plain = new FrameCodec({ maxFrame: MiB }).encode(frame, { compress: false });
+    for (const m of plain) expect(m[0]! & FLAG_DEFLATE).toBe(0);
+    const receiver = new FrameCodec({ maxFrame: MiB });
+    expect(receiver.decode(plain[0]!)).toEqual(frame);
+  });
+
   it('options are validated', () => {
+    expect(code(() => new FrameCodec({ maxFrame: 1, compressMin: Number.NaN }))).toBe('size');
+    expect(code(() => new FrameCodec({ maxFrame: 1, compressMin: -1 }))).toBe('size');
+    expect(
+      () => new FrameCodec({ maxFrame: 1, compressMin: Number.POSITIVE_INFINITY }),
+    ).not.toThrow();
     expect(code(() => new FrameCodec({ maxFrame: -1 }))).toBe('size');
     expect(code(() => new FrameCodec({ maxFrame: 1, chunkSize: 0 }))).toBe('size');
     expect(code(() => new FrameCodec({ maxFrame: 1, chunkSize: MAX_CHUNK + 1 }))).toBe('size');

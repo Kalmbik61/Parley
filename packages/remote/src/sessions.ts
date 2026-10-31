@@ -56,10 +56,12 @@ export function firstMessage(ws: WebSocket, timeoutMs: number): Promise<Uint8Arr
 
 /**
  * One Noise transport over one relay stream: FrameCodec plaintexts, encrypted one per WebSocket binary message
- * (spec §7.7). Any decryption, order or ceiling error is fatal; the caller closes the stream.
+ * (spec §7.7). Fail closed (critic m4 on A3): the first decryption, order, ceiling or framing error marks the
+ * channel failed, destroys its keys and closes the socket; every later `receive` throws and `send` refuses.
  */
 export class NoiseChannel {
   readonly #codec: FrameCodec;
+  #failed = false;
   constructor(
     readonly ws: WebSocket,
     readonly ciphers: TransportCiphers,
@@ -68,25 +70,51 @@ export class NoiseChannel {
     this.#codec = new FrameCodec({ maxFrame });
   }
 
-  /** Encrypts and queues one frame; false when the socket is not open. */
-  send(frame: Uint8Array, onSent?: () => void): boolean {
-    if (this.ws.readyState !== WebSocket.OPEN) return false;
-    const parts = this.#codec.encode(frame);
-    parts.forEach((plain, n) => {
-      const sealed = this.ciphers.send.encryptWithAd(EMPTY, plain);
+  get failed(): boolean {
+    return this.#failed;
+  }
+
+  /**
+   * Encrypts and queues one frame; false when the channel failed or the socket is not open. `compress: false`
+   * for frames that carry secrets (critic m5 on A3: no length oracle next to attacker-influenced text).
+   */
+  send(frame: Uint8Array, options: { compress?: boolean; onSent?: () => void } = {}): boolean {
+    if (this.#failed || this.ws.readyState !== WebSocket.OPEN) return false;
+    const { onSent } = options;
+    let sealed: Uint8Array[];
+    try {
+      sealed = this.#codec
+        .encode(frame, options.compress === false ? { compress: false } : {})
+        .map((plain) => this.ciphers.send.encryptWithAd(EMPTY, plain));
+    } catch {
+      this.#fail();
+      return false;
+    }
+    sealed.forEach((message, n) => {
       this.ws.send(
-        sealed,
+        message,
         { binary: true },
-        n === parts.length - 1 && onSent ? () => onSent() : undefined,
+        n === sealed.length - 1 && onSent ? () => onSent() : undefined,
       );
     });
     return true;
   }
 
-  /** One received WebSocket message → the completed frame or null. Throws on any error. */
+  /** One received WebSocket message → the completed frame or null. Any error is final (see the class note). */
   receive(data: RawData, isBinary: boolean): Uint8Array | null {
-    if (!isBinary) throw new Error('text message on a Noise stream');
-    return this.#codec.decode(this.ciphers.receive.decryptWithAd(EMPTY, toBytes(data)));
+    if (this.#failed) throw new Error('channel failed');
+    try {
+      if (!isBinary) throw new Error('text message on a Noise stream');
+      return this.#codec.decode(this.ciphers.receive.decryptWithAd(EMPTY, toBytes(data)));
+    } catch (error) {
+      this.#fail();
+      throw error;
+    }
+  }
+
+  #fail(): void {
+    this.#failed = true;
+    this.end(1002);
   }
 
   get shouldRekey(): boolean {
@@ -95,6 +123,7 @@ export class NoiseChannel {
 
   /** Closes the socket (queued frames go out first) and destroys the transport keys. */
   end(code = 1000): void {
+    this.#failed = true;
     if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
       this.ws.close(code);
     this.ciphers.send.destroy();
@@ -357,7 +386,7 @@ export class SessionManager implements PhoneSessions {
     if (s.closed) return;
     if (!s.confirmed) return this.#drop(s);
     const closing = encoder.encode(JSON.stringify({ event: 'session.closing', data: { reason } }));
-    const sent = s.channel.send(closing, () => this.#drop(s));
+    const sent = s.channel.send(closing, { onSent: () => this.#drop(s) });
     if (!sent) this.#drop(s);
     else {
       this.#detach(s);
