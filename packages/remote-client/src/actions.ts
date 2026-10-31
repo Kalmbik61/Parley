@@ -1,9 +1,9 @@
 // Действия человека (спека §10.1, §11.4): итог — `applied | conflict | stale | lost`. Изменяющий вызов после потери
 // соединения не повторяется: клиент перечитывает состояние и называет итог по его данным.
-import type { FeedDecision } from '@parley/core';
+import type { FeedDecision, RoleList } from '@parley/core';
 import { remoteWorksSnapshotSchema, type RemoteRoom } from '@parley/protocol/remote';
 import type { RemoteStore } from './store.js';
-import { sessionKey, type SessionRef } from './state.js';
+import { roomKey, sessionKey, type ProviderCatalog, type RoomRef, type SessionRef } from './state.js';
 
 /** RPC A11 (`call` отклоняется ошибкой с `code`: `connection_lost`, `conflict`, ...). Здесь — интерфейс, в тестах мок. */
 export interface Rpc {
@@ -135,4 +135,176 @@ export async function resolveProposal(store: RemoteStore, rpc: Rpc, p: ResolvePr
 async function lostResolve(store: RemoteStore, rpc: Rpc, stillPending: () => boolean | null): Promise<ResolveOutcome> {
   if (!(await rereadWorks(store, rpc))) return { outcome: 'lost', stillPending: null };
   return { outcome: 'lost', stillPending: stillPending() };
+}
+
+// ---- Запуск с телефона и письмо в комнату (решение 5, A12b) ----
+// Изменяющие вызовы не повторяются. Итог после обрыва узнаётся перечитыванием снимка работ.
+
+/** Отказ хоста или моста: `unknown_method` (переключатель выключен), `bad_request`, `rate_limited`, ошибки лимитов хоста... */
+export interface Rejected {
+  outcome: 'rejected';
+  code: string;
+  message: string;
+}
+
+const LOST_CODES = new Set(['connection_lost', 'timeout']);
+
+const messageOf = (error: unknown): string =>
+  typeof error === 'object' && error !== null && typeof (error as { message?: unknown }).message === 'string'
+    ? (error as { message: string }).message
+    : 'request failed';
+
+/** Ошибка вызова → итог: `null` для потери ответа (итог неизвестен), иначе отказ; не-ошибки RPC пробрасываются. */
+function rejection(error: unknown): Rejected | null {
+  const code = codeOf(error);
+  if (code === null) throw error;
+  return LOST_CODES.has(code) ? null : { outcome: 'rejected', code, message: messageOf(error) };
+}
+
+export interface CreateSessionParams {
+  projectPath: string;
+  workId: string;
+  provider: string;
+  label: string;
+  task: string;
+  model?: string | null;
+  role?: { source: 'builtin' | 'claude' | 'codex'; name: string } | null;
+  worktree?: boolean;
+}
+
+export type CreateSessionOutcome =
+  | { outcome: 'created'; ref: SessionRef }
+  | Rejected
+  /** Ответа нет, и снимок перечитать не удалось. */
+  | { outcome: 'lost' }
+  /** Снимок перечитан, новой сессии с этим именем в нём нет. */
+  | { outcome: 'unknown' };
+
+const sessionIds = (store: RemoteStore, projectPath: string, workId: string): Set<string> => {
+  const work = store.getState().snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
+  return new Set(work?.sessions.map((x) => x.id));
+};
+
+const roomIds = (store: RemoteStore, projectPath: string, workId: string): Set<string> => {
+  const work = store.getState().snapshot?.works.find((w) => w.projectPath === projectPath && w.id === workId);
+  return new Set(work?.rooms.map((x) => x.id));
+};
+
+/** Запустить сессию. `projectPath` и `workId` — из проекции: новую работу с телефона не создать. */
+export async function createSession(store: RemoteStore, rpc: Rpc, params: CreateSessionParams): Promise<CreateSessionOutcome> {
+  const epoch = store.getState().epoch;
+  const before = sessionIds(store, params.projectPath, params.workId);
+  try {
+    const res = (await rpc.call('sessions.create', { ...params, parent: null })) as { ref?: SessionRef } | null;
+    if (store.getState().epoch === epoch && res?.ref !== undefined) return { outcome: 'created', ref: res.ref };
+  } catch (error) {
+    const rejected = rejection(error);
+    if (rejected !== null) return rejected;
+  }
+  // Итог неизвестен: ищем новую сессию с этим именем в свежем снимке.
+  if (!(await rereadWorks(store, rpc))) return { outcome: 'lost' };
+  const work = store.getState().snapshot?.works.find((w) => w.projectPath === params.projectPath && w.id === params.workId);
+  const found = work?.sessions.filter((x) => !before.has(x.id) && x.label === params.label).at(-1);
+  return found === undefined
+    ? { outcome: 'unknown' }
+    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, sessionId: found.id } };
+}
+
+export interface CreateRoomParams {
+  projectPath: string;
+  workId: string;
+  title: string;
+  members: string[];
+  lead?: string;
+  quiet?: boolean;
+  /** Без `autonomous`: он с телефона закрыт. */
+  mode?: 'free' | 'checklist' | 'verified';
+}
+
+export type CreateRoomOutcome =
+  | { outcome: 'created'; ref: RoomRef }
+  | Rejected
+  | { outcome: 'lost' }
+  | { outcome: 'unknown' };
+
+export async function createRoom(store: RemoteStore, rpc: Rpc, params: CreateRoomParams): Promise<CreateRoomOutcome> {
+  const epoch = store.getState().epoch;
+  const before = roomIds(store, params.projectPath, params.workId);
+  try {
+    const res = (await rpc.call('rooms.create', params)) as { roomId?: string } | null;
+    if (store.getState().epoch === epoch && typeof res?.roomId === 'string') {
+      return { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, roomId: res.roomId } };
+    }
+  } catch (error) {
+    const rejected = rejection(error);
+    if (rejected !== null) return rejected;
+  }
+  if (!(await rereadWorks(store, rpc))) return { outcome: 'lost' };
+  const work = store.getState().snapshot?.works.find((w) => w.projectPath === params.projectPath && w.id === params.workId);
+  const found = work?.rooms.filter((r) => !before.has(r.id) && r.title === params.title).at(-1);
+  return found === undefined
+    ? { outcome: 'unknown' }
+    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, roomId: found.id } };
+}
+
+export interface SendRoomMessageParams extends RoomRef {
+  text: string;
+  kind: 'note' | 'question';
+  /** Адресаты; без поля — всем участникам комнаты. */
+  to?: string[];
+  replyTo?: string;
+}
+
+export type SendRoomMessageOutcome = { outcome: 'sent'; messageId: string } | Rejected | { outcome: 'lost' };
+
+/**
+ * Письмо в комнату. Текст лежит в черновике (`state.drafts`) с начала отправки и уходит из него только после `sent`:
+ * отказ и потеря ответа оставляют письмо человеку. Письмо после `lost` само не повторяется — человек решает.
+ */
+export async function sendRoomMessage(store: RemoteStore, rpc: Rpc, params: SendRoomMessageParams): Promise<SendRoomMessageOutcome> {
+  const epoch = store.getState().epoch;
+  const key = roomKey(params);
+  store.dispatch({ t: 'draft', key, text: params.text });
+  try {
+    const res = (await rpc.call('rooms.send', {
+      projectPath: params.projectPath,
+      workId: params.workId,
+      roomId: params.roomId,
+      to: params.to ?? [],
+      text: params.text,
+      kind: params.kind,
+      ...(params.replyTo !== undefined ? { replyTo: params.replyTo } : {}),
+    })) as { messageId?: string } | null;
+    if (store.getState().epoch === epoch && typeof res?.messageId === 'string') {
+      store.dispatch({ t: 'draft', key, text: '' });
+      return { outcome: 'sent', messageId: res.messageId };
+    }
+    return { outcome: 'lost' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+/** Каталог провайдеров для диалога запуска; `false` — не загрузился (метода нет, обрыв). */
+export async function loadProviders(store: RemoteStore, rpc: Rpc): Promise<boolean> {
+  const epoch = store.getState().epoch;
+  try {
+    const providers = (await rpc.call('providers.list', {})) as ProviderCatalog;
+    store.dispatch({ t: 'catalog.providers', epoch, providers });
+    return store.getState().epoch === epoch;
+  } catch {
+    return false;
+  }
+}
+
+/** Роли проекта для диалога запуска. */
+export async function loadRoles(store: RemoteStore, rpc: Rpc, projectPath: string): Promise<boolean> {
+  const epoch = store.getState().epoch;
+  try {
+    const roles = (await rpc.call('roles.list', { projectPath })) as RoleList;
+    store.dispatch({ t: 'catalog.roles', epoch, projectPath, roles });
+    return store.getState().epoch === epoch;
+  } catch {
+    return false;
+  }
 }

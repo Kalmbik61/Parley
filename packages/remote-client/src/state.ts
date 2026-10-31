@@ -1,7 +1,7 @@
 // Состояние телефона на одном хосте (спека §10.1): снимок-проекция, активность, ждущие карточки, письма.
 // Только типы и пустое состояние; переходы — `reducer.ts`, производные — `inbox.ts` и `works-view.ts`.
-import type { FeedCard, Message, SessionActivity } from '@parley/core';
-import type { SessionRef } from '@parley/protocol';
+import type { FeedCard, Message, RoleList, SessionActivity } from '@parley/core';
+import type { Result, SessionRef } from '@parley/protocol';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 
 export type { SessionRef };
@@ -40,6 +40,19 @@ export interface GoneCard {
   at: number;
 }
 
+/** Каталог провайдеров запуска (`providers.list`). */
+export type ProviderCatalog = Result<'providers.list'>;
+
+/** Ссылка на комнату. */
+export interface RoomRef {
+  projectPath: string;
+  workId: string;
+  roomId: string;
+}
+
+/** Ключ комнаты для черновиков. */
+export const roomKey = (r: RoomRef): string => `${r.projectPath}\u0000${r.workId}\u0000${r.roomId}`;
+
 export interface RemoteState {
   /** Текущая эпоха моста; `null` — ещё не пришла или хост без эпохи. */
   epoch: string | null;
@@ -54,6 +67,14 @@ export interface RemoteState {
   letterUnread: Record<string, number>;
   /** Ключ — `sessionKey` + `\u0000` + `cardId`. */
   gone: Record<string, GoneCard>;
+  /** Методы из hello моста (пересечение с хостом эпохи): по ним UI решает, показывать ли запуск и письмо. `null` — hello нет. */
+  methods: string[] | null;
+  /** `providers.list`; `null` — не загружен. Сбрасывается с эпохой. */
+  providers: ProviderCatalog | null;
+  /** `roles.list` по проектам. Сбрасывается с эпохой. */
+  roles: Record<string, RoleList>;
+  /** Черновики писем в комнату по `roomKey`: живут, пока письмо не принято хостом (и переживают эпоху). */
+  drafts: Record<string, string>;
 }
 
 export const initialRemoteState = (): RemoteState => ({
@@ -65,6 +86,10 @@ export const initialRemoteState = (): RemoteState => ({
   letters: {},
   letterUnread: {},
   gone: {},
+  methods: null,
+  providers: null,
+  roles: {},
+  drafts: {},
 });
 
 export const goneKey = (sKey: string, cardId: string): string => `${sKey}\u0000${cardId}`;
