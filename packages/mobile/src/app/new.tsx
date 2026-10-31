@@ -2,26 +2,27 @@
 // send; the Mac decides (rules, known works, limits) and its words come back as they are.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { approve } from '../auth/instance';
-import { Toast, useToast } from '../components/Toast';
+import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { DEMO } from '../dev/flags';
 import { haptic } from '../haptics';
+import { selectLaunchCapabilities } from '@parley/remote-client';
 import { useCanAct, useRemoteState } from '../hooks/use-remote';
 import { Card, Divider, Label, MenuRow, Segmented, choose } from '../launch/form-parts';
 import {
   AUTONOMOUS_NOTE,
   LETTER_PLACEHOLDER,
-  OFF_ON_MAC,
   ROOM_MODES,
-  canShowNew,
+  afterPartial,
   defaultWorkspace,
   hasDraft,
   launchRoom,
   launchSession,
   letterProblem,
+  methodMissing,
   providerChoices,
   roomCandidates,
   roomProblem,
@@ -51,7 +52,8 @@ export default function NewScreen() {
   const toast = useToast();
   const sending = useRef(false);
 
-  const [kind, setKind] = useState<Kind>(str(params.mode) === 'room' ? 'room' : 'session');
+  const caps = selectLaunchCapabilities(state ?? { methods: DEMO ? ['sessions.create', 'rooms.create', 'rooms.send'] : null });
+  const [kind, setKind] = useState<Kind>(str(params.mode) === 'room' || (!caps.canCreateSession && caps.canCreateRoom) ? 'room' : 'session');
   const list = useMemo(() => (state === null ? [] : workspaces(state)), [state]);
   const from = useMemo(() => parseWorkParam(str(params.ref)), [params.ref]);
   const [ws, setWs] = useState<Workspace | null>(null);
@@ -101,8 +103,12 @@ export default function NewScreen() {
 
   const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', provider, model, role, name, task, worktree };
   const roomForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', title, mode, members, agents, lead };
+  // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so and
+  // Face ID is not asked for a call that will not go (D1 §12a).
+  const gone = state === null || DEMO ? null : methodMissing(state, step === 'letter' ? 'letter' : kind, kind === 'room' ? agents.length : 0);
+
   const problem = step === 'letter' ? letterProblem(letter) : kind === 'session' ? sessionProblem(sessionForm, providers) : roomProblem(roomForm, providers);
-  const ready = ws !== null && catalogsReady && problem === null && online && !busy;
+  const ready = ws !== null && catalogsReady && problem === null && online && !busy && gone === null;
   const draft = hasDraft(kind, sessionForm, roomForm, letter);
 
   const fail = useCallback((f: LaunchFailure | { message: string }) => {
@@ -110,21 +116,25 @@ export default function NewScreen() {
     haptic.error();
   }, []);
 
-  // Methods that disappeared while the sheet was open (the Mac switch): no button can work any more.
-  const methodsGone = state !== null && !canShowNew(state) && !DEMO;
+  // Leaving goes through state so the "dirty sheet" guard is already off when the screen is dismissed.
+  const navigation = useNavigation();
+  const [exit, setExit] = useState<{ route: string | null } | null>(null);
+  useEffect(() => {
+    if (exit === null) return;
+    router.dismiss();
+    if (exit.route !== null) router.push(exit.route as never);
+  }, [exit, router]);
+  const askDiscard = (onDiscard: () => void) =>
+    Alert.alert('Discard this draft?', undefined, [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: onDiscard }]);
+  // Swipe-down on a dirty sheet asks instead of being blocked (D1 §8.4).
+  usePreventRemove(draft && exit === null && !busy, ({ data }) => askDiscard(() => navigation.dispatch(data.action)));
 
-  const close = () => {
-    if (!draft || busy) return router.back();
-    Alert.alert('Discard this draft?', undefined, [{ text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => router.back() }]);
-  };
+  const close = () => (draft && !busy ? askDiscard(() => setExit({ route: null })) : setExit({ route: null }));
 
   const finish = (route: string, message: string) => {
     haptic.success();
     toast.show(message);
-    setTimeout(() => {
-      router.dismiss();
-      router.push(route as never);
-    }, 600);
+    setTimeout(() => setExit({ route }), 600);
   };
 
   const submit = async () => {
@@ -135,19 +145,26 @@ export default function NewScreen() {
     try {
       if (step === 'letter' && made !== null) {
         const res = await sendFirstLetter(client, approve, made.ref, letter);
-        if (res.kind === 'cancelled') return toast.show('Face ID cancelled — nothing was sent');
+        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
         if (res.kind !== 'sent') return fail(res);
         return finish(`/work/${workParam({ projectPath: made.ref.projectPath, workId: made.ref.workId })}`, 'Task sent to the room');
       }
       if (kind === 'session') {
         const res = await launchSession(client, approve, sessionForm);
-        if (res.kind === 'cancelled') return toast.show('Face ID cancelled — nothing was started');
+        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
         if (res.kind !== 'created') return fail(res);
         return finish(`/session/${sessionParam(res.ref)}`, 'Session started');
       }
       const res = await launchRoom(client, approve, roomForm);
-      if (res.kind === 'cancelled') return toast.show('Face ID cancelled — nothing was started');
-      if (res.kind === 'partial') return fail(res);
+      if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+      if (res.kind === 'partial') {
+        // Agents that started stay: they become members, so a retry starts only what is missing.
+        const next = afterPartial(roomForm, res.startedAgents);
+        setMembers(next.members);
+        setAgents(next.agents);
+        setLead(next.lead);
+        return fail(res);
+      }
       haptic.success();
       setMade({ ref: res.ref, agents: res.agents });
       setStep('letter');
@@ -160,10 +177,7 @@ export default function NewScreen() {
   const later = () => {
     if (made === null) return;
     toast.show('Write the task in the room on your Mac');
-    setTimeout(() => {
-      router.dismiss();
-      router.push(`/work/${workParam({ projectPath: made.ref.projectPath, workId: made.ref.workId })}` as never);
-    }, 900);
+    setTimeout(() => setExit({ route: `/work/${workParam({ projectPath: made.ref.projectPath, workId: made.ref.workId })}` }), 900);
   };
 
   const pickWorkspace = async () => {
@@ -205,18 +219,21 @@ export default function NewScreen() {
         ? `One session in ${ws?.title ?? '…'}`
         : `Room with ${count} ${count === 1 ? 'agent' : 'agents'} in ${ws?.title ?? '…'}`;
   const actionTitle = step === 'letter' ? 'Send to the room' : kind === 'session' ? 'Start session' : 'Create room';
-  const off = !online ? 'Reconnecting — actions are paused' : methodsGone ? OFF_ON_MAC : null;
+  const off = !online ? 'Reconnecting — actions are paused' : gone;
 
   return (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
-      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', headerBackVisible: false, gestureEnabled: !draft, headerLeft: () => (
+      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', headerBackVisible: false, headerLeft: () => (
         <Pressable accessibilityRole="button" hitSlop={8} onPress={step === 'letter' ? later : close}>
           <Text allowFontScaling style={[typography.body, { color: c.tint }]}>{step === 'letter' ? 'Later' : 'Cancel'}</Text>
         </Pressable>
       ) }} />
-      <ConnectionBanner />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+          {/* First child of the scroll view, so it sits below a translucent sheet header (as on the M1 screens). */}
+          <View style={styles.banner}>
+            <ConnectionBanner />
+          </View>
           {step === 'letter' && made !== null ? (
             <>
               <View style={styles.created}>
@@ -243,7 +260,9 @@ export default function NewScreen() {
             </>
           ) : (
             <>
-              <Segmented<Kind> label="What to create" value={kind} onChange={(k) => { setKind(k); setError(null); }} options={[{ value: 'session', label: 'Session' }, { value: 'room', label: 'Room' }]} />
+              {caps.canCreateSession && caps.canCreateRoom ? (
+                <Segmented<Kind> label="What to create" value={kind} onChange={(k) => { setKind(k); setError(null); }} options={[{ value: 'session', label: 'Session' }, { value: 'room', label: 'Room' }]} />
+              ) : null}
               <Label>Workspace</Label>
               <Card>
                 <MenuRow label="Workspace" value={ws === null ? '…' : `${ws.title}`} onPress={() => void pickWorkspace()} disabled={list.length < 2} />
@@ -397,6 +416,7 @@ const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
   body: { padding: spacing.screenMargin, paddingBottom: 32 },
+  banner: { marginHorizontal: -spacing.screenMargin, marginTop: -spacing.screenMargin, marginBottom: 8 },
   pad: { padding: 12 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   memberRow: { paddingHorizontal: 16, minHeight: spacing.minTouchTarget },

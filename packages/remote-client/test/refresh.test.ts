@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRemoteClient, sessionKey, type Clock, type RemoteClient, type Rpc, type SessionRef } from '../src/index.js';
+import { MAX_PARALLEL_READS, createRemoteClient, sessionKey, type Clock, type RemoteClient, type Rpc, type SessionRef } from '../src/index.js';
 import { activityItem, live, permissionCard, ref, session, snap, textItem, work } from './fixtures.js';
 
 const clock: Clock = {
@@ -211,5 +211,31 @@ describe('перечитывание карточек (§10.3)', () => {
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(n).toBe(2);
+  });
+
+  it('никогда не больше MAX_PARALLEL_READS запросов в полёте: Inbox с 30 ждущими не упирается в предел моста (16)', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const rpc: Rpc = {
+      call: async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 50));
+        inFlight--;
+        return { items: [] };
+      },
+    };
+    client = createRemoteClient({ rpc, clock });
+    const ids = Array.from({ length: 30 }, (_, i) => `s-${String(i + 1).padStart(2, '0')}`);
+    client.handleEvent('bridge.status', { host: 'online', epoch: 'e1' });
+    client.handleEvent('works.changed', snap(1, [work('w-1', { sessions: ids.map((id) => session(id)) })]));
+    client.handleEvent('activity.snapshot', { epoch: 'e1', items: ids.map((id) => activityItem(ref(id), 'blocked')) });
+    client.refresher.setConnected(true);
+    client.refresher.setScreen({ kind: 'inbox', visible: ids.slice(0, 9).map((id) => ref(id)) });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(peak).toBeLessThanOrEqual(MAX_PARALLEL_READS);
+    // Очередь не теряет заявки: за тик прочитаны все 19 (9 видимых + круг из 10).
+    const loaded = Object.values(client.store.getState().cards).length;
+    expect(loaded).toBe(19);
   });
 });
