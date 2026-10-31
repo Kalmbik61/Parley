@@ -8,6 +8,8 @@ export interface NodePlatformOptions {
   WebSocket: new (url: string) => WebSocketLike;
   /** Rewrites the URL the client built: a relay on the loopback is `wss://` by the rules, the local test needs `ws://`. */
   rewriteUrl?: (url: string) => string;
+  /** Off by default: a private relay address over `ws://` must not pass silently. Loopback needs no flag (it is `wss://` by the rules and `rewriteUrl` fixes the scheme). */
+  allowLocalRelay?: boolean;
   /** Share one key store between several phones' hosts (second host on the same client). */
   records?: Map<string, HostRecord>;
 }
@@ -41,6 +43,6 @@ export function nodePlatform(options: NodePlatformOptions): NodePlatform {
     now: () => Date.now(),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (h) => clearTimeout(h as never),
-    allowLocalRelay: true,
+    allowLocalRelay: options.allowLocalRelay ?? false,
   };
 }
