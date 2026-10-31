@@ -258,6 +258,18 @@ textarea.field { min-height: 160px; resize: none; }
 .ax .cell { flex-wrap: wrap; }
 .ax .cell .val, .ax .cell .trail { width: 100%; text-align: left; }
 .ic { flex: none; display: inline-block; vertical-align: middle; }
+
+/* works grouped by project, work screen grouped by rooms and the parent tree */
+.projhead { display: flex; align-items: center; gap: 6px; text-transform: none; font-weight: 600; color: var(--label); margin-left: 20px; }
+.projhead .l3 { font-weight: 400; }
+.pdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; margin-right: 4px; vertical-align: middle; }
+.cell.inroom { background: var(--surface2); }
+.dark .cell.inroom { background: #242426; }
+.cell.roomhead.dec, .cell.inroom.dec { background: var(--tintSoft); }
+.mdots { display: flex; gap: 4px; align-items: center; margin-top: 4px; }
+.mdots .dot { width: 8px; height: 8px; }
+.mdots .t-foot { margin-left: 4px; }
+.star { color: var(--tint); font-size: .8em; }
 </style>
 </head>
 <body>
@@ -365,29 +377,38 @@ const LETTERS = [
   { id: 'l2', from: 's-174', work: 'Improvements', age: 'Yesterday', at: 'Yesterday', unread: false,
     text: 'The S7 draft is committed on `feat/mobile-stage-a`. It needs your confirmation of the cipher suite.' },
 ];
-const WORKS = [
-  { id: 'w1', title: 'Improvements', status: 'active', letters: 1, closed: 31, sessions: [
-      { id: 's-176', label: 'Mobile-D1-designer', role: 'designer', model: 'opus', att: 'needs', card: 'c1', since: '42 min' },
-      { id: 's-175', label: 'Mobile-A1-protocol', role: 'executor', model: 'sonnet', att: 'needs', card: 'c2', since: '40 min' },
-      { id: 's-181', label: 'Push-planner', role: 'planner', model: 'opus', att: 'needs', card: 'c3', since: '20 min' },
-      { id: 's-05', label: 'Task1-types', role: 'executor', model: 'sonnet', att: 'needs', card: 'c6', since: '2 h' },
-      { id: 's-174', label: 'Mobile-stage-A-lead', role: 'lead', model: 'opus', att: 'working', line: 'Waiting for s-175', since: '1 h' },
-      { id: 's-177', label: 'Critic-A1', role: 'critic', model: 'opus', att: 'working', line: 'Working · 2 subagents', since: '15 min' },
-      { id: 's-11', label: 'Greta', role: 'feature-lead', model: 'fable', att: 'unseen', line: 'Finished a turn · 3 min ago', since: '3 h' },
-      { id: 's-12', label: 'Astra-browser', role: 'architect', model: 'gpt-6-astra', att: 'idle', line: 'Idle · 20 min ago', since: '5 h' },
-      { id: 's-09', label: 'Task5-check-runner', role: 'executor', model: 'sonnet', att: 'done', line: 'Done · 1 h ago', since: '4 h' },
-      { id: 's-10', label: 'Task6-engine', role: 'executor', model: 'sonnet', att: 'failed', line: 'Failed · 2 h ago', since: '6 h' },
-    ], rooms: [ { id: 'r-18', title: 'iOS app: stage A (no device)', decision: 'd1' }, { id: 'r-12', title: 'Browser', members: 4 } ] },
-  { id: 'w2', title: 'Codex bridge', status: 'active', letters: 0, closed: 2, sessions: [
-      { id: 's-190', label: 'Codex-reviewer', role: 'reviewer', model: 'gpt-6-astra', att: 'needs', card: 'c4', since: '30 min' },
-      { id: 's-191', label: 'Claude-helper', role: null, model: 'sonnet', att: 'needs', card: 'c5', since: '1 h' },
-      { id: 's-192', label: 'Bridge-docs', role: 'writer', model: 'haiku', att: 'sleeping', line: 'Sleeping · last active 1 h ago', since: '1 d' },
-    ], rooms: [] },
-  { id: 'w3', title: 'Rooms organic', status: 'active', letters: 0, closed: 9, sessions: [
-      { id: 's-60', label: 'Organic-lead', role: 'lead', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
-    ], rooms: [ { id: 'r-03', title: 'Design review', members: 3 } ] },
+// Sessions are listed in creation order (as in the projection); `parent` builds the tree, room `members` the groups.
+const PROJECTS = [
+  { id: 'parley', name: 'parley', color: '#C67139', done: 3 },
+  { id: 'codex-bridge', name: 'codex-bridge', color: '#4F8A6B', done: 2 },
 ];
-const DONE_WORKS = 5;
+const WORKS = [
+  { id: 'w1', project: 'parley', title: 'Improvements', status: 'active', letters: 1, closed: 31, sessions: [
+      { id: 's-05', parent: null, label: 'Task1-types', role: 'executor', model: 'sonnet', att: 'needs', card: 'c6', since: '2 h' },
+      { id: 's-09', parent: 's-05', label: 'Task5-check-runner', role: 'executor', model: 'sonnet', att: 'done', line: 'Done · 1 h ago', since: '4 h' },
+      { id: 's-10', parent: 's-05', label: 'Task6-engine', role: 'executor', model: 'sonnet', att: 'failed', line: 'Failed · 2 h ago', since: '6 h' },
+      { id: 's-11', parent: null, label: 'Greta', role: 'feature-lead', model: 'fable', att: 'unseen', line: 'Finished a turn · 3 min ago', since: '3 h' },
+      { id: 's-12', parent: null, label: 'Astra-browser', role: 'architect', model: 'gpt-6-astra', att: 'idle', line: 'Idle · 20 min ago', since: '5 h' },
+      { id: 's-13', parent: null, label: 'Opus-browser', role: 'critic', model: 'opus', att: 'idle', line: 'Idle · 25 min ago', since: '5 h' },
+      { id: 's-174', parent: 's-11', label: 'Mobile-stage-A-lead', role: 'lead', model: 'opus', att: 'working', line: 'Waiting for s-175', since: '1 h' },
+      { id: 's-175', parent: 's-174', label: 'Mobile-A1-protocol', role: 'executor', model: 'sonnet', att: 'needs', card: 'c2', since: '40 min' },
+      { id: 's-176', parent: 's-174', label: 'Mobile-D1-designer', role: 'designer', model: 'opus', att: 'needs', card: 'c1', since: '42 min' },
+      { id: 's-177', parent: 's-174', label: 'Critic-A1', role: 'critic', model: 'opus', att: 'working', line: 'Working · 2 subagents', since: '15 min' },
+      { id: 's-181', parent: 's-11', label: 'Push-planner', role: 'planner', model: 'opus', att: 'needs', card: 'c3', since: '20 min' },
+    ], rooms: [
+      { id: 'r-12', title: 'Browser', members: ['s-12', 's-13'], lead: 's-12', unread: 0 },
+      { id: 'r-18', title: 'iOS app: stage A (no device)', members: ['s-174', 's-175', 's-176', 's-177'], lead: 's-174', decision: 'd1', unread: 3 },
+    ] },
+  { id: 'w2', project: 'codex-bridge', title: 'Codex bridge', status: 'active', letters: 0, closed: 2, sessions: [
+      { id: 's-190', parent: null, label: 'Codex-reviewer', role: 'reviewer', model: 'gpt-6-astra', att: 'needs', card: 'c4', since: '30 min' },
+      { id: 's-191', parent: 's-190', label: 'Claude-helper', role: null, model: 'sonnet', att: 'needs', card: 'c5', since: '1 h' },
+      { id: 's-192', parent: null, label: 'Bridge-docs', role: 'writer', model: 'haiku', att: 'sleeping', line: 'Sleeping · last active 1 h ago', since: '1 d' },
+    ], rooms: [] },
+  { id: 'w3', project: 'parley', title: 'Rooms organic', status: 'active', letters: 0, closed: 9, sessions: [
+      { id: 's-60', parent: null, label: 'Organic-lead', role: 'lead', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
+      { id: 's-61', parent: 's-60', label: 'Organic-designer', role: 'designer', model: 'opus', att: 'idle', line: 'Idle · 2 h ago', since: '2 d' },
+    ], rooms: [ { id: 'r-03', title: 'Design review', members: ['s-60', 's-61'], lead: 's-60', unread: 0 } ] },
+];
 const LAST_REPLY = "I'll run the linter and the full build before committing, so the prototype folder doesn't break the workspace. If `pnpm lint` passes, the next step is the commit.";
 
 function allSessions() { const r = []; WORKS.forEach(function (w) { w.sessions.forEach(function (s) { r.push({ s: s, w: w }); }); }); return r; }
@@ -397,7 +418,7 @@ function findSession(id) { return allSessions().find(function (x) { return x.s.i
 const S = {
   theme: 'light', conn: 'ready', scenario: 'normal', fs: 1, rm: false, hostCount: 2, cur: 0,
   flow: null, tab: 'inbox', stacks: { inbox: [{ s: 'inbox' }], works: [{ s: 'works' }], settings: [{ s: 'settings' }] },
-  gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {},
+  gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, roomOpen: {},
   sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120,
   pairName: 'iPhone 16 Pro', retryIn: 12, scrollTop: 0,
 };
@@ -632,49 +653,120 @@ function sessionLine(s) {
     if (c.kind === 'question') return 'Asked you a question'; if (c.kind === 'plan') return 'Waiting for you to approve a plan'; return c.reason; }
   return s.line;
 }
+/* Attention rank as in the window sidebar (@parley/core/attention): needs-you 4, unseen 3, working 2, idle 1, finished 0. */
+const RANK = { needs: 4, unseen: 3, working: 2, idle: 1, sleeping: 1, done: 0, failed: 0 };
+function sessAtt(s) { const pending = s.card && !S.gone[s.card]; return s.att === 'needs' && !pending ? 'working' : s.att; }
+function roomDecision(room) { return room.decision && !S.gone[room.decision] ? DECISIONS[room.decision] : null; }
+function workRank(w) {
+  let r = 0;
+  w.sessions.forEach(function (s) { r = Math.max(r, RANK[sessAtt(s)]); });
+  w.rooms.forEach(function (room) { if (roomDecision(room)) r = 4; });
+  return r;
+}
+function sortByRank(items, rankOf) {
+  return items.map(function (it, i) { return { it: it, i: i, r: rankOf(it) }; })
+    .sort(function (a, b) { return b.r - a.r || a.i - b.i; }).map(function (x) { return x.it; });
+}
+function workCell(w) {
+  const live = w.sessions.filter(function (s) { return s.att !== 'done' && s.att !== 'failed'; });
+  const needs = w.sessions.filter(function (s) { return sessAtt(s) === 'needs'; }).length + w.rooms.filter(roomDecision).length;
+  const working = w.sessions.filter(function (s) { return sessAtt(s) === 'working'; }).length;
+  return '<div class="cell ind" data-act="openWork" data-id="' + w.id + '" role="button" aria-label="' + h(w.title + (needs ? ', ' + needs + ' need you' : '')) + '">' + attDot(needs ? 'needs' : working ? 'working' : 'idle') +
+    '<div class="grow"><div class="t-head ellips">' + h(w.title) + '</div><div class="t-foot l2">' + live.length + ' sessions · ' + (w.rooms.length ? w.rooms.length + (w.rooms.length === 1 ? ' room · ' : ' rooms · ') : '') + (working ? working + ' working' : 'idle') + '</div></div>' +
+    '<div class="trail" style="display:flex;gap:6px;align-items:center">' + (w.letters ? '<span class="t-foot l2" style="display:flex;gap:2px;align-items:center">' + ic('envelope', 15) + w.letters + '</span>' : '') +
+    (needs ? '<span class="pill count t-cap">' + needs + '</span>' : '') + '</div><span class="chev">' + ic('chevR', 16) + '</span></div>';
+}
 function worksScreen() {
   let body = navbar({ left: hostMenu(), title: 'Works' }) + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(3) };
   if (S.scenario === 'empty') return { body: body + empty('stack', 'No works yet', 'Create a work on your Mac.') };
-  body += '<div class="group" style="margin-top:8px">' + WORKS.map(function (w) {
-    const live = w.sessions.filter(function (s) { return s.att !== 'done' && s.att !== 'failed'; });
-    const needs = w.sessions.filter(function (s) { return s.att === 'needs' && !(s.card && S.gone[s.card]); }).length;
-    const working = w.sessions.filter(function (s) { return s.att === 'working'; }).length;
-    return '<div class="cell ind" data-act="openWork" data-id="' + w.id + '" role="button" aria-label="' + h(w.title + ', ' + (needs ? needs + ' need you' : '')) + '">' + attDot(needs ? 'needs' : working ? 'working' : 'idle') +
-      '<div class="grow"><div class="t-head ellips">' + h(w.title) + '</div><div class="t-foot l2">' + live.length + ' sessions · ' + (working ? working + ' working' : 'idle') + '</div></div>' +
-      '<div class="trail" style="display:flex;gap:6px;align-items:center">' + (w.letters ? '<span class="t-foot l2" style="display:flex;gap:2px;align-items:center">' + ic('envelope', 15) + w.letters + '</span>' : '') +
-      (needs ? '<span class="pill count t-cap">' + needs + '</span>' : '') + '</div><span class="chev">' + ic('chevR', 16) + '</span></div>';
-  }).join('') + '</div>';
-  body += '<div class="group" style="margin-top:16px"><div class="cell"><div class="grow t-body l2">Done (' + DONE_WORKS + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div></div>';
+  // Projects like the sidebar headers: by the most urgent work inside, then by name.
+  const projects = sortByRank(PROJECTS.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }), function (p) {
+    return Math.max.apply(null, WORKS.filter(function (w) { return w.project === p.id; }).map(workRank));
+  });
+  projects.forEach(function (p) {
+    const works = sortByRank(WORKS.filter(function (w) { return w.project === p.id; }), workRank);
+    body += '<div class="sec projhead t-foot" role="heading"><span class="pdot" style="background:' + p.color + '"></span>' + h(p.name) + '<span class="l3">' + works.length + '</span></div>' +
+      '<div class="group">' + works.map(workCell).join('') +
+      '<div class="cell"><div class="grow t-sub l2">Done (' + p.done + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div></div>';
+  });
   return { body: body };
 }
-function sessionCell(s) {
-  const pending = s.card && !S.gone[s.card];
-  const att = s.att === 'needs' && !pending ? 'working' : s.att;
+function sessionCell(s, depth, opts) {
+  const o = opts || {};
+  const att = sessAtt(s);
   let lead = attDot(att);
   if (att === 'needs') lead = '<span style="color:var(--needs);display:flex">' + ic('hand', 18) + '</span>';
   if (att === 'done') lead = '<span style="color:var(--ok);display:flex">' + ic('checkCircle', 18) + '</span>';
   if (att === 'failed') lead = '<span style="color:var(--danger);display:flex">' + ic('xCircle', 18) + '</span>';
   const label = { needs: 'Needs you', working: 'Working', unseen: 'Finished a turn', idle: 'Idle', sleeping: 'Sleeping', done: 'Done', failed: 'Failed' }[att];
-  return '<div class="cell ind" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' + h(s.label + '. ' + label + '. ' + sessionLine(s)) + '">' +
-    '<span style="width:20px;display:flex;justify-content:center">' + lead + '</span><div class="grow"><div class="t-head ellips">' + h(s.label) + '</div>' +
+  const d = Math.min(depth || 0, 2);
+  return '<div class="cell ind' + (o.inRoom ? ' inroom' : '') + '" style="padding-left:' + (16 + d * 20) + 'px" data-act="openSession" data-id="' + s.id + '" role="button" aria-label="' +
+    h(s.label + (o.lead ? ', room lead' : '') + '. ' + label + '. ' + sessionLine(s)) + '">' +
+    '<span style="width:20px;display:flex;justify-content:center">' + lead + '</span><div class="grow"><div class="t-head ellips">' + h(s.label) +
+    (o.lead ? ' <span class="star" title="Lead">★</span>' : '') + '</div>' +
     '<div class="t-sub l2 clamp2"' + (att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(sessionLine(s)) + '</div>' +
     '<div class="t-cap l2" style="margin-top:2px">' + h((s.role ? s.role + ' · ' : '') + s.model) + '</div></div><span class="chev">' + ic('chevR', 16) + '</span></div>';
 }
+/* The work screen as the sidebar card: a room takes the place of its first member and holds all members; other sessions form a tree by `parent`. */
+function workGroups(w) {
+  const byId = {}, inRoom = {}, children = {};
+  w.sessions.forEach(function (s) { byId[s.id] = s; });
+  w.rooms.forEach(function (room) { room.members.forEach(function (m) { if (byId[m]) inRoom[m] = room; }); });
+  const roots = [];
+  w.sessions.forEach(function (s) {
+    if (inRoom[s.id]) return;
+    if (s.parent && byId[s.parent] && !inRoom[s.parent]) (children[s.parent] = children[s.parent] || []).push(s);
+    else roots.push(s);
+  });
+  const items = [], placed = {};
+  w.sessions.forEach(function (s) {
+    const room = inRoom[s.id];
+    if (room) { if (!placed[room.id]) { placed[room.id] = true; items.push({ room: room }); } }
+    else if (roots.indexOf(s) >= 0) items.push({ root: s });
+  });
+  w.rooms.forEach(function (room) { if (!placed[room.id]) items.push({ room: room }); });
+  function walk(s, depth, out) { out.push({ s: s, depth: depth }); (children[s.id] || []).forEach(function (c) { walk(c, depth + 1, out); }); return out; }
+  items.forEach(function (it) {
+    if (it.room) {
+      it.members = it.room.members.map(function (m) { return byId[m]; }).filter(Boolean);
+      it.rank = Math.max(roomDecision(it.room) ? 4 : 0, Math.max.apply(null, it.members.map(function (m) { return RANK[sessAtt(m)]; }).concat([0])));
+    } else {
+      it.rows = walk(it.root, 0, []);
+      it.rank = Math.max.apply(null, it.rows.map(function (x) { return RANK[sessAtt(x.s)]; }));
+    }
+  });
+  return sortByRank(items, function (it) { return it.rank; });
+}
+function roomOpen(it) {
+  if (S.roomOpen[it.room.id] !== undefined) return S.roomOpen[it.room.id];
+  return !!roomDecision(it.room) || it.members.some(function (m) { return sessAtt(m) === 'needs'; });
+}
+function roomBlock(it) {
+  const room = it.room, d = roomDecision(room), open = roomOpen(it);
+  const leadS = it.members.find(function (m) { return m.id === room.lead; });
+  const word = d ? '<span class="pill tint t-cap">Decision</span>' : room.unread ? '<span class="t-foot l2">' + room.unread + ' new</span>' : '';
+  let html = '<div class="cell ind roomhead' + (d ? ' dec' : '') + '" data-act="toggleRoom" data-id="' + room.id + '" role="button" aria-expanded="' + open + '" aria-label="' +
+    h('Room ' + room.title + (d ? ', decision waiting' : '') + ', ' + it.members.length + ' agents' + (leadS ? ', lead ' + leadS.label : '')) + '">' +
+    '<span style="width:20px;display:flex;justify-content:center;color:' + (d ? 'var(--tint)' : 'var(--label2)') + '">' + (d ? ic('seal', 20) : '<span class="t-head">#</span>') + '</span>' +
+    '<div class="grow"><div class="t-head clamp2">' + h(room.title) + '</div>' +
+    (open ? '<div class="mdots">' + word + '<span class="t-foot l2">' + it.members.length + ' agents' + (leadS ? ' · lead ' + h(leadS.label) : '') + '</span></div>'
+      : '<div class="mdots">' + word + it.members.map(function (m) { return attDot(sessAtt(m)); }).join('') + '<span class="t-foot l2">' + it.members.length + ' agents</span></div>') + '</div>' +
+    '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
+  if (d) html += '<div class="cell ind inroom" style="padding-left:68px" data-act="openDecision" data-id="' + room.decision + '" role="button"><div class="grow t-sub"><b>' + d.pid + ' · rev ' +
+    (S.dec[room.decision] && S.dec[room.decision].rev || d.rev) + '</b> <span class="l2">' + h(d.text.split('\n')[0].replace(/^#+ /, '')) + '</span></div><span class="link t-sub">Review' + ic('chevR', 16) + '</span></div>';
+  if (open) html += it.members.map(function (m) { return sessionCell(m, 1, { inRoom: true, lead: m.id === room.lead }); }).join('');
+  return html;
+}
 function workScreen(r) {
   const w = WORKS.find(function (x) { return x.id === r.id; });
-  let body = navbar({ back: 'Works', title: w.title }) + banner();
+  const p = PROJECTS.find(function (x) { return x.id === w.project; });
+  let body = navbar({ back: 'Works', title: w.title, sub: '<span class="pdot" style="background:' + p.color + '"></span>' + h(p.name) }) + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(2) };
-  const needs = w.sessions.filter(function (s) { return s.att === 'needs' && !S.gone[s.card]; });
-  const rest = w.sessions.filter(function (s) { return needs.indexOf(s) < 0; });
-  if (needs.length) body += sec('Needs you') + '<div class="group">' + needs.map(sessionCell).join('') + '</div>';
-  body += sec('Sessions') + '<div class="group">' + rest.map(sessionCell).join('') + '<div class="cell"><div class="grow t-body l2">Closed (' + w.closed + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div></div>';
-  if (w.rooms.length) body += sec('Rooms') + '<div class="group">' + w.rooms.map(function (room) {
-    const d = room.decision && !S.gone[room.decision] ? DECISIONS[room.decision] : null;
-    return '<div class="cell' + (d ? '' : ' static') + '"' + (d ? ' data-act="openDecision" data-id="' + room.decision + '" role="button"' : '') + '><span class="t-head l2" style="width:20px;text-align:center">#</span><div class="grow"><div class="t-head ellips">' + h(room.title) + '</div>' +
-      (d ? '<div class="t-foot" style="margin-top:3px"><span class="pill tint t-cap">Decision</span> <span class="l2">' + d.pid + ' · rev ' + (S.dec[room.decision] && S.dec[room.decision].rev || d.rev) + '</span></div>' : '<div class="t-foot l2">' + room.members + ' members</div>') +
-      '</div>' + (d ? '<span class="chev">' + ic('chevR', 16) + '</span>' : '') + '</div>';
-  }).join('') + '</div>';
+  if (S.scenario === 'empty') return { body: body + empty('stack', 'No sessions in this work', 'Start a session on your Mac.') };
+  body += '<div class="group" style="margin-top:8px">' + workGroups(w).map(function (it) {
+    return it.room ? roomBlock(it) : it.rows.map(function (x) { return sessionCell(x.s, x.depth); }).join('');
+  }).join('') + '<div class="cell"><div class="grow t-sub l2">Closed (' + w.closed + ')</div><span class="chev">' + ic('chevR', 16) + '</span></div></div>';
   return { body: body };
 }
 
@@ -942,6 +1034,11 @@ function act(el, e) {
     case 'back': pop(); break;
     case 'openSession': push({ s: 'session', id: id }); break;
     case 'openWork': push({ s: 'work', id: id }); break;
+    case 'toggleRoom': {
+      const w = WORKS.find(function (x) { return x.id === topRoute().id; });
+      const it = workGroups(w).find(function (x) { return x.room && x.room.id === id; });
+      S.roomOpen[id] = !roomOpen(it); haptic('selection'); break;
+    }
     case 'openDecision': push({ s: 'decision', id: id }); break;
     case 'openLetters': push({ s: 'letters' }); break;
     case 'openLetter': push({ s: 'letter', id: id }); S.letterOpened[id] = true; break;
@@ -1060,7 +1157,8 @@ const JUMPS = [
   ['Letters', function () { go('inbox', [{ s: 'letters' }]); }],
   ['Letter', function () { go('inbox', [{ s: 'letters' }, { s: 'letter', id: 'l1' }]); }],
   ['Works', function () { go('works', []); }],
-  ['Work', function () { go('works', [{ s: 'work', id: 'w1' }]); }],
+  ['Work: rooms and session tree', function () { go('works', [{ s: 'work', id: 'w1' }]); }],
+  ['Work: tree without rooms', function () { go('works', [{ s: 'work', id: 'w2' }]); }],
   ['Settings', function () { go('settings', []); }],
   ['Settings: Host', function () { go('settings', [{ s: 'host', i: 0 }]); }],
   ['Settings: Remove alert', function () { go('settings', [{ s: 'host', i: 0 }]); S.alert = { title: 'Remove ' + HOSTS[0].name + '?', text: 'The keys on this phone are erased. Your Mac keeps listing this phone until you revoke it there.', ok: 'Remove', destr: true, i: 0 }; }],
