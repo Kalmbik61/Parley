@@ -8,9 +8,11 @@ import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from './swarm-tools.js';
  * 2026-10-27, решение 2). Потолки — от замера на 5f4dd71a: все строки `description` весили 10 226 байт,
  * JSON схем целиком — 25 742. Цель: описания не больше 5 600 байт (−45 %), JSON не больше 21 000 (−18 %).
  * Правила и исключения живут в `read_guide`, а не в описаниях.
+ * Потолки подняты ровно на `get_capacity` (план 3, спека 4.3): описание 232 байта, схема целиком 386 с запятой —
+ * прежний запас остался прежним.
  */
-const DESCRIPTIONS_MAX_BYTES = 5600;
-const SCHEMAS_MAX_BYTES = 21000;
+const DESCRIPTIONS_MAX_BYTES = 5600 + 232;
+const SCHEMAS_MAX_BYTES = 21000 + 386;
 
 /** Сумма байт всех строк `description` на любой глубине схемы (описания свойств включены). */
 function descriptionBytes(node: unknown): number {

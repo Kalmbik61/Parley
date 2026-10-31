@@ -71,9 +71,11 @@ import {
   countRecipients,
   deniedForAgent,
   limitsFromConfig,
+  RESOURCE_WINDOW_MS,
   ResourceDeniedError,
   type ResourceLimits,
 } from '../work/resource-policy.js';
+import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
@@ -421,6 +423,13 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'get_capacity',
+    annotations: READS,
+    description:
+      'How busy Parley and this machine are: live, asleep and queued sessions, your child sessions and subagents, the limits that apply and how much of each is used, memory pressure. Call it before starting several sessions or a heavy job.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'report',
     annotations: WRITES,
     description:
@@ -613,6 +622,30 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
   // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
   return mapOverview(map, context.sessionId, storeLetterReader(context.projectPath, context.workId));
+}
+
+/**
+ * `get_capacity`: карта с письмами агентов только за последний час (не вся история), числа машины — от хоста.
+ * Один `now` на выборку писем и на расчёт: окно часа в обоих местах одно.
+ */
+async function getCapacity(context: McpContext, signal?: AbortSignal): Promise<CapacityReport> {
+  const now = Date.now();
+  const limits = await limitsOf(context);
+  const map = await readMap(context.projectPath, context.workId);
+  const messages = storeLetterReader(context.projectPath, context.workId).page({
+    sinceAt: new Date(now - RESOURCE_WINDOW_MS).toISOString(),
+    agentsOnly: true,
+    limit: limits.workMessages,
+  });
+  const facts = (await context.capacity?.(signal)) ?? null;
+  return capacityReport({
+    map: { ...map, messages },
+    sessionId: context.sessionId,
+    limits,
+    resumeRate: (await loadConfig()).config.resumeRate,
+    facts,
+    now,
+  });
 }
 
 /**
@@ -1482,6 +1515,10 @@ async function dispatch(
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context, args, signal);
+  if (name === 'get_capacity') {
+    if (Object.keys(args).length > 0) throw new Error('get_capacity takes no arguments');
+    return getCapacity(context, signal);
+  }
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);
@@ -1786,7 +1823,7 @@ export interface ToolRunner {
  * Инструменты, которые ничего не пишут от имени сессии: их ограда агента (спека передачи сессии 6.1) не касается.
  * `check_inbox` и `wait_for` сюда не входят — они помечают письма прочитанными.
  */
-const AGENT_FENCE_FREE = new Set(['get_map', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
+const AGENT_FENCE_FREE = new Set(['get_map', 'get_capacity', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
 
 export const STALE_AGENT = 'This session now continues with another agent: this process belongs to the previous one. Stop working and do not call Parley tools again.';
 
