@@ -27,6 +27,7 @@ import { atPrompt, busyError } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
+import { notFoundOnGone, requireWork } from './works.js';
 
 export interface SessionMethodDeps {
   sessions: SessionsService;
@@ -52,6 +53,7 @@ export interface SessionHandlers {
   sessionsDelete: Handler<'sessions.delete'>;
   sessionsClose: Handler<'sessions.close'>;
   sessionsRename: Handler<'sessions.rename'>;
+  sessionsSetKeepAwake: Handler<'sessions.setKeepAwake'>;
   sessionsInterrupted: Handler<'sessions.interrupted'>;
   sessionsSetMode: Handler<'sessions.setMode'>;
   sessionsSetEffort: Handler<'sessions.setEffort'>;
@@ -123,6 +125,29 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         { touch: false },
       );
       return { ok: true };
+    },
+
+    // «Keep awake» из меню строки сессии: чистая запись в карту, процесс не трогаем. Флаг ставит только человек. Нет ключа —
+    // то же, что `false`, поэтому при снятии ключ удаляется, а не получает `false` или `null`. Закрытость проверяется в той
+    // же записи, что и флаг: закрытие не проскочит между проверкой и записью. Как и rename, не событие работы: `updatedAt`
+    // стоит на месте.
+    sessionsSetKeepAwake: async ({ ref, keepAwake }) => {
+      requireWork(ref.projectPath, ref.workId);
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map) => {
+          const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (session === undefined) {
+            throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+          }
+          if (session.lifecycle === 'closed') throw new HostError('conflict', `session ${ref.sessionId} is closed`);
+          if (keepAwake) session.keepAwake = true;
+          else delete session.keepAwake;
+        },
+        { touch: false },
+      ).catch(notFoundOnGone);
+      return { keepAwake };
     },
 
     sessionsInterrupted: async () => ({ refs: deps.sessions.interrupted() }),

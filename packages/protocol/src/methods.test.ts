@@ -638,6 +638,30 @@ describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
   });
 });
 
+describe('sessions.setKeepAwake (спека сна агентов, 4.1)', () => {
+  const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+  const parse = (value: unknown) => METHODS['sessions.setKeepAwake'].safeParse(value);
+
+  it('принимает сессию и булево значение; без значения, с не-булевым и без сессии — отказ', () => {
+    for (const keepAwake of [true, false]) {
+      expect(parse({ ref, keepAwake }).success, String(keepAwake)).toBe(true);
+    }
+    expect(parse({ ref }).success).toBe(false);
+    for (const keepAwake of ['true', 1, 0, null]) {
+      expect(parse({ ref, keepAwake }).success, JSON.stringify(keepAwake)).toBe(false);
+    }
+    expect(parse({ keepAwake: true }).success).toBe(false);
+  });
+
+  it('параметры и результат: сессия и новое значение; ответ — значение, которое стоит в карте', () => {
+    expectTypeOf<Params<'sessions.setKeepAwake'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      keepAwake: boolean;
+    }>();
+    expectTypeOf<Result<'sessions.setKeepAwake'>>().toEqualTypeOf<{ keepAwake: boolean }>();
+  });
+});
+
 describe('capabilities.list (живая проверка 2026-10-02: подсказки поля ввода)', () => {
   it('принимает проект и провайдера, отвергает пустые', () => {
     expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p', provider: 'claude' }).success).toBe(true);

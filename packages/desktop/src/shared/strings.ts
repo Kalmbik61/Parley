@@ -603,6 +603,8 @@ export const S = {
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
       closeConfirmDescription: 'Session will no longer receive mail',
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
+      /** Галочка у незакрытой сессии: человек запрещает хосту усыплять её, `sessions.setKeepAwake` (спека сна агентов, 4.1). */
+      keepAwake: 'Keep awake',
       /** Участник развёрнутой комнаты, не ведущий и не закрытый: `rooms.setLead`. */
       makeLead: 'Make lead',
       /** Диалог замены агента (`SwitchAgentDialog`); подсвечен у сессии в лимите, без входа или с удалённым провайдером. */

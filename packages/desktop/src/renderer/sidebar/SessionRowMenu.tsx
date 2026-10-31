@@ -13,6 +13,9 @@
  *
  * «Rename» — первым пунктом, когда хост знает `sessions.rename`: поле на месте ярлыка открывает строка (`SessionInlineRename`),
  * меню лишь зовёт `onRename`. Закрытую сессию тоже можно переименовать.
+ *
+ * «Keep awake» — галочка у незакрытой сессии, когда хост знает `sessions.setKeepAwake`: человек запрещает хосту усыплять
+ * сессию (спека сна агентов, 4.1). Галочка стоит по карте (`session.keepAwake`), клик шлёт обратное значение без подтверждения.
  */
 
 import { useRef, useState, type ReactNode } from 'react';
@@ -38,6 +41,7 @@ import { openSwitchAgent } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -76,6 +80,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
 
   const canRename = useHostSupports('sessions.rename');
   const canSetLead = useHostSupports('rooms.setLead');
+  const canKeepAwake = useHostSupports('sessions.setKeepAwake');
   const canSwitch = useHostSupports('sessions.switchAgent');
   // Провайдера сессии нет в списке окна (удалён): пункт подсвечен. Пока список не пришёл, судить рано.
   const providerMissing = useProviderMissing(session.provider);
@@ -135,6 +140,13 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     });
   };
 
+  // Ошибки — в консоль, как у `call`: пункта у закрытой сессии нет, отказ возможен лишь при гонке, а галочка стоит по карте.
+  const setKeepAwake = (keepAwake: boolean): void => {
+    bridge.call('sessions.setKeepAwake', { ref, keepAwake }).catch((error: unknown) => {
+      console.warn('[parley] sessions.setKeepAwake', error);
+    });
+  };
+
   const makeLead = (roomId: string): void => {
     bridge.call('rooms.setLead', { projectPath, workId, roomId, sessionId: session.id }).catch((error: unknown) => {
       console.warn('[parley] rooms.setLead', error);
@@ -181,6 +193,11 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           ) : null}
           {!closed ? (
             <ContextMenuItem onSelect={() => setConfirm('close')}>{S.sidebar.sessionMenu.closeEllipsis}</ContextMenuItem>
+          ) : null}
+          {canKeepAwake && !closed ? (
+            <ContextMenuCheckboxItem checked={session.keepAwake === true} onCheckedChange={setKeepAwake}>
+              {S.sidebar.sessionMenu.keepAwake}
+            </ContextMenuCheckboxItem>
           ) : null}
           {room !== undefined && !room.lead && !closed && canSetLead ? (
             <ContextMenuItem onSelect={() => makeLead(room.id)}>{S.sidebar.sessionMenu.makeLead}</ContextMenuItem>
