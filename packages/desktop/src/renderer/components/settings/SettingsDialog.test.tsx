@@ -104,6 +104,19 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     expect(saveUiSpy).not.toHaveBeenCalled();
   });
 
+  it('«Finished turns»: по умолчанию «Fold work»; выбор зовёт app.saveUi({ chatFold })', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    const fold = await screen.findByRole('radio', { name: 'Fold work' });
+    expect(fold.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Final answer only' }));
+
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ chatFold: 'final' }));
+    expect(screen.getByRole('radio', { name: 'Final answer only' }).getAttribute('aria-checked')).toBe('true');
+  });
+
   it('переключатель «звук» зовёт app.saveUi({ notifications: { …, sound: false } })', async () => {
     const bridge = createFakeBridge();
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');

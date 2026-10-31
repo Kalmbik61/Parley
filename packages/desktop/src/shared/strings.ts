@@ -1252,6 +1252,11 @@ export const S = {
     appearanceSystem: 'System',
     appearanceDark: 'Dark',
     appearanceLight: 'Light',
+    /** Свёртка законченных ходов в Chat (план 2026-10-30). */
+    finishedTurns: 'Finished turns',
+    finishedTurnsExpanded: 'Expanded',
+    finishedTurnsFold: 'Fold work',
+    finishedTurnsFinal: 'Final answer only',
     terminalFont: 'Terminal font',
     terminalFontSize: 'Terminal font size (8…32)',
     silenceThreshold: 'Silence threshold, ms',
@@ -1642,6 +1647,28 @@ export const S = {
     turn: (duration: string | null): string => (duration === null ? 'Turn finished' : `Turn finished · ${duration}`),
     /** Черта прерванного хода (живая проверка 2026-10-02): человек нажал Esc. */
     turnInterrupted: (duration: string | null): string => (duration === null ? 'Interrupted' : `Interrupted · ${duration}`),
+    /** Свёртка законченного хода (план 2026-10-30): строка статуса вместо черты `turn` и заголовки групп работы. */
+    fold: {
+      completed: (duration: string | null): string => (duration === null ? 'Completed' : `Completed in ${duration}`),
+      stopped: 'Stopped',
+      failed: 'Failed',
+      /** Виды работ в заголовке группы; первый вид с заглавной буквы собирает `turn-fold`. */
+      kinds: {
+        read: 'read files',
+        search: 'searched code',
+        shell: 'ran commands',
+        edit: 'edited files',
+        web: 'browsed the web',
+        browser: 'used the browser',
+        agents: 'ran subagents',
+        parley: 'coordinated in Parley',
+        tools: 'used tools',
+      },
+      etc: 'etc.',
+      /** Группа без вызовов: только промежуточные тексты / только повторы запросов. */
+      replies: 'Wrote replies',
+      retries: 'Retried requests',
+    },
     /** Строка «агент работает» под лентой, пока текста ещё нет (живая проверка 2026-10-02). */
     working: 'Working…',
     retrying: 'Retrying request',
