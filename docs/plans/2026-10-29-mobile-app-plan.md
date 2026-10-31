@@ -756,8 +756,9 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
     - нет токена (iPhone на Personal Team) — `push.register {apnsToken: null}`, в Settings строка «Notifications
       unavailable on this build», остальное работает.
   - Биометрия на одобрение (Р6, спека §11.4; правки 9): шлюз `approve()` на `expo-local-authentication` с запасным
-    кодом устройства; Face ID перед Allow (`feed.decide` с разрешением — кнопки A15 в Inbox и Session) и перед
-    Accept (`rooms.resolveProposal accept`). Deny, Reject, Return for rework и просмотр — без запроса. Настройка
+    кодом устройства; Face ID перед Allow (`feed.decide` с разрешением — кнопки A15 в Inbox и Session), перед
+    Accept (`rooms.resolveProposal accept`) и перед одобрением плана в любом виде — с `auto-accept` и без (кнопки A15
+    на Session). Deny, Reject, отклонение плана и отзыв на него, Return for rework, ответы и просмотр — без запроса. Настройка
     «Require Face ID to allow» в Settings, по умолчанию включена. `NSFaceIDUsageDescription` в `app.config.ts`.
     Если A15 влит раньше, A16 подключает шлюз к его кнопкам Allow.
 - **Файлы.** `packages/mobile/app/room/[id]/decision.tsx`, `app/letters/*`, `src/push/*`, `src/auth/approve.ts`,
@@ -769,7 +770,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
   2. Разбор `data` push выбирает нужный хост из двух по `route`; неизвестный `route` открывает список хостов.
      Ошибка получения токена не мешает подключению (кейс с моком `getDevicePushTokenAsync`).
   3. Экраны по макетам D1.
-  4. Биометрия (кейсы с моком `expo-local-authentication`): Allow и Accept спрашивают Face ID; Deny и Reject не
+  4. Биометрия (кейсы с моком `expo-local-authentication`): Allow, Accept и одобрение плана (`manual`) спрашивают
+     Face ID; одобрение плана с `auto-accept` спрашивает Face ID; Deny, Reject и отклонение плана с отзывом не
      спрашивают; отмена или неудача Face ID — вызов не уходит, карточка остаётся; биометрия не настроена →
      запасной код устройства (`disableDeviceFallback: false`) и вызов после успеха; выключенная настройка —
      Allow без запроса; `NSFaceIDUsageDescription` есть в собранном Info.plist.
@@ -923,7 +925,8 @@ FCM на Android ушёл в отложенный блок 2.5 (правки 5).
       сокет, события AppState и NetInfo, время нового коннекта;
   20. запас фона 30 с (§10.2): подтверждён или нужна правка — по сценариям фона 30 и 60 с п. 19;
   21. установка Personal Team, скан QR системной камерой и сканером приложения, Keychain после перезапуска (S1).
-  22. Face ID на одобрение (Р6, правки 9): Allow и Accept спрашивают Face ID, Deny нет; отмена Face ID ничего не
+  22. Face ID на одобрение (Р6, правки 9): Allow, Accept и одобрение плана (в том числе с `auto-accept`) спрашивают
+      Face ID, Deny и отклонение нет; отмена Face ID ничего не
       шлёт; без настроенной биометрии работает код телефона; выключенная настройка снимает запрос.
 - **Файлы.** `docs/audits/2026-11-XX/mobile-mvp-acceptance.md`.
 - **Зависит.** A13–A18b, A23. Мак — собранный `.app` из A23, не dev-сборка.
@@ -1166,4 +1169,4 @@ Android не удалён, а отложен (Р3, правки 5). Блок п�
 
 | № | Решение | Что изменено |
 |---|---|---|
-| 9.1 | Face ID (запасной путь — код устройства) перед Allow и Accept; Deny, Reject и просмотр без запроса; настройка «Require Face ID to allow» | **A16**: объём, файлы, приёмка п. 4; A20 п. 22 (новый); B13 → A16; 2.4 |
+| 9.1 | Face ID (запасной путь — код устройства) перед Allow, Accept и одобрением плана (с `auto-accept` и без); Deny, Reject и просмотр без запроса; настройка «Require Face ID to allow» | **A16**: объём, файлы, приёмка п. 4; A20 п. 22 (новый); B13 → A16; 2.4 |
