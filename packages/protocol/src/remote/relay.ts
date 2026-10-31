@@ -1,6 +1,6 @@
 // Схема адреса relay (спека 6.6) и управляющие кадры relay (6.3).
 import { z } from 'zod';
-import { b64urlLength } from './b64url.js';
+import { b64urlDecode, b64urlLength } from './b64url.js';
 import { isValidRelayHost } from './qr.js';
 
 function privateIPv4(host: string): boolean {
@@ -25,8 +25,17 @@ export function relayUrlFor(r: string, opts: { allowLocal: boolean }): string {
   return `ws://${r}`;
 }
 
+/** Длина, алфавит и канонический вид (нулевые хвостовые биты): две строки не дают один и тот же id или токен. */
+const canonicalB64 = (text: string): boolean => {
+  try {
+    b64urlDecode(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const b64 = (bytes: number) =>
-  z.string().length(b64urlLength(bytes)).regex(/^[A-Za-z0-9_-]+$/);
+  z.string().length(b64urlLength(bytes)).regex(/^[A-Za-z0-9_-]+$/).refine(canonicalB64, 'non-canonical base64url');
 
 export const routeIdSchema = b64(16);
 export const deviceIdSchema = b64(16);
@@ -70,13 +79,11 @@ export const hostFrame = z.union([hostHelloFrame, hostDevicesFrame, hostOfferFra
 
 // Relay → мост (/v1/host)
 export const relayOkFrame = z.strictObject({ v: z.literal(1), t: z.literal('ok') });
-export const relayIncomingFrame = z.strictObject({
-  v: z.literal(1),
-  t: z.literal('incoming'),
-  stream: streamSchema,
-  kind: z.enum(['connect', 'pair']),
-  device: deviceIdSchema.optional(),
-});
+/** `connect` несёт `device` обязательно (проверка «устройство relay = ключ из msg1», 7.5), `pair` — без него. */
+export const relayIncomingFrame = z.discriminatedUnion('kind', [
+  z.strictObject({ v: z.literal(1), t: z.literal('incoming'), stream: streamSchema, kind: z.literal('connect'), device: deviceIdSchema }),
+  z.strictObject({ v: z.literal(1), t: z.literal('incoming'), stream: streamSchema, kind: z.literal('pair') }),
+]);
 
 // Мост → /v1/accept
 export const acceptFrame = z.strictObject({

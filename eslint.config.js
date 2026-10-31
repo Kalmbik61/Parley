@@ -78,6 +78,27 @@ export default tseslint.config(
       'no-restricted-imports': ['error', { patterns: [{ group: ['node:*'], message: 'No Node built-ins in @parley/noise.' }] }],
     },
   },
+  // `@parley/remote-client` идёт в Hermes: без Buffer, process и node:*; из корней `@parley/core` и `@parley/protocol` — только типы (план A11, A12 п. 5).
+  {
+    files: ['packages/remote-client/src/**'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        { name: 'Buffer', message: 'Hermes has no Buffer; use Uint8Array.' },
+        { name: 'process', message: 'Hermes has no process.' },
+      ],
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: '@parley/core', message: 'Use @parley/core/* subpaths.', allowTypeImports: true },
+            { name: '@parley/protocol', message: 'The protocol root pulls Buffer; use @parley/protocol/remote or import type.', allowTypeImports: true },
+          ],
+          patterns: [{ group: ['node:*'], message: 'No Node built-ins in @parley/remote-client.' }],
+        },
+      ],
+    },
+  },
   // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
     files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],
