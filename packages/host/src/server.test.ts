@@ -794,7 +794,9 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         notificationHandlers: {},
         registerClient: () => {},
         unregisterClient: () => {},
-        ...(policy === null ? {} : { remoteLaunch: { enabled: () => state.enabled, workOpen, roomAutonomous } }),
+        ...(policy === null
+          ? {}
+          : { remoteLaunch: { enabled: () => state.enabled, workOpen, roomAutonomous, projectKnown: () => true, workKnown: () => true } }),
       });
       const socketPath = path.join(home, 'launch.sock');
       await new Promise<void>((resolve) => server.listen(socketPath, resolve));
@@ -912,6 +914,92 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    describe('проекты чтений и решений (критик W11)', () => {
+      const ref = { projectPath: '/p', workId: 'w-01', sessionId: 's-01' };
+      const reads: Array<[string, Record<string, unknown>]> = [
+        ['context.messages', { projectPath: '/p', workId: 'w-01', roomId: null }],
+        ['context.letter', { projectPath: '/p', workId: 'w-01', id: 'm-1' }],
+        ['context.text', { projectPath: '/p', workId: 'w-01', ref: { kind: 'goal' } }],
+        ['roles.list', { projectPath: '/p' }],
+        ['feed.snapshot', { ref }],
+        ['feed.decide', { ref, cardId: 'c-1', decision: { kind: 'permission', behavior: 'deny' } }],
+        ['rooms.resolveProposal', { projectPath: '/p', workId: 'w-01', roomId: 'r-1', proposalId: 'm-1', action: 'accept', rev: 0 }],
+      ];
+
+      async function readServer(known: { projects: string[]; works: string[] }) {
+        const home = await tempHome();
+        homes.push(home);
+        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+        const context = { version: 'test', log, liveSessions: () => 0 } as unknown as HostContext;
+        const spies = Object.fromEntries(
+          [...reads.map(([method]) => method), 'works.list', 'host.info', 'providers.list'].map((method) => [method, vi.fn(async () => ({ ok: true }))]),
+        );
+        const server = createHostServer({
+          context,
+          token: 't',
+          helloTimeoutMs: 5000,
+          methodHandlers: spies as never,
+          notificationHandlers: {},
+          registerClient: () => {},
+          unregisterClient: () => {},
+          remoteLaunch: {
+            enabled: () => true,
+            workOpen: () => true,
+            roomAutonomous: () => false,
+            projectKnown: (projectPath) => known.projects.includes(projectPath),
+            workKnown: (projectPath, workId) => known.works.includes(`${projectPath}#${workId}`),
+          },
+        });
+        const socketPath = path.join(home, 'reads.sock');
+        await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+        const clients: TestClient[] = [];
+        const connect = async (name: string) => {
+          const client = connectRaw(socketPath);
+          clients.push(client);
+          await waitConnected(client.socket);
+          await hello(client, 't', { client: name });
+          return client;
+        };
+        return { spies, connect, close: () => { for (const c of clients) c.close(); server.close(); } };
+      }
+
+      it('неизвестный проект или работа — bad_request, обработчик не вызван; методы без проекта не затронуты', async () => {
+        const s = await readServer({ projects: [], works: [] });
+        const remote = await s.connect('remote');
+        let id = 170;
+        for (const [method, params] of reads) {
+          expect((await answer(remote, ++id, method, params)).error, method).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
+          expect(s.spies[method], method).not.toHaveBeenCalled();
+        }
+        for (const method of ['works.list', 'host.info', 'providers.list']) {
+          expect((await answer(remote, ++id, method, {})).error, method).toBeUndefined();
+        }
+        // Полный клиент проект не сверяет: те же вызовы доходят до обработчиков.
+        const desktop = await s.connect('desktop');
+        for (const [method, params] of reads) {
+          expect((await answer(desktop, ++id, method, params)).error, method).toBeUndefined();
+          expect(s.spies[method], method).toHaveBeenCalledTimes(1);
+        }
+        s.close();
+      });
+
+      it('известные проект и работа — обработчики вызваны; ref roles.list в чужую работу — bad_request', async () => {
+        const s = await readServer({ projects: ['/p'], works: ['/p#w-01'] });
+        const remote = await s.connect('remote');
+        let id = 190;
+        for (const [method, params] of reads) {
+          expect((await answer(remote, ++id, method, params)).error, method).toBeUndefined();
+          expect(s.spies[method], method).toHaveBeenCalledTimes(1);
+        }
+        expect((await answer(remote, ++id, 'roles.list', { projectPath: '/p', ref: { projectPath: '/other', workId: 'w-01', sessionId: 's-01' } })).error)
+          .toMatchObject({ code: 'bad_request' });
+        expect((await answer(remote, ++id, 'feed.snapshot', { ref: { ...ref, workId: 'w-02' } })).error).toMatchObject({ code: 'bad_request' });
+        expect(s.spies['roles.list']).toHaveBeenCalledTimes(1);
+        expect(s.spies['feed.snapshot']).toHaveBeenCalledTimes(1);
+        s.close();
+      });
+    });
+
     it('переключатель выключен после hello — следующий вызов получает unknown_method', async () => {
       const s = await launchServer({ enabled: true, open: true });
       const remote = await s.connect('remote');
@@ -982,6 +1070,13 @@ describe('роль remote: запуск с телефона (A2b, спека м�
 
         const foreign = await mkdtemp(path.join(tmpdir(), 'parley-remote-foreign-'));
         projects.push(foreign);
+        // Чтения (критик W11): своя работа читается, чужой путь — bad_request.
+        expect((await answer(remote.client, 210, 'context.messages', { projectPath: p.dir, workId: p.workId, roomId })).error).toBeUndefined();
+        expect((await answer(remote.client, 211, 'roles.list', { projectPath: p.dir })).error).toBeUndefined();
+        expect((await answer(remote.client, 212, 'context.messages', { projectPath: foreign, workId: p.workId, roomId: null })).error)
+          .toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
+        expect((await answer(remote.client, 213, 'roles.list', { projectPath: foreign })).error)
+          .toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
         expect((await answer(remote.client, 203, 'sessions.create', {
           projectPath: foreign, workId: p.workId, provider: 'claude', label: 'x', task: '', parent: null,
         })).error).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
@@ -1017,6 +1112,8 @@ describe('роль remote: запуск с телефона (A2b, спека м�
           if (Date.now() > deadline) throw new Error('archived work stayed open for the phone');
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
+        // Архивная работа закрыта для запуска, но читается: телефон видит архивные работы в проекции.
+        expect((await answer(remote.client, 399, 'context.messages', { projectPath: p.dir, workId: p.workId, roomId })).error).toBeUndefined();
         remote.client.close();
         desktop.client.close();
       } finally {
