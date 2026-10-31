@@ -2,8 +2,20 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PARLEY, addSession, createWork, readStoredMap, transitionSession, updateMap } from '@parley/core';
-import type { AutoSleep, SessionActivity, WorkSession } from '@parley/core';
+import {
+  PARLEY,
+  SYSTEM,
+  addSession,
+  asleepHint,
+  createWork,
+  readStoredMap,
+  removeSession,
+  sessionTag,
+  setResult,
+  transitionSession,
+  updateMap,
+} from '@parley/core';
+import type { AutoSleep, LetterTx, SessionActivity, WorkMap, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
@@ -11,6 +23,7 @@ import type { HostContext } from '../context.js';
 import type { PtyHandle } from '../pty/pty-manager.js';
 import { ALLOW_WAITER_SLEEP, AUTO_SLEEP_TICK_MS, createAutoSleepService } from './auto-sleep-service.js';
 import type { AutoSleepService, AutoSleepServiceDeps } from './auto-sleep-service.js';
+import { SURVIVOR_CHECK_MS } from './descendants.js';
 
 const MIN = 60_000;
 /** Конец хода всех сессий теста; часы теста (`clock`) уходят от него вперёд. */
@@ -29,6 +42,8 @@ let sleepAfterMinutes = 60;
 let live: PtyHandle[] = [];
 let lives = new Map<string, SessionLive>();
 let listeners: Array<(ref: SessionRef, value: SessionLive) => void> = [];
+/** Подписчики на снимок работ: служба работ зовёт их после каждой публикации. */
+let worksListeners: Array<Parameters<AutoSleepServiceDeps['works']['onChange']>[0]> = [];
 /** Вызовы `sessions.stop` и то, какая отметка стояла в карте в этот миг. */
 let stops: Array<{ sessionId: string; pending: AutoSleep | null }> = [];
 /** Вызовы `wake.retry` и то, в каком состоянии была сессия в карте в этот миг. */
@@ -38,6 +53,11 @@ let pointers = new Set<string>();
 let compacting = new Set<string>();
 let logs: Array<{ level: LogLevel; msg: string; data: Record<string, unknown> }> = [];
 let stoppers: Array<() => void> = [];
+/** Потомки процесса сессии, какими их отдаёт подделка `descendants`, и те pid, что «живы» для подделки `isAlive`. */
+let descendantsOf: number[] = [];
+let aliveSet = new Set<number>();
+/** Вызовы `descendants`: pid корня, стояла ли в карте отметка «засыпает» и сколько раз к этому моменту звали `stop`. */
+let collected: Array<{ rootPid: number; marked: boolean; stops: number }> = [];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-sleep-home-'));
@@ -49,6 +69,7 @@ beforeEach(async () => {
   live = [];
   lives = new Map();
   listeners = [];
+  worksListeners = [];
   stops = [];
   retries = [];
   drafts = new Set();
@@ -56,6 +77,9 @@ beforeEach(async () => {
   compacting = new Set();
   logs = [];
   stoppers = [];
+  descendantsOf = [];
+  aliveSet = new Set();
+  collected = [];
   stopImpl = defaultStop;
   // Таймеры фальшивые, диск настоящий: `setImmediate` остаётся живым. Время решений — через `now` сервиса.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -100,6 +124,12 @@ const fakeHost = (): HostContext => {
 /** Снимок работ хоста: карта всегда свежая с диска. */
 const works = {
   snapshot: () => ({ entries: [{ projectPath: project, map: readStoredMap(project, workId) }], branches: {} }),
+  onChange: (listener: (typeof worksListeners)[number]) => {
+    worksListeners.push(listener);
+    return () => {
+      worksListeners = worksListeners.filter((item) => item !== listener);
+    };
+  },
 } as unknown as AutoSleepServiceDeps['works'];
 
 const activity: AutoSleepServiceDeps['activity'] = {
@@ -153,6 +183,13 @@ function boot(over: Partial<AutoSleepServiceDeps> = {}): AutoSleepService {
     compacting: (ref) => compacting.has(ref.sessionId),
     config: async () => ({ sleepAfterMinutes }),
     now: () => clock,
+    // Настоящих процессов и `ps` в тестах нет: потомков и живых задаёт тест.
+    descendants: async (rootPid) => {
+      const marked = readStoredMap(project, workId).sessions.some((session) => session.autoSleepPending != null);
+      collected.push({ rootPid, marked, stops: stops.length });
+      return descendantsOf;
+    },
+    isAlive: (pid) => aliveSet.has(pid),
     ...over,
   });
   service.start();
@@ -227,6 +264,12 @@ function publish(ref: SessionRef, value: SessionActivity): void {
   for (const listener of listeners) listener(ref, next);
 }
 
+/** Служба работ опубликовала снимок: сервис узнаёт об этом через `onChange`, как будильник. */
+function publishWorks(): void {
+  const view = works.snapshot();
+  for (const listener of worksListeners) listener(view, view);
+}
+
 const sessionOf = (ref: SessionRef): WorkSession => {
   const found = readStoredMap(project, workId).sessions.find((session) => session.id === ref.sessionId);
   if (found === undefined) throw new Error(`нет сессии ${ref.sessionId}`);
@@ -243,6 +286,26 @@ async function sendLetter(ref: SessionRef, readAt?: number): Promise<void> {
     if (readAt !== undefined) letters.markRead(ref.sessionId, [letter.id], iso(readAt));
   });
 }
+
+/**
+ * Усыплённая хостом сессия без процесса, какой её оставляет `exitProcess`: `sleeping` и `autoSleep`. `waitTarget` — что она
+ * ждала в `wait_for(<id>)` перед сном. Ручки PTY у неё нет: сервис видит её только в снимке работ.
+ */
+async function startSleeper(waitTarget: string | null): Promise<SessionRef> {
+  if (workId === '') workId = (await createWork(project, { title: 'Работа' })).work.id;
+  let sessionId = '';
+  await updateMap(project, workId, (map) => {
+    const session = addSession(map, { provider: 'claude', label: 'лид', task: 'ждать помощника' });
+    transitionSession(map, session.id, 'active');
+    session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget };
+    transitionSession(map, session.id, 'sleeping', { exitCode: 0 });
+    sessionId = session.id;
+  });
+  return { projectPath: project, workId, sessionId };
+}
+
+/** Системные письма работы в порядке записи. */
+const systemLetters = () => readStoredMap(project, workId).messages.filter((message) => message.from === SYSTEM);
 
 const messagesOf = (level: LogLevel): string[] => logs.filter((entry) => entry.level === level).map((entry) => entry.msg);
 const slept = (): string[] => stops.map((stop) => stop.sessionId);
@@ -370,7 +433,7 @@ describe('сервис сна агентов', () => {
     await updateMap(project, workId, (map) => {
       map.sessions.find((session) => session.id === ref.sessionId)!.keepAwake = true;
     });
-    boot({ works: { snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) } });
+    boot({ works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) } });
     clock = T0 + 61 * MIN;
     await advance(AUTO_SLEEP_TICK_MS);
 
@@ -684,5 +747,439 @@ describe('сервис сна агентов', () => {
 
     expect(stops).toEqual([]);
     expect(sessionOf(ref).lifecycle).toBe('active');
+  });
+});
+
+describe('сервис сна: усыплённый ждал другую сессию', () => {
+  /**
+   * Что стало с целью ожидания: название для теста, состояние в журнале, письмо ждавшему и запись в карту (как у хоста или
+   * агента). Состояние — ответ `wait_for(<id>)` на такую цель (`finishedState`), `deleted` — цели нет в карте.
+   */
+  const endings: Array<
+    [string, string, (tag: string) => string, (id: string) => (map: WorkMap, letters: LetterTx) => void]
+  > = [
+    [
+      'сдала итог done',
+      'done',
+      (tag) => `${tag} finished: done`,
+      (id) => (map) => {
+        setResult(map, id, 'done');
+      },
+    ],
+    [
+      'сдала итог failed',
+      'failed',
+      (tag) => `${tag} finished: failed`,
+      (id) => (map) => {
+        setResult(map, id, 'failed');
+      },
+    ],
+    [
+      'застряла',
+      'stuck',
+      (tag) => `${tag} finished: stuck`,
+      (id) => (map) => {
+        const need = { kind: 'approval', since: iso(T0), detail: null, resetsAt: null, window: null, account: null } as const;
+        map.sessions.find((session) => session.id === id)!.stuck = need;
+      },
+    ],
+    [
+      'закрыта',
+      'closed',
+      (tag) => `${tag} finished: closed`,
+      (id) => (map) => {
+        transitionSession(map, id, 'closed');
+      },
+    ],
+    [
+      'удалена',
+      'deleted',
+      (tag) => `${tag} finished: deleted`,
+      (id) => (map, letters) => {
+        removeSession(map, letters, id);
+      },
+    ],
+    [
+      'усыплена хостом',
+      'asleep',
+      (tag) => asleepHint(tag),
+      (id) => (map) => {
+        // Как после `exitProcess`: отметка «засыпает» при выходе процесса становится `autoSleep`.
+        const session = map.sessions.find((candidate) => candidate.id === id)!;
+        session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget: null };
+        transitionSession(map, id, 'sleeping', { exitCode: 0 });
+      },
+    ],
+  ];
+
+  it.each(endings)('цель %s — спящему одно системное письмо, цель ожидания снята', async (_name, state, expected, end) => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    await updateMap(project, workId, end(target.sessionId));
+    publishWorks();
+    await quiet();
+
+    const letters = systemLetters();
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({
+      roomId: null,
+      to: [sleeper.sessionId],
+      kind: 'note',
+      text: expected(sessionTag(target.sessionId)),
+    });
+    // Причина и время сна остаются, снимается только цель ожидания; письмо поднимет сессию будильником, она пока спит.
+    expect(sessionOf(sleeper).lifecycle).toBe('sleeping');
+    expect(sessionOf(sleeper).autoSleep).toEqual({ reason: 'idle', at: iso(T0), waitTarget: null });
+    expect(logs).toContainEqual({
+      level: 'info',
+      msg: 'усыплённому записано письмо о цели его ожидания',
+      data: { ref: sleeper, target: target.sessionId, state },
+    });
+  });
+
+  it('проверка идёт и на таймере: снимок работ не приходил, а цель уже сдала итог', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters().map((letter) => letter.text)).toEqual([`${sessionTag(target.sessionId)} finished: done`]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBeNull();
+  });
+
+  it('повторная проверка второго письма не пишет', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    await startSleeper(target.sessionId);
+    boot();
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    publishWorks();
+    await quiet();
+    expect(systemLetters()).toHaveLength(1);
+
+    // И новый снимок, и два прохода таймера видят уже снятую цель ожидания.
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(systemLetters()).toHaveLength(1);
+  });
+
+  it('цель ещё работает — письма нет, цель ожидания остаётся', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep).toEqual({ reason: 'idle', at: iso(T0), waitTarget: target.sessionId });
+  });
+
+  it('цель в смене агента (switching) письма не даёт, остановленная человеком после смены — тоже', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    // Между остановкой прежнего агента и стартом нового цель `sleeping`, но работа у неё не кончилась.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === target.sessionId)!;
+      transitionSession(map, session.id, 'sleeping', { exitCode: 0 });
+      session.switching = { id: 'sw-01', to: 'codex', since: iso(T0) };
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+
+    // Замена кончилась, а цель осталась остановленной: остановленную человеком по-прежнему не считаем концом.
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === target.sessionId)!.switching = null;
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+  });
+
+  it('усыплённая хостом цель в смене агента (switching) письма не даёт, пока замена не кончится', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    // Без замены такая цель уже дала бы письмо «asleep»: держит его только `switching`.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === target.sessionId)!;
+      session.autoSleepPending = { reason: 'idle', at: iso(T0), waitTarget: null };
+      transitionSession(map, session.id, 'sleeping', { exitCode: 0 });
+      session.switching = { id: 'sw-01', to: 'codex', since: iso(T0) };
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === target.sessionId)!.switching = null;
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters().map((letter) => letter.text)).toEqual([asleepHint(sessionTag(target.sessionId))]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBeNull();
+  });
+
+  it('цель остановлена человеком — письма нет, цель ожидания остаётся; кончит после продолжения — письмо', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    boot();
+    // Остановка человеком, выход приложения и сверка мёртвого процесса оставляют `sleeping` без `autoSleep`: такую цель без
+    // согласия человека не поднимают, и будить ждавшего не за чем.
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target.sessionId, 'sleeping', { exitCode: 0 });
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBe(target.sessionId);
+
+    // Человек продолжил цель: она снова работает, письма по-прежнему нет.
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target.sessionId, 'active');
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters()).toEqual([]);
+
+    // Цель кончила — ждавшему есть что сказать.
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters().map((letter) => letter.text)).toEqual([`${sessionTag(target.sessionId)} finished: done`]);
+    expect(sessionOf(sleeper).autoSleep?.waitTarget).toBeNull();
+  });
+
+  it('спящий, который ждал письма, а не сессию, о чужом итоге не узнаёт', async () => {
+    const other = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(null);
+    boot();
+    await updateMap(project, workId, (map) => {
+      setResult(map, other.sessionId, 'done');
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+    expect(sessionOf(sleeper).autoSleep).toEqual({ reason: 'idle', at: iso(T0), waitTarget: null });
+  });
+
+  it('двое ждали одну цель — каждому по письму', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    const first = await startSleeper(target.sessionId);
+    const second = await startSleeper(target.sessionId);
+    boot();
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    publishWorks();
+    await quiet();
+
+    expect(systemLetters().map((letter) => letter.to)).toEqual([[first.sessionId], [second.sessionId]]);
+    expect(sessionOf(first).autoSleep?.waitTarget).toBeNull();
+    expect(sessionOf(second).autoSleep?.waitTarget).toBeNull();
+  });
+
+  // Снимок работ хоста отстаёт от базы, поэтому решает проверка под замком карты.
+  const staleCases: Array<[string, (sleeper: string) => (map: WorkMap, letters: LetterTx) => void]> = [
+    [
+      'то же письмо уже записала другая проверка',
+      (sleeper) => (map, letters) => {
+        letters.add({ roomId: null, from: SYSTEM, to: [sleeper], text: 'S01 finished: done', kind: 'note' });
+        const session = map.sessions.find((candidate) => candidate.id === sleeper)!;
+        session.autoSleep = { ...session.autoSleep!, waitTarget: null };
+      },
+    ],
+    [
+      'сессию уже подняли',
+      (sleeper) => (map) => {
+        transitionSession(map, sleeper, 'active');
+      },
+    ],
+  ];
+
+  it.each(staleCases)('снимок отстал от базы: %s — письма сверх записанного нет', async (_name, change) => {
+    const target = await startSession({ activity: workingActivity() });
+    const sleeper = await startSleeper(target.sessionId);
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    // В снимке цель сдала итог, а спящий ещё ждёт её; в базе уже иначе.
+    const stale = readStoredMap(project, workId);
+    await updateMap(project, workId, change(sleeper.sessionId));
+    const before = systemLetters().length;
+    boot({ works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) } });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toHaveLength(before);
+  });
+
+  it('после stop сервис не слушает снимок работ и писем не пишет', async () => {
+    const target = await startSession({ activity: workingActivity() });
+    await startSleeper(target.sessionId);
+    const service = boot();
+    expect(worksListeners).toHaveLength(1);
+
+    service.stop();
+    expect(worksListeners).toHaveLength(0);
+    await updateMap(project, workId, (map) => {
+      setResult(map, target.sessionId, 'done');
+    });
+    publishWorks();
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(systemLetters()).toEqual([]);
+  });
+});
+
+describe('сервис сна: потомки после сна', () => {
+  const SURVIVORS = 'потомки пережили сон агента';
+  /** Записи журнала о пережившем потомке. */
+  const survivorLogs = () => logs.filter((entry) => entry.msg === SURVIVORS);
+
+  /** Сессия, которая простояла дольше порога и засыпает на первом проходе сервиса. */
+  async function sleepFirstPass(): Promise<{ ref: SessionRef; service: AutoSleepService }> {
+    const ref = await startSession();
+    const service = boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+    return { ref, service };
+  }
+
+  it('потомков собирают по pid процесса сессии после отметки «засыпает» и до stop', async () => {
+    descendantsOf = [11, 12];
+    await sleepFirstPass();
+
+    expect(collected).toEqual([{ rootPid: 4242, marked: true, stops: 0 }]);
+  });
+
+  it('потомки пережили сон: через SURVIVOR_CHECK_MS один warn с pid выживших, не всех собранных', async () => {
+    descendantsOf = [11, 12, 13];
+    // 13 вышел вместе с агентом; 99 живёт, но потомком не был.
+    aliveSet = new Set([11, 12, 99]);
+    const { ref } = await sleepFirstPass();
+
+    await advance(SURVIVOR_CHECK_MS - 1_000);
+    expect(survivorLogs()).toEqual([]);
+
+    await advance(1_000);
+    expect(survivorLogs()).toEqual([{ level: 'warn', msg: SURVIVORS, data: { ref, pids: [11, 12] } }]);
+
+    // Проверка одна на сон: дальше сервис о них не пишет.
+    await advance(SURVIVOR_CHECK_MS);
+    expect(survivorLogs()).toHaveLength(1);
+  });
+
+  it('никто не пережил сон — в журнал ничего не пишется', async () => {
+    descendantsOf = [11, 12];
+    await sleepFirstPass();
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('у агента без потомков журнал пуст, как бы ни шли часы', async () => {
+    aliveSet = new Set([11]);
+    await sleepFirstPass();
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('stop() сервиса до проверки снимает таймер: warn не пишется', async () => {
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const { service } = await sleepFirstPass();
+
+    service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('stop() сервиса, пока сессию ещё усыпляют, таймер выживших не заводит', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stopImpl = async (ref) => {
+      recordStop(ref);
+      await gate;
+      await exitProcess(ref);
+    };
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const ref = await startSession();
+    const service = boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+
+    service.stop();
+    release();
+    await quiet();
+    expect(sessionOf(ref).lifecycle).toBe('sleeping');
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('сессия осталась active — сна не было, и выживших никто не ищет', async () => {
+    // `stop` вернулся, а процесс жив: сон не удался, потомки на месте и так.
+    stopImpl = async (ref) => {
+      recordStop(ref);
+    };
+    descendantsOf = [11];
+    aliveSet = new Set([11]);
+    const ref = await startSession();
+    boot();
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+
+    await advance(2 * SURVIVOR_CHECK_MS);
+
+    expect(survivorLogs()).toEqual([]);
+  });
+
+  it('сон отменён под замком карты — потомков не собирают: ps зря не зовут', async () => {
+    const ref = await startSession();
+    // Снимок работ хоста отстал от базы: Keep awake в нём ещё нет, а в базе уже есть.
+    const stale = readStoredMap(project, workId);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === ref.sessionId)!.keepAwake = true;
+    });
+    boot({ works: { ...works, snapshot: () => ({ entries: [{ projectPath: project, map: stale }], branches: {} }) } });
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(stops).toEqual([]);
+    expect(collected).toEqual([]);
   });
 });

@@ -11,13 +11,25 @@
  * 3. при выходе процесса `transitionSession` превращает отметку в `autoSleep` (core); если сессия всё же осталась `active`,
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
+ *
+ * Между шагами 1 и 2 хост запоминает потомков процесса агента, а через `SURVIVOR_CHECK_MS` после сна пишет в журнал тех, кто
+ * ещё жив (спека, 4.6). Хост ничего не убивает: общие сервисы и чужие процессы трогать нельзя, записи нужны этапу 3.
+ *
+ * Усыплённый на `wait_for(<id>)` сам не узнает, что с целью ожидания стало: процесса у него нет. Сервис следит за целью по
+ * снимку работ и, когда `wait_for` ответил бы на неё сразу (итог, `stuck`, сон по решению хоста, закрытие, удаление), пишет
+ * спящему системное письмо; оно поднимает сессию обычным путём будильника. Цель, остановленную человеком, письмом не
+ * считают: без его согласия её не поднимают, и ждавший проснётся, когда её продолжат и она кончит.
  */
 
 import {
+  asleepHint,
   autoSleepVerdict,
   deliveredSince,
+  finishedState,
   hookedSince,
   isClaudeCode,
+  sessionTag,
+  SYSTEM,
   unreadCount,
   updateMap,
   type AutoSleep,
@@ -34,19 +46,22 @@ import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { SURVIVOR_CHECK_MS, alivePids, descendantPids } from './descendants.js';
 
 /**
- * Ждущих в `wait_for` усыплять (итог спайка, задача 0 плана сна). Подъём после остановки посреди `wait_for` ещё не
- * проверен живьём: цела ли история, читает ли первый ход почту, не висит ли оборванное ожидание. Пока не проверен —
- * `false`: ждущие не засыпают, засыпают только те, у кого ход окончен. Переключить после того, как спайк пройден.
+ * Ждущих в `wait_for` усыплять (итог спайка, задача 0 плана сна). Спайк пройден 2026-10-31: процесс claude, остановленный
+ * посреди вызова MCP, поднялся через `--resume` с целой историей, оборванный вызов записан как ошибка «Connection closed»,
+ * а первый ход разобрал указатель на письма. Выключатель оставлен для отката: `false` — ждущие не засыпают, засыпают
+ * только те, у кого ход окончен.
  */
-export const ALLOW_WAITER_SLEEP: boolean = false;
+export const ALLOW_WAITER_SLEEP: boolean = true;
 
 /** Как часто сервис проверяет живые PTY сам, не дожидаясь изменения активности (спека 4.1). */
 export const AUTO_SLEEP_TICK_MS = 30_000;
 
 export interface AutoSleepServiceDeps {
-  works: Pick<WorksService, 'snapshot'>;
+  /** `snapshot` — карты работ, в том числе спящих сессий без PTY; `onChange` — повод проверить цели их ожидания. */
+  works: Pick<WorksService, 'snapshot' | 'onChange'>;
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   pty: Pick<PtyManager, 'list' | 'get'>;
   sessions: Pick<SessionsService, 'stop'>;
@@ -62,6 +77,10 @@ export interface AutoSleepServiceDeps {
   /** Часы; тесты подставляют свои. */
   now?: () => number;
   tickMs?: number;
+  /** Потомки процесса (pid), которых запоминают до остановки (`descendantPids`); тесты обходятся без настоящих процессов. */
+  descendants?: (rootPid: number) => Promise<number[]>;
+  /** Жив ли процесс с таким pid (`process.kill(pid, 0)`); тесты подставляют свой. */
+  isAlive?: (pid: number) => boolean;
 }
 
 export interface AutoSleepService {
@@ -91,9 +110,31 @@ function sinceLaunch(activity: SessionActivity | null, startedAt: number): Sessi
     : activity;
 }
 
+/**
+ * Что ответил бы `wait_for(<id>)` на цель ожидания прямо сейчас (`finishedState` из core): итог, `stuck`, `asleep` (усыплена
+ * хостом), `closed`; `deleted` — цели нет в карте. Одно отличие: остановленная человеком цель (`sleeping` без `autoSleep`;
+ * так же выглядят выход приложения и сверка мёртвого процесса) — не конец. Её без согласия человека не поднимают, поэтому
+ * письма нет, а ждавший проснётся, когда её продолжат и она кончит. `null` — ждать дальше.
+ */
+function targetState(target: WorkSession | undefined): string | null {
+  if (target === undefined) return 'deleted';
+  const state = finishedState(target);
+  return state === 'sleeping' ? null : state;
+}
+
+/**
+ * Письмо ждавшему о состоянии цели (`targetState`). Усыплённая хостом цель итога не сдаст, пока её не разбудят: подсказка
+ * та же, что `wait_for` даёт на неё (`asleepHint`).
+ */
+function waiterLetter(targetId: string, state: string): string {
+  const tag = sessionTag(targetId);
+  return state === 'asleep' ? asleepHint(tag) : `${tag} finished: ${state}`;
+}
+
 export function createAutoSleepService(host: HostContext, deps: AutoSleepServiceDeps): AutoSleepService {
   const now = deps.now ?? Date.now;
   const tickMs = deps.tickMs ?? AUTO_SLEEP_TICK_MS;
+  const collectDescendants = deps.descendants ?? descendantPids;
 
   /**
    * Начало текущего `wait_for` сессии, как его увидел хост (мс), и цель ожидания; ключ — `refKey`. Время строки журнала
@@ -105,10 +146,13 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
   const requested = new Map<string, AutoSleepReason>();
   /** Сессии, которые проверяются или усыпляются сейчас: вторая проверка той же сессии не начинается. */
   const inWork = new Set<string>();
+  /** Таймеры проверки выживших потомков, по одному на сон; `stop()` их снимает. */
+  const survivorTimers = new Set<ReturnType<typeof setTimeout>>();
 
   let stopped = true;
   let ticking = false;
   let unsubscribe: (() => void) | null = null;
+  let unsubscribeWorks: (() => void) | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   /**
@@ -189,6 +233,22 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     return dropped;
   }
 
+  /**
+   * Через `SURVIVOR_CHECK_MS` после сна пишет в журнал потомков агента, что остались живы (спека 4.6); не пережил никто —
+   * не пишет ничего. Ничего не убивает.
+   */
+  function watchSurvivors(ref: SessionRef, pids: readonly number[]): void {
+    // Сервис остановлен, пока сессию усыпляли: журнал после остановки не пишем.
+    if (stopped) return;
+    const survivorTimer = setTimeout(() => {
+      survivorTimers.delete(survivorTimer);
+      const survivors = alivePids(pids, deps.isAlive);
+      if (survivors.length > 0) host.log.warn('потомки пережили сон агента', { ref, pids: survivors });
+    }, SURVIVOR_CHECK_MS);
+    survivorTimer.unref();
+    survivorTimers.add(survivorTimer);
+  }
+
   /** Усыпляет сессию (шаги 1–4). `true` — сессия ушла в сон. */
   async function sleepSession(ref: SessionRef, plan: Plan): Promise<boolean> {
     const idleSince = new Date(plan.idleSince).toISOString();
@@ -218,6 +278,10 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       return false;
     }
 
+    // Потомков CLI запоминаем до остановки: когда родитель выйдет, их усыновит init, и родство пропадёт (спека 4.6).
+    const rootPid = deps.pty.get(ref)?.pid;
+    const descendants = rootPid === undefined ? [] : await collectDescendants(rootPid);
+
     // 2. Тот же `stop`, что у кнопки Stop: ждёт выхода процесса и записи перехода в `sleeping`.
     try {
       await deps.sessions.stop(ref);
@@ -240,7 +304,68 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       reason: plan.reason,
       idleMin: Math.round((now() - plan.idleSince) / 60_000),
     });
+    watchSurvivors(ref, descendants);
     return true;
+  }
+
+  /**
+   * Пишет усыплённому письмо о том, что стало с целью его `wait_for(<id>)`, и снимает цель ожидания. Одна запись, решающая
+   * проверка под замком карты: снимок работ отстаёт от базы, и за это время сессию могли поднять или письмо могла записать
+   * другая проверка — тогда не пишется ничего. Не бросает: сбой одной записи не должен остановить проход по остальным.
+   */
+  async function notifyWaiter(ref: SessionRef, targetId: string): Promise<void> {
+    const done: { state: string | null } = { state: null };
+    try {
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map, letters) => {
+          const sleeper = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (sleeper?.lifecycle !== 'sleeping' || sleeper.autoSleep?.waitTarget !== targetId) return;
+          const state = targetState(map.sessions.find((candidate) => candidate.id === targetId));
+          if (state === null) return;
+          letters.add({
+            roomId: null,
+            from: SYSTEM,
+            to: [ref.sessionId],
+            text: waiterLetter(targetId, state),
+            kind: 'note',
+          });
+          // Причина и время сна остаются: сессия спит по-прежнему, письмо поднимет её будильником.
+          sleeper.autoSleep = { ...sleeper.autoSleep, waitTarget: null };
+          done.state = state;
+        },
+        // Служебная запись, не событие работы: карточка работы не всплывает в сайдбаре.
+        { touch: false },
+      );
+    } catch (error) {
+      host.log.error('сон агентов: письмо усыплённому о цели его ожидания не записалось', { ref, error: String(error) });
+      return;
+    }
+    if (done.state !== null) {
+      host.log.info('усыплённому записано письмо о цели его ожидания', {
+        ref,
+        target: targetId,
+        state: done.state,
+      });
+    }
+  }
+
+  /**
+   * Проход по снимку работ: каждому `sleeping` с целью ожидания, о которой есть что сказать (`targetState`), — письмо. У
+   * спящих нет PTY, поэтому цикл по `pty.list()` их не видит. Зовут подписчик службы работ и таймер.
+   */
+  async function notifyWaiters(): Promise<void> {
+    if (stopped) return;
+    for (const entry of deps.works.snapshot().entries) {
+      for (const session of entry.map.sessions) {
+        const targetId = session.lifecycle === 'sleeping' ? session.autoSleep?.waitTarget : null;
+        if (targetId == null) continue;
+        if (targetState(entry.map.sessions.find((candidate) => candidate.id === targetId)) === null) continue;
+        if (stopped) return;
+        await notifyWaiter({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }, targetId);
+      }
+    }
   }
 
   /**
@@ -276,11 +401,12 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     }
   }
 
-  /** Проход по живым PTY хоста, по одной сессии за раз. */
+  /** Сначала письма ждавшим усыплённым, затем проход по живым PTY хоста, по одной сессии за раз. */
   async function tick(): Promise<void> {
     if (stopped || ticking) return;
     ticking = true;
     try {
+      await notifyWaiters();
       const live = deps.pty.list();
       forget(live);
       const config = await deps.config();
@@ -313,6 +439,9 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       if (!stopped) return;
       stopped = false;
       unsubscribe = deps.activity.onChange(onActivity);
+      unsubscribeWorks = deps.works.onChange(() => {
+        void notifyWaiters();
+      });
       timer = setInterval(() => {
         void tick();
       }, tickMs);
@@ -323,8 +452,12 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       stopped = true;
       unsubscribe?.();
       unsubscribe = null;
+      unsubscribeWorks?.();
+      unsubscribeWorks = null;
       if (timer !== null) clearInterval(timer);
       timer = null;
+      for (const survivorTimer of survivorTimers) clearTimeout(survivorTimer);
+      survivorTimers.clear();
       waits.clear();
       requested.clear();
     },

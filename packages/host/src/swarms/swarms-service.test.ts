@@ -36,6 +36,8 @@ let stoppers: Array<() => Promise<void>> = [];
 let notices: Array<{ event: EventName; data: EventData<EventName> }> = [];
 let closeCalls: string[] = [];
 let logErrors: string[] = [];
+/** Просьбы усыпить, которые получил сервис сна, и был ли в этот миг итог роя уже записан доставленным. */
+let sleepRequests: Array<{ ref: SessionRef; reason: string; delivered: boolean }> = [];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-swarms-home-'));
@@ -46,6 +48,7 @@ beforeEach(async () => {
   notices = [];
   closeCalls = [];
   logErrors = [];
+  sleepRequests = [];
   // Часы и таймеры фальшивые, диск настоящий: `setImmediate` остаётся живым.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   vi.setSystemTime(new Date(START));
@@ -106,13 +109,20 @@ const fakeSessions = {
   },
 };
 
+/** Сервис сна: просьба записывается вместе с признаком, что доставленный итог роя к этому моменту уже лежит в карте. */
+const fakeAutoSleep = {
+  requestSleep(ref: SessionRef, reason: string): void {
+    sleepRequests.push({ ref, reason, delivered: stored().swarms?.[0]?.result?.deliveredAt != null });
+  },
+};
+
 async function emit(): Promise<void> {
   for (const listener of listeners) listener();
   await quiet();
 }
 
 function boot(options: SwarmsServiceOptions = { limits: async () => ({ swarmMinutes: 0 }) }): SwarmsService {
-  const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, options);
+  const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, options, fakeAutoSleep);
   service.start();
   stoppers.push(() => service.stop());
   return service;
@@ -749,6 +759,158 @@ describe('доставка итога', () => {
     boot();
     await quiet();
     expect(notices).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Сон королевы (спека сна агентов, 4.1)
+// ---------------------------------------------------------------------------------------------
+
+describe('сон королевы завершённого роя', () => {
+  /** Момент через `ms` от старта теста, ISO. */
+  const at = (ms: number): string => new Date(Date.parse(START) + ms).toISOString();
+  /** Итог роя, доставленный в момент `deliveredAt`. */
+  const deliveredResult = (deliveredAt: string): NonNullable<WorkSwarm['result']> => ({ summary: 'итог', at: START, deliveredAt });
+
+  /** Рой, итог которого уходит письмом живой сессии-создателю. */
+  function makeLetterSwarm(options: { drones?: number; verifiers?: number } = {}): Promise<Made> {
+    return makeSwarm({
+      ...options,
+      extra: (map) => {
+        const creator = addSession(map, { provider: 'claude', label: 'Создатель', task: 'x' });
+        transitionSession(map, creator.id, 'active');
+        map.swarms![0]!.creator = { kind: 'session', sessionId: creator.id };
+      },
+    });
+  }
+
+  /** Королева засыпает по концу роя в момент `sleptAt` и в момент `resumedAt` поднята человеком (Resume). */
+  async function sleptAndResumed(queen: string, sleptAt: string, resumedAt: string): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === queen)!.autoSleepPending = { reason: 'swarm-done', at: sleptAt, waitTarget: null };
+      transitionSession(map, queen, 'sleeping', { at: sleptAt });
+      transitionSession(map, queen, 'active', { at: resumedAt });
+    });
+  }
+
+  it('итог доставлен письмом — сервис сна получает королеву: один раз, с причиной swarm-done, когда deliveredAt уже записан', async () => {
+    const { queen, drones } = await makeLetterSwarm({ drones: 1 });
+    boot();
+    await report(drones[0]!, 'done', 'a');
+    await emit();
+    // Рой ещё идёт: итога нет, королеву не трогают.
+    expect(sleepRequests).toEqual([]);
+
+    await report(queen, 'done', 'сводка');
+    await emit();
+
+    expect(swarmOf().result?.deliveredAt).not.toBeNull();
+    expect(sleepRequests).toEqual([{ ref: refOf(queen), reason: 'swarm-done', delivered: true }]);
+    await advance(SWARM_TICK_MS);
+    expect(sleepRequests).toHaveLength(1);
+  });
+
+  it('итог ещё не доставлен — королеву не трогает', async () => {
+    const { queen } = await makeSwarm({ drones: 1 });
+    boot({ limits: async () => ({ swarmMinutes: 90 }) });
+    await emit();
+    expect(sleepRequests).toEqual([]);
+
+    // Срок вышел, итог ждёт report королевы: рой терминален, но итог не доставлен.
+    await advance(91 * MIN);
+
+    expect(swarmOf()).toMatchObject({ status: 'failed' });
+    expect(swarmOf().result).toBeNull();
+    expect(sessionOf(queen).lifecycle).toBe('active');
+    expect(sleepRequests).toEqual([]);
+  });
+
+  it('итог ушёл человеку уведомлением — королеву просят уснуть, когда deliveredAt записан', async () => {
+    const { queen } = await makeSwarm({ drones: 0 });
+    boot();
+    await report(queen, 'done', 'сводка для человека');
+    await emit();
+
+    expect(notices).toHaveLength(1);
+    expect(swarmOf().result?.deliveredAt).not.toBeNull();
+    expect(sleepRequests).toEqual([{ ref: refOf(queen), reason: 'swarm-done', delivered: true }]);
+  });
+
+  it('итог доставлен раньше, королева активна и не спала — её просят уснуть на сверке', async () => {
+    const { queen, drones } = await makeSwarm({
+      drones: 1,
+      patch: { status: 'done', endedAt: START, result: deliveredResult(START) },
+    });
+    boot();
+    await quiet();
+
+    // Сверка прошла по этому рою: живой участник закрыт.
+    expect(closeCalls).toEqual([drones[0]]);
+    expect(sleepRequests).toEqual([{ ref: refOf(queen), reason: 'swarm-done', delivered: true }]);
+  });
+
+  it('королева уже спала по концу роя после доставки итога и поднята человеком — второй раз её не просят', async () => {
+    const { queen, drones } = await makeSwarm({
+      drones: 1,
+      patch: { status: 'done', endedAt: START, result: deliveredResult(START) },
+    });
+    await sleptAndResumed(queen, at(MIN), at(2 * MIN));
+    boot();
+    await quiet();
+
+    expect(closeCalls).toEqual([drones[0]]);
+    expect(sessionOf(queen).lifecycle).toBe('active');
+    expect(sleepRequests).toEqual([]);
+  });
+
+  it('королева спала по прошлой доставке итога, до нынешней, — по новой её просят снова', async () => {
+    const { queen } = await makeSwarm({
+      drones: 1,
+      patch: { status: 'done', endedAt: START, result: deliveredResult(at(10 * MIN)) },
+    });
+    await sleptAndResumed(queen, at(MIN), at(2 * MIN));
+    boot();
+    await quiet();
+
+    expect(sleepRequests).toEqual([{ ref: refOf(queen), reason: 'swarm-done', delivered: true }]);
+  });
+
+  it('королева не active — просить нечего', async () => {
+    const { queen } = await makeLetterSwarm({ drones: 0 });
+    await report(queen, 'done', 'сводка');
+    // Человек остановил королеву раньше, чем рой дошёл до доставки итога.
+    await setLifecycle(queen, 'sleeping');
+    boot();
+    await quiet();
+
+    expect(swarmOf().result?.deliveredAt).not.toBeNull();
+    expect(sleepRequests).toEqual([]);
+  });
+
+  it('участников по-прежнему закрывает, королеву не закрывает', async () => {
+    const { queen, drones, verifiers } = await makeLetterSwarm({ drones: 2, verifiers: 1 });
+    boot();
+    await report(queen, 'done', 'сводка');
+    await emit();
+
+    expect([...closeCalls].sort()).toEqual([...drones, ...verifiers].sort());
+    for (const id of [...drones, ...verifiers]) expect(sessionOf(id).lifecycle).toBe('closed');
+    expect(sessionOf(queen).lifecycle).toBe('active');
+    expect(sleepRequests).toEqual([{ ref: refOf(queen), reason: 'swarm-done', delivered: true }]);
+  });
+
+  it('без сервиса сна рой завершается как прежде, ошибок нет', async () => {
+    const { queen } = await makeLetterSwarm({ drones: 0 });
+    const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, { limits: async () => ({ swarmMinutes: 0 }) });
+    service.start();
+    stoppers.push(() => service.stop());
+    await report(queen, 'done', 'сводка');
+    await emit();
+
+    expect(swarmOf().result?.deliveredAt).not.toBeNull();
+    expect(sessionOf(queen).lifecycle).toBe('active');
+    expect(logErrors).toEqual([]);
+    expect(sleepRequests).toEqual([]);
   });
 });
 

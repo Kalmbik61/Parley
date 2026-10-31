@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type { Activity, SessionNeed, WorkSession } from '@parley/core';
+import type { Activity, AutoSleepReason, SessionNeed, WorkSession } from '@parley/core';
 import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -50,6 +50,8 @@ function renderRow(
     draggable?: boolean;
     selected?: boolean;
     onOpen?: () => void;
+    /** Чего ждёт сессия от человека (в записи активности); нужна и `activity`. */
+    need?: SessionNeed;
   } = {},
 ) {
   const built =
@@ -57,6 +59,7 @@ function renderRow(
       ? null
       : makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, options.activity, {
           lastEventAt: options.lastEventAt ?? '2026-09-27T09:57:00.000Z',
+          need: options.need ?? null,
         });
   const activity =
     built !== null && options.lastEventAt === null
@@ -1072,5 +1075,82 @@ describe('SessionRow — провайдер удалён', () => {
     cleanup();
     renderRow(makeSession('s-01', 'plan', { provider: 'claude' }));
     expect(mark()).toBeNull();
+  });
+});
+
+// Спека сна агентов 4.1, «В окне»: усыплённая хостом сессия называет причину сна вместо слова `asleep`.
+describe('SessionRow — сон по решению хоста', () => {
+  const asleepBy = (reason: AutoSleepReason): WorkSession =>
+    makeSession('s-01', 'a', { lifecycle: 'sleeping', autoSleep: { reason, at: '2026-09-27T09:00:00.000Z', waitTarget: null } });
+  const openTooltip = async (): Promise<HTMLElement> => {
+    act(() => row().focus());
+    return waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-session-tooltip]');
+      if (element === null) throw new Error('тултипа нет');
+      return element;
+    });
+  };
+
+  it('усыплённая за простой: «asleep · idle» вместо «asleep», 💤 на месте', () => {
+    renderRow(asleepBy('idle'));
+    expect(screen.getByText('asleep · idle')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+    expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+  });
+
+  it('усыплённая по концу роя: «asleep · swarm done»', () => {
+    renderRow(asleepBy('swarm-done'));
+    expect(screen.getByText('asleep · swarm done')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+  });
+
+  // Итог важнее сна, как в `agentStatus` (единый источник статусов): агент, сдавший `report` перед сном, остаётся «done».
+  it('усыплённая хостом, но с итогом: слово итога (done, failed), 💤 на месте', () => {
+    for (const result of ['done', 'failed'] as const) {
+      renderRow({ ...asleepBy('idle'), result });
+      expect(screen.getByText(S.states[result])).toBeTruthy();
+      expect(screen.queryByText('asleep · idle')).toBeNull();
+      expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+      cleanup();
+    }
+  });
+
+  it('остановленная человеком (autoSleep нет или null): «asleep», как раньше', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect(screen.getByText('asleep')).toBeTruthy();
+    cleanup();
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping', autoSleep: null }));
+    expect(screen.getByText('asleep')).toBeTruthy();
+  });
+
+  // `need` бывает только у живой сессии (`sessionNeed`): отметка сна на ней — остаток, который `transitionSession`
+  // снимает при подъёме. Нужен человек — важнее причины сна.
+  it('нужен человек: слово причины need, а не слово сна', () => {
+    renderRow({ ...asleepBy('idle'), lifecycle: 'active' }, { activity: 'unseen', need: makeNeed('approval') });
+    expect(screen.getByText('approval')).toBeTruthy();
+    expect(screen.queryByText('asleep · idle')).toBeNull();
+  });
+
+  it('спящая с остатком need в записи активности: слово сна, need у спящей не считается', () => {
+    renderRow(asleepBy('idle'), { activity: 'idle', need: makeNeed('limit') });
+    expect(screen.getByText('asleep · idle')).toBeTruthy();
+    expect(screen.queryByText('limit')).toBeNull();
+  });
+
+  it('тултип усыплённой хостом объясняет сон и чем её будить', async () => {
+    renderRow(asleepBy('idle'));
+    expect((await openTooltip()).textContent).toContain('Asleep to free memory. A message or Resume wakes it.');
+  });
+
+  it('тултип усыплённой хостом с итогом: объяснение сна есть и при слове итога', async () => {
+    renderRow({ ...asleepBy('idle'), result: 'done' });
+    const text = (await openTooltip()).textContent ?? '';
+    expect(text).toContain('Asleep to free memory. A message or Resume wakes it.');
+    expect(text).toContain(S.states.done);
+  });
+
+  it('тултип остановленной человеком этого объяснения не несёт', async () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect((await openTooltip()).textContent).not.toContain('Asleep to free memory');
   });
 });

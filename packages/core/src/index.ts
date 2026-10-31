@@ -631,6 +631,7 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
   createToolRunner,
+  finishedState,
 } from './mcp/tools.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';

@@ -527,6 +527,8 @@ export const S = {
     archivedWork: 'Archived',
     /** Подсказка к 💤 в слоте значка спящей сессии. */
     asleepSession: 'Asleep',
+    /** Строка тултипа сессии, которую усыпил хост (`autoSleep`, спека сна агентов 4.1): зачем она спит и чем её поднять. */
+    autoSleepTooltip: 'Asleep to free memory. A message or Resume wakes it.',
     /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
     removeFromList: 'Remove from list…',
     /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
