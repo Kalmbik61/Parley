@@ -107,7 +107,7 @@ export function demoRoute(name: unknown): string | null {
     case 'decision':
       return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
     case 'letters':
-      return '/letters';
+      return '/?segment=letters';
     case 'letter':
       return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':

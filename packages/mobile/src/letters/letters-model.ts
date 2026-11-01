@@ -52,3 +52,14 @@ export function plainPreview(text: string): string {
     .replace(/\s*\n\s*/g, ' ')
     .trim();
 }
+
+export type InboxSegment = 'needs-you' | 'letters';
+
+/** `segment` route param of the Inbox (push / deep link): anything but `letters` is the default segment. */
+export const parseInboxSegment = (v: unknown): InboxSegment => (v === 'letters' ? 'letters' : 'needs-you');
+
+/** Segment label: "Letters 3" when letters are unread (D1 §7). */
+export const lettersSegmentLabel = (unread: number): string => (unread > 0 ? `Letters ${unread}` : 'Letters');
+
+/** Letters live in their own segment; "Needs you" keeps decision cards only. */
+export const withoutLetters = <T extends { kind: string }>(items: readonly T[]): T[] => items.filter((i) => i.kind !== 'letter');
