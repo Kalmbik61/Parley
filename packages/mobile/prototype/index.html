@@ -556,7 +556,7 @@ function findSession(id) { return allSessions().find(function (x) { return x.s.i
 /* ---------- state ---------- */
 const S = {
   theme: 'light', conn: 'ready', scenario: 'normal', fs: 1, rm: false, hostCount: 2, cur: 0,
-  flow: null, tab: 'inbox', stacks: { inbox: [{ s: 'inbox' }], works: [{ s: 'works' }], settings: [{ s: 'settings' }] },
+  flow: null, inboxSeg: 'need', tab: 'inbox', stacks: { inbox: [{ s: 'inbox' }], works: [{ s: 'works' }], settings: [{ s: 'settings' }] },
   gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, open: {}, hier: 'cards',
   sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120, faceIdReq: 'on', bio: 'faceid', nextAuth: 'success', auth: null, macCreate: 'on', nextStart: 'ok', create: null,
   pairName: 'iPhone 16 Pro', retryIn: 12, scrollTop: 0,
@@ -601,15 +601,16 @@ function inboxItems() {
     if (x.s.card && !S.gone[x.s.card]) items.push({ id: x.s.card, type: 'card', card: CARDS[x.s.card], s: x.s, w: x.w });
   });
   Object.keys(DECISIONS).forEach(function (id) { if (!S.gone[id]) items.push({ id: id, type: 'decision', d: DECISIONS[id] }); });
-  LETTERS.forEach(function (l) { if (l.unread && !S.gone[l.id]) items.push({ id: l.id, type: 'letter', l: l }); });
-  const order = ['c1', 'c2', 'c3', 'd1', 'c6', 'c4', 'c5', 'l1'];
+  const order = ['c1', 'c2', 'c3', 'd1', 'c6', 'c4', 'c5'];
   items.sort(function (a, b) {
     const ao = S.letterOpened[a.id] ? 99 : order.indexOf(a.id), bo = S.letterOpened[b.id] ? 99 : order.indexOf(b.id);
     return ao - bo;
   });
   return items;
 }
-function needsCount() { return inboxItems().length; }
+/* Tab badge = needsYouCount: decisions plus unread letters (letters are listed in the Letters segment, not in Needs you). */
+function unreadLetters() { return LETTERS.filter(function (l) { return l.unread; }).length; }
+function needsCount() { return inboxItems().length + unreadLetters(); }
 
 /* ---------- markdown (no HTML, no remote images, links via confirmation) ---------- */
 function inline(t) {
@@ -786,16 +787,17 @@ function inboxRow(it) {
       '<div class="who t-head"># ' + h(d.room) + '</div><div class="t-sub l2">' + h(d.work) + '</div><div class="t-sub clamp2" style="margin-top:4px">' + h(d.text.split('\n')[0].replace(/^#+ /, '')) + '</div>' +
       '<div class="acts right"><span class="link t-sub">Review' + ic('chevR', 16) + '</span></div></div>';
   }
-  const l = it.l, opened = S.letterOpened[l.id];
-  return '<div class="' + cls + '" data-act="openLetter" data-id="' + l.id + '" role="button"' + (opened ? ' style="opacity:.7"' : '') + '><div class="khead t-foot">' + ic('envelope', 16) + '<span class="kind">Letter</span><span>· ' + l.age + '</span></div>' +
-    '<div class="who t-head">' + h(l.from) + ' → you</div><div class="t-sub l2">' + h(l.work) + '</div><div class="t-sub clamp2" style="margin-top:4px">' + h(l.text.split('\n')[0]) + '</div>' +
-    (opened ? '<div class="note t-foot">' + ic('envelopeOpen', 16) + 'Opened on this phone</div>' : '') + '</div>';
+}
+function inboxSegments() {
+  const n = unreadLetters();
+  return '<div class="segm" role="tablist" aria-label="Inbox section" style="margin:6px 16px 8px">' + [['need', 'Needs you'], ['letters', n ? 'Letters ' + n : 'Letters']].map(function (k) {
+    return '<button role="tab" aria-selected="' + (S.inboxSeg === k[0]) + '" class="' + (S.inboxSeg === k[0] ? 'on' : '') + '" data-act="seg" data-v="' + k[0] + '">' + k[1] + '</button>';
+  }).join('') + '</div>';
 }
 function inboxScreen() {
-  const letters = LETTERS.filter(function (l) { return l.unread; }).length;
-  const right = '<button class="navbtn glass" data-act="openLetters" aria-label="Letters, ' + letters + ' unread">' + ic('envelope', 20) + (letters ? '&nbsp;<span class="t-sub">' + letters + '</span>' : '') + '</button>';
-  let body = navbar({ left: hostMenu(), right: right, title: 'Inbox', sub: S.hostCount < 2 ? h(host().name) : '' }) + banner();
+  let body = navbar({ left: hostMenu(), title: 'Inbox', sub: S.hostCount < 2 ? h(host().name) : '' }) + inboxSegments() + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(3) };
+  if (S.inboxSeg === 'letters') return lettersList(body);
   const items = S.scenario === 'empty' ? [] : inboxItems();
   if (!items.length) return { body: body + empty('checkCircle', 'All clear', 'Nothing needs you on ' + h(host().name) + '.' +
     (S.hostCount > 1 ? '<br><span class="t-foot">Other Macs may need you — switch in the menu above.</span>' : '')) };
@@ -1753,9 +1755,8 @@ function decisionScreen(r) {
   return { body: body, bottom: bottom };
 }
 
-function lettersScreen() {
-  let body = navbar({ back: 'Inbox', title: 'Letters' }) + banner();
-  if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(2) };
+/* The Letters segment of the Inbox: all letters, read and unread. */
+function lettersList(body) {
   if (S.scenario === 'empty') return { body: body + empty('envelopeOpen', 'No letters', 'Letters from agents to you appear here.') };
   body += '<div class="group" style="margin-top:8px">' + LETTERS.map(function (l) {
     return '<div class="cell" data-act="openLetter" data-id="' + l.id + '" role="button" aria-label="' + h((l.unread ? 'Unread. ' : '') + 'Letter from ' + l.from) + '"><span class="dot" style="background:' + (l.unread ? 'var(--tint)' : 'transparent') + ';width:9px;height:9px"></span>' +
@@ -1766,7 +1767,7 @@ function lettersScreen() {
 }
 function letterScreen(r) {
   const l = LETTERS.find(function (x) { return x.id === r.id; });
-  let body = navbar({ back: stack().length > 2 ? 'Letters' : 'Inbox', title: l.from + ' → you', sub: h(l.work + ' · ' + l.at) }) + banner();
+  let body = navbar({ back: 'Inbox', title: l.from + ' → you', sub: h(l.work + ' · ' + l.at) }) + banner();
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: body + skeleton(1) };
   if (S.scenario === 'error') return { body: body + empty('triangle', "Couldn't load the letter", 'context.letter did not answer.', '<button class="btn pri full" data-act="noop">Try again</button>') };
   return { body: body + '<div class="card static">' + md(l.text) + '</div><div class="t-foot l2" style="margin:4px 32px">Reply at your Mac — replies from the phone come later.</div>' };
@@ -1969,7 +1970,6 @@ function screen() {
   if (r.s === 'work') return workScreen(r);
   if (r.s === 'session') return sessionScreen(r);
   if (r.s === 'decision') return decisionScreen(r);
-  if (r.s === 'letters') return lettersScreen();
   if (r.s === 'letter') return letterScreen(r);
   if (r.s === 'settings') return settingsScreen();
   if (r.s === 'host') return hostScreen(r);
@@ -2083,7 +2083,7 @@ function act(el, e) {
     case 'openWork': push({ s: 'work', id: id }); break;
     case 'toggle': S.open[el.dataset.k] = el.dataset.open !== 'true'; haptic('selection'); break;
     case 'openDecision': push({ s: 'decision', id: id }); break;
-    case 'openLetters': push({ s: 'letters' }); break;
+    case 'seg': S.inboxSeg = el.dataset.v; haptic('selection'); S.scrollTop = 0; break;
     case 'openLetter': push({ s: 'letter', id: id }); S.letterOpened[id] = true; break;
     case 'openHost': push({ s: 'host', i: +el.dataset.i }); break;
     case 'diag': if (S.flow) return; if (!(topRoute().s === 'diag')) push({ s: 'diag' }); break;
@@ -2245,8 +2245,8 @@ const JUMPS = [
   ['Decision', function () { go('inbox', [{ s: 'decision', id: 'd1' }]); }],
   ['Decision: Return for rework sheet', function () { go('inbox', [{ s: 'decision', id: 'd1' }]); DECISIONS.d1 && (S.dec.d1 = S.dec.d1 || { rev: 2, conflict: false, result: null, note: '' }); S.sheet = { kind: 'return', id: 'd1' }; }],
   ['Decision: conflict', function () { go('inbox', [{ s: 'decision', id: 'd1' }]); S.dec.d1 = { rev: 3, conflict: true, result: null, note: '' }; }],
-  ['Letters', function () { go('inbox', [{ s: 'letters' }]); }],
-  ['Letter', function () { go('inbox', [{ s: 'letters' }, { s: 'letter', id: 'l1' }]); }],
+  ['Inbox: Letters segment', function () { go('inbox', []); S.inboxSeg = 'letters'; }],
+  ['Letter', function () { go('inbox', [{ s: 'letter', id: 'l1' }]); S.inboxSeg = 'letters'; }],
   ['Works', function () { go('works', []); }],
   ['Work: teams, rooms, swarm, tree', function () { go('works', [{ s: 'work', id: 'w1' }]); }],
   ['Work: tree without rooms', function () { go('works', [{ s: 'work', id: 'w2' }]); }],

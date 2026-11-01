@@ -42,7 +42,7 @@ export default function LetterScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
-      <Stack.Screen options={{ title: 'Letter', headerBackTitle: 'Letters' }} />
+      <Stack.Screen options={{ title: 'Letter', headerBackTitle: 'Inbox' }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         <ConnectionBanner />
         {message === undefined ? (

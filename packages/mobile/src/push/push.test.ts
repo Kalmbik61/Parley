@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HostRecord } from '@parley/remote-client';
 import { clearHostNotifications } from './clear';
 import { registerPush } from './register';
-import { resolvePushTarget } from './route';
+import { resolvePushRoute, resolvePushTarget } from './route';
 
 const id16 = (c: string) => ({ a: 'A', b: 'Q', c: 'g' })[c as 'a']!.repeat(22);
 const host = (hostId: string, routeId: string) => ({ hostId, routeId }) as unknown as HostRecord;
@@ -18,6 +18,16 @@ describe('push route', () => {
     expect(resolvePushTarget(data(id16('c')), hosts)).toEqual({ kind: 'unknown' });
     expect(resolvePushTarget({ nope: 1 }, hosts)).toEqual({ kind: 'unknown' });
     expect(resolvePushTarget(undefined, hosts)).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('push → Inbox segment', () => {
+  it('a letter push opens the Letters segment of its host', () => {
+    expect(resolvePushRoute({ ...data(id16('b')), kind: 'letter' }, hosts)).toMatchObject({ segment: 'letters', target: { kind: 'host', host: { hostId: 'b' } } });
+  });
+  it('a needs-you push stays on Needs you; junk is unknown', () => {
+    expect(resolvePushRoute(data(id16('a')), hosts)).toMatchObject({ segment: 'needs-you', target: { kind: 'host' } });
+    expect(resolvePushRoute(undefined, hosts)).toEqual({ segment: 'needs-you', target: { kind: 'unknown' } });
   });
 });
 
