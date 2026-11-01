@@ -1567,6 +1567,20 @@ describe('привязка к логу провайдера без внешне�
       expect((await sessionOf(workId, first)).providerSessionId).toBeNull();
     });
 
+    it('непривязанная соседка стартовала больше минуты назад или позже: окно кончилось, догадка работает как раньше', async () => {
+      const { workId, first, second } = await twoSessions();
+      await updateMap(project, workId, (map) => {
+        const other = map.sessions.find((session) => session.id === second);
+        if (other !== undefined) other.startedAt = '2026-09-02T10:05:00.000Z';
+      });
+      await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
+
+      const found = await linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs });
+
+      expect(found).toBe('лог-первой');
+      expect((await sessionOf(workId, first)).providerSessionId).toBe('лог-первой');
+    });
+
     it('соседка уже привязана (или спит): догадка по папке работает как раньше', async () => {
       const { workId, first, second } = await twoSessions();
       await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
