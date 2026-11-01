@@ -127,6 +127,13 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека своих провайдеров 5.4: посев .claude.json только в папке провайдера в доме Parley; файл человека (userClaudeJsonPath) только читается',
   },
   {
+    file: 'packages/core/src/work/claude-trust.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const current = path.join(configDir ?? home, '.claude.json');",
+    reason:
+      'спека мобильного приложения 4.2 и 14 (план A29): перед запуском Claude — только projects[<папка из trust.json>].hasTrustDialogAccepted, под блокировкой CLI, слиянием с текущим файлом',
+  },
+  {
     file: 'packages/host/src/limits/zai-quota.ts',
     rule: 'API провайдеров',
     line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",

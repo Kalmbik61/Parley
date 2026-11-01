@@ -1,6 +1,6 @@
 import { readNativeContext, readNativeSkillCatalog } from './native-context.js';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +37,7 @@ import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 import { createWorktree } from './worktree.js';
+import { grantTrust } from './trust.js';
 import { BRANCH_PREFIX } from '../names.js';
 
 const runGit = promisify(execFile);
@@ -3299,5 +3300,74 @@ describe('resume форком чужого разговора (спека пер
     const codex = await pending('codex');
     const resumed = await planResume(project, codex.workId, await sessionOf(codex.workId, codex.sessionId), { forkFrom: source });
     expect(resumed.args).not.toContain('--fork-session');
+  });
+});
+
+describe('доверие к папке у Claude Code (спека мобильного приложения, 4.2; план A29)', () => {
+  /** Файл состояния профиля, каким его оставил CLI: свои поля и чужой проект. Всё во временном `home` теста. */
+  const CLI_STATE = { numStartups: 3, oauthAccount: { emailAddress: 'secret-marker@example.invalid' }, projects: { '/elsewhere': { hasTrustDialogAccepted: true } } };
+  const seed = async (dir: string): Promise<string> => {
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, '.claude.json');
+    await writeFile(file, JSON.stringify(CLI_STATE, null, 2), { mode: 0o600 });
+    return file;
+  };
+  const projects = async (file: string) => JSON.parse(await readFile(file, 'utf8')).projects as Record<string, unknown>;
+
+  it('claude в папке с записью trust.json: до запуска её realpath принят в файле профиля CLAUDE_CONFIG_DIR, прочее как было', async () => {
+    const dir = path.join(home, 'claude-profile');
+    const file = await seed(dir);
+    setEnv('CLAUDE_CONFIG_DIR', dir);
+    await grantTrust(project, 'window');
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.command).toBe('claude');
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      ...CLI_STATE,
+      projects: { ...CLI_STATE.projects, [await realpath(project)]: { hasTrustDialogAccepted: true } },
+    });
+  });
+
+  it('GLM — профиль ~/.claude.json, его CLAUDE_CONFIG_DIR хост срезает', async () => {
+    const fakeHome = path.join(home, 'user-home');
+    const file = await seed(fakeHome);
+    const foreign = await seed(path.join(home, 'foreign-profile'));
+    setEnv('HOME', fakeHome);
+    setEnv('CLAUDE_CONFIG_DIR', path.dirname(foreign));
+    await grantTrust(project, 'window');
+    const { workId, sessionId } = await pending('glm');
+    await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(await projects(file)).toHaveProperty([await realpath(project)], { hasTrustDialogAccepted: true });
+    expect(await projects(foreign)).toEqual(CLI_STATE.projects);
+  });
+
+  it('папка без записи доверия и не Claude-провайдер (Codex) — файл профиля не меняется', async () => {
+    const dir = path.join(home, 'claude-profile');
+    const file = await seed(dir);
+    setEnv('CLAUDE_CONFIG_DIR', dir);
+    const claude = await pending('claude');
+    await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId));
+    await grantTrust(project, 'window');
+    const codex = await pending('codex');
+    await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId));
+    expect(await readFile(file, 'utf8')).toBe(JSON.stringify(CLI_STATE, null, 2));
+  });
+
+  it('сбой записи не роняет запуск: план собран, в предупреждениях строка без содержимого файла', async () => {
+    const dir = path.join(home, 'claude-profile');
+    await seed(dir);
+    setEnv('CLAUDE_CONFIG_DIR', dir);
+    await grantTrust(project, 'window');
+    const { workId, sessionId } = await pending('claude');
+    await chmod(dir, 0o500);
+    try {
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.command).toBe('claude');
+      const line = plan.warnings.find((warning) => warning.includes('trusted for Claude Code'));
+      expect(line).toMatch(/\(EACCES\)/);
+      expect(plan.warnings.join('\n')).not.toContain('secret-marker');
+    } finally {
+      await chmod(dir, 0o700);
+    }
   });
 });

@@ -14,6 +14,7 @@ const saved = {
   parley: process.env['PARLEY_HOME'],
   harnas: process.env['HARNAS_HOME'],
   home: process.env['HOME'],
+  claudeConfig: process.env['CLAUDE_CONFIG_DIR'],
 };
 
 afterEach(() => {
@@ -21,6 +22,7 @@ afterEach(() => {
     ['PARLEY_HOME', saved.parley],
     ['HARNAS_HOME', saved.harnas],
     ['HOME', saved.home],
+    ['CLAUDE_CONFIG_DIR', saved.claudeConfig],
   ] as const) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -33,8 +35,9 @@ describe('песочница дома', () => {
     expect(atLoad.homedir).toBe(atLoad.testHome);
   });
 
-  it('унаследованные PARLEY_HOME и HARNAS_HOME снимаются, HOME — временный каталог процесса', async () => {
+  it('унаследованные PARLEY_HOME, HARNAS_HOME и CLAUDE_CONFIG_DIR снимаются, HOME — временный каталог процесса', async () => {
     process.env['PARLEY_HOME'] = '/настоящий/дом/parley';
+    process.env['CLAUDE_CONFIG_DIR'] = '/настоящий/человек/.claude';
     process.env['HARNAS_HOME'] = '/настоящий/дом/harnas';
     process.env['HOME'] = '/настоящий/человек';
 
@@ -44,6 +47,7 @@ describe('песочница дома', () => {
 
     expect(process.env['PARLEY_HOME']).toBeUndefined();
     expect(process.env['HARNAS_HOME']).toBeUndefined();
+    expect(process.env['CLAUDE_CONFIG_DIR']).toBeUndefined();
     expect(process.env['HOME']).toBe(process.env['PARLEY_TEST_HOME']);
     expect(process.env['USERPROFILE']).toBe(process.env['PARLEY_TEST_HOME']);
   });
