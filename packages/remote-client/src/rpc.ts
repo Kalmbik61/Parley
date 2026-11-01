@@ -20,6 +20,8 @@ const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'sessions.create',
   'rooms.create',
   'rooms.send',
+  'pty.send',
+  'consents.decide',
 ]);
 
 /** Таймаут по умолчанию для метода: изменяющие ждут дольше чтений. */

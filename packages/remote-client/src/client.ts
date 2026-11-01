@@ -4,6 +4,8 @@ import {
   createRoom,
   createSession,
   decide,
+  decideConsent,
+  sendMessage,
   loadProviders,
   loadRoles,
   readCards,
@@ -13,13 +15,17 @@ import {
   type CreateRoomParams,
   type CreateSessionOutcome,
   type CreateSessionParams,
+  type DecideConsentOutcome,
   type DecideOutcome,
+  type SendMessageOutcome,
+  type SendMessageParams,
   type ResolveOutcome,
   type ResolveProposalParams,
   type Rpc,
   type SendRoomMessageOutcome,
   type SendRoomMessageParams,
 } from './actions.js';
+import { createLiveSync, type LiveSync } from './live.js';
 import { createRefresher, type Clock, type Refresher } from './refresh.js';
 import { createRemoteStore, type RemoteStore } from './store.js';
 import { workKeyOf, type SessionRef } from './state.js';
@@ -32,6 +38,7 @@ export interface RemoteClientOptions {
 export interface RemoteClient {
   store: RemoteStore;
   refresher: Refresher;
+  live: LiveSync;
   /** Кадр события моста или хоста. */
   handleEvent(event: string, data: unknown): void;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Promise<DecideOutcome>;
@@ -42,6 +49,14 @@ export interface RemoteClient {
   createSession(params: CreateSessionParams): Promise<CreateSessionOutcome>;
   createRoom(params: CreateRoomParams): Promise<CreateRoomOutcome>;
   sendRoomMessage(params: SendRoomMessageParams): Promise<SendRoomMessageOutcome>;
+  /** Экран сессии открыт: лента подписана, пока вызов закрытия не сделан. */
+  openFeed(ref: SessionRef): () => void;
+  /** Написать агенту; повтор после `lost` — с тем же `clientMsgId`. */
+  sendMessage(params: SendMessageParams): Promise<SendMessageOutcome>;
+  decideConsent(id: string, decision: 'allow' | 'deny'): Promise<DecideConsentOutcome>;
+  /** Соединение готово / ушло; ведёт и перечитыватель карточек, и подписки. */
+  setConnected(connected: boolean): void;
+  setForeground(foreground: boolean): void;
   loadProviders(): Promise<boolean>;
   loadRoles(projectPath: string): Promise<boolean>;
   dispose(): void;
@@ -50,6 +65,7 @@ export interface RemoteClient {
 export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteClient {
   const store = createRemoteStore();
   const refresher = createRefresher({ store, rpc, clock });
+  const live = createLiveSync({ store, rpc });
   const now = (): number => clock.now();
   const env = { now, sleep: (ms: number) => new Promise<void>((resolve) => clock.setTimeout(resolve, ms)) };
 
@@ -85,6 +101,7 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
   return {
     store,
     refresher,
+    live,
     handleEvent: (event, data) => store.handleEvent(event, data),
     decide: (ref, cardId, decision) => decide(store, rpc, now, ref, cardId, decision),
     resolveProposal: (params) => resolveProposal(store, rpc, params),
@@ -93,10 +110,22 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     createSession: (params) => createSession(store, rpc, env, params),
     createRoom: (params) => createRoom(store, rpc, env, params),
     sendRoomMessage: (params) => sendRoomMessage(store, rpc, env, params),
+    openFeed: (ref) => live.openFeed(ref),
+    sendMessage: (params) => sendMessage(rpc, env, params),
+    decideConsent: (id, decision) => decideConsent(store, rpc, id, decision),
+    setConnected: (connected) => {
+      refresher.setConnected(connected);
+      live.setConnected(connected);
+    },
+    setForeground: (foreground) => {
+      refresher.setForeground(foreground);
+      live.setForeground(foreground);
+    },
     loadProviders: () => loadProviders(store, rpc),
     loadRoles: (projectPath) => loadRoles(store, rpc, projectPath),
     dispose: () => {
       unsubscribe();
+      live.dispose();
       refresher.dispose();
     },
   };

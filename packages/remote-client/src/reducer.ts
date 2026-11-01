@@ -1,7 +1,7 @@
 // Редьюсер состояния телефона (спека §10.1, §8.3). Чистый: часы и RPC сюда не входят, время приходит в действии.
 import type { FeedItem, Message, RoleList, SessionActivity } from '@parley/core';
 import { pendingCards } from '@parley/core/card-gist';
-import type { RoomsMailEvent } from '@parley/protocol';
+import type { ConsentCard, EventData, FeedDecisions, RoomsMailEvent } from '@parley/protocol';
 import { bridgeEventSchemas, remoteWorksSnapshotSchema, type RemoteWorksSnapshot } from '@parley/protocol/remote';
 import {
   goneKey,
@@ -10,6 +10,7 @@ import {
   workKeyOf,
   type ActivityEntry,
   type CardsEntry,
+  type FeedEntry,
   type HostStatus,
   type ProviderCatalog,
   type RemoteState,
@@ -34,6 +35,19 @@ export type RemoteAction =
   | { t: 'hello'; methods: string[] | null }
   | { t: 'catalog.providers'; epoch: string | null; providers: ProviderCatalog }
   | { t: 'catalog.roles'; epoch: string | null; projectPath: string; roles: RoleList }
+  /** Снимок ленты (`feed.snapshot`, полный). Ответ другой эпохи не применяется. */
+  | { t: 'feed.loaded'; ref: SessionRef; epoch: string | null; items: FeedItem[]; revision: number; mode: string | null; decisions: FeedDecisions | null }
+  | { t: 'feed.failed'; ref: SessionRef; epoch: string | null }
+  /** Открытие ленты: запись в состоянии `loading` (прежние элементы остаются на экране). */
+  | { t: 'feed.open'; ref: SessionRef }
+  | { t: 'feed.close'; ref: SessionRef }
+  /** Подписка потеряна (фон, переподключение): до нового снимка запись снова `loading`, дельты ждут в очереди. */
+  | { t: 'feed.reload'; ref: SessionRef }
+  | { t: 'feed.changed'; delta: EventData<'feed.changed'> }
+  | { t: 'consents.loaded'; epoch: string | null; items: ConsentCard[] }
+  | { t: 'consents.changed'; upsert: ConsentCard[]; removed: string[] }
+  /** Карточку согласия решили мы сами. */
+  | { t: 'consents.resolved'; id: string }
   /** `text: ''` убирает черновик. */
   | { t: 'draft'; key: string; text: string };
 
@@ -121,13 +135,73 @@ function applyCards(state: RemoteState, ref: SessionRef, items: FeedItem[], at: 
   return { ...state, gone, cards: { ...state.cards, [key]: entry }, ...(touched ? { resolved } : {}) };
 }
 
+/** Дельта r+1 поверх элементов: upsert по id (новые — в конец, известные — на месте), затем `removed`. */
+export function applyFeedDelta(items: readonly FeedItem[], upsert: readonly FeedItem[], removed: readonly string[]): FeedItem[] {
+  const next = [...items];
+  const index = new Map(next.map((item, at) => [item.id, at]));
+  for (const item of upsert) {
+    const at = index.get(item.id);
+    if (at === undefined) {
+      index.set(item.id, next.length);
+      next.push(item);
+    } else {
+      next[at] = item;
+    }
+  }
+  if (removed.length === 0) return next;
+  const gone = new Set(removed);
+  return next.filter((item) => !gone.has(item.id));
+}
+
+/** Применяет дельты по порядку `revision`; устаревшие отбрасывает, на пропуске останавливается (`gap`). */
+function drain(entry: FeedEntry): FeedEntry {
+  const queued = [...entry.queued].sort((a, b) => a.revision - b.revision);
+  let { items, revision, mode, decisions } = entry;
+  let gap = false;
+  const rest: EventData<'feed.changed'>[] = [];
+  for (const delta of queued) {
+    if (delta.revision <= revision) continue;
+    if (!gap && delta.revision === revision + 1) {
+      items = applyFeedDelta(items, delta.upsert, delta.removed);
+      revision = delta.revision;
+      mode = delta.mode;
+      if (delta.decisions !== undefined) decisions = delta.decisions;
+    } else {
+      gap = true;
+      rest.push(delta);
+    }
+  }
+  return { ...entry, items, revision, mode, decisions, queued: rest, status: gap ? 'stale' : entry.status };
+}
+
+/** Снимок свежее любой дельты с пропуском: остаток очереди отбрасывается, лента готова. */
+function settle(entry: FeedEntry): FeedEntry {
+  const drained = drain(entry);
+  return { ...drained, queued: [], status: 'ready' };
+}
+
+const upsertConsents = (items: ConsentCard[], upsert: ConsentCard[], removed: string[]): ConsentCard[] => {
+  const gone = new Set(removed);
+  const next = items.filter((c) => !gone.has(c.id));
+  for (const card of upsert) {
+    if (gone.has(card.id)) continue;
+    const at = next.findIndex((c) => c.id === card.id);
+    if (at === -1) next.push(card);
+    else next[at] = card;
+  }
+  return next;
+};
+
 export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
   switch (action.t) {
     case 'bridge.status':
       // Другая эпоха сбрасывает снимок, активность, карточки и письма: защита по `revision` начинается заново.
       // `methods` (hello моста) и черновики пишет не эпоха хоста: они живут до своего события.
       if (action.epoch !== state.epoch) {
-        return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch, methods: state.methods, drafts: state.drafts };
+        // Открытые ленты остаются записями `loading` (элементы прежние на экране до нового снимка); `revision` начинается заново.
+        const feeds: Record<string, FeedEntry> = {};
+        for (const [k, f] of Object.entries(state.feeds)) feeds[k] = { ...f, revision: 0, status: 'loading', queued: [] };
+        return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch, methods: state.methods, drafts: state.drafts, feeds };
       }
       return state.hostStatus === action.host ? state : { ...state, hostStatus: action.host };
     case 'snapshot':
@@ -177,6 +251,66 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
     }
     case 'hello':
       return { ...state, methods: action.methods };
+    case 'feed.open': {
+      const key = sessionKey(action.ref);
+      if (key in state.feeds) return state;
+      return { ...state, feeds: { ...state.feeds, [key]: { items: [], revision: 0, mode: null, decisions: null, status: 'loading', queued: [] } } };
+    }
+    case 'feed.close': {
+      const key = sessionKey(action.ref);
+      if (!(key in state.feeds)) return state;
+      const feeds = { ...state.feeds };
+      delete feeds[key];
+      return { ...state, feeds };
+    }
+    case 'feed.reload': {
+      const key = sessionKey(action.ref);
+      const prev = state.feeds[key];
+      if (prev === undefined || prev.status === 'loading') return state;
+      return { ...state, feeds: { ...state.feeds, [key]: { ...prev, revision: 0, status: 'loading', queued: [] } } };
+    }
+    case 'feed.loaded': {
+      if (action.epoch !== state.epoch) return state;
+      const key = sessionKey(action.ref);
+      const prev = state.feeds[key];
+      // Открытие закрыли, пока шёл снимок: запись не воскрешается.
+      if (prev === undefined) return state;
+      const entry = settle({
+        items: action.items,
+        revision: action.revision,
+        mode: action.mode,
+        decisions: action.decisions,
+        status: 'ready',
+        queued: prev.queued,
+      });
+      return { ...state, feeds: { ...state.feeds, [key]: entry } };
+    }
+    case 'feed.failed': {
+      if (action.epoch !== state.epoch) return state;
+      const key = sessionKey(action.ref);
+      const prev = state.feeds[key];
+      return prev === undefined ? state : { ...state, feeds: { ...state.feeds, [key]: { ...prev, status: 'error' } } };
+    }
+    case 'feed.changed': {
+      const key = sessionKey(action.delta.ref);
+      const prev = state.feeds[key];
+      if (prev === undefined) return state;
+      // Снимка ещё нет (или нужен новый): дельта ждёт в очереди.
+      if (prev.status !== 'ready') {
+        if (prev.queued.some((d) => d.revision === action.delta.revision)) return state;
+        return { ...state, feeds: { ...state.feeds, [key]: { ...prev, queued: [...prev.queued, action.delta] } } };
+      }
+      if (action.delta.revision <= prev.revision) return state;
+      return { ...state, feeds: { ...state.feeds, [key]: drain({ ...prev, queued: [...prev.queued, action.delta] }) } };
+    }
+    case 'consents.loaded':
+      return action.epoch === state.epoch ? { ...state, consents: { loaded: true, items: action.items } } : state;
+    case 'consents.changed':
+      return { ...state, consents: { ...state.consents, items: upsertConsents(state.consents.items, action.upsert, action.removed) } };
+    case 'consents.resolved':
+      return state.consents.items.some((c) => c.id === action.id)
+        ? { ...state, consents: { ...state.consents, items: state.consents.items.filter((c) => c.id !== action.id) } }
+        : state;
     case 'catalog.providers':
       return action.epoch === state.epoch ? { ...state, providers: action.providers } : state;
     case 'catalog.roles':
@@ -226,6 +360,18 @@ export function actionFromEvent(event: string, data: unknown): RemoteAction | nu
       return typeof e.projectPath === 'string' && typeof e.workId === 'string' && Array.isArray(e.rooms) && e.unread
         ? { t: 'mail', event: e as RoomsMailEvent }
         : null;
+    }
+    case 'feed.changed': {
+      if (typeof data !== 'object' || data === null) return null;
+      const d = data as Partial<EventData<'feed.changed'>>;
+      return isRef(d.ref) && typeof d.revision === 'number' && Array.isArray(d.upsert) && Array.isArray(d.removed)
+        ? { t: 'feed.changed', delta: d as EventData<'feed.changed'> }
+        : null;
+    }
+    case 'consents.changed': {
+      if (typeof data !== 'object' || data === null) return null;
+      const d = data as Partial<EventData<'consents.changed'>>;
+      return Array.isArray(d.upsert) && Array.isArray(d.removed) ? { t: 'consents.changed', upsert: d.upsert, removed: d.removed } : null;
     }
     default:
       return null;
