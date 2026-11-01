@@ -687,10 +687,10 @@ describe('sleepAfterMinutes setting', () => {
     expect((await loadConfig(file(), {})).config.sleepAfterMinutes).toBe(60);
 
     // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
-    expect(parseSetting('sleepAfterMinutes', '60')).toEqual({ value: 60 });
-    await saveConfig({ sleepAfterMinutes: 60 }, file());
+    expect(parseSetting('sleepAfterMinutes', '30')).toEqual({ value: 30 });
+    await saveConfig({ sleepAfterMinutes: 30 }, file());
     const fromFile = await loadConfig(file(), {});
-    expect(fromFile.config.sleepAfterMinutes).toBe(60);
+    expect(fromFile.config.sleepAfterMinutes).toBe(30);
     expect(fromFile.warning).toBeNull();
     expect(fromFile.fromEnv).toEqual([]);
 
