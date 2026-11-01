@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AppState, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
+import { DEMO } from '../dev/flags';
 import { appLock, startLock } from '../auth/lock-instance';
 import type { AppLock, UnlockResult } from '../auth/app-lock';
 import { runtime } from '../runtime/instance';
@@ -21,7 +22,12 @@ function useLockState(lock: AppLock | null): { covered: boolean; locked: boolean
   return { covered: state !== 'unlocked', locked: state === 'locked' };
 }
 
+/** Developer build with made-up data (`PARLEY_MOBILE_DEV_DEMO=1`): no lock, so screens can be looked at. Never in release. */
 export function LockGate({ children }: { children: ReactNode }) {
+  return DEMO ? <>{children}</> : <RealLockGate>{children}</RealLockGate>;
+}
+
+function RealLockGate({ children }: { children: ReactNode }) {
   const c = useColors();
   const [lock, setLock] = useState<AppLock | null>(appLock);
   const [active, setActive] = useState(AppState.currentState === 'active');

@@ -7,6 +7,7 @@ import { attentionOfSession, sessionKey, type RemoteState, type RemoteSwarm, typ
 import { capsuleOf } from '../cards/status';
 import { spacing, typography, useColors } from '../theme';
 import { attentionColor, attentionWord, CountPill, Dot } from '../ui/parts';
+import { ProviderAvatar } from '../ui/avatars';
 import { computeGuides, contentLeft, indentFor, STUB, trunkX, type GuideSpec } from './guides';
 import { useNow } from '../hooks/use-remote';
 import { elapsed } from './summary';
@@ -15,6 +16,7 @@ import { teamLine, teamOpenByDefault, type Team } from './teams';
 export interface TreeActions {
   openSession(sessionId: string): void;
   openDecision(roomId: string, proposalId: string): void;
+  openRoom(roomId: string): void;
 }
 
 export interface TreeEnv {
@@ -71,7 +73,7 @@ function SessionLine({ session, depth, env, spec, indent }: { session: RemoteSes
       style={[styles.line, { paddingLeft: depth === 0 || indent === undefined ? 12 : contentLeft(depth, indent) }]}
     >
       {spec !== undefined && indent !== undefined && <Guides spec={spec} indent={indent} mid={24} />}
-      <Dot color={attentionColor(c, a)} ring={a === 'unseen'} />
+      <ProviderAvatar provider={session.provider} size={24} badge={<Dot color={attentionColor(c, a)} ring={a === 'unseen'} />} />
       <View style={styles.flex}>
         <Text numberOfLines={1} allowFontScaling style={[typography.body, { color: session.lifecycle === 'closed' ? c.label2 : c.label }]}>
           {session.label}
@@ -91,22 +93,42 @@ function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { 
   const p = row.room.proposal;
   const memberWaits = row.members.some((m) => attentionOf(env, m) === 'needs-you');
   const [open, setOpen] = useState(p !== null || memberWaits);
+  const waits = memberWaits || p !== null;
+  const stateWord = p !== null ? 'decision' : memberWaits ? 'needs you' : null;
+  const leadLabel = row.members.find((m) => m.id === row.room.lead)?.label ?? null;
   return (
     <View>
       <Guides spec={spec} indent={indent} mid={28} />
-      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: p !== null ? c.warningBg : c.surface2, borderColor: p !== null ? c.tint : 'transparent' }]}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); haptic.selection(); }} style={styles.blockHead}>
-        <SymbolView name={p !== null ? 'checkmark.seal' : 'number'} size={18} tintColor={c.tint} />
-        <View style={styles.flex}>
-          <Text numberOfLines={2} allowFontScaling style={[typography.headline, { color: c.label }]}>
-            {row.room.title}
-          </Text>
-          <Text allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-            Room · {row.room.members.length} agent{row.room.members.length === 1 ? '' : 's'}
-          </Text>
-        </View>
-        <SymbolView name={open ? 'chevron.up' : 'chevron.down'} size={12} tintColor={c.label3} />
-      </Pressable>
+      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: waits ? c.warningBg : c.surface2, borderColor: waits ? c.tint : 'transparent' }]}>
+      <View style={styles.blockHead}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Room ${row.room.title}. ${stateWord ?? ''} ${row.room.mode ?? 'free'}, ${row.room.members.length} agents`} accessibilityHint="Opens the room chat" onPress={() => env.actions.openRoom(row.room.id)} style={[styles.flex, { gap: 4 }]}>
+          <View style={styles.roomTitle}>
+            <SymbolView name="number" size={15} tintColor={c.label2} />
+            <Text numberOfLines={2} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label, fontWeight: waits ? '700' : '600' }]}>
+              {row.room.title}
+            </Text>
+            {stateWord !== null && (
+              <Text allowFontScaling style={[typography.caption1, { color: p !== null ? c.tint : c.needsYou, fontWeight: '600' }]}>
+                {stateWord}
+              </Text>
+            )}
+          </View>
+          <View style={styles.roomTitle}>
+            <View style={[styles.mode, { backgroundColor: c.surface, borderColor: c.separator }]}>
+              <Text allowFontScaling style={[typography.caption2, { color: c.label2 }]}>
+                {row.room.mode ?? 'free'}
+              </Text>
+            </View>
+            <Text numberOfLines={1} allowFontScaling style={[typography.caption1, styles.flex, { color: c.label2 }]}>
+              {row.room.members.length} agent{row.room.members.length === 1 ? '' : 's'}
+              {leadLabel === null ? '' : ` · lead ${leadLabel}`}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={open ? 'Collapse room' : 'Expand room'} accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); haptic.selection(); }} style={styles.chevron}>
+          <SymbolView name={open ? 'chevron.up' : 'chevron.down'} size={12} tintColor={c.label3} />
+        </Pressable>
+      </View>
       {p !== null && (
         <Pressable accessibilityRole="button" accessibilityLabel={`Decision from ${p.from}. Review`} onPress={() => env.actions.openDecision(row.room.id, p.id)} style={styles.decision}>
           <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
@@ -120,7 +142,7 @@ function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { 
       {open &&
         row.members.map((m) => (
           <Pressable key={m.id} accessibilityRole="button" onPress={() => env.actions.openSession(m.id)} style={styles.memberLine}>
-            <Dot color={attentionColor(c, attentionOf(env, m))} ring={attentionOf(env, m) === 'unseen'} />
+            <ProviderAvatar provider={m.provider} size={20} badge={<Dot color={attentionColor(c, attentionOf(env, m))} ring={attentionOf(env, m) === 'unseen'} />} />
             <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
               {m.label}
             </Text>
@@ -235,9 +257,13 @@ export function TeamCard({ team, env }: { team: Team; env: TreeEnv }) {
           <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ position: 'absolute', left: trunkX(1, 28), top: 48, bottom: 0, width: LINE, backgroundColor: c.treeLine }} />
         )}
         <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${attentionWord(a)}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex, { alignItems: 'flex-start' }]}>
-          <View style={[styles.avatar, { backgroundColor: c.tint }]}>
-            <Text style={[typography.headline, { color: c.onTint }]}>{name.slice(0, 1).toUpperCase()}</Text>
-          </View>
+          {headSession !== null ? (
+            <ProviderAvatar provider={headSession.provider} size={36} />
+          ) : (
+            <View style={[styles.avatar, { backgroundColor: c.tint }]}>
+              <Text style={[typography.headline, { color: c.onTint }]}>{name.slice(0, 1).toUpperCase()}</Text>
+            </View>
+          )}
           <View style={styles.flex}>
             <Text numberOfLines={1} allowFontScaling style={[typography.headline, { color: c.label }]}>
               {name}
@@ -291,7 +317,9 @@ const styles = StyleSheet.create({
   chevron: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   line: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingRight: 12 },
   block: { marginRight: 8, marginVertical: 4, borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
-  blockHead: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minHeight: 48 },
+  blockHead: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 12, minHeight: 48 },
+  roomTitle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  mode: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 6, paddingVertical: 1 },
   decision: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingBottom: 10, minHeight: 44 },
   memberLine: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, minHeight: 44 },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },

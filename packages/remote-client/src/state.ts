@@ -73,6 +73,17 @@ export interface ConsentsState {
   items: ConsentCard[];
 }
 
+/** History of a room open on the phone (`context.messages` pages + `rooms.mail`), ascending by time. */
+export interface RoomChat {
+  messages: Message[];
+  /** Cursor of the next OLDER page; `null` — the history is complete. */
+  older: string | null;
+  /** `loading` — the newest page is not read yet; `stale` — `rooms.mail` said `reread`; `error` — the read failed. */
+  status: 'loading' | 'ready' | 'stale' | 'error';
+  /** The older page is being read / failed. */
+  more: 'idle' | 'loading' | 'error';
+}
+
 export interface RemoteState {
   /** Текущая эпоха моста; `null` — ещё не пришла или хост без эпохи. */
   epoch: string | null;
@@ -98,6 +109,8 @@ export interface RemoteState {
   providers: ProviderCatalog | null;
   /** `roles.list` по проектам. Сбрасывается с эпохой. */
   roles: Record<string, RoleList>;
+  /** Open rooms by `roomKey`; the entries stay across an epoch and reload (status `loading`). */
+  roomChats: Record<string, RoomChat>;
   /** Ленты открытых сессий по `sessionKey`; сбрасываются с эпохой. */
   feeds: Record<string, FeedEntry>;
   consents: ConsentsState;
@@ -118,6 +131,7 @@ export const initialRemoteState = (): RemoteState => ({
   methods: null,
   providers: null,
   roles: {},
+  roomChats: {},
   feeds: {},
   consents: { loaded: false, items: [] },
   drafts: {},

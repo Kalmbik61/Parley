@@ -14,6 +14,9 @@ import {
   type HostStatus,
   type ProviderCatalog,
   type RemoteState,
+  type RoomChat,
+  type RoomRef,
+  roomKey,
   type SessionRef,
 } from './state.js';
 
@@ -44,6 +47,13 @@ export type RemoteAction =
   /** Подписка потеряна (фон, переподключение): до нового снимка запись снова `loading`, дельты ждут в очереди. */
   | { t: 'feed.reload'; ref: SessionRef }
   | { t: 'feed.changed'; delta: EventData<'feed.changed'> }
+  | { t: 'room.open'; ref: RoomRef }
+  | { t: 'room.close'; ref: RoomRef }
+  | { t: 'room.reload'; ref: RoomRef }
+  | { t: 'room.loaded'; ref: RoomRef; epoch: string | null; messages: Message[]; next: string | null }
+  | { t: 'room.older'; ref: RoomRef; epoch: string | null; messages: Message[]; next: string | null }
+  | { t: 'room.more'; ref: RoomRef }
+  | { t: 'room.failed'; ref: RoomRef; epoch: string | null; more: boolean }
   | { t: 'consents.loaded'; epoch: string | null; items: ConsentCard[] }
   | { t: 'consents.changed'; upsert: ConsentCard[]; removed: string[] }
   /** Карточку согласия решили мы сами. */
@@ -192,6 +202,43 @@ const upsertConsents = (items: ConsentCard[], upsert: ConsentCard[], removed: st
   return next;
 };
 
+const idNum = (id: string): number => Number(/(\d+)$/.exec(id)?.[1] ?? 0);
+/** Ascending by time, then by id. */
+export const byOrder = (a: Message, b: Message): number => Date.parse(a.at) - Date.parse(b.at) || idNum(a.id) - idNum(b.id);
+
+function mergeMessages(list: readonly Message[], incoming: readonly Message[]): Message[] {
+  const map = new Map(list.map((m) => [m.id, m]));
+  for (const m of incoming) map.set(m.id, m);
+  return [...map.values()].sort(byOrder);
+}
+
+/** `rooms.mail` for the rooms open on the phone: new letters, read marks, deletions; `reread` marks the room stale. */
+function applyRoomMail(state: RemoteState, event: RoomsMailEvent): RemoteState {
+  let chats = state.roomChats;
+  const set = (key: string, chat: RoomChat): void => {
+    if (chats === state.roomChats) chats = { ...chats };
+    chats[key] = chat;
+  };
+  for (const room of event.rooms) {
+    if (room.roomId === null) continue;
+    const key = roomKey({ projectPath: event.projectPath, workId: event.workId, roomId: room.roomId });
+    const chat = state.roomChats[key];
+    if (chat === undefined) continue;
+    let messages = mergeMessages(chat.messages, room.letters.filter((m) => m.roomId === room.roomId));
+    if (room.deleted.length > 0) messages = messages.map((m) => (room.deleted.includes(m.id) ? { ...m, deleted: true } : m));
+    for (const read of room.reads) messages = messages.map((m) => (m.id === read.id ? { ...m, readBy: { ...m.readBy, [read.reader]: read.at } } : m));
+    set(key, { ...chat, messages, status: room.reread === true && chat.status === 'ready' ? 'stale' : chat.status });
+  }
+  for (const dropped of event.droppedRooms) {
+    const key = roomKey({ projectPath: event.projectPath, workId: event.workId, roomId: dropped });
+    if (key in chats) {
+      if (chats === state.roomChats) chats = { ...chats };
+      delete chats[key];
+    }
+  }
+  return chats === state.roomChats ? state : { ...state, roomChats: chats };
+}
+
 export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
   switch (action.t) {
     case 'bridge.status':
@@ -201,7 +248,10 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
         // Открытые ленты остаются записями `loading` (элементы прежние на экране до нового снимка); `revision` начинается заново.
         const feeds: Record<string, FeedEntry> = {};
         for (const [k, f] of Object.entries(state.feeds)) feeds[k] = { ...f, revision: 0, status: 'loading', queued: [] };
-        return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch, methods: state.methods, drafts: state.drafts, feeds };
+        // Open rooms keep what they show and read the newest page again.
+        const roomChats: Record<string, RoomChat> = {};
+        for (const [k, r] of Object.entries(state.roomChats)) roomChats[k] = { ...r, status: 'loading', more: 'idle' };
+        return { ...initialRemoteState(), hostStatus: action.host, epoch: action.epoch, methods: state.methods, drafts: state.drafts, feeds, roomChats };
       }
       return state.hostStatus === action.host ? state : { ...state, hostStatus: action.host };
     case 'snapshot':
@@ -225,7 +275,52 @@ export function reduce(state: RemoteState, action: RemoteAction): RemoteState {
         },
       };
     case 'mail':
-      return applyMail(state, action.event);
+      return applyRoomMail(applyMail(state, action.event), action.event);
+    case 'room.open': {
+      const key = roomKey(action.ref);
+      if (key in state.roomChats) return state;
+      return { ...state, roomChats: { ...state.roomChats, [key]: { messages: [], older: null, status: 'loading', more: 'idle' } } };
+    }
+    case 'room.close': {
+      const key = roomKey(action.ref);
+      if (!(key in state.roomChats)) return state;
+      const roomChats = { ...state.roomChats };
+      delete roomChats[key];
+      return { ...state, roomChats };
+    }
+    case 'room.reload': {
+      const key = roomKey(action.ref);
+      const chat = state.roomChats[key];
+      return chat === undefined || chat.status === 'loading' ? state : { ...state, roomChats: { ...state.roomChats, [key]: { ...chat, status: 'loading' } } };
+    }
+    case 'room.loaded': {
+      if (action.epoch !== state.epoch) return state;
+      const key = roomKey(action.ref);
+      const chat = state.roomChats[key];
+      if (chat === undefined) return state;
+      // The newest page replaces what is held (a reread); letters that arrived by `rooms.mail` meanwhile are kept.
+      const messages = mergeMessages(action.messages, chat.messages.filter((m) => action.messages.length === 0 || Date.parse(m.at) >= Date.parse(action.messages[0]!.at)));
+      return { ...state, roomChats: { ...state.roomChats, [key]: { messages, older: action.next, status: 'ready', more: 'idle' } } };
+    }
+    case 'room.more': {
+      const key = roomKey(action.ref);
+      const chat = state.roomChats[key];
+      return chat === undefined ? state : { ...state, roomChats: { ...state.roomChats, [key]: { ...chat, more: 'loading' } } };
+    }
+    case 'room.older': {
+      if (action.epoch !== state.epoch) return state;
+      const key = roomKey(action.ref);
+      const chat = state.roomChats[key];
+      if (chat === undefined) return state;
+      return { ...state, roomChats: { ...state.roomChats, [key]: { ...chat, messages: mergeMessages(chat.messages, action.messages), older: action.next, more: 'idle' } } };
+    }
+    case 'room.failed': {
+      if (action.epoch !== state.epoch) return state;
+      const key = roomKey(action.ref);
+      const chat = state.roomChats[key];
+      if (chat === undefined) return state;
+      return { ...state, roomChats: { ...state.roomChats, [key]: action.more ? { ...chat, more: 'error' } : { ...chat, status: 'error' } } };
+    }
     case 'messages':
       if (action.epoch !== undefined && action.epoch !== state.epoch) return state;
       return action.roomId === null

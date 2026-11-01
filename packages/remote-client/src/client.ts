@@ -29,7 +29,7 @@ import {
 import { createLiveSync, type LiveSync } from './live.js';
 import { createRefresher, type Clock, type Refresher } from './refresh.js';
 import { createRemoteStore, type RemoteStore } from './store.js';
-import { workKeyOf, type SessionRef } from './state.js';
+import { workKeyOf, type RoomRef, type SessionRef } from './state.js';
 
 export interface RemoteClientOptions {
   rpc: Rpc;
@@ -50,6 +50,11 @@ export interface RemoteClient {
   createSession(params: CreateSessionParams): Promise<CreateSessionOutcome>;
   createRoom(params: CreateRoomParams): Promise<CreateRoomOutcome>;
   sendRoomMessage(params: SendRoomMessageParams): Promise<SendRoomMessageOutcome>;
+  /** Экран комнаты открыт: история `context.messages` и живые `rooms.mail`. */
+  openRoom(ref: RoomRef): () => void;
+  /** Перечитать комнату / следующую более старую страницу. */
+  reloadRoom(ref: RoomRef): void;
+  loadOlder(ref: RoomRef): void;
   /** Экран сессии открыт: лента подписана, пока вызов закрытия не сделан. */
   openFeed(ref: SessionRef): () => void;
   /** Написать агенту; повтор после `lost` — с тем же `clientMsgId`. */
@@ -114,6 +119,9 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     createRoom: (params) => createRoom(store, rpc, env, params),
     sendRoomMessage: (params) => sendRoomMessage(store, rpc, env, params),
     openFeed: (ref) => live.openFeed(ref),
+    openRoom: (ref) => live.openRoom(ref),
+    reloadRoom: (ref) => live.reloadRoom(ref),
+    loadOlder: (ref) => live.loadOlder(ref),
     sendMessage: (params) => sendMessage(rpc, env, params),
     decideConsent: (id, decision) => decideConsent(store, rpc, id, decision),
     setConnected: (connected) => {

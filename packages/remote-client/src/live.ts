@@ -4,7 +4,7 @@
 import type { Rpc } from './actions.js';
 import type { Clock } from './refresh.js';
 import type { RemoteStore } from './store.js';
-import { sessionKey, type SessionRef } from './state.js';
+import { roomKey, sessionKey, type RoomRef, type SessionRef } from './state.js';
 
 export interface LiveSync {
   /** Экран сессии открыт. Возвращает закрытие; ссылки на одну сессию считаются. */
@@ -14,6 +14,12 @@ export interface LiveSync {
   /** Соединение готово (`ready`). */
   setConnected(connected: boolean): void;
   setForeground(foreground: boolean): void;
+  /** A room screen is open: its newest page is read, `rooms.mail` keeps it current. Returns the close. */
+  openRoom(ref: RoomRef): () => void;
+  /** Read the newest page again (after an error). */
+  reloadRoom(ref: RoomRef): void;
+  /** The next older page. */
+  loadOlder(ref: RoomRef): void;
   /** Перечитать согласия сейчас. */
   reloadConsents(): void;
   dispose(): void;
@@ -149,6 +155,34 @@ export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc:
     }
   }
 
+  // ---- rooms ----
+  const rooms = new Map<string, { ref: RoomRef; count: number; running: boolean }>();
+  async function syncRoom(key: string): Promise<void> {
+    const r = rooms.get(key);
+    if (r === undefined || !active() || r.running) return;
+    if (lacks('context.messages')) {
+      store.dispatch({ t: 'room.failed', ref: r.ref, epoch: store.getState().epoch, more: false });
+      return;
+    }
+    r.running = true;
+    try {
+      const epoch = store.getState().epoch;
+      try {
+        const res = (await rpc.call('context.messages', { projectPath: r.ref.projectPath, workId: r.ref.workId, roomId: r.ref.roomId })) as {
+          messages?: unknown;
+          page?: { next?: unknown; complete?: unknown };
+        } | null;
+        if (res === null || !Array.isArray(res.messages)) throw new Error('bad context.messages');
+        const next = typeof res.page?.next === 'string' && res.page.complete !== true ? res.page.next : null;
+        store.dispatch({ t: 'room.loaded', ref: r.ref, epoch, messages: res.messages as never[], next });
+      } catch {
+        store.dispatch({ t: 'room.failed', ref: r.ref, epoch, more: false });
+      }
+    } finally {
+      r.running = false;
+    }
+  }
+
   // ---- согласия ----
   let consentsRunning = false;
   let consentsAgain = false;
@@ -191,12 +225,21 @@ export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc:
       // Снимок заново; подписку мост восстанавливает сам (A30), повторно её не просим. Новая эпоха — новый Мак/хост:
       // окончательный отказ снимается.
       for (const key of open.keys()) void syncFeed(key, true);
+      for (const key of rooms.keys()) void syncRoom(key);
       return;
     }
     // The hello arrived or changed: what was held back for a missing hello may go now.
     if (next.methods !== prev.methods) {
+      for (const key of rooms.keys()) void syncRoom(key);
       void syncConsents();
       for (const key of open.keys()) void syncFeed(key);
+    }
+    // `rooms.mail` said `reread` for an open room: read it again.
+    for (const [key, chat] of Object.entries(next.roomChats)) {
+      if (chat.status === 'stale' && prev.roomChats[key]?.status !== 'stale' && rooms.has(key)) {
+        store.dispatch({ t: 'room.reload', ref: rooms.get(key)!.ref });
+        void syncRoom(key);
+      }
     }
     // Дельта с пропуском: нужен новый снимок.
     for (const [key, entry] of Object.entries(next.feeds)) {
@@ -252,12 +295,54 @@ export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc:
       foreground = f;
       handle(was);
     },
+    openRoom(ref) {
+      const key = roomKey(ref);
+      let r = rooms.get(key);
+      if (r === undefined) {
+        r = { ref, count: 0, running: false };
+        rooms.set(key, r);
+        store.dispatch({ t: 'room.open', ref });
+      }
+      r.count++;
+      void syncRoom(key);
+      let closed = false;
+      return () => {
+        if (closed) return;
+        closed = true;
+        const cur = rooms.get(key);
+        if (cur === undefined || --cur.count > 0) return;
+        rooms.delete(key);
+        store.dispatch({ t: 'room.close', ref });
+      };
+    },
+    reloadRoom(ref) {
+      const key = roomKey(ref);
+      if (!rooms.has(key)) return;
+      store.dispatch({ t: 'room.reload', ref });
+      void syncRoom(key);
+    },
+    loadOlder(ref) {
+      const key = roomKey(ref);
+      const chat = store.getState().roomChats[key];
+      if (chat === undefined || chat.older === null || chat.more === 'loading' || !active()) return;
+      const epoch = store.getState().epoch;
+      store.dispatch({ t: 'room.more', ref });
+      void rpc
+        .call('context.messages', { projectPath: ref.projectPath, workId: ref.workId, roomId: ref.roomId, cursor: chat.older })
+        .then((res) => {
+          const r = res as { messages?: unknown; page?: { next?: unknown; complete?: unknown } } | null;
+          if (r === null || !Array.isArray(r.messages)) throw new Error('bad page');
+          store.dispatch({ t: 'room.older', ref, epoch, messages: r.messages as never[], next: typeof r.page?.next === 'string' && r.page.complete !== true ? r.page.next : null });
+        })
+        .catch(() => store.dispatch({ t: 'room.failed', ref, epoch, more: true }));
+    },
     reloadConsents: () => void syncConsents(),
     dispose() {
       unsubscribeStore();
       unsubscribeEvents();
       for (const o of open.values()) clearRetry(o);
       open.clear();
+      rooms.clear();
     },
   };
 
@@ -275,5 +360,6 @@ export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc:
     }
     void syncConsents();
     for (const key of open.keys()) void syncFeed(key);
+    for (const key of rooms.keys()) void syncRoom(key);
   }
 }
