@@ -54,6 +54,15 @@ describe('applyFindHighlights', () => {
     expect(active[0]!.toString()).toBe('NEEDLE');
   });
 
+  it('подписи-обвязка (Arguments, Result) не считаются: запрос «result» с совпадением в выводе красит вывод, не подпись', () => {
+    const registry = stub();
+    const root = mount('<div data-feed-id="a"><span data-find-label>Result</span><pre>the result text</pre></div>');
+    applyFindHighlights(root, 'result', { itemId: 'a', nth: 0 });
+    expect((registry.get('chat-find') as FakeHighlight).ranges).toHaveLength(1);
+    const active = (registry.get('chat-find-active') as FakeHighlight).ranges[0]!;
+    expect((active.startContainer as Text).data).toBe('the result text');
+  });
+
   it('номер дальше найденных упирается в последнее вхождение строки', () => {
     const registry = stub();
     applyFindHighlights(mount(rows), 'needle', { itemId: 'a', nth: 5 });

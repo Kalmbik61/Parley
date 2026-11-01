@@ -6,7 +6,7 @@
  * в строке — по порядку отрисованного текста; счётчик панели считает по модели (`find.ts`), поэтому у Markdown
  * (`**x**` в исходнике, `x` на экране) номера могут разойтись — тогда берётся последнее найденное вхождение строки.
  * Не считаются и не подсвечиваются свёрнутая тень группы (`hidden`), сводка вызова (она повторена во входе), дифф
- * (заплатки не ищутся). Без API (jsdom, старый Chromium) функции ничего не делают.
+ * (заплатки не ищутся) и подписи-обвязка (`data-find-label`: «Arguments», «Result», «Changes»: в модели поиска их нет). Без API (jsdom, старый Chromium) функции ничего не делают.
  */
 
 import { normalizeQuery } from './find.js';
@@ -14,7 +14,7 @@ import { normalizeQuery } from './find.js';
 const MATCH = 'chat-find';
 const ACTIVE = 'chat-find-active';
 /** Текст, который не подсвечивается и не считается (см. шапку). */
-const SKIP = '[hidden], [data-tool-summary], [data-testid="chat-diff"]';
+const SKIP = '[hidden], [data-tool-summary], [data-testid="chat-diff"], [data-find-label]';
 
 interface Api {
   registry: Map<string, unknown>;
