@@ -271,6 +271,9 @@ importers:
       '@parley/core':
         specifier: workspace:*
         version: link:../core
+      '@parley/noise':
+        specifier: workspace:*
+        version: link:../noise
       '@parley/protocol':
         specifier: workspace:*
         version: link:../protocol

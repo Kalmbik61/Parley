@@ -28,12 +28,14 @@ const config: ExpoConfig = {
   version: '0.1.0',
   scheme: 'parley',
   extra: dev
-    ? { devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devApprove: process.env.PARLEY_MOBILE_DEV_APPROVE === '1', devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null }
+    ? { devBuild: true, devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devApprove: process.env.PARLEY_MOBILE_DEV_APPROVE === '1', devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null }
     : {},
   platforms: ['ios'],
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   ios: {
+    // 1024x1024 without alpha (iOS rejects transparency): the desktop icon flattened onto its own background #191814.
+    icon: './assets/icon.png',
     bundleIdentifier: process.env.PARLEY_MOBILE_BUNDLE_ID ?? 'dev.example.parley.mobile',
     supportsTablet: false,
     ...(dev && {

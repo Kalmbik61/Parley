@@ -31,6 +31,7 @@ export default function RootLayout() {
     <ApproveContext.Provider value={cardsApprove}>
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="bench" options={{ title: 'Crypto bench' }} />
       <Stack.Screen name="new" options={{ presentation: 'modal', headerBackVisible: false }} />
       <Stack.Screen
         name="pair"
