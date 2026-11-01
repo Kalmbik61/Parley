@@ -99,6 +99,17 @@ describe('ChatFindBar', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it('Esc закрывает полосу и после щелчка по стрелке, когда фокус уже не в поле', () => {
+    const { input, onClose } = setUp();
+    fireEvent.change(input, { target: { value: 'needle' } });
+    const next = screen.getByRole('button', { name: S.terminal.nextMatch });
+    next.focus();
+    fireEvent.click(next);
+    expect(document.activeElement).toBe(next);
+    fireEvent.keyDown(next, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('поле в фокусе при монтировании; повторный focusNonce возвращает фокус и выделяет запрос', () => {
     const { input, rerender, onChange, onClose } = setUp();
     expect(document.activeElement).toBe(input);

@@ -1,7 +1,7 @@
 /**
  * Полоса поиска ⌘F по ленте Chat (план 2026-11-01, задача 9): 32px поверх правого верхнего угла ленты, поле,
  * счётчик `n/m` (`0/0`, когда нет совпадений; больше `FIND_LIMIT` — `1000+`), ↑ ↓ и ×. Enter — следующее, ⇧Enter —
- * предыдущее, по кругу; Esc и × закрывают. Вид — как у полосы терминала (`terminal/SearchBar.tsx`), без «Aa» и regex.
+ * предыдущее, по кругу; Esc (с любого элемента полосы) и × закрывают. Вид — как у полосы терминала (`terminal/SearchBar.tsx`), без «Aa» и regex.
  *
  * Ищет `searchFeed` по модели ленты, поэтому находит и то, чего нет в DOM (свёрнутые ходы, вывод вызовов, вне экрана).
  * Куда прыгнуть, лента узнаёт из `onChange`: у цели свой `nonce`, растёт на каждый шаг человека (ввод, Enter, стрелки),
@@ -93,6 +93,12 @@ export function ChatFindBar({ items, focusNonce, onChange, initialQuery = '', on
       role="search"
       aria-label={S.chat.find.label}
       data-testid="chat-find"
+      // Esc с любого элемента полосы (поле, стрелки, ×): после щелчка по стрелке фокус уже не в поле.
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        onClose();
+      }}
       className="absolute right-2 top-2 z-10 flex h-8 items-center gap-1 rounded border border-border bg-popover px-2"
     >
       <input
@@ -111,9 +117,6 @@ export function ChatFindBar({ items, focusNonce, onChange, initialQuery = '', on
           if (event.key === 'Enter') {
             event.preventDefault();
             go(event.shiftKey ? -1 : 1);
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            onClose();
           }
         }}
         className="h-6 w-48 rounded border border-transparent bg-transparent px-1 text-sm text-popover-foreground outline-none"
