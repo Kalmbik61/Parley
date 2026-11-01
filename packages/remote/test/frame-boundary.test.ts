@@ -53,6 +53,8 @@ describe('белый список против запретного списка
     'providers.saveCustom', 'providers.signIn', 'providers.signInInput', 'providers.signInResize', 'providers.signOut', 'recipes.list',
     'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare', 'sessions.interrupted', 'sessions.switchAgent',
     'sessions.switchOptions', 'swarms.cancel', 'swarms.create', 'swarms.seen',
+    // Из master после слияния 2026-11-01 (лимиты агентов, сон, закрытие готовых сессий): телефону не открыты.
+    'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);
