@@ -10,7 +10,13 @@
 Ревизия 2 того же дня (s-194, пометки человека на прототипе, решение ведущего m-2210): имя агента — в панели
 навигации в строке с «‹», `role · model · время` — подзаголовок под ним вместе с состоянием (9.1); «Last reply» и
 секции Team на экране нет (Team — в меню `⋯`); «нужен ты» без кнопок — одна строка под панелью; новый экран Room — чат
-комнаты с упоминаниями и Face ID на каждое письмо (9.7; В4 и В17 закрыты); Allow согласия — Face ID всегда (В18).
+комнаты с упоминаниями (9.7; В4 и В17 закрыты).
+
+Ревизия 3 того же дня (s-194; спека rev. 16, план rev. 14, задача A33; ведущий m-2219): решение 6 изменено — вместо
+Face ID на каждое действие **блокировка приложения** (12a, 11.6: экран блокировки, «Lock Parley with Face ID»), все
+значки и запросы Face ID у кнопок убраны; **комнаты читаются как комнаты** — `#`, контейнер с участниками и `★`
+ведущего, режим и состояние, сессии — аватар со значком провайдера (8.2); **кнопки панели простые**, акцентом Parley
+в обеих темах, контраст проверен (17.4).
 
 Основание:
 - план `docs/plans/2026-10-29-mobile-app-plan.md`: D1, экранные задачи A13–A16;
@@ -32,7 +38,8 @@
 
 «Нативно отлично» (§11.3) значит: системные элементы и системное поведение, а не перенос окна Parley.
 
-1. **Системные компоненты.** Native tabs, native stack с крупными заголовками и свайпом назад, сгруппированные
+1. **Системные компоненты.** Native tabs, native stack с крупными заголовками (у экранов-чатов — компактная панель,
+   9.1) и свайпом назад; кнопки панели — простые, без подложек, акцентом Parley (17.4), сгруппированные
    списки (`insetGrouped`), системные листы (sheet) с ручкой, системные алерты только для разрушительных действий,
    контекстные меню вместо самодельных поповеров. На iOS 26 — Liquid Glass у панели вкладок, панели навигации и
    нижней панели действий (`expo-glass-effect`); на iOS 17–25 — системный материал `.bar` (запасной вариант).
@@ -83,7 +90,7 @@
 ## 3. Карта навигации
 
 ```
-Запуск
+Запуск ─▶ (замок включён) Экран блокировки ─▶ Face ID ─▶ дальше как обычно (12a); то же после 5 мин в фоне
  ├─ нет хостов ───────────────▶ Welcome ─▶ Scanner ─▶ Device name ─▶ Handshake ─▶ SAS ─▶ Paired ─▶ Notifications ─▶ Inbox
  │                                 ▲                       ▲
  │  parley://pair?… (камера iOS) ──┴─ Confirm link ────────┘
@@ -359,10 +366,11 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 | Согласие: смена провайдера (`agent-switch`, PR #143) | `arrow.left.arrow.right.circle` | «Continue <сессия> on <провайдер>?», откуда → куда, причина | **Deny** / **Allow** | Session той сессии |
 
 - «Always» в Inbox нет никогда: только на экране сессии, где видно всё правило (§11.2 п. 4).
-- Под работой у карточки сессии — строка происхождения (9): `↰ Greta › # iOS app: stage A`, `footnote`
+- Под работой у карточки сессии — строка происхождения (9): `↰ (C) Greta › # iOS app: stage A` (значок провайдера у
+  сессии, `#` у комнаты — правило 8.2), `footnote`
   `secondaryLabel`, без ссылок (тап по карточке и так ведёт в сессию). У главной сессии строки нет.
-- Allow в строке — для быстрых разрешений; полный вход карточки и весь разговор — на Session (чат, раздел 9). Allow в строке —
-  под Face ID, как на экране сессии (раздел 12a); Deny — без запроса.
+- Allow в строке — для быстрых разрешений; полный вход карточки и весь разговор — на Session (чат, раздел 9). Ни Allow, ни
+  Deny отдельного Face ID не спрашивают: приложение защищено блокировкой (раздел 12a).
 - Свайп строки влево — нет (случайный свайп в списке решений опасен).
 - Контекстное меню (долгое нажатие): Open session, Open work, Copy command (только `run`).
 
@@ -400,7 +408,7 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 │ │ create_session                │ │    resume / launch); без label — «by a launch on your Mac»
 │ │ Agents start here without the │ │  ← одна строка пояснения, тап — полный текст окна
 │ │ terminal's trust screen. More │ │
-│ │ [ Deny ]   [ (faceid) Allow ] │ │
+│ │ [ Deny ]   [   Allow   ]      │ │
 │ └───────────────────────────────┘ │
 ```
 
@@ -425,22 +433,20 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 │ │ Asked by Greta · Allow stops  │ │  ← requestedBy.label; вторая фраза — из окна
 │ │ the session now and continues │ │
 │ │ it there.                     │ │
-│ │ [ Deny ]   [ (faceid) Allow ] │ │
+│ │ [ Deny ]   [   Allow   ]      │ │
 │ └───────────────────────────────┘ │
 ```
 
 - Тап по карточке — Session сессии `ref`; там та же карточка стоит над полем сообщения с теми же кнопками (9.4).
 - Откуда → куда — капсула `surface2`, стрелка `arrow.right`; VoiceOver: «From Claude opus to Codex gpt-6-astra».
 
-**Кнопки и Face ID.** **Allow** — `borderedProminent` с `faceid`, под Face ID **всегда** (спека §11.4 после правки
-ведущего `6916819a`: настройка «Require Face ID to allow» запрос с согласия не снимает — согласие пускает агента
-работать в папке или на другом провайдере). **Deny** — `bordered`, без запроса.
+**Кнопки.** **Allow** — `borderedProminent`, **Deny** — `bordered`. Отдельного Face ID нет ни у одной: приложение
+защищено блокировкой (спека §11.4, решение 6 в редакции 2026-11-01; раздел 12a).
 `consents.decide {id, decision}`.
 
 | Состояние | Что видно |
 |---|---|
 | `pending` | карточка с Deny / Allow |
-| Face ID | системный запрос; отмена — карточка на месте, тост «Face ID cancelled — nothing was sent» |
 | Отправка | спиннер в нажатой кнопке, вторая выключена, `opacity 0.6` |
 | `applied: true, state: allowed` | `checkmark.circle.fill` «Allowed» (папка: «Allowed — the agent starts now»; смена: «Allowed — continuing on Codex»), haptic `success`, через 2 с уходит |
 | `applied: true, state: denied` | `xmark.circle` «Denied», haptic `warning`, через 2 с уходит |
@@ -520,7 +526,9 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 чтобы список не дробился на десятки карточек.
 
 **Шапка команды** — строка главной сессии, крупнее остальных:
-- аватар 36 pt — первая буква имени на заливке акцента, в углу значок состояния (рука, точка, галочка);
+- аватар 36 pt — **значок провайдера** (как `AgentIcon` окна: брендовые SVG `claude`, `codex`, вендоров пресетов из
+  `desktop/src/renderer/assets/providers/`, в тёмной теме — `*-light.svg`, где он есть; прочие провайдеры — буква на
+  `surface2`), в углу значок состояния (рука, точка, галочка);
 - имя (`headline`, 18 pt) и строка «чем занят» (до двух строк);
 - строка команды акцентом: `arrow.turn.down.right` **Team · 14 agents · 1 room · 1 swarm** — сколько всего под
   ней (участники комнат и роёв входят в число агентов);
@@ -536,13 +544,26 @@ Welcome · Scanner (нет разрешения / запрещено / не то
 Несколько детей дают «├», у последнего ствол заканчивается углом. Цвет — `separator` посильнее: `rgba(60,60,67,.30)`
 в светлой теме, `rgba(235,235,245,.26)` в тёмной. Отступ уровня — 28 pt, ствол — по центру колонки значка (36 pt).
 
-**Комната — контейнер.** Скруглённый блок (радиус 14) на фоне `surface2`, при ждущем решении — `tintSoft` с
-тонкой обводкой акцентом:
-- шапка: `checkmark.seal` акцентом при решении, иначе `number` (`#`); название до двух строк; ниже капсула
-  **Decision** или `3 new`, затем `Room · 4 agents · lead <label>` (у свёрнутой — точки участников);
-- **строка решения** `p-03 · rev 2 …  Review ›` → Decision — видна и у свёрнутой комнаты;
-- участники — компактные строки внутри блока, у ведущего `★`;
-- по умолчанию развёрнута, если ждёт решение или участник ждёт человека.
+**Комната и сессия различимы с первого взгляда** (решение человека 2026-11-01 после теста на iPhone: «комнаты должны
+читаться как комнаты, как в сайдбаре окна»; `sidebar/RoomRow.tsx`, `SessionRow.tsx`). Правило — везде, где они
+встречаются: Works, дерево работы, секция Team, лист Members, строки происхождения в Inbox и Session.
+- **Сессия** — круглый аватар со **значком провайдера** (24 pt в строке дерева, 36 pt в шапке команды; брендовые SVG
+  окна, `AgentIcon`), в правом нижнем углу — значок состояния 12 pt на подложке `surface` (точка, рука, галочка); имя
+  `headline`; строка «чем занят» (таблица ниже); `role · model` мелко. Без рамки и фона — обычная строка списка.
+- **Комната** — **контейнер**, никогда не строка с аватаром: скруглённый блок (радиус 14) на `surface2`, при ждущем
+  решении или «нужен ты» — `tintSoft` с тонкой обводкой акцентом. Внутри:
+  - шапка: **`#` и название** (`number` 15 pt, название `subheadline` semibold, до двух строк; жирное, когда комната
+    ждёт человека); справа от названия — **слово состояния**, как слот окна: `decision` (акцент), `needs you`
+    (`needs`), `@you` (человека упомянули) или ничего; затем шеврон свернуть / развернуть (44×44);
+  - вторая строка: **капсула режима** `free` / `checklist` / `verified` (`caption2`, `surface` с обводкой
+    `separator`; у `checklist` / `verified` с идущим планом — прогресс `3/7`), затем `4 agents · lead <label>`;
+  - **свёрнутая** — значки провайдеров участников 14 pt со счётчиком в углу (`2` — два агента Claude), как окно;
+  - **развёрнутая** — строки участников (аватар провайдера, имя, строка «чем занят»), у ведущего `★` акцентом;
+  - **строка решения** `p-03 · rev 2 …  Review ›` → Decision — видна и у свёрнутой комнаты;
+  - тап по шапке (кроме шеврона) — **экран Room** (9.7); тап по участнику — его Session;
+  - по умолчанию развёрнута, если ждёт решение или участник ждёт человека.
+- В строке происхождения сессия — значок провайдера 12 pt и имя, комната — `#` и название: `↰ (C) Greta › # iOS app:
+  stage A`.
 
 **Рой — контейнер, облик — как в окне** (третья правка человека: «рой бери из готовых вариантов дизайна, как в
 Парли»). Строка роя повторяет `SwarmRow` окна (`desktop/src/renderer/sidebar/SwarmRow.tsx`, `lib/swarm-view.ts`;
@@ -677,7 +698,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 телефон в MVP заводит сессии и комнаты и пишет письмо в комнату (`sessions.create`, `rooms.create`, `rooms.send`,
 `providers.list`, `roles.list`). На Маке один переключатель «Allow starting and messaging agents from the phone»
 (было «Allow creating sessions and rooms from the phone», спека §12, правки 15; он же закрывает `pty.send` и доверие к
-папке), **по умолчанию включён**. Face ID — перед каждым запуском и каждой отправкой (12a). Хост — власть: правила параметров,
+папке), **по умолчанию включён**. Отдельного Face ID на запуск и письмо нет — приложение защищено блокировкой (12a). Хост — власть: правила параметров,
 известные проекты и работы, лимиты.
 
 **Вход.** Кнопка `plus` в панели навигации Works (воркспейс по умолчанию — первый активный) и экрана воркспейса (этот
@@ -708,7 +729,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 │ │ ⑂ Own worktree          [off] │ │
 ├───────────────────────────────────┤
 │   One session in Improvements     │
-│ [ (faceid) Start session        ] │
+│ [        Start session          ] │
 ```
 
 - Уходит `sessions.create {projectPath, workId, provider, label, task, parent: null, model, role?, worktree,
@@ -724,7 +745,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   запускает агента в этой папке сам — иначе Codex встал бы на карточку согласия, а Claude — на экран доверия в
   терминале, который с телефона не нажать). Подпись в одну строку: «Agents start here without the terminal's trust
   screen and can change files in this folder.» Включена — уходит `trustFolder: true`, доверие пишется вместе с запуском
-  **под тем же Face ID** (отдельного запроса нет); выключена — ключа нет, запуск как у окна. `trusted: true` — строки
+  тем же вызовом; выключена — ключа нет, запуск как у окна. `trusted: true` — строки
   нет. Пока `trust.check` идёт — строка-скелет, кнопка запуска доступна (ответ нужен только для строки). Ошибка
   `trust.check` — строки нет, подпись «Couldn't check folder trust — the agent may ask at your Mac».
 - Сводка над кнопкой при доверии: «One session in Improvements · trusts parley».
@@ -756,7 +777,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 │ ╭ ⊕ New agent ╮                   │
 ├───────────────────────────────────┤
 │   Room with 3 agents in Improvements │
-│ [ (faceid) Create room          ] │
+│ [        Create room            ] │
 ```
 
 - Участники — сессии этой работы: отмеченные существующие и новые агенты. Новые запускаются тихо
@@ -768,8 +789,8 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   each item».
 - **Шаг 2 — первое письмо** (`rooms.send`, задача тихой комнаты). Тот же лист: `checkmark.circle.fill` «Room created»,
   `# Release review · 3 agents · verified`, поле «First message» (до 16 КБ, обязательно для отправки), подпись «The room
-  started quietly: this message is its task. Every agent in the room gets it.», кнопка «(faceid) Send to the room».
-  Face ID — второй раз: правило «каждая отправка». «Later» слева закрывает лист без письма — комната ждёт задачу,
+  started quietly: this message is its task. Every agent in the room gets it.», кнопка «Send to the room».
+  «Later» слева закрывает лист без письма — комната ждёт задачу,
   тост «Write the task in the room on your Mac».
 - После отправки — экран воркспейса, комната развёрнута в своей команде.
 
@@ -787,7 +808,6 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 | Загрузка `providers.list` / `roles.list` | сегменты и меню — скелет; кнопка запуска выключена |
 | Провайдер не готов | его сегмент выключен, подпись причины от хоста («Codex isn't signed in on your Mac») |
 | Нет задачи (сессия), нет названия или участников (комната), нет текста письма | кнопка выключена |
-| Face ID | системный запрос (12a); отмена — лист и черновик на месте, ничего не создано и не отправлено |
 | Отправка | спиннер в кнопке, лист не закрывается |
 | Успех — сессия | haptic `success`, тост «Session started», экран новой сессии |
 | Успех — комната | haptic `success`, шаг 2 «Room created» |
@@ -840,7 +860,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 │ ╰──────────────────────────────╯  │
 ├───────────────────────────────────┤
 │ [Allow and don't ask again]       │  ← только если CLI предложил
-│ [  Deny  ]   [ (faceid) Allow ]   │  ← панель действий карточки вместо поля
+│ [  Deny  ]   [     Allow    ]     │  ← панель действий карточки вместо поля
 └───────────────────────────────────┘
 
 Без ждущей карточки низ экрана — поле сообщения:
@@ -961,15 +981,14 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   (`bordered`), **Allow** (`borderedProminent`), над ними — **Allow and don't ask again** (`bordered`, во всю
   ширину) **только** при непустом `permission_suggestions` (приёмка A15, кейс); под ней мелко «Adds the rule:
   Bash(pnpm lint:*)». Перед «Always» нет алерта: правило видно на кнопке.
-  **Allow** и **Allow and don't ask again** — под Face ID (раздел 12a): на кнопке слева значок `faceid` (или
-  `lock.fill`, когда биометрия не настроена), пока настройка включена. **Deny** — без запроса.
+  Отдельного Face ID нет ни у одной кнопки (блокировка приложения, 12a).
 - **Вопрос.** Для каждого вопроса — `header` (капсула), текст, варианты как строки сгруппированного списка с
   описанием второй строкой. Один выбор — галочка `checkmark`; `multiSelect` — `checkmark.circle.fill` /
   `circle`. Поле «Other» — свой ответ (≤ предела `FEED_DECISION_ANSWER_LIMIT`). Кнопка **Send answer** в нижней
   панели активна, когда на каждый вопрос есть ответ. Варианты выбираются в самой карточке в ленте.
 - **План.** Текст плана — Markdown во всю ширину карточки. В панели две кнопки, слова как в окне: **Approve,
-  auto-accept edits** (`borderedProminent`) и **Approve, approve each edit** (`bordered`), обе под Face ID, со
-  значком `faceid` (12a, В13). Вариант «отклонить» в CLI — ответ в терминале: под кнопками ссылка-подпись «To keep
+  auto-accept edits** (`borderedProminent`) и **Approve, approve each edit** (`bordered`), без отдельного
+  Face ID (12a). Вариант «отклонить» в CLI — ответ в терминале: под кнопками ссылка-подпись «To keep
   planning, answer at your Mac».
 - **Смена провайдера** (`agent-switch` этой сессии, 7.3) — та же карточка, что в Inbox, над полем: Deny / Allow.
 - **Нет карточки при `blocked`** (Codex, экран без события) → не карточка, а полоска под панелью (9.1):
@@ -986,10 +1005,9 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 UTF-8: с 15 КБ над полем счётчик «15.2 / 16 KB», выше предела кнопка выключена и подпись «Too long for one message —
 16 KB max».
 
-**Face ID на каждую отправку** (§11.4, правки 15): тап по `⬆` → поле и кнопка выключаются, вызов ещё не уходит →
-системный запрос («Confirm to message the agent») → успех → `pty.send {ref, text, submit: true, clientMsgId,
-requestedAt}`. Отмена — текст в поле, клавиатура на месте, тост «Face ID cancelled — nothing was sent». Это
-отправка, как письмо в комнату: настройка «Require Face ID to allow» её **не** снимает (В18).
+**Отправка** — тап по `⬆` → `pty.send {ref, text, submit: true, clientMsgId, requestedAt}` сразу: отдельного Face ID
+нет, приложение защищено блокировкой (спека §11.4, решение 6 в редакции 2026-11-01; раздел 12a). Поле и кнопка
+выключаются до ответа.
 
 **`clientMsgId`** — новый ключ (`[A-Za-z0-9_-]`, 22 знака) на каждое **новое** сообщение; тот же ключ — только у
 повтора этого же сообщения после `lost`. Мост держит ответы по ключу 10 минут: повтор получает прежний ответ, агент
@@ -1017,30 +1035,29 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
 
 | Исход | Пузырь | Что дальше |
 |---|---|---|
-| Face ID / отправка | `opacity 0.6`, `ProgressView` 12 pt, «Sending…» | — |
+| Отправка | `opacity 0.6`, `ProgressView` 12 pt, «Sending…» | — |
 | `submitted: true`, хода нет | обычный, «Sent» на 2 с | сливается с `prompt` ленты |
 | `submitted: true`, ход идёт | `surface2`, `clock` «Queued — the agent reads it when the turn ends» | сливается с `prompt`, когда CLI его заберёт |
 | `inserted: true, submitted: false` (`draft`, `input`, `restarted`, `blocked-before-enter`) | `exclamationmark.triangle` `needs` «Typed into the terminal, not sent — press Enter at your Mac» (у `blocked-before-enter`: «… — the agent is waiting for your answer at your Mac») | **Retry нет**: текст уже в поле терминала, повтор задвоил бы его |
-| `busy` | `exclamationmark.circle` «Not sent — the agent is busy with another message» · **Retry** | Retry — тот же текст, **новый** `clientMsgId` (до агента ничего не дошло), Face ID снова |
+| `busy` | `exclamationmark.circle` «Not sent — the agent is busy with another message» · **Retry** | Retry — тот же текст, **новый** `clientMsgId` (до агента ничего не дошло) |
 | `blocked` | «Not sent — the agent is waiting for your answer» | пузырь уходит, текст возвращается в поле |
 | `no-paste-mode` | «Not sent — this agent doesn't accept multi-line messages» · **Edit** | Edit возвращает текст в поле |
 | `not_found` | «Not sent — the session isn't running» | текст возвращается в поле |
 | `unknown_method` | «Not sent — messaging from the phone is turned off on your Mac» | текст в поле, поле прячется |
-| `connection_lost` → `lost` | `exclamationmark.arrow.triangle.2.circlepath` «We couldn't confirm it was sent» | после переподключения лента перечитывается: есть `prompt` с этим текстом после `requestedAt` → «Sent», иначе **Retry** — тот же `clientMsgId` (мост ответит прежним, если вызов дошёл), Face ID снова. Сам вызов не повторяется |
+| `connection_lost` → `lost` | `exclamationmark.arrow.triangle.2.circlepath` «We couldn't confirm it was sent» | после переподключения лента перечитывается: есть `prompt` с этим текстом после `requestedAt` → «Sent», иначе **Retry** — тот же `clientMsgId` (мост ответит прежним, если вызов дошёл). Сам вызов не повторяется |
 | ошибка хоста | «Not sent — <текст хоста>» · **Retry** (новый ключ) | — |
 
 - Неотправленный текст (черновик) хранится по сессии в памяти приложения: уход с экрана и возврат его не теряют;
   холодный старт — теряет (кэша на диске в этапе A нет).
-- Автоповторов нет ни у одного исхода: каждый повтор — тап человека и Face ID.
+- Автоповторов нет ни у одного исхода: каждый повтор — тап человека.
 
 **Клавиатура.**
 - Поле прилипает к клавиатуре (`KeyboardStickyView` / `KeyboardAvoidingView` с `keyboardVerticalOffset` по шапке);
   лента получает нижний отступ по высоте поля и клавиатуры, последний элемент не прячется под ними.
 - Был внизу ленты — при открытии клавиатуры лента остаётся у последнего элемента; был выше — позиция не прыгает.
 - Свайп вниз по ленте прячет клавиатуру интерактивно (`keyboardDismissMode="interactive"`); тап по ленте — тоже.
-- Системный запрос Face ID встаёт поверх клавиатуры; после успеха поле очищается, клавиатура остаётся — можно писать
-  следующее.
-- Внешняя клавиатура: ⌘↩ — отправить (тоже через Face ID), ↩ — перенос строки.
+- После отправки поле очищается, клавиатура остаётся — можно писать следующее.
+- Внешняя клавиатура: ⌘↩ — отправить, ↩ — перенос строки.
 
 ### 9.6 Состояния Session
 
@@ -1054,8 +1071,7 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
 | Ждёт ответа (разрешение / вопрос / план / смена провайдера) | карточка в ленте + нижняя панель действий вместо поля |
 | Без карточки при `blocked` | полоска «Answer at your Mac» под панелью, поле выключено |
 | Лимит / вход | полоска под панелью, поле доступно |
-| Face ID (Allow, Always, одобрение плана, согласие, отправка сообщения) | системный запрос поверх экрана; кнопки и поле выключены, вызов ещё не ушёл (12a) |
-| Face ID отменён или не прошёл | запроса нет, карточка / текст на месте, кнопки снова доступны; тост «Face ID cancelled — nothing was sent» |
+| Приложение заблокировано (12a) | вместо экрана — экран блокировки; после Unlock — тот же экран сессии с тем же черновиком |
 | Отправка решения | нажатая кнопка — спиннер, остальные выключены |
 | `applied: true` | haptic, панель действий уходит (поле возвращается), карточка в ленте — строка состояния «Allowed» / «Answered» / «Approved · …» |
 | `applied: false` | «Already answered at your Mac» (капсула-тост 2 с), карточка — «Answered in the terminal» |
@@ -1079,7 +1095,7 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
   12 seconds».
 - Ротор «Заголовки» ходит по промптам человека — быстрый переход между ходами.
 - Новый ответ агента, пока VoiceOver на экране, объявляется «New reply» (не весь текст); `streaming` не объявляется.
-- Поле — «Message Mobile-D1-designer, text field»; кнопка — «Send», подсказка «Requires Face ID»; итог отправки
+- Поле — «Message Mobile-D1-designer, text field»; кнопка — «Send»; итог отправки
   объявляется: «Sent», «Queued», «Not sent, the agent is busy».
 - Пузырь с ошибкой — `accessibilityActions`: «Retry», «Edit».
 
@@ -1090,7 +1106,7 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
 полем с упоминаниями. Чтение — `context.messages {projectPath, workId, roomId, cursor}` (страницы от новых к старым),
 живое — `rooms.mail` (новые письма целиком, отметки прочтения, удалённые; `reread` — дочитать страницу заново).
 Письмо — `rooms.send {projectPath, workId, roomId, to, text, kind: 'note', replyTo?, requestedAt}`, как у окна
-(`room-outbox.ts`: окно всегда шлёт `note`), **Face ID на каждое письмо** (§11.4, всегда, настройка не снимает).
+(`room-outbox.ts`: окно всегда шлёт `note`); отдельного Face ID нет — приложение защищено блокировкой (12a).
 
 **Вход.** Тап по шапке контейнера комнаты на экране работы (8.2; шеврон справа по-прежнему сворачивает), «Open room»
 в меню `⋯` сессии-участника, `# комната` в строке происхождения, «Open room ›» на экране Decision (10.1).
@@ -1123,7 +1139,8 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
 └───────────────────────────────────┘
 ```
 
-**Панель** — как 9.1: `‹`, `number` / `checkmark.seal` и название комнаты (`headline`), подзаголовок — состояние, затем
+**Панель** — как 9.1: `‹`, `#` (`secondaryLabel`) и название комнаты (`headline`) — комната всегда с `#`, сессия всегда с
+аватаром провайдера (8.2), подзаголовок — состояние, затем
 `N agents · lead <label> · <mode>`. Состояние: **Decision** (`checkmark.seal`, `needs`) при ждущем решении или
 завершении, **Needs you** (`hand.raised`) если участник ждёт человека, **N working** (акцент) или **Idle**. Меню `⋯`:
 **Members (N)** — лист участников (точка состояния, роль · модель, `★` у ведущего; тап — Session участника),
@@ -1155,11 +1172,11 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
   чипов, набранное руками `@s02` остаётся текстом).
 - **Reply**: долгое нажатие на письмо → меню **Reply**, **Copy**. Reply ставит над полем плашку цитаты «Reply to Greta»
   с `xmark` (убрать), уходит `replyTo`.
-- Отправка: тап `⬆` → Face ID («Confirm to send to the room») → `rooms.send`. Ответ `{messageId}` — пузырь «Sent»,
+- Отправка: тап `⬆` → `rooms.send` сразу. Ответ `{messageId}` — пузырь «Sent»,
   дальше письмо приходит в `rooms.mail` с тем же id и сливается с пузырём. Предел — 16 КБ, как 9.5.
 - Повтора с ключом у `rooms.send` нет (`clientMsgId` только у `pty.send`): после `lost` сам вызов не повторяется
   (§11.4); после переподключения история дочитывается — есть письмо человека с этим текстом после `requestedAt` →
-  «Sent», нет → «Not sent · Retry» (Retry — Face ID снова). Отказ хоста (не участник, архив, автономная комната) —
+  «Sent», нет → «Not sent · Retry». Отказ хоста (не участник, архив, автономная комната) —
   «Not sent — <текст хоста>», текст возвращается в поле.
 
 | Когда | Поле |
@@ -1176,7 +1193,6 @@ requestedAt}`. Отмена — текст в поле, клавиатура н�
 | Пусто | `bubble.left.and.bubble.right` «No messages yet», «Write the task for everyone below.» (слова окна `emptyFeed`) |
 | Следующая страница / ошибка страницы | спиннер вверху / «Couldn't load earlier messages · Try again» |
 | Новое письмо, человек внизу | история подтягивается; выше — «Jump to latest» с числом |
-| Face ID отменён | текст и чипы в поле, тост «Face ID cancelled — nothing was sent» |
 | Отправка / Sent / Not sent | пузырь со спиннером / «Sent» → доставка / «Not sent · Retry» |
 | Решение принято или возвращено | полоска уходит, в истории — строка системного письма |
 | Комнату архивировали, пока экран открыт | поле сменяется строкой «This room is archived» |
@@ -1222,14 +1238,13 @@ VoiceOver: письмо — один элемент «Greta, 10:41, to Critic-A1
 ```
 
 - Оба действия уходят с `rev` показанной ревизии (приёмка A16, кейс).
-- **Accept** — под Face ID (раздел 12a), на кнопке значок `faceid`; **Return for rework** — без запроса.
+- Ни **Accept**, ни **Return for rework** отдельного Face ID не спрашивают (блокировка приложения, 12a).
 - Haptic: Accept → `notification(success)`, Return → `notification(warning)` после ответа хоста.
 
 | Состояние | Что видно |
 |---|---|
 | Загрузка | шапка, скелет текста |
 | Ждёт ответа | текст + две кнопки |
-| Face ID (Accept) | системный запрос поверх экрана; ничего не отправлено. Отмена — решение на месте, тост «Face ID cancelled — nothing was sent» |
 | Отправка | спиннер в нажатой кнопке, вторая выключена; sheet закрывается только по итогу |
 | `applied` | haptic, экран: `checkmark.seal.fill` «Accepted» / `arrow.uturn.backward.circle` «Returned for rework», через 1 с — назад |
 | **`conflict`** | баннер сверху `exclamationmark.arrow.triangle.2.circlepath` «The lead changed the decision — review the new text», новый текст, ревизия «rev 3» подсвечена; прежнее нажатие **не применяется**, кнопки снова доступны; заметка Return, если была, сохраняется в sheet. Вызов не повторяется сам |
@@ -1288,8 +1303,8 @@ Letters — прямые письма человеку, только чтени�
 │ └───────────────────────────┘ │
 │ SECURITY                      │
 │ ┌───────────────────────────┐ │
-│ │ [faceid] Require Face ID  │ │  ← по умолчанию включено (12a)
-│ │ to allow            [on]  │ │
+│ │ [faceid] Lock Parley with │ │  ← по умолчанию включено (12a)
+│ │ Face ID             [on]  │ │
 │ └───────────────────────────┘ │
 │ NOTIFICATIONS                 │
 │ ┌───────────────────────────┐ │
@@ -1351,16 +1366,17 @@ Haptic `notification(error)` один раз при появлении.
   Mac», «This phone needs a newer Parley on your Mac.»
 - Оба — `blocked`: прошлого снимка не показываем, решения невозможны.
 
-### 11.6 Безопасность: «Require Face ID to allow»
+### 11.6 Безопасность: «Lock Parley with Face ID»
 
-Секция **Security** над уведомлениями, одна строка:
-- `faceid` **Require Face ID to allow** — переключатель, **по умолчанию включён** (решение 6). На iPhone с Touch ID —
-  «Require Touch ID to allow» и `touchid` (`supportedAuthenticationTypesAsync`). Биометрия не настроена — подпись
-  второй строкой «Face ID isn't set up — your passcode is used», значок `lock.fill`.
-- Подпись под секцией: включено — «Parley asks for Face ID before Allow and Accept. Deny, Return for rework, answers
-  and viewing never ask.»; выключено — «Allow and Accept are sent without Face ID. Anyone holding this unlocked
-  iPhone can approve.» Второй абзац подписи — всегда: «Starting agents, messaging them and allowing a consent always ask for Face ID.»
-- **Выключение — само под Face ID**: иначе чужие руки сначала выключат защиту, потом одобрят. Включение — сразу.
+Секция **Security** над уведомлениями, одна строка (решение 6 в редакции 2026-11-01, спека §11.4):
+- `faceid` **Lock Parley with Face ID** — переключатель, **по умолчанию включён**. На iPhone с Touch ID — «Lock Parley
+  with Touch ID» и `touchid` (`supportedAuthenticationTypesAsync`). Биометрия не настроена — «Lock Parley with
+  passcode», значок `lock.fill`, подпись второй строкой «Face ID isn't set up — your passcode is used».
+- Подпись под секцией: включено — «Parley asks for Face ID when it opens and after 5 minutes in the background.
+  Nothing asks again while it is unlocked.»; выключено — «Anyone holding this unlocked iPhone can open Parley and
+  act on your Mac.»
+- **Выключение — само под Face ID** («Confirm to turn off the lock»): иначе чужие руки сначала выключат защиту.
+  Включение — сразу, без запроса.
 - Настройка локальная (Keychain/SecureStore приложения), мост и хост о ней не знают.
 
 ---
@@ -1377,49 +1393,73 @@ Haptic `notification(error)` один раз при появлении.
 
 ---
 
-## 12a. Face ID на одобрение (решение 6, спека §11.4)
+## 12a. Блокировка приложения (решение 6 в редакции 2026-11-01, спека §11.4)
 
-Защита от чужих рук на разблокированном телефоне, а не граница доступа: проверка только на телефоне, мост и хост о ней
-не знают.
+Человек изменил решение 6 после теста на iPhone: Face ID на каждое действие делал телефон непригодным как замену Мака.
+Теперь Face ID — **замок на приложение**, а не на действия. Защита от чужих рук на разблокированном телефоне, а не граница
+доступа: проверка только на телефоне, мост и хост о ней не знают.
 
-| Действие | Face ID |
+**Когда спрашивает.**
+| Событие | Face ID |
 |---|---|
-| Allow разрешения — на экране сессии и прямо в Inbox | да |
-| Allow and don't ask again («Always») | да |
-| Start session, Create room, первое письмо в комнату (8.4; `rooms.send` — каждая отправка) | да, всегда (настройка не снимает) |
-| «Trust this folder» в листе New session (`trustFolder: true`) | тот же запрос, что Start session: отдельного нет |
-| Сообщение агенту из поля Session (`pty.send`, 9.5) — каждая отправка и каждый Retry | да, всегда (настройка не снимает, В18) |
-| Письмо из чата комнаты (`rooms.send`, 9.7) — каждое и каждый Retry | да, всегда |
-| Allow на карточке согласия — доверие к папке и смена провайдера (7.3) | да, всегда (спека §11.4, `6916819a`) |
-| Accept решения комнаты (`rooms.resolveProposal` с `accept`) | да |
-| Выключить «Require Face ID to allow» в Settings | да |
-| Одобрение плана — оба варианта: «Approve, auto-accept edits» и «Approve, approve each edit» (В13) | да |
-| Deny (в том числе на согласии), Return for rework, ответ на вопрос, отказ от плана и отзыв на него (они — в терминале на Маке), просмотр ленты и листов инструментов | нет |
+| Открытие Parley (холодный старт) | да |
+| Возврат из фона, пробыв там **дольше 5 минут** | да |
+| Возврат из фона быстрее 5 минут | нет |
+| Блокировка экрана iPhone дольше 5 минут, затем возврат | да (это тоже фон) |
+| Перезапуск приложения (iOS выгрузила его из памяти) | да |
+| Allow, Always, одобрение плана, Accept, согласия, сообщение агенту, письмо в комнату, New session / New room | **нет** — приложение уже разблокировано |
+| Выключить «Lock Parley with Face ID» в Settings | да («Confirm to turn off the lock») |
+| Deny из уведомления (этап B, кнопка на push / Live Activity) | нет — блокировку снимать не нужно |
+| Allow из уведомления или с экрана блокировки iPhone | открывает приложение; на него действует замок |
 
-**Поток.**
-1. Тап по Allow / Accept → кнопки выключаются, вызов **ещё не уходит**.
-2. `LocalAuthentication.authenticateAsync({ promptMessage, disableDeviceFallback: false })`. Системный запрос
-   Face ID поверх экрана — своего оформления нет. `promptMessage` (виден при коде и Touch ID): «Confirm to allow» /
-   «Confirm to approve the plan» / «Confirm to accept the decision» / «Confirm to turn off Face ID for approvals» /
-   «Confirm to message the agent» / «Confirm to trust the folder» / «Confirm to switch the provider».
-3. Успех → вызов уходит; дальше всё как раньше: спиннер, итог `applied` / `already answered` / `conflict` / `lost`.
-4. **Отмена** (свайп, «Cancel», уход из приложения) → вызова нет, карточка или решение на месте, кнопки снова
-   доступны; тост «Face ID cancelled — nothing was sent» (2 с). Haptic приложения нет — системный уже был.
-5. **Лицо не узнано** → системный алерт «Face Not Recognized»: **Try Face ID Again** / **Enter Passcode** /
-   **Cancel**. Код устройства — системный экран «Enter iPhone Passcode» с той же причиной. Успех кода = успех Face ID.
-6. **Биометрия не настроена** (`isEnrolledAsync` → false) → сразу системный экран кода устройства.
-7. Между запросом и ответом карточку могли закрыть на Маке: перечитывание 10.3 продолжается; если карточки нет —
-   после успеха Face ID вызов не уходит, показывается «Answered at your Mac».
+Срок 5 минут фиксирован (спека). Отсчёт — с ухода в фон (`AppState` → `background`); `inactive` (Центр управления,
+системный запрос Face ID, входящий звонок поверх) — не фон и отсчёт не начинает.
+
+**Экран блокировки** — поверх всего, вместо вкладок и стека (при Reduce Motion — без анимации):
+
+```
+┌───────────────────────────────┐
+│                               │
+│                               │
+│          [lock.fill]          │  ← 56 pt, secondaryLabel
+│                               │
+│        Parley is locked       │  ← title3
+│  Unlock to see your agents.   │  ← subheadline secondary
+│                               │
+│  ┌─────────────────────────┐  │
+│  │ (faceid) Unlock         │  │  ← borderedProminent, во всю ширину минус поля
+│  └─────────────────────────┘  │
+│                               │
+└───────────────────────────────┘
+```
+
+- **Никаких данных**: ни имён хостов, ни бейджа вкладки, ни плашки подключения, ни счётчиков. Иконка приложения на
+  домашнем экране — бейдж от push, как прежде (в нём только число).
+- В App Switcher (снимок экрана при уходе в фон) — тот же экран блокировки: при `background` приложение сразу кладёт
+  поверх заглушку `lock.fill`, если блокировка включена, — иначе в переключателе были бы видны ленты.
+- При открытии приложение **само** зовёт Face ID один раз; кнопка **Unlock** — повтор после отмены. Код устройства —
+  запасной путь системы (`disableDeviceFallback: false`); биометрия не настроена — сразу системный экран кода.
+- Соединение может жить под замком (супервизор, §10.2): после Unlock экран сразу с данными, без «Connecting…».
+- Под замком действия невозможны: экранов нет, вызовов нет. Push приходят как прежде; тап по push → экран блокировки →
+  после Unlock — маршрут push (Inbox или письмо).
+- После Unlock — то, что было открыто: тот же экран, позиция ленты, черновики полей и листов.
+- Haptic: нет своего (системный запрос даёт свой). Отмена Face ID — экран блокировки остаётся, ни тоста, ни отклика.
+
+| Состояние | Что видно |
+|---|---|
+| Заблокировано, запрос идёт | экран блокировки + системный Face ID |
+| Отменено / лицо не узнано → Cancel | экран блокировки, кнопка Unlock |
+| Лицо не узнано | системный алерт «Face Not Recognized»: Try Face ID Again / Enter Passcode / Cancel |
+| Биометрия не настроена | системный экран «Enter iPhone Passcode» |
+| Нет ни Face ID, ни кода (`passcode_not_set`) | замок не включается; в Settings — «This iPhone has no passcode — Parley can't be locked» (В14) |
+| Разблокировано | приложение как было |
+| Блокировка выключена в Settings | экрана блокировки нет никогда |
 
 **Детали.**
-- `NSFaceIDUsageDescription`: «Parley uses Face ID to confirm approvals.» Первый запрос iOS — системное
-  разрешение на Face ID; отказ → дальше только код устройства.
-- Пока системный запрос на экране, приложение в `AppState: inactive`, не `background`: супервизор подключения (§10.2)
-  не считает это уходом в фон и не рвёт соединение.
-- Соединения нет (плашка «Updating…») — кнопки выключены, Face ID не спрашивается: спрашивать ради вызова, который не
-  уйдёт, нельзя.
-- Face ID спрашивается на каждое одобрение, без «окна доверия» на N секунд (`LAContext.touchIDAuthenticationAllowableReuseDuration` = 0):
-  иначе второе одобрение после первого прошло бы без проверки.
+- `NSFaceIDUsageDescription`: «Parley uses Face ID to unlock the app.» Первый запрос iOS — системное разрешение на
+  Face ID; отказ → дальше только код устройства.
+- `promptMessage` (виден при коде и Touch ID): «Unlock Parley» / «Confirm to turn off the lock».
+- Кнопки решений больше **не** несут значка `faceid`: ни Allow, ни Accept, ни Start session, ни Send.
 
 ---
 
@@ -1430,20 +1470,25 @@ Haptic `notification(error)` один раз при появлении.
 
 - Рамка iPhone 393×852 pt, остров, индикатор Home.
 - Панель справа: тема (Light / Dark / System), вид команд на экране работы (Team cards / Tree lines only, В10),
-  одобрения под Face ID (Face ID / не настроен → код; следующий исход: успех / отмена / сбой; защита вкл / выкл),
+  блокировка приложения (Face ID / не настроен → код; следующий исход: успех / отмена / сбой; замок вкл / выкл;
+  «Simulate: 2 min / 6 min in background», «Simulate: relaunch»),
   состояние подключения (все строки раздела 4), сценарий данных
   (обычный / пусто / загрузка / ошибка), размер шрифта (Default / XL — проверка Dynamic Type), Reduce Motion,
   кнопки «Simulate: answered at Mac», «Simulate: conflict», «Simulate: lost», переход к любому экрану.
 - Кликабельно: паринг от Welcome до Inbox, вкладки, Inbox → Session / Decision / Letter, Works → Work → Session,
   Settings → Host / Diagnostics, решения с итогами, sheet Return for rework, алерт Remove.
 - Ревизия 2026-11-01: экран Session — чат (закреплённая шапка, лента с Markdown, вызовами инструментов, субагентом,
-  свёрнутыми ходами и листом «Tool call», «Jump to latest»), поле сообщения с Face ID и всеми исходами 9.5 (панель:
+  свёрнутыми ходами и листом «Tool call», «Jump to latest»), поле сообщения со всеми исходами 9.5 (панель:
   «Next send result» — Sent / Queued / Busy / Typed not sent / Multi-line refused / Lost; занятость агента — по
   состоянию сессии), карточки согласий в Inbox (обе, с итогами 7.3), лист New session с Existing | New и «Trust this
   folder», переход на экран новой сессии. Переходы — в «Go to screen».
+- Ревизия 3: экран блокировки при открытии (кнопки панели прототипа «Simulate: 2 min / 6 min in background»,
+  «Simulate: relaunch» показывают, когда он появляется), ни одного значка `faceid` на кнопках действий; сессии с
+  аватаром провайдера, комнаты — контейнеры `#` с режимом, словом состояния и участниками; кнопки панели без
+  подложек.
 - Ревизия 2: компактная панель с именем в строке «‹» и подзаголовком «состояние · role · model · время», полоска «нужен
   ты» под панелью, Team в меню `⋯`; экран Room (история с «Load earlier», письма агентов и свои, доставка, Reply,
-  меню упоминаний по `@`, строка «To …», Face ID на письмо, исходы Sent / Not sent / lost) — вход из шапки контейнера
+  меню упоминаний по `@`, строка «To …», исходы Sent / Not sent / lost) — вход из шапки контейнера
   комнаты на экране работы, из меню сессии, из происхождения и из Decision.
 - Haptics в прототипе показаны тостом-индикатором «haptic: success» в углу рамки — чтобы ревьюер видел, где они.
 - Иконки SF Symbols в браузере недоступны: прототип рисует простые SVG-заменители, имя символа — в `title`.
@@ -1473,8 +1518,9 @@ Haptic `notification(error)` один раз при появлении.
 - **В8. Акцент.** Терракотовый акцент Parley (`#C67139`) на белом даёт 3,6:1 — мало для текста. Макеты берут
   затемнённый `#A8531E` (5,4:1) в светлой теме и `#E08A52` в тёмной. Подходит ли, или акцентом iOS-приложения
   оставить системный синий?
-- **В9. Биометрия** — решено человеком (решение 6, 2026-10-31): Face ID перед Allow и Accept, запасной путь — код
-  устройства, настройка «Require Face ID to allow» включена по умолчанию (раздел 12a).
+- **В9. Биометрия** — решено человеком 2026-10-31 и изменено им же 2026-11-01: вместо Face ID перед каждым
+  одобрением — блокировка приложения (Face ID при открытии и после 5 минут в фоне), настройка «Lock Parley with Face
+  ID» включена по умолчанию (раздел 12a, 11.6).
 - **В10. Вид команд на экране работы.** Макет по умолчанию — **Team cards**: карточка на главную сессию, шапка с
   аватаром, линии и контейнеры комнат и роёв. Альтернатива **Tree lines only** — то же одним списком, как карточка
   сайдбара (переключатель в прототипе). По умолчанию — Team cards: граница команды видна без чтения линий.
@@ -1483,24 +1529,22 @@ Haptic `notification(error)` один раз при появлении.
   этап B (статус и так говорит `failed` / `cancelled`).
 - **В12. Иконка роя в React Native.** Порт `swarm-comb.ts` требует рисования по пикселям: `react-native-skia`
   (новая зависимость, шейдер SkSL) или статичные кадры без анимации. Решение — за A15 и ведущим.
-- **В13. Face ID на одобрение плана** — решено человеком (2026-10-31, спека §11.4, `8b1a9d1f`): Face ID на любом
-  одобрении плана, и с `auto-accept`, и без; отказ от плана и отзыв на него Face ID не спрашивают.
+- **В13. Face ID на одобрение плана** — снят решением 6 в редакции 2026-11-01: отдельного Face ID на действия нет.
 - **В14. Телефон без кода-пароля.** Если на iPhone нет ни Face ID, ни кода, `authenticateAsync` не может ничего
-  спросить (`passcode_not_set`). Варианты: (а) одобрения идут без проверки, в Settings предупреждение «This iPhone has
-  no passcode — approvals are not protected»; (б) Allow и Accept недоступны, пока не задан код. Предложение — (а):
-  без кода телефон и так открыт любому.
+  спросить (`passcode_not_set`). Варианты: (а) замок не включается, в Settings предупреждение «This iPhone has no
+  passcode — Parley can't be locked»; (б) Parley не открывается, пока не задан код. Предложение — (а): без кода
+  телефон и так открыт любому.
 - **В15. Задача комнаты с телефона** — решено (решение 5, `b47befcb`): `rooms.send` в этапе A, письмо в комнату,
-  в том числе первое — задача тихой комнаты; Face ID на каждую отправку.
+  в том числе первое — задача тихой комнаты.
 - **В16. Что ещё из диалога окна** — решено там же: режимы комнаты на телефоне — `free`, `checklist`, `verified`;
   `autonomous`, рецепты и `origin` — только окно; усилия, `agent` и облегчённого запуска с телефона нет.
 - **В17. Экран комнаты** — решено (ведущий, по пометке человека «можем писать в чат сами, делать mention (в
-  комнатах)»): экран Room с историей (`context.messages` + `rooms.mail`), полем с упоминаниями и Reply, `rooms.send`
-  под Face ID на каждое письмо (9.7).
+  комнатах)»): экран Room с историей (`context.messages` + `rooms.mail`), полем с упоминаниями и Reply, `rooms.send` (9.7).
 
 Ревизия 2026-11-01 (экран-чат, сообщения, согласия, доверие):
 
-- **В18. Face ID на сообщение агенту и согласие** — решено ведущим (спека §11.4, `6916819a`): сообщение агенту и
-  Allow на карточке согласия спрашивают Face ID **всегда**, настройка «Require Face ID to allow» их не снимает.
+- **В18. Face ID на сообщение агенту и согласие** — снят решением 6 в редакции 2026-11-01: отдельного Face ID на
+  действия нет, приложение защищено блокировкой (12a).
 - **В19. Сообщение во время хода.** Окно держит сообщение у себя, пока ход не кончится (`chat-outbox.ts`), потому что
   после Esc в терминале Claude Code перекладывает очередь CLI в поле ввода. Телефон своей очереди не держит
   (приложение уходит в фон): шлёт сразу, CLI ставит в очередь, пузырь «Queued». Риск: после Esc на Маке сообщение
@@ -1509,7 +1553,7 @@ Haptic `notification(error)` один раз при появлении.
   держит сообщение, пока открыт экран, и шлёт после хода (уход в фон — «Not sent · Retry»).
 - **В20. «Trust this folder» по умолчанию.** Макет включает переключатель по умолчанию: без доверия Claude встанет на
   экран доверия в терминале, который с телефона не нажать, а Codex — на карточку согласия. Доверие видно в сводке над
-  кнопкой и уходит под тем же Face ID. Альтернатива — выключен по умолчанию, человек включает сам.
+  кнопкой и уходит тем же вызовом. Альтернатива — выключен по умолчанию, человек включает сам.
 - **В21. Сворачивание ходов на телефоне.** `foldFeed` живёт в окне (`renderer/chat/turn-fold.ts`, тексты из
   `shared/strings.ts`). Для A32 дешевле перенести чистую функцию в `@parley/core` (рядом с `feed-turn`), а слова
   передавать параметром; иначе телефон держит копию. Решение — за ведущим и A31/A32.
@@ -1518,7 +1562,7 @@ Haptic `notification(error)` один раз при появлении.
   (мост) и спеки.
 - **В23. Новая работа с телефона и задача** — решено ведущим (m-2204): ветка `workId === null` в
   `sessions-service.ts:1382–1389` не передавала `task` в запуск; A28 запускает агента новой работы **с задачей** и
-  покрывает это тестом. Лист New session шлёт задачу одним вызовом, второго Face ID нет.
+  покрывает это тестом. Лист New session шлёт задачу одним вызовом.
 - **В24. Согласия и переключатель на Маке.** Спека: переключатель закрывает `pty.send` и «доверие к папке». Макет
   читает это как `trustFolder` и `trust.check`; карточки согласий (`consents.*`) — ответы на уже ждущие запросы,
   они видны и при выключенном переключателе. Если `consents.decide` тоже за переключателем — карточки показываются
@@ -1572,7 +1616,8 @@ Haptic `notification(error)` один раз при появлении.
 | Paired | `checkmark.circle.fill` | multicolor, `symbolEffect(.drawOn)` на iOS 26, иначе `.bounce` |
 | Отказ / таймаут | `xmark.octagon` / `clock.badge.exclamationmark` | regular |
 | Уведомления | `bell.badge` | multicolor |
-| Face ID на кнопках Allow / Accept и в Settings | `faceid` (на Touch ID — `touchid`) | regular |
+| Экран блокировки | `lock.fill` 56 pt; кнопка Unlock — `faceid` (на Touch ID — `touchid`) | hierarchical / regular |
+| «Lock Parley with Face ID» в Settings | `faceid` / `touchid` / `lock.fill` | regular |
 | New session / New room (панель навигации) | `plus` | regular |
 | Ведущий комнаты в листе New room | `star.fill` / `star` | акцент / `tertiaryLabel` |
 | Участник отмечен / нет | `checkmark.circle.fill` / `circle` | акцент |
@@ -1632,8 +1677,8 @@ Haptic `notification(error)` один раз при появлении.
 | Новая карточка на открытом экране сессии | `selectionAsync()` | лёгкое «появилось» |
 | Remove хоста подтверждён | `notificationAsync(Warning)` | разрушительное действие |
 | Нажатие кнопки решения (до ответа) | нет | haptic — на итог, не на нажатие, иначе ложное «принято» |
-| Запрос Face ID, лицо не узнано | нет своего | системный запрос даёт свой отклик; второй сбивал бы |
-| Face ID отменён | нет | ничего не произошло — и отклика нет |
+| Unlock, лицо не узнано | нет своего | системный запрос даёт свой отклик; второй сбивал бы |
+| Unlock отменён | нет | ничего не произошло — и отклика нет |
 | Сессия или комната запущена | `notificationAsync(Success)` | итог запуска |
 | Запуск отклонён хостом | `notificationAsync(Error)` | действие не применилось |
 | Session / Room, провайдер, режим, участник, ведущий в листе | `selectionAsync()` | выбор |
@@ -1715,6 +1760,32 @@ SF Pro через системный шрифт, только стили Dynamic
 | Точка состояния | 10 pt; кольцо `unseen` — 2 pt |
 | Анимации | пружина `damping 20, stiffness 220`; уход карточки 250 мс; тост 2 с; при Reduce Motion — fade 150 мс без сдвигов и пульса |
 
+
+### 17.4 Кнопки панели навигации (решение человека 2026-11-01)
+
+На iPhone человек увидел серые круги и обводки за «‹», «+» и `⋯` — так не должно быть.
+- **Кнопки панели — простые** (`plain`): только символ или слово, **без подложки, круга и обводки** — ни
+  `glass`-капсулы, ни `bordered`. В `native stack`: `headerRight` / `headerLeft` — `Pressable` без фона;
+  на iOS 26 — системные `UIBarButtonItem` без `.prominent` (Liquid Glass даёт им общую подложку панели, а не круг на
+  каждую кнопку). Цель касания — 44×44 pt, видимый символ — 22–24 pt.
+- **Оттенок** всех кнопок панели (`‹`, `+`, `ellipsis.circle`, меню хоста, Cancel / Done листов) — **акцент Parley в
+  обеих темах**: `tint` = `#A8531E` в светлой, `#E08A52` в тёмной (`headerTintColor` через `PlatformColor`/тему, не
+  системный синий). Сырой бренд-цвет `#C67139` в панели не используется: в тёмной теме на материале он даёт 3,9:1.
+- Выключенная кнопка (`+` без связи) — `tertiaryLabel`, без подложки.
+
+Контраст оттенков панели (WCAG, текст и символы; материал панели взят по худшему цвету под ним):
+
+| Оттенок | Фон | Светлая | Тёмная |
+|---|---|---|---|
+| `tint` — кнопки панели, ссылки | материал панели (`#F9F9F9` / `#252527`) | 5,1:1 | 5,8:1 |
+| `tint` | `systemGroupedBackground` под прозрачной панелью (`#F2F2F7` / `#000000`) | 4,8:1 | 7,9:1 |
+| `tint` | `surface2` / тёмный материал iOS 26 (`#2C2C2E`) | — | 5,3:1 |
+| `needs` — слово «Needs you» в подзаголовке, полоска | `needsSoft` (`#FFF0E0` / `#3A2A12`) | 4,7:1 | 6,7:1 |
+| `label` — имя в панели | материал | ≥ 15:1 | ≥ 15:1 |
+| `#C67139` (сырой бренд, **не использовать** в панели) | `#2C2C2E` | — | 3,9:1 |
+
+При Increase Contrast — варианты `tint` `#8C4519` (6,7:1 на материале) и `#F09A62` (6,9:1).
+
 ---
 
 ## 18. Dynamic Type и VoiceOver
@@ -1739,12 +1810,12 @@ SF Pro через системный шрифт, только стили Dynamic
 - Выключенные кнопки — `accessibilityState.disabled` и подсказка «Reconnecting — actions are paused».
 - Лист New session: агенты — группы с заголовком «Agent 1, lead»; звезда — кнопка «Make lead»; итог запуска
   объявляется «Session started» / «Room created».
-- Кнопки под Face ID: `accessibilityLabel` «Allow», `accessibilityHint` «Requires Face ID»; отмена Face ID
-  объявляется «Face ID cancelled, nothing was sent».
+- Экран блокировки: «Parley is locked» — заголовок, кнопка «Unlock with Face ID»; после снятия фокус — на заголовок
+  открытого экрана.
 - Заголовки секций — `accessibilityRole="header"`, чтобы ротор «Заголовки» работал.
 - Карточка согласия — один элемент: «Folder trust. Trust parley for agents? Requested by Task1-types. 1 minute ago.» /
   «Provider switch. Continue Mobile-D1-designer on Codex? From Claude opus to Codex gpt-6-astra. Reason: …»; Allow / Deny —
-  `accessibilityActions` строки и отдельные кнопки, Allow с подсказкой «Requires Face ID».
+  `accessibilityActions` строки и отдельные кнопки.
 - Экран Session — раздел 9.6 (шапка, лента, поле).
 - Увеличенный контраст (`Increase Contrast`): системные цвета подстраиваются сами; у `tint` — вариант `#8C4519` /
   `#F09A62`.
@@ -1758,5 +1829,6 @@ SF Pro через системный шрифт, только стили Dynamic
 | A13 | 1, 3 (вкладки, стек), 4 (компонент плашки), 17 (токены темы), 18 |
 | A14 | 4, 6, 11 (в том числе 11.6) |
 | A15 | 7, 8 (в том числе 8.4), 9, 12a, 16 |
+| A33 | 8.2 (сессии и комнаты), 9.1, 9.7, 11.6, 12a, 17.4 |
 | A32 | 7.1, 7.3, 8.4 (Existing / New, «Trust this folder», переход), 9 (весь, в том числе 9.1 ревизии 2 и 9.7 Room), 10.1 (Open room), 12a, 15, 16, 18 |
 | A16 | 10, 11.2, 12, 12a |
