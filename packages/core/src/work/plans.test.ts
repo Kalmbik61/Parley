@@ -1267,11 +1267,19 @@ describe("history of plan item submissions", () => {
     ["not an array", "oops"],
     ["a record of the wrong shape", [{ n: 1 }]],
     ["a verdict out of the set", [{ n: 1, by: "s-02", at: AT, evidence, verdict: "maybe", verdictBy: null, verdictAt: null, note: null }]],
-    ["too many records", Array.from({ length: 6 }, (_, i) => ({ n: i + 1, by: "s-02", at: AT, evidence, verdict: null, verdictBy: null, verdictAt: null, note: null }))],
   ])("normalisation rejects a malformed submissions value: %s", (_name, value) => {
     const map = fixture("verified");
     accept(map);
     (map.plans![0]!.items[0] as unknown as { submissions: unknown }).submissions = value;
     expect(() => parseMap(JSON.stringify(map), "fixture")).toThrow();
+  });
+
+  it("a stored history longer than the limit is read, not rejected", () => {
+    const map = fixture("verified");
+    accept(map);
+    const long = Array.from({ length: 6 }, (_, i) => ({ n: i + 1, by: "s-02", at: AT, evidence, verdict: null, verdictBy: null, verdictAt: null, note: null }));
+    (map.plans![0]!.items[0] as unknown as { submissions: unknown }).submissions = long;
+    const reread = parseMap(JSON.stringify(map), "fixture");
+    expect(reread.plans![0]!.items[0]!.submissions).toHaveLength(6);
   });
 });

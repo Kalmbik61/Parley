@@ -955,7 +955,8 @@ export function completeRoomPlan(
 }
 
 function validSubmissions(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length > PLAN_SUBMISSIONS_MAX) return false;
+  // Длину не ограничиваем: запись режет историю до PLAN_SUBMISSIONS_MAX, а длинную чужую читаем как есть.
+  if (!Array.isArray(value)) return false;
   const orNull = (field: unknown): boolean =>
     field === null || typeof field === "string";
   return value.every(
