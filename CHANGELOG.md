@@ -23,6 +23,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 - Agents can see how busy Parley and the machine are with the new `get_capacity` tool: live, asleep and queued sessions on the machine and in their workspace, their own child sessions, subagents and background tasks, the limits that apply and how much of each is used, and the memory pressure. It also says how many sessions can start right now and which limit stops the rest. A room lead is advised to call it before handing out parts to run in parallel.
 - The status bar shows how many agents run on the machine: `Agents 17/18 · 3 queued · memory warn`, or just `Agents 5` when there is no cap and nothing else to report. A click lists the queued launches with their reasons and waiting time, the memory pressure and swap, and when idle agents fall asleep; "Limits in Settings" opens the agent settings. These are the same numbers `get_capacity` gives agents.
 - A workspace can let its agents close finished sessions: turn on "Agents close finished sessions" in the workspace card menu. An agent then closes its own session once its part is accepted, and a room lead closes the room's finished members, so you no longer have to write "wrap up" in every room. It is off by default, and sessions you start yourself still wait for you.
+- A plan item keeps its last five submissions: who handed it in and when, the evidence, the verifier's verdict and a return by you. The item details list the earlier ones; before, a new submission replaced the old evidence.
 - An agent can answer your direct letter: it replies with `send_message` to `human`, and the reply arrives in the workspace mail like any letter to you.
 - A session's Chat queue shows the letters it has not picked up yet, from other sessions, rooms or you: grey, after your own queued messages, with the sender, the room, the start of the text and why the letter still waits, for example `Not picked up yet (compacting context)`. They have no buttons: Parley delivers them by itself, and a letter leaves the queue once the agent reads it.
 
@@ -38,6 +39,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 
 - Clearing "Session wake-ups per hour" in Settings no longer saves 0, which silently stopped every wake-up by letter.
 - A message you send in Chat while the agent's context is being compacted now waits in the queue with "Send now" and ×, and goes to the agent once the compaction ends. Before, it hung as "Sending…" with no way to remove it.
+- The autonomous engine leaves the agents' own folders at the repository root (`.omc`, `.omx`, `.claude`, `.codex`, `.agents`) out of attempts, so two attempts no longer collide on them when they are integrated.
 
 ### What is not proven yet
 
