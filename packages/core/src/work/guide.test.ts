@@ -415,8 +415,7 @@ describe('the plans topic: assignments, checkpoints and amendments', () => {
     expect(text).toContain('the human sees only unfinished items');
   });
 
-  it('a revision conflict sends the agent to plan_tasks, not to get_map', () => {
-    expect(plans()).toContain('call plan_tasks and use the current revision');
-    expect(plans()).not.toContain('refresh get_map');
+  it('a revision conflict sends checklist and verified to plan_tasks and autonomous to get_map', () => {
+    expect(plans()).toContain('call plan_tasks and use the current revision; in autonomous, refresh with get_map');
   });
 });

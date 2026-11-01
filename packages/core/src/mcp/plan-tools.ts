@@ -723,7 +723,7 @@ export async function planTool(
       error instanceof ProposalConflictError
     )
       throw new Error(
-        "Plan revision or item changed; call plan_tasks for the current revision.",
+        "Plan revision or item changed; call plan_tasks (checklist and verified plans) or get_map for the current revision.",
       );
     if (error instanceof RoomRuleError) throw new Error(error.message);
     if (error instanceof PageError)

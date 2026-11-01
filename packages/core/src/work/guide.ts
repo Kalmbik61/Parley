@@ -130,7 +130,7 @@ host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
 exports and linked backlog closures are captured separately from the map transaction;
 a disk/conflict failure stays pending. Human Retry retries the original captured intent,
 never overwrites an edited/reopened backlog row or an immutable foreign snapshot.
-On a revision conflict in checklist and verified, call plan_tasks and use the current revision.`,
+On a revision conflict in checklist and verified, call plan_tasks and use the current revision; in autonomous, refresh with get_map.`,
   },
   {
     topic: 'overview',

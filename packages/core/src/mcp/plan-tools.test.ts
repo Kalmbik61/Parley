@@ -1162,7 +1162,7 @@ describe("plan_progress", () => {
     });
     expect(result.failed).toBe(true);
     expect(result.text).toBe(
-      "Plan revision or item changed; call plan_tasks for the current revision.",
+      "Plan revision or item changed; call plan_tasks (checklist and verified plans) or get_map for the current revision.",
     );
     expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
   });
@@ -1330,7 +1330,7 @@ describe("next actions after a mutation", () => {
     expect(Object.keys(result)).toEqual(["effects"]);
   });
 
-  it("the conflict message points at plan_tasks", async () => {
+  it("the conflict message points at plan_tasks and get_map", async () => {
     await accepted();
     const result = await call("s-02", "plan_update", {
       ...base,
@@ -1339,7 +1339,7 @@ describe("next actions after a mutation", () => {
     });
     expect(result.failed).toBe(true);
     expect(result.text).toBe(
-      "Plan revision or item changed; call plan_tasks for the current revision.",
+      "Plan revision or item changed; call plan_tasks (checklist and verified plans) or get_map for the current revision.",
     );
   });
 });
