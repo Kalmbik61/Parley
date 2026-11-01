@@ -1,3 +1,4 @@
+import { MIN_CLIENT_VERSION } from '@parley/protocol/remote';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HostStore, type HostRecord } from '../src/host-store.js';
 import { RpcError } from '../src/rpc.js';
@@ -392,6 +393,16 @@ describe('acceptance 4: unauthenticated vs authenticated signals', () => {
     sup = newSupervisor();
     await flushStart();
     expect(sup.status).toMatchObject({ state: 'blocked', blocked: 'update_phone' });
+  });
+
+  it('a client at exactly the bridge minClient (the first app build) connects and is not blocked', async () => {
+    sup.stop();
+    sup = new Supervisor(platform, store, {
+      hostId: record.hostId,
+      client: { app: 'parley-mobile', version: MIN_CLIENT_VERSION, platform: 'ios' },
+    });
+    await flushStart();
+    expect(sup.status).toMatchObject({ state: 'ready', blocked: null });
   });
 
   it('a hello for another host → failure with backoff, not ready', async () => {

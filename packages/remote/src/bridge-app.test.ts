@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- кадры в тестах разбираются как JSON */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorksSnapshot } from '@parley/protocol';
-import { REMOTE_METHODS, bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
+import { MIN_CLIENT_VERSION, REMOTE_METHODS, bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
 import type { AuditInput, AuditLog } from './audit.js';
 import { createSessionHandler } from './dispatch.js';
 import { HostCallError, refKey } from './host-link.js';
@@ -145,7 +145,7 @@ beforeEach(() => {
     sessions,
     audit,
     log,
-    info: { hostId: 'h1', hostName: 'Mac', bridgeVersion: '0.1.0', minClient: '1.0.0', relays: [] },
+    info: { hostId: 'h1', hostName: 'Mac', bridgeVersion: '0.1.0', minClient: MIN_CLIENT_VERSION, relays: [] },
     deviceName: () => 'Phone 1',
   });
 });

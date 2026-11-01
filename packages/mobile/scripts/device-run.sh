@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run the dev variant of the Parley iOS app on an iPhone over Wi-Fi (A20 items 16-23). See README, "Run on your iPhone over Wi-Fi".
 #
-#   packages/mobile/scripts/device-run.sh [--skip-build] [--no-relay] [--udid <hardware UDID>]
+#   packages/mobile/scripts/device-run.sh [--skip-build] [--no-relay] [--build-only] [--udid <hardware UDID>]
 #
+# (--build-only stops after the build and leaves the phone and the relay alone.)
 # 1. finds the Mac's LAN IPv4 and starts the dev relay on it (prints the ws:// address);
 # 2. builds the Release configuration of the DEV variant for iphoneos (embedded JS bundle: no Metro, no cable after the
 #    install; optimised Hermes, so the Bench numbers count; ws:// to a private address stays allowed through extra.devBuild);
@@ -13,13 +14,14 @@ set -euo pipefail
 MOBILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$MOBILE/../.." && pwd)"
 UDID="${PARLEY_DEVICE_UDID:-00008150-001179DA0E50C01C}"   # iPhone 17 Pro "Kalmbik"
-BUILD=1 RELAY=1
+BUILD=1 RELAY=1 INSTALL=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) BUILD=0 ;;
     --no-relay) RELAY=0 ;;
+    --build-only) INSTALL=0 RELAY=0 ;;   # build, print the .app path, do not touch the phone
     --udid) UDID="$2"; shift ;;
-    -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -62,7 +64,7 @@ if [ "$RELAY" = 1 ]; then
 else
   RELAY_WS="ws://$LAN_IP:$PORT"
 fi
-curl -fsS --max-time 3 "http://${RELAY_WS#ws://}/v1/health" >/dev/null || die "relay health check failed at $RELAY_WS"
+if [ "$RELAY" = 1 ]; then curl -fsS --max-time 3 "http://${RELAY_WS#ws://}/v1/health" >/dev/null || die "relay health check failed at $RELAY_WS"; fi
 echo "Relay: $RELAY_WS   (log: $LOGS/relay.log)"
 cat <<EOT
 
@@ -107,6 +109,8 @@ if [ "$BUILD" = 1 ]; then
 fi
 APP="$DERIVED/Build/Products/Release-iphoneos/Parley.app"
 [ -d "$APP" ] || die "no build at $APP: run without --skip-build"
+
+[ "$INSTALL" = 1 ] || { echo "Build only: $APP"; exit 0; }
 
 # ---- 3. The phone ---------------------------------------------------------------------------------------------------
 JSON="$LOGS/devices.json"

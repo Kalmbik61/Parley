@@ -1,6 +1,7 @@
 import '../polyfills';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { BlockedView, useBlockedScreen } from '../components/BlockedView';
 import { cardsApprove } from '../auth/instance';
 import { ApproveContext } from '../cards/approve-context';
 import { useClearOnOpen, usePushTaps } from '../push/notifications';
@@ -11,6 +12,7 @@ export default function RootLayout() {
   const { phase, hosts } = useRuntimeState();
   const segments = useSegments();
   const router = useRouter();
+  const blocked = useBlockedScreen();
   usePushTaps(router);
   useClearOnOpen();
   useEffect(() => {
@@ -38,6 +40,8 @@ export default function RootLayout() {
         options={{ headerShown: false, presentation: 'fullScreenModal', gestureEnabled: false }}
       />
     </Stack>
+    {/* Blocked supervisor (D1 §11.4–11.5): a full screen over the tabs; the pairing flow stays reachable for "Pair again". */}
+    {blocked !== null && !inPairing && <BlockedView />}
     </ApproveContext.Provider>
   );
 }

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parleyHome } from '@parley/core/home';
-import { relayUrlFor } from '@parley/protocol/remote';
+import { MIN_CLIENT_VERSION, relayUrlFor } from '@parley/protocol/remote';
 import { createAuditLog } from './audit.js';
 import type { AuditLog } from './audit.js';
 import { openRemoteAccess } from './access.js';
@@ -180,7 +180,7 @@ async function assemble(options: BridgeProcessOptions, paths: RemotePaths, log: 
         hostName,
         bridgeVersion: version,
         hostVersion: () => null,
-        minClient: '1.0.0',
+        minClient: MIN_CLIENT_VERSION,
         relays: () => (access.relay === null ? [] : [access.relay]),
       },
       deviceName: (deviceId) => access.devices.get(deviceId)?.name ?? '',

@@ -2,6 +2,8 @@
 // Значения из корня протокола не импортируются: сверку с METHODS делает тест.
 
 export const REMOTE_PROTOCOL = 1;
+/** The oldest phone app version (x.y.z) the bridge's hello accepts; the app's `version` in app.config.ts must not be lower. */
+export const MIN_CLIENT_VERSION = '0.1.0';
 export const REMOTE_POLICY_FEATURE = 'remote-policy-1';
 
 export type RemoteStage = 'A' | 'B' | 'C';

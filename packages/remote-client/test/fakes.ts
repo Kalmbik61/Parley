@@ -11,7 +11,7 @@ import {
   type KeyPair,
   type TransportCiphers,
 } from '@parley/noise';
-import { b64urlDecode, b64urlEncode, type BridgeHello } from '@parley/protocol/remote';
+import { MIN_CLIENT_VERSION, b64urlDecode, b64urlEncode, type BridgeHello } from '@parley/protocol/remote';
 import { decodeFrame, encodeFrame } from '../src/rpc.js';
 import { hostIdFor } from '../src/pair.js';
 import type { HostRecord } from '../src/host-store.js';
@@ -221,7 +221,7 @@ export class FakeBridge {
   hello(): BridgeHello {
     return {
       protocol: 1,
-      minClient: '1.0.0',
+      minClient: MIN_CLIENT_VERSION,
       hostId: this.hostId,
       hostName: 'Test Mac',
       bridgeVersion: '0.26.0',
