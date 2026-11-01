@@ -46,6 +46,7 @@ import { useHostStore } from '../../store/host.js';
 import { AssistantSettings } from './AssistantSettings.js';
 import { ProjectsSettings } from './ProjectsSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
+import { RemoteSettings } from './RemoteSettings.js';
 import { TelegramSettings } from './TelegramSettings.js';
 import { ShortcutField } from './ShortcutField.js';
 
@@ -67,9 +68,10 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   assistant: S.settings.sections.assistant,
   providers: S.settings.sections.providers,
   projects: S.settings.sections.projects,
+  remote: S.settings.sections.remote,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'projects', 'providers', 'notifications', 'browser', 'voice', 'assistant'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'projects', 'providers', 'notifications', 'browser', 'voice', 'assistant', 'remote'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
@@ -731,6 +733,10 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           <TabsContent value="providers" className="mt-0"><ProvidersSettings /></TabsContent>
 
           <TabsContent value="assistant" className="mt-0">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
+
+          <TabsContent value="remote" className="mt-0">
+            <RemoteSettings bridge={bridge} config={config} locked={locked} save={save} error={errors.remoteCreate} />
+          </TabsContent>
           </div>
         </Tabs>
 

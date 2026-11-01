@@ -21,12 +21,15 @@
     "fetch-node": "node scripts/fetch-node.mjs",
     "fetch-whisper": "node scripts/fetch-whisper.mjs",
     "fetch-speech": "node scripts/fetch-speech.mjs",
-    "dist": "pnpm build && rm -rf out/host && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && electron-builder"
+    "dist": "pnpm build && rm -rf out/host out/remote && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && pnpm --filter @parley/remote deploy --prod \"$PWD/out/remote\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/remote\" && electron-builder"
   },
   "dependencies": {
     "@parley/core": "workspace:*",
     "@parley/host": "workspace:*",
-    "@parley/protocol": "workspace:*"
+    "@parley/protocol": "workspace:*",
+    "@parley/remote": "workspace:*",
+    "qrcode": "1.5.4",
+    "ssh2": "1.17.0"
   },
   "devDependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -54,6 +57,7 @@
     "@testing-library/react": "^16.3.3",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/ssh2": "1.15.6",
     "@vitejs/plugin-react": "^4.7.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
@@ -69,7 +73,6 @@
     "lucide-react": "^1.48.0",
     "monaco-editor": "^0.52.2",
     "pdfjs-dist": "^6.3.289",
-    "qrcode": "1.5.4",
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^10.1.0",

@@ -35,6 +35,8 @@ export interface TestSwitches {
    * любом мониторе, вырез — посередине каждого дисплея. `undefined` — не задан или задан не по форме.
    */
   readonly notch: { width: number; height: number } | undefined;
+  /** Entry of a stub bridge process (`PARLEY_BRIDGE_ENTRY`): E2E of Settings → Remote access without the real bridge. */
+  readonly bridgeEntry: string | undefined;
 }
 
 function parseNotch(value: string | undefined): { width: number; height: number } | undefined {
@@ -59,5 +61,6 @@ export function testSwitches(env: Readonly<Record<string, string | undefined>>, 
     islandOff: allowed && envValue(env, 'ISLAND') === 'off',
     appData: allowed ? envValue(env, 'APP_DATA') : undefined,
     notch: allowed ? parseNotch(envValue(env, 'NOTCH')) : undefined,
+    bridgeEntry: allowed ? envValue(env, 'BRIDGE_ENTRY') : undefined,
   };
 }

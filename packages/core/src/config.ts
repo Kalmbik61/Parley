@@ -111,6 +111,12 @@ export interface ParleyConfig extends ResourceLimits {
    * сессию, которую человек запускает из окна сам, решение не касается. Читается один раз, при создании сессии.
    */
   leanAgents: boolean;
+  /**
+   * «Allow creating sessions and rooms from the phone» (спека мобильного приложения 4.2, решение 5): пускает ли хост
+   * `sessions.create`, `rooms.create` и `rooms.send` от клиента роли `remote`. Включён по умолчанию; выключен — этих
+   * методов нет в `hello.methods` моста, вызов получает `unknown_method`. Окно и прочие клиенты не затронуты.
+   */
+  remoteCreate: boolean;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
@@ -141,6 +147,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   telegramMail: true,
   telegramCards: true,
   leanAgents: true,
+  remoteCreate: true,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
@@ -169,6 +176,7 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   telegramMail: 'TELEGRAM_MAIL',
   telegramCards: 'TELEGRAM_CARDS',
   leanAgents: 'LEAN_AGENTS',
+  remoteCreate: 'REMOTE_CREATE',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
   worktreeRoot: 'WORKTREE_ROOT',
@@ -331,6 +339,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('telegramMail', (value) => typeof value === 'boolean', 'true or false');
   take('telegramCards', (value) => typeof value === 'boolean', 'true or false');
   take('leanAgents', (value) => typeof value === 'boolean', 'true or false');
+  take('remoteCreate', (value) => typeof value === 'boolean', 'true or false');
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   take('worktreeRoot', isWorktreeRoot, 'a non-empty string');
@@ -354,7 +363,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents'
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate'
     | 'telegramEnabled' | 'telegramNeedsYou' | 'telegramFinished' | 'telegramMail' | 'telegramCards',
   ): void => {
     const value = text(key);
@@ -426,6 +435,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('telegramMail');
   flag('telegramCards');
   flag('leanAgents');
+  flag('remoteCreate');
 
   const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
@@ -506,6 +516,7 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'agentSkills',
   'skillNavigator',
   'leanAgents',
+  'remoteCreate',
   'telegramEnabled',
   'telegramNeedsYou',
   'telegramFinished',

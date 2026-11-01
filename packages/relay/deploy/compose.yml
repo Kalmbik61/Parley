@@ -1,0 +1,33 @@
+# Parley relay behind Caddy. Usage:
+#   RELAY_DOMAIN=relay.example.com docker compose up -d
+# The relay port is not published: only Caddy listens on the host (80 for the certificate, 443 for the app).
+# RELAY_IMAGE, RELAY_HTTP_PORT and RELAY_HTTPS_PORT are optional; the setup wizard sets them in .env.
+# The image is built from the repository root: docker build -f packages/relay/Dockerfile -t parley-relay .
+services:
+  relay:
+    image: ${RELAY_IMAGE:-parley-relay}
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: '1'
+    volumes:
+      - relay-data:/data
+    expose:
+      - '8787'
+  caddy:
+    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    restart: unless-stopped
+    depends_on:
+      - relay
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay host name}
+    ports:
+      - '${RELAY_HTTP_PORT:-80}:80'
+      - '${RELAY_HTTPS_PORT:-443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

@@ -18,7 +18,8 @@
     "./stuck": "./dist/work/stuck.js",
     "./session-names": "./dist/work/names.js",
     "./resource-policy": "./dist/work/resource-policy.js",
-    "./swarms": "./dist/work/swarms.js"
+    "./swarms": "./dist/work/swarms.js",
+    "./home": "./dist/home.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

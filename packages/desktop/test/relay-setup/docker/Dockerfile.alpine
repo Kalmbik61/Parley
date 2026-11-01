@@ -1,0 +1,7 @@
+# The unsupported-system case: the wizard must stop after the probe and change nothing.
+FROM alpine:3.20
+RUN apk add --no-cache openssh sudo iproute2 shadow \
+ && echo 'root:stand-root-pw' | chpasswd \
+ && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/; s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+COPY entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

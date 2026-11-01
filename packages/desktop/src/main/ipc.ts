@@ -35,6 +35,7 @@ import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
 import type { Inspector } from './browser/inspector.js';
+import { ControlCallError } from './remote-control.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -63,6 +64,8 @@ export function withIpcError(
           ...(error.data !== undefined ? { data: error.data } : {}),
         });
       }
+      // The bridge's own refusals (`stale_request`, `not_ready`, …) keep their code for the window.
+      if (error instanceof ControlCallError) throw encodeIpcError({ code: error.code, message: error.message });
       if (error instanceof FilesDeniedError) throw encodeIpcError({ code: error.code, message: error.message });
       if (error instanceof DropTooLargeError) throw encodeIpcError({ code: error.code, message: error.message });
       const message = error instanceof Error ? error.message : String(error);

@@ -16,8 +16,10 @@ files:
   - out/renderer/**
   - package.json
   - '!node_modules/@parley/host/**'
+  - '!node_modules/@parley/remote/**'
   - '!node_modules/node-pty/**'
   - '!node_modules/.pnpm/@parley+host@**'
+  - '!node_modules/.pnpm/@parley+remote@**'
   - '!node_modules/.pnpm/node-pty@**'
 # node-pty хоста собран под системный Node (спека §3.2) — Electron его вообще
 # не грузит, поэтому пересобирать нативные модули под ABI Electron незачем.
@@ -33,6 +35,12 @@ extraResources:
   # отдельной записью, где он уже не верхний уровень своего `from`.
   - from: out/host/node_modules
     to: host/node_modules
+  # Мост Remote access едет так же (mobile plan A23): `Resources/remote/dist/main.js` и его node_modules; запускается
+  # тем же встроенным node, что и хост (`src/main/remote-launcher.ts`).
+  - from: out/remote
+    to: remote
+  - from: out/remote/node_modules
+    to: remote/node_modules
   # NOTICE и лицензии шрифтов Figtree и Caprasimo — в Contents/Resources (ревью M7): MIT Orca и
   # shadcn/ui требует уведомления в копиях, OFL — текста лицензии рядом со шрифтом, а `files` берёт
   # только out/** и package.json.

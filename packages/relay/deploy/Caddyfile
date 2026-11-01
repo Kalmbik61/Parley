@@ -1,0 +1,5 @@
+# TLS on 443 with an automatic certificate; WebSocket upgrades pass through reverse_proxy as is.
+# RELAY_DOMAIN comes from the environment (see compose.yml), for example relay.example.com.
+{$RELAY_DOMAIN} {
+	reverse_proxy relay:8787
+}

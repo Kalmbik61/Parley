@@ -31,6 +31,8 @@ import type { ActionId } from './keybindings.js';
 import type { WorkLayout } from './layout-types.js';
 import type { NotesFile } from './notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
+import type { RemoteCallName, RemoteCalls, RemoteEvent } from './remote-types.js';
+import type { RelaySetupCallName, RelaySetupCalls, RelaySetupEvent } from './relay-setup-types.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
 /** Прогресс скачивания весов нейроголоса (`app:assistant-voice-progress`). */
@@ -253,6 +255,19 @@ export interface ParleyBridge {
      * Проверка выключена переключателем или `PARLEY_UPDATE_CHECK=off` — не приходит ничего.
      */
     onUpdateAvailable(listener: (info: UpdateInfo) => void): () => void;
+  };
+  /**
+   * Settings → Remote access (mobile spec 12): the local control socket of the bridge, through main. The window
+   * never goes through the relay. Refusals of the bridge keep their code (`decodeIpcError`: `stale_request`, …).
+   */
+  remote: {
+    call<N extends RemoteCallName>(name: N, params: RemoteCalls[N]['params']): Promise<RemoteCalls[N]['result']>;
+    on(listener: (event: RemoteEvent) => void): () => void;
+  };
+  /** The relay setup wizard over SSH (mobile spec 6.7). Credentials go to main and never come back. */
+  relaySetup: {
+    call<N extends RelaySetupCallName>(name: N, params: RelaySetupCalls[N]['params']): Promise<RelaySetupCalls[N]['result']>;
+    on(listener: (event: RelaySetupEvent) => void): () => void;
   };
   /**
    * Файловый API main (спека 10.7): `stat` и `locate` — с этапа 5, `list`, `readText`,

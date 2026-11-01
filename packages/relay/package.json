@@ -1,0 +1,22 @@
+{
+  "name": "@parley/relay",
+  "version": "0.26.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "dev": "tsc -p tsconfig.json && node dist/main.js --dev"
+  },
+  "dependencies": {
+    "@parley/protocol": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.12"
+  }
+}

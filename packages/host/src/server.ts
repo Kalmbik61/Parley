@@ -11,6 +11,12 @@ import {
   parseIncoming,
 } from '@parley/protocol';
 import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
+import {
+  REMOTE_METHODS,
+  REMOTE_NOTIFICATIONS,
+  REMOTE_POLICY_FEATURE,
+  checkRemoteParams,
+} from '@parley/protocol/remote';
 import { createClient } from './client.js';
 import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';
@@ -26,6 +32,25 @@ export interface ServerOptions {
   unregisterClient: (client: Client) => void;
   /** Часы для замера запросов (мс); по умолчанию `performance.now`. */
   now?: () => number;
+  /**
+   * Власть хоста над клиентом `remote` (спека мобильного приложения 4.2, 14): запуск и проекты. Нет — методы запуска
+   * закрыты, а проекты вызовов не сверяются (голый сервер в тестах; хост передаёт политику всегда).
+   */
+  remoteLaunch?: RemoteLaunchPolicy;
+}
+
+/** Власть хоста над запуском с телефона (спека 4.2, «Хост — власть»). */
+export interface RemoteLaunchPolicy {
+  /** Настройка `remoteCreate`: спрашивается на каждом `hello` и на каждом вызове. */
+  enabled(): boolean;
+  /** `projectPath` — известный хосту проект, `workId` — существующая неархивная работа этого проекта. */
+  workOpen(projectPath: string, workId: string): boolean;
+  /** Комната этой работы в режиме `autonomous`: письмо с телефона в неё не уходит (спека 4.2, правки 14). */
+  roomAutonomous(projectPath: string, workId: string, roomId: string): boolean;
+  /** Проект известен хосту (есть хоть одна его работа): чтения без `workId`, например `roles.list`. */
+  projectKnown(projectPath: string): boolean;
+  /** Работа этого проекта существует, архивная тоже: чтения и решения по ней. */
+  workKnown(projectPath: string, workId: string): boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -42,7 +67,24 @@ interface HelloParams {
  * Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный, что лента Chat есть у Codex и
  * что письма приходят событием `rooms.mail`, а не вместе со снимком.
  */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE];
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
+
+const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
+const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
+/** Методы запуска с телефона за одним переключателем `remoteCreate` (спека 4.2); `providers.list` и `roles.list` — чтение. */
+const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
+
+/** Метод белого списка, открытый клиенту `remote` сейчас: методы запуска — только при включённом `remoteCreate`. */
+function remoteMethodOpen(name: string, options: ServerOptions): boolean {
+  if (!REMOTE_METHOD_SET.has(name)) return false;
+  return !REMOTE_LAUNCH_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
+}
+/**
+ * Что хост принимает из `hello.features` клиента `remote` (спека мобильного приложения 4.4: мост заявляет ровно их).
+ * Прочие признаки меняют поведение хоста для других клиентов: с `browser-agent` мост стал бы «окном» для операций
+ * браузера, с `assistant-actions` — тем, кто показывает действия ассистента.
+ */
+const REMOTE_CLIENT_FEATURES: ReadonlySet<string> = new Set([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
 
 /** Пишет один кадр напрямую в сокет — до рукопожатия у соединения ещё нет `Client`. */
 function writeRaw(socket: Socket, message: ResponseMessage): void {
@@ -58,6 +100,8 @@ export function createHostServer(options: ServerOptions): Server {
 function handleConnection(socket: Socket, options: ServerOptions): void {
   const decoder = new LineDecoder();
   let client: Client | null = null;
+  // Отклонённое рукопожатие — конец соединения: следующий кадр того же или позднего чанка не получает второй попытки.
+  let rejected = false;
 
   // Первое сообщение должно быть `hello` за `helloTimeoutMs`, иначе — закрытие
   // без ответа (клиент ничего не прислал, отвечать нечему).
@@ -76,8 +120,10 @@ function handleConnection(socket: Socket, options: ServerOptions): void {
       throw error;
     }
     for (const raw of messages) {
+      if (rejected) return;
       if (!client) {
         client = handleHello(raw, socket, options, helloTimer);
+        if (!client) rejected = true;
         continue;
       }
       handleMessage(raw, client, options);
@@ -135,14 +181,21 @@ function handleHello(
     return null;
   }
 
-  const registered = createClient(socket, hello.client, hello.features);
+  // Роль — только здесь и один раз: повторный `hello` уходит в handleMessage и получает `unknown_method`.
+  const remote = hello.client === 'remote';
+  const registered = remote
+    ? createClient(socket, hello.client, (hello.features ?? []).filter((name) => REMOTE_CLIENT_FEATURES.has(name)), 'remote')
+    : createClient(socket, hello.client, hello.features);
+  const methods = supportedMethods(options);
   writeRaw(socket, {
     id,
     result: {
       hostVersion: options.context.version,
       protocol: PROTOCOL_VERSION,
       pid: process.pid,
-      methods: supportedMethods(options),
+      methods: remote
+        ? methods.filter((name) => name === 'hello' || remoteMethodOpen(name, options) || REMOTE_NOTIFICATION_SET.has(name))
+        : methods,
       features: HOST_FEATURES,
     },
   });
@@ -163,7 +216,70 @@ function supportedMethods(options: ServerOptions): string[] {
   ].sort();
 }
 
+/**
+ * Белый список клиента `remote` (спека 4.1, точка «вызов») — по имени, до разбора схемы: запрещённый метод получает
+ * `unknown_method` при любых параметрах, а не текст ошибки своей схемы. Деление на запрос и уведомление — как в
+ * `parseIncoming`: числовой `id` — запрос. `true` — кадр обработан здесь (отказ), дальше не идёт.
+ */
+function rejectedForRemote(raw: unknown, client: Client, options: ServerOptions): boolean {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false;
+  const { id, method } = raw as Record<string, unknown>;
+  // Без имени метода `parseIncoming` вернёт invalid, и до обработчика кадр не дойдёт.
+  if (typeof method !== 'string') return false;
+  if (typeof id === 'number') {
+    if (remoteMethodOpen(method, options)) return false;
+    client.send({ id, error: { code: 'unknown_method', message: `unknown method: ${method}` } });
+    return true;
+  }
+  if (REMOTE_NOTIFICATION_SET.has(method)) return false;
+  options.context.log.warn('уведомление клиента remote вне белого списка отброшено', { method, client: client.name });
+  return true;
+}
+
+/** Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2). */
+function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
+  if (typeof params !== 'object' || params === null) return false;
+  const { projectPath, workId } = params as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string') return false;
+  return options.remoteLaunch?.workOpen(projectPath, workId) === true;
+}
+
+/** Проект и работа, которые называет вызов: верхний уровень и `ref` сессии (у `roles.list` — оба). */
+function remoteTargets(params: unknown): { projectPath: string; workId: string | null }[] {
+  const out: { projectPath: string; workId: string | null }[] = [];
+  const add = (value: unknown): void => {
+    if (typeof value !== 'object' || value === null) return;
+    const { projectPath, workId } = value as Record<string, unknown>;
+    if (typeof projectPath !== 'string') return;
+    out.push({ projectPath, workId: typeof workId === 'string' ? workId : null });
+  };
+  add(params);
+  if (typeof params === 'object' && params !== null) add((params as Record<string, unknown>).ref);
+  return out;
+}
+
+/**
+ * Только известные хосту проекты (спека 14, критик W11): запуск — в существующую неархивную работу, прочие вызовы с
+ * проектом — в известный проект и существующую работу. Вызовы без проекта (`works.list`, `host.info`) не затронуты.
+ */
+function remoteTargetsKnown(method: string, params: unknown, options: ServerOptions): boolean {
+  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(params, options);
+  const policy = options.remoteLaunch;
+  if (policy === undefined) return true;
+  return remoteTargets(params).every(({ projectPath, workId }) =>
+    workId === null ? policy.projectKnown(projectPath) : policy.workKnown(projectPath, workId),
+  );
+}
+
+/** Письмо с телефона в идущую автономную комнату (спека 4.2, правки 14). Комнату ищет политика по снимку хоста. */
+function remoteRoomAutonomous(params: unknown, options: ServerOptions): boolean {
+  const { projectPath, workId, roomId } = params as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof roomId !== 'string') return false;
+  return options.remoteLaunch?.roomAutonomous(projectPath, workId, roomId) === true;
+}
+
 function handleMessage(raw: unknown, client: Client, options: ServerOptions): void {
+  if (client.role === 'remote' && rejectedForRemote(raw, client, options)) return;
   const parsed = parseIncoming(raw);
   const request: RequestInfo = { client, host: options.context };
 
@@ -191,6 +307,18 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   }
 
   const { id, method } = parsed.message;
+  if (client.role === 'remote' && !checkRemoteParams(method, parsed.params)) {
+    client.send({ id, error: { code: 'bad_request', message: `params are not allowed for remote clients: ${method}` } });
+    return;
+  }
+  if (client.role === 'remote' && !remoteTargetsKnown(method, parsed.params, options)) {
+    client.send({ id, error: { code: 'bad_request', message: 'unknown project or work' } });
+    return;
+  }
+  if (client.role === 'remote' && method === 'rooms.send' && remoteRoomAutonomous(parsed.params, options)) {
+    client.send({ id, error: { code: 'bad_request', message: 'the phone cannot write into an autonomous room' } });
+    return;
+  }
   const handler = options.methodHandlers[method];
   if (!handler) {
     // Схема метода известна протоколу (иначе parseIncoming вернул бы invalid),

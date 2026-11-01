@@ -1,0 +1,410 @@
+import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { METHODS, NOTIFICATIONS } from '../methods.js';
+import type { Events } from '../events.js';
+import {
+  REMOTE_EVENTS,
+  REMOTE_FORBIDDEN,
+  REMOTE_METHODS,
+  REMOTE_NOTIFICATIONS,
+  REMOTE_STAGES,
+  REMOTE_PARAM_RULES,
+  checkRemoteParams,
+  isRemoteForbidden,
+  b64urlDecode,
+  b64urlEncode,
+  buildPairUrl,
+  parsePairUrl,
+  relayUrlFor,
+  pushRequestSchema,
+  pushDataSchema,
+  pairCredentialsFrame,
+  pairMsg1Payload,
+  pairMsg2Payload,
+  pairAnswerParams,
+  bridgeMethodSchemas,
+  bridgeEventSchemas,
+  appRequestFrame,
+  connectFrame,
+  hostHelloFrame,
+  relayIncomingFrame,
+  controlConfigureParams,
+  controlStatusResult,
+  pairFailedEvent,
+  pairOfferClosedEvent,
+  pairRequestEvent,
+  routeIdSchema,
+} from './index.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const bytes = (n: number, v = 7) => new Uint8Array(n).fill(v);
+
+describe('allowlist', () => {
+  const stages = Object.values(REMOTE_STAGES);
+
+  it('forbidden list does not intersect any stage; pty.input/resize are in none', () => {
+    for (const st of stages) {
+      for (const name of [...st.methods, ...st.notifications, ...st.events]) {
+        expect(isRemoteForbidden(name), name).toBe(false);
+        expect(REMOTE_FORBIDDEN).not.toContain(name);
+      }
+      expect(st.methods).not.toContain('pty.input');
+      expect(st.notifications).not.toContain('pty.input');
+      expect(st.notifications).not.toContain('pty.resize');
+    }
+    expect(REMOTE_METHODS).toBe(REMOTE_STAGES.A.methods);
+    expect(isRemoteForbidden('settings.get')).toBe(true);
+    expect(isRemoteForbidden('pty.input')).toBe(true);
+  });
+
+  it('every listed name exists in the root protocol', () => {
+    const m = METHODS as Record<string, unknown>;
+    const n = NOTIFICATIONS as Record<string, unknown>;
+    for (const st of stages) {
+      for (const name of st.methods) expect(m, name).toHaveProperty([name]);
+      for (const name of st.notifications) expect(n, name).toHaveProperty([name]);
+    }
+    // Compile-time counterpart: a renamed method or event breaks the build here.
+    const methods = REMOTE_STAGES.C.methods satisfies readonly (keyof typeof METHODS)[];
+    const notes = REMOTE_STAGES.C.notifications satisfies readonly (keyof typeof NOTIFICATIONS)[];
+    const events = REMOTE_STAGES.C.events satisfies readonly (keyof Events)[];
+    expect(methods.length + notes.length + events.length).toBeGreaterThan(0);
+    expect(REMOTE_NOTIFICATIONS).toEqual([]);
+    expect(REMOTE_EVENTS).toContain('works.changed');
+  });
+
+  it('stages are cumulative', () => {
+    for (const x of REMOTE_STAGES.A.methods) expect(REMOTE_STAGES.B.methods).toContain(x);
+    for (const x of REMOTE_STAGES.B.methods) expect(REMOTE_STAGES.C.methods).toContain(x);
+  });
+
+  it('rooms.resolveProposal needs rev', () => {
+    const base = { projectPath: '/p', workId: 'w-1', roomId: 'r-1', proposalId: 'p', action: 'accept' };
+    expect(checkRemoteParams('rooms.resolveProposal', base)).toBe(false);
+    expect(checkRemoteParams('rooms.resolveProposal', { ...base, rev: 2 })).toBe(true);
+    expect(checkRemoteParams('rooms.resolveProposal', { ...base, rev: '2' })).toBe(false);
+    expect(checkRemoteParams('rooms.resolveProposal', null)).toBe(false);
+    expect(checkRemoteParams('works.list', {})).toBe(true);
+    expect(Object.keys(REMOTE_PARAM_RULES)).toContain('pty.send');
+  });
+
+  it('text rules (rooms.send moved to stage A and needs a room)', () => {
+    const room = { roomId: 'r-1' };
+    expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'a' })).toBe(true);
+    expect(checkRemoteParams('rooms.send', { ...room, kind: 'decision', text: 'a' })).toBe(false);
+    expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8193) })).toBe(false);
+    expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8192) })).toBe(true);
+    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16385) })).toBe(false);
+    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16384) })).toBe(true);
+  });
+});
+
+describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
+  const launch = ['sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list'];
+
+  it('stage A has the launch methods; B no longer lists rooms.send / providers.list separately; C adds nothing', () => {
+    for (const name of launch) expect(REMOTE_STAGES.A.methods).toContain(name);
+    for (const name of REMOTE_STAGES.B.methods) {
+      expect(REMOTE_STAGES.B.methods.filter(x => x === name), name).toHaveLength(1);
+    }
+    expect([...REMOTE_STAGES.C.methods].sort()).toEqual([...REMOTE_STAGES.B.methods].sort());
+    expect(REMOTE_FORBIDDEN).not.toContain('rooms.create');
+    expect(isRemoteForbidden('rooms.create')).toBe(false);
+    for (const name of ['rooms.addMember', 'rooms.setLead', 'rooms.setMode', 'rooms.delete']) {
+      expect(isRemoteForbidden(name), name).toBe(true);
+    }
+  });
+
+  const session = {
+    projectPath: '/p',
+    workId: 'w-01',
+    provider: 'claude',
+    label: 'fix',
+    task: 'do it',
+    parent: null,
+  };
+
+  it('sessions.create: allowed shapes pass', () => {
+    expect(checkRemoteParams('sessions.create', session)).toBe(true);
+    expect(
+      checkRemoteParams('sessions.create', {
+        ...session,
+        model: 'opus',
+        role: { source: 'builtin', name: 'executor' },
+        worktree: true,
+        label: 'я'.repeat(64),
+        task: 'a'.repeat(16 * 1024),
+      }),
+    ).toBe(true);
+    expect(checkRemoteParams('sessions.create', { ...session, task: '' })).toBe(true);
+  });
+
+  it('sessions.create: agent, effort, lean, new work, child session, long task or label → rejected', () => {
+    for (const extra of [{ agent: 'x' }, { effort: 'high' }, { lean: true }, { other: 1 }]) {
+      expect(checkRemoteParams('sessions.create', { ...session, ...extra }), JSON.stringify(extra)).toBe(false);
+    }
+    expect(checkRemoteParams('sessions.create', { ...session, workId: null })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, workId: '' })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, parent: { sessionId: 's-01' } })).toBe(false);
+    const noParent: Record<string, unknown> = { ...session };
+    delete noParent.parent;
+    expect(checkRemoteParams('sessions.create', noParent)).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, task: 'a'.repeat(16 * 1024 + 1) })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, task: 'я'.repeat(8192) + 'a' })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, label: 'я'.repeat(65) })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, label: '' })).toBe(false);
+    expect(checkRemoteParams('sessions.create', null)).toBe(false);
+  });
+
+  const room = { projectPath: '/p', workId: 'w-01', title: 'Review', members: ['s-01', 's-02'] };
+
+  it('rooms.create: allowed shapes pass', () => {
+    expect(checkRemoteParams('rooms.create', room)).toBe(true);
+    for (const mode of ['free', 'checklist', 'verified']) {
+      expect(checkRemoteParams('rooms.create', { ...room, lead: 's-02', quiet: true, mode }), mode).toBe(true);
+    }
+    const sixteen = Array.from({ length: 16 }, (_, i) => `s-${i + 1}`);
+    expect(checkRemoteParams('rooms.create', { ...room, members: sixteen, title: 'я'.repeat(128) })).toBe(true);
+  });
+
+  it('rooms.create: autonomous, recipe, origin, 17 members, no members, long title → rejected', () => {
+    expect(checkRemoteParams('rooms.create', { ...room, mode: 'autonomous' })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, recipe: { id: 'x' } })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, origin: ['s-01', 's-02'] })).toBe(false);
+    const seventeen = Array.from({ length: 17 }, (_, i) => `s-${i + 1}`);
+    expect(checkRemoteParams('rooms.create', { ...room, members: seventeen })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, members: [] })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, members: [1] })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, title: '' })).toBe(false);
+    expect(checkRemoteParams('rooms.create', { ...room, title: 'я'.repeat(129) })).toBe(false);
+  });
+
+  it('rooms.send: only to a room, only note or question', () => {
+    const letter = { projectPath: '/p', workId: 'w-01', roomId: 'r-1', to: [], kind: 'note', text: 'task' };
+    expect(checkRemoteParams('rooms.send', letter)).toBe(true);
+    expect(checkRemoteParams('rooms.send', { ...letter, kind: 'question' })).toBe(true);
+    expect(checkRemoteParams('rooms.send', { ...letter, roomId: null })).toBe(false);
+    expect(checkRemoteParams('rooms.send', { ...letter, roomId: '' })).toBe(false);
+    expect(checkRemoteParams('rooms.send', { ...letter, kind: 'decision' })).toBe(false);
+    expect(checkRemoteParams('rooms.send', { ...letter, text: 'a'.repeat(16 * 1024 + 1) })).toBe(false);
+  });
+
+  it('rooms.send: only the listed keys (spec 4.2, revision 14)', () => {
+    const letter = { projectPath: '/p', workId: 'w-01', roomId: 'r-1', to: ['s-01'], kind: 'note', text: 'task' };
+    expect(checkRemoteParams('rooms.send', { ...letter, replyTo: 'm-01', requestedAt: 1 })).toBe(true);
+    for (const extra of [{ via: 'phone' }, { from: 's-01' }, { agent: 'x' }, { mode: 'autonomous' }]) {
+      expect(checkRemoteParams('rooms.send', { ...letter, ...extra }), JSON.stringify(extra)).toBe(false);
+    }
+  });
+
+  it('roles.list and providers.list have no rule', () => {
+    expect(checkRemoteParams('roles.list', { projectPath: '/p' })).toBe(true);
+    expect(checkRemoteParams('providers.list', {})).toBe(true);
+  });
+});
+
+describe('b64url', () => {
+  it('round-trips and is strict', () => {
+    for (let n = 0; n < 40; n++) {
+      const b = Uint8Array.from({ length: n }, (_, i) => (i * 37 + n) & 255);
+      expect(b64urlDecode(b64urlEncode(b))).toEqual(b);
+    }
+    expect(b64urlEncode(Uint8Array.of(251, 255))).toBe('-_8');
+    expect(() => b64urlDecode('AB=')).toThrow();
+    expect(() => b64urlDecode('A+')).toThrow();
+    expect(() => b64urlDecode('A')).toThrow();
+    expect(() => b64urlDecode('AB')).toThrow(); // non-canonical trailing bits
+  });
+});
+
+describe('pair url', () => {
+  const k = bytes(32, 1);
+  const s = bytes(16, 2);
+  it('round-trips and stays small', () => {
+    const url = buildPairUrl({ k, s, r: 'relay.example.com:8787' });
+    expect(parsePairUrl(url)).toEqual({ k, s, r: 'relay.example.com:8787' });
+    const long = buildPairUrl({ k, s, r: 'a'.repeat(30) });
+    expect(new TextEncoder().encode(long).length).toBeLessThanOrEqual(150);
+  });
+
+  const good = (over: Record<string, string>) => {
+    const f = { v: '1', k: b64urlEncode(k), s: b64urlEncode(s), r: 'relay.example.com', ...over };
+    return `parley://pair?v=${f.v}&k=${f.k}&s=${f.s}&r=${f.r}`;
+  };
+  it('rejects bad input without echoing secrets', () => {
+    expect(() => parsePairUrl(good({}))).not.toThrow();
+    expect(() => parsePairUrl(good({ v: '2' }))).toThrow();
+    expect(() => parsePairUrl(good({ k: b64urlEncode(bytes(31)) }))).toThrow();
+    expect(() => parsePairUrl(good({ s: b64urlEncode(bytes(15)) }))).toThrow();
+    expect(() => parsePairUrl(good({ s: b64urlEncode(bytes(17)) }))).toThrow();
+    expect(() => parsePairUrl(good({ r: 'relay.example.com/path' }))).toThrow();
+    expect(() => parsePairUrl(good({ r: 'user@relay.example.com' }))).toThrow();
+    expect(() => parsePairUrl(good({ r: 'a'.repeat(65) }))).toThrow();
+    expect(() => parsePairUrl(good({ r: 'a'.repeat(64) }))).not.toThrow();
+    expect(() => parsePairUrl(good({ r: 'host:99999' }))).toThrow();
+    expect(() => parsePairUrl('https://pair?v=1')).toThrow();
+    expect(() => parsePairUrl(good({}) + '&x=1')).toThrow();
+    expect(() => parsePairUrl(good({}) + '&s=AAAA')).toThrow();
+    try {
+      parsePairUrl(good({ v: '2' }));
+    } catch (e) {
+      expect(String(e)).not.toContain(b64urlEncode(s));
+    }
+  });
+});
+
+describe('relayUrlFor', () => {
+  it.each(['192.168.1.5:8787', '10.0.0.2', '172.20.1.1', '169.254.1.1', 'mac.local'])('%s is local', r => {
+    expect(relayUrlFor(r, { allowLocal: true })).toBe(`ws://${r}`);
+    expect(() => relayUrlFor(r, { allowLocal: false })).toThrow();
+  });
+  it.each(['relay.example.com', '172.32.0.1', '172.15.0.1', '8.8.8.8:443'])('%s is public', r => {
+    expect(relayUrlFor(r, { allowLocal: false })).toBe(`wss://${r}`);
+    expect(relayUrlFor(r, { allowLocal: true })).toBe(`wss://${r}`);
+  });
+});
+
+describe('schemas', () => {
+  const id16 = b64urlEncode(bytes(16, 3));
+  const id32 = b64urlEncode(bytes(32, 4));
+  it('app frames', () => {
+    expect(appRequestFrame.safeParse({ id: 'a', method: 'works.list' }).success).toBe(true);
+    expect(appRequestFrame.safeParse({ id: 'x'.repeat(33), method: 'm' }).success).toBe(false);
+  });
+  it('bridge methods and events', () => {
+    expect(bridgeMethodSchemas['push.register'].safeParse({ apnsToken: null, env: 'sandbox' }).success).toBe(true);
+    expect(bridgeMethodSchemas['push.register'].safeParse({ apnsToken: 'zz', env: 'sandbox' }).success).toBe(false);
+    expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'rekey' }).success).toBe(true);
+    expect(bridgeEventSchemas['bridge.status'].safeParse({ host: 'incompatible', epoch: null }).success).toBe(true);
+  });
+  it('relay frames', () => {
+    expect(hostHelloFrame.safeParse({ v: 1, t: 'hello', route: id16, secret: id32 }).success).toBe(true);
+    expect(connectFrame.safeParse({ v: 1, t: 'connect', route: id16, device: id16, token: id32 }).success).toBe(true);
+    expect(connectFrame.safeParse({ v: 1, t: 'connect', route: id16, device: id16, token: id16 }).success).toBe(false);
+    expect(connectFrame.safeParse({ v: 1, t: 'connect', route: id16, device: id16, token: id32, x: 1 }).success).toBe(false);
+  });
+  it('pairing payloads', () => {
+    expect(pairMsg1Payload.safeParse({ v: 1, name: 'iPhone', platform: 'ios', app: '1.0.0' }).success).toBe(true);
+    expect(pairMsg2Payload.safeParse({ v: 1 }).success).toBe(true);
+    expect(pairMsg2Payload.safeParse({ v: 1, hostName: 'Mac' }).success).toBe(false);
+    expect(
+      pairCredentialsFrame.safeParse({
+        t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: id32, relays: ['r.example.com'],
+      }).success,
+    ).toBe(true);
+    expect(pairAnswerParams.safeParse({ requestId: id16, allow: true }).success).toBe(true);
+    expect(pairAnswerParams.safeParse({ allow: true }).success).toBe(false);
+  });
+  it('push gateway is strict', () => {
+    const body = { v: 1, token: 'ab'.repeat(32), env: 'production', count: 3, route: id16 };
+    expect(pushRequestSchema.safeParse(body).success).toBe(true);
+    expect(pushRequestSchema.safeParse({ ...body, text: 'hi' }).success).toBe(false);
+    expect(pushRequestSchema.safeParse({ ...body, env: 'dev' }).success).toBe(false);
+    expect(pushDataSchema.safeParse({ v: 1, kind: 'needs-you', count: 3, route: id16 }).success).toBe(true);
+    expect(pushDataSchema.safeParse({ v: 1, kind: 'other', count: 3, route: id16 }).success).toBe(false);
+  });
+});
+
+describe('built entry', () => {
+  const dist = resolve(here, '../../dist/remote');
+  it('imports with Buffer deleted and has a clean import graph', () => {
+    expect(existsSync(join(dist, 'index.js')), 'run `pnpm --filter @parley/protocol build` first').toBe(true);
+    const url = pathToFileURL(join(dist, 'index.js')).href;
+    const script = `delete globalThis.Buffer;
+if (globalThis.Buffer !== undefined) throw new Error('Buffer still present');
+const m = await import(${JSON.stringify(url)});
+const u = m.buildPairUrl({ k: new Uint8Array(32).fill(1), s: new Uint8Array(16).fill(2), r: 'relay.example.com' });
+const p = m.parsePairUrl(u);
+if (p.r !== 'relay.example.com' || p.k.length !== 32) throw new Error('parse failed');
+console.log('ok');`;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    expect(out.trim()).toBe('ok');
+
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap(e =>
+        e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith('.js') ? [join(d, e.name)] : [],
+      );
+    const files = walk(dist);
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/g)) {
+        const spec = m[1]!;
+        expect(spec.startsWith('node:'), `${f}: ${spec}`).toBe(false);
+        expect(spec.endsWith('framing.js'), `${f}: ${spec}`).toBe(false);
+        if (spec.startsWith('.')) {
+          expect(resolve(dirname(f), spec).startsWith(dist), `${f}: ${spec}`).toBe(true);
+        } else expect(spec).toBe('zod');
+      }
+    }
+  });
+});
+
+describe('hardened strings and frames (critic A1)', () => {
+  const id16 = b64urlEncode(bytes(16, 3));
+  it('relay address in configure and status is host[:port]', () => {
+    expect(controlConfigureParams.safeParse({ relayUrl: 'relay.example.com:8787' }).success).toBe(true);
+    for (const relayUrl of ['wss://relay.example.com', 'a b', 'relay/path', 'user@host', 'host:99999', 'a'.repeat(65)]) {
+      expect(controlConfigureParams.safeParse({ relayUrl }).success, relayUrl).toBe(false);
+    }
+    const status = { running: true, host: 'online', relay: 'connected', devices: 0, version: '1' };
+    expect(controlStatusResult.safeParse({ ...status, relayUrl: null }).success).toBe(true);
+    expect(controlStatusResult.safeParse({ ...status, relayUrl: 'not a host' }).success).toBe(false);
+  });
+
+  it('phone strings: no control or bidi characters, trimmed', () => {
+    const msg = (name: string) => pairMsg1Payload.safeParse({ v: 1, name, platform: 'ios', app: '1.0.0' });
+    expect(msg('iPhone')).toMatchObject({ success: true });
+    expect(msg('  iPhone  ').data?.name).toBe('iPhone');
+    for (const name of ['a\nb', 'a\u202Eb', 'a\u2028b', 'a\u0000b', '   ']) expect(msg(name).success, JSON.stringify(name)).toBe(false);
+    expect(bridgeMethodSchemas['client.info'].safeParse({ app: 'Parley', version: '1.0.0', platform: 'ios\u200F' }).success).toBe(false);
+    expect(bridgeMethodSchemas['client.info'].safeParse({ app: 'Parley', version: '1.0.0', platform: 'ios' }).success).toBe(true);
+    const req = { requestId: id16, name: 'x\u202E', platform: 'ios', sas: '123456', fingerprint: 'f', expiresAt: 1 };
+    expect(pairRequestEvent.safeParse(req).success).toBe(false);
+  });
+
+  it('incoming: connect needs device, pair has none', () => {
+    const base = { v: 1, t: 'incoming', stream: 'x' };
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'connect', device: id16 }).success).toBe(true);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'connect' }).success).toBe(false);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'pair' }).success).toBe(true);
+    expect(relayIncomingFrame.safeParse({ ...base, kind: 'pair', device: id16 }).success).toBe(false);
+  });
+
+  it('ids and tokens must be canonical base64url', () => {
+    expect(routeIdSchema.safeParse(id16).success).toBe(true);
+    // 22 знака, но последний несёт ненулевые лишние биты: в байты та же строка не вернётся.
+    expect(routeIdSchema.safeParse('A'.repeat(22)).success).toBe(true);
+    expect(routeIdSchema.safeParse('A'.repeat(21) + 'B').success).toBe(false);
+  });
+
+  it('pairing failure reason and relay lists are checked', () => {
+    expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'bad-psk' }).success).toBe(true);
+    expect(pairFailedEvent.safeParse({ requestId: id16, reason: 'because' }).success).toBe(false);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'bad-psk' }).success).toBe(true);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'used' }).success).toBe(true);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'expired' }).success).toBe(false);
+    expect(pairOfferClosedEvent.safeParse({ reason: 'used', requestId: id16 }).success).toBe(false);
+    const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
+    expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
+    expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);
+  });
+});
+
+describe('bridge reads in stage A (wave 3)', () => {
+  const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+  it('W7: feed.snapshot only with scope attention and without agentId', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention' })).toBe(true);
+    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention', agentId: 'a1' })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', { scope: 'attention' })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', null)).toBe(false);
+  });
+  it('W12: session.closing knows the protocol reason', () => {
+    expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'protocol' }).success).toBe(true);
+    expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'nope' }).success).toBe(false);
+  });
+});

@@ -883,6 +883,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   if (providersListHandler !== undefined) {
     listProviders = () => providersListHandler({} as never, {} as RequestInfo) as Promise<Result<'providers.list'>>;
   }
+  // Запуск с телефона (спека мобильного приложения 4.2): значение `remoteCreate` держится здесь и меняется только через
+  // `settings.set`. Смена закрывает соединения клиентов `remote`: мост переподключится и получит новый `hello.methods`.
+  let remoteCreate = (await loadConfig()).config.remoteCreate;
+  const settingsSetHandler = handlers.methods['settings.set'];
+  if (settingsSetHandler !== undefined) {
+    handlers.methods['settings.set'] = async (params, request) => {
+      const result = (await settingsSetHandler(params, request)) as Result<'settings.set'>;
+      if (result.config.remoteCreate !== remoteCreate) {
+        remoteCreate = result.config.remoteCreate;
+        for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
+      }
+      return result;
+    };
+  }
   health.start();
   handle.context.onShutdown(async () => health.stop());
   const server = createHostServer({
@@ -891,6 +905,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     helloTimeoutMs,
     methodHandlers: handlers.methods,
     notificationHandlers: handlers.notifications,
+    remoteLaunch: {
+      enabled: () => remoteCreate,
+      workOpen: (projectPath, workId) => {
+        const entry = worksService.entry(projectPath, workId);
+        return entry !== undefined && entry.map.work.status !== 'archived';
+      },
+      roomAutonomous: (projectPath, workId, roomId) =>
+        worksService.entry(projectPath, workId)?.map.rooms.find((room) => room.id === roomId)?.mode === 'autonomous',
+      projectKnown: (projectPath) => worksService.snapshot().entries.some((entry) => entry.projectPath === projectPath),
+      workKnown: (projectPath, workId) => worksService.entry(projectPath, workId) !== undefined,
+    },
     // Активность хост шлёт только при изменении, а живёт дольше окна: окно,
     // перезапущенное при живом хосте, до следующего события считало бы
     // ждущую разрешения сессию `idle` — в `blocked` она событий больше не шлёт.

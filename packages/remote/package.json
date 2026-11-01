@@ -1,0 +1,33 @@
+{
+  "name": "@parley/remote",
+  "version": "0.26.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./main": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@parley/core": "workspace:*",
+    "@parley/noise": "workspace:*",
+    "@parley/protocol": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@parley/relay": "workspace:*",
+    "@types/ws": "^8.5.12",
+    "@parley/remote-client": "workspace:*"
+  },
+  "bin": {
+    "parley-remote": "./dist/main.js"
+  }
+}

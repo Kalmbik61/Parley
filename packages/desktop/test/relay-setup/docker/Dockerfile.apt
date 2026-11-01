@@ -1,0 +1,20 @@
+# A bare server for the relay setup wizard: sshd, a passwordful root and a sudo user. Ubuntu 24.04 / Debian 12 by
+# BASE; WITH_NGINX=1 adds an nginx on port 80 (the «busy port 80» case).
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+ARG WITH_NGINX=0
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server sudo ca-certificates curl iproute2 procps netcat-openbsd \
+ && if [ "$WITH_NGINX" = "1" ]; then apt-get install -y --no-install-recommends nginx; fi \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd \
+ && useradd -m -s /bin/bash deploy \
+ && echo 'root:stand-root-pw' | chpasswd \
+ && echo 'deploy:stand-deploy-pw' | chpasswd \
+ && echo 'deploy ALL=(ALL) ALL' > /etc/sudoers.d/deploy \
+ && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/; s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+COPY entrypoint.sh /entrypoint.sh
+COPY docker-shim.sh /usr/local/bin/docker
+COPY stand-dockerd.sh /stand-dockerd.sh
+ENTRYPOINT ["/entrypoint.sh"]

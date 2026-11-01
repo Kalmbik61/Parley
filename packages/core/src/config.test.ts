@@ -52,6 +52,7 @@ describe('loadConfig', () => {
       telegramMail: true,
       telegramCards: true,
       leanAgents: true,
+      remoteCreate: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -96,6 +97,7 @@ describe('loadConfig', () => {
       telegramMail: true,
       telegramCards: true,
       leanAgents: true,
+      remoteCreate: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -125,6 +127,7 @@ describe('loadConfig', () => {
       telegramMail: true,
       telegramCards: true,
       leanAgents: true,
+      remoteCreate: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -387,6 +390,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['telegramMail', 'TELEGRAM_MAIL', 'off', false],
     ['telegramCards', 'TELEGRAM_CARDS', 'off', false],
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
+    ['remoteCreate', 'REMOTE_CREATE', 'off', false],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
@@ -641,6 +645,15 @@ describe('skillNavigator setting', () => {
     await write({ skillNavigator: 'invalid' });
     const value = await loadConfig(file(), {});
     expect(value.config.skillNavigator).toBe(true); expect(value.warning).toContain('skillNavigator');
+  });
+});
+
+describe('remoteCreate setting (mobile spec 4.2, decision 5)', () => {
+  it('is on by default and settable through parseSetting', () => {
+    expect(DEFAULT_CONFIG.remoteCreate).toBe(true);
+    expect(parseSetting('remoteCreate', '0')).toEqual({ value: false });
+    expect(parseSetting('remoteCreate', 'on')).toEqual({ value: true });
+    expect(parseSetting('remoteCreate', 'maybe')).toEqual({ error: 'remoteCreate: expected 0 or 1' });
   });
 });
 
