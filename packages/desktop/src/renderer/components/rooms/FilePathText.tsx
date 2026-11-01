@@ -2,10 +2,10 @@
  * Путь к файлу в тексте чата, комнаты и почты — ссылка по ⌘ (macOS) или Ctrl (Windows, Linux), как ⌘-клик в
  * терминале (`terminal/TerminalSurface.tsx`). Кандидатов в тексте находит `remarkFilePaths` (`room-remark.ts`) регуляркой
  * терминала, а ссылкой кандидат становится, только пока модификатор зажат и указатель над ним (как ссылка xterm) и только
- * если main нашёл путь в корне работы (`files.locate` через кэш `createStatCache`, как в `terminal/links.ts`): произвольный
- * путь с диска окно не откроет. Спрашивается только путь под указателем: ⌘C в поле ввода не гонит `files.locate` по всей
+ * если main нашёл путь (`files.locate` с `external: true` через кэш `createStatCache`, как в `terminal/links.ts`): в корне
+ * работы или, ⌘-клик по пути вне корней (2026-10-31), существующий вне корней — такой файл откроется только для чтения. Спрашивается только путь под указателем: ⌘C в поле ввода не гонит `files.locate` по всей
  * ленте и не подчёркивает её. Без модификатора — обычный текст. Клик с модификатором: файл — вкладка редактора на строке и колонке, каталог —
- * приложение по умолчанию (`terminal/LinkMenu.tsx`).
+ * приложение по умолчанию, а вне корней — Finder (`activatePathLink`, `terminal/LinkMenu.tsx`).
  *
  * Работу и папку для относительных путей даёт `FilePathLinksContext`: его ставят вид «Chat» (папка сессии), комната и
  * почта (папка проекта). Нет контекста — путь всегда текст.
@@ -21,7 +21,7 @@ import {
 } from 'react';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { Located } from '../../../shared/files-types.js';
-import { isFileLink, openLinkInEditor, openLinkPath } from '../../terminal/LinkMenu.js';
+import { activatePathLink } from '../../terminal/LinkMenu.js';
 import {
   createStatCache,
   resolveCandidatePath,
@@ -87,7 +87,7 @@ const caches = new WeakMap<ParleyBridge, StatCache>();
 function statCache(bridge: ParleyBridge): StatCache {
   let cache = caches.get(bridge);
   if (cache === undefined) {
-    cache = createStatCache((workKey, absPaths) => bridge.files.locate(workKey, absPaths));
+    cache = createStatCache((workKey, absPaths) => bridge.files.locate(workKey, absPaths, { external: true }));
     caches.set(bridge, cache);
   }
   return cache;
@@ -159,8 +159,7 @@ export function FilePathText({ path, line, col, children }: FilePathTextProps): 
       onClick={(event) => {
         if (!hasLinkModifier(event)) return;
         event.preventDefault();
-        if (isFileLink(link)) openLinkInEditor(link);
-        else void openLinkPath(bridge, link.absPath);
+        activatePathLink(bridge, link);
       }}
       className="cursor-pointer underline"
     >

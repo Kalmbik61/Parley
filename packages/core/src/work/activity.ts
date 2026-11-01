@@ -108,6 +108,15 @@ export interface SessionActivity {
    * или о конце хода ничего не известно, либо сессия вовсе не `working`.
    */
   heldByBackground: boolean;
+  /**
+   * Виды (`type`: `shell`, `subagent`, `monitor`…) работающих задач последнего снимка `background_tasks` — любых, а не
+   * только субагентов, которых держит `heldByBackground`. Фоновая команда сессию `working` не делает, но уснуть ей не
+   * даёт (сон агентов, спека 4.1). Субагенты в списке живут по правилам `background`: остановленный (`SubagentStop`)
+   * не возвращается отставшим снимком, а предел `backgroundHoldMs` снимает зомби. Остальные виды — буквально последний
+   * снимок, без срока давности: устаревший снимок только мешает уснуть, это безопасная сторона. Пустой снимок стирает,
+   * запуск процесса сбрасывает.
+   */
+  runningBackground: string[];
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
   /**
@@ -217,6 +226,9 @@ interface StartedAgent {
 const isRunningSubagent = (task: BackgroundTask): boolean =>
   task.type === 'subagent' && task.status === 'running';
 
+/** Задача снимка — субагент: за ним следят `SubagentStop` и предел зомби; у других видов остановки в журнале нет. */
+const isSubagent = (task: BackgroundTask): boolean => task.type === 'subagent';
+
 /**
  * Живые субагенты: стартовавшие (в порядке старта) и работающие из снимка, о чьём старте
  * журнал не знает. Описание и тип берутся из снимка, если они там есть.
@@ -296,6 +308,11 @@ export function activityOf({
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
   // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
   let background: BackgroundTask[] = [];
+  // Все работающие задачи того же снимка, а не одни субагенты, — с id и видом (`runningBackground` отдаёт только виды):
+  // сессию держит `background`, а фоновая команда или монитор — нет. Субагенты в списке живут по правилам `background`:
+  // остановленные отставшим снимком не возвращаются, `SubagentStop` убирает свой id, предел зомби их снимает. Остальные
+  // виды — буквально последний снимок, без срока давности. Сброс при запуске процесса тот же.
+  let runningTasks: BackgroundTask[] = [];
   // Остановленные субагенты: снимок следующего события может отстать и ещё числить их работающими,
   // а остановка уже была — таких в снимках не учитываем, пока субагент не стартует снова.
   const stopped = new Set<string>();
@@ -382,12 +399,16 @@ export function activityOf({
     if (event.name === 'SessionStart') {
       started.clear();
       background = [];
+      runningTasks = [];
       stopped.clear();
       waits = [];
     }
     if (event.backgroundTasks !== null) {
       background = event.backgroundTasks.filter(
         (task) => isRunningSubagent(task) && !stopped.has(task.id),
+      );
+      runningTasks = event.backgroundTasks.filter(
+        (task) => task.status === 'running' && !(isSubagent(task) && stopped.has(task.id)),
       );
     }
     switch (event.name) {
@@ -470,6 +491,7 @@ export function activityOf({
           started.delete(id);
           // Снимок самого события мог отстать от остановки и ещё числить задачу работающей.
           background = background.filter((task) => task.id !== id);
+          runningTasks = runningTasks.filter((task) => !(isSubagent(task) && task.id === id));
         }
         break;
       }
@@ -573,6 +595,8 @@ export function activityOf({
     // Фоновый субагент и ожидание не вечны: молчит и журнал, и лог дольше предела — это зомби.
     if (!Number.isNaN(quietAt) && now - quietAt > backgroundHoldMs) {
       background = [];
+      // Зомби-субагент уходит из списка вместе с `background`; у остальных видов срока давности нет.
+      runningTasks = runningTasks.filter((task) => !isSubagent(task));
       waits = [];
     }
     if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
@@ -618,6 +642,7 @@ export function activityOf({
     // Последнее из идущих ожиданий.
     waitingFor: phase === 'ended' ? null : (waits.at(-1)?.target ?? null),
     heldByBackground,
+    runningBackground: runningTasks.map((task) => task.type),
     turnEndedAt,
     turnBoundaryAt,
     lastEventAt,

@@ -40,6 +40,9 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 20,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
+      sleepUnderPressureMinutes: 5,
+      machineConcurrent: 'off',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -82,6 +85,9 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
+      sleepUnderPressureMinutes: 5,
+      machineConcurrent: 'off',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -109,6 +115,9 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 7,
       resumeRate: 6,
+      sleepAfterMinutes: 0,
+      sleepUnderPressureMinutes: 5,
+      machineConcurrent: 'off',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -368,6 +377,9 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['channelPush', 'CHANNEL_PUSH', '0', false],
     ['messageRate', 'MESSAGE_RATE', '9', 9],
     ['resumeRate', 'RESUME_RATE', '3', 3],
+    ['sleepAfterMinutes', 'SLEEP_AFTER_MINUTES', '30', 30],
+    ['sleepUnderPressureMinutes', 'SLEEP_UNDER_PRESSURE_MINUTES', '10', 10],
+    ['machineConcurrent', 'MACHINE_CONCURRENT', 'auto', 'auto'],
     ['agentSkills', 'AGENT_SKILLS', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
@@ -533,6 +545,28 @@ describe('parseSetting', () => {
     expect(fromEnv.fromEnv).toContain('resumeRate');
   });
 
+  it('parseSetting resumeRate: пустая строка и пробелы — ошибка, а не 0 (Number("") === 0)', () => {
+    for (const blank of ['', '  ']) {
+      expect(parseSetting('resumeRate', blank)).toEqual({
+        error: 'resumeRate: expected an integer from 0 to 60',
+      });
+    }
+  });
+
+  it('PARLEY_RESUME_RATE из пробелов — жалоба, значение по умолчанию, ключ не заперт', async () => {
+    // Number('  ') === 0: без проверки такая переменная молча заперла бы будильник на «выключен».
+    const loaded = await loadConfig(file(), { PARLEY_RESUME_RATE: '  ' });
+    expect(loaded.config.resumeRate).toBe(6);
+    expect(loaded.warning).toBe('PARLEY_RESUME_RATE: expected an integer from 0 to 60');
+    expect(loaded.fromEnv).toEqual([]);
+
+    // Значение из файла пробелы тоже не сбрасывают в ноль.
+    await write({ resumeRate: 3 });
+    const withFile = await loadConfig(file(), { PARLEY_RESUME_RATE: '  ' });
+    expect(withFile.config.resumeRate).toBe(3);
+    expect(withFile.warning).toBe('PARLEY_RESUME_RATE: expected an integer from 0 to 60');
+  });
+
   it('agentSkills — булев ключ: да/нет теми же словами', () => {
     expect(parseSetting('agentSkills', 'false')).toEqual({ value: false });
     expect(parseSetting('agentSkills', '1')).toEqual({ value: true });
@@ -644,6 +678,230 @@ describe('leanAgents setting', () => {
     const value = await loadConfig(file(), {});
     expect(value.config.leanAgents).toBe(true);
     expect(value.warning).toContain('leanAgents');
+  });
+});
+
+describe('sleepAfterMinutes setting', () => {
+  it('по умолчанию 0 — сон выключен; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepAfterMinutes).toBe(0);
+    expect((await loadConfig(file(), {})).config.sleepAfterMinutes).toBe(0);
+
+    // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
+    expect(parseSetting('sleepAfterMinutes', '60')).toEqual({ value: 60 });
+    await saveConfig({ sleepAfterMinutes: 60 }, file());
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.sleepAfterMinutes).toBe(60);
+    expect(fromFile.warning).toBeNull();
+    expect(fromFile.fromEnv).toEqual([]);
+
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '30' });
+    expect(fromEnv.config.sleepAfterMinutes).toBe(30);
+    // Ключ пришёл из окружения: файл его не перекроет, хост покажет замок с именем переменной.
+    expect(fromEnv.fromEnv).toEqual(['sleepAfterMinutes']);
+    expect(fromEnv.warning).toBeNull();
+  });
+
+  it('parseSetting: целое от 0 до 1440, ноль — своей веткой, остальное — ошибка с границами', () => {
+    expect(parseSetting('sleepAfterMinutes', '0')).toEqual({ value: 0 });
+    expect(parseSetting('sleepAfterMinutes', '1440')).toEqual({ value: 1440 });
+    for (const bad of ['1441', '-1', 'abc', '2.5']) {
+      expect(parseSetting('sleepAfterMinutes', bad)).toEqual({
+        error: 'sleepAfterMinutes: expected an integer from 0 to 1440',
+      });
+    }
+  });
+
+  it('parseSetting: пустая строка и пробелы — ошибка, а не молчаливый ноль (Number("") === 0)', () => {
+    for (const blank of ['', '  ']) {
+      expect(parseSetting('sleepAfterMinutes', blank)).toEqual({
+        error: 'sleepAfterMinutes: expected an integer from 0 to 1440',
+      });
+    }
+  });
+
+  it('пробелы вместо числа в окружении — жалоба с именем, значение без переменной, ключ не заперт', async () => {
+    // Number('  ') === 0: без проверки такая переменная молча заперла бы сон на «выключен».
+    const noFile = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '  ' });
+    expect(noFile.config.sleepAfterMinutes).toBe(0);
+    expect(noFile.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(noFile.fromEnv).toEqual([]);
+
+    // Порог из файла переменная с пробелами не сбрасывает в ноль.
+    await write({ sleepAfterMinutes: 60 });
+    const withFile = await loadConfig(file(), { HARNAS_SLEEP_AFTER_MINUTES: '  ' });
+    expect(withFile.config.sleepAfterMinutes).toBe(60);
+    expect(withFile.warning).toBe('HARNAS_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(withFile.fromEnv).toEqual([]);
+  });
+
+  it('переменная нулевой длины — то же, что незаданная, как у всех настроек (envValue): без жалобы и замка', async () => {
+    await write({ sleepAfterMinutes: 60 });
+    const empty = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '' });
+    expect(empty.config.sleepAfterMinutes).toBe(60);
+    expect(empty.warning).toBeNull();
+    expect(empty.fromEnv).toEqual([]);
+  });
+
+  it('вне границ в файле и в окружении — жалоба с именем и умолчание 0; ключ в окружении не запирается', async () => {
+    await write({ sleepAfterMinutes: 1441 });
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.sleepAfterMinutes).toBe(0);
+    expect(fromFile.warning).toBe('sleepAfterMinutes: expected an integer from 0 to 1440');
+
+    await write({});
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: 'abc' });
+    expect(fromEnv.config.sleepAfterMinutes).toBe(0);
+    expect(fromEnv.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
+    expect(fromEnv.fromEnv).toEqual([]);
+  });
+
+  it('ноль разрешён и в файле, и в окружении: окружение выключает сон поверх файла', async () => {
+    await write({ sleepAfterMinutes: 0 });
+    const zeroFile = await loadConfig(file(), {});
+    expect(zeroFile.config.sleepAfterMinutes).toBe(0);
+    expect(zeroFile.warning).toBeNull();
+
+    await write({ sleepAfterMinutes: 60 });
+    const zeroEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '0' });
+    expect(zeroEnv.config.sleepAfterMinutes).toBe(0);
+    expect(zeroEnv.fromEnv).toEqual(['sleepAfterMinutes']);
+    expect(zeroEnv.warning).toBeNull();
+  });
+});
+
+describe('sleepUnderPressureMinutes setting', () => {
+  const EXPECTED = 'expected an integer from 1 to 60';
+
+  it('по умолчанию 5; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepUnderPressureMinutes).toBe(5);
+    expect((await loadConfig(file(), {})).config.sleepUnderPressureMinutes).toBe(5);
+
+    // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
+    expect(parseSetting('sleepUnderPressureMinutes', '20')).toEqual({ value: 20 });
+    await saveConfig({ sleepUnderPressureMinutes: 20 }, file());
+    const fromFile = await loadConfig(file(), {});
+    expect(fromFile.config.sleepUnderPressureMinutes).toBe(20);
+    expect(fromFile.warning).toBeNull();
+    expect(fromFile.fromEnv).toEqual([]);
+
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: '15' });
+    expect(fromEnv.config.sleepUnderPressureMinutes).toBe(15);
+    // Ключ пришёл из окружения: файл его не перекроет, хост покажет замок с именем переменной.
+    expect(fromEnv.fromEnv).toEqual(['sleepUnderPressureMinutes']);
+    expect(fromEnv.warning).toBeNull();
+  });
+
+  it('parseSetting: целое от 1 до 60; ноль, пустая строка и всё вне границ — ошибка с границами', () => {
+    expect(parseSetting('sleepUnderPressureMinutes', '1')).toEqual({ value: 1 });
+    expect(parseSetting('sleepUnderPressureMinutes', '60')).toEqual({ value: 60 });
+    // Ноль здесь не «выключено»: сон выключает один ключ, `sleepAfterMinutes`. Пустая строка — не ноль (Number('') === 0).
+    for (const bad of ['0', '61', '-1', 'abc', '2.5', '', '  ']) {
+      expect(parseSetting('sleepUnderPressureMinutes', bad), JSON.stringify(bad)).toEqual({
+        error: `sleepUnderPressureMinutes: ${EXPECTED}`,
+      });
+    }
+  });
+
+  it('вне границ в файле и в окружении — жалоба с именем и умолчание 5; ключ в окружении не запирается', async () => {
+    for (const bad of [0, 61]) {
+      await write({ sleepUnderPressureMinutes: bad });
+      const fromFile = await loadConfig(file(), {});
+      expect(fromFile.config.sleepUnderPressureMinutes, String(bad)).toBe(5);
+      expect(fromFile.warning, String(bad)).toBe(`sleepUnderPressureMinutes: ${EXPECTED}`);
+    }
+
+    await write({});
+    // Пробелы вместо числа — не ноль и не «выключено»: Number('  ') === 0 вне границ.
+    for (const bad of ['0', 'abc', '  ']) {
+      const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: bad });
+      expect(fromEnv.config.sleepUnderPressureMinutes, JSON.stringify(bad)).toBe(5);
+      expect(fromEnv.warning, JSON.stringify(bad)).toBe(`PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: ${EXPECTED}`);
+      expect(fromEnv.fromEnv, JSON.stringify(bad)).toEqual([]);
+    }
+  });
+});
+
+describe('machineConcurrent setting', () => {
+  const EXPECTED = 'expected "off", "auto" or an integer from 1 to 128';
+
+  it('по умолчанию off — потолок, очередь и допуск выключены', async () => {
+    expect(DEFAULT_CONFIG.machineConcurrent).toBe('off');
+    const loaded = await loadConfig(file(), {});
+    expect(loaded.config.machineConcurrent).toBe('off');
+    expect(loaded.warning).toBeNull();
+  });
+
+  it('из файла: auto, off и целое от 1 до 128', async () => {
+    for (const value of ['auto', 'off', 1, 12, 128]) {
+      await write({ machineConcurrent: value });
+      const loaded = await loadConfig(file(), {});
+      expect(loaded.config.machineConcurrent, String(value)).toBe(value);
+      expect(loaded.warning, String(value)).toBeNull();
+      expect(loaded.fromEnv, String(value)).toEqual([]);
+    }
+  });
+
+  it('из файла: регистр и пробелы разбираются как у parseSetting, значение хранится строчным', async () => {
+    for (const [raw, stored] of [[' AUTO ', 'auto'], ['Off', 'off'], [' 12 ', 12]] as const) {
+      await write({ machineConcurrent: raw });
+      const loaded = await loadConfig(file(), {});
+      expect(loaded.config.machineConcurrent, raw).toBe(stored);
+      expect(loaded.warning, raw).toBeNull();
+    }
+  });
+
+  it('вне границ или не того вида в файле — жалоба с именем и умолчание off', async () => {
+    for (const bad of [0, 129, 1.5, -3, 'max', '', '  ', true, null, [8], { n: 8 }]) {
+      await write({ machineConcurrent: bad });
+      const loaded = await loadConfig(file(), {});
+      expect(loaded.config.machineConcurrent, JSON.stringify(bad)).toBe('off');
+      expect(loaded.warning, JSON.stringify(bad)).toBe(`machineConcurrent: ${EXPECTED}`);
+    }
+  });
+
+  it('parseSetting: off и auto без учёта регистра и пробелов, целое 1–128, остальное — ошибка с границами', () => {
+    expect(parseSetting('machineConcurrent', ' AUTO ')).toEqual({ value: 'auto' });
+    expect(parseSetting('machineConcurrent', 'Off')).toEqual({ value: 'off' });
+    expect(parseSetting('machineConcurrent', '1')).toEqual({ value: 1 });
+    expect(parseSetting('machineConcurrent', '64')).toEqual({ value: 64 });
+    expect(parseSetting('machineConcurrent', '128')).toEqual({ value: 128 });
+    // Пустая строка и пробелы — ошибка, а не молчаливый «выключено» или ноль (Number('') === 0).
+    for (const bad of ['', '  ', '0', '129', '-1', '1.5', 'max', 'on', 'true']) {
+      expect(parseSetting('machineConcurrent', bad), JSON.stringify(bad)).toEqual({
+        error: `machineConcurrent: ${EXPECTED}`,
+      });
+    }
+  });
+
+  it('путь settings.set: parseSetting → saveConfig → loadConfig, число и слово переживают файл', async () => {
+    for (const text of ['auto', '24']) {
+      const parsed = parseSetting('machineConcurrent', text);
+      if ('error' in parsed) throw new Error(parsed.error);
+      await saveConfig({ machineConcurrent: parsed.value }, file());
+      const loaded = await loadConfig(file(), {});
+      expect(loaded.config.machineConcurrent, text).toBe(parsed.value);
+      expect(loaded.warning, text).toBeNull();
+    }
+  });
+
+  it('PARLEY_MACHINE_CONCURRENT: auto, off и число; ключ попадает в fromEnv и перекрывает файл', async () => {
+    await write({ machineConcurrent: 12 });
+    for (const [raw, parsed] of [['auto', 'auto'], [' OFF ', 'off'], ['32', 32]] as const) {
+      const loaded = await loadConfig(file(), { PARLEY_MACHINE_CONCURRENT: raw });
+      expect(loaded.config.machineConcurrent, raw).toBe(parsed);
+      expect(loaded.fromEnv, raw).toEqual(['machineConcurrent']);
+      expect(loaded.warning, raw).toBeNull();
+    }
+  });
+
+  it('битое значение в окружении — жалоба с именем переменной, файл не перекрыт, ключ не заперт', async () => {
+    await write({ machineConcurrent: 12 });
+    for (const bad of ['max', '0', '129', '  ']) {
+      const loaded = await loadConfig(file(), { HARNAS_MACHINE_CONCURRENT: bad });
+      expect(loaded.config.machineConcurrent, JSON.stringify(bad)).toBe(12);
+      expect(loaded.warning, JSON.stringify(bad)).toBe(`HARNAS_MACHINE_CONCURRENT: ${EXPECTED}`);
+      expect(loaded.fromEnv, JSON.stringify(bad)).toEqual([]);
+    }
   });
 });
 

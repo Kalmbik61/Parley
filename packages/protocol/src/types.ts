@@ -1,4 +1,4 @@
-import type { AgentPlan, ContextFill, Message, UsageSummary, WindowWorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, MachineCapacity, Message, QueuedLaunch, UsageSummary, WindowWorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -114,7 +114,8 @@ export interface LiveTask {
  * - `pending` — сессия ещё не запускалась;
  * - `folder-trust` — запуск Codex удержан до согласия человека на папку проекта (спека 2026-10-21, 4.2);
  * - `settling` — письма несрочные (заметка всем без упоминания): указатель ждёт тишины в комнате;
- * - `provider-missing` — провайдера сессии больше нет в реестре: она ждёт, пока человек продолжит её на другом.
+ * - `provider-missing` — провайдера сессии больше нет в реестре: она ждёт, пока человек продолжит её на другом;
+ * - `queued` — запуск сессии стоит в очереди машины: потолок живых CLI полон или память на пределе (спека ёмкости, 4.2).
  */
 export type MailWait =
   | 'busy'
@@ -130,7 +131,8 @@ export type MailWait =
   | 'pending'
   | 'folder-trust'
   | 'settling'
-  | 'provider-missing';
+  | 'provider-missing'
+  | 'queued';
 
 /**
  * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
@@ -247,7 +249,9 @@ export type NoticeKind =
   // Рой закончил (спека роя v1, 3.3): `ref` — королева, `text` — «Рой sw-NN [тег] готов, 3/5, 4:12» и итог. Для роя, заведённого
   // человеком или не нашедшим живого адресата-агента; создателю-агенту итог идёт письмом.
   | 'swarm-done'
-  | 'swarm-failed';
+  | 'swarm-failed'
+  // Запуск человека пошёл сверх потолка машины (спека ёмкости, 4.2, «Классы запусков»): `ref` — запущенная сессия.
+  | 'machine-over-limit';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -463,4 +467,10 @@ export interface RoomsMailEvent {
    * каркас кадра (отметки прочтения) оставил под него меньше потолка: урезанных кандидатов окно получит со следующим снимком.
    */
   mentionCandidates: Message[];
+}
+
+/** Снимок ёмкости машины для окна (спека 4.5): числа — те же, что у get_capacity; очередь — в порядке compareQueued. */
+export interface CapacitySnapshot {
+  machine: MachineCapacity;
+  queue: Array<{ ref: SessionRef; queued: QueuedLaunch }>;
 }

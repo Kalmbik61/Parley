@@ -92,6 +92,13 @@ describe('StatusBar: хост от другой сборки окна (0.2.0)', 
 });
 
 describe('StatusBar: хост старее окна', () => {
+  it('хост без capacity.get: сегмента «Agents» нет, тоста нет, строка предлагает перезапуск', () => {
+    renderBar({ state: 'connected', hostVersion: '1.0.0', methods: REQUIRED_METHODS.filter((method) => method !== 'capacity.get') });
+    expect(screen.getByRole('button', { name: S.statusBar.hostOutdated })).toBeTruthy();
+    expect(document.querySelector('[data-capacity-segment]')).toBeNull();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
   it('Restart в подтверждении зовёт onRestartHost один раз', () => {
     const onRestartHost = renderBar(old);
     fireEvent.click(screen.getByRole('button', { name: 'Host is outdated — restart' }));

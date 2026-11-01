@@ -611,14 +611,13 @@ describe('WorkCard — комнаты на месте участников (1.2)
     expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-02"]')).not.toBeNull();
   });
 
-  it('счётчик непрочитанного идёт строке комнаты из расчёта внимания работы (roomsUnread), решение — из карты', () => {
+  it('решение — из карты; непрочитанное на строке комнаты слов не рисует', () => {
     const proposal = { id: 'p-1', from: 's-02', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' };
     renderCard(four([room('r-01', ['s-02', 's-03'], { proposal })]), { attention: attention({ roomsUnread: { 'r-01': 4 } }) });
-    // Решение важнее слова «N new».
     expect(card().querySelector('[data-room-row]')?.textContent).toContain('decision');
     cleanup();
     renderCard(four([room('r-01', ['s-02', 's-03'])]), { attention: attention({ roomsUnread: { 'r-01': 4 } }) });
-    expect(card().querySelector('[data-room-row]')?.textContent).toContain('4 new');
+    expect(card().querySelector('[data-room-row]')?.textContent).not.toContain('new');
   });
 
   it('клик по строке комнаты — onOpenRoom с её id, а не onActivate; клик по участнику развёрнутой комнаты — onOpenSession', () => {
@@ -835,7 +834,7 @@ describe('WorkCard — счётчик «для тебя»: письма и уп�
       useUiStore.setState({ roomExpanded: {} });
     });
 
-    it('с упоминанием — «@you · N new»; без — «N new»; решение важнее обоих — «decision»', () => {
+    it('с упоминанием — «@you»; без — слова нет; решение важнее — «decision»', () => {
       const proposal = {
         id: 'p-1',
         from: 's-05',
@@ -857,8 +856,8 @@ describe('WorkCard — счётчик «для тебя»: письма и уп�
           }),
         },
       );
-      expect(rowText('r-01')).toContain(S.sidebar.roomMentioned(3));
-      expect(rowText('r-02')).toContain('2 new');
+      expect(rowText('r-01')).toContain(S.sidebar.roomMentioned);
+      expect(rowText('r-02')).not.toContain('new');
       expect(rowText('r-02')).not.toContain('@you');
       expect(rowText('r-03')).toContain(S.sidebar.roomDecision);
       expect(rowText('r-03')).not.toContain('@you');

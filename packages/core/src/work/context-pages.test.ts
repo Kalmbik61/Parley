@@ -933,6 +933,18 @@ describe('топология для агента', () => {
     expect(mapTopology(map, 's-01').sessions[1]).toHaveProperty('stuck', null);
   });
 
+  it('status: усыплённая хостом сессия без итога — asleep, остановленная человеком — exited, итог важнее сна', () => {
+    const map = baseMap();
+    map.sessions[0]!.lifecycle = 'sleeping';
+    map.sessions[0]!.autoSleep = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+    map.sessions[1]!.lifecycle = 'sleeping';
+
+    expect(mapTopology(map, 's-01').sessions.map((session) => session.status)).toEqual(['asleep', 'exited']);
+
+    map.sessions[0]!.result = 'done';
+    expect(mapTopology(map, 's-01').sessions[0]?.status).toBe('done');
+  });
+
   it('комната: плейбук рецепта не виден, ждущее решение сокращено; в планах только действующие ревизии с хвостом журнала', () => {
     const map = baseMap();
     map.rooms[0]!.recipe = { id: 'project:x', name: 'X', playbook: 'SECRET PLAYBOOK' };

@@ -8,7 +8,7 @@ const event = (name: string, notificationType: string | null = null): EventRecor
   notificationType,
 });
 
-const entryOf = (sessions: Array<{ id: string; lifecycle: string }>): WorkEntry =>
+const entryOf = (sessions: Array<{ id: string; lifecycle: string; autoSleep?: object | null; queued?: object | null }>): WorkEntry =>
   ({
     projectPath: '/tmp/p',
     map: { work: { id: 'w-01' }, sessions },
@@ -42,6 +42,36 @@ describe('findInterrupted', () => {
     const refs = await findInterrupted([entry], async (ref: SessionRef) => journals[ref.sessionId] ?? null);
 
     expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' }]);
+  });
+
+  it('усыплённая хостом посреди хода не прервана: поднимать её человеку не предлагают', async () => {
+    const slept = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+    const entry = entryOf([
+      // Хост остановил процесс, пока агент ждал в wait_for: последний хук хода не Stop, но это не обрыв.
+      { id: 's-01', lifecycle: 'sleeping', autoSleep: slept },
+      // Остановил человек посреди хода — прервана, как раньше; пустой ключ сна ничего не меняет.
+      { id: 's-02', lifecycle: 'sleeping' },
+      { id: 's-03', lifecycle: 'sleeping', autoSleep: null },
+    ]);
+
+    const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit'), event('ParleyWaitStart')]);
+
+    expect(refs.map((ref) => ref.sessionId)).toEqual(['s-02', 's-03']);
+  });
+
+  it('сессия в очереди машины не прервана: её продолжит очередь, поднимать её человеку не предлагают', async () => {
+    const queued = { class: 'agent', mode: 'resume', by: 'wake', at: '2026-10-31T12:00:00.000Z', reason: 'machine-limit', live: 18, limit: 18 };
+    const entry = entryOf([
+      // Запуск ждёт слота: журнал оборван посреди хода, но процесса не было и поднимет её очередь.
+      { id: 's-01', lifecycle: 'sleeping', queued },
+      { id: 's-02', lifecycle: 'sleeping' },
+      // Пустой ключ очереди ничего не меняет.
+      { id: 's-03', lifecycle: 'sleeping', queued: null },
+    ]);
+
+    const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit')]);
+
+    expect(refs.map((ref) => ref.sessionId)).toEqual(['s-02', 's-03']);
   });
 
   it('отметка хоста ParleyPermissionAnswered после Stop сессию прерванной не делает', async () => {

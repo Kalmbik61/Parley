@@ -9,6 +9,7 @@ import {
   isRoomArchived,
   isSwarmTerminal,
   liveLead,
+  noteCreation,
   readMap,
   swarmOfSession,
 } from '@parley/core';
@@ -119,6 +120,8 @@ export function admitSwarmSession(map: WorkMap, session: WorkSession, admission:
     if (byAgent) {
       resources().swarmsCreated = (resources().swarmsCreated ?? 0) + 1;
       resources().swarmSpawned = (resources().swarmSpawned ?? 0) + 1;
+      noteCreation(map, 'swarm', null);
+      noteCreation(map, 'swarm-session', null);
     }
     return;
   }
@@ -140,6 +143,7 @@ export function admitSwarmSession(map: WorkMap, session: WorkSession, admission:
   // Вторая волна (спека, 3): королева добавила участника, пока рой собирал итоги, — рой снова работает.
   if (swarm.status === 'collecting') swarm.status = 'running';
   resources().swarmSpawned = (resources().swarmSpawned ?? 0) + 1;
+  noteCreation(map, 'swarm-session', null);
 }
 
 /** Рой и номер только что созданного участника — по карте, которую записала та же операция; `undefined` — сессия не в рое. */

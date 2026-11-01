@@ -758,6 +758,22 @@ describe('hostToolContext', () => {
     expect(context.mapChanges).toBe(onWorksChange);
   });
 
+  it('capacity from the deps answers with the machine numbers and the activity of the session, bound to the token scope', async () => {
+    const facts = {
+      machine: { live: 3, limit: 4, queued: 0, pressure: 'normal' as const, swapGb: null, sleepMinutes: 60 },
+      activity: { subagents: 1, background: ['shell'] },
+    };
+    const capacity = vi.fn(async () => facts);
+    const context = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {}, capacity });
+    await expect(context.capacity?.()).resolves.toBe(facts);
+    expect(capacity).toHaveBeenCalledWith(scope());
+  });
+
+  it('has no capacity field without deps.capacity', async () => {
+    const context = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {} });
+    expect('capacity' in context).toBe(false);
+  });
+
   it('turns a failing provider source into null rows', async () => {
     const failing = async (): Promise<ProviderRow[]> => {
       throw new Error('the host is still starting');

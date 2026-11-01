@@ -44,7 +44,8 @@ export function isTabAlive(entry: WindowWorkEntry, tab: TabSpec): boolean {
       // `find`: TS не удерживает сужение вложенного свойства через границу
       // замыкания, только простого локального связывания.
       const root = tab.root;
-      if (root.kind === 'project') return true;
+      // Внешний файл (2026-10-31) от сессий работы не зависит: вкладка живёт, пока открыта.
+      if (root.kind === 'project' || root.kind === 'external') return true;
       const session = entry.map.sessions.find((candidate) => candidate.id === root.sessionId);
       if (session === undefined || session.worktree === null) return false;
       return session.worktree.createdAt !== null;

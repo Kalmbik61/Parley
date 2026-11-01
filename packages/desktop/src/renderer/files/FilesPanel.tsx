@@ -116,7 +116,7 @@ export function FilesPanel({ bridge, entry }: FilesPanelProps): JSX.Element {
   const focused = useLayoutStore((state) => focusedSessionOf(state, workKey));
   const chosen = useFilesStore((state) => state.rootByWork[workKey]);
   const spec = filesRootSpec(chosen === undefined ? {} : { [workKey]: chosen }, entry, focused);
-  const specKey = spec.kind === 'project' ? 'project' : spec.sessionId;
+  const specKey = spec.kind === 'project' ? 'project' : spec.kind === 'worktree' ? spec.sessionId : 'external';
   // Одна ссылка на корень, пока он тот же (зависимость — ключ `spec`, а не новый объект на
   // каждую отрисовку): дерево и подписки ниже зависят от неё.
   const root = useMemo<FileRoot>(() => ({ workKey, spec }), [workKey, specKey]);

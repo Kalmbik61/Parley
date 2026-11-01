@@ -1162,6 +1162,26 @@ export async function setWorkStatus(
   return updateMap(projectPath, workId, (map) => (map.work.status = status), { touch: false });
 }
 
+/**
+ * Ставит или снимает разрешение агентам закрывать завершённые сессии (sg-12); `false` удаляет поле, миграций карты нет.
+ * Как смена статуса — не событие работы: `updatedAt` стоит на месте. Пишет только человек, через окно.
+ */
+export async function setWorkCloseFinished(
+  projectPath: string,
+  workId: string,
+  closeFinished: boolean,
+): Promise<void> {
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      if (closeFinished) map.work.closeFinished = true;
+      else delete map.work.closeFinished;
+    },
+    { touch: false },
+  );
+}
+
 
 export type SharedStateErrorCode = 'project-unavailable' | 'git-context-unverified' | 'main-project-unavailable' |
   'shared-state-unsafe' | 'shared-file-too-large' | 'shared-file-unreadable' | 'backlog-lock-timeout' |

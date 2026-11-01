@@ -278,8 +278,12 @@ export interface ParleyBridge {
   files: {
     /** До 200 путей; `null` — пути нет или он вне корня. */
     stat(root: FileRoot, paths: string[]): Promise<Array<FileStat | null>>;
-    /** До 200 путей; корень ищется только среди корней работы workKey; `~` раскрывает main. */
-    locate(workKey: string, absPaths: string[]): Promise<Array<Located | null>>;
+    /**
+     * До 200 путей; корень ищется только среди корней работы workKey; `~` раскрывает main.
+     * `options.external` (2026-10-31): существующий путь вне корней отдаётся с корнем `external` и абсолютным
+     * `relPath` (только чтение); без флага — `null`, как раньше.
+     */
+    locate(workKey: string, absPaths: string[], options?: { external?: boolean }): Promise<Array<Located | null>>;
     /** dir относительный, '' — корень; без `.git` и каталога состояния (`.parley`, `.harnas`), только файлы, папки и симлинки. */
     list(root: FileRoot, dir: string): Promise<DirEntry[]>;
     /** Больше 20 МБ — `files:too-large`; не обычный файл — `bad_request`. */

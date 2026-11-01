@@ -389,3 +389,68 @@ describe('SessionRowMenu — Continue on another provider…', () => {
     expect(screen.getByText('Continue on another provider…').getAttribute('data-highlight')).toBe('true');
   });
 });
+
+describe('SessionRowMenu — Keep awake (спека сна агентов, 4.1)', () => {
+  const hostWith = (methods: string[]): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods } });
+  };
+  const ref = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
+  const item = (): HTMLElement => screen.getByRole('menuitemcheckbox', { name: 'Keep awake' });
+
+  beforeEach(() => {
+    hostWith(['sessions.setKeepAwake']);
+    bridge.setHandler('sessions.setKeepAwake', ({ keepAwake }) => ({ keepAwake }));
+  });
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('отмечен, когда keepAwake: true; без флага не отмечен', () => {
+    renderMenu(makeSession('s-01', 'plan', { keepAwake: true }));
+    expect(item().getAttribute('aria-checked')).toBe('true');
+    cleanup();
+
+    renderMenu(makeSession('s-01', 'plan'));
+    expect(item().getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('клик по отмеченному снимает флаг: sessions.setKeepAwake с false, без подтверждения', () => {
+    renderMenu(makeSession('s-01', 'plan', { keepAwake: true }));
+    fireEvent.click(item());
+    expect(bridge.calls).toEqual([{ method: 'sessions.setKeepAwake', params: { ref, keepAwake: false } }]);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('клик по неотмеченному ставит флаг: sessions.setKeepAwake с true', () => {
+    renderMenu(makeSession('s-01', 'plan'));
+    fireEvent.click(item());
+    expect(bridge.calls).toEqual([{ method: 'sessions.setKeepAwake', params: { ref, keepAwake: true } }]);
+  });
+
+  it('отказ хоста — только в консоль, без тоста', async () => {
+    bridge.setHandler('sessions.setKeepAwake', () => {
+      throw encodeIpcError({ code: 'conflict', message: 'session s-01 is closed' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderMenu(makeSession('s-01', 'plan'));
+    fireEvent.click(item());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(warn).toHaveBeenCalledWith('[parley] sessions.setKeepAwake', expect.anything());
+    expect(toast).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('у хоста без sessions.setKeepAwake и у закрытой сессии пункта нет, остальные на месте', () => {
+    hostWith([]);
+    renderMenu(makeSession('s-01', 'plan', { keepAwake: true }));
+    expect(screen.queryByText('Keep awake')).toBeNull();
+    expect(screen.getByText('Open')).toBeTruthy();
+    cleanup();
+
+    hostWith(['sessions.setKeepAwake']);
+    renderMenu(makeSession('s-01', 'plan', { lifecycle: 'closed', keepAwake: true }));
+    expect(screen.queryByText('Keep awake')).toBeNull();
+    expect(screen.getByText('Open')).toBeTruthy();
+  });
+});

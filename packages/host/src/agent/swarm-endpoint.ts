@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isSwarmTag, loadConfig, roleFromId, SWARM_OBJECTIVE_MAX } from '@parley/core';
 import type { SwarmRole } from '@parley/core';
 import { AGENT_LIMITS, type SessionRef } from '@parley/protocol';
-import type { CreateSessionInput } from '../sessions/sessions-service.js';
+import type { CreatedSession, CreateSessionInput } from '../sessions/sessions-service.js';
 import { memberName } from '../swarms/spawn.js';
 
 export const AGENT_SWARMS_PATH = '/agent/swarms';
@@ -15,7 +15,7 @@ export const AGENT_SWARMS_PATH = '/agent/swarms';
  */
 export function createSwarmEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
-  create(input: CreateSessionInput): Promise<SessionRef & { held?: 'folder-trust' }>;
+  create(input: CreateSessionInput): Promise<CreatedSession>;
   /** Рой и номер созданного участника — по карте, которую только что записала та же операция. */
   memberOf(ref: SessionRef): Promise<{ swarmId: string; role: SwarmRole; n: number } | undefined>;
 }) {
@@ -68,7 +68,9 @@ export function createSwarmEndpoint(options: {
               projectPath: ref.projectPath, workId: ref.workId, requestedBy: ref.sessionId, parent: null,
               provider: args['provider'] as string, label: op === 'add' ? args['label'] as string | undefined ?? '' : '',
               task: (op === 'create' ? args['objective'] : args['task']) as string,
-              lean: config.leanAgents,
+              // Королева всегда облегчённая: она только координирует, MCP человека ей не нужны, а диалог «new MCP servers found»
+              // держал её до ответа человека (b-013). Участники из `swarm_add` — по настройке `leanAgents`.
+              lean: op === 'create' ? true : config.leanAgents,
               swarm: op === 'create' ? { kind: 'create', tag: args['tag'] as string, objective: args['objective'] as string } : { kind: 'add', role: args['role'] as 'drone' | 'verifier' },
               ...(roleOf === undefined ? {} : { role: roleFromId(roleOf as string) }),
               ...(args['model'] === undefined ? {} : { model: args['model'] as string | null }),
@@ -77,11 +79,12 @@ export function createSwarmEndpoint(options: {
             const member = await options.memberOf(created);
             if (member === undefined) throw new Error(`Session ${created.sessionId} was created but is not in a swarm. Check get_map.`);
             const held = created.held === undefined ? {} : { held: created.held };
+            const queued = created.queued === undefined ? {} : { queued: created.queued };
             reply({
               ok: true,
               result: op === 'create'
-                ? { swarmId: member.swarmId, queenSessionId: created.sessionId, ...held }
-                : { sessionId: created.sessionId, member: memberName(member.role, member.n), ...held },
+                ? { swarmId: member.swarmId, queenSessionId: created.sessionId, ...held, ...queued }
+                : { sessionId: created.sessionId, member: memberName(member.role, member.n), ...held, ...queued },
             });
           } catch (error) {
             const data = error instanceof Error && 'data' in error && typeof error.data === 'object' && error.data !== null ? error.data as Record<string, unknown> : {};

@@ -184,8 +184,12 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export {
+  AUTO_SLEEP_WORDS,
   NEED_WORDS,
   STATE_WORDS,
+  agentStatus,
+  asleepHint,
+  autoSleepWord,
   dotState,
   liveStatus,
   needWord,
@@ -335,6 +339,7 @@ export {
   readWorksIndex,
   renameWork,
   replaceStoredMap,
+  setWorkCloseFinished,
   setWorkStatus,
   updateMap,
   viewMap,
@@ -450,7 +455,7 @@ export {
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { CodexWriteApprovals, ParleyConfig, LoadedConfig } from './config.js';
+export type { CodexWriteApprovals, MachineConcurrent, ParleyConfig, LoadedConfig } from './config.js';
 export { CODEX_AUTO_MIN_VERSION } from './work/codex-policy.js';
 export {
   SecretFormatError,
@@ -540,6 +545,20 @@ export {
   wakesAtOnce,
 } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
+export { autoSleepVerdict, deliveredSince, inboxFenced } from './work/auto-sleep.js';
+export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict } from './work/auto-sleep.js';
+export {
+  AUTO_MACHINE_SHARE,
+  HUMAN_OVERFLOW,
+  QUEUE_ORDER,
+  compareQueued,
+  launchClassOf,
+  machineAdmission,
+  machineLimit,
+  mergeQueued,
+  queuedAhead,
+} from './work/machine-capacity.js';
+export type { Admission, AdmissionInput, MachineTicket } from './work/machine-capacity.js';
 export {
   START_TOLERANCE_MS,
   checkSession,
@@ -625,18 +644,25 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
   createToolRunner,
+  finishedState,
 } from './mcp/tools.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';
 export type {
   Artifact,
+  AutoSleep,
+  AutoSleepReason,
   HistoryEntry,
+  LaunchClass,
   LaunchedBy,
+  MemoryPressure,
   Message,
   MessageKind,
   MessageVia,
   Proposal,
+  QueuedLaunch,
+  QueueReason,
   Room,
   RoomMembership,
   SessionLifecycle,
@@ -709,6 +735,7 @@ export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 
 export {
+  CREATION_WINDOW_MS,
   DEFAULT_RESOURCE_LIMITS,
   REQUEST_BUDGET_EXTENSION,
   RESOURCE_COVERAGE,
@@ -722,11 +749,14 @@ export {
   countRecipients,
   deniedForAgent,
   limitsFromConfig,
+  noteCreation,
+  recentCreations,
   reserveAttempt,
   resourceStatus,
   roomOfSession,
   settleAttempt,
   settleByEvidence,
+  swarmBusy,
   teamStartFits,
 } from './work/resource-policy.js';
 export type {
@@ -740,7 +770,17 @@ export type {
   ScopeStatus,
   SwarmSpawnRequest,
 } from './work/resource-policy.js';
-export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+export type { CreationKind, ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+
+export { capacityReport, machineCapacity } from './work/capacity-report.js';
+export type {
+  CapacityFacts,
+  CapacityLimit,
+  CapacityReport,
+  CapacityReportInput,
+  MachineCapacity,
+  MachineInput,
+} from './work/capacity-report.js';
 
 export {
   SWARM_OBJECTIVE_MAX,

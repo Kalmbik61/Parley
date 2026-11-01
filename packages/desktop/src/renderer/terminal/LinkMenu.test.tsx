@@ -15,7 +15,7 @@ import { groups } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { monacoMock } from '../test-utils/monaco-mock.js';
 import { makeWork } from '../test-utils/work-fixtures.js';
-import { LinkMenu } from './LinkMenu.js';
+import { activatePathLink, LinkMenu } from './LinkMenu.js';
 import type { TerminalLink } from './links.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
@@ -135,9 +135,55 @@ describe('тест 6: LinkMenu', () => {
     expect(bridge.openedPaths).toEqual([]);
   });
 
+  it('путь вне корней: без Open in default app; Open in editor, Reveal in Finder и Copy path остаются', () => {
+    const outside: Located = { root: { workKey: 'w', spec: { kind: 'external' } }, relPath: '/etc/hosts', stat: { kind: 'file', size: 1, mtimeMs: 0 } };
+    open({ kind: 'path', absPath: '/etc/hosts', located: outside });
+    expect(screen.queryByRole('menuitem', { name: 'Open in default app' })).toBeNull();
+    for (const name of ['Open in editor', 'Reveal in Finder', 'Copy path']) expect(screen.getByRole('menuitem', { name })).toBeTruthy();
+  });
+
+  it('путь в корне: все четыре пункта', () => {
+    open(pathLink);
+    for (const name of ['Open in editor', 'Open in default app', 'Reveal in Finder', 'Copy path'])
+      expect(screen.getByRole('menuitem', { name })).toBeTruthy();
+  });
+
   it('у ссылки на каталог пункта Open in editor нет', () => {
     open({ kind: 'path', absPath: '/p/src', located: { ...located, relPath: 'src', stat: { kind: 'dir', size: 0, mtimeMs: 0 } } });
     expect(screen.queryByRole('menuitem', { name: 'Open in editor' })).toBeNull();
     expect(screen.getByRole('menuitem', { name: 'Open in default app' })).toBeTruthy();
+  });
+});
+
+describe('activatePathLink — одно действие ⌘-клика', () => {
+  const dir = (spec: Located['root']['spec']): Located => ({ root: { workKey: 'w', spec }, relPath: 'x', stat: { kind: 'dir', size: 0, mtimeMs: 0 } });
+
+  it('файл — вкладка редактора', () => {
+    const key = 'w';
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: [], activeTabId: null }, activeGroupId: 'g1', closedTabs: [] } },
+      hydrated: { [key]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+    });
+    activatePathLink(bridge, { kind: 'path', absPath: '/p/src/a.ts', located });
+    const layout = useLayoutStore.getState().layouts[key];
+    expect(layout === undefined ? [] : groups(layout)[0]?.tabs).toMatchObject([{ kind: 'file', path: 'src/a.ts' }]);
+    expect(bridge.openedPaths).toEqual([]);
+    expect(bridge.revealedPaths).toEqual([]);
+  });
+
+  it('каталог в корне работы — приложение по умолчанию', async () => {
+    activatePathLink(bridge, { kind: 'path', absPath: '/p/src', located: dir({ kind: 'project' }) });
+    await waitFor(() => expect(bridge.openedPaths).toEqual(['/p/src']));
+    expect(bridge.revealedPaths).toEqual([]);
+  });
+
+  it('каталог вне корней — Finder, ничего не запускается', async () => {
+    activatePathLink(bridge, { kind: 'path', absPath: '/var/log', located: dir({ kind: 'external' }) });
+    await waitFor(() => expect(bridge.revealedPaths).toEqual(['/var/log']));
+    expect(bridge.openedPaths).toEqual([]);
   });
 });

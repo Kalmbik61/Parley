@@ -374,6 +374,62 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   />
                 </FieldRow>
 
+                {/* Ключа нет у хоста, оставшегося от прежней версии: поле показало бы «undefined», а `settings.set` такой
+                    хост отклонил бы. */}
+                {config.sleepAfterMinutes !== undefined ? (
+                  <FieldRow
+                    label={S.settings.sleepAfterMinutes}
+                    lockedBy={locked.sleepAfterMinutes ?? null}
+                    error={errors.sleepAfterMinutes}
+                  >
+                    <Input
+                      defaultValue={String(config.sleepAfterMinutes)}
+                      disabled={locked.sleepAfterMinutes !== undefined}
+                      onBlur={(event) => void save('sleepAfterMinutes', event.target.value)}
+                    />
+                  </FieldRow>
+                ) : null}
+
+                {/* Потолок машины и порог сна под давлением (спека ёмкости 4.4). Ключей нет у хоста, оставшегося от прежней
+                    версии: поля показали бы «undefined», а `settings.set` такой хост отклонил бы. */}
+                {config.sleepUnderPressureMinutes !== undefined ? (
+                  <FieldRow
+                    label={S.settings.sleepUnderPressureMinutes}
+                    lockedBy={locked.sleepUnderPressureMinutes ?? null}
+                    error={errors.sleepUnderPressureMinutes}
+                  >
+                    <Input
+                      defaultValue={String(config.sleepUnderPressureMinutes)}
+                      disabled={locked.sleepUnderPressureMinutes !== undefined}
+                      onBlur={(event) => void save('sleepUnderPressureMinutes', event.target.value)}
+                    />
+                  </FieldRow>
+                ) : null}
+
+                {config.machineConcurrent !== undefined ? (
+                  <>
+                    <FieldRow
+                      label={S.settings.machineConcurrent}
+                      lockedBy={locked.machineConcurrent ?? null}
+                      error={errors.machineConcurrent}
+                    >
+                      <Input
+                        defaultValue={String(config.machineConcurrent)}
+                        disabled={locked.machineConcurrent !== undefined}
+                        onBlur={(event) => void save('machineConcurrent', event.target.value)}
+                      />
+                    </FieldRow>
+                    <span className="text-xs text-muted-foreground">{S.settings.machineConcurrentHint}</span>
+                    {/* Потолок без сна опасен: простаивающие агенты слотов не отдают (спека 4.2, «Включение»). Внутри проверки
+                        ключа, иначе у хоста прежней версии `undefined !== 'off'` показал бы предупреждение про потолок, которого нет. */}
+                    {config.machineConcurrent !== 'off' && config.sleepAfterMinutes === 0 ? (
+                      <span role="status" className="text-xs text-status-warning-text">
+                        {S.settings.machineLimitWithoutSleep}
+                      </span>
+                    ) : null}
+                  </>
+                ) : null}
+
                 {/* Ключа нет у хоста, оставшегося от прежней версии: он lean-запуск не знает, переключатель врал бы. */}
                 {config.leanAgents !== undefined ? (
                   <>

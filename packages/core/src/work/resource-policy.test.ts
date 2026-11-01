@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addMessage, addSession, parseMap, transitionSession } from './map.js';
 import {
+  CREATION_WINDOW_MS,
   DEFAULT_RESOURCE_LIMITS,
   RESOURCE_COVERAGE,
   RESOURCE_WINDOW_MS,
@@ -17,6 +18,8 @@ import {
   checkSwarmSpawn,
   deniedForAgent,
   limitsFromConfig,
+  noteCreation,
+  recentCreations,
   reserveAttempt,
   resourceStatus,
   roomOfSession,
@@ -29,7 +32,7 @@ import {
 import { addRoom } from './rooms.js';
 import type { WorkSwarm } from './swarms.js';
 import { createWork, readMap, readStoredMap, updateMap } from './store.js';
-import { HUMAN, PARLEY, SYSTEM, type WorkMap } from './types.js';
+import { HUMAN, PARLEY, SYSTEM, type CreationKind, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
@@ -38,6 +41,10 @@ const NOW = Date.now() + 60_000;
 const iso = (ms: number): string => new Date(ms).toISOString();
 
 const limits = (patch: Partial<ResourceLimits> = {}): ResourceLimits => ({ ...DEFAULT_RESOURCE_LIMITS, ...patch });
+
+/** `count` записей журнала создания вида `kind`; по умолчанию «только что» (`NOW`) и вне комнат. */
+const recentOf = (kind: CreationKind, count: number, room: string | null = null, at: number = NOW) =>
+  Array.from({ length: count }, () => ({ kind, at: iso(at), room }));
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -51,6 +58,23 @@ const emptyMap = (): WorkMap => ({
 function addActive(map: WorkMap): string {
   const session = addSession(map, { provider: 'claude', label: 'x', task: 'y' });
   transitionSession(map, session.id, 'active');
+  return session.id;
+}
+
+/** Сессия, которую усыпил хост: `autoSleep` ставит `transitionSession` из отметки «засыпает» при уходе в `sleeping`. */
+function addHostSlept(map: WorkMap): string {
+  const session = addSession(map, { provider: 'claude', label: 'z', task: 't' });
+  transitionSession(map, session.id, 'active');
+  session.autoSleepPending = { reason: 'idle', at: iso(NOW), waitTarget: null };
+  transitionSession(map, session.id, 'sleeping');
+  return session.id;
+}
+
+/** Сессия, которую остановил человек: ушла в `sleeping` без отметки, `autoSleep` пуст. */
+function addHumanStopped(map: WorkMap): string {
+  const session = addSession(map, { provider: 'claude', label: 'h', task: 't' });
+  transitionSession(map, session.id, 'active');
+  transitionSession(map, session.id, 'sleeping');
   return session.id;
 }
 
@@ -158,6 +182,115 @@ describe('reserveAttempt: окно запусков, слоты и повтор'
     const other = addActive(map);
     denied(() => reserveAttempt(map, { kind: 'launch', actor: 'human', session: other, owner, limits: limits({ workLaunches: 1 }), now: NOW }));
     expect(map.resources?.attempts.map((attempt) => attempt.session)).toEqual([session]);
+  });
+});
+
+describe('reserveAttempt: подъём сессии, которую усыпил хост, идёт вне окон запусков', () => {
+  const owner = 'host-A';
+  /** Подъём будильником, как его берёт `sessions-service`: с порогом `resumeRate`, исход — `spent`. */
+  const wake = (map: WorkMap, session: string, patch: Partial<ResourceLimits>, at: number) => {
+    const attempt = reserveAttempt(map, { kind: 'resume', actor: 'wake', session, owner, limits: limits(patch), sessionResumeRate: 6, now: at });
+    settleAttempt(map, attempt.id, owner, 'spent', at);
+    return attempt;
+  };
+
+  it('усыплённую хостом будильник поднимает сверх resumeRate', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    // Семь подъёмов за час при пороге шесть: все резервы взяты, у каждой попытки отметка «вне окна».
+    const attempts = Array.from({ length: 7 }, (_, i) => wake(map, target, {}, NOW + i));
+    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(7).fill(true));
+    expect(map.resources?.attempts).toHaveLength(7);
+  });
+
+  it('подъёмы после сна не тратят workLaunches и roomLaunches', () => {
+    const map = emptyMap();
+    const sleeper = addHostSlept(map);
+    const peer = addActive(map);
+    const fresh = addSession(map, { provider: 'claude', label: 'n', task: 't' }).id;
+    const other = addSession(map, { provider: 'claude', label: 'o', task: 't' }).id;
+    const room = addRoom(map, { title: 'r', creator: peer, members: [sleeper, peer, fresh, other] }).id;
+    // Шестьдесят подъёмов при умолчаниях: окно работы (60) и окно комнаты (20) исчерпали бы их задолго до конца.
+    for (let i = 0; i < 60; i += 1) wake(map, sleeper, {}, NOW + i);
+    const status = resourceStatus(map, limits(), NOW + 100, room);
+    expect([status.work.launches.used, status.room?.launches.used]).toEqual([0, 0]);
+
+    // Обычный запуск проходит под порогом в единицу и сам окно по-прежнему тратит: следующий отказан.
+    const tight = limits({ workLaunches: 1, roomLaunches: 1 });
+    const launch = reserveAttempt(map, { kind: 'launch', actor: 'human', session: fresh, owner, limits: tight, now: NOW + 100 });
+    expect(launch.windowFree).toBeUndefined();
+    settleAttempt(map, launch.id, owner, 'spent', NOW + 100);
+    const refusal = denied(() => reserveAttempt(map, { kind: 'launch', actor: 'human', session: other, owner, limits: tight, now: NOW + 101 }));
+    expect([refusal.code, refusal.scope, refusal.used]).toEqual(['launches', 'work', 1]);
+  });
+
+  it('слоты одновременных сессий подъём после сна занимает', () => {
+    const map = emptyMap();
+    addActive(map);
+    addActive(map);
+    const first = addHostSlept(map);
+    const second = addHostSlept(map);
+    // В работе места на двоих, и оба заняты: подъём отказан по слотам, карта не тронута.
+    const full = denied(() =>
+      reserveAttempt(map, { kind: 'resume', actor: 'wake', session: first, owner, limits: limits({ workConcurrent: 2 }), sessionResumeRate: 6, now: NOW }),
+    );
+    expect([full.code, full.scope, full.used, full.limit]).toEqual(['concurrent', 'work', 2, 2]);
+    expect(map.resources?.attempts).toHaveLength(0);
+
+    // Место есть — подъём берёт слот до исхода, и следующий упирается в него.
+    const three = limits({ workConcurrent: 3 });
+    const taken = reserveAttempt(map, { kind: 'resume', actor: 'wake', session: first, owner, limits: three, sessionResumeRate: 6, now: NOW });
+    expect(taken.windowFree).toBe(true);
+    const next = denied(() => reserveAttempt(map, { kind: 'resume', actor: 'wake', session: second, owner, limits: three, sessionResumeRate: 6, now: NOW }));
+    expect([next.code, next.scope, next.used]).toEqual(['concurrent', 'work', 3]);
+
+    // Слоты комнаты тоже: в комнате места на одного, и его держит живой участник.
+    const mate = addActive(map);
+    const sleeper = addHostSlept(map);
+    addRoom(map, { title: 'r', creator: mate, members: [mate, sleeper] });
+    const inRoom = denied(() =>
+      reserveAttempt(map, { kind: 'resume', actor: 'wake', session: sleeper, owner, limits: limits({ workConcurrent: 50, roomConcurrent: 1 }), sessionResumeRate: 6, now: NOW }),
+    );
+    expect([inRoom.code, inRoom.scope]).toEqual(['concurrent', 'room']);
+  });
+
+  it('остановленную человеком будильник считает по-старому', () => {
+    const map = emptyMap();
+    const target = addHumanStopped(map);
+    // Шесть подъёмов за час — порог; у них нет отметки «вне окна», они считаются в окне.
+    const attempts = Array.from({ length: 6 }, (_, i) => wake(map, target, {}, NOW + i));
+    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(6).fill(undefined));
+    const refusal = denied(() => wake(map, target, {}, NOW + 10));
+    expect([refusal.code, refusal.scope, refusal.limit]).toEqual(['resume-rate', 'session', 6]);
+  });
+
+  it('усыплённую хостом сессию, поднятую не будильником, окна считают как обычно', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    const one = limits({ workLaunches: 1 });
+    // Resume человеком — его действие, а не решение хоста: попытка без отметки, окно запусков её считает.
+    const first = reserveAttempt(map, { kind: 'resume', actor: 'human', session: target, owner, limits: one, now: NOW });
+    expect(first.windowFree).toBeUndefined();
+    settleAttempt(map, first.id, owner, 'spent', NOW);
+    const refusal = denied(() => reserveAttempt(map, { kind: 'resume', actor: 'human', session: target, owner, limits: one, now: NOW + 1 }));
+    expect([refusal.code, refusal.scope]).toEqual(['launches', 'work']);
+  });
+
+  it('validateResources: windowFree — только true, иначе карта не читается', () => {
+    const ledger = (extra: Record<string, unknown>) => ({
+      ...emptyMap(),
+      resources: {
+        seq: 1,
+        spawned: 0,
+        spawnedByRoom: {},
+        attempts: [{ id: 'a-0001', kind: 'resume', state: 'spent', at: iso(NOW), actor: 'wake', session: 's-01', room: null, owner: 'host-A', ...extra }],
+      },
+    });
+    expect(parseMap(JSON.stringify(ledger({ windowFree: true })), 'map.json').resources?.attempts[0]?.windowFree).toBe(true);
+    expect(parseMap(JSON.stringify(ledger({})), 'map.json').resources?.attempts[0]?.windowFree).toBeUndefined();
+    for (const bad of [false, 'true', 1, null]) {
+      expect(() => parseMap(JSON.stringify(ledger({ windowFree: bad })), 'map.json')).toThrow('invalid resource ledger');
+    }
   });
 });
 
@@ -317,13 +450,14 @@ describe('текст отказа и состояние бюджета', () => {
     const legacy = addSession(map, { provider: 'claude', label: 'c', task: 't' });
     legacy.parent = lead; // историческая запись
     const id = addRoom(map, { title: 'r', creator: lead, members: [lead, member] }).id;
-    map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [] };
+    map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [], recent: recentOf('session', 1, id) };
     addMessage(map, { from: lead, to: [member], text: 'x', roomId: id }, iso(NOW - 5));
 
     const status = resourceStatus(map, limits({ workConcurrent: 4, roomConcurrent: 2 }), NOW, id);
     expect(status.work.concurrent).toEqual({ used: 2, reserved: 1, limit: 4, remaining: 1 });
     expect(status.room?.concurrent).toEqual({ used: 2, reserved: 0, limit: 2, remaining: 0 });
     expect(status.work.newSessions.used).toBe(1);
+    expect(status.room?.newSessions.used).toBe(1);
     expect(status.work.messages.used).toBe(1);
     expect(status.exhausted).toContain('concurrent');
     expect(status.monetaryCap).toBe(false);
@@ -487,10 +621,10 @@ describe('рои: пороги, отказы и проверка до общег
 
   it('четыре кода отказа: область swarm, счётчики и текст, а агенту ещё и «только человек»', () => {
     const cases: Array<[ConstructorParameters<typeof ResourceDeniedError>[0], RegExp]> = [
-      ['swarms', /swarm limit reached: agents already created 6 of 6 swarms in this workspace/],
+      ['swarms', /swarm limit reached: agents created 6 of 6 swarms in this workspace in the last 24 hours; wait or raise the limit in Settings/],
       ['swarm-sessions', /swarm size limit reached: 6 of 6 sessions already belong to this swarm/],
       ['swarm-concurrent', /swarm concurrency limit reached: 6 of 6 sessions of this swarm are running or reserved/],
-      ['swarm-total', /swarm session limit reached: agents already created 6 of 6 swarm sessions in this workspace/],
+      ['swarm-total', /swarm session limit reached: agents created 6 of 6 swarm sessions in this workspace in the last 24 hours; wait or raise the limit in Settings/],
     ];
     for (const [code, text] of cases) {
       const error = new ResourceDeniedError(code, 'swarm', 6, 6);
@@ -515,9 +649,9 @@ describe('рои: пороги, отказы и проверка до общег
     expect(checkSwarmSpawn(map, limits({ swarmSessions: 5 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
   });
 
-  it('swarm-total: сессии роёв, созданные агентами за всё время; ноль — рои агентам запрещены; человека не касается', () => {
+  it('swarm-total: сессии роёв, созданные агентами за сутки; ноль — рои агентам запрещены; человека не касается', () => {
     const { map, swarm } = mapWithSwarm(2, 2);
-    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 5 };
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 5, recent: recentOf('swarm-session', 5) };
     expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 5 }), { swarm, creatingSwarm: false, byAgent: true }))
       .toMatchObject({ code: 'swarm-total', scope: 'swarm', used: 5, limit: 5 });
     expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 6 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
@@ -526,15 +660,15 @@ describe('рои: пороги, отказы и проверка до общег
     expect(checkSwarmSpawn(map, limits({ workSwarmSessions: 0, workSwarms: 0 }), { swarm: null, creatingSwarm: true, byAgent: false })).toBeNull();
   });
 
-  it('swarms: роёв, созданных агентами, уже порог — только для создания роя', () => {
+  it('swarms: роёв, созданных агентами за сутки, уже порог — только для создания роя', () => {
     const map = emptyMap();
-    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6 };
+    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6, recent: recentOf('swarm', 6) };
     expect(checkSwarmSpawn(map, limits(), { swarm: null, creatingSwarm: true, byAgent: true }))
       .toMatchObject({ code: 'swarms', scope: 'swarm', used: 6, limit: 6 });
     expect(checkSwarmSpawn(map, limits({ workSwarms: 7 }), { swarm: null, creatingSwarm: true, byAgent: true })).toBeNull();
     // Добавить участника в уже созданный рой это не мешает.
     const { map: inner, swarm } = mapWithSwarm(2, 2);
-    inner.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6 };
+    inner.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmsCreated: 6, recent: recentOf('swarm', 6) };
     expect(checkSwarmSpawn(inner, limits(), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
     // Без счётчиков (старая карта) — ноль; ноль порога — запрет.
     expect(checkSwarmSpawn(emptyMap(), limits({ workSwarms: 0 }), { swarm: null, creatingSwarm: true, byAgent: true })?.code).toBe('swarms');
@@ -558,7 +692,10 @@ describe('рои: пороги, отказы и проверка до общег
 
   it('порядок: размер роя раньше сессий роёв работы, они раньше живых; создание роя — число роёв после сессий', () => {
     const { map, swarm } = mapWithSwarm(4, 4);
-    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 100, swarmsCreated: 100 };
+    map.resources = {
+      seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 100, swarmsCreated: 100,
+      recent: [...recentOf('swarm-session', 100), ...recentOf('swarm', 100)],
+    };
     const all = limits({ swarmSessions: 4, swarmConcurrent: 2, workSwarmSessions: 1, workSwarms: 1 });
     expect(checkSwarmSpawn(map, all, { swarm, creatingSwarm: false, byAgent: true })?.code).toBe('swarm-sessions');
     expect(checkSwarmSpawn(map, { ...all, swarmSessions: 64 }, { swarm, creatingSwarm: false, byAgent: true })?.code).toBe('swarm-total');
@@ -569,15 +706,19 @@ describe('рои: пороги, отказы и проверка до общег
 
   it('общий резерв остаётся за хостом: проверка роёв его не берёт и обычные пороги спавна не читает', () => {
     const { map, swarm } = mapWithSwarm(2, 2);
-    map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [] };
+    map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [], recent: recentOf('session', 50) };
     expect(checkSwarmSpawn(map, limits({ workNewSessions: 0 }), { swarm, creatingSwarm: false, byAgent: true })).toBeNull();
     expect(map.resources.attempts).toEqual([]);
     expect(map.resources.spawned).toBe(50);
+    expect(map.resources.recent).toHaveLength(50);
   });
 
-  it('resourceStatus: счётчики роёв по работе; исчерпанные пороги названы кодами роёв', () => {
+  it('resourceStatus: счётчики роёв по работе за сутки; исчерпанные пороги названы кодами роёв', () => {
     const map = emptyMap();
-    map.resources = { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 3, swarmsCreated: 2 };
+    map.resources = {
+      seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 3, swarmsCreated: 2,
+      recent: [...recentOf('swarm-session', 3), ...recentOf('swarm', 2)],
+    };
     const status = resourceStatus(map, limits({ workSwarmSessions: 10, workSwarms: 2 }), NOW);
     expect(status.work.swarmSessions).toEqual({ used: 3, reserved: 0, limit: 10, remaining: 7 });
     expect(status.work.swarms).toEqual({ used: 2, reserved: 0, limit: 2, remaining: 0 });
@@ -594,5 +735,127 @@ describe('рои: пороги, отказы и проверка до общег
     for (const bad of [{ swarmSpawned: -1 }, { swarmsCreated: 1.5 }, { swarmSpawned: '2' }, { swarmsCreated: null }]) {
       expect(() => parseMap(JSON.stringify(ledger(bad)), 'map.json')).toThrow('invalid resource ledger');
     }
+  });
+});
+
+describe('создания агентами за сутки: скользящее окно вместо пожизненных счётчиков', () => {
+  const HOUR = 60 * 60 * 1000;
+
+  it('создания старше суток не считаются', () => {
+    const map = emptyMap();
+    map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [], recent: recentOf('session', 50, null, NOW - 25 * HOUR) };
+    expect(recentCreations(map, 'session', NOW)).toBe(0);
+
+    // Граница окна: запись ровно суточной давности уже вне его, на миллисекунду моложе — ещё внутри.
+    map.resources.recent = [
+      { kind: 'session', at: iso(NOW - CREATION_WINDOW_MS), room: null },
+      { kind: 'session', at: iso(NOW - CREATION_WINDOW_MS + 1), room: null },
+    ];
+    expect(recentCreations(map, 'session', NOW)).toBe(1);
+
+    // Журнала нет (карта до этого окна): пусто, как бы далеко ни ушёл пожизненный счётчик.
+    const before = emptyMap();
+    before.resources = { seq: 0, spawned: 500, spawnedByRoom: {}, attempts: [] };
+    expect(recentCreations(before, 'session', NOW)).toBe(0);
+    expect(recentCreations(emptyMap(), 'session', NOW)).toBe(0);
+  });
+
+  it('noteCreation выбрасывает записи старше суток', () => {
+    const map = emptyMap();
+    map.resources = {
+      seq: 0, spawned: 2, spawnedByRoom: {}, attempts: [],
+      recent: [...recentOf('session', 1, null, NOW - CREATION_WINDOW_MS - 1), ...recentOf('swarm', 1, null, NOW - HOUR)],
+    };
+    noteCreation(map, 'session', 'r-01', NOW);
+    expect(map.resources.recent).toEqual([...recentOf('swarm', 1, null, NOW - HOUR), ...recentOf('session', 1, 'r-01', NOW)]);
+    // Пишется только журнал: пожизненные счётчики растут отдельно, у хоста.
+    expect(map.resources.spawned).toBe(2);
+
+    // Карта без журнала получает его с первой записью.
+    const fresh = emptyMap();
+    noteCreation(fresh, 'swarm', null, NOW);
+    expect(fresh.resources).toEqual({ seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], recent: recentOf('swarm', 1) });
+  });
+
+  it('комнатный счёт — только своя комната', () => {
+    const map = emptyMap();
+    for (const room of ['r-1', 'r-1', 'r-1', 'r-2', 'r-2']) noteCreation(map, 'session', room, NOW);
+    noteCreation(map, 'session', null, NOW);
+    noteCreation(map, 'swarm', null, NOW);
+    expect(recentCreations(map, 'session', NOW, 'r-1')).toBe(3);
+    expect(recentCreations(map, 'session', NOW, 'r-2')).toBe(2);
+    expect(recentCreations(map, 'session', NOW, 'r-3')).toBe(0);
+    // По работе — все комнаты и сессии вне комнат; рои — отдельный вид.
+    expect(recentCreations(map, 'session', NOW)).toBe(6);
+    expect(recentCreations(map, 'swarm', NOW)).toBe(1);
+    expect(recentCreations(map, 'swarm-session', NOW)).toBe(0);
+  });
+
+  it('validateResources принимает recent и отвергает кривые строки', () => {
+    const ledger = (recent: unknown) => ({ ...emptyMap(), resources: { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], recent } });
+    const rows = [...recentOf('session', 1, 'r-01'), ...recentOf('swarm-session', 1), ...recentOf('swarm', 1)];
+    expect(parseMap(JSON.stringify(ledger(rows)), 'map.json').resources?.recent).toEqual(rows);
+    expect(parseMap(JSON.stringify(ledger([])), 'map.json').resources?.recent).toEqual([]);
+    // Поля нет — карта до этого окна читается, журнал пуст.
+    const without = { ...emptyMap(), resources: { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [] } };
+    expect(parseMap(JSON.stringify(without), 'map.json').resources?.recent).toBeUndefined();
+
+    const at = iso(NOW);
+    const bad: unknown[] = [
+      {}, // не список
+      ['x'], // строка не объект
+      [null],
+      [{ kind: 'boom', at, room: null }], // вид вне набора
+      [{ kind: 'session', at: 5, room: null }], // at не строка
+      [{ kind: 'session', at: 'вчера', room: null }], // at не время
+      [{ kind: 'session', at, room: 7 }], // комната не строка и не null
+      [{ kind: 'session', at }], // комнаты нет совсем
+    ];
+    for (const recent of bad) expect(() => parseMap(JSON.stringify(ledger(recent)), 'map.json')).toThrow('invalid resource ledger');
+  });
+
+  it('рои: пожизненные swarmSpawned и swarmsCreated порог не двигают, записи старше суток не считаются', () => {
+    const map = emptyMap();
+    map.resources = {
+      seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [], swarmSpawned: 500, swarmsCreated: 500,
+      recent: [...recentOf('swarm-session', 64, null, NOW - 25 * HOUR), ...recentOf('swarm', 6, null, NOW - 25 * HOUR)],
+    };
+    const create = { swarm: null, creatingSwarm: true, byAgent: true } as const;
+    expect(checkSwarmSpawn(map, limits(), create)).toBeNull();
+
+    // Свежие записи считаются, а рои и сессии роёв — каждый по своему виду.
+    map.resources.recent = recentOf('swarm-session', 64);
+    expect(checkSwarmSpawn(map, limits(), create)).toMatchObject({ code: 'swarm-total', used: 64, limit: 64 });
+    map.resources.recent = recentOf('swarm', 6);
+    expect(checkSwarmSpawn(map, limits(), create)).toMatchObject({ code: 'swarms', used: 6, limit: 6 });
+  });
+
+  it('resourceStatus считает созданное за сутки, а не за всё время', () => {
+    const map = emptyMap();
+    map.resources = {
+      seq: 0, spawned: 80, spawnedByRoom: { 'r-1': 30 }, attempts: [], swarmSpawned: 90, swarmsCreated: 9,
+      recent: [
+        ...recentOf('session', 3, 'r-1'), ...recentOf('session', 2, 'r-2'), ...recentOf('session', 40, 'r-1', NOW - 25 * HOUR),
+        ...recentOf('swarm-session', 4), ...recentOf('swarm', 1),
+      ],
+    };
+    const status = resourceStatus(map, limits(), NOW, 'r-1');
+    expect(status.work.newSessions).toEqual({ used: 5, reserved: 0, limit: 50, remaining: 45 });
+    expect(status.room?.newSessions).toEqual({ used: 3, reserved: 0, limit: 12, remaining: 9 });
+    expect(status.work.swarmSessions.used).toBe(4);
+    expect(status.work.swarms.used).toBe(1);
+    expect(status.exhausted).not.toContain('new-sessions');
+    expect(status.exhausted).not.toContain('swarms');
+    expect(status.exhausted).not.toContain('swarm-total');
+  });
+
+  it('тексты отказов new-sessions: счёт за последние 24 часа, область и «wait or raise»', () => {
+    expect(new ResourceDeniedError('new-sessions', 'work', 50, 50).message).toBe(
+      'new-session limit reached: agents created 50 of 50 sessions in this workspace in the last 24 hours; wait or raise the limit in Settings',
+    );
+    expect(new ResourceDeniedError('new-sessions', 'room', 12, 12).message).toBe(
+      'new-session limit reached: agents created 12 of 12 sessions in this room in the last 24 hours; wait or raise the limit in Settings',
+    );
+    expect(deniedForAgent(new ResourceDeniedError('new-sessions', 'work', 50, 50))).toContain('Only the human can raise this limit');
   });
 });

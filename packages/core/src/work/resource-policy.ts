@@ -15,10 +15,13 @@
 import type { LetterTx } from './letter-store.js';
 import { HUMAN, PARLEY, SYSTEM } from './types.js';
 import type { WorkSwarm } from './swarms.js';
-import type { Message, ResourceAttempt, ResourceKind, WindowWorkMap, WorkMap, WorkResources } from './types.js';
+import type { CreationKind, Message, ResourceAttempt, ResourceKind, WindowWorkMap, WorkMap, WorkResources } from './types.js';
 
 /** Скользящее окно запусков, возобновлений и писем. */
 export const RESOURCE_WINDOW_MS = 60 * 60 * 1000;
+
+/** Скользящее окно созданий агентами: сессии, сессии роёв и рои считаются за последние сутки (`recentCreations`). */
+export const CREATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Пороги бюджета. Ключи совпадают с настройками (`ParleyConfig`): человек видит и меняет их в окне, агент —
@@ -29,9 +32,9 @@ export interface ResourceLimits {
   workConcurrent: number;
   /** То же в одной комнате. */
   roomConcurrent: number;
-  /** Новых сессий от агентов за всё время работы. */
+  /** Новых сессий от агентов за последние 24 часа в работе. */
   workNewSessions: number;
-  /** То же на комнату породившего агента. */
+  /** То же за последние 24 часа на комнату породившего агента. */
   roomNewSessions: number;
   /** Запусков, возобновлений и повторов за скользящий час в работе. */
   workLaunches: number;
@@ -47,9 +50,9 @@ export interface ResourceLimits {
   swarmSessions: number;
   /** Одновременно живых и заказанных участников одного роя. */
   swarmConcurrent: number;
-  /** Сессий роёв, созданных агентами, за всё время работы. */
+  /** Сессий роёв, созданных агентами, за последние 24 часа в работе. */
   workSwarmSessions: number;
-  /** Роёв, созданных агентами, за всё время работы. */
+  /** Роёв, созданных агентами, за последние 24 часа в работе. */
   workSwarms: number;
   /** Срок жизни одного роя в минутах от создания; 0 — без срока. */
   swarmMinutes: number;
@@ -168,7 +171,7 @@ const DENIED_TEXT: Record<ResourceDeniedCode, (scope: ResourceDeniedScope, used:
   concurrent: (scope, used, limit) =>
     `session limit reached: ${used} of ${limit} sessions are running or reserved ${where(scope)}; stop one or raise the limit in Settings`,
   'new-sessions': (scope, used, limit) =>
-    `new-session limit reached: agents already created ${used} of ${limit} sessions ${where(scope)}; raise the limit in Settings`,
+    `new-session limit reached: agents created ${used} of ${limit} sessions ${where(scope)} in the last 24 hours; wait or raise the limit in Settings`,
   launches: (scope, used, limit) =>
     `launch limit reached: ${used} of ${limit} launches and resumes in the last hour ${where(scope)}; wait or raise the limit in Settings`,
   'resume-rate': (_scope, used, limit) =>
@@ -179,13 +182,13 @@ const DENIED_TEXT: Record<ResourceDeniedCode, (scope: ResourceDeniedScope, used:
     `delivery limit reached: ${used} of ${limit} message deliveries in the last hour ${where(scope)}; wait or raise the limit in Settings`,
   // Область у всех четырёх `swarm`, но фразу каждый код строит сам: `swarms` и `swarm-total` считают всю работу.
   swarms: (_scope, used, limit) =>
-    `swarm limit reached: agents already created ${used} of ${limit} swarms in this workspace; raise the limit in Settings`,
+    `swarm limit reached: agents created ${used} of ${limit} swarms in this workspace in the last 24 hours; wait or raise the limit in Settings`,
   'swarm-sessions': (_scope, used, limit) =>
     `swarm size limit reached: ${used} of ${limit} sessions already belong to this swarm; raise the limit in Settings`,
   'swarm-concurrent': (_scope, used, limit) =>
     `swarm concurrency limit reached: ${used} of ${limit} sessions of this swarm are running or reserved; wait for one to hand in or raise the limit in Settings`,
   'swarm-total': (_scope, used, limit) =>
-    `swarm session limit reached: agents already created ${used} of ${limit} swarm sessions in this workspace; raise the limit in Settings`,
+    `swarm session limit reached: agents created ${used} of ${limit} swarm sessions in this workspace in the last 24 hours; wait or raise the limit in Settings`,
 };
 
 /** Текст отказа агенту: причина и что делать — расширение бюджета за человеком. */
@@ -205,6 +208,32 @@ export function roomOfSession(map: WorkMap, sessionId: string): string | null {
 function ensureResources(map: WorkMap): WorkResources {
   map.resources ??= { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [] };
   return map.resources;
+}
+
+const createdWithin = (at: string, now: number): boolean => now - Date.parse(at) < CREATION_WINDOW_MS;
+
+/**
+ * Сколько созданий вида `kind` агенты сделали за сутки до `now`; с `room` — только в этой комнате. Нет журнала (карта
+ * до окна созданий, новая работа) — ноль: пожизненные счётчики пороги не двигают. Карту не меняет.
+ */
+export function recentCreations(map: WorkMap, kind: CreationKind, now: number = Date.now(), room?: string): number {
+  let count = 0;
+  for (const entry of map.resources?.recent ?? []) {
+    if (entry.kind === kind && (room === undefined || entry.room === room) && createdWithin(entry.at, now)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Записывает создание агентом и выбрасывает записи старше суток. Вызывается в той же записи карты, что и сама операция,
+ * когда порог уже проверен; пожизненные счётчики растут отдельно, у хоста.
+ */
+export function noteCreation(map: WorkMap, kind: CreationKind, room: string | null, now: number = Date.now()): void {
+  const resources = ensureResources(map);
+  resources.recent = [
+    ...(resources.recent ?? []).filter((entry) => createdWithin(entry.at, now)),
+    { kind, at: new Date(now).toISOString(), room },
+  ];
 }
 
 const nextAttemptId = (resources: WorkResources): string => {
@@ -254,9 +283,10 @@ function occupied(map: WorkMap): Set<string> {
   return ids;
 }
 
+// Подъёмы после сна по решению хоста (`windowFree`) вне окна: ни `resumeRate`, ни `workLaunches`/`roomLaunches` их не считают.
 const launchAttempts = (map: WorkMap, now: number): ResourceAttempt[] =>
   (map.resources?.attempts ?? []).filter(
-    (attempt) => attempt.kind !== 'spawn' && attempt.state !== 'released' && within(attempt.at, now),
+    (attempt) => attempt.kind !== 'spawn' && attempt.windowFree !== true && attempt.state !== 'released' && within(attempt.at, now),
   );
 
 const inRoom = (map: WorkMap, ids: Iterable<string>, roomId: string): number => {
@@ -293,8 +323,9 @@ export function attemptKindFor(map: WorkMap, sessionId: string, mode: 'launch' |
 
 /**
  * Резерв слота под запуск или возобновление: окно запусков, слоты одновременных сессий, при возобновлении будильником
- * ещё и частота по самой сессии. Нерешённый резерв той же сессии — повтор прежней попытки: его подхватывает новый
- * владелец, второй раз он не списывается. Отказ — исключение, карта не меняется.
+ * ещё и частота по самой сессии. Подъём будильником сессии, которую усыпил хост, окна и частоту не тратит
+ * (`windowFree`), слоты занимает как обычно. Нерешённый резерв той же сессии — повтор прежней попытки: его подхватывает
+ * новый владелец, второй раз он не списывается. Отказ — исключение, карта не меняется.
  */
 export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceAttempt {
   const now = request.now ?? Date.now();
@@ -313,16 +344,22 @@ export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceA
 
   const room = roomOfSession(map, session);
 
-  if (request.kind === 'resume' && request.sessionResumeRate !== undefined) {
-    const taken = launchAttempts(map, now).filter((attempt) => attempt.kind === 'resume' && attempt.session === session).length;
-    if (taken >= request.sessionResumeRate) throw new ResourceDeniedError('resume-rate', 'session', taken, request.sessionResumeRate);
-  }
+  // Будильник поднимает сессию, которую усыпил хост: подъём вызвало решение хоста, а не агенты, будящие друг друга, и
+  // число таких подъёмов уже ограничено лимитами писем. Окна и частота его не касаются, слоты одновременных — да.
+  const autoWake = request.actor === 'wake' && map.sessions.find((candidate) => candidate.id === session)?.autoSleep != null;
 
-  const recent = launchAttempts(map, now);
-  if (recent.length >= limits.workLaunches) throw new ResourceDeniedError('launches', 'work', recent.length, limits.workLaunches);
-  if (room !== null) {
-    const recentInRoom = recent.filter((attempt) => attempt.room === room).length;
-    if (recentInRoom >= limits.roomLaunches) throw new ResourceDeniedError('launches', 'room', recentInRoom, limits.roomLaunches);
+  if (!autoWake) {
+    if (request.kind === 'resume' && request.sessionResumeRate !== undefined) {
+      const taken = launchAttempts(map, now).filter((attempt) => attempt.kind === 'resume' && attempt.session === session).length;
+      if (taken >= request.sessionResumeRate) throw new ResourceDeniedError('resume-rate', 'session', taken, request.sessionResumeRate);
+    }
+
+    const recent = launchAttempts(map, now);
+    if (recent.length >= limits.workLaunches) throw new ResourceDeniedError('launches', 'work', recent.length, limits.workLaunches);
+    if (room !== null) {
+      const recentInRoom = recent.filter((attempt) => attempt.room === room).length;
+      if (recentInRoom >= limits.roomLaunches) throw new ResourceDeniedError('launches', 'room', recentInRoom, limits.roomLaunches);
+    }
   }
 
   const others = occupied(map);
@@ -343,6 +380,7 @@ export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceA
     room,
     owner: request.owner,
   };
+  if (autoWake) attempt.windowFree = true;
   resources.attempts.push(attempt);
   return attempt;
 }
@@ -379,7 +417,8 @@ export interface SwarmSpawnRequest {
  * Пороги роёв для новой сессии роя (спека роя, 5), в порядке спеки: размер роя → сессии роёв работы (для нового роя ещё
  * и число роёв) → живые участники роя. Закрытость роя (`swarm-closed`) — код хоста, не бюджета: вызывающий проверяет её
  * раньше, а общий `reserveAttempt` берёт после. Карту не меняет; отказ возвращается, а не бросается, чтобы хост сам
- * решил, где поднять `ResourceDeniedError`. Счётчики растут только у хоста, в той же записи карты.
+ * решил, где поднять `ResourceDeniedError`. Сессии роёв и рои считаются за последние сутки (`recentCreations`); журнал
+ * (`noteCreation`) и счётчики растут только у хоста, в той же записи карты.
  */
 export function checkSwarmSpawn(map: WorkMap, limits: ResourceLimits, request: SwarmSpawnRequest): ResourceDeniedError | null {
   const { swarm, creatingSwarm, byAgent } = request;
@@ -387,22 +426,29 @@ export function checkSwarmSpawn(map: WorkMap, limits: ResourceLimits, request: S
     return new ResourceDeniedError('swarm-sessions', 'swarm', swarm.members.length, limits.swarmSessions);
   }
   if (byAgent) {
-    const spawned = map.resources?.swarmSpawned ?? 0;
+    const spawned = recentCreations(map, 'swarm-session');
     if (spawned >= limits.workSwarmSessions) return new ResourceDeniedError('swarm-total', 'swarm', spawned, limits.workSwarmSessions);
     if (creatingSwarm) {
-      const created = map.resources?.swarmsCreated ?? 0;
+      const created = recentCreations(map, 'swarm');
       if (created >= limits.workSwarms) return new ResourceDeniedError('swarms', 'swarm', created, limits.workSwarms);
     }
   }
   if (swarm !== null) {
-    // Заказанный, но не стартовавший участник занимает место и без родителя: `occupied` берёт `pending` только с ним.
-    // Сдавший места не держит: его сессию хост закрывает следом (спека роя, 5).
-    const busy = occupied(map);
-    for (const session of map.sessions) if (session.lifecycle === 'pending') busy.add(session.id);
-    const used = swarm.members.filter((member) => member.handedAt === null && busy.has(member.sessionId)).length;
+    const used = swarmBusy(map, swarm);
     if (used >= limits.swarmConcurrent) return new ResourceDeniedError('swarm-concurrent', 'swarm', used, limits.swarmConcurrent);
   }
   return null;
+}
+
+/**
+ * Живые и заказанные участники роя, не сдавшие итог: тот же подсчёт, что в `checkSwarmSpawn`.
+ * Заказанный, но не стартовавший участник занимает место и без родителя: `occupied` берёт `pending` только с ним.
+ * Сдавший места не держит: его сессию хост закрывает следом (спека роя, 5).
+ */
+export function swarmBusy(map: WorkMap, swarm: WorkSwarm): number {
+  const busy = occupied(map);
+  for (const session of map.sessions) if (session.lifecycle === 'pending') busy.add(session.id);
+  return swarm.members.filter((member) => member.handedAt === null && busy.has(member.sessionId)).length;
 }
 
 export interface MessageRequest {
@@ -527,7 +573,7 @@ export function resourceStatus(
   });
 
   const agentRecent = map.messages.filter((message) => isAgentSender(message.from) && within(message.at, now));
-  const work = scope(() => true, recent, resources?.spawned ?? 0, {
+  const work = scope(() => true, recent, recentCreations(map, 'session', now), {
     concurrent: limits.workConcurrent, newSessions: limits.workNewSessions, launches: limits.workLaunches, messages: limits.workMessages,
   }, agentRecent.length);
   const delivered = agentRecent.reduce((sum, message) => sum + recipientCount(message, map), 0);
@@ -535,7 +581,7 @@ export function resourceStatus(
   const room = roomId === null
     ? null
     : scope((id) => roomOfSession(map, id) === roomId, recent.filter((attempt) => attempt.room === roomId),
-      resources?.spawnedByRoom[roomId] ?? 0, {
+      recentCreations(map, 'session', now, roomId), {
         concurrent: limits.roomConcurrent, newSessions: limits.roomNewSessions, launches: limits.roomLaunches, messages: limits.roomMessages,
       }, agentRecent.filter((message) => message.roomId === roomId).length);
 
@@ -549,8 +595,8 @@ export function resourceStatus(
   check(work);
   if (room !== null) check(room);
   if (delivered >= limits.fanout) exhausted.add('fanout');
-  const swarmSessions = meter(resources?.swarmSpawned ?? 0, 0, limits.workSwarmSessions);
-  const swarms = meter(resources?.swarmsCreated ?? 0, 0, limits.workSwarms);
+  const swarmSessions = meter(recentCreations(map, 'swarm-session', now), 0, limits.workSwarmSessions);
+  const swarms = meter(recentCreations(map, 'swarm', now), 0, limits.workSwarms);
   if (swarmSessions.remaining === 0) exhausted.add('swarm-total');
   if (swarms.remaining === 0) exhausted.add('swarms');
 
@@ -596,12 +642,23 @@ export function validateResources(map: WorkMap): void {
     throw new Error('invalid resource ledger');
   };
   if (typeof resources !== 'object' || resources === null || Array.isArray(resources)) return bad();
-  const { seq, spawned, spawnedByRoom, attempts, swarmSpawned, swarmsCreated } = resources as Record<string, unknown>;
+  const { seq, spawned, spawnedByRoom, attempts, swarmSpawned, swarmsCreated, recent } = resources as Record<string, unknown>;
   if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(spawned) || (seq as number) < 0 || (spawned as number) < 0) return bad();
   if (typeof spawnedByRoom !== 'object' || spawnedByRoom === null || Array.isArray(spawnedByRoom)) return bad();
   if (!Object.values(spawnedByRoom).every((value) => Number.isSafeInteger(value) && (value as number) >= 0)) return bad();
   for (const counter of [swarmSpawned, swarmsCreated]) {
     if (counter !== undefined && (!Number.isSafeInteger(counter) || (counter as number) < 0)) return bad();
+  }
+  if (recent !== undefined) {
+    if (!Array.isArray(recent)) return bad();
+    for (const entry of recent as unknown[]) {
+      if (typeof entry !== 'object' || entry === null) return bad();
+      const row = entry as Record<string, unknown>;
+      if (
+        !['session', 'swarm-session', 'swarm'].includes(String(row['kind'])) || typeof row['at'] !== 'string' ||
+        !Number.isFinite(Date.parse(row['at'])) || (row['room'] !== null && typeof row['room'] !== 'string')
+      ) return bad();
+    }
   }
   if (!Array.isArray(attempts)) return bad();
   for (const attempt of attempts as unknown[]) {
@@ -611,7 +668,8 @@ export function validateResources(map: WorkMap): void {
       typeof row['id'] !== 'string' || !['spawn', 'launch', 'resume', 'retry'].includes(String(row['kind'])) ||
       !['reserved', 'spent', 'released'].includes(String(row['state'])) || typeof row['at'] !== 'string' ||
       !Number.isFinite(Date.parse(row['at'])) || typeof row['actor'] !== 'string' || typeof row['session'] !== 'string' ||
-      (row['room'] !== null && typeof row['room'] !== 'string') || typeof row['owner'] !== 'string'
+      (row['room'] !== null && typeof row['room'] !== 'string') || typeof row['owner'] !== 'string' ||
+      (row['windowFree'] !== undefined && row['windowFree'] !== true)
     ) return bad();
   }
 }

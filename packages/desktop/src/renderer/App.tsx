@@ -21,6 +21,7 @@ import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { useFeedStore } from './chat/store.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostConfigStore } from './store/config.js';
+import { useCapacityStore } from './store/capacity.js';
 import { useConsentsStore } from './store/consents.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
@@ -198,6 +199,8 @@ export function App(): JSX.Element {
       useWorksStore.getState().init(bridge),
       // Карточки согласия на папку (спека 2026-10-21, 4.4): диалог по ним — `ConsentPrompt` ниже, строка в Chat — `ChatView`.
       useConsentsStore.getState().init(bridge),
+      // Ёмкость машины для сегмента «Agents» строки статуса: хост шлёт первое событие не сразу — начало из `capacity.get`.
+      useCapacityStore.getState().init(bridge),
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),

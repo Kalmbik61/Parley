@@ -539,3 +539,100 @@ describe('sessions.rename (часть 2 спеки архива комнат, 15
     expect(closed).toMatchObject({ label: 'Archived backend', lifecycle: 'closed' });
   });
 });
+
+describe('sessions.setKeepAwake (спека сна агентов, 4.1)', () => {
+  let project = '';
+
+  beforeEach(async () => {
+    project = await mkdtemp(path.join(tmpdir(), 'parley-keep-awake-'));
+  });
+
+  afterEach(async () => {
+    await rm(project, { recursive: true, force: true });
+  });
+
+  const { sessionsSetKeepAwake } = createSessionHandlers({
+    sessions: {} as unknown as SessionsService,
+    pty: {} as unknown as SessionMethodDeps['pty'],
+    activity: {} as unknown as SessionMethodDeps['activity'],
+    wake: {} as unknown as SessionMethodDeps['wake'],
+  });
+
+  /** Работа с двумя незакрытыми сессиями. */
+  async function workWithSessions(): Promise<{ workId: string; refs: [SessionRef, SessionRef] }> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const workId = work.work.id;
+    const first = await createPendingSession(project, workId, { provider: 'claude', label: '', task: 'сделай штуку' });
+    const second = await createPendingSession(project, workId, { provider: 'claude', label: 'бэкенд', task: 'и ещё' });
+    return {
+      workId,
+      refs: [
+        { projectPath: project, workId, sessionId: first },
+        { projectPath: project, workId, sessionId: second },
+      ],
+    };
+  }
+
+  it('флаг ставится в карту и снимается удалением ключа, а не записью false; соседи и updatedAt работы на месте', async () => {
+    const { workId, refs } = await workWithSessions();
+    const before = readStoredMap(project, workId);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await expect(sessionsSetKeepAwake({ ref: refs[0], keepAwake: true }, request)).resolves.toEqual({ keepAwake: true });
+    const set = readStoredMap(project, workId);
+    expect(set.sessions[0]?.keepAwake).toBe(true);
+    expect(set.sessions[1]).not.toHaveProperty('keepAwake');
+    expect(set.work.updatedAt).toBe(before.work.updatedAt);
+
+    await expect(sessionsSetKeepAwake({ ref: refs[0], keepAwake: false }, request)).resolves.toEqual({ keepAwake: false });
+    const cleared = readStoredMap(project, workId);
+    expect(cleared.sessions[0]).not.toHaveProperty('keepAwake');
+    expect(cleared.sessions).toEqual(before.sessions);
+    expect(cleared.work.updatedAt).toBe(before.work.updatedAt);
+  });
+
+  it('снять флаг, которого не было, — ответ false, ключа в карте нет', async () => {
+    const { workId, refs } = await workWithSessions();
+
+    await expect(sessionsSetKeepAwake({ ref: refs[0], keepAwake: false }, request)).resolves.toEqual({ keepAwake: false });
+
+    expect(readStoredMap(project, workId).sessions[0]).not.toHaveProperty('keepAwake');
+  });
+
+  it('закрытая сессия — conflict при любом значении, флаг в карте не появляется', async () => {
+    const { workId, refs } = await workWithSessions();
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, refs[1].sessionId, 'closed');
+    });
+    const before = readStoredMap(project, workId);
+
+    for (const keepAwake of [true, false]) {
+      await expect(sessionsSetKeepAwake({ ref: refs[1], keepAwake }, request), String(keepAwake)).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'conflict',
+      });
+    }
+
+    expect(readStoredMap(project, workId).sessions).toEqual(before.sessions);
+    expect(readStoredMap(project, workId).sessions[1]).not.toHaveProperty('keepAwake');
+  });
+
+  it('чужая сессия, чужая работа и чужой проект — not_found, карта не тронута', async () => {
+    const { workId, refs } = await workWithSessions();
+    const before = readStoredMap(project, workId);
+    const [first] = refs;
+
+    const attempts: SessionRef[] = [
+      { ...first, sessionId: 's-09' },
+      { ...first, workId: 'w-9999' },
+      { ...first, projectPath: path.join(project, 'нет-такого') },
+    ];
+    for (const ref of attempts) {
+      await expect(sessionsSetKeepAwake({ ref, keepAwake: true }, request), JSON.stringify([ref.sessionId, ref.workId])).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'not_found',
+      });
+    }
+    expect(readStoredMap(project, workId)).toEqual(before);
+  });
+});

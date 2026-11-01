@@ -39,6 +39,13 @@ describe('agent session endpoint', () => {
     create.mockResolvedValueOnce({ ...ref, sessionId: 's-03', held: 'folder-trust' } as never);
     expect(JSON.parse((await post(args)).body)).toEqual({ ok: true, result: { sessionId: 's-03', provider: 'codex', held: 'folder-trust' } });
   });
+  it('запуск в очереди машины отвечает сразу с queued: причина, как с held', async () => {
+    const { post, create } = await setup();
+    create.mockResolvedValueOnce({ ...ref, sessionId: 's-03', queued: 'machine-limit' } as never);
+    expect(JSON.parse((await post(args)).body)).toEqual({ ok: true, result: { sessionId: 's-03', provider: 'codex', queued: 'machine-limit' } });
+    create.mockResolvedValueOnce({ ...ref, sessionId: 's-04', queued: 'memory-critical' } as never);
+    expect(JSON.parse((await post(args)).body)).toEqual({ ok: true, result: { sessionId: 's-04', provider: 'codex', queued: 'memory-critical' } });
+  });
   it('rejects missing or revoked bearer tokens', async () => {
     const { post, create, registry } = await setup();
     expect((await post(args, '')).status).toBe(401);

@@ -261,6 +261,23 @@ describe('живость', () => {
     const entry = s.entry(projectA, map.work.id);
     expect(entry?.map.sessions[0]?.lifecycle).toBe('sleeping');
   });
+
+  it('pid из ownedPids хоста по времени старта не сверяются: такая сессия остаётся active', async () => {
+    const map = await createWork(projectA, { title: 'Работа' });
+    await updateMap(projectA, map.work.id, (current) => {
+      const created = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      created.launchedBy = 'tui';
+      // Живой процесс — сам тест, а записанное время старта заведомо не сходится: проверь его `ps`, pid сочли бы чужим.
+      created.pid = process.pid;
+      created.startedAtProcess = '2020-01-01T00:00:00.000Z';
+      transitionSession(current, created.id, 'active');
+    });
+
+    const s = service({ ownedPids: () => new Set([process.pid]) });
+    await s.start();
+
+    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
+  });
 });
 
 describe('аренда', () => {

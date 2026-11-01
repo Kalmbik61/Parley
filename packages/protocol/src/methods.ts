@@ -40,7 +40,7 @@ import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -126,6 +126,8 @@ export const METHODS = {
     workId: z.string(),
     status: z.enum(['active', 'done', 'archived']),
   }),
+  // Флаг «агенты закрывают завершённые сессии» ставит только человек из окна (план 4, задача 5).
+  'works.setCloseFinished': z.object({ projectPath: z.string(), workId: z.string(), closeFinished: z.boolean() }),
   'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
   // Каталог рецептов комнат: встроенные и рецепты выбранного проекта (спека рецептов, 5–6).
   'recipes.list': z.object({ projectPath: z.string().min(1) }).strict(),
@@ -184,6 +186,10 @@ export const METHODS = {
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
+  // «Keep awake» из меню строки сессии (спека сна агентов, 4.1): человек запрещает хосту усыплять сессию, флаг лежит в
+  // карте. Закрытая сессия — `conflict`, нет сессии или работы — `not_found`. Агент флаг не ставит. Старый хост метода не
+  // знает — окно прячет пункт.
+  'sessions.setKeepAwake': z.object({ ref: sessionRef, keepAwake: z.boolean() }),
   // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
   // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
   'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
@@ -217,6 +223,7 @@ export const METHODS = {
   'wake.pause': z.object({}),
   'wake.resume': z.object({}),
   'wake.state': z.object({}),
+  'capacity.get': z.object({}),
   'settings.get': z.object({}),
   'settings.set': z.object({ key: z.string(), value: z.string() }),
   'rooms.create': z.object({
@@ -438,6 +445,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'works.delete': { ok: true };
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
+  'works.setCloseFinished': { ok: true };
   'roles.list': import('@parley/core').RoleList;
   'recipes.list': import('@parley/core').RecipeCatalogView;
   'sessions.create': { ref: SessionRef };
@@ -452,6 +460,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
   'sessions.setMode': { mode: string | null; verified: boolean };
+  /** `keepAwake` — значение, записанное в карту: `false` — флага в карте больше нет. */
+  'sessions.setKeepAwake': { keepAwake: boolean };
   /**
    * Смена effort ползунком `/effort` (нормалайзер модели и effort, 5.7). `effort` — уровень, который
    * показал подвал CLI (`null` — подвала не нашли); `verified` — он совпал с целью, и хост записал его в
@@ -483,8 +493,11 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
     keeps: { rooms: number; leads: string[]; owns: string[]; children: number; unread: number; worktree: string | null };
     blockers: string[];
   };
-  /** `held` — запуск ждёт согласия (папка Codex); `carried` — как передан контекст. */
-  'sessions.switchAgent': { outcome: 'started' | 'held'; carried: 'handover' | 'transcript' };
+  /**
+   * `held` — запуск ждёт согласия (папка Codex); `queued` — запуск ждёт свободного слота машины (очередь, спека ёмкости
+   * 4.2); `carried` — как передан контекст.
+   */
+  'sessions.switchAgent': { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;
@@ -498,6 +511,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'wake.pause': { paused: boolean };
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };
+  'capacity.get': CapacitySnapshot;
   'settings.get': { config: ParleyConfig; locked: Record<string, string> };
   'settings.set': { config: ParleyConfig };
   'rooms.create': { roomId: string };

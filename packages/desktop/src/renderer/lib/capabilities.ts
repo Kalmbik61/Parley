@@ -48,7 +48,8 @@ export const BASELINE_METHODS: readonly string[] = [
 
 /**
  * Что нужно окну этой сборки; пополняется в 3.1, 4.1, 5.1, 8.1 и комнатами Organic. `rooms.addMember` (вступление в
- * комнату, бросок на её строку) и `rooms.resolveProposal` (ответ на решение) и `swarms.create`/`swarms.cancel`/`swarms.seen` (рой, спека роя v1, 6) — хост старее окна их не знает, и строка
+ * комнату, бросок на её строку) и `rooms.resolveProposal` (ответ на решение) и `swarms.create`/`swarms.cancel`/`swarms.seen` (рой, спека роя v1, 6) и `sessions.setKeepAwake`
+ * («Keep awake», спека сна агентов, 4.1) и `capacity.get` (сегмент «Agents», там же, 4.5) — хост старее окна их не знает, и строка
  * статуса предлагает перезапуск, а не молча прячет функции (спека Orca-UI 3.2).
  */
 export const REQUIRED_METHODS: readonly string[] = [
@@ -58,6 +59,7 @@ export const REQUIRED_METHODS: readonly string[] = [
   'providers.refreshLimits',
   'works.rename',
   'works.setStatus',
+  'works.setCloseFinished',
   'activity.seen',
   'mail.markRead',
   'pty.send',
@@ -69,6 +71,8 @@ export const REQUIRED_METHODS: readonly string[] = [
   'swarms.create',
   'swarms.cancel',
   'swarms.seen',
+  'sessions.setKeepAwake',
+  'capacity.get',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */

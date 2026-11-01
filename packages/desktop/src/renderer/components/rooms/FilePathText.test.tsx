@@ -7,15 +7,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { Located } from '../../../shared/files-types.js';
-import { openLinkInEditor, openLinkPath } from '../../terminal/LinkMenu.js';
+import { activatePathLink } from '../../terminal/LinkMenu.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { FilePathLinksContext } from './FilePathText.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 
 vi.mock('../../terminal/LinkMenu.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../terminal/LinkMenu.js')>()),
-  openLinkInEditor: vi.fn(),
-  openLinkPath: vi.fn(() => Promise.resolve()),
+  activatePathLink: vi.fn(),
 }));
 
 afterEach(() => {
@@ -23,8 +22,7 @@ afterEach(() => {
   fireEvent.keyUp(window, { key: 'Control' });
   fireEvent.keyUp(window, { key: 'Meta' });
   cleanup();
-  vi.mocked(openLinkInEditor).mockClear();
-  vi.mocked(openLinkPath).mockClear();
+  vi.mocked(activatePathLink).mockClear();
 });
 
 const WORK = 'w';
@@ -101,20 +99,19 @@ describe('FilePathText — пути к файлам ссылками по ⌘/Ct
     await hoverAll(container);
     const link = container.querySelector('[data-file-link]') as HTMLElement;
     fireEvent.click(link);
-    expect(openLinkInEditor).not.toHaveBeenCalled();
+    expect(activatePathLink).not.toHaveBeenCalled();
     fireEvent.click(link, MODIFIER);
-    expect(openLinkInEditor).toHaveBeenCalledWith({ kind: 'path', absPath: '/proj/src/a.ts', located, line: 12, col: 3 });
+    expect(activatePathLink).toHaveBeenCalledWith(bridge, { kind: 'path', absPath: '/proj/src/a.ts', located, line: 12, col: 3 });
   });
 
-  it('каталог — приложение по умолчанию, как в терминале', async () => {
+  it('каталог — то же единое действие ⌘-клика, что в терминале (activatePathLink)', async () => {
     const bridge = createFakeBridge();
     bridge.setLocated(WORK, '/proj/src/lib', { ...fileAt('src/lib'), stat: { kind: 'dir', size: 0, mtimeMs: 0 } });
     const container = mount('см. /proj/src/lib', bridge);
     await holdModifier();
     await hoverAll(container);
     fireEvent.click(container.querySelector('[data-file-link]') as HTMLElement, MODIFIER);
-    expect(openLinkPath).toHaveBeenCalledWith(bridge, '/proj/src/lib');
-    expect(openLinkInEditor).not.toHaveBeenCalled();
+    expect(activatePathLink).toHaveBeenCalledWith(bridge, expect.objectContaining({ absPath: '/proj/src/lib' }));
   });
 
   it('корень чужой работы и путь вне окружения (нет FilePathLinksContext) — не ссылки', async () => {

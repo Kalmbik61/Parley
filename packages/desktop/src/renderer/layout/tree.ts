@@ -570,6 +570,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function parseFileRootSpec(value: unknown): FileRootSpec | null {
   if (!isRecord(value)) return null;
   if (value.kind === 'project') return { kind: 'project' };
+  if (value.kind === 'external') return { kind: 'external' };
   if (value.kind === 'worktree' && typeof value.sessionId === 'string') {
     return { kind: 'worktree', sessionId: value.sessionId };
   }

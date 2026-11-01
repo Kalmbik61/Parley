@@ -35,6 +35,7 @@ const DESTROY: Hints = { readOnlyHint: false, destructiveHint: true, openWorldHi
 
 const TABLE: Record<string, Hints> = {
   get_map: READ,
+  get_capacity: READ,
   backlog_list: READ,
   backlog_suggest: WRITE,
   remember: WRITE,
@@ -188,6 +189,7 @@ describe('аннотации инструментов parley: таблица', (
     expect(readOnly.map((tool) => tool.name).sort()).toEqual([
       'attempt_status',
       'backlog_list',
+      'get_capacity',
       'get_map',
       'list_roles',
       'memory_read',
@@ -210,6 +212,7 @@ describe('аннотации инструментов parley: правда по 
     const before = await snapshotAll();
 
     await callOk(client, 'get_map');
+    await callOk(client, 'get_capacity');
     await callOk(client, 'backlog_list');
     await callOk(client, 'memory_read');
     await callOk(client, 'search_history', { query: 'делаем' });

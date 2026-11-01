@@ -41,6 +41,12 @@ export function codexHooksWanted(config: Pick<ParleyConfig, 'codexWriteApprovals
 }
 
 /**
+ * Общий потолок живых CLI агентов на машине (спека сна агентов и ёмкости 2026-10-30, 4.2): `off` — потолок, очередь
+ * и допуск выключены, `auto` — по памяти машины, число — 1…128.
+ */
+export type MachineConcurrent = 'off' | 'auto' | number;
+
+/**
  * Пороги бюджета работы и комнаты (`work/resource-policy.ts`) — те же ключи, что у `ResourceLimits`: человек видит и
  * меняет их в настройках окна. Это счётчики запусков, сессий и писем, а не денежный лимит.
  */
@@ -62,6 +68,21 @@ export interface ParleyConfig extends ResourceLimits {
    * письма ждут, а не жгут подписку за ночь (спецификация окна 7.4). 0…60.
    */
   resumeRate: number;
+  /**
+   * Через сколько минут простоя хост усыпляет агента Claude Code без процесса: письмо будит его с той же историей
+   * (план сна агентов). 0 — сон выключен, это умолчание. 0…1440.
+   */
+  sleepAfterMinutes: number;
+  /**
+   * Сколько минут простоя хватает, чтобы хост усыпил агента ради памяти или свободного слота, когда машине тесно
+   * (спека сна агентов и ёмкости, 4.2). Работает только при включённом сне (`sleepAfterMinutes > 0`). 1…60.
+   */
+  sleepUnderPressureMinutes: number;
+  /**
+   * Общий потолок живых CLI агентов на машине (спека сна агентов и ёмкости, 4.2): `off` — потолок, очередь и допуск
+   * выключены (умолчание), `auto` — `max(1, round(ГиБ памяти × 0.75))`, число — 1…128.
+   */
+  machineConcurrent: MachineConcurrent;
   /**
    * Ставить ли скилл `parley` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
    * `.agents/skills/parley` и симлинк `.claude/skills/parley`. Выключено — хост скилл не ставит и не
@@ -114,6 +135,9 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
+  sleepAfterMinutes: 0,
+  sleepUnderPressureMinutes: 5,
+  machineConcurrent: 'off',
   agentSkills: true,
   skillNavigator: true,
   codexWriteApprovals: 'auto',
@@ -140,6 +164,9 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   channelPush: 'CHANNEL_PUSH',
   messageRate: 'MESSAGE_RATE',
   resumeRate: 'RESUME_RATE',
+  sleepAfterMinutes: 'SLEEP_AFTER_MINUTES',
+  sleepUnderPressureMinutes: 'SLEEP_UNDER_PRESSURE_MINUTES',
+  machineConcurrent: 'MACHINE_CONCURRENT',
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
   codexWriteApprovals: 'CODEX_WRITE_APPROVALS',
@@ -220,6 +247,47 @@ const isResumeRate = (value: unknown): value is number =>
   value <= RESUME_RATE_MAX;
 const RESUME_RATE_EXPECTED = `an integer from ${RESUME_RATE_MIN} to ${RESUME_RATE_MAX}`;
 
+/** Ноль минут — сон выключен, поэтому, как у `resumeRate`, границы начинаются с нуля. */
+const SLEEP_AFTER_MINUTES_MIN = 0;
+const SLEEP_AFTER_MINUTES_MAX = 1440;
+const isSleepAfterMinutes = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= SLEEP_AFTER_MINUTES_MIN &&
+  value <= SLEEP_AFTER_MINUTES_MAX;
+const SLEEP_AFTER_MINUTES_EXPECTED = `an integer from ${SLEEP_AFTER_MINUTES_MIN} to ${SLEEP_AFTER_MINUTES_MAX}`;
+
+/** Ноль здесь не «выключено» (сон выключает `sleepAfterMinutes`), поэтому границы начинаются с единицы. */
+const SLEEP_UNDER_PRESSURE_MINUTES_MIN = 1;
+const SLEEP_UNDER_PRESSURE_MINUTES_MAX = 60;
+const isSleepUnderPressureMinutes = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= SLEEP_UNDER_PRESSURE_MINUTES_MIN &&
+  value <= SLEEP_UNDER_PRESSURE_MINUTES_MAX;
+const SLEEP_UNDER_PRESSURE_MINUTES_EXPECTED = `an integer from ${SLEEP_UNDER_PRESSURE_MINUTES_MIN} to ${SLEEP_UNDER_PRESSURE_MINUTES_MAX}`;
+
+const MACHINE_CONCURRENT_MIN = 1;
+const MACHINE_CONCURRENT_MAX = 128;
+const MACHINE_CONCURRENT_EXPECTED = `"off", "auto" or an integer from ${MACHINE_CONCURRENT_MIN} to ${MACHINE_CONCURRENT_MAX}`;
+
+/**
+ * Разбор потолка машины — один для файла, окружения и `parseSetting`: `off` и `auto` без учёта регистра и пробелов по
+ * краям, хранятся строчными; иначе целое от 1 до 128, числом или строкой. Пустая строка и пробелы — не число
+ * (`Number('') === 0`) и вне границ, поэтому не превращаются молча ни в «выключено», ни в ноль. `null` — не разобралось.
+ */
+function parseMachineConcurrent(value: unknown): MachineConcurrent | null {
+  const word = typeof value === 'string' ? value.trim().toLowerCase() : undefined;
+  if (word === 'off' || word === 'auto') return word;
+  const parsed = word === undefined ? value : Number(word);
+  return typeof parsed === 'number' &&
+    Number.isInteger(parsed) &&
+    parsed >= MACHINE_CONCURRENT_MIN &&
+    parsed <= MACHINE_CONCURRENT_MAX
+    ? parsed
+    : null;
+}
+
 /** Порог бюджета — целое в границах своего ключа (`RESOURCE_LIMIT_BOUNDS`): ноль допустим не везде. */
 const isResourceLimit = (key: keyof ResourceLimits, value: unknown): value is number =>
   typeof value === 'number' &&
@@ -250,6 +318,14 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('channelPush', (value) => typeof value === 'boolean', 'true or false');
   take('messageRate', isPositiveInt, 'a positive integer');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
+  take('sleepAfterMinutes', isSleepAfterMinutes, SLEEP_AFTER_MINUTES_EXPECTED);
+  take('sleepUnderPressureMinutes', isSleepUnderPressureMinutes, SLEEP_UNDER_PRESSURE_MINUTES_EXPECTED);
+  // Потолок хранится строчным и без пробелов, а `take` кладёт значение как есть, поэтому разбор свой — общий с окружением.
+  if (data.machineConcurrent !== undefined) {
+    const machineConcurrent = parseMachineConcurrent(data.machineConcurrent);
+    if (machineConcurrent === null) complain(`machineConcurrent: expected ${MACHINE_CONCURRENT_EXPECTED}`);
+    else patch.machineConcurrent = machineConcurrent;
+  }
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
   take('codexWriteApprovals', isCodexWriteApprovals, CODEX_WRITE_APPROVALS_EXPECTED);
@@ -312,8 +388,29 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const resumeRate = text('resumeRate');
   if (resumeRate !== undefined) {
     const parsed = Number(resumeRate);
-    if (isResumeRate(parsed)) patch.resumeRate = parsed;
+    // Пробелы вместо числа — не ноль (`Number('  ') === 0`): будильник не выключается молча, ключ не запирается.
+    if (resumeRate.trim() !== '' && isResumeRate(parsed)) patch.resumeRate = parsed;
     else complain(`${nameOf('resumeRate')}: expected ${RESUME_RATE_EXPECTED}`);
+  }
+  const sleepAfterMinutes = text('sleepAfterMinutes');
+  if (sleepAfterMinutes !== undefined) {
+    const parsed = Number(sleepAfterMinutes);
+    // Пробелы вместо числа — не ноль (`Number('  ') === 0`): сон не выключается молча, ключ не запирается.
+    if (sleepAfterMinutes.trim() !== '' && isSleepAfterMinutes(parsed)) patch.sleepAfterMinutes = parsed;
+    else complain(`${nameOf('sleepAfterMinutes')}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}`);
+  }
+  const sleepUnderPressureMinutes = text('sleepUnderPressureMinutes');
+  if (sleepUnderPressureMinutes !== undefined) {
+    // Пробелы вместо числа дают `Number('  ') === 0` — вне границ 1…60, жалоба есть и без отдельной проверки.
+    const parsed = Number(sleepUnderPressureMinutes);
+    if (isSleepUnderPressureMinutes(parsed)) patch.sleepUnderPressureMinutes = parsed;
+    else complain(`${nameOf('sleepUnderPressureMinutes')}: expected ${SLEEP_UNDER_PRESSURE_MINUTES_EXPECTED}`);
+  }
+  const machineConcurrent = text('machineConcurrent');
+  if (machineConcurrent !== undefined) {
+    const parsed = parseMachineConcurrent(machineConcurrent);
+    if (parsed === null) complain(`${nameOf('machineConcurrent')}: expected ${MACHINE_CONCURRENT_EXPECTED}`);
+    else patch.machineConcurrent = parsed;
   }
   flag('agentSkills');
   flag('skillNavigator');
@@ -455,9 +552,29 @@ export function parseSetting<K extends keyof ParleyConfig>(
   }
   if (key === 'resumeRate') {
     // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
+    // Пустая строка — не ноль (`Number('') === 0`): очищенное поле не должно молча выключать возобновление.
     const parsed = Number(text);
-    if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
+    if (text.trim() !== '' && isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: expected ${RESUME_RATE_EXPECTED}` };
+  }
+  if (key === 'sleepAfterMinutes') {
+    // Отдельная ветка, как у `resumeRate`: общая для чисел отвергла бы допустимый ноль — «сон выключен».
+    // Пустая строка — не ноль (`Number('') === 0`): очищенное поле не должно молча выключать сон.
+    const parsed = Number(text);
+    if (text.trim() !== '' && isSleepAfterMinutes(parsed)) return { value: parsed as ParleyConfig[K] };
+    return { error: `${key}: expected ${SLEEP_AFTER_MINUTES_EXPECTED}` };
+  }
+  if (key === 'sleepUnderPressureMinutes') {
+    // Отдельная ветка: общая для чисел не знает ни верхней границы, ни своего текста ошибки. Пустая строка — не ноль:
+    // `Number('') === 0` вне границ 1…60.
+    const parsed = Number(text);
+    if (isSleepUnderPressureMinutes(parsed)) return { value: parsed as ParleyConfig[K] };
+    return { error: `${key}: expected ${SLEEP_UNDER_PRESSURE_MINUTES_EXPECTED}` };
+  }
+  if (key === 'machineConcurrent') {
+    const parsed = parseMachineConcurrent(text);
+    if (parsed !== null) return { value: parsed as ParleyConfig[K] };
+    return { error: `${key}: expected ${MACHINE_CONCURRENT_EXPECTED}` };
   }
   if ((RESOURCE_LIMIT_KEYS as readonly string[]).includes(key)) {
     const limit = key as keyof ResourceLimits;

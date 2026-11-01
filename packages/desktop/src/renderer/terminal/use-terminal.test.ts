@@ -344,7 +344,7 @@ describe('тест 11: опции xterm, ссылки и WebGL (кусок 5.3)'
     const term = xtermMock.terminals[0];
     term?.setLines([lineFromText('see src/a.ts:12')]);
     const links = await new Promise<ILink[] | undefined>((resolve) => term?.linkProviders[0]?.provideLinks(1, resolve));
-    expect(bridge.locateCalls).toEqual([{ workKey: 'wk', absPaths: ['/tmp/proj/src/a.ts'] }]);
+    expect(bridge.locateCalls).toEqual([{ workKey: 'wk', absPaths: ['/tmp/proj/src/a.ts'], options: { external: true } }]);
     links?.[0]?.activate(new MouseEvent('click'), 'src/a.ts:12');
     expect(onLink).toHaveBeenCalledWith({ kind: 'path', absPath: '/tmp/proj/src/a.ts', located, line: 12 }, expect.any(MouseEvent));
   });

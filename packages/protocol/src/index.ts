@@ -23,6 +23,7 @@ export type {
   CapabilityCommand,
   CapabilitySkill,
   CapabilitySource,
+  CapacitySnapshot,
   CompactResult,
   NoticeKind,
   ProfileStatus,

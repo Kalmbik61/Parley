@@ -230,6 +230,7 @@ describe('список инструментов', () => {
       'check_inbox',
       'close_session',
       'create_room',
+      'get_capacity',
       'get_map',
       'list_roles',
       'memory_read',
@@ -390,7 +391,7 @@ describe('список инструментов', () => {
     const closeSession = tools.find((tool) => tool.name === 'close_session');
 
     expect(report?.description).toMatch(/stays reachable/);
-    expect(closeSession?.description).toMatch(/only after the human's explicit consent/);
+    expect(closeSession?.description).toMatch(/after the human's explicit consent/);
   });
 
   it('wait_for предупреждает: сдавшей report сессии — ждать через inbox, не по id', async () => {
@@ -1125,7 +1126,7 @@ describe('close_session', () => {
 
     const foreign = await call(child, 'close_session', { target: 's-01' });
     expect(foreign.isError).toBe(true);
-    expect(foreign.text).toContain('the calling session or a session it created');
+    expect(foreign.text).toContain('the calling session, a session it created, or');
     const human = await call(await connect('s-01'), 'close_session', { target: 's-04' });
     expect(human.isError).toBe(true);
     expect(human.text).toContain('s-04 is not one of them');

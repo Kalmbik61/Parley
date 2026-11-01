@@ -50,7 +50,8 @@ export interface TextFile {
   size: number;
   binary: boolean;
   utf8: boolean;
-  readOnlyReason: 'too-large' | 'not-utf8' | null;
+  /** `external` — файл вне корней работы (2026-10-31): открыт только для чтения. */
+  readOnlyReason: 'too-large' | 'not-utf8' | 'external' | null;
 }
 
 /** Ответ `files.write`: `conflict` — `mtimeMs` на диске не тот, что ждал буфер; запись не сделана. */

@@ -18,13 +18,14 @@ function swarmOf(map: WorkMap, swarmId: string): WorkSwarm {
 }
 
 // Рой из окна: королеву заводит `sessions.create` с внутренним полем `swarm`. Создатель — человек, рой и королева в лимиты
-// агентов не считаются, модель и усилие проверяет тот же `resolveModelChoice`.
+// агентов не считаются, модель и усилие проверяет тот же `resolveModelChoice`. Королева всегда облегчённая (`lean: true`):
+// она только координирует, MCP человека ей не нужны, а диалог «new MCP servers found» держал её до ответа человека (b-013).
 export const createSwarmsCreate = (sessions: Pick<SessionsService, 'create'>): Handler<'swarms.create'> =>
   async ({ projectPath, workId, tag, objective, provider, role, model, effort }) => {
     requireWork(projectPath, workId);
     const created = await sessions.create({
       projectPath, workId, provider, label: '', task: objective, parent: null,
-      swarm: { kind: 'create', tag, objective },
+      swarm: { kind: 'create', tag, objective }, lean: true,
       ...(role === undefined ? {} : { role }),
       ...(model === undefined ? {} : { model }),
       ...(effort === undefined ? {} : { effort }),

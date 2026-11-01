@@ -58,7 +58,7 @@ Parley adds the swarm rules to the queen's brief, so write only the question. A 
 
 A swarm started by the live lead of a room belongs to the room; one started by any other session belongs to that session. The result comes back to the owner as a letter from Parley: \`Swarm sw-NN [Tag] done, N/M handed in, time\`, the queen's summary and a pointer to her full report. Do not poll the swarm: wait for that letter on your inbox. Only the human can cancel a swarm, from the window.
 
-Limits (the human changes them in Settings → Limits): 16 sessions per swarm with the queen, 8 of them running at once, 6 swarms and 64 swarm sessions per workspace, 90 minutes of lifetime. Swarm sessions do not use the agent new-session limits, but they count toward the workspace limits on concurrent sessions and launches per hour. A refusal names its limit; only the human can raise it.
+Limits (the human changes them in Settings → Limits): 16 sessions per swarm with the queen, 8 of them running at once, 6 swarms and 64 swarm sessions per workspace per day (the last 24 hours), 90 minutes of lifetime. Swarm sessions do not use the agent new-session limits, but they count toward the workspace limits on concurrent sessions and launches per hour. A refusal names its limit; only the human can raise it.
 
 ## The queen's plan
 

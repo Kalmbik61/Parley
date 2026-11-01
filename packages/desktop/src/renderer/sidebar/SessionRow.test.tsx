@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type { Activity, SessionNeed, WorkSession } from '@parley/core';
+import type { Activity, AutoSleepReason, QueuedLaunch, SessionNeed, WorkSession } from '@parley/core';
 import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -50,6 +50,8 @@ function renderRow(
     draggable?: boolean;
     selected?: boolean;
     onOpen?: () => void;
+    /** Чего ждёт сессия от человека (в записи активности); нужна и `activity`. */
+    need?: SessionNeed;
   } = {},
 ) {
   const built =
@@ -57,6 +59,7 @@ function renderRow(
       ? null
       : makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, options.activity, {
           lastEventAt: options.lastEventAt ?? '2026-09-27T09:57:00.000Z',
+          need: options.need ?? null,
         });
   const activity =
     built !== null && options.lastEventAt === null
@@ -1072,5 +1075,173 @@ describe('SessionRow — провайдер удалён', () => {
     cleanup();
     renderRow(makeSession('s-01', 'plan', { provider: 'claude' }));
     expect(mark()).toBeNull();
+  });
+});
+
+// Спека сна агентов 4.1, «В окне»: усыплённая хостом сессия называет причину сна вместо слова `asleep`.
+describe('SessionRow — сон по решению хоста', () => {
+  const asleepBy = (reason: AutoSleepReason): WorkSession =>
+    makeSession('s-01', 'a', { lifecycle: 'sleeping', autoSleep: { reason, at: '2026-09-27T09:00:00.000Z', waitTarget: null } });
+  const openTooltip = async (): Promise<HTMLElement> => {
+    act(() => row().focus());
+    return waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-session-tooltip]');
+      if (element === null) throw new Error('тултипа нет');
+      return element;
+    });
+  };
+
+  it('усыплённая за простой: «asleep · idle» вместо «asleep», 💤 на месте', () => {
+    renderRow(asleepBy('idle'));
+    expect(screen.getByText('asleep · idle')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+    expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+  });
+
+  it('усыплённая по концу роя: «asleep · swarm done»', () => {
+    renderRow(asleepBy('swarm-done'));
+    expect(screen.getByText('asleep · swarm done')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+  });
+
+  // Спека ёмкости 4.2: сон ради памяти и сон ради слота для запуска из очереди называют свою причину.
+  it('усыплённая по давлению памяти: «asleep · memory was low»; ради слота: «asleep · freed a slot»', () => {
+    renderRow(asleepBy('pressure'));
+    expect(screen.getByText('asleep · memory was low')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+    cleanup();
+    renderRow(asleepBy('slot'));
+    expect(screen.getByText('asleep · freed a slot')).toBeTruthy();
+    expect(screen.queryByText(S.states.asleep)).toBeNull();
+  });
+
+  // Итог важнее сна, как в `agentStatus` (единый источник статусов): агент, сдавший `report` перед сном, остаётся «done».
+  it('усыплённая хостом, но с итогом: слово итога (done, failed), 💤 на месте', () => {
+    for (const result of ['done', 'failed'] as const) {
+      renderRow({ ...asleepBy('idle'), result });
+      expect(screen.getByText(S.states[result])).toBeTruthy();
+      expect(screen.queryByText('asleep · idle')).toBeNull();
+      expect(row().querySelector('[data-sleeping]')?.textContent).toBe('💤');
+      cleanup();
+    }
+  });
+
+  it('остановленная человеком (autoSleep нет или null): «asleep», как раньше', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect(screen.getByText('asleep')).toBeTruthy();
+    cleanup();
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping', autoSleep: null }));
+    expect(screen.getByText('asleep')).toBeTruthy();
+  });
+
+  // `need` бывает только у живой сессии (`sessionNeed`): отметка сна на ней — остаток, который `transitionSession`
+  // снимает при подъёме. Нужен человек — важнее причины сна.
+  it('нужен человек: слово причины need, а не слово сна', () => {
+    renderRow({ ...asleepBy('idle'), lifecycle: 'active' }, { activity: 'unseen', need: makeNeed('approval') });
+    expect(screen.getByText('approval')).toBeTruthy();
+    expect(screen.queryByText('asleep · idle')).toBeNull();
+  });
+
+  it('спящая с остатком need в записи активности: слово сна, need у спящей не считается', () => {
+    renderRow(asleepBy('idle'), { activity: 'idle', need: makeNeed('limit') });
+    expect(screen.getByText('asleep · idle')).toBeTruthy();
+    expect(screen.queryByText('limit')).toBeNull();
+  });
+
+  it('тултип усыплённой хостом объясняет сон и чем её будить', async () => {
+    renderRow(asleepBy('idle'));
+    expect((await openTooltip()).textContent).toContain('Asleep to free memory. A message or Resume wakes it.');
+  });
+
+  it('тултип усыплённой хостом с итогом: объяснение сна есть и при слове итога', async () => {
+    renderRow({ ...asleepBy('idle'), result: 'done' });
+    const text = (await openTooltip()).textContent ?? '';
+    expect(text).toContain('Asleep to free memory. A message or Resume wakes it.');
+    expect(text).toContain(S.states.done);
+  });
+
+  it('тултип остановленной человеком этого объяснения не несёт', async () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect((await openTooltip()).textContent).not.toContain('Asleep to free memory');
+  });
+});
+
+// Спека ёмкости 4.2 и 4.5: запуск, что ждёт слота машины, называет причину и числа вместо слова состояния.
+describe('SessionRow — очередь машины', () => {
+  const entry = (patch: Partial<QueuedLaunch> = {}): QueuedLaunch => ({
+    class: 'agent',
+    mode: 'launch',
+    by: 's-00',
+    at: '2026-09-27T09:00:00.000Z',
+    reason: 'machine-limit',
+    live: 18,
+    limit: 18,
+    ...patch,
+  });
+  const QUEUE_TIP = 'Waiting for a free agent slot on this machine. It starts by itself when a slot frees.';
+  const openTooltip = async (): Promise<HTMLElement> => {
+    act(() => row().focus());
+    return waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-session-tooltip]');
+      if (element === null) throw new Error('тултипа нет');
+      return element;
+    });
+  };
+
+  it('ожидающая запуска с queued (потолок 18/18): «queued · limit 18/18» вместо «not started»', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'pending', queued: entry() }));
+    expect(screen.getByText('queued · limit 18/18')).toBeTruthy();
+    expect(screen.queryByText(S.states.pending)).toBeNull();
+  });
+
+  it('давление памяти: «queued · low memory»', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'pending', queued: entry({ reason: 'memory-critical' }) }));
+    expect(screen.getByText('queued · low memory')).toBeTruthy();
+    expect(screen.queryByText(S.states.pending)).toBeNull();
+  });
+
+  it('тултип ожидающей в очереди объясняет, чего она ждёт и что стартует сама', async () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'pending', queued: entry() }));
+    expect((await openTooltip()).textContent).toContain(QUEUE_TIP);
+  });
+
+  it('спящая, которую письмо подняло в очередь: слово очереди, а не сна; тултип про очередь, без «Resume wakes it»', async () => {
+    renderRow(
+      makeSession('s-01', 'a', {
+        lifecycle: 'sleeping',
+        autoSleep: { reason: 'idle', at: '2026-09-27T09:00:00.000Z', waitTarget: null },
+        queued: entry({ class: 'mail', mode: 'resume', by: 'wake' }),
+      }),
+    );
+    expect(screen.getByText('queued · limit 18/18')).toBeTruthy();
+    expect(screen.queryByText('asleep · idle')).toBeNull();
+    const text = (await openTooltip()).textContent ?? '';
+    expect(text).toContain(QUEUE_TIP);
+    expect(text).not.toContain('Asleep to free memory');
+  });
+
+  // Итог важнее очереди, как в `agentStatus` (единый источник статусов): слово — итога, а тултип по-прежнему объясняет очередь.
+  it('спящая в очереди, но с итогом: слово итога, тултип очереди на месте', async () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'done', queued: entry({ class: 'mail', mode: 'resume', by: 'wake' }) }));
+    expect(screen.getByText(S.states.done)).toBeTruthy();
+    expect(screen.queryByText(/^queued/)).toBeNull();
+    expect((await openTooltip()).textContent).toContain(QUEUE_TIP);
+  });
+
+  // `transitionSession` снимает запись при подъёме и закрытии; если она осталась, жизненный цикл главнее (как в `agentStatus`).
+  it('остаток записи очереди у живой и закрытой сессии слова очереди не даёт', () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'active', queued: entry() }), { activity: 'idle' });
+    expect(screen.queryByText(/^queued/)).toBeNull();
+    expect(screen.getByText(S.states.idle)).toBeTruthy();
+    cleanup();
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'closed', queued: entry() }));
+    expect(screen.queryByText(/^queued/)).toBeNull();
+    expect(screen.getByText(S.states.closed)).toBeTruthy();
+  });
+
+  it('ожидающая без записи очереди: «not started», тултип очереди не несёт', async () => {
+    renderRow(makeSession('s-01', 'a', { lifecycle: 'pending' }));
+    expect(screen.getByText(S.states.pending)).toBeTruthy();
+    expect((await openTooltip()).textContent).not.toContain('Waiting for a free agent slot');
   });
 });

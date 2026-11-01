@@ -17,6 +17,8 @@ export interface RootOption {
 }
 
 function valueOf(spec: FileRootSpec): string {
+  // Внешний корень (2026-10-31) в выборе не показывается — ключ нужен лишь для исчерпанности.
+  if (spec.kind === 'external') return 'external';
   return spec.kind === 'project' ? 'project' : `worktree:${spec.sessionId}`;
 }
 

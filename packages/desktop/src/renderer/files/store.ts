@@ -367,12 +367,16 @@ export function filesRootSpec(
  */
 export function rootDirOf(entry: WindowWorkEntry, spec: FileRootSpec): string | null {
   if (spec.kind === 'project') return entry.projectPath;
+  // Внешний файл (2026-10-31) — не папка работы: корня-папки нет.
+  if (spec.kind === 'external') return null;
   const worktree = entry.map.sessions.find((item) => item.id === spec.sessionId)?.worktree ?? null;
   return worktree === null || worktree.createdAt === null ? null : worktree.path;
 }
 
 /** Абсолютный путь файла корня: папка корня плюс относительный путь ('' — сама папка). */
 export function absPathOf(entry: WindowWorkEntry, spec: FileRootSpec, path: string): string | null {
+  // У внешнего корня `path` и есть абсолютный путь.
+  if (spec.kind === 'external') return path;
   const dir = rootDirOf(entry, spec);
   if (dir === null) return null;
   if (path === '') return dir;

@@ -638,6 +638,30 @@ describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
   });
 });
 
+describe('sessions.setKeepAwake (спека сна агентов, 4.1)', () => {
+  const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+  const parse = (value: unknown) => METHODS['sessions.setKeepAwake'].safeParse(value);
+
+  it('принимает сессию и булево значение; без значения, с не-булевым и без сессии — отказ', () => {
+    for (const keepAwake of [true, false]) {
+      expect(parse({ ref, keepAwake }).success, String(keepAwake)).toBe(true);
+    }
+    expect(parse({ ref }).success).toBe(false);
+    for (const keepAwake of ['true', 1, 0, null]) {
+      expect(parse({ ref, keepAwake }).success, JSON.stringify(keepAwake)).toBe(false);
+    }
+    expect(parse({ keepAwake: true }).success).toBe(false);
+  });
+
+  it('параметры и результат: сессия и новое значение; ответ — значение, которое стоит в карте', () => {
+    expectTypeOf<Params<'sessions.setKeepAwake'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      keepAwake: boolean;
+    }>();
+    expectTypeOf<Result<'sessions.setKeepAwake'>>().toEqualTypeOf<{ keepAwake: boolean }>();
+  });
+});
+
 describe('capabilities.list (живая проверка 2026-10-02: подсказки поля ввода)', () => {
   it('принимает проект и провайдера, отвергает пустые', () => {
     expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p', provider: 'claude' }).success).toBe(true);
@@ -887,6 +911,16 @@ describe('swarms.* — рой из окна (спека роя v1, 6)', () => {
   });
 });
 
+describe('очередь запусков машины в протоколе', () => {
+  it('уведомление о запуске сверх потолка входит в NoticeKind', () => {
+    expectTypeOf<'machine-over-limit'>().toExtend<import('./types.js').NoticeKind>();
+  });
+
+  it('запуск в очереди — причина, по которой письмо ещё не забрано (MailWait)', () => {
+    expectTypeOf<'queued'>().toExtend<import('./types.js').MailWait>();
+  });
+});
+
 describe('sessions.switchOptions / sessions.switchAgent', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
   const requestId = '3f2b8c1e-5a4d-4e6f-9b7a-1c2d3e4f5a6b';
@@ -908,7 +942,7 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
     expect(parse({ ref, requestId, provider: 'codex', effort: 'High!' }).success).toBe(false);
   });
   it('результат switchAgent и тип лимитов цели', () => {
-    expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held'>();
+    expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held' | 'queued'>();
     expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['limits']>().toEqualTypeOf<ProviderLimits | null>();
   });
 });

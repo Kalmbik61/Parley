@@ -15,6 +15,18 @@
  * Живой сессии, которой нужен человек (`need`), слово состояния заменяет слово причины (`approval`, `limit · 19:27`,
  * `starting`…; `attention/derive.ts#needLabel`), а тултип строки добавляет обрамление и `detail` (спека застрявших 7.3).
  *
+ * Спящей сессии, которую усыпил хост (`autoSleep`, спека сна агентов 4.1), слово `asleep` заменяет слово причины сна
+ * (`asleep · idle`, `asleep · swarm done`; `autoSleepWord` из core), а тултип строки добавляет, зачем она спит и чем её
+ * поднять. Итог важнее сна, как в `agentStatus` (единый источник статусов): сессия, сдавшая `done`/`failed`, остаётся со
+ * словом итога, а объяснение в тултипе есть у любой усыплённой хостом. Остановленная человеком (`autoSleep` нет) осталась
+ * как была. Нужен человек (`need`) — он важнее причины сна.
+ *
+ * Сессии, чей запуск ждёт слота машины (`queued`, спека ёмкости 4.2 и 4.5), слово очереди с причиной и числами
+ * (`queued · limit 18/18`, `queued · low memory`; `queuedWord` из core) заменяет слово состояния, а тултип
+ * строки говорит, чего она ждёт. Итог важнее очереди, как в `agentStatus`: сессия с итогом остаётся со словом итога, но
+ * тултип очереди есть у любой, чей запуск ждёт. Очередь важнее причины сна: письмо, поднявшее усыплённую в очередь,
+ * уже разбудило её, и «Resume wakes it» её не касается.
+ *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
  * остальных активатор выключен и курсор `not-allowed`. Атрибуты @dnd-kit (`role`,
@@ -48,7 +60,7 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { agentStatus, autoSleepWord, queuedWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
@@ -213,7 +225,23 @@ export const SessionRow = memo(function SessionRow({
   // такой сессии — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`).
   const need = sessionNeed(session, live);
   const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
-  const word = need === null ? stateWord(state, session.lifecycle) : needLabel(need, now.getTime());
+  // Усыплённая хостом (`hostSleep`): слово причины сна вместо `asleep`, а тултип объясняет сон при любом итоге. `need` у
+  // спящей всегда `null` (`sessionNeed`), но первым в выборе слова остаётся он. Итог важнее сна, как у агентов: слово сна —
+  // там, где им статус `asleep` (`agentStatus`, единый источник), а сессия с итогом остаётся со словом итога. Нет
+  // `autoSleep` (или `null`) — сессию остановил человек: слово состояния, как раньше.
+  const hostSleep = need === null && session.lifecycle === 'sleeping' ? (session.autoSleep ?? null) : null;
+  // Запуск ждёт слота машины (`queued`): запись очереди решает только у `pending` и `sleeping`, как в `agentStatus` — у
+  // живой и закрытой её снимает `transitionSession`, а если она осталась, жизненный цикл главнее. Слово очереди — там,
+  // где `agentStatus` называет сессию `queued` (с итогом остаётся слово итога); тултип очереди — при любом итоге, как у сна.
+  const queued = session.lifecycle === 'pending' || session.lifecycle === 'sleeping' ? (session.queued ?? null) : null;
+  const word =
+    need !== null
+      ? needLabel(need, now.getTime())
+      : queued !== null && agentStatus(session) === 'queued'
+        ? queuedWord(queued)
+        : hostSleep !== null && agentStatus(session) === 'asleep'
+          ? autoSleepWord(hostSleep.reason)
+          : stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
@@ -385,7 +413,13 @@ export const SessionRow = memo(function SessionRow({
       </HoverCardTrigger>
       </SessionRowMenu>
       <HoverCardContent side="right" align="start" className="w-72 space-y-1.5 p-3 text-xs">
-        <SessionTooltip session={session} activity={activity} word={word} needTip={need === null ? null : needTooltip(need)} />
+        <SessionTooltip
+          session={session}
+          activity={activity}
+          word={word}
+          needTip={need === null ? null : needTooltip(need)}
+          sleepTip={queued !== null ? S.sidebar.queuedTooltip : hostSleep === null ? null : S.sidebar.autoSleepTooltip}
+        />
       </HoverCardContent>
     </HoverCard>
   );
@@ -396,12 +430,15 @@ function SessionTooltip({
   activity,
   word,
   needTip,
+  sleepTip,
 }: {
   session: WorkSession;
   activity: ActivityEntry | null;
   word: string;
   /** Чего ждёт сессия от человека (`needTooltip`); `null` — ничего. */
   needTip: string | null;
+  /** Почему у сессии нет процесса и чем её поднять: её усыпил хост или её запуск ждёт слота машины; `null` — объяснять нечего. */
+  sleepTip: string | null;
 }): JSX.Element {
   const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;
   // Слово итога: у сессии с итогом — он сам (`result` — только 'done' | 'failed'), иначе
@@ -417,6 +454,7 @@ function SessionTooltip({
       ) : null}
       <div>{outcome}</div>
       {needTip === null ? null : <div className="break-words">{needTip}</div>}
+      {sleepTip === null ? null : <div className="break-words">{sleepTip}</div>}
       {metrics?.model !== null && metrics?.model !== undefined ? <div className="font-mono">{metrics.model}</div> : null}
       {metrics !== null ? <div className="text-muted-foreground">{formatMetricsLine(metrics)}</div> : null}
       {session.worktree !== null ? <div className="font-mono">⎇ {session.worktree.branch}</div> : null}

@@ -29,6 +29,7 @@ import {
   supportsEffort,
 } from '../providers.js';
 import { roleSummaries, sessionRoleCatalog } from '../work/agents.js';
+import { inboxFenced } from '../work/auto-sleep.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
@@ -70,18 +71,20 @@ import {
   countRecipients,
   deniedForAgent,
   limitsFromConfig,
+  RESOURCE_WINDOW_MS,
   ResourceDeniedError,
   type ResourceLimits,
 } from '../work/resource-policy.js';
+import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
-import { reportedStatus } from '../work/session-state.js';
+import { agentStatus, asleepHint } from '../work/session-state.js';
 import { swarmOfSession } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
-import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
 import {
   HUMAN,
@@ -116,14 +119,18 @@ const SETTLE_SLACK_MS = 20;
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
  * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
- * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает. Идёт замена агента (спека
+ * процесса больше нет — ушла в `sleeping` или `closed`. Усыплённая хостом (`autoSleep`) — `asleep`: она не кончила
+ * и не умерла, письмо её поднимет (спека сна агентов 4.1). `null` — цель ещё работает. Идёт замена агента (спека
  * передачи сессии 6.2) — тоже работает: между остановкой прежнего агента и стартом нового сессия `sleeping`, а
- * `stuck` снят, но работа у неё не кончилась.
+ * `stuck` снят, но работа у неё не кончилась. Цель в очереди машины (`queued`, спека ёмкости 4.2) тоже работает: процесса
+ * ещё нет, но запуск начнётся сам, и `wait_for` ждёт её, как работающую. Итог и `stuck` отвечают раньше очереди.
  */
 export function finishedState(session: WorkSession): string | null {
   if ((session.switching ?? null) !== null) return null;
   if (session.result !== null) return session.result;
   if ((session.stuck ?? null) !== null) return 'stuck';
+  if (session.queued != null && session.lifecycle !== 'closed') return null;
+  if (session.lifecycle === 'sleeping' && session.autoSleep != null) return 'asleep';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
     ? session.lifecycle
     : null;
@@ -416,6 +423,13 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'get_capacity',
+    annotations: READS,
+    description:
+      'How busy Parley and this machine are: live, asleep and queued sessions, your child sessions and subagents, the limits that apply and how much of each is used, memory pressure. Call it before starting several sessions or a heavy job.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'report',
     annotations: WRITES,
     description:
@@ -573,11 +587,11 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close yourself only after the human's explicit consent; ones you created: when accepted.",
+      "Close yourself after the human's explicit consent or, if work.closeFinished, once accepted; ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Yours or one you created.' },
+        target: { type: 'string', description: 'Yours, one you created, or (closeFinished) a finished member of your room.' },
       },
       required: ['target'],
     },
@@ -608,6 +622,30 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
   // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
   return mapOverview(map, context.sessionId, storeLetterReader(context.projectPath, context.workId));
+}
+
+/**
+ * `get_capacity`: карта с письмами агентов только за последний час (не вся история), числа машины — от хоста.
+ * Один `now` на выборку писем и на расчёт: окно часа в обоих местах одно.
+ */
+async function getCapacity(context: McpContext, signal?: AbortSignal): Promise<CapacityReport> {
+  const now = Date.now();
+  const limits = await limitsOf(context);
+  const map = await readMap(context.projectPath, context.workId);
+  const messages = storeLetterReader(context.projectPath, context.workId).page({
+    sinceAt: new Date(now - RESOURCE_WINDOW_MS).toISOString(),
+    agentsOnly: true,
+    limit: limits.workMessages,
+  });
+  const facts = (await context.capacity?.(signal)) ?? null;
+  return capacityReport({
+    map: { ...map, messages },
+    sessionId: context.sessionId,
+    limits,
+    resumeRate: (await loadConfig()).config.resumeRate,
+    facts,
+    now,
+  });
 }
 
 /**
@@ -712,7 +750,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       const withSummary = map.sessions.filter((session) => session.summary !== null);
       const { items, page } = pageBySeq(withSummary, {
         seq: (session) => seqOf(session.id, 's-'),
-        view: (session) => ({ id: session.id, label: session.label, status: reportedStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        view: (session) => ({ id: session.id, label: session.label, status: agentStatus(session), source: session.summarySource, text: session.summary ?? '' }),
         shrink: (view, limit) => shrinkSummary(view, limit),
         cursor: parseCursor(cursorRaw),
         maxBytes,
@@ -801,14 +839,43 @@ async function report(
   }
 
   const session = requireSession(map, sessionId);
+  const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
   return {
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
     // харнесс ещё не отметил запущенной.
-    status: session.result ?? reportedStatus(session),
+    status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
+    ...(next !== null ? { next } : {}),
   };
+}
+
+/**
+ * Подсказка в ответ на `report(done)`, когда рабочее пространство разрешает агентам закрывать завершённые сессии:
+ * правила из брифа и гида агент забывает, а здесь они под рукой в момент действия. Ведущий живой открытой комнаты
+ * получает список завершивших участников (не закрытых и не из роя), остальные участники комнат и созданные сессии —
+ * напоминание закрыть себя последним вызовом; сессия, запущенная человеком без комнаты, — ничего.
+ */
+function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
+  if (map.work.closeFinished !== true) return null;
+  const rooms = map.rooms.filter((room) => !isRoomArchived(room) && isMember(room, sessionId));
+  const led = rooms.filter((room) => liveLead(map, room) === sessionId);
+  if (led.length > 0) {
+    const finished = map.sessions
+      .filter((row) =>
+        row.id !== sessionId && row.lifecycle !== 'closed' && row.result === 'done' && swarmOfSession(map, row.id) === null &&
+        led.some((room) => room.members.includes(row.id)))
+      .map((row) => row.id);
+    return finished.length > 0
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${finished.join(', ')}; the tool allows it.`
+      : null;
+  }
+  const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
+  if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
+    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${sessionId}" as your last call.`;
+  }
+  return null;
 }
 
 /**
@@ -866,6 +933,15 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  /**
+   * Хост усыпляет эту сессию или уже усыпил (`inboxFenced`): письма ей не выдаются, ожидание отвечает `running`. Синхронно
+   * и без копии карты: от проверки отмены до ответа ниже `await` быть не должно.
+   */
+  const fenced = (): boolean =>
+    viewMap(context.projectPath, context.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      return session !== undefined && inboxFenced(session);
+    });
   /** Сколько ещё ждать тишины по этим письмам, мс; 0 — доставлять сейчас (окно и потолок — из контекста, для тестов). */
   const settleDelay = (unread: readonly Message[]): number =>
     settleDelayMs(unread, sessionId, Date.now(), context.settleMs, context.settleMaxMs);
@@ -914,6 +990,9 @@ async function waitFor(
           hint: stuckHint(target, session.stuck, new Date()),
         };
       }
+      // Усыплённая хостом: итога не будет, пока её не разбудит письмо, а ждать её до таймаута впустую. Отвечаем сразу и вместо
+      // резюме и артефактов даём подсказку, что делать: писать ей или ждать почту.
+      if (state === 'asleep') return { state, sessionId: target, hint: asleepHint(target) };
       return state !== null
         ? {
             state,
@@ -970,6 +1049,8 @@ async function waitFor(
   // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
   const cancelled = (): boolean => signal?.aborted === true;
   for (;;) {
+    // Отметка «засыпает»: письма остаются непрочитанными, ждать их незачем — сессию остановят. Ни одной строки журнала.
+    if (fenced()) return { state: 'running' };
     const timeLeftMs = Math.max(endsAt - Date.now(), 0);
     // Письма лежат, но пачка не устоялась: проба из-за этого не сработает до смены карты, а срок идёт по часам. Поэтому ждём
     // не дольше срока и пересчитываем (не раньше, чем кончится таймаут вызова).
@@ -994,6 +1075,8 @@ async function waitFor(
     // Брошенный вызов: ход сессии кончился или начался заново после старта вызова (человек прервал ход, а клиент отмену не
     // прислал — Codex). Агент ответа не увидит; письмо остаётся непрочитанным, и хост напечатает на него указатель.
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
+    // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
+    if (fenced()) return { state: 'running' };
     const messages = takeInbox(context, sessionId);
     if (messages.length > 0) return { state: 'message', messages };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
@@ -1100,7 +1183,8 @@ async function sendMessage(
         throw new Error('without room, exactly one addressee in to is required');
       }
       const target = to[0] as string;
-      assertDeliverable(current, target);
+      // Человек — не сессия: прямое письмо ему (ответ на его письмо) проверки доставки не проходит, его читает окно.
+      if (target !== HUMAN) assertDeliverable(current, target);
       assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       sent = letters.add({ roomId: null, from: sessionId, to: [target], text, kind });
     }
@@ -1133,6 +1217,9 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
     // почту нового (спека передачи сессии 6.1). Отказ откатывает запись: письма остаются непрочитанными.
     const revision = current.sessions.find((session) => session.id === sessionId)?.agentRevision ?? null;
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
+    // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
+    // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
+    if (inboxFenced(requireSession(current, sessionId))) return [];
     const inbox = letters.unreadFor(sessionId);
     const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
@@ -1296,14 +1383,20 @@ async function closeSession(
   const target = stringArg(args, 'target');
 
   await updateMap(context.projectPath, context.workId, (current) => {
-    requireSession(current, target);
+    const targetSession = requireSession(current, target);
     if (target !== sessionId) {
       if (swarmOfSession(current, target) !== null) {
         throw new Error(`close_session cannot close ${target}: it is a swarm member; only the human cancels a swarm`);
       }
-      if (!isCreatedDescendant(current, sessionId, target)) {
+      // Право лида (sg-12): флаг разрешения включён, вызывающий — живой лид комнаты, цель — её участник с итогом `done`.
+      // Участника роя отсекла проверка выше.
+      const finishedMemberOfLedRoom =
+        current.work.closeFinished === true &&
+        targetSession.result === 'done' &&
+        current.rooms.some((room) => !isRoomArchived(room) && liveLead(current, room) === sessionId && isMember(room, target));
+      if (!isCreatedDescendant(current, sessionId, target) && !finishedMemberOfLedRoom) {
         throw new Error(
-          `close_session can only close the calling session or a session it created (${target} is not one of them)`,
+          `close_session can only close the calling session, a session it created, or — when the workspace lets agents close finished sessions — a finished member of the room it leads (${target} is not one of them)`,
         );
       }
     }
@@ -1458,6 +1551,10 @@ async function dispatch(
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context, args, signal);
+  if (name === 'get_capacity') {
+    if (Object.keys(args).length > 0) throw new Error('get_capacity takes no arguments');
+    return getCapacity(context, signal);
+  }
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);
@@ -1762,7 +1859,7 @@ export interface ToolRunner {
  * Инструменты, которые ничего не пишут от имени сессии: их ограда агента (спека передачи сессии 6.1) не касается.
  * `check_inbox` и `wait_for` сюда не входят — они помечают письма прочитанными.
  */
-const AGENT_FENCE_FREE = new Set(['get_map', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
+const AGENT_FENCE_FREE = new Set(['get_map', 'get_capacity', 'read_guide', 'list_roles', 'read_room', 'find_skill', 'memory_read', 'backlog_list', 'search_history', 'attempt_status']);
 
 export const STALE_AGENT = 'This session now continues with another agent: this process belongs to the previous one. Stop working and do not call Parley tools again.';
 

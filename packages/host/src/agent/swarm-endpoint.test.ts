@@ -1,11 +1,22 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, request, type Server } from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { saveConfig } from '@parley/core';
 import { HostError } from '../errors.js';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { createSwarmEndpoint } from './swarm-endpoint.js';
 
 const servers: Server[] = [];
-afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve())))); });
+// Песочница настроек: `leanAgents` читается из конфига, настоящий `~/.parley` тест не трогает.
+let home = '';
+beforeEach(async () => { home = await mkdtemp(path.join(tmpdir(), 'parley-swarm-endpoint-')); process.env['PARLEY_HOME'] = home; });
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+  delete process.env['PARLEY_HOME'];
+  await rm(home, { recursive: true, force: true });
+});
 const ref = { projectPath: '/trusted/project', workId: 'w-01', sessionId: 's-01' };
 async function setup() {
   const registry = createBrowserEndpoint({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, clients: () => [], roomsOf: () => [] });
@@ -42,6 +53,24 @@ describe('agent swarm endpoint', () => {
     });
   });
 
+  it('create: королева облегчённая и при leanAgents = false', async () => {
+    await saveConfig({ leanAgents: false });
+    const { post, create: spawn } = await setup();
+    expect(JSON.parse((await post(create)).body).ok).toBe(true);
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ lean: true, swarm: { kind: 'create', tag: 'Research', objective: 'Audit' } }));
+  });
+
+  it('add: участник по leanAgents — true и false', async () => {
+    const { post, create: spawn, memberOf } = await setup();
+    memberOf.mockResolvedValue({ swarmId: 'sw-01', role: 'drone', n: 1 });
+    await saveConfig({ leanAgents: true });
+    await post(add);
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: true, swarm: { kind: 'add', role: 'drone' } }));
+    await saveConfig({ leanAgents: false });
+    await post(add);
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: false, swarm: { kind: 'add', role: 'drone' } }));
+  });
+
   it('add: трутень получает роль researcher, проверяющий — verifier; ответ называет участника', async () => {
     const { post, create: spawn, memberOf } = await setup();
     memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'drone', n: 3 });
@@ -53,6 +82,15 @@ describe('agent swarm endpoint', () => {
     memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'verifier', n: 2 });
     await post({ ...add, role: 'verifier' });
     expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ role: { source: 'builtin', name: 'verifier' } }));
+  });
+
+  it('участник в очереди машины: queued в ответе — у королевы при create и у участника при add', async () => {
+    const { post, create: spawn, memberOf } = await setup();
+    spawn.mockResolvedValueOnce({ ...ref, sessionId: 's-02', queued: 'machine-limit' } as never);
+    expect(JSON.parse((await post(create)).body)).toEqual({ ok: true, result: { swarmId: 'sw-01', queenSessionId: 's-02', queued: 'machine-limit' } });
+    spawn.mockResolvedValueOnce({ ...ref, sessionId: 's-03', queued: 'memory-critical' } as never);
+    memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'drone', n: 2 });
+    expect(JSON.parse((await post(add)).body)).toEqual({ ok: true, result: { sessionId: 's-03', member: 'Drone 2', queued: 'memory-critical' } });
   });
 
   it('отказы хоста: код — причина роя или resource-budget, иначе код ошибки', async () => {

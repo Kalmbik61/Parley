@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUTO_SLEEP_WORDS,
   NEED_WORDS,
   STATE_WORDS,
+  agentStatus,
+  asleepHint,
+  autoSleepWord,
   dotState,
   liveStatus,
   needWord,
+  queuedWord,
   reportedStatus,
   sessionDotState,
   sessionDotStateWithNeed,
@@ -16,6 +21,7 @@ import {
   type SessionStatus,
 } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
+import type { AutoSleep, QueuedLaunch } from './types.js';
 
 describe('reportedStatus и liveStatus', () => {
   // Таблица двух осей (план этапа 3, 3.1): бриф и MCP ставят итог выше процесса, окно и помощник у живой — нет.
@@ -47,6 +53,109 @@ describe('reportedStatus и liveStatus', () => {
   it('ось итога можно не передавать', () => {
     expect(reportedStatus({ lifecycle: 'active' })).toBe('active');
     expect(liveStatus({ lifecycle: 'sleeping' })).toBe('exited');
+  });
+});
+
+describe('agentStatus: сон по решению хоста', () => {
+  const slept: AutoSleep = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+
+  it('усыплённая хостом сессия без итога — asleep, а не exited', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: null, autoSleep: slept })).toBe('asleep');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept })).toBe('asleep');
+  });
+
+  it('остановленная человеком (autoSleep пуст или нет) — exited, как у reportedStatus', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: null, autoSleep: null })).toBe('exited');
+    expect(agentStatus({ lifecycle: 'sleeping', result: null })).toBe('exited');
+  });
+
+  it('итог важнее сна: усыплённая хостом с итогом показывает итог', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'done', autoSleep: slept })).toBe('done');
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'failed', autoSleep: slept })).toBe('failed');
+  });
+
+  it('отметка сна решает только у sleeping: у остальных осей статус как у reportedStatus', () => {
+    for (const lifecycle of ['pending', 'active', 'closed'] as const) {
+      for (const result of [null, 'done', 'failed'] as const) {
+        expect(agentStatus({ lifecycle, result, autoSleep: slept })).toBe(reportedStatus({ lifecycle, result }));
+      }
+    }
+  });
+
+  it('без сна всё как у reportedStatus', () => {
+    for (const lifecycle of ['pending', 'active', 'sleeping', 'closed'] as const) {
+      for (const result of [null, 'done', 'failed'] as const) {
+        expect(agentStatus({ lifecycle, result })).toBe(reportedStatus({ lifecycle, result }));
+      }
+    }
+  });
+});
+
+describe('agentStatus: очередь машины', () => {
+  const slept: AutoSleep = { reason: 'idle', at: '2026-10-31T12:00:00.000Z', waitTarget: null };
+  const queued: QueuedLaunch = {
+    class: 'agent', mode: 'new', by: 's-01', at: '2026-10-31T12:00:00.000Z', reason: 'machine-limit', live: 18, limit: 18,
+  };
+
+  it('ожидающая запуска сессия с записью очереди — queued', () => {
+    expect(agentStatus({ lifecycle: 'pending', queued })).toBe('queued');
+    expect(agentStatus({ lifecycle: 'pending', result: null, queued })).toBe('queued');
+  });
+
+  it('спящая сессия с записью очереди — queued, и усыплённая хостом тоже: её поднимает очередь', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', queued })).toBe('queued');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept, queued })).toBe('queued');
+  });
+
+  it('итог важнее очереди', () => {
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'done', queued })).toBe('done');
+    expect(agentStatus({ lifecycle: 'sleeping', result: 'failed', autoSleep: slept, queued })).toBe('failed');
+  });
+
+  it('у живой и закрытой сессии запись очереди не решает: жизненный цикл главнее', () => {
+    expect(agentStatus({ lifecycle: 'active', queued })).toBe('active');
+    expect(agentStatus({ lifecycle: 'closed', queued })).toBe('exited');
+  });
+
+  it('пустая запись очереди (null или нет) — как без очереди', () => {
+    expect(agentStatus({ lifecycle: 'pending', queued: null })).toBe('pending');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept, queued: null })).toBe('asleep');
+    expect(agentStatus({ lifecycle: 'sleeping', autoSleep: slept })).toBe('asleep');
+  });
+});
+
+describe('queuedWord: слово сессии в очереди машины', () => {
+  it('потолок полон: причина и сколько живо из скольких', () => {
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: 18 })).toBe('queued · limit 18/18');
+    expect(queuedWord({ reason: 'machine-limit', live: 7, limit: 12 })).toBe('queued · limit 7/12');
+  });
+
+  it('потолка нет — слово без чисел', () => {
+    expect(queuedWord({ reason: 'machine-limit', live: 18, limit: null })).toBe('queued · limit');
+  });
+
+  it('давление памяти critical — слово про память, числа не нужны', () => {
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: 18 })).toBe('queued · low memory');
+    expect(queuedWord({ reason: 'memory-critical', live: 3, limit: null })).toBe('queued · low memory');
+  });
+});
+
+describe('слова сна по решению хоста', () => {
+  it('AUTO_SLEEP_WORDS: слово на каждую причину, autoSleepWord берёт из таблицы', () => {
+    expect(AUTO_SLEEP_WORDS).toEqual({
+      idle: 'asleep · idle',
+      'swarm-done': 'asleep · swarm done',
+      pressure: 'asleep · memory was low',
+      slot: 'asleep · freed a slot',
+    });
+    expect(autoSleepWord('idle')).toBe('asleep · idle');
+    expect(autoSleepWord('swarm-done')).toBe('asleep · swarm done');
+    expect(autoSleepWord('pressure')).toBe('asleep · memory was low');
+    expect(autoSleepWord('slot')).toBe('asleep · freed a slot');
+  });
+
+  it('asleepHint: подсказка тому, кто ждёт усыплённую цель', () => {
+    expect(asleepHint('s-07')).toBe('s-07 is asleep until mail arrives: write to it, or wait for mail via inbox.');
   });
 });
 

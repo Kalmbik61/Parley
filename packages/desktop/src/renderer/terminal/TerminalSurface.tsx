@@ -57,7 +57,7 @@ import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { trustCardFor, useConsentsStore } from '../store/consents.js';
 import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
-import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
+import { activatePathLink, LinkMenu, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
 import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
@@ -257,13 +257,12 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   }, []);
 
   // Обычный клик — меню у курсора; ⌘-клик — сразу действие: файл — вкладка редактора на строке и
-  // колонке (7.3b), каталог — приложение по умолчанию, адрес — вкладка встроенного браузера рядом (9.2b);
+  // колонке (7.3b), каталог — приложение по умолчанию (вне корней — Finder, `activatePathLink`), адрес — вкладка встроенного браузера рядом (9.2b);
   // системный браузер — пунктом меню.
   const onLink = useCallback(
     (link: TerminalLink, event: MouseEvent) => {
       if (event.metaKey) {
-        if (link.kind === 'path' && isFileLink(link)) openLinkInEditor(link);
-        else if (link.kind === 'path') void openLinkPath(bridge, link.absPath);
+        if (link.kind === 'path') activatePathLink(bridge, link);
         else openInBrowserTab(link.url);
         return;
       }

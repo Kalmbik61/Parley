@@ -10,7 +10,7 @@ import type { FileRoot, GrepQuery } from '../../shared/files-types.js';
 import { HostError } from '../host-connection.js';
 import { isValidPathArg, isValidWorkKey, withIpcError } from '../ipc.js';
 import type { RootsRegistry } from '../roots.js';
-import { createFsApi, LIMITS, MAX_PATHS_PER_CALL } from './fs-api.js';
+import { createFsApi, LIMITS, MAX_PATHS_PER_CALL, type LocateOptions } from './fs-api.js';
 import { createGitApi, isSafeRev, type GitRunner } from './git-api.js';
 import { createFileWatch, type WatchFs, type WatchSink } from './watch.js';
 
@@ -23,14 +23,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** `{ workKey, spec }`, где spec — `{ kind: 'project' }` или `{ kind: 'worktree', sessionId }`. */
+/** `{ workKey, spec }`, где spec — `{ kind: 'project' }`, `{ kind: 'worktree', sessionId }` или `{ kind: 'external' }`. */
 export function isFileRoot(value: unknown): value is FileRoot {
   if (!isRecord(value) || !isValidWorkKey(value.workKey) || !isRecord(value.spec)) return false;
   const spec = value.spec;
-  if (spec.kind === 'project') return true;
+  if (spec.kind === 'project' || spec.kind === 'external') return true;
   // Своей проверки id сессии в shared нет, а форма `s-NN` не обязательна (ручные и чужие
   // сессии): те же правила, что у workKey — непустой, не длиннее предела, не имя прототипа.
   return spec.kind === 'worktree' && isValidWorkKey(spec.sessionId);
+}
+
+/**
+ * Путь для корня: у `external` (2026-10-31) — абсолютный или `~/…`; у прочих — прежние правила
+ * (`isValidPathArg`: относительность и выход из корня проверяет реестр).
+ */
+function isPathFor(root: FileRoot, value: unknown): value is string {
+  if (!isValidPathArg(value)) return false;
+  return root.spec.kind !== 'external' || value.startsWith('/') || value === '~' || value.startsWith('~/');
+}
+
+/** `undefined` или `{ external?: boolean }`: без чужих полей. */
+function isLocateOptions(value: unknown): value is LocateOptions | undefined {
+  return value === undefined || (isRecord(value) && Object.keys(value).every((k) => k === 'external') && (value.external === undefined || typeof value.external === 'boolean'));
 }
 
 function isPathList(value: unknown): value is string[] {
@@ -146,17 +160,18 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
     'files:stat',
     withIpcError(async (_event, root: unknown, paths: unknown) => {
       if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
-      if (!isPathList(paths)) throw new HostError('bad_request', 'invalid path list');
+      if (!isPathList(paths) || !paths.every((p) => isPathFor(root, p))) throw new HostError('bad_request', 'invalid path list');
       return api.stat(root, paths);
     }),
   );
 
   ipcMain.handle(
     'files:locate',
-    withIpcError(async (_event, workKey: unknown, absPaths: unknown) => {
+    withIpcError(async (_event, workKey: unknown, absPaths: unknown, options: unknown) => {
       if (!isValidWorkKey(workKey)) throw new HostError('bad_request', 'invalid work key');
       if (!isPathList(absPaths)) throw new HostError('bad_request', 'invalid path list');
-      return api.locate(workKey, absPaths);
+      if (!isLocateOptions(options)) throw new HostError('bad_request', 'invalid locate options');
+      return api.locate(workKey, absPaths, options);
     }),
   );
 
@@ -173,7 +188,7 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
     'files:read-text',
     withIpcError(async (_event, root: unknown, relPath: unknown) => {
       if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
-      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (!isPathFor(root, relPath)) throw new HostError('bad_request', 'invalid path');
       return api.readText(root, relPath);
     }),
   );
@@ -182,7 +197,7 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
     'files:read-bytes',
     withIpcError(async (_event, root: unknown, relPath: unknown, limit: unknown) => {
       if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
-      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (!isPathFor(root, relPath)) throw new HostError('bad_request', 'invalid path');
       if (!isByteLimit(limit)) throw new HostError('bad_request', 'invalid byte limit');
       return api.readBytes(root, relPath, limit);
     }),
@@ -192,7 +207,7 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
     'files:write',
     withIpcError(async (_event, root: unknown, relPath: unknown, text: unknown, expectedMtimeMs: unknown) => {
       if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
-      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (!isPathFor(root, relPath)) throw new HostError('bad_request', 'invalid path');
       if (typeof text !== 'string') throw new HostError('bad_request', 'invalid text');
       if (!isExpectedMtime(expectedMtimeMs)) throw new HostError('bad_request', 'invalid expected mtime');
       return api.write(root, relPath, text, expectedMtimeMs);
@@ -203,7 +218,7 @@ export function registerFilesIpc({ ipcMain, roots, git, spawnGrepWorker, watchFs
     'files:watch',
     withIpcError(async (event, root: unknown, relPath: unknown) => {
       if (!isFileRoot(root)) throw new HostError('bad_request', 'invalid file root');
-      if (!isValidPathArg(relPath)) throw new HostError('bad_request', 'invalid path');
+      if (!isPathFor(root, relPath)) throw new HostError('bad_request', 'invalid path');
       const owner = ownerOf(event);
       const epoch = owner.epoch;
       const id = await watch.watch(root, relPath, owner.sink);

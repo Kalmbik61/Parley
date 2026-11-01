@@ -361,8 +361,8 @@ const bridge = {
   files: {
     stat: (root: FileRoot, paths: string[]) =>
       ipcRenderer.invoke('files:stat', root, paths) as Promise<Array<FileStat | null>>,
-    locate: (workKey: string, absPaths: string[]) =>
-      ipcRenderer.invoke('files:locate', workKey, absPaths) as Promise<Array<Located | null>>,
+    locate: (workKey: string, absPaths: string[], options?: { external?: boolean }) =>
+      ipcRenderer.invoke('files:locate', workKey, absPaths, options) as Promise<Array<Located | null>>,
     list: (root: FileRoot, dir: string) => ipcRenderer.invoke('files:list', root, dir) as Promise<DirEntry[]>,
     readText: (root: FileRoot, path: string) => ipcRenderer.invoke('files:read-text', root, path) as Promise<TextFile>,
     readBytes: (root: FileRoot, path: string, limit?: number) =>

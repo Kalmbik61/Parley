@@ -115,7 +115,7 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
     expect(S.sidebar.showAgents).toBe('Show agents');
     expect(S.sidebar.hideAgents).toBe('Hide agents');
     expect(S.sidebar.roomDecision).toBe('decision');
-    expect(S.sidebar.roomNew(3)).toBe('3 new');
+    expect(S.sidebar.roomMentioned).toBe('@you');
     expect(S.sidebar.lead).toBe('Lead');
     expect(S.sidebar.newSessionOrRoom).toBe('New session or room');
   });

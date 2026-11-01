@@ -102,6 +102,7 @@ export function makeActivity(
       tasks: [],
       waitingFor: null,
       heldByBackground: patch.heldByBackground ?? false,
+      runningBackground: [],
       turnEndedAt: patch.turnEndedAt ?? null,
       turnBoundaryAt: null,
       lastEventAt: patch.lastEventAt === undefined ? '2026-09-27T09:00:00.000Z' : patch.lastEventAt,

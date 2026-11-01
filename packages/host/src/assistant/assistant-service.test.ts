@@ -1447,6 +1447,15 @@ describe('assistant-service: план действий', () => {
     await service.ask({ ...ASK, text: 'ну?' });
     expect(turns.at(-1)?.spec.args[1]).toContain('[system: proposal p1 was done (S03 Ruslan waits for you to trust the folder)]');
   });
+  it('очередь машины: пометка шага попадает в заметку модели', async () => {
+    (deps.createSession as Mock).mockResolvedValue({ projectPath: '/p', workId: 'w-1', sessionId: 's-03', queued: 'machine-limit' });
+    const service = await asked();
+    await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley' }] });
+    await service.decide('p1', 'send', 'actions');
+    await vi.waitFor(() => expect(last().report?.status).toBe('done'));
+    await service.ask({ ...ASK, text: 'ну?' });
+    expect(turns.at(-1)?.spec.args[1]).toContain('[system: proposal p1 was done (S03 Ruslan is queued for a free agent slot; it starts by itself)]');
+  });
   it('create_session: вход sessions.create — без requestedBy, lean из настроек, role и model только когда названы', async () => {
     const service = await asked();
     await service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley', name: 'Vera', task: 'Run tests' }] });

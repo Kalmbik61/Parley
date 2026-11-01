@@ -180,7 +180,7 @@ describe('TerminalSurface', () => {
       });
       bridge.setLocated(key, '/wt/s-01/src/a.ts', { ...located, root: { workKey: key, spec: { kind: 'worktree', sessionId: ref.sessionId } } });
       const link = await linkUnderPointer('at src/a.ts:3', key);
-      expect(bridge.locateCalls).toEqual([{ workKey: key, absPaths: ['/wt/s-01/src/a.ts'] }]);
+      expect(bridge.locateCalls).toEqual([{ workKey: key, absPaths: ['/wt/s-01/src/a.ts'], options: { external: true } }]);
       expect(link.text).toBe('src/a.ts:3');
     });
 

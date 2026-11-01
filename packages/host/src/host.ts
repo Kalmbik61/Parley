@@ -66,6 +66,9 @@ import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createCapacityFeed } from './capacity/capacity-feed.js';
+import { createCapacityService } from './capacity/capacity-service.js';
+import { createPressureSensor } from './capacity/memory-pressure.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createConsentsService } from './consents/consents-service.js';
 import { createHeldLaunchActions } from './consents/held-launches.js';
@@ -103,6 +106,7 @@ import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
 import { limitReturnFromEnv } from './wake/limit-return.js';
@@ -269,7 +273,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   // Счётчики окна строки состояния: сервисы пишут, health читает и обнуляет.
   const windowCounters = createWindowCounters();
-  const worksService = createWorksService(handle.context, { windowCounters });
+  const worksService = createWorksService(handle.context, {
+    windowCounters,
+    // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
+    ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
+  });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();
@@ -452,6 +460,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
         attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
         turnBoundary: turnBoundarySource(worksService, activityService),
+        // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
+        // инструмент: `null` — в ответе `machine: null`.
+        capacity: async (ref) => {
+          try {
+            const live = activityService.get(ref)?.activity;
+            return {
+              machine: (await capacityFeed.snapshot()).machine,
+              activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
+            };
+          } catch (error) {
+            log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
+            return null;
+          }
+        },
       }),
     log,
   });
@@ -537,12 +559,40 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   });
   handle.context.onShutdown(async () => consentsService.stop());
+  // Датчик давления памяти (спека 2026-10-30, 4.2): раз в 10 с читает уровень. По нему сервис ёмкости пускает запуски или
+  // держит их в очереди, а сервис сна решает, пора ли усыплять простаивающих. Читать начинает перед будильником (ниже).
+  const pressureSensor = createPressureSensor();
+  handle.context.onShutdown(async () => pressureSensor.stop());
+  // Потолок машины (спека 2026-10-30, 4.2): допуск запусков, резерв слота и очередь. Заводится до сессий, они зовут его на
+  // каждом `launch`; продолжение очереди (`launch`, `retry`) и сон ради слота читают сервисы, созданные ниже, — привязка
+  // поздняя, как у согласий. Останавливается раньше `stopAll`, чтобы выходы процессов при остановке хоста не продвигали
+  // очередь.
+  const capacityService = createCapacityService(handle.context, {
+    pty: ptyManager,
+    works: worksService,
+    pressure: pressureSensor,
+    config: async () => (await loadConfig()).config,
+    launch: (ref, mode, choice) => sessionsService.launch(ref, mode, choice),
+    retry: (ref) => wakeService.retry(ref),
+    sleep: () => autoSleepService,
+  });
+  handle.context.onShutdown(async () => capacityService.stop());
+  // Числа ёмкости для окна (спека 2026-10-30, 4.5): снимок по запросу и рассылка `capacity.changed`.
+  const capacityFeed = createCapacityFeed(handle.context, {
+    capacity: capacityService,
+    pressure: pressureSensor,
+    works: worksService,
+    pty: ptyManager,
+    config: async () => (await loadConfig()).config,
+  });
+  handle.context.onShutdown(async () => capacityFeed.stop());
   sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
     {
+      capacity: capacityService,
       consents: consentsService,
       hooks: hookServer,
       providerVersions,
@@ -572,7 +622,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
-  const swarmsService = createSwarmsService(handle.context, worksService, sessionsService);
+  // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
+  const swarmsService = createSwarmsService(handle.context, worksService, sessionsService, {}, {
+    requestSleep: (ref, reason) => autoSleepService.requestSleep(ref, reason),
+  });
   handle.context.onShutdown(() => swarmsService.stop());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
@@ -602,6 +655,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   );
   handle.context.onShutdown(async () => wakeService.stop());
+
+  // Сон агентов (спека 2026-10-30, 4.1): усыпляет простаивающих агентов Claude Code, а письмо поднимает их будильником.
+  // Сжатие создаётся ниже: замыкание читает его позже, как у будильника.
+  const autoSleepService = createAutoSleepService(handle.context, {
+    works: worksService,
+    activity: activityService,
+    pty: ptyManager,
+    sessions: sessionsService,
+    wake: wakeService,
+    compacting: (ref) => compactionService?.holds(ref) === true,
+    config: async () => (await loadConfig()).config,
+    // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
+    pressure: pressureSensor,
+  });
+  handle.context.onShutdown(async () => autoSleepService.stop());
 
   compactionService = createCompactionService({
     host: handle.context,
@@ -643,9 +711,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     feed: feedService,
     send,
     launch: async (ref, mode, options) => {
+      const outcome = await sessionsService.launch(ref, mode, options);
       // Запуск Codex ждёт согласия человека на папку: письмо ассистента не доставлено, он скажет об этом и не отметит «sent».
-      if ((await sessionsService.launch(ref, mode, options)) === 'held') {
+      if (outcome === 'held') {
         throw new HostError('conflict', 'The session waits for the human to trust the folder. Send the message again after it is allowed.');
+      }
+      // Машине тесно: сессия стоит в очереди и стартует сама, а письмо ей пока уйти не может — так же.
+      if (outcome === 'queued') {
+        throw new HostError('conflict', 'This machine is at its agent limit: the session is queued and starts by itself when a slot frees. Send the message again after it starts.');
       }
     },
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
@@ -793,6 +866,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,
+    capacityFeed,
     compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
@@ -939,7 +1013,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   autonomousEngine.start();
   swarmsService.start();
   history.start();
+  // Датчик начинает читать раньше будильника и сна, очередь стартует после них: уже первый проход насоса может и
+  // перепроверить письма (будильник), и усыпить простаивающего ради слота (сон).
+  pressureSensor.start();
   wakeService.start();
+  autoSleepService.start();
+  // Очередь собирается из карт работ, прочитанных выше: запуски, что ждали слота до перезапуска хоста, продолжаются.
+  capacityService.start();
+  capacityFeed.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.
   await limitsService.start();

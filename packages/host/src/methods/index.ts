@@ -4,6 +4,7 @@ import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, Notificatio
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
+import type { CapacityFeed } from '../capacity/capacity-feed.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler, RequestInfo } from '../context.js';
@@ -35,6 +36,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createAssistantHandlers } from './assistant.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
+import { createCapacityHandlers } from './capacity.js';
 import { createConsentHandlers } from './consents.js';
 import { contextLetter, contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
@@ -76,7 +78,7 @@ import { settingsGet, settingsSet } from './settings.js';
 import { createSwarmsCreate, swarmsCancel, swarmsSeen } from './swarms.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, createWorksDelete, worksList, worksRename, worksSetStatus } from './works.js';
+import { worksCreate, createWorksDelete, worksList, worksRename, worksSetCloseFinished, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -137,6 +139,8 @@ export interface MethodDeps {
   telegram?: TelegramService;
   /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
   consents?: ConsentsService;
+  /** Лента ёмкости машины (спека 2026-10-30, 4.5); без неё метода `capacity.get` у хоста нет. */
+  capacityFeed?: Pick<CapacityFeed, 'snapshot'>;
 }
 
 /** Сколько знаков сообщения окна доходит агенту. */
@@ -151,7 +155,7 @@ const knownAgentCode = (code: string): BrowserAgentErrorCode =>
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, sessions.rename, rooms.create/addMember/rename/setLead/delete/send,
+ * карт с диска (works.create/delete/rename/setStatus, sessions.rename/setKeepAwake, rooms.create/addMember/rename/setLead/delete/send,
  * rooms.archive/reopen, mail.*, swarms.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
@@ -163,6 +167,7 @@ export const WORKS_GATED_METHODS = [
   'plans.cancel',
   'plans.retryEffects',
   'works.list',
+  'capacity.get',
   'decisions.list',
   'sessions.create',
   'sessions.resume',
@@ -235,6 +240,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
+    // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.
+    ...(deps.capacityFeed === undefined ? {} : { 'capacity.get': createCapacityHandlers({ capacityFeed: deps.capacityFeed }).capacityGet as AnyHandler }),
     // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.
     ...(deps.consents === undefined ? {} : createConsentHandlers({ consents: deps.consents, home: parleyHome() })),
     'host.info': hostInfo as AnyHandler,
@@ -248,6 +255,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
+    'works.setCloseFinished': worksSetCloseFinished as AnyHandler,
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
@@ -282,6 +290,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.delete': sessions.sessionsDelete as AnyHandler,
     'sessions.close': sessions.sessionsClose as AnyHandler,
     'sessions.rename': sessions.sessionsRename as AnyHandler,
+    'sessions.setKeepAwake': sessions.sessionsSetKeepAwake as AnyHandler,
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,

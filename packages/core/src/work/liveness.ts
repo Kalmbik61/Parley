@@ -86,6 +86,11 @@ export interface LivenessOptions {
   silenceThresholdMs?: number;
   /** Время последней записи лога — единственная ось живости сессии без pid. */
   lastRecordAt?: string | null;
+  /**
+   * Процесс держит PTY этого хоста: его pid занят нашим ребёнком и переиспользован быть не может, поэтому время старта
+   * у ОС (`ps`) не спрашивают. Чужие pid проверяются как раньше: переиспользование грозит только им.
+   */
+  owned?: boolean;
 }
 
 /**
@@ -99,6 +104,7 @@ export async function checkSession(
     now = Date.now(),
     silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
     lastRecordAt = null,
+    owned = false,
   }: LivenessOptions = {},
 ): Promise<Liveness> {
   if (session.pid === null) {
@@ -106,6 +112,7 @@ export async function checkSession(
     return { alive: silence === null || silence <= silenceThresholdMs * DEAD_SILENCE_FACTOR };
   }
   if (!isAlive(session.pid)) return { alive: false };
+  if (owned) return { alive: true };
 
   const actual = await processStartedAt(session.pid);
   const expected = session.startedAtProcess;
@@ -119,6 +126,8 @@ export interface ReconcileOptions extends MetricsRoots {
   silenceThresholdMs?: number;
   /** Сколько ждать занятую базу (`busy_timeout`) при переводе мёртвых сессий в `sleeping` (кусок 1.4 хоста). */
   lockTimeoutMs?: number;
+  /** Pid процессов, которые держит PTY этого хоста: у `active` сессий с такими pid время старта у ОС не спрашивают (`owned`). */
+  ownedPids?: ReadonlySet<number>;
 }
 
 /** Время последней записи лога сессии; `null` — лога такого провайдера мы не читаем. */
@@ -173,6 +182,7 @@ export async function reconcileMap(
     now = Date.now(),
     silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
     lockTimeoutMs,
+    ownedPids,
     ...roots
   }: ReconcileOptions = {},
 ): Promise<string[]> {
@@ -188,7 +198,8 @@ export async function reconcileMap(
     if (session.lifecycle !== 'active') continue;
     // Лог читаем только там, где он и решает: у сессии с pid ответ даёт ОС.
     const lastRecordAt = session.pid === null ? await lastRecordOf(session, roots) : null;
-    const { alive } = await checkSession(session, { now, silenceThresholdMs, lastRecordAt });
+    const owned = session.pid !== null && ownedPids?.has(session.pid) === true;
+    const { alive } = await checkSession(session, { now, silenceThresholdMs, lastRecordAt, owned });
     if (!alive) dead.push(session.id);
   }
 

@@ -35,7 +35,11 @@ export class FilesDeniedError extends Error {
 }
 
 export interface RootsRegistry {
-  /** realpath цели внутри realpath корня; для записи — правила спеки 10.8; иначе FilesDeniedError. */
+  /**
+   * realpath цели внутри realpath корня; для записи — правила спеки 10.8; иначе FilesDeniedError.
+   * Корень `external` (⌘-клик по пути вне корней, 2026-10-31: только чтение): путь абсолютный или `~/…`,
+   * отдаётся его realpath без сверки с корнями; запись — всегда отказ.
+   */
   resolve(root: FileRoot, relPath: string, mode: 'read' | 'write'): Promise<string>;
   /** Корень работы workKey, которому принадлежит путь: самый длинный realpath среди её корней (проект и worktree её сессий). */
   locate(workKey: string, absPath: string): Promise<{ root: FileRoot; relPath: string } | null>;
@@ -47,7 +51,7 @@ export interface RootsRegistry {
    * `showInFinder` раскрывают путь тем же домом, что `locate`, а не своим.
    */
   expandHome(p: string): string;
-  /** realpath корня — cwd для git (7.1b) и сверка каталога записи; нет корня — FilesDeniedError. */
+  /** realpath корня — cwd для git (7.1b) и сверка каталога записи; нет корня (и у `external`) — FilesDeniedError. */
   rootPath(root: FileRoot): Promise<string>;
 }
 
@@ -321,7 +325,27 @@ export function createRootsRegistry(
     return entry;
   };
 
+  /** Работа известна реестру (промах — пересборка, как у корня): внешний файл читается во вкладке работы. */
+  const requireWork = async (key: string): Promise<void> => {
+    if (entries.has(key)) return;
+    await refresh();
+    if (!entries.has(key)) throw new FilesDeniedError(`unknown work: ${key}`);
+  };
+
+  /** Внешний корень (2026-10-31): только чтение; путь абсолютный или `~/…`, без сверки с корнями — отдаётся realpath. */
+  const resolveExternal = async (root: FileRoot, target: string, mode: 'read' | 'write'): Promise<string> => {
+    if (mode === 'write') throw new FilesDeniedError('external files are read-only');
+    await requireWork(root.workKey);
+    if (target.includes('\0')) throw new FilesDeniedError('path contains NUL');
+    const expanded = expandHome(target);
+    if (!path.isAbsolute(expanded)) throw new FilesDeniedError(`relative path in external root: ${target}`);
+    return realpath(expanded).catch((error: unknown) => {
+      throw diskError(error, target);
+    });
+  };
+
   const resolve: RootsRegistry['resolve'] = async (root, relPath, mode) => {
+    if (root.spec.kind === 'external') return resolveExternal(root, relPath, mode);
     const entry = await requireRoot(root, mode);
     if (relPath.includes('\0')) throw new FilesDeniedError('path contains NUL');
     if (path.isAbsolute(relPath)) throw new FilesDeniedError(`absolute path: ${relPath}`);
@@ -414,6 +438,10 @@ export function createRootsRegistry(
     insideAnyRoot,
     roots: (key) => (entries.get(key) ?? []).map((entry) => ({ spec: entry.root.spec, absPath: entry.absPath })),
     expandHome,
-    rootPath: async (root) => (await requireRoot(root, 'read')).absPath,
+    rootPath: async (root) => {
+      // У внешнего файла нет корня-папки и git.
+      if (root.spec.kind === 'external') throw new FilesDeniedError('external root has no folder');
+      return (await requireRoot(root, 'read')).absPath;
+    },
   };
 }

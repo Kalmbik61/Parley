@@ -1,4 +1,5 @@
 import type { SkillCatalog } from '../skills/catalog.js';
+import type { CapacityFacts } from '../work/capacity-report.js';
 import type { ResourceLimits } from '../work/resource-policy.js';
 import type { AttemptChannelRequest, WorkSession } from '../work/types.js';
 import path from 'node:path';
@@ -97,6 +98,11 @@ export interface McpContext {
    * остаётся непрочитанным. В окружении его нет.
    */
   turnBoundarySince?: (sinceMs: number) => boolean;
+  /**
+   * Числа машины и активность вызывающей сессии от хоста (спека 4.3). Нет поля — путь без канала: в ответе
+   * `machine: null`. `null` из функции — хост не смог ответить, то же. В окружении его нет.
+   */
+  capacity?: (signal?: AbortSignal) => Promise<CapacityFacts | null>;
 }
 
 /**

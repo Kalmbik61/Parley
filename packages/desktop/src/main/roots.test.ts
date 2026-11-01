@@ -665,3 +665,51 @@ describe('корень worktree — только из каталога worktree 
     expect(await registry.resolve(WT('s-04'), 'b.ts', 'read')).toBe(path.join(await realpath(registered), 'b.ts'));
   });
 });
+
+describe('внешний корень: только чтение (⌘-клик по пути вне корней, 2026-10-31)', () => {
+  const EXTERNAL = (): FileRoot => ({ workKey: KEY(), spec: { kind: 'external' } });
+
+  it('чтение даёт realpath абсолютного пути вне корней; `~/…` раскрывается домом реестра', async () => {
+    const outside = path.join(dir, 'outside.md');
+    await writeFile(outside, 'x');
+    const { registry } = await ready();
+    expect(await registry.resolve(EXTERNAL(), outside, 'read')).toBe(await realpath(outside));
+    const homed = createRootsRegistry(fakeSource(snapshot([{ projectPath: project, workId: WORK }])), { home: dir });
+    await vi.waitFor(async () => expect(await homed.resolve(EXTERNAL(), '~/outside.md', 'read')).toBe(await realpath(outside)));
+  });
+
+  it('запись — всегда FilesDeniedError, даже для существующего файла', async () => {
+    const outside = path.join(dir, 'outside.md');
+    await writeFile(outside, 'x');
+    const { registry } = await ready();
+    await expect(registry.resolve(EXTERNAL(), outside, 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(EXTERNAL(), path.join(dir, 'new.md'), 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+  });
+
+  it('rootPath внешнего корня — отказ: у файла нет git', async () => {
+    const { registry } = await ready();
+    await expect(registry.rootPath(EXTERNAL())).rejects.toBeInstanceOf(FilesDeniedError);
+  });
+
+  it('относительный путь и NUL — отказ; нет файла — not_found', async () => {
+    const { registry } = await ready();
+    await expect(registry.resolve(EXTERNAL(), 'src/a.ts', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(EXTERNAL(), '/tmp/a\0b', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(EXTERNAL(), path.join(dir, 'missing.md'), 'read')).rejects.toBeInstanceOf(HostError);
+  });
+
+  it('симлинк снаружи — realpath цели', async () => {
+    const target = path.join(dir, 'target.md');
+    await writeFile(target, 'x');
+    await symlink(target, path.join(dir, 'link.md'));
+    const { registry } = await ready();
+    expect(await registry.resolve(EXTERNAL(), path.join(dir, 'link.md'), 'read')).toBe(await realpath(target));
+  });
+
+  it('неизвестная работа — отказ', async () => {
+    const { registry } = await ready();
+    await expect(
+      registry.resolve({ workKey: 'nope', spec: { kind: 'external' } }, '/etc/hosts', 'read'),
+    ).rejects.toBeInstanceOf(FilesDeniedError);
+  });
+});

@@ -79,6 +79,11 @@ export interface WorksServiceOptions {
   /** Счётчики окна строки состояния: один `refresh` — одна запись. */
   windowCounters?: WindowCounters;
   /**
+   * Pid процессов, которые держит PTY этого хоста: у них время старта у ОС не спрашивают (`reconcileMap`, `ownedPids`).
+   * Функция, а не набор: PTY заводятся позже сервиса и меняются, набор берётся заново на каждую сверку живости.
+   */
+  ownedPids?: () => ReadonlySet<number>;
+  /**
    * Сколько пачка писем копится до рассылки, мс; по умолчанию `MAIL_BATCH_MS`. Только для тестов: большое значение, чтобы
    * пачку выпускал снимок, а не таймер. Выше `MAIL_HOLD_MAX_MS` потолком ожидания пачки, которую держит снимок, становится
    * само `mailBatchMs`.
@@ -507,6 +512,10 @@ export function createWorksService(
    * из карты v1), и сверка вернёт её в `active`.
    */
   async function reconcileLiveness(works: readonly WorkEntry[]): Promise<void> {
+    // Свои pid берутся раз на проход, а не на каждую работу: за проход PTY почти не меняются, а мёртвый свой процесс
+    // сверка всё равно увидит по самому pid.
+    const ownedPids = options.ownedPids?.();
+    const reconcileOptions = { ...lockOptions, ...(ownedPids === undefined ? {} : { ownedPids }) };
     for (const work of works) {
       const hasLiveCandidate = work.map.sessions.some(
         (session) =>
@@ -516,7 +525,7 @@ export function createWorksService(
       if (!hasLiveCandidate) continue;
 
       try {
-        await reconcileMap(work.projectPath, work.map.work.id, lockOptions);
+        await reconcileMap(work.projectPath, work.map.work.id, reconcileOptions);
         // Карта перечитывается всегда, а не только когда эта сверка нашла мёртвых: список
         // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой

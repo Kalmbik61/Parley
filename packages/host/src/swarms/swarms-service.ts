@@ -9,6 +9,10 @@
  * - итог создателю доходит «как минимум один раз»: письмо пишется в той же записи, что `deliveredAt`, уведомление человеку
  *   уходит раньше `deliveredAt`, и недоставленный итог при следующей сверке или перезапуске отправляется снова.
  *
+ * Королеву завершённого роя хост не закрывает, а просит сервис сна её усыпить, как только итог доставлен (спека сна агентов,
+ * 4.1): работа кончена, продолжить разговор можно письмом или кнопкой Resume. Просьба уходит, пока королева после этой
+ * доставки ещё не засыпала по концу роя; иначе её, поднятую человеком, усыпляла бы каждая следующая сверка.
+ *
  * Карта не помнит, кто закрыл королеву: человек — методом `sessions.close`, а агент — своим `close_session` прямо в карте.
  * Метод зовёт `humanClosed` до закрытия, и сверка отличает отмену от падения по этой памяти хоста (после перезапуска между
  * закрытием и сверкой она теряется, и закрытая без сдачи королева считается упавшей).
@@ -33,6 +37,7 @@ import { refKey } from '@parley/protocol';
 import type { NoticeKind, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { AutoSleepService } from '../sleep/auto-sleep-service.js';
 import type { WorksService } from '../works/works-service.js';
 
 /** Как часто сервис сверяет рои сам, не дожидаясь снимка (3.0). */
@@ -69,6 +74,8 @@ interface Notice {
 /** Побочное сверки одной работы. */
 interface Effects {
   close: string[];
+  /** Королевы доставленных роёв, которым пора уснуть. */
+  sleep: string[];
   notices: Notice[];
 }
 
@@ -108,11 +115,28 @@ function needsReconcile(map: WorkMap, swarm: WorkSwarm): boolean {
   );
 }
 
+/**
+ * Королеве пора уснуть: итог роя доставлен, она `active` и после этой доставки ещё не засыпала по концу роя
+ * (запись истории `sleeping` с причиной `swarm-done` не раньше `deliveredAt`).
+ */
+function queenAwaitsSleep(map: WorkMap, swarm: WorkSwarm): boolean {
+  const deliveredAt = swarm.result?.deliveredAt;
+  if (deliveredAt == null || !isSwarmTerminal(swarm.status)) return false;
+  const queen = map.sessions.find((session) => session.id === swarm.queen);
+  if (queen?.lifecycle !== 'active') return false;
+  const since = Date.parse(deliveredAt);
+  return !queen.history.some(
+    (entry) => entry.event === 'sleeping' && entry.reason === 'swarm-done' && Date.parse(entry.at) >= since,
+  );
+}
+
 export function createSwarmsService(
   host: HostContext,
   works: Pick<WorksService, 'snapshot' | 'onChange'>,
   sessions: Pick<SessionsService, 'close'>,
   options: SwarmsServiceOptions = {},
+  /** Сервис сна: королеве завершённого роя пора спать. Без него королеву не трогают. */
+  autoSleep?: Pick<AutoSleepService, 'requestSleep'>,
 ): SwarmsService {
   const now = options.now ?? Date.now;
   const readLimits =
@@ -191,6 +215,10 @@ export function createSwarmsService(
       swarm.failure = failure;
       swarm.endedAt = at;
     };
+    // Итог доставлен: королеве пора спать. Повтор на каждой сверке безвреден — сервис сна держит просьбу, пока она не сбудется.
+    const sleepQueen = (): void => {
+      if (queenAwaitsSleep(map, swarm)) effects.sleep.push(swarm.queen);
+    };
 
     // Сдача (3.2): сначала запись `handedAt`, закрытие — после неё и без согласия человека. `progress` не сдаёт.
     for (const member of workers) {
@@ -243,7 +271,10 @@ export function createSwarmsService(
     if (!terminal) return;
     // Королева сдала после срока ожидания: итог без сводки уже ушёл, теперь уходит ещё раз со сводкой (дубль безвреден).
     if (lateReport(map, swarm)) swarm.result = { summary: queenSummary(), at, deliveredAt: null };
-    if (swarm.result?.deliveredAt != null) return;
+    if (swarm.result?.deliveredAt != null) {
+      sleepQueen();
+      return;
+    }
 
     // Итог просроченного роя ждёт `report` королевы, но не дольше `SWARM_EXPIRY_GRACE_MS` (3.0).
     if (
@@ -258,6 +289,7 @@ export function createSwarmsService(
     const text = deliveryText(swarm, Date.parse(swarm.endedAt ?? at));
     if (deliverByLetter(map, letters, swarm, text, at)) {
       swarm.result.deliveredAt = at;
+      sleepQueen();
       return;
     }
     effects.notices.push({
@@ -280,8 +312,9 @@ export function createSwarmsService(
     closing.set(key, task);
   }
 
-  /** Итог доставлен уведомлением человеку — только теперь `deliveredAt`. */
-  async function markDelivered(notice: Notice): Promise<void> {
+  /** Итог доставлен уведомлением человеку — только теперь `deliveredAt`. `true` — королеве пора уснуть. */
+  async function markDelivered(notice: Notice): Promise<boolean> {
+    let sleep = false;
     await updateMap(
       notice.ref.projectPath,
       notice.ref.workId,
@@ -289,21 +322,25 @@ export function createSwarmsService(
         const swarm = map.swarms?.find((candidate) => candidate.id === notice.swarmId);
         if (swarm?.result != null && swarm.result.deliveredAt === null) {
           swarm.result.deliveredAt = new Date(now()).toISOString();
+          sleep = queenAwaitsSleep(map, swarm);
         }
       },
       { touch: false },
     );
+    return sleep;
   }
 
   async function reconcileWork(projectPath: string, workId: string, limits: Pick<ResourceLimits, 'swarmMinutes'> | null): Promise<void> {
-    const effects: Effects = { close: [], notices: [] };
+    const effects: Effects = { close: [], sleep: [], notices: [] };
     await updateMap(projectPath, workId, (map, letters) => {
       for (const swarm of map.swarms ?? []) reconcileSwarm(map, letters, swarm, projectPath, limits, effects);
     });
     for (const sessionId of effects.close) closeMember({ projectPath, workId, sessionId });
+    for (const sessionId of effects.sleep) autoSleep?.requestSleep({ projectPath, workId, sessionId }, 'swarm-done');
     for (const notice of effects.notices) {
       host.broadcast('host.notice', { kind: notice.kind, ref: notice.ref, text: notice.text, at: new Date(now()).toISOString() });
-      await markDelivered(notice);
+      // Королева — `notice.ref`: итог человеку идёт от её имени. Просят уже после записи `deliveredAt`.
+      if (await markDelivered(notice)) autoSleep?.requestSleep(notice.ref, 'swarm-done');
     }
   }
 

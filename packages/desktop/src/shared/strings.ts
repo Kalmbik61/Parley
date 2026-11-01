@@ -527,6 +527,10 @@ export const S = {
     archivedWork: 'Archived',
     /** Подсказка к 💤 в слоте значка спящей сессии. */
     asleepSession: 'Asleep',
+    /** Строка тултипа сессии, которую усыпил хост (`autoSleep`, спека сна агентов 4.1): зачем она спит и чем её поднять. */
+    autoSleepTooltip: 'Asleep to free memory. A message or Resume wakes it.',
+    /** Строка тултипа сессии, чей запуск ждёт слота машины (`queued`, спека ёмкости 4.2): чего ждёт и что поднимать её не нужно. */
+    queuedTooltip: 'Waiting for a free agent slot on this machine. It starts by itself when a slot frees.',
     /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
     removeFromList: 'Remove from list…',
     /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
@@ -568,11 +572,10 @@ export const S = {
     /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
     showAgents: 'Show agents',
     hideAgents: 'Hide agents',
-    /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
+    /** Слово строки комнаты, пока решение ждёт человека. */
     roomDecision: 'decision',
-    roomNew: (n: number): string => `${n} new`,
-    /** Слово строки комнаты, где человека назвали (`@human`): `@you · {n} new`, `n` — все непрочитанные сообщения комнаты. */
-    roomMentioned: (n: number): string => `@you · ${n} new`,
+    /** Слово строки комнаты, где человека назвали (`@human`). */
+    roomMentioned: '@you',
     /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
     roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
     /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
@@ -603,6 +606,8 @@ export const S = {
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
       closeConfirmDescription: 'Session will no longer receive mail',
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
+      /** Галочка у незакрытой сессии: человек запрещает хосту усыплять её, `sessions.setKeepAwake` (спека сна агентов, 4.1). */
+      keepAwake: 'Keep awake',
       /** Участник развёрнутой комнаты, не ведущий и не закрытый: `rooms.setLead`. */
       makeLead: 'Make lead',
       /** Диалог замены агента (`SwitchAgentDialog`); подсвечен у сессии в лимите, без входа или с удалённым провайдером. */
@@ -648,6 +653,10 @@ export const S = {
     markDone: 'Mark as done',
     reopen: 'Reopen',
     archive: 'Archive',
+    /** Флажок: `works.setCloseFinished`, план 4. */
+    closeFinished: 'Agents close finished sessions',
+    closeFinishedHint:
+      "Agents in this workspace close their own sessions once their part is accepted, and a room lead closes the room's finished members. Sessions you start yourself still wait for you.",
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
     archiveConfirmDescription: 'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
@@ -959,7 +968,7 @@ export const S = {
       inOwnWorktree: 'In its own worktree',
       /** Переключатель при двух агентах и больше: включён — комната, выключен — отдельные сессии. */
       putInRoom: 'Put them in a room',
-      /** Одиночная сессия человека по умолчанию не lean; участники комнаты берут настройку `leanAgents`. */
+      /** Галочка стартует с настройки `leanAgents`; участники комнаты всегда берут её саму. */
       leanSession: 'Lean session',
       /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
       hintLabel: (field: string): string => `About “${field}”`,
@@ -972,7 +981,7 @@ export const S = {
         agents: 'One agent starts a session; two or more make a room, or separate sessions if you switch “Put them in a room” off.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         putInRoom: 'On: the agents discuss your task in one room and the lead brings you a decision. Off: each agent works as its own session.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
-        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
+        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. The box starts from Settings → Agents → “Lean agent sessions”; agents of a room always follow that setting.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
         mode: 'How the room tracks the work. You can change it later in the room.',
       },
@@ -1169,6 +1178,7 @@ export const S = {
       'folder-trust': 'waiting for folder trust',
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
+      queued: 'queued for a free agent slot',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
@@ -1263,6 +1273,13 @@ export const S = {
     silenceThreshold: 'Silence threshold, ms',
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
+    sleepAfterMinutes: 'Sleep idle agents after (min, 0 = off)',
+    /** Потолок живых CLI на машине и порог сна, когда машине тесно (спека сна агентов и ёмкости, 4.4): подписи полей, подсказка и предупреждение. */
+    sleepUnderPressureMinutes: 'Sleep idle agents sooner when the machine is busy (min, 1–60)',
+    machineConcurrent: 'Agents running at once on this machine (off, auto or 1–128)',
+    machineConcurrentHint: 'Auto is 75% of RAM in GB. At the limit, agent launches wait in a queue; your own launches may go up to 2 over it.',
+    /** Потолок включён, а сон выключен: простаивающие агенты слотов не отдают, и очередь может стоять долго (спека 4.2, «Включение»). */
+    machineLimitWithoutSleep: 'Sleep is off: idle agents keep their slots, so queued launches may wait a long time.',
     /** Облегчённый запуск агентов комнат (спека «меньше ходов и легче контекст», C2.2). */
     leanAgents: 'Lean agent sessions',
     leanAgentsHint: 'Agents Parley starts for rooms run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
@@ -1292,8 +1309,8 @@ export const S = {
       hint: 'Counts of sessions, starts and messages, not tokens or money. A room is limited more tightly than its workspace. Changes apply to new starts; running sessions are not stopped. Subagents a CLI starts inside its own session are not counted.',
       workConcurrent: 'Running sessions, workspace',
       roomConcurrent: 'Running sessions, room',
-      workNewSessions: 'Agent-created sessions, workspace',
-      roomNewSessions: 'Agent-created sessions, room',
+      workNewSessions: 'Agent-created sessions per day, workspace',
+      roomNewSessions: 'Agent-created sessions per day, room',
       workLaunches: 'Starts and wake-ups per hour, workspace',
       roomLaunches: 'Starts and wake-ups per hour, room',
       workMessages: 'Agent messages per hour, workspace',
@@ -1301,8 +1318,8 @@ export const S = {
       fanout: 'Message deliveries per hour, workspace',
       swarmSessions: 'Sessions per swarm',
       swarmConcurrent: 'Running sessions per swarm',
-      workSwarmSessions: 'Agent-created swarm sessions, workspace',
-      workSwarms: 'Agent-created swarms, workspace',
+      workSwarmSessions: 'Agent-created swarm sessions per day, workspace',
+      workSwarms: 'Agent-created swarms per day, workspace',
       swarmMinutes: 'Swarm lifetime, minutes (0 = no limit)',
       range: (min: number, max: number): string => `${min}…${max}`,
     },
@@ -2573,6 +2590,7 @@ export const S = {
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',
       archiveWorkspace: 'archive workspace',
+      setCloseFinished: 'change whether agents close finished sessions',
       deleteWorkspace: 'delete workspace',
       renameRoom: 'rename room',
       renameSession: 'rename session',
@@ -2623,6 +2641,8 @@ export const S = {
     /** Вкладка правого сайдбара и её дерево (кусок 7.2, спека 10.1). */
     panel: 'Files',
     project: 'Project',
+    /** Метка корня вкладки с файлом вне корней работы (⌘-клик по пути вне корней, 2026-10-31). */
+    external: 'External',
     /** Корень-worktree в `RootPicker`: ярлык сессии и ветка — данные, идут как есть. */
     worktreeRoot: (tag: string, branch: string): string => `⎇ ${tag} · ${branch}`,
     rootGone: 'Session folder no longer exists',
@@ -2654,6 +2674,7 @@ export const S = {
      */
     readOnlyTooLarge: 'Large file — editing disabled',
     readOnlyNotUtf8: 'Not UTF-8 — editing disabled',
+    readOnlyExternal: 'Read-only: this file is outside the workspace',
     tooLarge: 'File is larger than 20 MB',
     binary: 'Binary file',
     notFound: 'File not found',
@@ -2733,6 +2754,30 @@ export const S = {
       '',
       'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
     ].join('\n'),
+  },
+
+  /** Ёмкость машины (спека сна агентов и ёмкости, 4.5): сегмент строки статуса и поповер с очередью запусков. */
+  capacity: {
+    /** Полный текст: «Agents 17/18 · 3 queued · memory warn»; потолок выключен — «Agents 17», нормы памяти не пишем. */
+    segment: (machine: { live: number; limit: number | null; queued: number; pressure: string }): string => {
+      const parts = [machine.limit === null ? `Agents ${machine.live}` : `Agents ${machine.live}/${machine.limit}`];
+      if (machine.queued > 0) parts.push(`${machine.queued} queued`);
+      if (machine.pressure === 'warn' || machine.pressure === 'critical') parts.push(`memory ${machine.pressure}`);
+      return parts.join(' · ');
+    },
+    /** Короткая форма узкого окна: «17/18» или «17». */
+    segmentShort: (machine: { live: number; limit: number | null }): string =>
+      machine.limit === null ? `${machine.live}` : `${machine.live}/${machine.limit}`,
+    title: 'Agents on this machine',
+    live: (machine: { live: number; limit: number | null }): string =>
+      machine.limit === null ? `Live: ${machine.live}, no limit` : `Live: ${machine.live} of ${machine.limit}`,
+    memory: (machine: { pressure: string; swapGb: number | null }): string =>
+      `Memory: ${machine.pressure}${machine.swapGb === null ? '' : ` · swap ${machine.swapGb} GB`}`,
+    sleep: (minutes: number | null): string => (minutes === null ? 'Sleep is off' : `Idle agents sleep after ${minutes} min`),
+    noQueue: 'No launches are waiting.',
+    waiting: (n: number): string => `Waiting for a slot (${n})`,
+    waited: (ms: number): string => (ms < 60_000 ? 'for <1 min' : `for ${Math.floor(ms / 60_000)} min`),
+    openLimits: 'Limits in Settings',
   },
 
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
@@ -3033,6 +3078,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
   'swarm-done': 'swarm finished',
   'swarm-failed': "swarm didn't finish",
+  'machine-over-limit': 'started over the machine limit',
 };
 
 /**

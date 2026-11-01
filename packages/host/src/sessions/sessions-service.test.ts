@@ -2743,7 +2743,10 @@ describe('agent-created workspace peers', () => {
     const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
     await updateMap(project, work.work.id, map => { map.work.status = 'archived'; });
     await expect(service.create(input)).rejects.toThrow('archived');
-    await updateMap(project, work.work.id, map => { map.work.status = 'active'; map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [] }; });
+    await updateMap(project, work.work.id, map => {
+      map.work.status = 'active';
+      map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [], recent: [{ kind: 'session', at: new Date().toISOString(), room: null }] };
+    });
     await expect(service.create(input)).rejects.toThrow();
     expect((await readMap(project, work.work.id)).sessions).toHaveLength(1);
   });
@@ -2785,5 +2788,93 @@ describe('agent-created workspace peers', () => {
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
     await expect(service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: 's-missing' })).rejects.toThrow('caller');
     expect((await readMap(project, work.work.id)).sessions).toHaveLength(0);
+  });
+});
+
+describe('лимиты созданий агентами — за сутки, а не за всё время', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** Работа, вызывающая сессия агента и сервис; у каждого теста свои. */
+  async function setup() {
+    const work = await createWork(project, { title: 'Day limit', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
+    return { workId: work.work.id, caller, service, input };
+  }
+
+  /** `count` созданий сессий агентами «только что» в комнате `room`. */
+  const created = (count: number, room: string | null = null) =>
+    Array.from({ length: count }, () => ({ kind: 'session' as const, at: new Date().toISOString(), room }));
+
+  /** Отказ создания как значение: само исключение, без `rejects`, чтобы проверить и поля, и текст. */
+  const refusalOf = (run: Promise<unknown>) => run.then(() => undefined, (error: unknown) => error as { code: string; scope: string; used: number; limit: number; message: string });
+
+  it('51-е создание агентом за сутки — отказ new-sessions с текстом про 24 часа', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '50');
+    const { workId, service, input } = await setup();
+    await updateMap(project, workId, map => { map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [], recent: created(50) }; });
+
+    const refusal = await refusalOf(service.create(input));
+    expect(refusal).toMatchObject({ code: 'new-sessions', scope: 'work', used: 50, limit: 50 });
+    expect(refusal?.message).toBe('new-session limit reached: agents created 50 of 50 sessions in this workspace in the last 24 hours; wait or raise the limit in Settings');
+    // Отказ ничего не записал: ни сессии, ни записи журнала.
+    const map = await readMap(project, workId);
+    expect(map.sessions).toHaveLength(1);
+    expect(map.resources?.recent).toHaveLength(50);
+  });
+
+  it('через сутки создание снова проходит', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '50');
+    const { workId, service, input } = await setup();
+    await updateMap(project, workId, map => { map.resources = { seq: 0, spawned: 50, spawnedByRoom: {}, attempts: [], recent: created(50) }; });
+    expect((await refusalOf(service.create(input)))?.code).toBe('new-sessions');
+
+    // Проходят сутки с минутой: записи журнала стареют. Часы процесса не трогаются — под ними идёт настоящий запуск.
+    await updateMap(project, workId, map => {
+      for (const entry of map.resources!.recent!) entry.at = new Date(Date.parse(entry.at) - DAY - 60_000).toISOString();
+    });
+    try {
+      const ref = await service.create(input);
+      const map = await readMap(project, workId);
+      expect(map.sessions.some(row => row.id === ref.sessionId)).toBe(true);
+      // Старые записи выброшены при записи новой, пожизненный счётчик вырос как раньше.
+      expect(map.resources?.recent).toEqual([{ kind: 'session', at: expect.any(String), room: null }]);
+      expect(map.resources?.spawned).toBe(51);
+    } finally { await service.stopAll(); }
+  });
+
+  it('пожизненный spawned больше порога не мешает', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '50');
+    const { workId, service, input } = await setup();
+    await updateMap(project, workId, map => { map.resources = { seq: 0, spawned: 500, spawnedByRoom: {}, attempts: [] }; });
+    try {
+      const ref = await service.create(input);
+      const map = await readMap(project, workId);
+      expect(map.sessions.some(row => row.id === ref.sessionId)).toBe(true);
+      expect(map.resources?.spawned).toBe(501);
+      expect(map.resources?.recent).toHaveLength(1);
+    } finally { await service.stopAll(); }
+  });
+
+  it('комнатный порог считает сутки своей комнаты, а пожизненный spawnedByRoom растёт на единицу', async () => {
+    setEnv('PARLEY_ROOM_NEW_SESSIONS', '2');
+    const { workId, caller, service, input } = await setup();
+    let roomId = '';
+    await updateMap(project, workId, map => {
+      roomId = addRoom(map, { title: 'Team', creator: caller, ownerId: caller, members: [caller] }).id;
+      // Пожизненно в комнате создано семь сессий, за сутки — одна, в чужой комнате — ещё одна: порог 2 не достигнут.
+      map.resources = { seq: 0, spawned: 9, spawnedByRoom: { [roomId]: 7 }, attempts: [], recent: [...created(1, roomId), ...created(1, 'r-other')] };
+    });
+    try {
+      await service.create(input);
+      const map = await readMap(project, workId);
+      expect(map.resources?.spawnedByRoom[roomId]).toBe(8); // пожизненный счёт +1, а не «сутки + 1»
+      expect(map.resources?.recent?.filter(entry => entry.room === roomId)).toHaveLength(2);
+
+      const refusal = await refusalOf(service.create(input));
+      expect(refusal).toMatchObject({ code: 'new-sessions', scope: 'room', used: 2, limit: 2 });
+      expect(refusal?.message).toContain('sessions in this room in the last 24 hours');
+    } finally { await service.stopAll(); }
   });
 });

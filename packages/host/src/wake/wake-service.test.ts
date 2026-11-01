@@ -12,6 +12,7 @@ import {
   archiveRoom,
   createWork,
   DEFAULT_RESOURCE_LIMITS,
+  HUMAN,
   LIMIT_RETURN_TEXT,
   readStoredMap,
   reserveAttempt,
@@ -24,7 +25,7 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
+import type { ProviderLimits, SessionActivity, SessionNeed, WorkSession } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
@@ -1011,7 +1012,7 @@ describe('WakeService: подъём спящей письмом', () => {
     await sendLetter(workId, target);
     await waitFor(() => launch.mock.calls.length > 0, 5000);
     // `launch` сессий сам переведёт подъём в запуск с пакетом; указатель уйдёт после первого простоя, не в argv.
-    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake' });
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', launchClass: 'mail' });
   }, 20_000);
 
   it('5-pm2: битый providers.json не роняет хост (ревью №3): провайдер считается на месте, подъём отчитывается сбоем', async () => {
@@ -1178,7 +1179,7 @@ describe('WakeService: подъём спящей письмом', () => {
     // Согласие пришло: `retry` заново считает письма спящей неуказанными — подъём с указателем на оба.
     second.retry(ref);
     await waitFor(() => launches.length > 0, 5000);
-    expect(launches).toEqual([{ mode: 'resume', options: { by: 'wake', prompt: pointer(2) } }]);
+    expect(launches).toEqual([{ mode: 'resume', options: { by: 'wake', prompt: pointer(2), launchClass: 'mail' } }]);
   }, 30_000);
 
   it('6: стаб выходит сразу — отправителю письмо от system, есть resume-failed', async () => {
@@ -1302,6 +1303,341 @@ describe('WakeService: подъём спящей письмом', () => {
     await readArgv(argsFile);
     await waitFor(() => sessions.live(ref), 5000);
   }, 20_000);
+});
+
+/**
+ * Очередь машины (спека сна агентов 4.2): `launch` подъёма ответил `queued` — потолок живых CLI полон либо память на
+ * пределе. Процесса нет, а сбоя нет: письма ждут слота, и подъём продолжит очередь (`retry`), а не каждое событие карты.
+ */
+describe('WakeService: подъём в очереди машины (спека сна агентов 4.2)', () => {
+  it.each([
+    ['retry', (wake: WakeService, ref: SessionRef) => wake.retry(ref)],
+    ['switched', (wake: WakeService, ref: SessionRef) => wake.switched(ref)],
+  ])('1: подъём в очереди — письма ждут без сбоя, новых попыток нет, счёт часа цел; %s начинает новую', async (_name, free) => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const limiter = new ResumeLimiter(() => 6);
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity, wake } = await resumeRig({ limiter }, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    // Пока слота нет, новое письмо новой попытки не рождает: очередь держит запись, а не каждое событие карты.
+    await sendLetter(workId, target, 'второе', sender);
+    await settle(300);
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('queued');
+    expect(notices('resume-failed')).toEqual([]);
+    expect(notices('resume-limit')).toEqual([]);
+    const waiting = readStoredMap(project, workId);
+    expect(unreadFor(waiting, target)).toHaveLength(2);
+    expect(waiting.messages.some((m) => m.from === SYSTEM)).toBe(false);
+    // Очередь не расходует счёт часа: все шесть подъёмов ещё доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+    limiter.release(ref);
+
+    // Слот освободился: очередь зовёт `retry` (после замены агента — `switched`), письма поднимают сессию обычным путём.
+    launch.mockImplementation(async () => 'started');
+    free(wake, ref);
+    await waitFor(() => launch.mock.calls.length === 2, 5000);
+    expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'mail' });
+  }, 30_000);
+
+  it('2: класс запуска считается по всем будящим письмам: письмо человека и более новое письмо агента дают human', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity, wake } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+
+    // Письмо агента пришло позже, но подъём уже стоит классом human: новой попытки нет, а когда очередь позовёт `retry`,
+    // пачка несёт оба письма, и среди них по-прежнему письмо человека.
+    await sendLetter(workId, target, 'от агента', sender);
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
+    wake.retry(ref);
+    await waitFor(() => launch.mock.calls.length === 2, 5000);
+    expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'human' });
+  }, 30_000);
+
+  it('3: письмо одного человека — класс human, и сразу при первом подъёме', async () => {
+    const { workId, target } = await sleepingPair();
+    const launch = vi.fn<SessionsService['launch']>(async () => 'started');
+    await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => launch.mock.calls.length === 1, 5000);
+    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'human' });
+  }, 20_000);
+
+  it('4: сессию подняли мимо очереди — письма не указаны, и живой процесс снимает очередь: после Stop новое письмо снова поднимает', async () => {
+    setEnv('STUB_READY_HOOK', '1');
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity, sessions, stream } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'пришло в очереди', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+
+    // Человек поднял сессию сам, мимо очереди: письма очередью не указаны, и будильник печатает указатель в живой процесс.
+    await sessions.launch(ref, 'resume', { by: 'human' });
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 8000);
+
+    // Stop человека: сессия снова спит, прежнее письмо считается указанным, а новое поднимает её — очередь не держит.
+    await sessions.stop(ref);
+    await settle(500);
+    await sendLetter(workId, target, 'пришло после Stop', sender);
+    await waitFor(() => launch.mock.calls.length === 2, 5000);
+  }, 30_000);
+
+  it('5: подъём стоит в очереди классом mail, и пришло письмо человека — новая попытка сразу, классом human, без retry', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от агента', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'mail' });
+
+    // Письмо человека не ждёт `retry` в хвосте писем: класс выше, и очередь поднимет запись (`mergeQueued`).
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => launch.mock.calls.length === 2, 5000);
+    expect(launch.mock.calls[1]?.[2]).toEqual({ by: 'wake', prompt: pointer(2), launchClass: 'human' });
+
+    // Очередь снова ответила `queued`: теперь подъём стоит классом human, и ещё письма новых попыток не рождают.
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    await sendLetter(workId, target, 'ещё от агента', sender);
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(2);
+  }, 30_000);
+
+  it('6: подъём стоит в очереди классом human, и пришло ещё письмо человека — новой попытки нет', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от человека', HUMAN);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+    expect(launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointer(1), launchClass: 'human' });
+
+    // Класс уже высший: запись очереди держит место, и второе письмо человека новой попытки не просит.
+    await sendLetter(workId, target, 'ещё от человека', HUMAN);
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('queued');
+    expect(notices('resume-limit')).toEqual([]);
+  }, 20_000);
+
+  it('7: письмо человека, помеченное удалённым, класс не поднимает — подъём остаётся в очереди, новых попыток нет', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    let other = '';
+    await updateMap(project, workId, (map) => {
+      other = addSession(map, { provider: 'claude', label: 'третья', task: 'ждать' }).id;
+    });
+    const launch = vi.fn<SessionsService['launch']>(async () => 'queued');
+    const { activity } = await resumeRig({}, (real) => ({ ...real, launch }));
+
+    await sendLetter(workId, target, 'от агента', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'queued', 5000);
+
+    // Письмо человека двоим, и второго адресата удаляют: письмо помечено `deleted` и у `target` остаётся непрочитанным,
+    // но будильник его не считает (`deliveryAction`) — значит, и класс запуска от него не растёт.
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: HUMAN, to: [target, other], text: 'от человека двоим' });
+      letters.flagDeleted(other);
+    });
+    await settle(300);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('queued');
+  }, 20_000);
+});
+
+/**
+ * Сон агентов (спека 2026-10-30, 4.1): сессию, которую усыпил хост, письмо поднимает и после перезапуска хоста, и сверх
+ * `resumeRate`, не тратя слот часа; остановленную человеком будильник считает по-прежнему.
+ */
+describe('WakeService: усыплённая хостом сессия (сон агентов, 4.1)', () => {
+  /** Помечает спящую сессию усыплённой хостом: `autoSleep` лежит в карте так, как его оставляет `transitionSession`. */
+  async function sleptByHost(workId: string, sessionId: string): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session !== undefined) session.autoSleep = { reason: 'idle', at: new Date().toISOString(), waitTarget: null };
+    });
+  }
+  /** Сервис сессий, у которого `launch` — подделка: настоящий подъём не нужен, важно лишь, что будильник его потребовал. */
+  const withLaunch = (launch: SessionsService['launch']) => (real: SessionsService): SessionsService => {
+    const spy = Object.create(real) as SessionsService;
+    spy.launch = launch;
+    return spy;
+  };
+
+  it('10: после старта хоста письмо поднимает усыплённую хостом сессию', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    // Письмо легло, пока будильника не было: на старте он встречает его как лежавшее (`ensureKnown`).
+    await sendLetter(workId, target, 'проснись', sender);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, withLaunch(launch));
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1), launchClass: 'mail' });
+  }, 20_000);
+
+  it('11: после старта хоста остановленную человеком письмо не поднимает, как и раньше; новое письмо поднимает', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    await sendLetter(workId, target, 'лежало до старта', sender);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({}, withLaunch(launch));
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+
+    // Контроль: стенд исправен, подъём не заперт навсегда.
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 20_000);
+
+  it('12: усыплённую хостом поднимают семь писем за час: лимитер на шесть не мешает, слот часа не берётся', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    const limiter = new ResumeLimiter(() => 6);
+    const launch = vi.fn(async () => 'started' as const);
+    await resumeRig({ limiter }, withLaunch(launch));
+
+    for (let i = 1; i <= 7; i += 1) {
+      await sendLetter(workId, target, `письмо ${i}`, sender);
+      await waitFor(() => launch.mock.calls.length === i, 5000);
+    }
+
+    expect(notices('resume-limit')).toEqual([]);
+    // Слот часа не взят ни разу: все шесть подъёмов по-прежнему доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 30_000);
+
+  it('13: поднять нечем (нет id разговора) — у усыплённой хостом слот не взят, и чужой не возвращается', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === target);
+      if (session !== undefined) session.providerSessionId = null;
+    });
+    await sleptByHost(workId, target);
+    // Пять подъёмов за этот час уже сделаны: возврат без своего слота вернул бы один из них.
+    const limiter = new ResumeLimiter(() => 6);
+    for (let i = 0; i < 5; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const launch = vi.fn(async () => 'started' as const);
+    const { activity } = await resumeRig({ limiter }, withLaunch(launch));
+
+    await sendLetter(workId, target, 'проснись', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(200);
+
+    expect(launch).not.toHaveBeenCalled();
+    // Пять взятых на месте: шестой есть, седьмого нет.
+    expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  it('14: запуск удержан (held) — у усыплённой хостом слот не взят, и чужой не возвращается', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sleptByHost(workId, target);
+    const limiter = new ResumeLimiter(() => 6);
+    for (let i = 0; i < 5; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    const launch = vi.fn(async () => 'held' as const);
+    const { activity } = await resumeRig({ limiter }, withLaunch(launch));
+
+    await sendLetter(workId, target, 'проснись', sender);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'folder-trust', 5000);
+    await settle(200);
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  /**
+   * Живая сессия получает письмо, и её процесс останавливают: настоящий `sessions.stop`, выход процесса и запись `sleeping` в карту.
+   * `mark` — хост уже поставил отметку «засыпает» (`autoSleepPending`), письмо ограда не выдаёт, и оно остаётся непрочитанным;
+   * иначе остановка — как кнопка Stop человека. `hooks` — хуки доходят, и будильник успевает напечатать указатель в умирающий
+   * процесс: письмо уже «указано», но агент его так и не прочёл.
+   */
+  async function stoppedWithLetter(options: { mark: boolean; hooks: boolean }) {
+    if (options.hooks) setEnv('STUB_READY_HOOK', '1');
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const session = (): WorkSession | undefined => readStoredMap(project, workId).sessions.find((candidate) => candidate.id === target);
+    const launch = vi.fn(async () => 'started' as const);
+    const { sessions, stream } = await resumeRig({}, withLaunch(launch));
+    await sessions.launch(ref, 'resume', { by: 'human' });
+    await waitFor(() => sessions.live(ref) && stream().includes('STUB READY') && session()?.lifecycle === 'active', 5000);
+
+    if (options.mark) {
+      await updateMap(project, workId, (map) => {
+        const found = map.sessions.find((candidate) => candidate.id === target);
+        if (found !== undefined) found.autoSleepPending = { reason: 'idle', at: new Date().toISOString(), waitTarget: null };
+      });
+    }
+    await sendLetter(workId, target, 'пришло перед остановкой', sender);
+    if (options.hooks) await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 5000);
+    else await settle(200);
+    // До остановки подъёма нет: живую письмо не поднимает.
+    expect(launch).not.toHaveBeenCalled();
+
+    await sessions.stop(ref);
+    return { launch, ref, workId, target, sender, session };
+  }
+
+  it('15: письмо пришло, пока стояла отметка «засыпает»: процесс вышел, карта стала sleeping и autoSleep — сессию поднимает указатель', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: false });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1), launchClass: 'mail' });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+    expect(session()).not.toHaveProperty('autoSleepPending');
+  }, 30_000);
+
+  it('16: то же, но указатель успел уйти в умирающий процесс: письмо снова указывается, сессию поднимает', async () => {
+    const { launch, ref, session } = await stoppedWithLetter({ mark: true, hooks: true });
+
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+    expect(launch).toHaveBeenCalledWith(ref, 'resume', { by: 'wake', prompt: pointer(1), launchClass: 'mail' });
+    expect(session()).toMatchObject({ lifecycle: 'sleeping', autoSleep: { reason: 'idle' } });
+  }, 30_000);
+
+  it('17: то же без отметки (Stop человека): письмо, лежавшее при выходе, сессию не поднимает, как и раньше; новое письмо поднимает', async () => {
+    const { launch, workId, target, sender, session } = await stoppedWithLetter({ mark: false, hooks: false });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+    expect(session()?.lifecycle).toBe('sleeping');
+    expect(session()?.autoSleep ?? null).toBeNull();
+
+    // Контроль: стенд исправен, подъём не заперт навсегда.
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
+
+  it('18: Stop человека после того, как указатель ушёл в процесс: письмо считается указанным, подъёма нет', async () => {
+    const { launch, workId, target, sender } = await stoppedWithLetter({ mark: false, hooks: true });
+
+    await settle(500);
+    expect(launch).not.toHaveBeenCalled();
+
+    await sendLetter(workId, target, 'новое', sender);
+    await waitFor(() => launch.mock.calls.length > 0, 5000);
+  }, 30_000);
 });
 
 /** Работа с тремя живыми сессиями хоста; `events/` заведён, как при настоящем запуске. */
@@ -1569,6 +1905,7 @@ describe('возврат после сброса лимита', () => {
     tasks: [],
     waitingFor: null,
     heldByBackground: false,
+    runningBackground: [],
     turnEndedAt: null,
     turnBoundaryAt: null,
     lastEventAt: new Date(Date.now()).toISOString(),
