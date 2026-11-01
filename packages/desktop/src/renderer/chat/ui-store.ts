@@ -83,6 +83,10 @@ export interface ChatUiState {
   requestRevealItem(sessionKey: string, itemId: string): void;
   /** Погасить просьбу с этим `nonce`; ушедшая раньше или уже заменённая новой — не трогается. */
   clearReveal(nonce: number): void;
+  /** Панель поиска ⌘F по сессии: открыта ли; `focusNonce` растёт на каждый ⌘F — открытая панель берёт фокус заново. */
+  find: Record<string /* sessionKey */, { open: boolean; focusNonce: number }>;
+  openFind(sessionKey: string): void;
+  closeFind(sessionKey: string): void;
   setDraft(key: string, text: string): void;
   /** Заменить вложения сессии; тот же массив — стор не трогается. */
   setAttachments(key: string, paths: readonly string[]): void;
@@ -103,6 +107,14 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   attachments: {},
   queued: {},
   reveal: null,
+  find: {},
+  openFind: (sessionKey) =>
+    set((state) => ({ find: { ...state.find, [sessionKey]: { open: true, focusNonce: (state.find[sessionKey]?.focusNonce ?? 0) + 1 } } })),
+  closeFind: (sessionKey) =>
+    set((state) => {
+      const was = state.find[sessionKey];
+      return was === undefined || !was.open ? state : { find: { ...state.find, [sessionKey]: { ...was, open: false } } };
+    }),
   agentPanel: {},
   agentsPin: {},
   pinAgentsSession: (workKey, sessionId) => set((state) => ({ agentsPin: { ...state.agentsPin, [workKey]: sessionId } })),
@@ -148,7 +160,7 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, agentsPin: {}, finishedOpen: {}, hooksHintDismissed: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, find: {}, cardDrafts: {}, agentPanel: {}, agentsPin: {}, finishedOpen: {}, hooksHintDismissed: {} });
 }
 
 /** Pin resets follow actual tab activation, including while the Agents panel is unmounted. */

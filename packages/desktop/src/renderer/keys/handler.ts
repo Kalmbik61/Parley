@@ -42,6 +42,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'tab.mruNext',
   'tab.mruPrev',
   'find',
+  'chat.find',
   'voice.toggle',
   'assistant.open',
   'terminal.clear',
@@ -129,15 +130,19 @@ function matchesAny(accelerators: readonly string[], event: KeyLike): boolean {
 /** Действия, которые удержание клавиши повторяет (шаги навигации). */
 const REPEATABLE = new Set<ActionId>(ACTIONS.filter((action) => action.repeatable === true).map((action) => action.id));
 
-/** `when` действия допускает контекст. `browser` рендерер не ловит: клавиши у гостя. */
-function whenAllows(when: ActionDef['when'], context: FocusContext): boolean {
+/**
+ * `when` действия допускает контекст. `browser` рендерер не ловит: клавиши у гостя. `chat` — фокус внутри вида Chat
+ * (`inChat`, из DOM в момент нажатия); поле ввода вида — тоже он: ⌘F не входит в `INPUT_KEYS`.
+ */
+function whenAllows(when: ActionDef['when'], context: FocusContext, inChat: boolean): boolean {
   if (when === 'always') return true;
   if (when === 'terminal') return context === 'terminal';
+  if (when === 'chat') return inChat && context !== 'terminal';
   return false;
 }
 
 /** Что отдаётся полю, а что окну — таблица «Контекст фокуса» спеки 9.6. null — не окну. */
-export function resolveAction(event: KeyLike, context: FocusContext, paletteOpen: boolean): ResolvedKey | null {
+export function resolveAction(event: KeyLike, context: FocusContext, paletteOpen: boolean, inChat = false): ResolvedKey | null {
   // Набор IME и модальный диалог — всё полю: за формой ⌘W не закрывает вкладку.
   if (event.isComposing || context === 'dialog') return null;
   if (paletteOpen) {
@@ -151,7 +156,7 @@ export function resolveAction(event: KeyLike, context: FocusContext, paletteOpen
   if (context === 'input' && matchesAny(INPUT_KEYS, event)) return null;
   const action = ACTIONS.find(
     (candidate) =>
-      candidate.keys !== null && whenAllows(candidate.when, context) && matchesAccelerator(candidate.keys, event),
+      candidate.keys !== null && whenAllows(candidate.when, context, inChat) && matchesAccelerator(candidate.keys, event),
   );
   if (action === undefined) return null;
   if (context === 'input' && CTRL_ONLY_IDS.has(action.id)) return null;
@@ -163,6 +168,8 @@ export function installKeyHandler(input: {
   run(id: ActionId): void;
   pickPaletteRow(index: number): void; // ⌘1–9 при открытой палитре
   context(): FocusContext;
+  /** Фокус внутри вида Chat: действию с `when: 'chat'` нужен он, а не контекст. */
+  inChat(): boolean;
   paletteOpen(): boolean;
   available(id: ActionId): boolean; // действие реализовано и поддержано хостом (6.1b)
   endMruCycle(): void; // keyup Control и blur окна — конец цикла ⌃Tab
@@ -178,7 +185,7 @@ export function installKeyHandler(input: {
   const { paletteOpen } = input;
   const onKeyDown = (event: KeyboardEvent): void => {
     const context = input.context();
-    const resolved = resolveAction(event, context, paletteOpen());
+    const resolved = resolveAction(event, context, paletteOpen(), input.inChat());
     if (resolved === null) {
       // Сочетание окна не нашлось: печатный символ вне полей уходит в поле сообщения. Без
       // preventDefault — браузер доставит символ уже в сфокусированное поле.

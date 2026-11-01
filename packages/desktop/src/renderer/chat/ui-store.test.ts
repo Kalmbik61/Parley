@@ -28,6 +28,30 @@ describe('ui-store: вложения поля ввода', () => {
   });
 });
 
+describe('ui-store: полоса поиска ⌘F (план 2026-11-01, задача 9)', () => {
+  it('openFind открывает по сессии, повторный — тот же open и растущий focusNonce; closeFind гасит, не трогая соседей', () => {
+    const { openFind, closeFind } = useChatUiStore.getState();
+    openFind('a');
+    openFind('b');
+    expect(useChatUiStore.getState().find).toEqual({ a: { open: true, focusNonce: 1 }, b: { open: true, focusNonce: 1 } });
+    openFind('a');
+    expect(useChatUiStore.getState().find['a']).toEqual({ open: true, focusNonce: 2 });
+    closeFind('a');
+    expect(useChatUiStore.getState().find).toEqual({ a: { open: false, focusNonce: 2 }, b: { open: true, focusNonce: 1 } });
+  });
+
+  it('closeFind закрытой или неизвестной сессии стор не трогает; сброс для тестов стирает', () => {
+    const listener = vi.fn();
+    const off = useChatUiStore.subscribe(listener);
+    useChatUiStore.getState().closeFind('nobody');
+    expect(listener).not.toHaveBeenCalled();
+    off();
+    useChatUiStore.getState().openFind('a');
+    resetChatUiStoreForTests();
+    expect(useChatUiStore.getState().find).toEqual({});
+  });
+});
+
 describe('ui-store: просьба показать карточку агента (кусок 4b)', () => {
   afterEach(() => {
     vi.useRealTimers();
