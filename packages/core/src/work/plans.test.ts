@@ -12,6 +12,7 @@ import {
   setProposal,
 } from "./proposals.js";
 import {
+  activeRoomPlan,
   cancelRoomPlan,
   reconcileRoomPlans,
   savePlanCheckpoint,
@@ -24,7 +25,11 @@ import {
   acceptRoomPlan,
   PlanConflictError,
 } from "./plans.js";
-import { planSubmission } from "./plan-state.js";
+import {
+  planItemSatisfied,
+  planRemaining,
+  planSubmission,
+} from "./plan-state.js";
 import { ENGINE, HUMAN } from "./types.js";
 import type { AutonomousDraft, PlanDraft, WorkMap } from "./types.js";
 import { mapLetterTx, type LetterTx, type NewLetter } from "./letter-store.js";
@@ -1451,5 +1456,193 @@ describe("plan item checkpoints", () => {
     expect(attempt).toThrow(RoomRuleError);
     expect(attempt).toThrow("checkpoints are not used in autonomous plans");
     expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe("planRemaining agrees with acceptRoomPlan", () => {
+  const wide = (): PlanDraft => ({
+    mode: "verified",
+    goal: "Accepted complete behavior",
+    items: [
+      ["Parse", "s-02", "src/a.ts", []],
+      ["Wire", "s-01", "src/b.ts", [1]],
+      ["Docs", "s-02", "docs", [2]],
+      ["Cache", "s-01", "src/c.ts", []],
+      ["Bench", "s-02", "src/d.ts", [4]],
+      ["Audit", "s-02", "src/e.ts", []],
+    ].map(([title, owner, scope, after], index) => ({
+      id: index + 1,
+      title: title as string,
+      owner: owner as string,
+      scope: scope as string,
+      after: after as number[],
+      criteria: [`${title} works`],
+      verifier: "s-03",
+    })),
+  });
+  /** Verified plan: 1 verified, 2 returned, 3 waiting, 4 in progress, 5 waiting, 6 done and awaiting verification. */
+  function midway(): WorkMap {
+    const map = fixture("verified");
+    const plan = accept(map, wide());
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+    updatePlanItem(map, plan.id, 0, 2, "s-01", "in_progress", undefined, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 2, "s-03", "returned", "Redo", AT);
+    updatePlanItem(map, plan.id, 0, 4, "s-01", "in_progress", undefined, AT);
+    updatePlanItem(map, plan.id, 0, 6, "s-02", "in_progress", undefined, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 6, "s-02", evidence, AT);
+    return map;
+  }
+  /** Draft the amendment, plan what is left, accept it on a copy and compare with what really happened. */
+  function agree(map: WorkMap, change: (draft: PlanDraft) => void) {
+    const active = activeRoomPlan(map, "r-01")!;
+    const amended = draftOf(active);
+    change(amended);
+    const probe = structuredClone(map);
+    const proposal = setProposal(probe, "r-01", "s-01", "Decision", AT, {
+      plan: amended,
+    });
+    const proposed = probe.rooms[0]!.proposal!.plan!;
+    const remaining = planRemaining(activeRoomPlan(probe, "r-01"), proposed);
+    resolveProposal(
+      probe,
+      lt(probe),
+      "r-01",
+      proposal.proposalId,
+      "accept",
+      { rev: proposal.rev, planId: proposed.id, planRev: proposed.rev },
+      AT,
+    );
+    const accepted = activeRoomPlan(probe, "r-01")!;
+    const left = accepted.items.filter(
+      (row) => !planItemSatisfied(accepted, row),
+    );
+    expect(remaining.items.map((entry) => [entry.item.id, entry.status])).toEqual(
+      left.map((row) => [row.id, row.status]),
+    );
+    expect(remaining.doneHidden).toBe(accepted.items.length - left.length);
+    expect(remaining.removed.map((row) => row.id)).toEqual(
+      active.items
+        .filter(
+          (old) =>
+            !accepted.items.some((row) => row.id === old.id) &&
+            !planItemSatisfied(active, old),
+        )
+        .map((old) => old.id),
+    );
+    return remaining;
+  }
+  /** The accepted plan as a draft for the next revision. */
+  function draftOf(active: NonNullable<ReturnType<typeof activeRoomPlan>>) {
+    return {
+      id: active.id,
+      rev: active.rev,
+      mode: active.mode,
+      goal: active.goal,
+      items: active.items.map((row) => ({
+        id: row.id,
+        title: row.title,
+        owner: row.owner,
+        scope: row.scope,
+        after: [...row.after],
+        criteria: [...row.criteria],
+        verifier: row.verifier,
+      })),
+    } as PlanDraft;
+  }
+
+  it("an amendment that changes nothing leaves exactly the unsatisfied items", () => {
+    const remaining = agree(midway(), () => {});
+    expect(remaining.items.map((entry) => entry.item.id)).toEqual([
+      2, 3, 4, 5, 6,
+    ]);
+    expect(remaining.doneHidden).toBe(1);
+  });
+  it("rewording a verified item resets it and everything downstream", () => {
+    const remaining = agree(midway(), (draft) => {
+      draft.items[0]!.scope = "src/a2.ts";
+    });
+    expect(remaining.items.map((entry) => entry.mark)).toEqual([
+      "redo",
+      "changed",
+      "changed",
+      null,
+      null,
+      null,
+    ]);
+  });
+  it("dropping unfinished items and adding new ones", () => {
+    const remaining = agree(midway(), (draft) => {
+      draft.items = draft.items.filter((row) => row.id !== 3 && row.id !== 5);
+      draft.items.push({
+        id: 7,
+        title: "Release",
+        owner: "s-01",
+        scope: "src/f.ts",
+        after: [1, 4],
+        criteria: ["Shipped"],
+        verifier: "s-03",
+      });
+    });
+    expect(remaining.removed.map((row) => row.id)).toEqual([3, 5]);
+    expect(remaining.items.find((entry) => entry.item.id === 7)).toMatchObject({
+      status: "waiting",
+      mark: "new",
+    });
+  });
+  it("dropping a verified item does not list it as removed", () => {
+    const remaining = agree(midway(), (draft) => {
+      draft.items = draft.items.filter((row) => row.id !== 1);
+      draft.items[0]!.after = [];
+    });
+    expect(remaining.removed).toEqual([]);
+    expect(remaining.doneHidden).toBe(0);
+  });
+  it("Checklist to Verified promotion hides the carried-over done items", () => {
+    const map = fixture();
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    setRoomMode(map, lt(map), "r-01", HUMAN, "verified", "Review it", {}, AT);
+    const promoted = input("verified");
+    promoted.id = plan.id;
+    promoted.rev = 0;
+    const probe = structuredClone(map);
+    const proposal = setProposal(probe, "r-01", "s-01", "Decision", AT, {
+      plan: promoted,
+    });
+    const proposed = probe.rooms[0]!.proposal!.plan!;
+    const remaining = planRemaining(activeRoomPlan(probe, "r-01"), proposed);
+    resolveProposal(
+      probe,
+      lt(probe),
+      "r-01",
+      proposal.proposalId,
+      "accept",
+      { rev: proposal.rev, planId: proposed.id, planRev: proposed.rev },
+      AT,
+    );
+    const accepted = activeRoomPlan(probe, "r-01")!;
+    expect(accepted.items[0]!.status).toBe("done");
+    expect(remaining.doneHidden).toBe(1);
+    expect(
+      remaining.items.map((entry) => [entry.item.id, entry.status]),
+    ).toEqual(
+      accepted.items
+        .filter((row) => !planItemSatisfied(accepted, row))
+        .map((row) => [row.id, row.status]),
+    );
+  });
+  it("an autonomous proposal lists its items without marks and does not model acceptance", () => {
+    const map = autonomousMap();
+    const result = planRemaining(
+      undefined,
+      proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
+    );
+    expect(result.base).toBeNull();
+    expect(result.doneHidden).toBe(0);
+    expect(result.removed).toEqual([]);
+    expect(result.items.map((entry) => entry.mark)).toEqual([null]);
   });
 });
