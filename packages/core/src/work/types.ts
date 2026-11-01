@@ -294,6 +294,18 @@ export type PlanMode = Exclude<RoomMode, 'free'>;
 export type PlanStatus = 'proposed' | 'active' | 'completing' | 'completed' | 'cancelled';
 export type PlanItemStatus = 'waiting' | 'ready' | 'in_progress' | 'done' | 'blocked' | 'verified' | 'returned';
 export interface PlanEvidence { text: string; artifacts: string[] }
+/** Last saved position of one participant on one plan item; latest only, never a history. */
+export interface PlanCheckpoint {
+  by: string;                 // s-NN
+  at: string;                 // ISO
+  /** Verifier: planSubmission(item) at save time; owner: null. */
+  submission: number | null;
+  done: string;               // 1..600 chars
+  next: string;               // 1..300 chars, the resume point
+  artifacts: string[];        // ≤ 5 paths, each 1..256 chars
+  /** Soft obstacle without status change; verifier: why the review waits. ≤ 300 chars. */
+  blocker: string | null;
+}
 export interface PlanItemInput {
   id: number; title: string; owner: string; scope: string; after?: number[];
   criteria?: string[]; verifier?: string | null;
@@ -326,6 +338,8 @@ export interface PlanItem extends PlanItemInput {
   evidence: PlanEvidence | null; note: string | null;
   /** Human-accepted Checklist completion retained on promotion; never a verification claim. */
   acceptedChecklistRevision?: number;
+  /** Resume points kept outside `log`, so saving one never changes a submission or a plan effect. */
+  progress?: { owner?: PlanCheckpoint; verifier?: PlanCheckpoint };
   log: { at: string; by: string; status: PlanItemStatus; note: string | null }[];
 }
 export interface RoomPlan {
