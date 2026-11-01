@@ -546,7 +546,8 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await remaining.locator('details[data-plan-full] > summary').click();
     await expect(remaining.locator('details[data-plan-full] [data-plan-item]')).toHaveCount(5);
     await expect(remaining.locator('details[data-plan-full] [data-plan-item="1"]')).toContainText('Schema');
-    // Название без пробелов в `PlanSummary` не переносится: оно прокручивается внутри раскрытия, карточку не раздвигает.
+    // Название без пробелов в `PlanSummary` переносится (`[overflow-wrap:anywhere]`; обёртки с прокруткой больше нет), поэтому
+    // раскрытый полный план карточку не раздвигает.
     expect((await overflow()).scroll).toBe(0);
   });
 });
