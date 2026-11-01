@@ -558,6 +558,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         run: (id) => runRef.current(id, 'key'),
         pickPaletteRow: (index) => usePaletteStore.getState().pickRow(index),
         context: () => focusContext(document.activeElement),
+        inChat: () => document.activeElement?.closest('[data-testid="chat-view"]') != null,
         paletteOpen: () => usePaletteStore.getState().open,
         available: (id) => available(id, 'key'),
         endMruCycle: () => endMruCycleRef.current(),

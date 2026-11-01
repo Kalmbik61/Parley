@@ -9,6 +9,7 @@
  * уходит); хост перезапускается только после «Restart» в подтверждении.
  */
 
+import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { ActionId } from '../../shared/keybindings.js';
@@ -27,6 +28,7 @@ import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { runSaveDiagnostics } from '../shell/diagnostics-flow.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
+import { useChatUiStore } from '../chat/ui-store.js';
 import { neighborInOrder } from '../sidebar/sort.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import type { PaletteState } from './store.js';
@@ -294,8 +296,15 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'host.diagnostics':
       void runSaveDiagnostics(ctx.bridge, { profile: false });
       return;
-    case 'find':
-      (ctx.terminals.focused() ?? ctx.terminals.active())?.openSearch();
+    case 'find': {
+      // Терминал в фокусе — его поиск. Иначе (меню, палитра) активная вкладка в виде Chat ищет по ленте, прочие — по активному терминалу.
+      const focused = ctx.terminals.focused();
+      if (focused !== null) focused.openSearch();
+      else if (!openChatFind(ctx)) ctx.terminals.active()?.openSearch();
+      return;
+    }
+    case 'chat.find':
+      openChatFind(ctx);
       return;
     case 'voice.toggle':
       ctx.voice.toggle();
@@ -369,6 +378,25 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     default:
       return;
   }
+}
+
+/** Открыть полосу поиска по ленте активной вкладки, если она сессия в виде Chat; `false` — вкладка не в чате. */
+function openChatFind(ctx: ActionContext): boolean {
+  const key = ctx.layout.activeWorkKey;
+  const layout = key === null ? undefined : ctx.layout.layouts[key];
+  if (key === null || layout === undefined) return false;
+  const group = groups(layout).find((candidate) => candidate.id === layout.activeGroupId);
+  const tab = group?.tabs.find((candidate) => candidate.id === group.activeTabId);
+  if (tab?.kind !== 'terminal') return false;
+  const entry = useWorksStore.getState().entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === key);
+  const session = entry?.map.sessions.find((candidate) => candidate.id === tab.sessionId);
+  if (entry === undefined || session === undefined) return false;
+  const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId };
+  const { byRef, loaded } = useActivityStore.getState();
+  const started = sessionStartedOrUnknown(loaded, activityFor(byRef, ref));
+  if (effectiveView(tab, feedAvailableNow(session.provider), started) !== 'chat') return false;
+  useChatUiStore.getState().openFind(refKey(ref));
+  return true;
 }
 
 /**

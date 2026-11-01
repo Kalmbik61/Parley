@@ -883,6 +883,16 @@ export async function startSession(
   if (started !== undefined) await stampNativeContext(projectPath, workId, sessionId, started, nativeContextRevision).catch(() => {});
 }
 
+/** Окно, в котором старты двух Codex-сессий одной папки не различить по времени логов. */
+const UNBOUND_NEIGHBOUR_WINDOW_MS = 60_000;
+
+/** Старт соседки неизвестен или ближе минуты к нашему: считаем, что различить логи нельзя. */
+function startedNear(other: string | null, own: string): boolean {
+  if (other === null) return true;
+  const gap = Math.abs(Date.parse(other) - Date.parse(own));
+  return Number.isNaN(gap) || gap < UNBOUND_NEIGHBOUR_WINDOW_MS;
+}
+
 /**
  * Привязка сессии к логу провайдера, который не принимает id снаружи: сессия
  * ищется по cwd и времени запуска (спецификация, раздел 5). Найденный id
@@ -903,9 +913,17 @@ export async function linkSession(
   // Логи, занятые другими сессиями работы, своими не берём: рядом запущенный агент в том же каталоге иначе
   // получил бы самый ранний лог — чужой.
   const taken = new Set<string>();
+  let unboundNeighbour = false;
   for (const other of (await readMap(projectPath, workId)).sessions) {
-    if (other.id !== session.id && other.providerSessionId !== null) taken.add(other.providerSessionId);
+    if (other.id === session.id) continue;
+    if (other.providerSessionId !== null) taken.add(other.providerSessionId);
+    else if (session.provider === 'codex' && other.provider === 'codex' && other.lifecycle === 'active' &&
+      startedNear(other.startedAt, session.startedAt)) unboundNeighbour = true;
   }
+  // Рядом, в пределах минуты, стартовала живая Codex-сессия без привязки: её лог по папке и времени от нашего
+  // не отличить, и догадка отдала бы один из них не той сессии. Тред назовёт `_meta.threadId` первого вызова
+  // MCP (`bindCodexThread`). Дальше окна логи различимы по времени, и сессии без вызовов MCP привязываются по-старому.
+  if (unboundNeighbour) return null;
   const found = await linkProviderSession(
     entry,
     { cwd: projectPath, startedAt: session.startedAt },

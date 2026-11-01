@@ -1539,7 +1539,7 @@ describe('привязка к логу провайдера без внешне�
       expect((await sessionOf(workId, first)).providerSessionId).toBe('лог-первой');
     });
 
-    it('обе ищут одновременно и видят один лог: его получает одна, вторая остаётся без привязки', async () => {
+    it('обе ещё без привязки и ищут одновременно: догадки по папке нет, логу назначит себя доказательство MCP', async () => {
       const { workId, first, second } = await twoSessions();
       await writeRollout('единственный-лог', project, '2026-09-02T10:00:01.000Z');
 
@@ -1548,12 +1548,50 @@ describe('привязка к логу провайдера без внешне�
         linkSession(project, workId, await sessionOf(workId, second), { codexRoot: logs }),
       ]);
 
+      // Каждая видит рядом непривязанную соседку и чужого лога не берёт.
+      expect(results).toEqual([null, null]);
       const holders = (await readMap(project, workId)).sessions.filter(
-        (session) => session.providerSessionId === 'единственный-лог',
+        (session) => session.providerSessionId !== null,
       );
-      expect(holders).toHaveLength(1);
-      // Проигравшая ничего не записала и говорит об этом: «привязывать нечего».
-      expect(results.filter((result) => result === null)).toHaveLength(1);
+      expect(holders).toHaveLength(0);
+    });
+
+    it('рядом непривязанная соседка: лог второй сессии первой не достаётся, даже если её собственного ещё нет', async () => {
+      const { workId, first } = await twoSessions();
+      // Лог второй лежит в допуске первой, а собственного лога у первой пока нет.
+      await writeRollout('лог-второй', project, '2026-09-02T10:00:04.000Z');
+
+      const found = await linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs });
+
+      expect(found).toBeNull();
+      expect((await sessionOf(workId, first)).providerSessionId).toBeNull();
+    });
+
+    it('непривязанная соседка стартовала больше минуты назад или позже: окно кончилось, догадка работает как раньше', async () => {
+      const { workId, first, second } = await twoSessions();
+      await updateMap(project, workId, (map) => {
+        const other = map.sessions.find((session) => session.id === second);
+        if (other !== undefined) other.startedAt = '2026-09-02T10:05:00.000Z';
+      });
+      await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
+
+      const found = await linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs });
+
+      expect(found).toBe('лог-первой');
+      expect((await sessionOf(workId, first)).providerSessionId).toBe('лог-первой');
+    });
+
+    it('соседка уже привязана (или спит): догадка по папке работает как раньше', async () => {
+      const { workId, first, second } = await twoSessions();
+      await writeRollout('лог-первой', project, '2026-09-02T10:00:01.000Z');
+      await updateMap(project, workId, (map) => {
+        const other = map.sessions.find((session) => session.id === second);
+        if (other !== undefined) other.providerSessionId = 'лог-второй';
+      });
+
+      const found = await linkSession(project, workId, await sessionOf(workId, first), { codexRoot: logs });
+
+      expect(found).toBe('лог-первой');
     });
   });
 
