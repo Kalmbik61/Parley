@@ -12,6 +12,7 @@ import {
   hasDraft,
   launchRoom,
   launchSession,
+  workspaceOptions,
   letterProblem,
   partialMessage,
   providerChoices,
@@ -133,6 +134,26 @@ describe('forms', () => {
     expect(hasDraft('session', { task: 'x', name: '' }, r, '')).toBe(true);
     expect(hasDraft('room', s, { ...r, title: 'T' }, '')).toBe(true);
     expect(hasDraft('room', s, r, 'first message')).toBe(true);
+  });
+});
+
+describe('A32: trust and new workspace', () => {
+  it('"Trust this folder" goes as trustFolder: true; off or unset sends no key', async () => {
+    const c = client();
+    await launchSession(c, ok, sessionForm({ trustFolder: true }));
+    expect(c.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ trustFolder: true }));
+    await launchSession(c, ok, sessionForm({ trustFolder: false }));
+    expect(c.createSession.mock.calls.at(-1)![0]).not.toHaveProperty('trustFolder');
+  });
+
+  it('a new workspace goes as workId null; workspaceOptions adds one per project for sessions only', async () => {
+    const c = client();
+    await launchSession(c, ok, sessionForm({ workId: null }));
+    expect(c.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ workId: null }));
+    const snap = snapshot([work('w-3'), work('w-4')]);
+    expect(workspaceOptions(snap, true).map((w) => w.workId)).toEqual(['w-3', 'w-4', null]);
+    expect(workspaceOptions(snap, true).at(-1)).toMatchObject({ title: 'New workspace', projectName: 'proj' });
+    expect(workspaceOptions(snap, false).map((w) => w.workId)).toEqual(['w-3', 'w-4']);
   });
 });
 

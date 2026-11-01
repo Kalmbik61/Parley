@@ -84,6 +84,34 @@ describe('createSession', () => {
     expect(calls(rpc, 'sessions.create')[0]?.[1]).toMatchObject({ parent: null, label: 'New one' });
   });
 
+  it('A32: trustFolder and workId null go to the host as given; a lost answer finds the session in the new work', async () => {
+    const after = snap(2, [
+      work('w-1', { sessions: [session('s-1')], rooms: [room('r-1')] }),
+      work('w-2', { sessions: [session('s-7', { label: 'New one' })] }),
+    ]);
+    const { client, rpc } = setup(async (method) => {
+      if (method === 'sessions.create') throw err('connection_lost');
+      return after;
+    });
+    expect(await client.createSession({ ...sessionParams, workId: null, trustFolder: true })).toEqual({
+      outcome: 'created',
+      ref: { projectPath: PROJECT, workId: 'w-2', sessionId: 's-7' },
+    });
+    expect(calls(rpc, 'sessions.create')[0]?.[1]).toMatchObject({ workId: null, trustFolder: true, parent: null });
+  });
+
+  it('A32: checkTrust → trusted / not trusted / null when unknown', async () => {
+    const yes = setup(async () => ({ trusted: true }));
+    expect(await yes.client.checkTrust(PROJECT)).toBe(true);
+    expect(calls(yes.rpc, 'trust.check')[0]?.[1]).toEqual({ folder: PROJECT });
+    expect(await setup(async () => ({ trusted: false })).client.checkTrust(PROJECT)).toBe(false);
+    expect(
+      await setup(async () => {
+        throw err('unknown_method');
+      }).client.checkTrust(PROJECT),
+    ).toBeNull();
+  });
+
   it('unknown_method → rejected with the code, no re-read', async () => {
     const { client, rpc } = setup(async () => {
       throw err('unknown_method');

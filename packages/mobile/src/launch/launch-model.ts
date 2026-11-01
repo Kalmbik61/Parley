@@ -26,6 +26,8 @@ export const ROOM_MODES: ReadonlyArray<{ mode: RoomMode; title: string; hint: st
   { mode: 'checklist', title: 'Checklist', hint: 'The lead proposes a plan of items; you accept it, then the room works through it' },
   { mode: 'verified', title: 'Verified', hint: 'Like Checklist, and a verifier checks each item' },
 ];
+export const TRUST_ON_NOTE = "Agents start here without the terminal's trust screen and can change files in this folder.";
+export const TRUST_OFF_NOTE = "Not trusted yet: the agent may stop at the terminal's trust screen on your Mac.";
 export const AUTONOMOUS_NOTE = 'Autonomous rooms are created on your Mac';
 
 export const OFF_ON_MAC = 'Creating sessions and rooms from the phone is turned off on your Mac.';
@@ -39,7 +41,8 @@ export const utf8Length = (text: string): number => encoder.encode(text).length;
 
 export interface Workspace {
   projectPath: string;
-  workId: string;
+  /** `null` — a new workspace in the project (the Mac creates it; sessions only). */
+  workId: string | null;
   title: string;
   projectName: string;
   status: RemoteWork['status'];
@@ -53,6 +56,22 @@ export function workspaces(state: Pick<RemoteState, 'snapshot'>): Workspace[] {
     .filter((w) => w.status !== 'archived')
     .map((w) => ({ projectPath: w.projectPath, workId: w.id, title: w.title, projectName: folder(w.projectPath), status: w.status }));
   return [...all.filter((w) => w.status === 'active'), ...all.filter((w) => w.status !== 'active')];
+}
+
+export const NEW_WORKSPACE_TITLE = 'New workspace';
+
+/**
+ * Workspaces to pick from. Sessions may also start a NEW workspace in any known project (`workId: null`); rooms need an
+ * existing one (`allowNew: false`).
+ */
+export function workspaceOptions(state: Pick<RemoteState, 'snapshot'>, allowNew: boolean): Workspace[] {
+  const existing = workspaces(state);
+  if (!allowNew) return existing;
+  const projects = [...new Set((state.snapshot?.works ?? []).map((w) => w.projectPath))];
+  return [
+    ...existing,
+    ...projects.map((projectPath): Workspace => ({ projectPath, workId: null, title: NEW_WORKSPACE_TITLE, projectName: folder(projectPath), status: 'active' })),
+  ];
 }
 
 /** The work the sheet opens on: the one it was opened from, else the first active. */
@@ -103,13 +122,15 @@ export interface RoleChoice {
 
 export interface SessionForm {
   projectPath: string;
-  workId: string;
+  workId: string | null;
   provider: string;
   model: string | null;
   role: RoleChoice | null;
   name: string;
   task: string;
   worktree: boolean;
+  /** "Trust this folder": the Mac records the consent (`by: 'phone'`) before it starts the agent. */
+  trustFolder?: boolean;
 }
 
 /** What the session is called: the typed name, else the role, else "New session" — never past 64 characters. */
@@ -212,6 +233,7 @@ export async function launchSession(client: Launcher, approve: Approve, form: Se
     ...(form.model !== null && form.model !== '' ? { model: form.model } : {}),
     ...(form.role !== null ? { role: form.role } : {}),
     ...(form.worktree ? { worktree: true } : {}),
+    ...(form.trustFolder === true ? { trustFolder: true } : {}),
   });
   return outcome.outcome === 'created' ? { kind: 'created', ref: outcome.ref } : failure(outcome);
 }

@@ -3,9 +3,12 @@ import { ActionSheetIOS, FlatList, Pressable, RefreshControl, StyleSheet, Text, 
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { selectInbox, type InboxItem } from '@parley/remote-client';
+import { selectInbox, type InboxItem, type RemoteState } from '@parley/remote-client';
 import { goneEntries, useGoneDismiss, type GoneEntry } from '../../cards/gone';
+import { ConsentCardView } from '../../cards/ConsentViews';
+import { useConsents } from '../../cards/use-consents';
 import { InboxRow, GoneRow } from '../../cards/InboxRow';
+import { Toast, useToast } from '../../components/Toast';
 import { fullCommand } from '../../cards/model';
 import { Segmented } from '../../launch/form-parts';
 import { LettersList } from '../../letters/LettersList';
@@ -21,10 +24,20 @@ import { typography, useColors } from '../../theme';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState } from 'react';
+import type { ConsentRow } from '../../cards/use-consents';
 
 const MAX_ROWS = 100;
 
-type Row = { t: 'item'; item: InboxItem } | { t: 'gone'; entry: GoneEntry };
+/** The label and provider of the session a provider-switch card is about, from the projection. */
+function switchContext(state: RemoteState | null, row: ConsentRow): { switchLabel?: string; fromLabel?: string } {
+  const card = row.card;
+  if (card.kind !== 'agent-switch' || state === null) return {};
+  const session = state.snapshot?.works.find((w) => w.projectPath === card.ref.projectPath && w.id === card.ref.workId)?.sessions.find((x) => x.id === card.ref.sessionId);
+  if (session === undefined) return {};
+  return { switchLabel: session.label, fromLabel: [session.provider, session.model].filter((x) => x !== null && x !== '').join(' · ') };
+}
+
+type Row = { t: 'item'; item: InboxItem } | { t: 'gone'; entry: GoneEntry } | { t: 'consent'; row: ConsentRow };
 
 export default function InboxScreen() {
   const c = useColors();
@@ -46,7 +59,16 @@ export default function InboxScreen() {
   const items = useMemo(() => (state === null ? [] : withoutLetters(selectInbox(state)).slice(0, MAX_ROWS)), [state]);
   const gone = useMemo(() => (state === null ? [] : goneEntries(state)), [state]);
   useGoneDismiss(client, gone);
-  const rows = useMemo<Row[]>(() => [...gone.map((entry): Row => ({ t: 'gone', entry })), ...items.map((item): Row => ({ t: 'item', item }))], [gone, items]);
+  const toast = useToast();
+  const consents = useConsents(toast.show);
+  const rows = useMemo<Row[]>(
+    () => [
+      ...consents.rows.map((row): Row => ({ t: 'consent', row })),
+      ...gone.map((entry): Row => ({ t: 'gone', entry })),
+      ...items.map((item): Row => ({ t: 'item', item })),
+    ],
+    [consents.rows, gone, items],
+  );
   const unreadLetters = useMemo(() => Object.values(state?.letterUnread ?? {}).reduce((a, b) => a + b, 0), [state]);
 
   // Tell the refresher which sessions' cards are on screen (D1 §10.3: visible rows poll every 10 s).
@@ -122,7 +144,7 @@ export default function InboxScreen() {
       ) : (
         <FlatList
           data={rows}
-          keyExtractor={(r) => (r.t === 'gone' ? `gone:${r.entry.key}` : r.item.key)}
+          keyExtractor={(r) => (r.t === 'gone' ? `gone:${r.entry.key}` : r.t === 'consent' ? `consent:${r.row.card.id}` : r.item.key)}
           contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
           refreshControl={
@@ -140,12 +162,22 @@ export default function InboxScreen() {
           renderItem={({ item: r }) =>
             r.t === 'gone' ? (
               <GoneRow sessionLabel={r.entry.sessionLabel} workTitle={r.entry.workTitle} />
+            ) : r.t === 'consent' ? (
+              <ConsentCardView
+                row={r.row}
+                now={now}
+                canAct={canAct}
+                onDecide={consents.decide}
+                {...switchContext(state, r.row)}
+                onOpenSession={() => r.row.card.kind === 'agent-switch' && router.push(`/session/${sessionParam(r.row.card.ref)}` as never)}
+              />
             ) : (
               <InboxRow item={r.item} now={now} canAct={canAct} onOpen={() => open(r.item)} onMenu={() => menu(r.item)} />
             )
           }
         />
       )}
+    <Toast message={toast.message} />
     </View>
   );
 }

@@ -20,6 +20,7 @@ export {
   createRoom,
   sendRoomMessage,
   sendMessage,
+  checkTrust,
   decideConsent,
   newClientMsgId,
   loadProviders,

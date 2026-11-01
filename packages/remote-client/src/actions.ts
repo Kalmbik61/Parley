@@ -183,7 +183,10 @@ const isoMs = (iso: string | null): number | null => {
 
 export interface CreateSessionParams {
   projectPath: string;
-  workId: string;
+  /** `null` — новая работа в известном проекте (хост создаёт её сам). */
+  workId: string | null;
+  /** Пометить папку доверенной (`trust.json`, `by: 'phone'`) до запуска. */
+  trustFolder?: boolean;
   provider: string;
   label: string;
   task: string;
@@ -227,7 +230,12 @@ async function awaitCreated<T>(store: RemoteStore, rpc: Rpc, env: ActionEnv, sta
 export async function createSession(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: CreateSessionParams): Promise<CreateSessionOutcome> {
   const epoch = store.getState().epoch;
   const startedAt = env.now();
-  const before = new Set(workOf(store, params.projectPath, params.workId)?.sessions.map((x) => x.id));
+  // Новая работа (`workId: null`) неизвестна заранее: ищем по всем работам проекта.
+  const worksOf = (): NonNullable<ReturnType<typeof workOf>>[] =>
+    params.workId === null
+      ? (store.getState().snapshot?.works.filter((w) => w.projectPath === params.projectPath) ?? [])
+      : [workOf(store, params.projectPath, params.workId)].filter((w) => w !== undefined);
+  const before = new Set(worksOf().flatMap((w) => w.sessions.map((x) => x.id)));
   try {
     const res = (await rpc.call('sessions.create', { ...params, parent: null })) as { ref?: SessionRef } | null;
     if (store.getState().epoch === epoch && res?.ref !== undefined) return { outcome: 'created', ref: res.ref };
@@ -237,19 +245,23 @@ export async function createSession(store: RemoteStore, rpc: Rpc, env: ActionEnv
   }
   // Итог неизвестен: новая сессия — не из прежнего снимка, с тем же именем, провайдером и моделью, начатая не раньше вызова.
   const found = await awaitCreated(store, rpc, env, startedAt, () =>
-    workOf(store, params.projectPath, params.workId)
-      ?.sessions.filter((x) => {
-        if (before.has(x.id) || x.label !== params.label || x.provider !== params.provider) return false;
-        if (params.model && x.model !== null && x.model !== params.model) return false;
-        const started = isoMs(x.startedAt);
-        return started === null || started >= startedAt - CLOCK_SKEW_MS;
-      })
+    worksOf()
+      .flatMap((w) =>
+        w.sessions
+          .filter((x) => {
+            if (before.has(x.id) || x.label !== params.label || x.provider !== params.provider) return false;
+            if (params.model && x.model !== null && x.model !== params.model) return false;
+            const started = isoMs(x.startedAt);
+            return started === null || started >= startedAt - CLOCK_SKEW_MS;
+          })
+          .map((x) => ({ session: x, workId: w.id })),
+      )
       .at(-1),
   );
   if (found === null) return { outcome: 'lost' };
   return found === undefined
     ? { outcome: 'unknown' }
-    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, sessionId: found.id } };
+    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: found.workId, sessionId: found.session.id } };
 }
 
 export interface CreateRoomParams {
@@ -402,7 +414,7 @@ export interface SendMessageParams {
 
 export type SendMessageOutcome =
   /** Хост принял вызов; `submitted: false` — текст вставлен, но не отправлен (`reason` — почему). */
-  | { outcome: 'sent'; clientMsgId: string; inserted: boolean; submitted: boolean }
+  | { outcome: 'sent'; clientMsgId: string; inserted: boolean; submitted: boolean; reason: string | null }
   | (Rejected & { clientMsgId: string })
   /** Ответа нет: повторить с тем же `clientMsgId`. */
   | { outcome: 'lost'; clientMsgId: string };
@@ -432,8 +444,8 @@ export function sendMessage(rpc: Rpc, env: Pick<ActionEnv, 'now'>, params: SendM
         submit: true,
         requestedAt: env.now(),
         clientMsgId,
-      })) as { inserted?: boolean; submitted?: boolean } | null;
-      return { outcome: 'sent', clientMsgId, inserted: res?.inserted === true, submitted: res?.submitted === true };
+      })) as { inserted?: boolean; submitted?: boolean; reason?: string | null } | null;
+      return { outcome: 'sent', clientMsgId, inserted: res?.inserted === true, submitted: res?.submitted === true, reason: typeof res?.reason === 'string' ? res.reason : null };
     } catch (error) {
       const rejected = rejection(error);
       return rejected === null ? { outcome: 'lost', clientMsgId } : { ...rejected, clientMsgId };
@@ -471,4 +483,14 @@ export async function decideConsent(store: RemoteStore, rpc: Rpc, id: string, de
     if (rejected !== null) return rejected;
   }
   return { outcome: 'lost', stillPending: await reread() };
+}
+
+/** `trust.check` для папки известного проекта; `null` — узнать не удалось (старый Мак, нет связи, отказ). */
+export async function checkTrust(rpc: Rpc, folder: string): Promise<boolean | null> {
+  try {
+    const res = (await rpc.call('trust.check', { folder })) as { trusted?: unknown } | null;
+    return typeof res?.trusted === 'boolean' ? res.trusted : null;
+  } catch {
+    return null;
+  }
 }

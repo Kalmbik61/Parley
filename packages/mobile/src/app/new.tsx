@@ -14,6 +14,8 @@ import { useCanAct, useRemoteState } from '../hooks/use-remote';
 import { Card, Divider, Label, MenuRow, Segmented, choose } from '../launch/form-parts';
 import {
   AUTONOMOUS_NOTE,
+  TRUST_OFF_NOTE,
+  TRUST_ON_NOTE,
   LETTER_PLACEHOLDER,
   ROOM_MODES,
   afterPartial,
@@ -28,7 +30,7 @@ import {
   roomProblem,
   sendFirstLetter,
   sessionProblem,
-  workspaces,
+  workspaceOptions,
   type LaunchFailure,
   type NewAgent,
   type RoleChoice,
@@ -54,12 +56,29 @@ export default function NewScreen() {
 
   const caps = selectLaunchCapabilities(state ?? { methods: DEMO ? ['sessions.create', 'rooms.create', 'rooms.send'] : null });
   const [kind, setKind] = useState<Kind>(str(params.mode) === 'room' || (!caps.canCreateSession && caps.canCreateRoom) ? 'room' : 'session');
-  const list = useMemo(() => (state === null ? [] : workspaces(state)), [state]);
+  // A session may start a NEW workspace in a known project; a room needs an existing one.
+  const list = useMemo(() => (state === null ? [] : workspaceOptions(state, kind === 'session')), [state, kind]);
   const from = useMemo(() => parseWorkParam(str(params.ref)), [params.ref]);
   const [ws, setWs] = useState<Workspace | null>(null);
   useEffect(() => {
-    if (ws === null && list.length > 0) setWs(defaultWorkspace(list, from));
-  }, [list, from, ws]);
+    if ((ws === null || (ws.workId === null && kind === 'room')) && list.length > 0) setWs(defaultWorkspace(list, from));
+  }, [list, from, ws, kind]);
+
+  // Folder trust (D1 §8.4): asked of the Mac for the project's folder; the switch exists only while it is not trusted.
+  const [trusted, setTrusted] = useState<boolean | null>(null);
+  const [trustOn, setTrustOn] = useState(false);
+  useEffect(() => {
+    setTrusted(null);
+    setTrustOn(false);
+    if (client === null || ws === null) return;
+    let live = true;
+    // Demo build: no Mac to ask — show the not-trusted state.
+    if (DEMO) setTrusted(false);
+    else void client.checkTrust(ws.projectPath).then((t) => live && setTrusted(t));
+    return () => {
+      live = false;
+    };
+  }, [client, ws?.projectPath]);
 
   // Catalogs: providers once, roles per project.
   useEffect(() => {
@@ -90,7 +109,7 @@ export default function NewScreen() {
   const [members, setMembers] = useState<string[]>([]);
   const [agents, setAgents] = useState<NewAgent[]>([]);
   const [lead, setLead] = useState<string | null>(null);
-  const work = state?.snapshot?.works.find((w) => ws !== null && w.projectPath === ws.projectPath && w.id === ws.workId) ?? null;
+  const work = state?.snapshot?.works.find((w) => ws !== null && ws.workId !== null && w.projectPath === ws.projectPath && w.id === ws.workId) ?? null;
   const candidates = work === null ? [] : roomCandidates(work);
 
   // Step 2 of a room: the first message.
@@ -101,7 +120,7 @@ export default function NewScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', provider, model, role, name, task, worktree };
+  const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws === null ? '' : ws.workId, provider, model, role, name, task, worktree, trustFolder: trusted === false && trustOn };
   const roomForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', title, mode, members, agents, lead };
   // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so and
   // Face ID is not asked for a call that will not go (D1 §12a).
@@ -153,7 +172,7 @@ export default function NewScreen() {
         const res = await launchSession(client, approve, sessionForm);
         if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
         if (res.kind !== 'created') return fail(res);
-        return finish(`/session/${sessionParam(res.ref)}`, 'Session started');
+        return finish(`/session/${sessionParam(res.ref)}?fresh=1`, 'Session started');
       }
       const res = await launchRoom(client, approve, roomForm);
       if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
@@ -267,6 +286,30 @@ export default function NewScreen() {
               <Card>
                 <MenuRow label="Workspace" value={ws === null ? '…' : `${ws.title}`} onPress={() => void pickWorkspace()} disabled={list.length < 2} />
               </Card>
+              {kind === 'session' && trusted !== null && (
+                <>
+                  <View style={{ height: 4 }} />
+                  <Card>
+                    {trusted === false ? (
+                      <View style={[styles.row, styles.pad]}>
+                        <SymbolView name="folder.badge.questionmark" size={18} tintColor={c.label2} />
+                        <Text allowFontScaling style={[typography.body, styles.flex, { color: c.label }]}>Trust this folder</Text>
+                        <Switch accessibilityLabel="Trust this folder" value={trustOn} onValueChange={setTrustOn} />
+                      </View>
+                    ) : (
+                      <View style={[styles.row, styles.pad]}>
+                        <SymbolView name="checkmark.shield" size={18} tintColor={c.label2} />
+                        <Text allowFontScaling style={[typography.body, styles.flex, { color: c.label }]}>This folder is trusted</Text>
+                      </View>
+                    )}
+                  </Card>
+                  {trusted === false && (
+                    <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+                      {trustOn ? TRUST_ON_NOTE : TRUST_OFF_NOTE}
+                    </Text>
+                  )}
+                </>
+              )}
 
               {kind === 'session' ? (
                 <>

@@ -72,7 +72,7 @@ export function installDemo(client: RemoteClient): void {
     ],
   });
   // The "+" and the New session / New room sheet (A26): launch methods in the hello, a made-up provider and role list.
-  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping']);
+  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping', 'pty.send', 'consents.list', 'consents.decide', 'trust.check']);
   store.dispatch({
     t: 'catalog.providers', epoch: 'demo',
     providers: { providers: [
@@ -86,6 +86,29 @@ export function installDemo(client: RemoteClient): void {
       { id: 'executor', name: 'executor', description: '', source: 'builtin', provider: 'claude', model: null, effort: null, readOnly: false },
       { id: 'writer', name: 'writer', description: '', source: 'builtin', provider: 'claude', model: null, effort: null, readOnly: false },
     ] } as never,
+  });
+  // A32: a made-up conversation for the chat screen (greta is idle, so the composer shows) and two consent cards.
+  const at = (min: number): string => ago(min);
+  const feedItems = [
+    { kind: 'prompt', id: 'f1', at: at(40), text: 'Update the D1 doc for the human decisions', images: 0 },
+    { kind: 'tool', id: 'f2', at: at(39), toolUseId: 't2', name: 'Read', input: { file_path: 'docs/design/mobile.md' }, status: 'done' },
+    { kind: 'tool', id: 'f3', at: at(38), toolUseId: 't3', name: 'Bash', input: { command: 'pnpm lint' }, status: 'done' },
+    { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer with Face ID\n\n```\npnpm lint\n```' },
+    { kind: 'turn', id: 'f5', at: at(36), durationMs: 372_000 },
+    { kind: 'prompt', id: 'f6', at: at(5), text: 'Run the linter once more', images: 0 },
+    { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
+    { kind: 'text', id: 'f8', at: at(3), messageId: 'm2', streaming: true, text: "I'll run the linter first, then the build." },
+  ] as never[];
+  for (const id of ['greta', 'drone1']) {
+    store.dispatch({ t: 'feed.open', ref: ref(id) });
+    store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
+  }
+  store.dispatch({
+    t: 'consents.loaded', epoch: 'demo',
+    items: [
+      { id: 'c-1', kind: 'folder-trust', projectPath: P, folder: `${P}`, at: ago(1), state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } },
+      { id: 'c-2', kind: 'agent-switch', projectPath: P, at: ago(3), state: 'pending', ref: ref('greta'), provider: 'codex', providerLabel: 'Codex', model: 'gpt-6-astra', reason: 'Usage limit until 14:30; continue the review there.', requestedBy: { sessionId: 'd1', label: 'Greta' } },
+    ] as never,
   });
   store.dispatch({ t: 'cards.loaded', ref: ref('d1'), epoch: 'demo', items: [permission], at: Date.now() });
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
@@ -112,6 +135,10 @@ export function demoRoute(name: unknown): string | null {
       return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':
       return s('greta');
+    case 'chat':
+      return s('drone1');
+    case 'inbox':
+      return '/';
     case 'new':
       return `/new?ref=${encodeURIComponent(w)}`;
     case 'new-room':

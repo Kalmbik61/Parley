@@ -2,6 +2,7 @@
 import type { FeedDecision } from '@parley/core';
 import {
   createRoom,
+  checkTrust,
   createSession,
   decide,
   decideConsent,
@@ -57,6 +58,8 @@ export interface RemoteClient {
   /** Соединение готово / ушло; ведёт и перечитыватель карточек, и подписки. */
   setConnected(connected: boolean): void;
   setForeground(foreground: boolean): void;
+  /** Доверена ли папка проекта на Маке (`trust.check`); `null` — неизвестно. */
+  checkTrust(folder: string): Promise<boolean | null>;
   loadProviders(): Promise<boolean>;
   loadRoles(projectPath: string): Promise<boolean>;
   dispose(): void;
@@ -121,6 +124,7 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
       refresher.setForeground(foreground);
       live.setForeground(foreground);
     },
+    checkTrust: (folder) => checkTrust(rpc, folder),
     loadProviders: () => loadProviders(store, rpc),
     loadRoles: (projectPath) => loadRoles(store, rpc, projectPath),
     dispose: () => {
