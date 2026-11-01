@@ -4,21 +4,13 @@ import type { PlanRemaining } from '@parley/core/plan-state';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { RoleChip } from '../../lib/role-summary.js';
-import { sessionRowLabel } from '../../lib/participant.js';
 import { Badge } from '../../ui/badge.js';
-import { PlanSummary } from './PlanPanel.js';
+import { ownerLabel, PlanSummary } from './PlanPanel.js';
 
 const P = S.plans;
 
 /** Значок пункта поправки: новый, изменённый, сбрасываемый (уже сделанный, но поправка его отменяет). */
 const MARK_VARIANT = { new: 'accent', changed: 'accent-2', redo: 'neutral' } as const;
-
-/** Подпись владельца, как в `PlanSummary` (там она не экспортируется). */
-function ownerLabel(entry: WindowWorkEntry | undefined, id: string): string {
-  if (id === 'human') return S.participants.human;
-  const session = entry?.map.sessions.find((candidate) => candidate.id === id);
-  return session ? sessionRowLabel(session.id, session.label) : id;
-}
 
 /**
  * Карточка поправки плана (план 2026-10-19, D6): только то, что после принятия останется несделанным, — новые, старые
@@ -90,9 +82,9 @@ export function PlanRemainingView({
       ) : null}
       <details data-plan-full="" onToggle={(event) => setFull(event.currentTarget.open)}>
         <summary className="cursor-pointer">{P.showFullPlan}</summary>
-        {/* Закрытый черновик не монтируем: цель и пункты не двоятся на карточке, роли не грузятся впустую. `PlanSummary` не переносит название без пробелов (путь): прокрутка внутри раскрытия, а не за краем карточки. */}
+        {/* Закрытый черновик не монтируем: цель и пункты не двоятся на карточке, роли не грузятся впустую. Длинное название без пробелов (путь) `PlanSummary` переносит сам. */}
         {full ? (
-          <div className="min-w-0 overflow-x-auto pt-2">
+          <div className="min-w-0 pt-2">
             <PlanSummary plan={plan} {...(entry ? { entry } : {})} {...(bridge ? { bridge } : {})} />
           </div>
         ) : null}
