@@ -19,7 +19,6 @@ import { decodeIpcError } from "../../../shared/ipc-error.js";
 import { S } from "../../../shared/strings.js";
 import { hostMethods } from "../../lib/capabilities.js";
 import { isRoomArchived } from "../../lib/room-archive.js";
-import { relativeTime } from "../../lib/relative-time.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
 import { relativeTime } from "../../lib/relative-time.js";
