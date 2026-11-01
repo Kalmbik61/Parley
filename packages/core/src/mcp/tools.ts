@@ -76,6 +76,8 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
+import { currentPlanEffect, planEffectOwnsLetter } from '../work/plan-effects.js';
+import { planTasksNext } from '../work/plan-tasks.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
@@ -298,10 +300,50 @@ function roomTaskOf(map: WorkMap, message: Message, recipientId: string) {
   };
 }
 
-/** Письмо в ответе `check_inbox` и `wait_for("inbox")`: `messageView` и, для задачи человека всем, `roomTask`. */
-const inboxView = (message: Message, map: WorkMap, recipientId: string) => {
+/**
+ * Поручение плана, которым владеет письмо: ссылка на план, ревизию и пункт считается на сервере по эффекту плана
+ * (`planEffectOwnsLetter` сверяет id письма, отправителя Parley, адресата и текст), а не по тексту письма —
+ * «Accepted plan…» в чужом письме полномочий не даёт. Эффект без плана (`mode`) поручением не считается; письма
+ * автономного плана до ответа не доходят (`unreadFor`). `current` — поручение всё ещё действует; устаревшие письма
+ * плана `unreadFor` отсекает раньше, поэтому в ответе `check_inbox` оно практически всегда `true`. Письма лежат вне
+ * карты, поэтому актуальность эффекта сверяется через `byId` записи, в которой письма отдаются.
+ */
+function assignmentOf(map: WorkMap, message: Message, byId: (id: string) => Message | undefined) {
+  const owner = (map.planEffects ?? []).find((value) => planEffectOwnsLetter(value, message));
+  if (owner === undefined || owner.planId === null) return undefined;
+  return {
+    planId: owner.planId,
+    rev: owner.rev,
+    item: owner.item,
+    kind: owner.kind,
+    current: currentPlanEffect(map, owner, byId),
+  };
+}
+
+/**
+ * Письмо в ответе `check_inbox` и `wait_for("inbox")`: `messageView`, для задачи человека всем — `roomTask`,
+ * для поручения плана — `assignment`.
+ */
+const inboxView = (message: Message, map: WorkMap, recipientId: string, byId: (id: string) => Message | undefined) => {
   const roomTask = roomTaskOf(map, message, recipientId);
-  return { ...messageView(message, map), ...(roomTask === undefined ? {} : { roomTask }) };
+  const assignment = assignmentOf(map, message, byId);
+  return {
+    ...messageView(message, map),
+    ...(roomTask === undefined ? {} : { roomTask }),
+    ...(assignment === undefined ? {} : { assignment }),
+  };
+};
+
+/**
+ * Открытые задания плана у сессии. Прочтение письма их не закрывает (S12 прочёл оба поручения проверки и
+ * закончил ход), поэтому ответ `check_inbox` и `wait_for("inbox")` напоминает о них и после прочтения. Нет
+ * заданий — нет полей: ответ остаётся прежней формы. Подсказка одна на ответ, а не на письмо.
+ */
+const openAssignmentsNotice = (map: WorkMap, sessionId: string) => {
+  const { total } = planTasksNext(map, sessionId);
+  return total === 0
+    ? {}
+    : { openAssignments: total, hint: 'Reading does not complete assignments; call plan_tasks.' };
 };
 
 /**
@@ -1079,8 +1121,8 @@ async function waitFor(
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
     // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
     if (fenced()) return { state: 'running' };
-    const messages = takeInbox(context, sessionId);
-    if (messages.length > 0) return { state: 'message', messages };
+    const { messages, notice } = takeInbox(context, sessionId);
+    if (messages.length > 0) return { state: 'message', messages, ...notice };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
     // новым ожиданием — на случай, если проба и `takeInbox` разойдутся: без неё цикл крутился бы в микрозадачах до таймаута.
     const remaining = endsAt - Date.now();
@@ -1211,7 +1253,10 @@ async function sendMessage(
  * `wait_for("inbox")`: письмо не бывает отмечено, не будучи отданным хотя бы одному из вызовов. Пустой ящик ничего не пишет:
  * ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
  */
-function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof inboxView>[] {
+function takeInbox(
+  context: McpContext,
+  sessionId: string,
+): { messages: ReturnType<typeof inboxView>[]; notice: ReturnType<typeof openAssignmentsNotice> } {
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
@@ -1221,16 +1266,17 @@ function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof in
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
     // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
     // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
-    if (inboxFenced(requireSession(current, sessionId))) return [];
+    if (inboxFenced(requireSession(current, sessionId))) return { messages: [], notice: {} };
     const inbox = letters.unreadFor(sessionId);
-    const views = inbox.map((message) => inboxView(message, current, sessionId));
+    const views = inbox.map((message) => inboxView(message, current, sessionId, (id) => letters.byId(id)));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
-    return views;
+    return { messages: views, notice: openAssignmentsNotice(current, sessionId) };
   });
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  return { messages: takeInbox(context, sessionId) };
+  const { messages, notice } = takeInbox(context, sessionId);
+  return { messages, ...notice };
 }
 
 /** Сессия роя в комнату не входит (спека роя v1, 4): проверка по карте, `code: message` как у остальных отказов роя. */
