@@ -1361,7 +1361,8 @@ export function createSessionsService(
     if (input.agent !== undefined && input.role !== undefined) throw new HostError('bad_request', 'agent-and-role-conflict');
     const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
     const registry = await timer.step('providers', () => loadProviders());
-    const entry = registry[provider];
+    // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
     await timer.step('role', async () => {
       await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
@@ -1588,7 +1589,7 @@ export function createSessionsService(
 
   /** Имя провайдера для людей и агентов; удалённый из реестра — своим id. */
   const labelOf = (registry: Record<string, ProviderEntry>, id: string): string =>
-    providerLabel(registry[id] ?? { id, label: id });
+    providerLabel((Object.hasOwn(registry, id) ? registry[id] : undefined) ?? { id, label: id });
 
   /** Новый агент ещё не стартовал после замены: прежний агент записан, разговора у нового пока нет. */
   const awaitingAgent = (session: WorkSession): boolean =>
@@ -1771,7 +1772,7 @@ export function createSessionsService(
 
   /** Почему прежний агент сменён: из застревания, отсутствия в реестре или по просьбе. */
   function switchReason(session: WorkSession, registry: Record<string, ProviderEntry>): Exclude<AgentBinding['reason'], 'model'> {
-    if (registry[session.provider] === undefined) return 'provider-missing';
+    if (!Object.hasOwn(registry, session.provider)) return 'provider-missing';
     if (session.stuck?.kind === 'limit') return 'limit';
     if (session.stuck?.kind === 'sign-in') return 'sign-in';
     return 'manual';
@@ -1826,7 +1827,7 @@ export function createSessionsService(
     const entry = await readyProvider(request.provider);
     const registry = await loadProviders();
     // Продолжение разговора — только между аккаунтами Anthropic (5.4): иначе отказ, тоже до любых изменений.
-    if (carry === 'transcript' && !(isClaudeAccount(session.provider, registry[session.provider]) && isClaudeAccount(entry.id, entry))) {
+    if (carry === 'transcript' && !(isClaudeAccount(session.provider, Object.hasOwn(registry, session.provider) ? registry[session.provider] : undefined) && isClaudeAccount(entry.id, entry))) {
       throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
     }
     // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
@@ -2019,7 +2020,7 @@ export function createSessionsService(
       throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
     }
     const registry = await loadProviders();
-    const currentEntry = registry[session.provider];
+    const currentEntry = Object.hasOwn(registry, session.provider) ? registry[session.provider] : undefined;
     const reason = currentEntry === undefined
       ? 'provider-missing'
       : session.stuck?.kind === 'limit' || session.stuck?.kind === 'sign-in'
