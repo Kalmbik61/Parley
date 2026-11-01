@@ -326,13 +326,13 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   }, [sessionKey, visible]);
   useEffect(() => () => useUiStore.getState().setSessionVisible(sessionKey, false), [sessionKey]);
 
-  // Настоящий промпт с тем же текстом пришёл — серый элемент уходит.
+  // Принятый промпт и ответ pty.send могут прийти в любом порядке — сверяем и при изменении очереди.
   useEffect(() => {
     useChatUiStore.getState().updateQueued(sessionKey, (was) => {
       const left = was.filter((entry) => promptCount(items, entry.text) <= entry.seen);
       return left.length === was.length ? was : left;
     });
-  }, [items, sessionKey]);
+  }, [items, queued, sessionKey]);
 
   // Цитата Reply (`reply.ts`) — своя у сессии вида: другая сессия во вкладке её не видит.
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | null>(null);

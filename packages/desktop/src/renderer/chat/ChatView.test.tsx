@@ -404,6 +404,26 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
   });
 
+  it('Queued исчезает, когда CLI принял сообщение вместе с указателями Parley', () => {
+    const key = refKey(REF);
+    useChatUiStore.getState().updateQueued(key, () => [{ id: 'q1', text: 'вот что еще нашли', seen: 0 }]);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    expect(screen.getByTestId('chat-queued').textContent).toContain('вот что еще нашли');
+    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'New messages (1). Call check_inbox.\nвот что еще нашли\nNew messages (2). Call check_inbox.')], 2);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
+  });
+
+  it('Queued подтверждается и когда промпт пришёл раньше ответа pty.send', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'next')]);
+    act(() => {
+      useChatUiStore.getState().updateQueued(refKey(REF), () => [{ id: 'q1', text: 'next', seen: 0 }]);
+    });
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
   it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; удачный — уходит', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

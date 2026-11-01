@@ -152,6 +152,8 @@ function typed(text) {
       const text = composer;
       composer = '';
       submit(text, 'enter');
+    } else if (char === '\x15') {
+      composer = '';
     } else if (char === '\t') {
       const text = composer;
       composer = '';
