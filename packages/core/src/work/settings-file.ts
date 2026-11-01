@@ -113,6 +113,12 @@ const browserRule = (op: string): string => `mcp__${MCP_SERVER_NAME}__browser_${
 /** Заранее разрешены все, `browser_evaluate`, `browser_cookies` и `browser_storage` тоже (решение владельца 2026-10-21, дизайн доверия Codex 5.4; отменяет правила `ask` решений 2026-10-20, п. 2, и 2026-10-21, п. 9). */
 export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.map(browserRule);
 
+/**
+ * Решение владельца 2026-11-01: `close_session` идёт без вопроса, у каждой сессии с каналом агента.
+ * Право закрыть эту сессию проверяет сервер (`closeSession` в `mcp/tools.ts`), а не вопрос Claude Code.
+ */
+export const CLOSE_SESSION_PERMISSION = `mcp__${MCP_SERVER_NAME}__close_session`;
+
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
 export const FEED_HOOK_EVENTS = [
   'SessionStart',
@@ -174,7 +180,7 @@ export interface WorkSettingsOptions {
   /**
    * У сессии есть канал агента, значит, есть и инструменты `browser_*`: снять вопрос Claude Code перед первым вызовом
    * каждого, кроме browser_evaluate, browser_cookies и browser_storage, правилами `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
-   * Так же ведёт себя Codex, которому читающие инструменты разрешает `readOnlyHint`.
+   * Так же ведёт себя Codex, которому читающие инструменты разрешает `readOnlyHint`. Тем же условием разрешён и `close_session` (`CLOSE_SESSION_PERMISSION`).
    */
   allowBrowser?: boolean;
 }
@@ -236,7 +242,7 @@ export function workSettings({
   }
   const allow = [
     ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),
-    ...(allowBrowser ? BROWSER_PERMISSIONS : []),
+    ...(allowBrowser ? [...BROWSER_PERMISSIONS, CLOSE_SESSION_PERMISSION] : []),
   ];
   return {
     hooks,

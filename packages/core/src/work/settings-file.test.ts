@@ -10,9 +10,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BROWSER_TOOLS } from '../mcp/browser-tools.js';
+import { TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
   BROWSER_PERMISSIONS,
+  CLOSE_SESSION_PERMISSION,
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
@@ -394,7 +396,7 @@ describe('writeWorkSettings', () => {
     const settings = JSON.parse(await readFile(file, 'utf8'));
     const allow = [
       ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),
-      ...(allowBrowser ? BROWSER_PERMISSIONS : []),
+      ...(allowBrowser ? [...BROWSER_PERMISSIONS, CLOSE_SESSION_PERMISSION] : []),
     ];
     expect(settings.permissions).toEqual(allow.length ? { allow } : undefined);
     expect(settings.sandbox).toEqual(autonomous
@@ -539,8 +541,8 @@ describe('все инструменты браузера разрешены за
     expect(workSettings()).not.toHaveProperty('permissions');
   });
 
-  it('с каналом — четырнадцать правил allow и никакого ask (правило ask сильнее allow и спрашивало бы при каждом вызове); без канала — поля нет', () => {
-    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: ALLOWED });
+  it('с каналом — четырнадцать правил браузера и close_session в allow и никакого ask (правило ask сильнее allow и спрашивало бы при каждом вызове); без канала — поля нет', () => {
+    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: [...ALLOWED, 'mcp__parley__close_session'] });
     for (const op of ['evaluate', 'cookies', 'storage']) expect(workSettings({ allowBrowser: true }).permissions?.allow).toContain(`mcp__parley__browser_${op}`);
     expect(workSettingsJson({ allowBrowser: true })).not.toContain('"ask"');
     expect(workSettings({ allowBrowser: false })).not.toHaveProperty('permissions');
@@ -548,6 +550,14 @@ describe('все инструменты браузера разрешены за
 
   it('имена правил собраны из настоящих имён сервера и инструментов', () => {
     expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
+    const close = TOOLS.find((tool) => tool.name === 'close_session');
+    expect(close).toBeDefined();
+    expect(CLOSE_SESSION_PERMISSION).toBe(`mcp__${MCP_SERVER_NAME}__${close?.name}`);
+  });
+
+  it('close_session разрешён сессии с каналом без вопроса; у сессии без канала правила нет', () => {
+    expect(workSettings({ allowBrowser: true }).permissions?.allow).toContain(CLOSE_SESSION_PERMISSION);
+    expect(workSettings({ allowBrowser: false })).not.toHaveProperty('permissions');
   });
 });
 
