@@ -390,3 +390,85 @@ export async function loadRoles(store: RemoteStore, rpc: Rpc, projectPath: strin
     return false;
   }
 }
+
+// ---- Сообщение агенту и решение по согласию (A31) ----
+
+export interface SendMessageParams {
+  ref: SessionRef;
+  text: string;
+  /** Ключ из прежней попытки: повтор после `lost` идёт с ним, и мост не пускает второй вызов хоста. */
+  clientMsgId?: string;
+}
+
+export type SendMessageOutcome =
+  /** Хост принял вызов; `submitted: false` — текст вставлен, но не отправлен (`reason` — почему). */
+  | { outcome: 'sent'; clientMsgId: string; inserted: boolean; submitted: boolean }
+  | (Rejected & { clientMsgId: string })
+  /** Ответа нет: повторить с тем же `clientMsgId`. */
+  | { outcome: 'lost'; clientMsgId: string };
+
+/** Ключ сообщения: 8–64 знака `[A-Za-z0-9_-]` (правило протокола). */
+export function newClientMsgId(now: number): string {
+  const rnd = (): string => Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+  return `m${now.toString(36)}${rnd()}${rnd()}`.slice(0, 64);
+}
+
+const inFlightSends = new Map<string, Promise<SendMessageOutcome>>();
+
+/**
+ * Написать агенту. Вызов не повторяется самим клиентом; итог `lost` несёт `clientMsgId`, с которым человек (или экран)
+ * повторяет отправку: второго вызова хоста не будет (мост кэширует ответ 10 минут). Параллельная отправка с тем же
+ * ключом возвращает тот же итог.
+ */
+export function sendMessage(rpc: Rpc, env: Pick<ActionEnv, 'now'>, params: SendMessageParams): Promise<SendMessageOutcome> {
+  const clientMsgId = params.clientMsgId ?? newClientMsgId(env.now());
+  const running = inFlightSends.get(clientMsgId);
+  if (running !== undefined) return running;
+  const run = (async (): Promise<SendMessageOutcome> => {
+    try {
+      const res = (await rpc.call('pty.send', {
+        ref: params.ref,
+        text: params.text,
+        submit: true,
+        requestedAt: env.now(),
+        clientMsgId,
+      })) as { inserted?: boolean; submitted?: boolean } | null;
+      return { outcome: 'sent', clientMsgId, inserted: res?.inserted === true, submitted: res?.submitted === true };
+    } catch (error) {
+      const rejected = rejection(error);
+      return rejected === null ? { outcome: 'lost', clientMsgId } : { ...rejected, clientMsgId };
+    }
+  })().finally(() => inFlightSends.delete(clientMsgId));
+  inFlightSends.set(clientMsgId, run);
+  return run;
+}
+
+export type DecideConsentOutcome =
+  | { outcome: 'applied' | 'stale' }
+  /** `stillPending`: после перечитывания карточка ещё ждёт (`true`), ушла (`false`), перечитать не удалось (`null`). */
+  | { outcome: 'lost'; stillPending: boolean | null }
+  | Rejected;
+
+/** Решить карточку согласия (доверие к папке, смена провайдера). Не повторяется: после потери итог — по `consents.list`. */
+export async function decideConsent(store: RemoteStore, rpc: Rpc, id: string, decision: 'allow' | 'deny'): Promise<DecideConsentOutcome> {
+  const epoch = store.getState().epoch;
+  const reread = async (): Promise<boolean | null> => {
+    try {
+      const res = (await rpc.call('consents.list', {})) as { items?: unknown } | null;
+      if (!Array.isArray(res?.items)) return null;
+      store.dispatch({ t: 'consents.loaded', epoch: store.getState().epoch, items: res.items as never[] });
+      return (res.items as Array<{ id?: string }>).some((c) => c.id === id);
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const res = (await rpc.call('consents.decide', { id, decision })) as { applied?: boolean } | null;
+    store.dispatch({ t: 'consents.resolved', id });
+    if (store.getState().epoch === epoch) return { outcome: res?.applied === true ? 'applied' : 'stale' };
+  } catch (error) {
+    const rejected = rejection(error);
+    if (rejected !== null) return rejected;
+  }
+  return { outcome: 'lost', stillPending: await reread() };
+}

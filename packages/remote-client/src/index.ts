@@ -19,6 +19,9 @@ export {
   createSession,
   createRoom,
   sendRoomMessage,
+  sendMessage,
+  decideConsent,
+  newClientMsgId,
   loadProviders,
   loadRoles,
   type Rpc as ActionRpc,
@@ -30,11 +33,15 @@ export {
   type CreateRoomOutcome,
   type SendRoomMessageParams,
   type SendRoomMessageOutcome,
+  type SendMessageParams,
+  type SendMessageOutcome,
+  type DecideConsentOutcome,
   type ReadCardsResult,
   type DecideOutcome,
   type ResolveProposalParams,
   type ResolveOutcome,
 } from './actions.js';
 export * from './refresh.js';
+export * from './live.js';
 export * from './client.js';
 export * from './push-target.js';
