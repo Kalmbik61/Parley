@@ -3,10 +3,10 @@
 import type { FeedDecision } from '@parley/core';
 
 /** What is being approved; picks the prompt text. */
-export type ApproveKind = 'allow' | 'plan' | 'accept' | 'disable' | 'launch' | 'letter';
+export type ApproveKind = 'allow' | 'plan' | 'accept' | 'disable' | 'launch' | 'letter' | 'send' | 'consent';
 
 /** Asked whatever the "Require Face ID to allow" setting says. */
-export const ALWAYS_ASK: ReadonlySet<ApproveKind> = new Set<ApproveKind>(['disable', 'launch', 'letter']);
+export const ALWAYS_ASK: ReadonlySet<ApproveKind> = new Set<ApproveKind>(['disable', 'launch', 'letter', 'send', 'consent']);
 
 export const PROMPTS: Record<ApproveKind, string> = {
   allow: 'Confirm to allow',
@@ -15,6 +15,8 @@ export const PROMPTS: Record<ApproveKind, string> = {
   disable: 'Confirm to turn off Face ID for approvals',
   launch: 'Confirm to start from this phone',
   letter: 'Confirm to send the message',
+  send: 'Confirm to message the agent',
+  consent: 'Confirm to allow',
 };
 
 /** The slice of `expo-local-authentication` used here. */
@@ -46,7 +48,7 @@ export type Approve = (kind: ApproveKind) => Promise<ApproveResult>;
  * Not enrolled needs no branch: `disableDeviceFallback: false` makes iOS go straight to the device passcode, and
  * its success counts as Face ID success. A failure of any kind (cancel, lockout, no passcode set) sends nothing.
  * The "Require Face ID to allow" setting covers approvals only (Allow, plan, Accept). Turning it off, starting a
- * session or room from the phone, and sending a room letter ALWAYS ask, whatever the setting says (decision 5: Face ID
+ * session or room from the phone, and sending a room letter, messaging an agent and allowing a consent card ALWAYS ask, whatever the setting says (decision 5: Face ID
  * on every create and every send; a launch with an arbitrary task is more than one Allow).
  */
 export function createApprove({ auth, isRequired }: ApproveDeps): Approve {

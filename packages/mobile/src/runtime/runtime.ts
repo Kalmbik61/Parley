@@ -219,11 +219,11 @@ export class AppRuntime {
         if (next.snapshot !== prev.snapshot) this.#set({ lastUpdatedAt: platform.now() });
         if (next.hostStatus !== prev.hostStatus) this.#set({ hostStatus: next.hostStatus });
       }),
-      platform.appState.subscribe((s) => client.refresher.setForeground(s === 'active')),
+      platform.appState.subscribe((s) => client.setForeground(s === 'active')),
       supervisor.subscribe((status) => {
         const ready = status.state === 'ready';
         if (ready && this.#state.supervisor?.state !== 'ready') this.registerPush();
-        client.refresher.setConnected(ready);
+        client.setConnected(ready);
         client.setBridgeMethods(ready ? (status.hello?.methods ?? null) : null);
         const failing = status.state === 'waiting' || status.state === 'offline';
         this.#set({
