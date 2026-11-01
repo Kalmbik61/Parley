@@ -303,14 +303,16 @@ function roomTaskOf(map: WorkMap, message: Message, recipientId: string) {
 /**
  * Поручение плана, которым владеет письмо: ссылка на план, ревизию и пункт считается на сервере по эффекту плана
  * (`planEffectOwnsLetter` сверяет id письма, отправителя Parley, адресата и текст), а не по тексту письма —
- * «Accepted plan…» в чужом письме полномочий не даёт. Эффект без плана (`mode`) поручением не считается; письма
- * автономного плана до ответа не доходят (`unreadFor`). `current` — поручение всё ещё действует; устаревшие письма
- * плана `unreadFor` отсекает раньше, поэтому в ответе `check_inbox` оно практически всегда `true`. Письма лежат вне
- * карты, поэтому актуальность эффекта сверяется через `byId` записи, в которой письма отдаются.
+ * «Accepted plan…» в чужом письме полномочий не даёт. Эффект без плана (`mode`) и эффект автономного плана
+ * поручением не считаются. `current` — поручение всё ещё действует; устаревшие письма плана `unreadFor` отсекает
+ * раньше, поэтому в ответе `check_inbox` оно практически всегда `true`. Письма лежат вне карты, поэтому актуальность эффекта сверяется через `byId` записи, в которой письма отдаются.
  */
 function assignmentOf(map: WorkMap, message: Message, byId: (id: string) => Message | undefined) {
   const owner = (map.planEffects ?? []).find((value) => planEffectOwnsLetter(value, message));
   if (owner === undefined || owner.planId === null) return undefined;
+  // Метки поручения — только checklist и verified: письма автономного плана (например `completing` ведущему) ведёт движок.
+  const plan = map.plans?.find((row) => row.id === owner.planId && row.rev === owner.rev);
+  if (plan === undefined || plan.mode === 'autonomous') return undefined;
   return {
     planId: owner.planId,
     rev: owner.rev,

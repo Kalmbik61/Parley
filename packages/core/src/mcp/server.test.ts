@@ -26,7 +26,7 @@ import { addRoom, archiveRoom } from '../work/rooms.js';
 import type { SessionNeed } from '../work/stuck.js';
 import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
-import { HUMAN, type PlanDraft, type WindowWorkMap, type WorkMap } from '../work/types.js';
+import { HUMAN, type PlanDraft, type RoomPlan, type WindowWorkMap, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
 import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
@@ -2042,6 +2042,23 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
 
   const item = (id: number) => ({ planId: 'pl-01', rev: 0, item: id });
 
+  // Минимальное допустимое хранилище автономного плана: проверяется только форма, не работа движка.
+  const autonomousStore = (): NonNullable<RoomPlan['autonomous']> => ({
+    budget: {
+      limits: { attemptsPerItem: 1, repairWaves: 0, minutesPerAttempt: 1, sessions: 1, concurrent: 1 },
+      spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 },
+      reservations: [],
+    },
+    checks: [],
+    coverage: {},
+    criteriaVersion: {},
+    integration: { branch: 'b', baseSha: 'a', verifiedHead: 'a', candidateHead: null, queue: [], suspended: null },
+    attempts: [],
+    ops: [],
+    halted: null,
+    seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
+  });
+
   it('поручение плана несёт assignment (current: true), а ответ — openAssignments и подсказку', async () => {
     const { owner } = await planRoom();
 
@@ -2147,22 +2164,7 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
     await updateMap(project, workId, (map) => {
       const plan = map.plans![0]!;
       plan.mode = 'autonomous';
-      // Минимальное допустимое хранилище автономного плана: проверяется только форма, не работа движка.
-      plan.autonomous = {
-        budget: {
-          limits: { attemptsPerItem: 1, repairWaves: 0, minutesPerAttempt: 1, sessions: 1, concurrent: 1 },
-          spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 },
-          reservations: [],
-        },
-        checks: [],
-        coverage: {},
-        criteriaVersion: {},
-        integration: { branch: 'b', baseSha: 'a', verifiedHead: 'a', candidateHead: null, queue: [], suspended: null },
-        attempts: [],
-        ops: [],
-        halted: null,
-        seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
-      };
+      plan.autonomous = autonomousStore();
     });
 
     const inbox = await callOk(owner, 'check_inbox');
@@ -2170,6 +2172,38 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
     expect(lettersOf(inbox)).toEqual([]);
     expect(inbox).not.toHaveProperty('openAssignments');
     expect(inbox).not.toHaveProperty('hint');
+  });
+
+  /** Автономный план, дошедший до completing: движок резервирует ведущему письмо о завершении. */
+  async function completingAutonomous(): Promise<Client> {
+    const { lead } = await planRoom();
+    await updateMap(project, workId, (map, letters) => {
+      const plan = map.plans![0]!;
+      plan.mode = 'autonomous';
+      plan.autonomous = autonomousStore();
+      plan.status = 'completing';
+      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+    });
+    const effects = (await readMap(project, workId)).planEffects ?? [];
+    expect(effects.some((effect) => effect.kind === 'completing' && effect.target === 's-01')).toBe(true);
+    return lead;
+  }
+
+  // Письмо самого движка доходит, но поручением плана не считается: автономный план ведёт движок.
+  const expectNoAssignment = (inbox: Record<string, unknown>): void => {
+    const letters = lettersOf(inbox);
+    expect(letters.map((letter) => letter.text)).toEqual([expect.stringContaining('is ready for human completion')]);
+    expect(letters[0]).not.toHaveProperty('assignment');
+    expect(inbox).not.toHaveProperty('openAssignments');
+    expect(inbox).not.toHaveProperty('hint');
+  };
+
+  it('автономный план в completing: check_inbox отдаёт письмо ведущему без assignment, openAssignments и подсказки', async () => {
+    expectNoAssignment(await callOk(await completingAutonomous(), 'check_inbox'));
+  });
+
+  it('автономный план в completing: wait_for("inbox") тоже без assignment, openAssignments и подсказки', async () => {
+    expectNoAssignment(await callOk(await completingAutonomous(), 'wait_for', { target: 'inbox', timeoutSec: 5 }));
   });
 });
 
