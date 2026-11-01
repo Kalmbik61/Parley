@@ -11,7 +11,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Сегмент «Agents» в строке статуса (спека сна агентов и ёмкости, 4.5): потолок машины 2 (`PARLEY_MACHINE_CONCURRENT`),
  * давление памяти `warn` из файла (`PARLEY_MEMORY_PRESSURE_FILE`), три сессии из окна: человек не упирается в потолок,
  * поэтому живых 3 из 2. Текст сегмента совпадает с ответом хоста `capacity.get`; в окне 800×500 строка статуса не
- * переполняется и виден короткий вид; поповер показывает строку памяти. Раскладка — при масштабе 1 и 2.
+ * переполняется, виден только значок (имена провайдеров целы), полный текст в title; поповер показывает строку памяти. Раскладка — при масштабе 1 и 2.
  * Агент — эхо-заглушка, настоящий `claude` не запускается.
  */
 
@@ -112,7 +112,7 @@ test.describe('ёмкость машины в строке статуса', () =
   });
 
   for (const dpr of [1, 2]) {
-    test(`в окне 800×500 строка статуса не переполняется, виден короткий вид (масштаб ${dpr})`, async () => {
+    test(`в окне 800×500 строка статуса не переполняется, виден только значок (масштаб ${dpr})`, async () => {
       test.setTimeout(90_000);
       const { application, window } = await launch([`--force-device-scale-factor=${dpr}`]);
       await resize(application, 800, 500);
@@ -120,9 +120,12 @@ test.describe('ёмкость машины в строке статуса', () =
       const segment = window.locator('[data-capacity-segment]');
       await expect(segment).toBeVisible();
       await expect(segment).toBeInViewport({ ratio: 1 });
-      // Ниже 1100 px полный текст скрыт (display none), виден короткий «3/2»; полный остаётся в title.
-      await expect(segment.locator('span').first()).toHaveCSS('display', 'none');
-      await expect(segment.getByText('3/2', { exact: true })).toBeVisible();
+      // Ниже 960 px оба текста скрыты (display none), виден один значок; полный текст остаётся в title.
+      const spans = segment.locator('span');
+      await expect(spans).toHaveCount(2);
+      await expect(spans.nth(0)).toHaveCSS('display', 'none');
+      await expect(spans.nth(1)).toHaveCSS('display', 'none');
+      await expect(segment.locator('svg')).toBeVisible();
       await expect(segment).toHaveAttribute('title', 'Agents 3/2 · memory warn');
 
       // Корень строки статуса — дед сегмента (сегмент → правая группа → строка): ничто не выпирает за её границы.

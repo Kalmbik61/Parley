@@ -61,18 +61,31 @@ describe('CapacitySegment', () => {
     expect(trigger().getAttribute('title')).toBe('Agents 2/4');
   });
 
-  it('короткая форма узкого окна: 17/18 или 17, полный текст скрыт ниже 1100 px', () => {
+  it('три вида по ширине: иконка ниже 960 px, короткая форма 17/18 или 17 от 960 до 1100, полный текст от 1100 px', () => {
     show(snapshot({ live: 17, limit: 18, queued: 3 }));
     const { unmount } = render(<CapacitySegment />);
     const full = screen.getByText('Agents 17/18 · 3 queued');
     const short = screen.getByText('17/18');
     expect(full.className).toContain('hidden');
     expect(full.className).toContain('min-[1100px]:inline');
+    expect(short.className).toContain('hidden');
+    expect(short.className).toContain('min-[960px]:inline');
     expect(short.className).toContain('min-[1100px]:hidden');
     unmount();
     show(snapshot({ live: 17 }));
     render(<CapacitySegment />);
-    expect(screen.getByText('17').className).toContain('min-[1100px]:hidden');
+    const shortOnly = screen.getByText('17');
+    expect(shortOnly.className).toContain('min-[960px]:inline');
+    expect(shortOnly.className).toContain('min-[1100px]:hidden');
+  });
+
+  it('ниже 960 px остаётся иконка: тон предупреждения на кнопке, полный текст в title и aria-label', () => {
+    show(snapshot({ live: 17, limit: 18, queued: 3 }));
+    render(<CapacitySegment />);
+    expect(trigger().querySelector('svg')).not.toBeNull();
+    expect(trigger().className).toContain('text-accent-700');
+    expect(trigger().getAttribute('title')).toBe('Agents 17/18 · 3 queued');
+    expect(trigger().getAttribute('aria-label')).toBe('Agents 17/18 · 3 queued');
   });
 
   it('тон предупреждения: critical, очередь и live > limit; в норме его нет', () => {

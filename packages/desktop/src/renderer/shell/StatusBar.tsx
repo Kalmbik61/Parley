@@ -340,7 +340,8 @@ export function StatusBar({
       </button>
       {/* Уведомление хоста — заполнитель: берёт то, что осталось, и уступает первым. */}
       <span className="min-w-0 flex-1 truncate text-right">{noticeLine}</span>
-      <div className="flex shrink-0 items-center gap-3.5">
+      {/* Ниже 960 px зазоры между правыми сегментами тесные: места хватает именам провайдеров. */}
+      <div className="flex shrink-0 items-center gap-1 min-[960px]:gap-3.5">
         {attentionText === '' ? null : (
           <button type="button" data-attention-segment onClick={onNextAttention} className={SEGMENT_BUTTON}>
             {attentionText}
