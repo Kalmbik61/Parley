@@ -54,6 +54,16 @@ it('consents.decide: решение окна и острова пишет дов
   expect(consents.decide).toHaveBeenCalledWith('c-01', 'allow', 'window');
 });
 
+it('consents.decide от моста телефонов (роль remote) пишет доверие от phone — для обоих видов карточек', async () => {
+  const { consents, handlers } = build();
+  const remote = { client: { role: 'remote' } } as unknown as RequestInfo;
+
+  expect(await handlers['consents.decide']?.({ id: 'c-01', decision: 'allow' }, remote)).toEqual({ applied: true, state: 'allowed' });
+  expect(await handlers['consents.decide']?.({ id: 'c-02', decision: 'deny' }, remote)).toEqual({ applied: true, state: 'allowed' });
+  expect(consents.decide).toHaveBeenNthCalledWith(1, 'c-01', 'allow', 'phone');
+  expect(consents.decide).toHaveBeenNthCalledWith(2, 'c-02', 'deny', 'phone');
+});
+
 it('trust.grant → trust.list → trust.revoke: запись в trust.json выбранного дома', async () => {
   const { handlers } = build();
   const folder = await mkdtemp(path.join(tmpdir(), 'parley-consent-folder-'));
@@ -91,6 +101,45 @@ it('trust.check: доверена ли папка — по realpath, путь ч
     await handlers['trust.revoke']?.({ folder: link }, request);
     expect(await handlers['trust.check']?.({ folder }, request)).toEqual({ trusted: false });
   } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+it('consents.decide с телефона на настоящем сервисе: доверие к папке пишется с by: phone, смена провайдера доходит до switchAgent', async () => {
+  const { createConsentsService } = await import('../consents/consents-service.js');
+  const { grantTrust, listTrust } = await import('@parley/core');
+  const switchAgent = vi.fn(async () => ({ outcome: 'started' }));
+  const continueLaunch = vi.fn(async () => {});
+  const service = createConsentsService({
+    home,
+    host: { broadcast: () => {}, log: { info: () => {}, warn: () => {}, error: () => {} } },
+    trust: { grant: (folder, by) => grantTrust(folder, by, home) },
+    continueLaunch,
+    refuseLaunch: async () => {},
+    isLive: async () => false,
+    switchAgent,
+    tellRequester: async () => {},
+    noticeFailure: () => {},
+  });
+  const folder = await mkdtemp(path.join(tmpdir(), 'parley-consent-phone-'));
+  try {
+    const remote = { client: { role: 'remote' } } as unknown as RequestInfo;
+    const handlers = createConsentHandlers({ consents: service, home }) as unknown as Record<string, Call>;
+    const hold = { ref: { projectPath: folder, workId: 'w-01', sessionId: 's-02' }, mode: 'launch' as const, by: 'human' };
+    const trustCard = service.request({ projectPath: folder, folder: await realpath(folder), requestedBy: { source: 'launch' } }, hold);
+    expect(await handlers['consents.decide']?.({ id: trustCard.id, decision: 'allow' }, remote)).toEqual({ applied: true, state: 'allowed' });
+    expect(await listTrust(home)).toEqual([expect.objectContaining({ folder: await realpath(folder), by: 'phone' })]);
+    await vi.waitFor(() => expect(continueLaunch).toHaveBeenCalledWith(hold));
+
+    const target = { projectPath: '/p', workId: 'w-01', sessionId: 's-03' };
+    const switchCard = service.requestSwitch({
+      ref: target, provider: 'codex', providerLabel: 'Codex', model: null, reason: 'limit',
+      requestedBy: { sessionId: 's-01', label: 'Lead' },
+    });
+    expect(await handlers['consents.decide']?.({ id: switchCard.id, decision: 'allow' }, remote)).toEqual({ applied: true, state: 'allowed' });
+    await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledWith(target, { requestId: switchCard.id, provider: 'codex', force: true, by: 's-01' }));
+  } finally {
+    service.stop();
     await rm(folder, { recursive: true, force: true });
   }
 });

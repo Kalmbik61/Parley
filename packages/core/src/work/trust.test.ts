@@ -44,6 +44,12 @@ describe('trust.json: согласие на папку проекта', () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
+  it('запись телефона (by: phone) переживает чтение: папка доверенная, в списке by: phone', async () => {
+    const record = await grantTrust(project, 'phone', home);
+    expect(await isTrusted(project, home)).toBe(true);
+    expect(await listTrust(home)).toEqual([{ folder: record.folder, grantedAt: record.grantedAt, by: 'phone' }]);
+  });
+
   it('символическая ссылка на папку — тот же ключ и то же согласие', async () => {
     const link = path.join(root, 'link-to-project');
     await symlink(project, link);

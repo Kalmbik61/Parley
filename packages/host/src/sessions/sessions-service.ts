@@ -48,6 +48,8 @@ import {
   baseBranchOf,
   createNewSession,
   createPendingSession,
+  createWork,
+  UNTITLED_WORK,
   createWorktree,
   checkProjectConnectivity,
   ensureParleyMd,
@@ -1339,7 +1341,8 @@ export function createSessionsService(
     timer: ReturnType<typeof createStepTimer>,
     logged: { sessionId?: string },
   ): Promise<CreatedSession> {
-    const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
+    const { projectPath, provider, label, task, parent, worktree, lean } = input;
+    let { workId } = input;
     if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
     if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
@@ -1377,6 +1380,12 @@ export function createSessionsService(
     // Проверка до создания сессии — иначе в карте осталась бы pending-сессия, которую нечем завести.
     if (worktree === true && !(await timer.step('git', () => isGitRepo(projectPath)))) {
       throw new HostError('bad_request', 'the project has no git — a worktree cannot be created');
+    }
+
+    // Новая работа с задачей (New session с телефона, спека мобильного приложения 4.2): сначала работа — так же, как окно
+    // зовёт `works.create`, — а дальше обычный путь запуска с задачей; без этого агент ушёл бы в новую работу без задачи.
+    if (workId === null && task !== '') {
+      workId = (await timer.step('record', () => createWork(projectPath, { title: UNTITLED_WORK, goal: '' }))).work.id;
     }
 
     if (workId === null) {

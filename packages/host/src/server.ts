@@ -51,6 +51,13 @@ export interface RemoteLaunchPolicy {
   projectKnown(projectPath: string): boolean;
   /** Работа этого проекта существует, архивная тоже: чтения и решения по ней. */
   workKnown(projectPath: string, workId: string): boolean;
+  /** Сессия есть в карте этой работы известного проекта: сообщение агенту `pty.send` (спека 4.2, правки 15). */
+  sessionKnown(projectPath: string, workId: string, sessionId: string): boolean;
+  /**
+   * `sessions.create` с `trustFolder: true`: доверить папку проекта до запуска тем же путём, что окно (`trust.check`,
+   * затем `trust.grant` с `by: 'phone'`). Зовётся только после всех проверок роли `remote`.
+   */
+  trustFolder(projectPath: string): Promise<void>;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -71,13 +78,18 @@ const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEA
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
-/** Методы запуска с телефона за одним переключателем `remoteCreate` (спека 4.2); `providers.list` и `roles.list` — чтение. */
+/** Методы запуска с телефона: только в существующую неархивную работу (`sessions.create` — ещё и в новую). */
 const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
+/**
+ * За одним переключателем `remoteCreate` (спека 4.2): запуск и сообщение агенту; доверие к папке идёт только
+ * ключом `sessions.create`. `providers.list`, `roles.list` и `trust.check` — чтение.
+ */
+const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([...REMOTE_LAUNCH_METHODS, 'pty.send']);
 
-/** Метод белого списка, открытый клиенту `remote` сейчас: методы запуска — только при включённом `remoteCreate`. */
+/** Метод белого списка, открытый клиенту `remote` сейчас: запуск и сообщения — только при включённом `remoteCreate`. */
 function remoteMethodOpen(name: string, options: ServerOptions): boolean {
   if (!REMOTE_METHOD_SET.has(name)) return false;
-  return !REMOTE_LAUNCH_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
+  return !REMOTE_SWITCHED_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
 }
 /**
  * Что хост принимает из `hello.features` клиента `remote` (спека мобильного приложения 4.4: мост заявляет ровно их).
@@ -236,12 +248,26 @@ function rejectedForRemote(raw: unknown, client: Client, options: ServerOptions)
   return true;
 }
 
-/** Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2). */
-function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
+/**
+ * Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2); `sessions.create`
+ * с `workId: null` — новая работа, но тоже только в известном проекте: произвольную папку с телефона не задать.
+ */
+function remoteWorkOpen(method: string, params: unknown, options: ServerOptions): boolean {
   if (typeof params !== 'object' || params === null) return false;
   const { projectPath, workId } = params as Record<string, unknown>;
-  if (typeof projectPath !== 'string' || typeof workId !== 'string') return false;
+  if (typeof projectPath !== 'string') return false;
+  if (method === 'sessions.create' && workId === null) return options.remoteLaunch?.projectKnown(projectPath) === true;
+  if (typeof workId !== 'string') return false;
   return options.remoteLaunch?.workOpen(projectPath, workId) === true;
+}
+
+/** Сообщение агенту с телефона — только в сессию из карты известного проекта (спека 4.2, правки 15). */
+function remoteSessionKnown(params: unknown, options: ServerOptions): boolean {
+  const ref = (params as Record<string, unknown>).ref;
+  if (typeof ref !== 'object' || ref === null) return false;
+  const { projectPath, workId, sessionId } = ref as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof sessionId !== 'string') return false;
+  return options.remoteLaunch?.sessionKnown(projectPath, workId, sessionId) === true;
 }
 
 /** Проект и работа, которые называет вызов: верхний уровень и `ref` сессии (у `roles.list` — оба). */
@@ -263,9 +289,15 @@ function remoteTargets(params: unknown): { projectPath: string; workId: string |
  * проектом — в известный проект и существующую работу. Вызовы без проекта (`works.list`, `host.info`) не затронуты.
  */
 function remoteTargetsKnown(method: string, params: unknown, options: ServerOptions): boolean {
-  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(params, options);
+  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(method, params, options);
+  if (method === 'pty.send') return remoteSessionKnown(params, options);
   const policy = options.remoteLaunch;
   if (policy === undefined) return true;
+  // `trust.check {folder}` — ответ только для известного проекта: телефон не узнаёт, доверена ли чужая папка.
+  if (method === 'trust.check') {
+    const { folder } = params as Record<string, unknown>;
+    return typeof folder === 'string' && policy.projectKnown(folder);
+  }
   return remoteTargets(params).every(({ projectPath, workId }) =>
     workId === null ? policy.projectKnown(projectPath) : policy.workKnown(projectPath, workId),
   );
@@ -307,7 +339,10 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   }
 
   const { id, method } = parsed.message;
-  if (client.role === 'remote' && !checkRemoteParams(method, parsed.params)) {
+  // Правила роли `remote` смотрят на параметры кадра, а не на разобранные схемой: схема отбрасывает незнакомые ключи, и
+  // правило не увидело бы ни обязательного `clientMsgId` у `pty.send`, ни `trustFolder` у `sessions.create`, ни лишнего
+  // ключа (спека 4.2: лишний ключ → `bad_request`). Так же проверяет мост.
+  if (client.role === 'remote' && !checkRemoteParams(method, parsed.message.params)) {
     client.send({ id, error: { code: 'bad_request', message: `params are not allowed for remote clients: ${method}` } });
     return;
   }
@@ -349,7 +384,18 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     }
   };
 
-  Promise.resolve(handler(parsed.params as never, request))
+  // `trustFolder: true` с телефона (спека 4.2): запись доверия — после всех проверок роли и до запуска. Схема хоста ключ
+  // не знает и отбрасывает, поэтому он читается из кадра; правило параметров уже проверило, что это boolean.
+  const trustFirst =
+    client.role === 'remote' && method === 'sessions.create' && (parsed.message.params as Record<string, unknown>).trustFolder === true
+      ? (parsed.params as { projectPath: string }).projectPath
+      : null;
+  const policy = options.remoteLaunch;
+  // Без доверия обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не меняется.
+  const pending = trustFirst === null || policy === undefined
+    ? Promise.resolve(handler(parsed.params as never, request))
+    : policy.trustFolder(trustFirst).then(() => handler(parsed.params as never, request));
+  pending
     .then((result) => {
       client.send({ id, result });
       logIfSlow({ ok: true, result });

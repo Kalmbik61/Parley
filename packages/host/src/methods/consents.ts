@@ -19,8 +19,10 @@ export function createConsentHandlers(deps: { consents: ConsentsService; home: s
     'trust.revoke': Handler<'trust.revoke'>;
   } = {
     'consents.list': async () => ({ items: deps.consents.list() }),
-    // Окно и остров — один сокет хоста, оба пишут доверие от `window`; Telegram зовёт сервис напрямую с `telegram`.
-    'consents.decide': async (params) => deps.consents.decide(params.id, params.decision, 'window'),
+    // Окно и остров — один сокет хоста, оба пишут доверие от `window`; мост телефонов (роль `remote`) — от `phone`;
+    // Telegram зовёт сервис напрямую с `telegram`. Виды карточек для всех одни (доверие к папке и смена провайдера).
+    'consents.decide': async (params, request) =>
+      deps.consents.decide(params.id, params.decision, request.client.role === 'remote' ? 'phone' : 'window'),
     'trust.list': async () => ({ folders: await listTrust(deps.home) }),
     // Realpath папки берёт сам `isTrusted`: путь через символическую ссылку — та же папка, что в `trust.json`.
     'trust.check': async (params) => ({ trusted: await isTrusted(params.folder, deps.home) }),
