@@ -682,3 +682,360 @@ describe('fanout', () => {
     expect(events('d2', 'works.changed').map((f) => f.data.revision)).toEqual([1, 2]);
   });
 });
+
+describe('A30: feed subscriptions across phones', () => {
+  const sub = (deviceId: string, id: string, sessionId = 's-1') => call(deviceId, id, 'feed.subscribe', { ref: ref(sessionId) });
+  const unsub = (deviceId: string, id: string, sessionId = 's-1') => call(deviceId, id, 'feed.unsubscribe', { ref: ref(sessionId) });
+  const hostCalls = (method: string) => host.calls.filter((c) => c.method === method);
+  const delta = (sessionId: string, revision: number) => ({ ref: ref(sessionId), revision, upsert: [], removed: [], mode: null });
+  const answer = (deviceId: string, id: string) => sessions.of(deviceId).find((f) => f.id === id);
+
+  beforeEach(() => {
+    online();
+    dispatcher.onOpen('d1');
+    dispatcher.onOpen('d2');
+  });
+
+  it('two phones subscribed: the host is subscribed once; one leaves, the subscription stays; the other disconnects, it is removed', async () => {
+    sub('d1', 'a');
+    await flush();
+    sub('d2', 'b');
+    await flush();
+    expect(hostCalls('feed.subscribe')).toEqual([{ method: 'feed.subscribe', params: { ref: ref('s-1') } }]);
+    expect(answer('d1', 'a')).toEqual({ id: 'a', result: { ok: true } });
+    expect(answer('d2', 'b')).toEqual({ id: 'b', result: { ok: true } });
+
+    unsub('d1', 'c');
+    await flush();
+    expect(answer('d1', 'c')).toEqual({ id: 'c', result: { ok: true } });
+    expect(hostCalls('feed.unsubscribe')).toEqual([]);
+    host.event('feed.changed', delta('s-1', 2));
+    expect(events('d1', 'feed.changed')).toEqual([]);
+    expect(events('d2', 'feed.changed')).toEqual([{ event: 'feed.changed', data: delta('s-1', 2) }]);
+
+    dispatcher.onClose('d2');
+    await flush();
+    expect(hostCalls('feed.unsubscribe')).toEqual([{ method: 'feed.unsubscribe', params: { ref: ref('s-1') } }]);
+  });
+
+  it('feed.changed goes only to phones subscribed to that ref; consents.changed goes to every phone', async () => {
+    sub('d1', 'a', 's-1');
+    sub('d2', 'b', 's-2');
+    await flush();
+    host.event('feed.changed', delta('s-1', 5));
+    host.event('feed.changed', delta('s-3', 1));
+    host.event('consents.changed', { upsert: [], removed: ['c-1'] });
+    expect(events('d1', 'feed.changed').map((f) => f.data.ref.sessionId)).toEqual(['s-1']);
+    expect(events('d2', 'feed.changed')).toEqual([]);
+    expect(events('d1', 'consents.changed')).toHaveLength(1);
+    expect(events('d2', 'consents.changed')).toHaveLength(1);
+  });
+
+  it('race: phones subscribing while the first host subscribe is in flight join it (one host call, all answered after it)', async () => {
+    const resolvers: ((v: unknown) => void)[] = [];
+    host.handler = () => new Promise((r) => resolvers.push(r));
+    sub('d1', 'a');
+    sub('d2', 'b');
+    sub('d1', 'a2');
+    await flush();
+    expect(hostCalls('feed.subscribe')).toHaveLength(1);
+    expect(answer('d1', 'a')).toBeUndefined();
+    expect(answer('d2', 'b')).toBeUndefined();
+    resolvers[0]!({ ok: true });
+    await flush();
+    expect(answer('d1', 'a')).toEqual({ id: 'a', result: { ok: true } });
+    expect(answer('d1', 'a2')).toEqual({ id: 'a2', result: { ok: true } });
+    expect(answer('d2', 'b')).toEqual({ id: 'b', result: { ok: true } });
+    expect(hostCalls('feed.subscribe')).toHaveLength(1);
+    // The duplicate subscribe of d1 is idempotent: one unsubscribe per phone frees the ref.
+    unsub('d1', 'u1');
+    unsub('d2', 'u2');
+    await flush();
+    expect(hostCalls('feed.unsubscribe')).toHaveLength(1);
+  });
+
+  it('race: unsubscribe while the host subscribe is in flight ends unsubscribed at the host', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = (method) => (method === 'feed.subscribe' ? new Promise((r) => (resolve = r)) : Promise.resolve({ ok: true }));
+    sub('d1', 'a');
+    await flush();
+    unsub('d1', 'b');
+    await flush();
+    expect(hostCalls('feed.unsubscribe')).toEqual([]);
+    resolve({ ok: true });
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.subscribe', 'feed.unsubscribe']);
+    host.event('feed.changed', delta('s-1', 2));
+    expect(events('d1', 'feed.changed')).toEqual([]);
+  });
+
+  it('race: subscribe while the host unsubscribe is in flight subscribes again after it', async () => {
+    sub('d1', 'a');
+    await flush();
+    let resolve!: (v: unknown) => void;
+    host.handler = (method) => (method === 'feed.unsubscribe' ? new Promise((r) => (resolve = r)) : Promise.resolve({ ok: true }));
+    unsub('d1', 'b');
+    await flush();
+    sub('d2', 'c');
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.subscribe', 'feed.unsubscribe']);
+    expect(answer('d2', 'c')).toBeUndefined();
+    resolve({ ok: true });
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.subscribe', 'feed.unsubscribe', 'feed.subscribe']);
+    expect(answer('d2', 'c')).toEqual({ id: 'c', result: { ok: true } });
+    host.event('feed.changed', delta('s-1', 3));
+    expect(events('d2', 'feed.changed')).toHaveLength(1);
+  });
+
+  it('race: a phone that disconnects while its subscribe is in flight leaves no host subscription behind', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = (method) => (method === 'feed.subscribe' ? new Promise((r) => (resolve = r)) : Promise.resolve({ ok: true }));
+    sub('d1', 'a');
+    await flush();
+    dispatcher.onClose('d1');
+    resolve({ ok: true });
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.subscribe', 'feed.unsubscribe']);
+  });
+
+  it('a new epoch re-subscribes once per ref for the live subscribed phones only', async () => {
+    sub('d1', 'a', 's-1');
+    sub('d2', 'b', 's-1');
+    sub('d2', 'c', 's-2');
+    await flush();
+    dispatcher.onClose('d2');
+    await flush();
+    host.drop();
+    host.calls = [];
+    host.connect('b:2');
+    host.load(1);
+    await flush();
+    // s-1 still has d1; s-2 lost its only phone before the drop.
+    expect(host.calls).toEqual([{ method: 'feed.subscribe', params: { ref: ref('s-1') } }]);
+    host.event('feed.changed', delta('s-1', 1));
+    expect(events('d1', 'feed.changed')).toHaveLength(1);
+    // The phone re-subscribing on resync is idempotent: no second host call in this epoch.
+    sub('d1', 'r', 's-1');
+    await flush();
+    expect(hostCalls('feed.subscribe')).toHaveLength(1);
+    expect(answer('d1', 'r')).toEqual({ id: 'r', result: { ok: true } });
+    // The last unsubscribe in the new epoch reaches the new connection.
+    unsub('d1', 'u', 's-1');
+    await flush();
+    expect(hostCalls('feed.unsubscribe')).toHaveLength(1);
+  });
+
+  it('unsubscribe while the host is away is kept: no host call for the dead subscription, no re-subscribe in the new epoch', async () => {
+    sub('d1', 'a');
+    await flush();
+    host.drop();
+    unsub('d1', 'b');
+    await flush();
+    expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
+    host.connect('b:2');
+    host.load(1);
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['feed.subscribe']);
+  });
+
+  it('a re-subscribe the host refuses in the new epoch drops the subscribers', async () => {
+    sub('d1', 'a');
+    await flush();
+    host.drop();
+    host.handler = async () => {
+      throw new HostCallError('not_found', 'no session');
+    };
+    host.connect('b:2');
+    host.load(1);
+    await flush();
+    host.event('feed.changed', delta('s-1', 1));
+    expect(events('d1', 'feed.changed')).toEqual([]);
+    host.handler = async () => ({ ok: true });
+    sub('d1', 'b');
+    await flush();
+    expect(hostCalls('feed.subscribe')).toHaveLength(3);
+  });
+
+  it('a host error on subscribe reaches the phone and leaves it unsubscribed; the next subscribe asks the host again', async () => {
+    host.handler = async () => {
+      throw new HostCallError('not_found', 'no session s-9');
+    };
+    sub('d1', 'a', 's-9');
+    await flush();
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'not_found' } });
+    host.event('feed.changed', delta('s-9', 1));
+    expect(events('d1', 'feed.changed')).toEqual([]);
+    host.handler = async () => ({ ok: true });
+    sub('d1', 'b', 's-9');
+    await flush();
+    expect(hostCalls('feed.subscribe')).toHaveLength(2);
+    expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
+  });
+
+  it('a malformed ref is bad_request and never reaches the host', async () => {
+    call('d1', 'a', 'feed.subscribe', { ref: { projectPath: '/p', workId: 1, sessionId: 's-1' } });
+    call('d1', 'b', 'feed.subscribe', {});
+    await flush();
+    expect(host.calls).toEqual([]);
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(answer('d1', 'b')).toMatchObject({ error: { code: 'bad_request' } });
+  });
+
+  it('the snapshot is per phone: each feed.snapshot is its own host call and answer', async () => {
+    let n = 0;
+    host.handler = async () => ({ items: [], revision: ++n, schemaVersion: 1, mode: null });
+    call('d1', 'a', 'feed.snapshot', { ref: ref('s-1') });
+    call('d2', 'b', 'feed.snapshot', { ref: ref('s-1') });
+    await flush();
+    expect(hostCalls('feed.snapshot')).toHaveLength(2);
+    expect(answer('d1', 'a')?.result.revision).not.toBe(answer('d2', 'b')?.result.revision);
+  });
+});
+
+describe('A30: pty.send without duplicates', () => {
+  const params = (clientMsgId: string, text = 'hello agent') => ({ ref: ref('s-1'), text, submit: true, clientMsgId });
+  const send = (deviceId: string, id: string, clientMsgId: string, text?: string) => call(deviceId, id, 'pty.send', params(clientMsgId, text));
+  const sends = () => host.calls.filter((c) => c.method === 'pty.send');
+  const answer = (deviceId: string, id: string) => sessions.of(deviceId).find((f) => f.id === id);
+
+  beforeEach(() => {
+    online();
+    dispatcher.onOpen('d1');
+  });
+
+  it('a repeat with the same clientMsgId gets the same answer without a second host call; params reach the host unchanged', async () => {
+    host.handler = async () => ({ ok: true, queued: false });
+    send('d1', 'a', 'msg-00000001');
+    await flush();
+    send('d1', 'b', 'msg-00000001');
+    await flush();
+    expect(sends()).toEqual([{ method: 'pty.send', params: params('msg-00000001') }]);
+    expect(answer('d1', 'a')).toEqual({ id: 'a', result: { ok: true, queued: false } });
+    expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true, queued: false } });
+  });
+
+  it('race: a repeat that arrives while the first call is in flight joins it', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = () => new Promise((r) => (resolve = r));
+    send('d1', 'a', 'msg-00000002');
+    send('d1', 'b', 'msg-00000002');
+    await flush();
+    send('d1', 'c', 'msg-00000002');
+    await flush();
+    expect(sends()).toHaveLength(1);
+    resolve({ ok: true });
+    await flush();
+    for (const id of ['a', 'b', 'c']) expect(answer('d1', id)).toEqual({ id, result: { ok: true } });
+    expect(sends()).toHaveLength(1);
+  });
+
+  it('race: the phone loses its session mid-call and repeats on the new one: one host call, the answer reaches the new session', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = () => new Promise((r) => (resolve = r));
+    send('d1', 'a', 'msg-00000003');
+    await flush();
+    dispatcher.onClose('d1');
+    sessions.frames.delete('d1');
+    dispatcher.onOpen('d1');
+    send('d1', 'b', 'msg-00000003');
+    await flush();
+    resolve({ ok: true });
+    await flush();
+    expect(sends()).toHaveLength(1);
+    expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
+    // After the call finished, a later repeat on yet another session still gets the cached answer.
+    dispatcher.onClose('d1');
+    dispatcher.onOpen('d1');
+    send('d1', 'c', 'msg-00000003');
+    await flush();
+    expect(sends()).toHaveLength(1);
+    expect(answer('d1', 'c')).toEqual({ id: 'c', result: { ok: true } });
+  });
+
+  it('a host error is cached too (delivery unknown after a timeout): the repeat gets it, the host is not called again', async () => {
+    host.handler = async () => {
+      throw new HostCallError('timeout');
+    };
+    send('d1', 'a', 'msg-00000004');
+    await flush();
+    host.handler = async () => ({ ok: true });
+    send('d1', 'b', 'msg-00000004');
+    await flush();
+    expect(sends()).toHaveLength(1);
+    expect(answer('d1', 'b')).toEqual({ id: 'b', error: { code: 'timeout', message: 'timeout' } });
+  });
+
+  it('a refusal before the host (host offline) is not cached: the repeat reaches the host once it is online', async () => {
+    host.drop();
+    send('d1', 'a', 'msg-00000005');
+    await flush();
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'host_offline' } });
+    host.connect('b:2');
+    host.load(1);
+    send('d1', 'b', 'msg-00000005');
+    await flush();
+    expect(sends()).toHaveLength(1);
+    expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
+  });
+
+  it('the key is per device and per clientMsgId; it expires after 10 minutes', async () => {
+    dispatcher.onOpen('d2');
+    send('d1', 'a', 'msg-00000006');
+    send('d2', 'b', 'msg-00000006');
+    send('d1', 'c', 'msg-00000007');
+    await flush();
+    expect(sends()).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    send('d1', 'd', 'msg-00000006');
+    await flush();
+    expect(sends()).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    send('d1', 'e', 'msg-00000006');
+    await flush();
+    expect(sends()).toHaveLength(4);
+  });
+
+  it('pty.send is mutating: 30 per minute, repeats do not spend the limit; audited with the session as target, text only as length and hash', async () => {
+    for (let i = 0; i < 30; i++) {
+      send('d1', `m${i}`, `msg-limit-${String(i).padStart(3, '0')}`, `secret words ${i}`);
+      await flush();
+    }
+    send('d1', 'repeat', 'msg-limit-000', 'secret words 0');
+    send('d1', 'over', 'msg-limit-999', 'one too many');
+    await flush();
+    expect(sends()).toHaveLength(30);
+    expect(answer('d1', 'repeat')).toEqual({ id: 'repeat', result: { ok: true } });
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+    const calls = audits.filter((a) => a.kind === 'call');
+    expect(calls).toHaveLength(30);
+    expect(calls[0]).toMatchObject({ method: 'pty.send', target: 's-1', outcome: 'ok' });
+    expect(JSON.stringify(audits)).not.toContain('secret words');
+    // The refused one was never sent: a later retry with the same key after the window goes to the host.
+    await vi.advanceTimersByTimeAsync(60_000);
+    send('d1', 'retry', 'msg-limit-999', 'one too many');
+    await flush();
+    expect(sends()).toHaveLength(31);
+  });
+
+  it('pty.send without clientMsgId is bad_request before the host', async () => {
+    call('d1', 'a', 'pty.send', { ref: ref('s-1'), text: 'x', submit: true });
+    await flush();
+    expect(sends()).toEqual([]);
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'bad_request' } });
+  });
+
+  it('consents.decide is mutating: audited with the card as target and limited', async () => {
+    call('d1', 'a', 'consents.decide', { id: 'c-1', decision: 'allow' });
+    await flush();
+    expect(audits).toEqual([expect.objectContaining({ kind: 'call', method: 'consents.decide', target: 'c-1', outcome: 'ok' })]);
+    for (let i = 0; i < 29; i++) {
+      call('d1', `m${i}`, 'consents.decide', { id: `c-${i + 2}`, decision: 'deny' });
+      await flush();
+    }
+    call('d1', 'over', 'consents.decide', { id: 'c-99', decision: 'deny' });
+    await flush();
+    expect(host.calls.filter((c) => c.method === 'consents.decide')).toHaveLength(30);
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+});

@@ -11,8 +11,12 @@ import {
   projectWorksSnapshot,
 } from '@parley/protocol/remote';
 import type { BridgeHello } from '@parley/protocol/remote';
+import type { SessionRef } from '@parley/protocol';
 import type { AuditLog } from './audit.js';
 import { createFanout } from './fanout.js';
+import { createFeedSubscriptions } from './feed-subs.js';
+import { createSendDedupe } from './send-dedupe.js';
+import type { SendOutcome } from './send-dedupe.js';
 import type { SessionHandler, PhoneSessions } from './session-contract.js';
 import { HostCallError } from './host-link.js';
 import type { HostLink } from './host-link.js';
@@ -129,13 +133,33 @@ function targetOf(params: unknown): string | undefined {
   for (const key of ['roomId', 'proposalId', 'workId', 'sessionId', 'id']) {
     if (typeof p[key] === 'string' && (p[key] as string).length <= 128) return p[key] as string;
   }
-  return undefined;
+  // `pty.send`, `feed.subscribe`: цель — сессия из `ref`.
+  const ref = typeof p.ref === 'object' && p.ref !== null ? (p.ref as Record<string, unknown>) : {};
+  return typeof ref.sessionId === 'string' && ref.sessionId.length <= 128 ? ref.sessionId : undefined;
+}
+
+/** `ref` подписки на ленту: три строки, иначе `bad_request` — по нему считается подписка. */
+function sessionRefOf(params: unknown): SessionRef | null {
+  if (typeof params !== 'object' || params === null) return null;
+  const ref = (params as { ref?: unknown }).ref;
+  if (typeof ref !== 'object' || ref === null) return null;
+  const { projectPath, workId, sessionId } = ref as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof sessionId !== 'string') return null;
+  return { projectPath, workId, sessionId };
 }
 
 export function createSessionHandler(options: BridgeOptions): SessionHandler & { stop(): void } {
   const { host, sessions, audit, log, info } = options;
   const push = sessions;
-  const fanout = createFanout({ host, sessions, log, ...(options.coalesceMs === undefined ? {} : { coalesceMs: options.coalesceMs }) });
+  const feedSubs = createFeedSubscriptions({ host, log });
+  const fanout = createFanout({
+    host,
+    sessions,
+    log,
+    feedSubscribers: (ref) => feedSubs.subscribers(ref),
+    ...(options.coalesceMs === undefined ? {} : { coalesceMs: options.coalesceMs }),
+  });
+  const sendDedupe = createSendDedupe(options.now ? { now: options.now } : {});
   const limiter = createRateLimiter(MUTATING_PER_MINUTE, 60_000, options.now);
   const readLimiter = createRateLimiter(READS_PER_MINUTE, 60_000, options.now);
   const pushLimiter = createRateLimiter(PUSH_REGISTER_PER_MINUTE, 60_000, options.now);
@@ -187,6 +211,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   function close(deviceId: string): void {
     devices.delete(deviceId);
     fanout.sessionClosed(deviceId);
+    feedSubs.dropDevice(deviceId);
     sessions.close(deviceId, 'protocol');
   }
 
@@ -233,10 +258,27 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       fail(deviceId, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
       return;
     }
-    if (!checkRemoteParams(method, params)) {
+    const feedRef = method === 'feed.subscribe' || method === 'feed.unsubscribe' ? sessionRefOf(params) : undefined;
+    if (!checkRemoteParams(method, params) || feedRef === null) {
       refuse(deviceId, state, method, params, 'bad_request', 'params');
       fail(deviceId, id, 'bad_request');
       return;
+    }
+    // Отписка — состояние самого моста: проходит и без хоста, и мимо лимитов, иначе намерение телефона потерялось бы,
+    // а новая эпоха подписала бы его снова. Вызов хоста (последний подписчик) делает сама очередь, если хост `online`.
+    if (method === 'feed.unsubscribe' && feedRef) {
+      reply(deviceId, id, { result: await feedSubs.unsubscribe(deviceId, feedRef) });
+      return;
+    }
+    // Повтор `pty.send` с тем же `clientMsgId` — прежний ответ (или ждущий вызов), без хоста и без лимитов: он не
+    // новое действие. Между поиском и записью ключа ниже нет `await` — второй кадр того же ключа найдёт первый вызов.
+    const clientMsgId = method === 'pty.send' ? (params as { clientMsgId: string }).clientMsgId : null;
+    if (clientMsgId !== null) {
+      const prior = sendDedupe.lookup(deviceId, clientMsgId);
+      if (prior) {
+        reply(deviceId, id, await prior);
+        return;
+      }
     }
     // Хост не online (starting, offline, incompatible): ничего не уходит и лимиты не тратятся.
     if (host.status !== 'online') {
@@ -273,21 +315,37 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
 
     state.inFlight++;
     try {
-      const raw = await host.call(method, params ?? {});
+      const outcome = callHost(deviceId, state, method, params, feedRef);
+      // Параметры `pty.send` уходят хосту как есть, с `clientMsgId` (решение ведущего m-2202): правило A27 хост
+      // проверяет то же, его схема лишний ключ отбрасывает.
+      if (clientMsgId !== null) sendDedupe.remember(deviceId, clientMsgId, outcome);
+      reply(deviceId, id, await outcome);
+    } finally {
+      state.inFlight--;
+    }
+  }
+
+  /** Вызов хоста (или подписки моста) → исход для телефона; не отвергается. */
+  async function callHost(deviceId: string, state: DeviceState, method: string, params: unknown, feedRef: SessionRef | undefined): Promise<SendOutcome> {
+    const mutating = MUTATING_METHODS.has(method);
+    try {
+      let raw: unknown;
+      if (feedRef !== undefined) {
+        // `feed.subscribe`: хост видит одного подписчика — мост; счётчик по `ref` на все телефоны (A30).
+        raw = await feedSubs.subscribe(deviceId, feedRef);
+      } else {
+        raw = await host.call(method, params ?? {});
+      }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;
       if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, ...auditOf(method, params), outcome: 'ok' });
-      reply(deviceId, id, { result });
+      return { result };
     } catch (error) {
       const code = error instanceof HostCallError ? error.code : 'internal';
       if (mutating) audit.append({ kind: 'call', deviceId, deviceName: state.name, method, ...auditOf(method, params), outcome: code });
-      if (error instanceof HostCallError) fail(deviceId, id, error.code, error.message, safeErrorData(error.data));
-      else {
-        log.error('dispatch.call_failed', { method, error });
-        fail(deviceId, id, 'internal', 'internal error');
-      }
-    } finally {
-      state.inFlight--;
+      if (error instanceof HostCallError) return { error: { code: error.code, message: error.message, ...safeErrorData(error.data) } };
+      log.error('dispatch.call_failed', { method, error });
+      return { error: { code: 'internal', message: 'internal error' } };
     }
   }
 
@@ -322,6 +380,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       pushLimiter.forget(deviceId);
       helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);
+      // Подписки на ленту телефона сняты; кэш `pty.send` остаётся: повтор после `lost` придёт с новой сессии.
+      feedSubs.dropDevice(deviceId);
     },
     onFrame(deviceId, frame) {
       const state = devices.get(deviceId);
@@ -350,6 +410,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     stop() {
       unsubscribe();
       fanout.stop();
+      feedSubs.stop();
     },
   };
 }
