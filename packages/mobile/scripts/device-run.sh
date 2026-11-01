@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run the dev variant of the Parley iOS app on an iPhone over Wi-Fi (A20 items 16-23). See README, "Run on your iPhone over Wi-Fi".
 #
-#   packages/mobile/scripts/device-run.sh [--skip-build] [--no-relay] [--udid <hardware UDID>]
+#   packages/mobile/scripts/device-run.sh [--skip-build] [--no-relay] [--build-only] [--udid <hardware UDID>]
 #
+# (--build-only stops after the build and leaves the phone and the relay alone.)
 # 1. finds the Mac's LAN IPv4 and starts the dev relay on it (prints the ws:// address);
 # 2. builds the Release configuration of the DEV variant for iphoneos (embedded JS bundle: no Metro, no cable after the
 #    install; optimised Hermes, so the Bench numbers count; ws:// to a private address stays allowed through extra.devBuild);
@@ -13,13 +14,14 @@ set -euo pipefail
 MOBILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$MOBILE/../.." && pwd)"
 UDID="${PARLEY_DEVICE_UDID:-00008150-001179DA0E50C01C}"   # iPhone 17 Pro "Kalmbik"
-BUILD=1 RELAY=1
+BUILD=1 RELAY=1 INSTALL=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) BUILD=0 ;;
     --no-relay) RELAY=0 ;;
+    --build-only) INSTALL=0 RELAY=0 ;;   # build, print the .app path, do not touch the phone
     --udid) UDID="$2"; shift ;;
-    -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -43,7 +45,12 @@ if [ -z "${PORT:-}" ]; then
 fi
 [ -n "${PORT:-}" ] || die "no free port in 8787-8799; set PORT"
 RELAY_PID=""
-cleanup() { [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null || true; }
+cleanup() {
+  if [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null; then
+    echo "The dev relay on $RELAY_WS has been STOPPED with this script; run the script again (--skip-build) to start it." >&2
+  fi
+  RELAY_PID=""
+}
 trap cleanup EXIT INT TERM
 
 if [ "$RELAY" = 1 ]; then
@@ -57,7 +64,7 @@ if [ "$RELAY" = 1 ]; then
 else
   RELAY_WS="ws://$LAN_IP:$PORT"
 fi
-curl -fsS --max-time 3 "http://${RELAY_WS#ws://}/v1/health" >/dev/null || die "relay health check failed at $RELAY_WS"
+if [ "$RELAY" = 1 ]; then curl -fsS --max-time 3 "http://${RELAY_WS#ws://}/v1/health" >/dev/null || die "relay health check failed at $RELAY_WS"; fi
 echo "Relay: $RELAY_WS   (log: $LOGS/relay.log)"
 cat <<EOT
 
@@ -103,29 +110,29 @@ fi
 APP="$DERIVED/Build/Products/Release-iphoneos/Parley.app"
 [ -d "$APP" ] || die "no build at $APP: run without --skip-build"
 
+[ "$INSTALL" = 1 ] || { echo "Build only: $APP"; exit 0; }
+
 # ---- 3. The phone ---------------------------------------------------------------------------------------------------
 JSON="$LOGS/devices.json"
 xcrun devicectl list devices --json-output "$JSON" >/dev/null 2>&1 || true
-STATE="$(node -e '
-  const [f, udid] = process.argv.slice(1);
-  try {
-    const d = (JSON.parse(require("fs").readFileSync(f, "utf8")).result?.devices ?? []).find((x) => x.hardwareProperties?.udid === udid);
-    console.log(d ? `${d.connectionProperties?.tunnelState ?? "unknown"}|${d.deviceProperties?.name ?? ""}` : "absent|");
-  } catch { console.log("absent|"); }
-' "$JSON" "$UDID")"
-case "${STATE%%|*}" in
-  connected) ;;
+STATE="$(node "$MOBILE/scripts/device-state.mjs" "$JSON" "$UDID")"
+IFS='|' read -r PSTATE PNAME PDM <<<"$STATE"
+case "$PSTATE" in
+  ready) ;;
   *) cat >&2 <<EOT
 
-STOP: the iPhone ($UDID) is "${STATE%%|*}". The build is ready at $APP.
-  Connect it by cable (or turn on Wi-Fi sync), unlock it, tap "Trust This Computer", enable Developer Mode
+STOP: the iPhone ($UDID) is "$PSTATE". The build is ready at $APP.
+  Connect it by cable (or Wi-Fi sync), unlock it, tap "Trust This Computer", enable Developer Mode
   (Settings > Privacy & Security > Developer Mode, then restart; the switch appears after the first install attempt),
   then run:  $0 --skip-build
 EOT
      exit 3 ;;
 esac
+[ "$PDM" = disabled ] && die "Developer Mode is off on $PNAME: Settings > Privacy & Security > Developer Mode, restart the phone, run again with --skip-build"
+# A wired phone reports tunnelState "disconnected" until a command needs it; this brings the tunnel up.
+xcrun devicectl device info details --device "$UDID" >/dev/null 2>&1 || true
 
-say "Installing on ${STATE#*|}"
+say "Installing on $PNAME"
 xcrun devicectl device install app --device "$UDID" "$APP" || die "install failed. 'Developer Mode disabled' = enable it and restart the phone; 'profile has not been explicitly trusted' comes at launch"
 say "Launching"
 if ! xcrun devicectl device process launch --device "$UDID" "$PARLEY_MOBILE_BUNDLE_ID"; then

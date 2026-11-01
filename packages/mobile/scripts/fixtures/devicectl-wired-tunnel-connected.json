@@ -1,0 +1,35 @@
+{
+  "result": {
+    "devices": [
+      {
+        "hardwareProperties": {
+          "udid": "00008150-001179DA0E50C01C"
+        },
+        "deviceProperties": {
+          "name": "Kalmbik",
+          "developerModeStatus": "enabled"
+        },
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "lastConnectionDate": "2026-11-01T09:49:00.000Z",
+          "localHostnames": [
+            "Kalmbik.coredevice.local",
+            "AF81BBE8-438F-57CA-B0FF-412998D44774.coredevice.local",
+            "00008150-001179DA0E50C01C.coredevice.local"
+          ],
+          "pairingState": "paired",
+          "potentialHostnames": [
+            "Kalmbik.coredevice.local",
+            "AF81BBE8-438F-57CA-B0FF-412998D44774.coredevice.local",
+            "00008150-001179DA0E50C01C.coredevice.local"
+          ],
+          "transportType": "wired",
+          "tunnelIPAddress": "fd7a:fc51:994a::1",
+          "tunnelState": "connected",
+          "tunnelTransportProtocol": "tcp"
+        }
+      }
+    ]
+  }
+}
