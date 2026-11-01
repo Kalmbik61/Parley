@@ -8,7 +8,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Поиск ⌘F по ленте вида «Chat» (план 2026-11-01, задача 9). Лента сеется из журнала, как в `chat-view.spec.ts`
- * (настоящий журнал пробы p5b, `providerSessionId` сессии подставляется), но в сводки результатов двух вызовов
+ * (настоящий журнал пробы p5b, `providerSessionId` сессии подставляется), но в `toolUseResult.filePath` двух вызовов
  * (`Write` и `Edit`) вписано слово `zebrafish`: оно лежит только внутри вывода вызовов, который в DOM есть лишь у
  * раскрытого вызова, — обычный поиск по странице его бы не нашёл. ⌘F с фокусом в поле сообщения открывает полосу,
  * набранное слово даёт `1/2`, Enter — `2/2`, вызов с совпадением раскрывается и виден на экране, Shift+Enter и Esc
@@ -110,11 +110,11 @@ test.describe('поиск ⌘F по ленте Chat (план 2026-11-01, зад
     if (historyRoot === undefined) throw new Error('нет PARLEY_CLAUDE_PROJECTS_DIR — global-setup не отработал');
     const dir = path.join(historyRoot, `-e2e-chat-find-${ref.sessionId}-${Date.now()}`);
     await mkdir(dir, { recursive: true });
-    // Слово — в сводки результатов `Write` («created successfully») и `Edit` («updated successfully»).
+    // Слово — в `toolUseResult.filePath` двух вызовов (`Write`, `Edit`). Лента берёт вывод вызова из `toolUseResult`, а не из
+    // текста `content` для модели («File created successfully…»): он в ленту не попадает, слово там искать нельзя.
     const records = (await readFile(transcript, 'utf8'))
       .replaceAll(TRANSCRIPT_SESSION_ID, providerSessionId)
-      .replace('File created successfully at', `File created successfully ${WORD} at`)
-      .replace('has been updated successfully', `has been updated ${WORD} successfully`);
+      .replaceAll('"filePath":"<proj>/notes.txt"', `"filePath":"<proj>/${WORD}-notes.txt"`);
     expect(records.split(WORD)).toHaveLength(3);
     await writeFile(path.join(dir, `${providerSessionId}.jsonl`), records);
     await expect
@@ -142,7 +142,7 @@ test.describe('поиск ⌘F по ленте Chat (план 2026-11-01, зад
     await expect(bar.getByTestId('chat-find-count')).toHaveText('1/2');
     // Первое совпадение — сверху: вывод `Write`, вызов раскрыт и на экране.
     const results = chat.getByTestId('chat-tool-result');
-    const first = results.filter({ hasText: 'created successfully' });
+    const first = results.filter({ hasText: '"type": "create"' });
     await expect(first).toHaveCount(1);
     await expect(first).toContainText(WORD);
     await expect(first).toBeInViewport();
@@ -150,7 +150,7 @@ test.describe('поиск ⌘F по ленте Chat (план 2026-11-01, зад
 
     await window.keyboard.press('Enter');
     await expect(bar.getByTestId('chat-find-count')).toHaveText('2/2');
-    const second = results.filter({ hasText: 'has been updated' });
+    const second = results.filter({ hasText: 'newString' });
     await expect(second).toHaveCount(1);
     await expect(second).toContainText(WORD);
     await expect(second).toBeInViewport();
