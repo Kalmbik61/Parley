@@ -314,6 +314,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const findOpen = useChatUiStore((state) => state.find[sessionKey]?.open === true);
   const findFocusNonce = useChatUiStore((state) => state.find[sessionKey]?.focusNonce ?? 0);
   const [findView, setFindView] = useState<FindView | null>(null);
+  const setFindQuery = useCallback((query: string): void => useChatUiStore.getState().setFindQuery(sessionKey, query), [sessionKey]);
   const closeFind = useCallback((): void => {
     useChatUiStore.getState().closeFind(sessionKey);
     setFindView(null);
@@ -542,7 +543,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             fold={chatFold}
             {...(findOpen && visible && findView !== null ? { find: findView } : {})}
           >
-            {findOpen ? <ChatFindBar items={items} focusNonce={findFocusNonce} onChange={setFindView} onClose={closeFind} /> : null}
+            {findOpen ? <ChatFindBar items={items} focusNonce={findFocusNonce} onChange={setFindView} initialQuery={useChatUiStore.getState().find[sessionKey]?.query ?? ''} onQueryChange={setFindQuery} onClose={closeFind} /> : null}
           </FeedList>
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}

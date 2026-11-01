@@ -2469,6 +2469,20 @@ describe('ChatView — поиск ⌘F по ленте (план 2026-11-01, з�
     expect((within(screen.getByTestId('chat-find')).getByRole('textbox') as HTMLInputElement).value).toBe('');
   });
 
+  it('перемонтирование ChatView возвращает открытую полосу с набранным запросом; закрытая открывается пустой', () => {
+    const session = makeSession('s-01', 'S01');
+    const view = renderBody(session);
+    setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    fireEvent.change(within(screen.getByTestId('chat-find')).getByRole('textbox'), { target: { value: 'hello' } });
+    view.unmount();
+    renderBody(session);
+    setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+    const field = within(screen.getByTestId('chat-find')).getByRole('textbox') as HTMLInputElement;
+    expect(field.value).toBe('hello');
+    expect(screen.getByTestId('chat-find-count').textContent).toBe('1/1');
+  });
+
   describe('подсветка в окне с несколькими вкладками Chat', () => {
     class FakeHighlight {
       readonly ranges: Range[];

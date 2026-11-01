@@ -83,10 +83,15 @@ export interface ChatUiState {
   requestRevealItem(sessionKey: string, itemId: string): void;
   /** Погасить просьбу с этим `nonce`; ушедшая раньше или уже заменённая новой — не трогается. */
   clearReveal(nonce: number): void;
-  /** Панель поиска ⌘F по сессии: открыта ли; `focusNonce` растёт на каждый ⌘F — открытая панель берёт фокус заново. */
-  find: Record<string /* sessionKey */, { open: boolean; focusNonce: number }>;
+  /**
+   * Панель поиска ⌘F по сессии: открыта ли; `focusNonce` растёт на каждый ⌘F — открытая панель берёт фокус заново;
+   * `query` — набранное: ChatView может перемонтироваться (смена вкладки, раскладки), а открытая полоса должна вернуться с запросом.
+   */
+  find: Record<string /* sessionKey */, { open: boolean; focusNonce: number; query: string }>;
   openFind(sessionKey: string): void;
+  /** Закрытая полоса забывает запрос: следующий ⌘F открывает пустую. */
   closeFind(sessionKey: string): void;
+  setFindQuery(sessionKey: string, query: string): void;
   setDraft(key: string, text: string): void;
   /** Заменить вложения сессии; тот же массив — стор не трогается. */
   setAttachments(key: string, paths: readonly string[]): void;
@@ -109,11 +114,19 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   reveal: null,
   find: {},
   openFind: (sessionKey) =>
-    set((state) => ({ find: { ...state.find, [sessionKey]: { open: true, focusNonce: (state.find[sessionKey]?.focusNonce ?? 0) + 1 } } })),
+    set((state) => {
+      const was = state.find[sessionKey];
+      return { find: { ...state.find, [sessionKey]: { open: true, focusNonce: (was?.focusNonce ?? 0) + 1, query: was?.open === true ? was.query : '' } } };
+    }),
   closeFind: (sessionKey) =>
     set((state) => {
       const was = state.find[sessionKey];
-      return was === undefined || !was.open ? state : { find: { ...state.find, [sessionKey]: { ...was, open: false } } };
+      return was === undefined || !was.open ? state : { find: { ...state.find, [sessionKey]: { ...was, open: false, query: '' } } };
+    }),
+  setFindQuery: (sessionKey, query) =>
+    set((state) => {
+      const was = state.find[sessionKey];
+      return was === undefined || !was.open || was.query === query ? state : { find: { ...state.find, [sessionKey]: { ...was, query } } };
     }),
   agentPanel: {},
   agentsPin: {},

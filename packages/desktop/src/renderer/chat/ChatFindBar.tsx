@@ -7,7 +7,8 @@
  * Куда прыгнуть, лента узнаёт из `onChange`: у цели свой `nonce`, растёт на каждый шаг человека (ввод, Enter, стрелки),
  * поэтому повторный Enter на единственном совпадении прокручивает снова, а рост стримящегося текста — нет. Текущее
  * совпадение держится по (элемент, часть, номер): лента растёт, а выбор остаётся на месте; пропало — ближайший индекс.
- * Запрос и номер живут здесь и теряются вместе с полосой.
+ * Номер живёт здесь и теряется вместе с полосой; запрос ещё и отдаётся наружу (`onQueryChange`), а вернувшийся
+ * ChatView кладёт его обратно через `initialQuery`: полоса переживает перемонтирование (вкладка, раскладка).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -34,6 +35,10 @@ export interface ChatFindBarProps {
   /** Растёт на каждый ⌘F: открытая полоса берёт фокус и выделяет запрос. */
   focusNonce: number;
   onChange(view: FindView): void;
+  /** Запрос, с которым полоса открывается (после перемонтирования — прежний); номер совпадения начинается с первого. */
+  initialQuery?: string;
+  /** Запрос изменился (ввод человека). */
+  onQueryChange?(query: string): void;
   /** Закрыть полосу; фокус в поле сообщения возвращает вызывающий. */
   onClose(): void;
 }
@@ -45,8 +50,8 @@ interface Cursor {
 
 const same = (a: FindMatch, b: FindMatch): boolean => a.itemId === b.itemId && a.part === b.part && a.nth === b.nth;
 
-export function ChatFindBar({ items, focusNonce, onChange, onClose }: ChatFindBarProps): JSX.Element {
-  const [query, setQuery] = useState('');
+export function ChatFindBar({ items, focusNonce, onChange, initialQuery = '', onQueryChange, onClose }: ChatFindBarProps): JSX.Element {
+  const [query, setQuery] = useState(initialQuery);
   const [cursor, setCursor] = useState<Cursor>({ index: 0, key: null });
   const [step, setStep] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -98,6 +103,7 @@ export function ChatFindBar({ items, focusNonce, onChange, onClose }: ChatFindBa
         placeholder={S.chat.find.placeholder}
         onChange={(event) => {
           setQuery(event.target.value);
+          onQueryChange?.(event.target.value);
           setCursor({ index: 0, key: null });
           setStep((value) => value + 1);
         }}
