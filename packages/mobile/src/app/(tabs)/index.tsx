@@ -2,11 +2,14 @@ import { useEffect, useMemo } from 'react';
 import { ActionSheetIOS, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { selectInbox, type InboxItem } from '@parley/remote-client';
 import { goneEntries, useGoneDismiss, type GoneEntry } from '../../cards/gone';
 import { InboxRow, GoneRow } from '../../cards/InboxRow';
 import { fullCommand } from '../../cards/model';
+import { Segmented } from '../../launch/form-parts';
+import { LettersList } from '../../letters/LettersList';
+import { lettersSegmentLabel, parseInboxSegment, withoutLetters, type InboxSegment } from '../../letters/letters-model';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { haptic } from '../../haptics';
 import { useDemoData } from '../../hooks/use-demo';
@@ -27,6 +30,12 @@ export default function InboxScreen() {
   const c = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams<{ segment?: string }>();
+  const [segment, setSegment] = useState<InboxSegment>(parseInboxSegment(params.segment));
+  // A push / deep link can ask for the Letters segment while the screen is already mounted.
+  useEffect(() => {
+    if (params.segment !== undefined) setSegment(parseInboxSegment(params.segment));
+  }, [params.segment]);
   const client = useClient();
   useDemoData();
   const state = useRemoteState();
@@ -34,7 +43,7 @@ export default function InboxScreen() {
   const canAct = useCanAct();
   const now = useNow(30_000);
   const [refreshing, setRefreshing] = useState(false);
-  const items = useMemo(() => (state === null ? [] : selectInbox(state).slice(0, MAX_ROWS)), [state]);
+  const items = useMemo(() => (state === null ? [] : withoutLetters(selectInbox(state)).slice(0, MAX_ROWS)), [state]);
   const gone = useMemo(() => (state === null ? [] : goneEntries(state)), [state]);
   useGoneDismiss(client, gone);
   const rows = useMemo<Row[]>(() => [...gone.map((entry): Row => ({ t: 'gone', entry })), ...items.map((item): Row => ({ t: 'item', item }))], [gone, items]);
@@ -50,8 +59,7 @@ export default function InboxScreen() {
 
   const open = (item: InboxItem): void => {
     if (item.kind === 'card' || item.kind === 'need') router.push(`/session/${sessionParam(item.ref)}` as never);
-    else if (item.kind === 'decision')
-      router.push({ pathname: '/decision', params: { ref: workParam(item), room: item.roomId, proposal: item.proposalId } } as never);
+    else if (item.kind === 'decision') router.push({ pathname: '/decision', params: { ref: workParam(item), room: item.roomId, proposal: item.proposalId } } as never);
     else router.push({ pathname: '/letter', params: { ref: workParam(item), id: item.message.id } } as never);
   };
 
@@ -76,66 +84,68 @@ export default function InboxScreen() {
   };
 
   const cold = state === null || (state.snapshot === null && supervisor?.state !== 'ready' && supervisor?.state !== undefined);
+  const header = (
+    <View style={{ marginBottom: 12 }}>
+      <View style={styles.topRow}>
+        {hosts.length >= 2 ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Switch Mac" onPress={switchHost} style={styles.hostBtn}>
+            <Text allowFontScaling numberOfLines={1} style={[typography.subheadline, { color: c.tint, flexShrink: 1 }]}>
+              {hostNames[host?.hostId ?? ''] ?? host?.hostName ?? 'Mac'}
+            </Text>
+            <SymbolView name="chevron.down" size={11} tintColor={c.tint} />
+          </Pressable>
+        ) : (
+          <View />
+        )}
+      </View>
+      <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, { color: c.label }]}>
+        Inbox
+      </Text>
+      <View style={{ marginTop: 8 }}>
+        <Segmented<InboxSegment>
+          label="Inbox section"
+          value={segment}
+          onChange={setSegment}
+          options={[
+            { value: 'needs-you', label: 'Needs you' },
+            { value: 'letters', label: lettersSegmentLabel(unreadLetters) },
+          ]}
+        />
+      </View>
+    </View>
+  );
   return (
     <View style={[styles.page, { backgroundColor: c.bg, paddingTop: insets.top }]}>
       <ConnectionBanner />
-      <FlatList
-        data={rows}
-        keyExtractor={(r) => (r.t === 'gone' ? `gone:${r.entry.key}` : r.item.key)}
-        contentContainerStyle={styles.list}
-        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              runtime.retry();
-              void Promise.all(visible.map((r) => client?.readCards(r))).finally(() => setRefreshing(false));
-            }}
-          />
-        }
-        ListHeaderComponent={
-          <View style={{ marginBottom: 12 }}>
-            <View style={styles.topRow}>
-              {hosts.length >= 2 ? (
-                <Pressable accessibilityRole="button" accessibilityLabel="Switch Mac" onPress={switchHost} style={styles.hostBtn}>
-                  <Text allowFontScaling numberOfLines={1} style={[typography.subheadline, { color: c.tint, flexShrink: 1 }]}>
-                    {hostNames[host?.hostId ?? ''] ?? host?.hostName ?? 'Mac'}
-                  </Text>
-                  <SymbolView name="chevron.down" size={11} tintColor={c.tint} />
-                </Pressable>
-              ) : (
-                <View />
-              )}
-              <Pressable accessibilityRole="button" accessibilityLabel={unreadLetters > 0 ? `Letters, ${unreadLetters} unread` : 'Letters'} onPress={() => router.push('/letters' as never)} style={styles.hostBtn}>
-                <SymbolView name="envelope" size={20} tintColor={c.tint} />
-                {unreadLetters > 0 && (
-                  <Text allowFontScaling style={[typography.subheadline, { color: c.tint }]}>
-                    {unreadLetters}
-                  </Text>
-                )}
-              </Pressable>
-            </View>
-            <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, { color: c.label }]}>
-              Inbox
-            </Text>
-          </View>
-        }
-        ListEmptyComponent={
-          cold ? (
-            <Skeleton />
-          ) : (
-            <EmptyState icon="checkmark.circle" title="All clear" text={`Nothing needs you on ${host?.hostName ?? 'your Mac'}.`} />
-          )
-        }
-        renderItem={({ item: r }) =>
-          r.t === 'gone' ? (
-            <GoneRow sessionLabel={r.entry.sessionLabel} workTitle={r.entry.workTitle} />
-          ) : (
-            <InboxRow item={r.item} now={now} canAct={canAct} onOpen={() => open(r.item)} onMenu={() => menu(r.item)} />
-          )
-        }
-      />
+      {segment === 'letters' ? (
+        <LettersList header={header} />
+      ) : (
+        <FlatList
+          data={rows}
+          keyExtractor={(r) => (r.t === 'gone' ? `gone:${r.entry.key}` : r.item.key)}
+          contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                setRefreshing(true);
+                runtime.retry();
+                void Promise.all(visible.map((r) => client?.readCards(r))).finally(() => setRefreshing(false));
+              }}
+            />
+          }
+          ListHeaderComponent={header}
+          ListEmptyComponent={cold ? <Skeleton /> : <EmptyState icon="checkmark.circle" title="All clear" text={`Nothing needs you on ${host?.hostName ?? 'your Mac'}.`} />}
+          renderItem={({ item: r }) =>
+            r.t === 'gone' ? (
+              <GoneRow sessionLabel={r.entry.sessionLabel} workTitle={r.entry.workTitle} />
+            ) : (
+              <InboxRow item={r.item} now={now} canAct={canAct} onOpen={() => open(r.item)} onMenu={() => menu(r.item)} />
+            )
+          }
+        />
+      )}
     </View>
   );
 }
