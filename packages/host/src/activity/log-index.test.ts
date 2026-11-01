@@ -697,6 +697,16 @@ describe('createLogIndex', () => {
           const idx = customIndex([]);
           await idx.start();
           for (let i = 0; i < calls; i += 1) idx.watchClaudeRoot(root);
+          // Пробная запись до счётчика: рекурсивный наблюдатель включается не мгновенно, и единственная измеряемая
+          // запись сразу после watchClaudeRoot под нагрузкой терялась. Пока проба не видна в индексе, наблюдатель
+          // не доказан живым; повторы пробы идут до регистрации onChange и счёт не искажают.
+          const probeId = `c-probe-${calls}`;
+          const probe = (): Promise<string> =>
+            writeCustom(root, probeId, `${JSON.stringify({ type: 'custom-title', customTitle: 'проба', sessionId: probeId })}\n`);
+          await probe();
+          await waitFor(() => idx.index(session({ provider: 'custom-kimi', providerSessionId: probeId }))?.title === 'проба', 15_000, probe);
+          // Запоздалое событие самой пробы не должно попасть в счёт.
+          await new Promise((resolve) => setTimeout(resolve, 300));
           let count = 0;
           idx.onChange(() => {
             count += 1;
