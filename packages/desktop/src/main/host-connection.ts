@@ -54,6 +54,11 @@ export interface HostProcesses {
   isAlive(pid: number): boolean;
   /** Это процесс хоста Parley, а не чужой, занявший pid после него. */
   isHost(pid: number): boolean;
+  /**
+   * Тождество процесса: pid и время его старта. Повторно занявший pid процесс (даже другой Parley-хост)
+   * даст другую строку. null — установить нельзя (процесса нет или `ps` не ответил).
+   */
+  identity(pid: number): string | null;
 }
 
 const realProcesses: HostProcesses = {
@@ -79,6 +84,14 @@ const realProcesses: HostProcesses = {
       return /[\\/]host[\\/]dist[\\/]main\.js/.test(command);
     } catch {
       return false;
+    }
+  },
+  identity(pid) {
+    try {
+      const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+      return started === '' ? null : `${pid}:${started}`;
+    } catch {
+      return null;
     }
   },
 };
@@ -709,20 +722,27 @@ export class HostConnection {
         }
       } else {
         const oldPid = pid;
+        // Тождество снимаем до ожидания: сигнал получит только тот процесс, который мы остановили.
+        const expected = this.processes.identity(oldPid);
         const exited = (): boolean => !this.processes.isAlive(oldPid);
+        // Прежнее поколение ушло: pid свободен, занят чужим процессом или другим поколением хоста.
+        const gone = (): boolean =>
+          exited() || !this.processes.isHost(oldPid) || (expected !== null && this.processes.identity(oldPid) !== expected);
         if (!(await this.waitRestart(exited, options.timeoutMs ?? 10_000, epoch))) {
-          // isHost различает команду, но не поколение процесса: повторный pid другого Parley-хоста не отличим.
           for (const [signal, grace] of [
             ['SIGTERM', options.killGraceMs ?? 3000],
             ['SIGKILL', options.killWaitMs ?? 3000],
           ] as const) {
             this.checkEpoch(epoch);
-            // Перед каждым сигналом снова проверяем: pid уже мог выйти или перейти чужому процессу.
-            if (exited() || !this.processes.isHost(oldPid)) break;
-            this.processes.kill(oldPid, signal);
+            // Перед каждым сигналом тождество сверяется снова; не сошлось или не установлено — сигнала нет.
+            if (gone() || !this.signalIfSame(oldPid, expected, signal)) break;
             if (await this.waitRestart(exited, grace, epoch)) break;
           }
-          if (!exited() && this.processes.isHost(oldPid)) throw new Error('old host did not exit after SIGKILL');
+          if (!gone()) {
+            throw new Error(expected === null
+              ? 'host teardown could not be confirmed without the host process identity'
+              : 'old host did not exit after SIGKILL');
+          }
         }
       }
     } catch (error) {
@@ -748,6 +768,16 @@ export class HostConnection {
     // После подтверждённой остановки прежнее поведение сохраняется: отказ подключения заводит автоповтор.
     await this.connectOrRetry();
     this.checkEpoch(epoch);
+  }
+
+  /**
+   * Шлёт сигнал, только если под pid всё ещё тот процесс хоста, чьё тождество снято раньше. Тождества нет или оно
+   * изменилось — сигнала нет (fail closed); true — сигнал отправлен.
+   */
+  private signalIfSame(pid: number, expected: string | null, signal: NodeJS.Signals): boolean {
+    if (expected === null || this.processes.identity(pid) !== expected || !this.processes.isHost(pid)) return false;
+    this.processes.kill(pid, signal);
+    return true;
   }
 
   /** pid живого процесса хоста по `host.pid` (первая строка), если он ещё жив и это хост Parley. */
@@ -810,9 +840,12 @@ export class HostConnection {
     this.candidate = null;
 
     let pid: number | null;
+    let expected: string | null = null;
     const socket = this.socket;
     if (socket !== null) {
       pid = this.hostPid;
+      // Тождество снимаем до shutdown: добивать можно только тот процесс, которому он был отправлен.
+      if (pid !== null) expected = this.processes.identity(pid);
       const closed =
         socket.destroyed ? Promise.resolve() : new Promise<void>((resolve) => socket.once('close', () => resolve()));
       // Ответа не ждём: молчащий хост (цикл событий стоит) не должен держать выход дольше срока. Отказ вызова
@@ -828,10 +861,12 @@ export class HostConnection {
     } else {
       pid = await this.livePidFromFile();
       if (pid === null) return 'none';
+      expected = this.processes.identity(pid);
     }
 
-    this.processes.kill(pid, 'SIGTERM');
-    if (!(await this.waitExit(pid, killGraceMs))) this.processes.kill(pid, 'SIGKILL');
+    // Тождество не сошлось или не установлено: чужого поколения не трогаем, выход остаётся без добивания.
+    if (!this.signalIfSame(pid, expected, 'SIGTERM')) return 'none';
+    if (!(await this.waitExit(pid, killGraceMs))) this.signalIfSame(pid, expected, 'SIGKILL');
     return 'killed';
   }
 
