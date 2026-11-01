@@ -1678,7 +1678,19 @@ async function bindCodexThread(
     await updateMap(context.projectPath, context.workId, (current) => {
       const target = current.sessions.find((candidate) => candidate.id === sessionId);
       if (target === undefined || target.provider !== 'codex') return;
-      if (writeRaw) target.providerSessionId = rawThread;
+      if (writeRaw) {
+        // Тот же тред у другой живой сессии без доказательства — это догадка запасного пути, не её тред: снимаем,
+        // чтобы две сессии не держали один лог (она привяжется своим вызовом или найдёт свой лог заново).
+        // Спящая, ожидающая и закрытая сессии не трогаются: их providerSessionId — handle возобновления.
+        for (const other of current.sessions) {
+          if (other.id === target.id || other.provider !== 'codex' || other.lifecycle !== 'active') continue;
+          if (other.providerSessionId !== rawThread) continue;
+          if (other.codexThreadBinding?.threadId === rawThread) continue;
+          other.providerSessionId = null;
+          if (other.codexThreadBinding !== undefined) other.codexThreadBinding = { ...other.codexThreadBinding, threadId: null };
+        }
+        target.providerSessionId = rawThread;
+      }
       // Не доверять readMap до lock: новый launch мог уже сбросить record.
       const locked = proof === null ? null : matchingCodexLaunch(target, proof.launchRevision);
       if (proof !== null && locked !== null && target.providerSessionId === proof.thread) {

@@ -25,6 +25,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 - A workspace can let its agents close finished sessions: turn on "Agents close finished sessions" in the workspace card menu. An agent then closes its own session once its part is accepted, and a room lead closes the room's finished members, so you no longer have to write "wrap up" in every room. It is off by default, and sessions you start yourself still wait for you.
 - An agent can answer your direct letter: it replies with `send_message` to `human`, and the reply arrives in the workspace mail like any letter to you.
 - A session's Chat queue shows the letters it has not picked up yet, from other sessions, rooms or you: grey, after your own queued messages, with the sender, the room, the start of the text and why the letter still waits, for example `Not picked up yet (compacting context)`. They have no buttons: Parley delivers them by itself, and a letter leaves the queue once the agent reads it.
+- Find text in the Chat view with ⌘F. It searches the whole feed, including the input and output of tool calls, subagents, cards and errors, also inside folded turns and in rows not yet on screen, and unfolds and scrolls to the match. Enter and Shift+Enter move between matches, the counter shows where you are, and Escape closes the bar.
 
 ### Changed
 
@@ -44,6 +45,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 - Protocol method names such as `constructor` or `toString` are treated as unknown methods instead of breaking the connection.
 - The window stops a host process only after checking that it is the same process it started.
 - Provider names such as `constructor` are refused as unknown providers.
+- A Codex session's Chat no longer shows another Codex session's history when two sessions start in the same folder at about the same time. The Chat follows the thread the agent itself reports and reloads when it changes, and Parley does not guess a log while another Codex session in that folder started less than a minute apart and is still unbound.
 
 ### What is not proven yet
 
