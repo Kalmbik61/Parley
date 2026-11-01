@@ -310,6 +310,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
   const clearReveal = useChatUiStore((state) => state.clearReveal);
   // Поиск ⌘F по ленте (`ChatFindBar`): открыта ли полоса — в сторе (⌘F и палитра ставят её снаружи), запрос и цель — здесь.
+  // Подсветка общая на окно, а ChatView скрытой вкладки живёт дальше: красит только видимая, скрытая лента `find` не получает.
   const findOpen = useChatUiStore((state) => state.find[sessionKey]?.open === true);
   const findFocusNonce = useChatUiStore((state) => state.find[sessionKey]?.focusNonce ?? 0);
   const [findView, setFindView] = useState<FindView | null>(null);
@@ -539,7 +540,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             {...(showWorking ? { working: { since: turnStart } } : {})}
             {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
             fold={chatFold}
-            {...(findOpen && findView !== null ? { find: findView } : {})}
+            {...(findOpen && visible && findView !== null ? { find: findView } : {})}
           >
             {findOpen ? <ChatFindBar items={items} focusNonce={findFocusNonce} onChange={setFindView} onClose={closeFind} /> : null}
           </FeedList>

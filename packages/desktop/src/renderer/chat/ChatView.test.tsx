@@ -2468,4 +2468,61 @@ describe('ChatView — поиск ⌘F по ленте (план 2026-11-01, з�
     act(() => useChatUiStore.getState().openFind(refKey(REF)));
     expect((within(screen.getByTestId('chat-find')).getByRole('textbox') as HTMLInputElement).value).toBe('');
   });
+
+  describe('подсветка в окне с несколькими вкладками Chat', () => {
+    class FakeHighlight {
+      readonly ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    }
+    const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown };
+    const original = { css: g.CSS, highlight: g.Highlight };
+    let registry: Map<string, unknown>;
+    beforeEach(() => {
+      registry = new Map();
+      g.CSS = { highlights: registry };
+      g.Highlight = FakeHighlight;
+    });
+    afterEach(() => {
+      g.CSS = original.css;
+      g.Highlight = original.highlight;
+    });
+
+    const tabBody = (session: WorkSession, active: boolean): JSX.Element => (
+      <TerminalBody workKey="/tmp/p w-01" tab={{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }} session={session} sessionRef={REF} active={active} bridge={bridge} sendDeps={sendDeps} />
+    );
+    const type = (value: string): void => {
+      fireEvent.change(within(screen.getByTestId('chat-find')).getByRole('textbox'), { target: { value } });
+    };
+
+    it('скрытая вкладка с открытой полосой общую подсветку окна не трогает', () => {
+      const session = makeSession('s-01', 'S01');
+      const view = render(tabBody(session, false));
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+      const foreign = new FakeHighlight();
+      registry.set('chat-find', foreign);
+      act(() => useChatUiStore.getState().openFind(refKey(REF)));
+      type('hello');
+      // Ещё одна отрисовка скрытой вкладки (так её перерисовывает стрим).
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there, and more')], 2);
+      expect(registry.get('chat-find')).toBe(foreign);
+      expect(registry.has('chat-find-active')).toBe(false);
+      view.unmount();
+    });
+
+    it('вкладка, что красила подсветку, при скрытии её снимает; при возврате красит снова', () => {
+      const session = makeSession('s-01', 'S01');
+      const view = render(tabBody(session, true));
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+      act(() => useChatUiStore.getState().openFind(refKey(REF)));
+      type('hello');
+      expect(registry.has('chat-find')).toBe(true);
+      view.rerender(tabBody(session, false));
+      expect(registry.has('chat-find')).toBe(false);
+      expect(registry.has('chat-find-active')).toBe(false);
+      view.rerender(tabBody(session, true));
+      expect(registry.has('chat-find')).toBe(true);
+    });
+  });
 });
