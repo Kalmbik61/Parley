@@ -1083,3 +1083,107 @@ it("leaves a closed autonomous room to the engine instead of cancelling before c
   expect(JSON.stringify(map)).toBe(before);
   expect(map.plans![0]!.status).toBe("active");
 });
+
+describe("history of plan item submissions", () => {
+  const submitOnce = (map: WorkMap, planId: string, text = "Test passed") =>
+    submitPlanItem(map, lt(map), planId, 0, 1, "s-02", { text, artifacts: [] }, AT);
+  const returnOnce = (map: WorkMap, planId: string) =>
+    verifyPlanItem(map, lt(map), planId, 0, 1, "s-03", "returned", "Again", AT);
+
+  it("two submissions stay in order, evidence points to the latest", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    expect(map.plans![0]!.items[0]!.submissions).toBeUndefined();
+    submitOnce(map, plan.id, "first");
+    returnOnce(map, plan.id);
+    submitOnce(map, plan.id, "second");
+    const item = map.plans![0]!.items[0]!;
+    expect(item.submissions!.map((entry) => [entry.n, entry.by, entry.evidence.text])).toEqual([
+      [1, "s-02", "first"],
+      [2, "s-02", "second"],
+    ]);
+    expect(item.evidence!.text).toBe("second");
+  });
+
+  it("verify and the human's return land on the latest submission", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    returnOnce(map, plan.id);
+    submitOnce(map, plan.id, "second");
+    const item = () => map.plans![0]!.items[0]!;
+    expect(item().submissions![0]).toMatchObject({
+      verdict: "returned",
+      verdictBy: "s-03",
+      verdictAt: AT,
+      note: "Again",
+    });
+    expect(item().submissions![1]).toMatchObject({ verdict: null, verdictBy: null, verdictAt: null, note: null });
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Fine", AT);
+    expect(item().submissions![1]).toMatchObject({ verdict: "verified", verdictBy: "s-03", note: "Fine" });
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "returned", "Regression", AT);
+    expect(item().submissions![1]).toMatchObject({ verdict: "returned", verdictBy: HUMAN, note: "Regression" });
+    expect(item().submissions![0]!.verdictBy).toBe("s-03");
+  });
+
+  it("a sixth submission drops the oldest and the numbers keep growing", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    for (let i = 1; i <= 6; i++) {
+      submitOnce(map, plan.id, `try ${i}`);
+      if (i < 6) returnOnce(map, plan.id);
+    }
+    const item = map.plans![0]!.items[0]!;
+    expect(item.submissions!.map((entry) => entry.n)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("older evidence is cut to 2000 characters and the newest is not", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    const long = "x".repeat(5000);
+    submitOnce(map, plan.id, long);
+    returnOnce(map, plan.id);
+    submitOnce(map, plan.id, long);
+    const item = map.plans![0]!.items[0]!;
+    expect(item.submissions![0]!.evidence.text).toHaveLength(2000);
+    expect(item.submissions![1]!.evidence.text).toHaveLength(5000);
+    expect(item.evidence!.text).toHaveLength(5000);
+  });
+
+  it("a map without the field reads fine and the history starts on the next submit", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    for (const item of map.plans![0]!.items) delete item.submissions;
+    const reread = parseMap(JSON.stringify(map), "fixture");
+    expect(reread.plans![0]!.items[0]!.submissions).toBeUndefined();
+    returnOnce(reread, plan.id);
+    submitOnce(reread, plan.id, "second");
+    expect(reread.plans![0]!.items[0]!.submissions!.map((entry) => entry.n)).toEqual([1]);
+  });
+
+  it("an unchanged item keeps its submissions through an amendment", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    const before = structuredClone(map.plans![0]!.items[0]!.submissions);
+    const p = setProposal(map, "r-01", "s-01", "Amend", AT, {
+      plan: { ...input("verified"), id: plan.id, rev: 0 },
+    });
+    const amended = map.rooms[0]!.proposal!.plan!;
+    resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", { rev: p.rev, planId: amended.id, planRev: amended.rev }, AT);
+    expect(map.plans![0]!.items[0]!.submissions).toEqual(before);
+  });
+
+  it.each([
+    ["not an array", "oops"],
+    ["a record of the wrong shape", [{ n: 1 }]],
+    ["a verdict out of the set", [{ n: 1, by: "s-02", at: AT, evidence, verdict: "maybe", verdictBy: null, verdictAt: null, note: null }]],
+    ["too many records", Array.from({ length: 6 }, (_, i) => ({ n: i + 1, by: "s-02", at: AT, evidence, verdict: null, verdictBy: null, verdictAt: null, note: null }))],
+  ])("normalisation rejects a malformed submissions value: %s", (_name, value) => {
+    const map = fixture("verified");
+    accept(map);
+    (map.plans![0]!.items[0] as unknown as { submissions: unknown }).submissions = value;
+    expect(() => parseMap(JSON.stringify(map), "fixture")).toThrow();
+  });
+});
