@@ -34,7 +34,7 @@ import { PROVIDERS } from '../providers.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
-import { workSettingsJson } from './settings-file.js';
+import { CLOSE_SESSION_PERMISSION, workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 import { createWorktree } from './worktree.js';
 import { BRANCH_PREFIX } from '../names.js';
@@ -1231,6 +1231,7 @@ describe('правило приоритета браузера Parley в зап�
 
   it('Claude и GLM с каналом: в файле --settings заранее разрешены все четырнадцать browser_*, спрашивать нечего; без канала правил нет', async () => {
     const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close'].map((op) => `mcp__parley__browser_${op}`);
+    allowed.push(CLOSE_SESSION_PERMISSION);
     for (const provider of ['claude', 'glm']) {
       const { workId, sessionId } = await pending('claude');
       const session = { ...(await sessionOf(workId, sessionId)), provider };
