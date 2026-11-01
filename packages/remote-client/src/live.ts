@@ -2,6 +2,7 @@
 // и согласия хоста (`consents.list` + `consents.changed`). Подписка живёт, пока открыт экран сессии, и только на переднем
 // плане при готовом соединении; после переподключения подписываемся заново, после новой эпохи берём новый снимок.
 import type { Rpc } from './actions.js';
+import type { Clock } from './refresh.js';
 import type { RemoteStore } from './store.js';
 import { sessionKey, type SessionRef } from './state.js';
 
@@ -18,24 +19,63 @@ export interface LiveSync {
   dispose(): void;
 }
 
+/** Pauses between retries after a transient failure; the last one repeats. */
+export const FEED_RETRY_MS = [1000, 2000, 5000, 10_000, 30_000] as const;
+
+/** A refusal that a retry will not change (`unknown_method`, `bad_request`, ...): no automatic retry. */
+const TRANSIENT = new Set(['timeout', 'connection_lost', 'not_connected', 'rate_limited']);
+const isTransient = (error: unknown): boolean => {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  // No code: a parse failure of the answer or a thrown non-RPC error — treat as final, the person can press Try again.
+  return typeof code === 'string' && TRANSIENT.has(code);
+};
+
 interface Open {
   ref: SessionRef;
   count: number;
+  /** Consecutive transient failures; the retry pause grows with it. */
+  failures: number;
+  /** A final refusal: only "Try again" (`reloadFeed`) or a new epoch lifts it. */
+  blocked: boolean;
+  retryTimer: unknown;
   /** Мост подписан от имени этого телефона. */
   subscribed: boolean;
   running: boolean;
   again: boolean;
 }
 
-export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc }): LiveSync {
+export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc: Rpc; clock: Clock }): LiveSync {
   const open = new Map<string, Open>();
   let connected = false;
   let foreground = true;
   const active = (): boolean => connected && foreground;
 
-  async function syncFeed(key: string): Promise<void> {
+  /** The bridge hello says the Mac cannot do it: no call is made. `null` hello — not known yet, ask. */
+  const lacks = (method: string): boolean => {
+    const methods = store.getState().methods;
+    return methods !== null && !methods.includes(method);
+  };
+
+  const clearRetry = (o: Open): void => {
+    if (o.retryTimer !== null) clock.clearTimeout(o.retryTimer);
+    o.retryTimer = null;
+  };
+
+  async function syncFeed(key: string, force = false): Promise<void> {
     const o = open.get(key);
     if (o === undefined || !active()) return;
+    if (force) {
+      o.blocked = false;
+      o.failures = 0;
+      clearRetry(o);
+    }
+    // One call in flight per ref, none while a retry is waiting or the refusal is final.
+    if (o.blocked || o.retryTimer !== null) return;
+    if (lacks('feed.subscribe') || lacks('feed.snapshot')) {
+      o.blocked = true;
+      store.dispatch({ t: 'feed.failed', ref: o.ref, epoch: store.getState().epoch });
+      return;
+    }
     if (o.running) {
       o.again = true;
       return;
@@ -76,9 +116,22 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
           if (store.getState().feeds[key]?.status === 'stale') o.again = true;
           // Эпоха сменилась за время чтения: ответ отброшен, читаем заново.
           if (store.getState().epoch !== epoch) o.again = true;
-        } catch {
-          // Ленту читать не удалось: `error`, пока человек не нажмёт «повторить» или не придёт переподключение.
+          o.failures = 0;
+        } catch (error) {
           if (store.getState().epoch === epoch) store.dispatch({ t: 'feed.failed', ref: o.ref, epoch });
+          if (isTransient(error)) {
+            // Transient: the same call again after a growing pause (1 s, 2 s, 5 s, 10 s, then 30 s).
+            const wait = FEED_RETRY_MS[Math.min(o.failures, FEED_RETRY_MS.length - 1)]!;
+            o.failures++;
+            o.again = false;
+            o.retryTimer = clock.setTimeout(() => {
+              o.retryTimer = null;
+              void syncFeed(key);
+            }, wait);
+          } else {
+            o.blocked = true;
+            o.again = false;
+          }
         }
       } while (o.again && open.has(key) && active());
     } finally {
@@ -101,7 +154,7 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
   let consentsAgain = false;
   let applyingList = false;
   async function syncConsents(): Promise<void> {
-    if (!active()) return;
+    if (!active() || lacks('consents.list')) return;
     if (consentsRunning) {
       consentsAgain = true;
       return;
@@ -135,9 +188,15 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
     if (!active()) return;
     if (next.epoch !== prev.epoch) {
       void syncConsents();
-      // Снимок заново; подписку мост восстанавливает сам (A30), повторно её не просим.
-      for (const key of open.keys()) void syncFeed(key);
+      // Снимок заново; подписку мост восстанавливает сам (A30), повторно её не просим. Новая эпоха — новый Мак/хост:
+      // окончательный отказ снимается.
+      for (const key of open.keys()) void syncFeed(key, true);
       return;
+    }
+    // The hello arrived or changed: what was held back for a missing hello may go now.
+    if (next.methods !== prev.methods) {
+      void syncConsents();
+      for (const key of open.keys()) void syncFeed(key);
     }
     // Дельта с пропуском: нужен новый снимок.
     for (const [key, entry] of Object.entries(next.feeds)) {
@@ -155,7 +214,7 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
       const key = sessionKey(ref);
       let o = open.get(key);
       if (o === undefined) {
-        o = { ref, count: 0, subscribed: false, running: false, again: false };
+        o = { ref, count: 0, failures: 0, blocked: false, retryTimer: null, subscribed: false, running: false, again: false };
         open.set(key, o);
         store.dispatch({ t: 'feed.open', ref });
       }
@@ -170,6 +229,7 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
         cur.count--;
         if (cur.count > 0) return;
         open.delete(key);
+        clearRetry(cur);
         store.dispatch({ t: 'feed.close', ref });
         void unsubscribe(cur);
       };
@@ -178,7 +238,7 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
       const key = sessionKey(ref);
       if (!open.has(key)) return;
       store.dispatch({ t: 'feed.reload', ref });
-      void syncFeed(key);
+      void syncFeed(key, true);
     },
     setConnected(c) {
       if (connected === c) return;
@@ -196,6 +256,7 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
     dispose() {
       unsubscribeStore();
       unsubscribeEvents();
+      for (const o of open.values()) clearRetry(o);
       open.clear();
     },
   };
@@ -207,7 +268,8 @@ export function createLiveSync({ store, rpc }: { store: RemoteStore; rpc: Rpc })
       // Фон или обрыв: подписки сняты (мост снимает сам при обрыве, при фоне просим), записи ждут нового снимка.
       for (const o of open.values()) {
         void unsubscribe(o);
-        store.dispatch({ t: 'feed.reload', ref: o.ref });
+        // A refused feed stays in its error state (and a waiting retry stays scheduled): a reconnect is no new reason.
+        if (!o.blocked) store.dispatch({ t: 'feed.reload', ref: o.ref });
       }
       return;
     }

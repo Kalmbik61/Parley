@@ -207,3 +207,105 @@ describe('согласия', () => {
     expect(await client.decideConsent('c1', 'deny')).toEqual({ outcome: 'lost', stillPending: true });
   });
 });
+
+describe('повторы подписки', () => {
+  const refuse = (code: string) => (m: string) => {
+    if (m === 'feed.subscribe') throw Object.assign(new Error(code), { code });
+    return m === 'consents.list' ? { items: [] } : {};
+  };
+  const subscribes = (rpc: Rpc) => (rpc.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'feed.subscribe').length;
+
+  it('unknown_method: один вызов, состояние error, без повторов; Try again вызывает снова', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, rpc } = setup(refuse('unknown_method'));
+      client.setConnected(true);
+      client.openFeed(R);
+      await flush();
+      expect(subscribes(rpc)).toBe(1);
+      expect(client.store.getState().feeds[K]!.status).toBe('error');
+      // переподключения и время ничего не повторяют
+      client.setConnected(false);
+      client.setConnected(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flush();
+      expect(subscribes(rpc)).toBe(1);
+      expect(client.store.getState().feeds[K]!.status).toBe('error');
+      client.live.reloadFeed(R);
+      await flush();
+      expect(subscribes(rpc)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('временная ошибка: 1 с, 2 с, 5 с, 10 с, потолок 30 с; один вызов за раз', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, rpc } = setup(refuse('connection_lost'));
+      client.setConnected(true);
+      client.openFeed(R);
+      client.openFeed(R); // второй экран той же сессии — не второй вызов
+      await flush();
+      expect(subscribes(rpc)).toBe(1);
+      let calls = 1;
+      for (const wait of [1000, 2000, 5000, 10_000, 30_000, 30_000]) {
+        await vi.advanceTimersByTimeAsync(wait - 1);
+        await flush();
+        expect(subscribes(rpc), `до ${wait}`).toBe(calls);
+        await vi.advanceTimersByTimeAsync(1);
+        await flush();
+        calls++;
+        expect(subscribes(rpc), `после ${wait}`).toBe(calls);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('закрытие экрана останавливает повтор; успех сбрасывает счёт', async () => {
+    vi.useFakeTimers();
+    try {
+      let fail = true;
+      const { client, rpc } = setup((m) => {
+        if (m === 'feed.subscribe' && fail) throw Object.assign(new Error('x'), { code: 'timeout' });
+        return m === 'feed.snapshot' ? { items: [], revision: 1, mode: null } : m === 'consents.list' ? { items: [] } : {};
+      });
+      client.setConnected(true);
+      const close = client.openFeed(R);
+      await flush();
+      close();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(subscribes(rpc)).toBe(1);
+      fail = false;
+      client.openFeed(R);
+      await flush();
+      expect(client.store.getState().feeds[K]!.status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('hello моста', () => {
+  it('нет feed.subscribe или consents.list в hello — вызовов нет, лента в error', async () => {
+    const { client, rpc, methods } = setup(feedHandler());
+    client.setBridgeMethods(['works.list', 'host.info']);
+    client.setConnected(true);
+    client.openFeed(R);
+    await flush();
+    expect(methods().filter((m) => m === 'feed.subscribe' || m === 'consents.list')).toEqual([]);
+    expect(client.store.getState().feeds[K]!.status).toBe('error');
+    expect(rpc.call).not.toHaveBeenCalled();
+  });
+
+  it('hello пришёл позже подключения: consents.list уходит после него', async () => {
+    const { client, methods } = setup(feedHandler());
+    client.setBridgeMethods(null);
+    client.setConnected(true);
+    await flush();
+    client.setBridgeMethods(['consents.list', 'feed.subscribe', 'feed.snapshot']);
+    await flush();
+    expect(methods()).toContain('consents.list');
+  });
+});

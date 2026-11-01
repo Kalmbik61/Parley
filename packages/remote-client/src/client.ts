@@ -68,7 +68,7 @@ export interface RemoteClient {
 export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteClient {
   const store = createRemoteStore();
   const refresher = createRefresher({ store, rpc, clock });
-  const live = createLiveSync({ store, rpc });
+  const live = createLiveSync({ store, rpc, clock });
   const now = (): number => clock.now();
   const env = { now, sleep: (ms: number) => new Promise<void>((resolve) => clock.setTimeout(resolve, ms)) };
 
