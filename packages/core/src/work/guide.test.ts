@@ -86,6 +86,23 @@ describe('темы гида', () => {
     expect(lifecycle).toContain('A session Parley put to sleep is `sleeping` too: `wait_for` on it answers `asleep`, and mail wakes it.');
   });
 
+  it('тема lifecycle: при closeFinished не ждать «wrap up», report первым, close_session последним (sg-12)', () => {
+    const lifecycle = (guideTopic('lifecycle') ?? '').replace(/\s+/g, ' ');
+    expect(lifecycle).toContain(
+      'If the human lets agents close finished sessions (`get_map` shows `closeFinished: true` in `work`), that is the human\'s explicit consent: do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with `report` first and `close_session` as your last call. A room lead also closes the members of its room whose `result` is `done` once it has accepted their parts, and closes itself after the human accepts the room\'s completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".',
+    );
+  });
+
+  it('тема rules: исключение для лида комнаты при closeFinished', () => {
+    const rules = (guideTopic('rules') ?? '').replace(/\s+/g, ' ');
+    expect(rules).toContain(
+      "only after the human's explicit consent. The workspace switch `closeFinished` (topic `lifecycle`) is that consent: then close yourself once your part is accepted.",
+    );
+    expect(rules).toContain(
+      'owning a room gives no right to close them. The one exception: when `get_map` shows `closeFinished` in `work`, the live lead of a room closes its finished members (topic `lifecycle`).',
+    );
+  });
+
   it('тема lifecycle: сессия, ждущая слота машины, — queued: стартует сама, wait_for ждёт её как работающую', () => {
     const lifecycle = (guideTopic('lifecycle') ?? '').replace(/\s+/g, ' ');
     expect(lifecycle).toContain('`queued`');
@@ -279,6 +296,13 @@ describe('ссылки между темами гида', () => {
       'the etiquette and the kinds of messages are in topic `letters`.',
     );
     expect(flat('rooms')).toContain('`add_to_room(room, session)` (topic `lead`).');
+  });
+
+  it('«Комнаты» называют ответ на прямое письмо человека: send_message(to: "human") вне комнаты, в комнате — по-прежнему ошибка', () => {
+    const rooms = flat('rooms');
+    expect(rooms).toContain(
+      'The human is not a session: in a room, answer the human without `to` and with `replyTo` (`to: "human"` is an error there). Outside a room, answer a direct letter from the human with `send_message(to: "human")`.',
+    );
   });
 
   it('«Инструменты» отсылают за правилами worktree к теме `worktrees`, а та лежит отдельно от `window`', () => {

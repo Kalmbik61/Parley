@@ -29,6 +29,7 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -82,6 +83,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
 
   const canRename = useHostSupports('works.rename');
   const canSetStatus = useHostSupports('works.setStatus');
+  const canSetCloseFinished = useHostSupports('works.setCloseFinished');
   const canDelete = useHostSupports('works.delete');
   const canCreateSession = useHostSupports('sessions.create');
   const canCreateRoom = useHostSupports('rooms.create');
@@ -89,6 +91,12 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
   const status = map.work.status;
   const setStatus = (next: WorkStatus, action: string): void => {
     bridge.call('works.setStatus', { projectPath, workId, status: next }).catch(reportError('works.setStatus', action));
+  };
+
+  const setCloseFinished = (closeFinished: boolean): void => {
+    bridge
+      .call('works.setCloseFinished', { projectPath, workId, closeFinished })
+      .catch(reportError('works.setCloseFinished', S.errors.actions.setCloseFinished));
   };
 
   const togglePin = (): void => {
@@ -199,6 +207,18 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
                   {S.cardMenu.archive}
                 </ContextMenuItem>
               ) : null}
+            </>
+          ) : null}
+          {canSetCloseFinished ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuCheckboxItem
+                checked={map.work.closeFinished === true}
+                onCheckedChange={setCloseFinished}
+                title={S.cardMenu.closeFinishedHint}
+              >
+                {S.cardMenu.closeFinished}
+              </ContextMenuCheckboxItem>
             </>
           ) : null}
           {canDelete ? (

@@ -126,6 +126,8 @@ export const METHODS = {
     workId: z.string(),
     status: z.enum(['active', 'done', 'archived']),
   }),
+  // Флаг «агенты закрывают завершённые сессии» ставит только человек из окна (план 4, задача 5).
+  'works.setCloseFinished': z.object({ projectPath: z.string(), workId: z.string(), closeFinished: z.boolean() }),
   'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
   // Каталог рецептов комнат: встроенные и рецепты выбранного проекта (спека рецептов, 5–6).
   'recipes.list': z.object({ projectPath: z.string().min(1) }).strict(),
@@ -443,6 +445,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'works.delete': { ok: true };
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
+  'works.setCloseFinished': { ok: true };
   'roles.list': import('@parley/core').RoleList;
   'recipes.list': import('@parley/core').RecipeCatalogView;
   'sessions.create': { ref: SessionRef };

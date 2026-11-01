@@ -587,11 +587,11 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close yourself only after the human's explicit consent; ones you created: when accepted.",
+      "Close yourself after the human's explicit consent or, if work.closeFinished, once accepted; ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Yours or one you created.' },
+        target: { type: 'string', description: 'Yours, one you created, or (closeFinished) a finished member of your room.' },
       },
       required: ['target'],
     },
@@ -839,6 +839,7 @@ async function report(
   }
 
   const session = requireSession(map, sessionId);
+  const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
   return {
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
@@ -846,7 +847,35 @@ async function report(
     status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
+    ...(next !== null ? { next } : {}),
   };
+}
+
+/**
+ * Подсказка в ответ на `report(done)`, когда рабочее пространство разрешает агентам закрывать завершённые сессии:
+ * правила из брифа и гида агент забывает, а здесь они под рукой в момент действия. Ведущий живой открытой комнаты
+ * получает список завершивших участников (не закрытых и не из роя), остальные участники комнат и созданные сессии —
+ * напоминание закрыть себя последним вызовом; сессия, запущенная человеком без комнаты, — ничего.
+ */
+function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
+  if (map.work.closeFinished !== true) return null;
+  const rooms = map.rooms.filter((room) => !isRoomArchived(room) && isMember(room, sessionId));
+  const led = rooms.filter((room) => liveLead(map, room) === sessionId);
+  if (led.length > 0) {
+    const finished = map.sessions
+      .filter((row) =>
+        row.id !== sessionId && row.lifecycle !== 'closed' && row.result === 'done' && swarmOfSession(map, row.id) === null &&
+        led.some((room) => room.members.includes(row.id)))
+      .map((row) => row.id);
+    return finished.length > 0
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${finished.join(', ')}; the tool allows it.`
+      : null;
+  }
+  const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
+  if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
+    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${sessionId}" as your last call.`;
+  }
+  return null;
 }
 
 /**
@@ -1154,7 +1183,8 @@ async function sendMessage(
         throw new Error('without room, exactly one addressee in to is required');
       }
       const target = to[0] as string;
-      assertDeliverable(current, target);
+      // Человек — не сессия: прямое письмо ему (ответ на его письмо) проверки доставки не проходит, его читает окно.
+      if (target !== HUMAN) assertDeliverable(current, target);
       assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       sent = letters.add({ roomId: null, from: sessionId, to: [target], text, kind });
     }
@@ -1353,14 +1383,20 @@ async function closeSession(
   const target = stringArg(args, 'target');
 
   await updateMap(context.projectPath, context.workId, (current) => {
-    requireSession(current, target);
+    const targetSession = requireSession(current, target);
     if (target !== sessionId) {
       if (swarmOfSession(current, target) !== null) {
         throw new Error(`close_session cannot close ${target}: it is a swarm member; only the human cancels a swarm`);
       }
-      if (!isCreatedDescendant(current, sessionId, target)) {
+      // Право лида (sg-12): флаг разрешения включён, вызывающий — живой лид комнаты, цель — её участник с итогом `done`.
+      // Участника роя отсекла проверка выше.
+      const finishedMemberOfLedRoom =
+        current.work.closeFinished === true &&
+        targetSession.result === 'done' &&
+        current.rooms.some((room) => !isRoomArchived(room) && liveLead(current, room) === sessionId && isMember(room, target));
+      if (!isCreatedDescendant(current, sessionId, target) && !finishedMemberOfLedRoom) {
         throw new Error(
-          `close_session can only close the calling session or a session it created (${target} is not one of them)`,
+          `close_session can only close the calling session, a session it created, or — when the workspace lets agents close finished sessions — a finished member of the room it leads (${target} is not one of them)`,
         );
       }
     }

@@ -105,7 +105,7 @@ describe('заглушка скилла parley: тело', () => {
     );
     expect(body).toMatch(/do not start the work before acceptance/);
     expect(body).toMatch(/Only the lead can bring one more session into a room — `add_to_room`/);
-    expect(body).toMatch(/`close_session` — your own session only after the human's explicit consent; sessions you created/);
+    expect(body).toMatch(/`close_session` — your own session only after the human's explicit consent; `closeFinished` in `work` \(`get_map`\) is that consent: then close yourself once your part is accepted \(`report` first\), and a room lead closes its room's finished members\. Sessions you created \(and their descendants\) you may close yourself when their work is accepted or not needed; never the human's or a swarm's, and a colleague's only as its room lead with `closeFinished`\. Stage 1/);
     expect(body).toMatch(/Before finishing, call `report`/);
   });
 
@@ -138,7 +138,7 @@ describe('заглушка скилла parley: тело', () => {
     expect(body).toMatch(
       /Answering a particular message in a room — above all the human's question — pass `replyTo` with its id: the window shows a quote of it above your answer\./,
     );
-    expect(body).toMatch(/The human is not a session: answer the human in the room without `to`\./);
+    expect(body).toMatch(/The human is not a session: answer the human in the room without `to`; outside a room, answer a direct letter from the human with `send_message\(to: "human"\)`\./);
     expect(body).toMatch(
       /Write `@human` as plain text, and only when you need the human's answer or attention: it notifies the human\./,
     );
@@ -213,7 +213,7 @@ describe('заглушка и гид согласованы', () => {
     try {
       const tools = new Set((await client.listTools()).tools.map((tool) => tool.name));
       // Слова в кавычках, которые не инструменты: аргументы (`topic` у read_guide, `to` у send_message), виды писем,
-      // имя сервера и темы гида.
+      // имя сервера, раздел карты `work` и темы гида.
       const notTools = new Set([
         'topic',
         'to',
@@ -221,6 +221,7 @@ describe('заглушка и гид согласованы', () => {
         'note',
         'decision',
         'parley',
+        'work',
         ...GUIDE_TOPICS.map((item) => item.topic),
       ]);
       const named = [...SKILL_MD.matchAll(/`([a-z]+(?:_[a-z]+)*)`/g)]

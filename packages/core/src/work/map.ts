@@ -585,6 +585,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
     (version !== 1 && version !== 2) ||
     !isRecord(work) ||
     typeof work.id !== 'string' ||
+    (work.closeFinished !== undefined && typeof work.closeFinished !== 'boolean') ||
     !Array.isArray(data.sessions) ||
     (version === 2 && !Array.isArray(data.rooms)) ||
     !data.sessions.every(isSessionShape(version))

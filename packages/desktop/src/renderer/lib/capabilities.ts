@@ -59,6 +59,7 @@ export const REQUIRED_METHODS: readonly string[] = [
   'providers.refreshLimits',
   'works.rename',
   'works.setStatus',
+  'works.setCloseFinished',
   'activity.seen',
   'mail.markRead',
   'pty.send',

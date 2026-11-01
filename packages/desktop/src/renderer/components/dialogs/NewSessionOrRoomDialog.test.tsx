@@ -2283,14 +2283,63 @@ describe('NewSessionOrRoomDialog — Lean agent sessions (C2.2)', () => {
     expect('lean' in (callsOf('sessions.create')[0] as Record<string, unknown>)).toBe(false);
   });
 
-  it('одиночная сессия: чекбокс «Lean session» по умолчанию снят, без галочки поля lean нет — даже при включённой настройке', async () => {
+  it('одиночная сессия при leanAgents = true: галочка стоит, sessions.create получает lean: true', async () => {
     stubLean(true);
+    const { onOpenChange } = await renderDialog();
+    expect(isChecked(leanBox())).toBe(true);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(leanOf()).toEqual([true]);
+  });
+
+  it('одиночная сессия при leanAgents = false: галочка снята, поле lean не уходит', async () => {
+    stubLean(false);
     const { onOpenChange } = await renderDialog();
     expect(isChecked(leanBox())).toBe(false);
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(callsOf('sessions.create')).toHaveLength(1);
     expect('lean' in (callsOf('sessions.create')[0] as Record<string, unknown>)).toBe(false);
+  });
+
+  it('человек снял галочку, а настройки пришли позже (новый мост) — она остаётся снятой', async () => {
+    stubLean(true);
+    const view = render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />);
+    await act(async () => {});
+    expect(isChecked(leanBox())).toBe(true);
+    fireEvent.click(leanBox());
+    expect(isChecked(leanBox())).toBe(false);
+    // Новый мост: настройки спрашиваются заново в том же открытии, ответ приходит после правки человека.
+    const next = createFakeBridge();
+    next.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+    next.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
+    next.setHandler('worktrees.available', async () => ({ available: true }));
+    next.setHandler('settings.get', async () => ({ config: { leanAgents: true } as never, locked: {} }));
+    view.rerender(<NewSessionOrRoomDialog open bridge={next} work={null} room={false} onOpenChange={vi.fn()} />);
+    await act(async () => {});
+    expect(isChecked(leanBox())).toBe(false);
+  });
+
+  it('галочка стояла, а новый мост не отдал leanAgents: чекбокс скрыт, Start session уходит без lean', async () => {
+    stubLean(true);
+    const onOpenChange = vi.fn();
+    const view = render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    expect(isChecked(leanBox())).toBe(true);
+    const next = createFakeBridge();
+    next.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+    next.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
+    next.setHandler('worktrees.available', async () => ({ available: true }));
+    next.setHandler('sessions.create', async (params) => ({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } }));
+    next.setHandler('settings.get', async () => ({ config: {} as never, locked: {} }));
+    view.rerender(<NewSessionOrRoomDialog open bridge={next} work={null} room={false} onOpenChange={onOpenChange} />);
+    await act(async () => {});
+    expect(screen.queryByRole('checkbox', { name: 'Lean session' })).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    const calls = next.calls.filter((call) => call.method === 'sessions.create');
+    expect(calls).toHaveLength(1);
+    expect('lean' in (calls[0]?.params as Record<string, unknown>)).toBe(false);
   });
 
   it('одиночная сессия с галочкой уходит с lean: true', async () => {
@@ -2314,18 +2363,18 @@ describe('NewSessionOrRoomDialog — Lean agent sessions (C2.2)', () => {
     expect(leanOf()).toEqual([false, false]);
   });
 
-  it('новое открытие начинается со снятой галочкой', async () => {
-    stubLean(false);
+  it('новое открытие начинается с галочки по настройке, а не с правки прошлого открытия', async () => {
+    stubLean(true);
     const view = render(
       <NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />,
     );
     await act(async () => {});
     fireEvent.click(leanBox());
-    expect(isChecked(leanBox())).toBe(true);
+    expect(isChecked(leanBox())).toBe(false);
     view.rerender(<NewSessionOrRoomDialog open={false} bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />);
     view.rerender(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />);
     await act(async () => {});
-    expect(isChecked(leanBox())).toBe(false);
+    expect(isChecked(leanBox())).toBe(true);
   });
 });
 

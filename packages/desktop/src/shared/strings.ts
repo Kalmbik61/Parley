@@ -653,6 +653,10 @@ export const S = {
     markDone: 'Mark as done',
     reopen: 'Reopen',
     archive: 'Archive',
+    /** Флажок: `works.setCloseFinished`, план 4. */
+    closeFinished: 'Agents close finished sessions',
+    closeFinishedHint:
+      "Agents in this workspace close their own sessions once their part is accepted, and a room lead closes the room's finished members. Sessions you start yourself still wait for you.",
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
     archiveConfirmDescription: 'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
@@ -964,7 +968,7 @@ export const S = {
       inOwnWorktree: 'In its own worktree',
       /** Переключатель при двух агентах и больше: включён — комната, выключен — отдельные сессии. */
       putInRoom: 'Put them in a room',
-      /** Одиночная сессия человека по умолчанию не lean; участники комнаты берут настройку `leanAgents`. */
+      /** Галочка стартует с настройки `leanAgents`; участники комнаты всегда берут её саму. */
       leanSession: 'Lean session',
       /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
       hintLabel: (field: string): string => `About “${field}”`,
@@ -977,7 +981,7 @@ export const S = {
         agents: 'One agent starts a session; two or more make a room, or separate sessions if you switch “Put them in a room” off.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         putInRoom: 'On: the agents discuss your task in one room and the lead brings you a decision. Off: each agent works as its own session.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
-        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
+        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. The box starts from Settings → Agents → “Lean agent sessions”; agents of a room always follow that setting.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
         mode: 'How the room tracks the work. You can change it later in the room.',
       },
@@ -2458,6 +2462,7 @@ export const S = {
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',
       archiveWorkspace: 'archive workspace',
+      setCloseFinished: 'change whether agents close finished sessions',
       deleteWorkspace: 'delete workspace',
       renameRoom: 'rename room',
       renameSession: 'rename session',

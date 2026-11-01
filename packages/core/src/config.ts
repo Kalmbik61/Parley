@@ -379,7 +379,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const resumeRate = text('resumeRate');
   if (resumeRate !== undefined) {
     const parsed = Number(resumeRate);
-    if (isResumeRate(parsed)) patch.resumeRate = parsed;
+    // Пробелы вместо числа — не ноль (`Number('  ') === 0`): будильник не выключается молча, ключ не запирается.
+    if (resumeRate.trim() !== '' && isResumeRate(parsed)) patch.resumeRate = parsed;
     else complain(`${nameOf('resumeRate')}: expected ${RESUME_RATE_EXPECTED}`);
   }
   const sleepAfterMinutes = text('sleepAfterMinutes');
@@ -540,8 +541,9 @@ export function parseSetting<K extends keyof ParleyConfig>(
   }
   if (key === 'resumeRate') {
     // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
+    // Пустая строка — не ноль (`Number('') === 0`): очищенное поле не должно молча выключать возобновление.
     const parsed = Number(text);
-    if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
+    if (text.trim() !== '' && isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: expected ${RESUME_RATE_EXPECTED}` };
   }
   if (key === 'sleepAfterMinutes') {
