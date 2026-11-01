@@ -871,16 +871,18 @@ export function createFeedService(
   /**
    * Сессия привязана к другому треду или журналу, чем тот, из которого посеяна лента. Догадка по папке и
    * времени могла отдать чужой тред; доказательство MCP потом его исправило, а лента осталась на чужом журнале.
-   * Пока привязки нет (`null`) или журнал индексу неизвестен, лента остаётся как есть.
+   * Лента, посеянная из привязки, при снятой привязке (`null`) или неизвестном индексу журнале тоже
+   * перепосеяна: она пуста и ждёт нового журнала. Лента без привязки при неизвестном журнале остаётся как есть.
    */
   function codexRebound(feed: SessionFeed, seed: { providerSessionId: string | null; file: string }): boolean {
     let session: WorkSession;
     try { session = sessionOf(feed.ref); } catch { return false; }
     const file = deps.activity.logFile(feed.ref);
-    if (file === null) return false;
     const id = session.providerSessionId;
-    return file !== seed.file ||
-      (typeof id === 'string' && id.length > 0 && seed.providerSessionId !== null && id !== seed.providerSessionId);
+    const bound = typeof id === 'string' && id.length > 0;
+    if (seed.providerSessionId !== null && (!bound || file === null)) return true;
+    if (file === null) return false;
+    return file !== seed.file || (bound && seed.providerSessionId !== null && id !== seed.providerSessionId);
   }
 
   /**

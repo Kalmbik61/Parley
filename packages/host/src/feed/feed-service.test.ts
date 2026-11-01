@@ -2569,6 +2569,28 @@ describe('лента Codex', () => {
       }
     });
 
+    it('привязка снята (тред null, журнал неизвестен): лента пуста, чужие элементы в removed, хвост снят; новая привязка сеет заново', async () => {
+      start();
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      expect(await toolIds()).toEqual(['b1']);
+      const bItem = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'tool')!;
+      thread = null;
+      fakes.setLogFile(null);
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+      await vi.waitFor(async () => expect(await toolIds()).toEqual([]));
+      expect(feedChanged(client).flatMap((delta) => delta.removed)).toContain(bItem.id);
+      // Старый файл больше не читается: запись в него не попадает в ленту.
+      await appendRollout(fileB, [command(3, 'b2', 'ls b2')]);
+      fakes.emitLog();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await toolIds()).toEqual([]);
+      // Появился журнал другого треда: пустая лента сеется из него.
+      rebind(T_A, fileA);
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1']));
+    });
+
     it('та же привязка (тот же тред и файл) не пересевает: элементы те же, removed нет', async () => {
       start();
       const client = fakeClient();
