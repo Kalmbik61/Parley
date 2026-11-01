@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { confirmRemove } from '../hosts/confirm-remove';
@@ -23,16 +23,6 @@ function useNow(active: boolean): number {
   return now;
 }
 
-function useReduceMotion(): boolean {
-  const [reduce, setReduce] = useState(false);
-  useEffect(() => {
-    void AccessibilityInfo.isReduceMotionEnabled().then(setReduce);
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduce);
-    return () => sub.remove();
-  }, []);
-  return reduce;
-}
-
 /** One line under the navigation bar (D1 §4). "Pair again" scans a new code, "Remove" asks first, a tap opens Diagnostics. */
 export function ConnectionBanner({ onAction }: { onAction?: (action: BannerAction) => void }) {
   const colors = useColors();
@@ -50,7 +40,6 @@ export function ConnectionBanner({ onAction }: { onAction?: (action: BannerActio
   const kindNow = bannerFor({ ...base, now: Date.now() })?.kind ?? null;
   const now = useNow(kindNow !== null && needsClock(kindNow));
   const banner = bannerFor({ ...base, now });
-  const reduceMotion = useReduceMotion();
 
   // The "Updating…" banner waits 1.5 s so a short reconnect does not flash it.
   const kind = banner?.kind ?? null;
@@ -64,14 +53,7 @@ export function ConnectionBanner({ onAction }: { onAction?: (action: BannerActio
   }, [kind, delayMs]);
 
   const visible = banner !== null && shownKind === banner.kind;
-  useEffect(() => {
-    // D1 §17.3: a spring, or a 150 ms fade with Reduce Motion.
-    LayoutAnimation.configureNext(
-      reduceMotion
-        ? LayoutAnimation.create(150, 'easeInEaseOut', 'opacity')
-        : LayoutAnimation.create(250, 'spring', 'opacity'),
-    );
-  }, [visible, reduceMotion]);
+  // No layout animation here: with Fabric it crashes when a view is removed during the animation (navigation right after).
   useEffect(() => {
     if (visible && banner !== null) AccessibilityInfo.announceForAccessibility(banner.text);
     // Announce on kind change only (D1 §18).

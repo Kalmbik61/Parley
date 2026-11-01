@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { ActionSheetIOS, FlatList, LayoutAnimation, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { ActionSheetIOS, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -56,11 +56,6 @@ export default function InboxScreen() {
     client?.refresher.setScreen({ kind: 'inbox', visible });
     return () => client?.refresher.setScreen({ kind: 'other' });
   }, [client, visibleKey]);
-
-  // Rows leave with a short height/fade animation.
-  useEffect(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.create(250, 'easeInEaseOut', 'opacity'));
-  }, [rows.length]);
 
   const open = (item: InboxItem): void => {
     if (item.kind === 'card' || item.kind === 'need') router.push(`/session/${sessionParam(item.ref)}` as never);
