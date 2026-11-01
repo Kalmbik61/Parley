@@ -1,7 +1,7 @@
 /**
  * Будильник для codex (спека комнат Organic, 3.6, «Ввод»): указатель на письма уходит вставкой
- * (bracketed paste), через десятки миллисекунд — клавиша: Enter у приглашения, Tab занятому агенту
- * (очередь на следующий ход, а не вмешательство в ход). Настоящий codex не запускается: заглушка
+ * (bracketed paste), через десятки миллисекунд — Enter у приглашения. Занятому агенту указатели
+ * не печатаются: письма могут быть прочитаны до конца хода. Настоящий codex не запускается: заглушка
  * печатает заголовки окна и то, какая клавиша до неё дошла (`enter:` / `tab:`).
  */
 
@@ -16,6 +16,7 @@ import {
   transitionSession,
   updateMap,
   workPaths,
+  writeLetters,
 } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import { linkTerminalActivity } from '../activity/terminal-link.js';
@@ -212,23 +213,102 @@ describe('будильник и codex', () => {
     await waitFor(() => stream().includes(`enter: ${POINTER}`), 3000);
   }, 30_000);
 
-  it('агент работает — указатель уходит в очередь Tab, ход не прерывается и ждать конца хода не нужно', async () => {
+  it('прочитанные во время хода письма не оставляют указателей в очереди Codex', async () => {
     const { ref, pty, activity, stream, letter, notices } = await rig();
     await waitFor(() => known(activity, ref));
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => activity.get(ref)?.activity.activity === 'working');
 
     await letter();
-    await waitFor(() => stream().includes(`tab: ${POINTER}`), 5000);
-    expect(stream()).not.toContain(`enter: ${POINTER}`);
+    await letter();
+    await settle(300);
+    // check_inbox / wait_for отмечают письма прочитанными до конца текущего хода.
+    writeLetters(project, ref.workId, (letters) => {
+      letters.markRead(ref.sessionId, letters.unreadFor(ref.sessionId).map((message) => message.id), new Date().toISOString());
+    });
+    pty.input(ref, 'STUB_READY\r');
+    await waitFor(() => activity.get(ref)?.activity.activity === 'unseen');
+    await settle(300);
 
-    // Указатель ушёл в очередь, а не в ход: предохранитель «ход не начался» не срабатывает.
-    await settle(1200);
+    expect(stream()).not.toContain('paste: New messages');
+    expect(stream()).not.toContain('tab: New messages');
+    expect(stream()).not.toContain('enter: New messages');
     expect(notices('pointer-timeout')).toBe(0);
-    // Письма помечены указанными: второго указателя нет.
-    expect(stream().split(`tab: ${POINTER}`).length - 1).toBe(1);
-    // Агент всё это время работал.
-    expect(activity.get(ref)?.activity.activity).toBe('working');
+  }, 30_000);
+
+  it('после хода отправляет один указатель только на оставшиеся непрочитанные письма', async () => {
+    const { ref, pty, activity, stream, letter } = await rig();
+    await waitFor(() => known(activity, ref));
+    pty.input(ref, 'STUB_WORK\r');
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working');
+
+    await letter('прочитано');
+    await settle(200);
+    writeLetters(project, ref.workId, (letters) => {
+      letters.markRead(ref.sessionId, letters.unreadFor(ref.sessionId).map((message) => message.id), new Date().toISOString());
+    });
+    await letter('новое 1');
+    await letter('новое 2');
+    await settle(200);
+    pty.input(ref, 'STUB_READY\r');
+
+    await waitFor(() => stream().includes('enter: New messages (2). Call check_inbox.'), 3000);
+    expect(stream()).not.toContain('tab: New messages');
+    expect(stream().split('paste: New messages').length - 1).toBe(1);
+  }, 30_000);
+
+  for (const change of ['read', 'working'] as const) {
+    it(`перед Enter перепроверяет письма и активность (${change}), убирает только свой указатель`, async () => {
+      const { ref, pty, activity, stream, letter, notices } = await rig();
+      await waitFor(() => known(activity, ref));
+      const unsubscribe = pty.on('output', (_ref, data) => {
+        if (!data.includes(`paste: ${POINTER}`)) return;
+        unsubscribe();
+        if (change === 'read') {
+          writeLetters(project, ref.workId, (letters) => {
+            letters.markRead(ref.sessionId, letters.unreadFor(ref.sessionId).map((message) => message.id), new Date().toISOString());
+          });
+        } else {
+          activity.terminalSignal(ref, { kind: 'working' });
+        }
+      });
+
+      await letter();
+      await waitFor(() => stream().includes(`paste: ${POINTER}`));
+      await settle(200);
+      expect(stream()).not.toContain('enter: New messages');
+      expect(stream()).not.toContain('tab: New messages');
+
+      // Отменённая вставка не остаётся в поле и не склеивается со следующей строкой.
+      pty.input(ref, 'STUB_READY\r');
+      await waitFor(() => stream().includes('enter: STUB_READY'));
+      if (change === 'working') {
+        await waitFor(() => stream().includes(`enter: ${POINTER}`));
+        expect(stream().split(`enter: ${POINTER}`).length - 1).toBe(1);
+      } else {
+        await settle(200);
+        expect(stream()).not.toContain('enter: New messages');
+      }
+      expect(notices('pointer-timeout')).toBe(0);
+    }, 30_000);
+  }
+
+  it('не стирает ввод человека, если письма прочитаны между вставкой и Enter', async () => {
+    const { ref, pty, activity, stream, letter, notices } = await rig();
+    await waitFor(() => known(activity, ref));
+    const unsubscribe = pty.on('output', (_ref, data) => {
+      if (!data.includes(`paste: ${POINTER}`)) return;
+      unsubscribe();
+      pty.input(ref, 'мой текст');
+      writeLetters(project, ref.workId, (letters) => {
+        letters.markRead(ref.sessionId, letters.unreadFor(ref.sessionId).map((message) => message.id), new Date().toISOString());
+      });
+    });
+    await letter();
+    await waitFor(() => notices('pointer-cancelled') === 1);
+    expect(stream()).not.toContain('enter: New messages');
+    pty.input(ref, '\r');
+    await waitFor(() => stream().includes(`enter: ${POINTER}мой текст`));
   }, 30_000);
 
   it('режима вставки ещё нет — указатель не печатается, а с появлением режима уходит сам', async () => {
