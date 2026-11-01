@@ -60,6 +60,11 @@ export const S = {
     reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
+    /** Карточка поправки: что станет с пунктом после принятия. */
+    marks: { new: 'New', changed: 'Changed', redo: 'Will be redone' },
+    doneHidden: (n: number) => n + ' done ' + (n === 1 ? 'item' : 'items') + ' hidden',
+    removed: (items: string[]) => 'Removed: ' + items.join(', '),
+    showFullPlan: 'Show the full plan',
     owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
