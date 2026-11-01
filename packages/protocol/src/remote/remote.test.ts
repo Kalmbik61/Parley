@@ -91,14 +91,51 @@ describe('allowlist', () => {
     expect(Object.keys(REMOTE_PARAM_RULES)).toContain('pty.send');
   });
 
+  const ptySend = {
+    ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' },
+    text: 'hi',
+    submit: true,
+    requestedAt: 1,
+    clientMsgId: 'msg-12345',
+  };
+  it('A27: pty.send needs clientMsgId 8–64 [A-Za-z0-9_-], rejects extra keys', () => {
+    expect(checkRemoteParams('pty.send', ptySend)).toBe(true);
+    const noId: Record<string, unknown> = { ...ptySend };
+    delete noId.clientMsgId;
+    expect(checkRemoteParams('pty.send', noId)).toBe(false);
+    for (const id of ['short', 'a'.repeat(65), 'bad id!!!!', 5]) {
+      expect(checkRemoteParams('pty.send', { ...ptySend, clientMsgId: id }), String(id)).toBe(false);
+    }
+    expect(checkRemoteParams('pty.send', { ...ptySend, clientMsgId: 'a'.repeat(64) })).toBe(true);
+    expect(checkRemoteParams('pty.send', { ...ptySend, extra: 1 })).toBe(false);
+    expect(checkRemoteParams('pty.send', { ...ptySend, submit: 'yes' })).toBe(false);
+    expect(checkRemoteParams('pty.send', null)).toBe(false);
+  });
+
+  it('A27: consents.decide takes allow or deny only', () => {
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'deny' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'always' })).toBe(false);
+    expect(checkRemoteParams('consents.decide', null)).toBe(false);
+  });
+
+  it('A27: stage A has feed/pty/consents/trust.check; trust.grant, revoke, list stay forbidden', () => {
+    for (const m of ['feed.subscribe', 'feed.unsubscribe', 'pty.send', 'consents.list', 'consents.decide', 'trust.check']) {
+      expect(REMOTE_STAGES.A.methods as readonly string[]).toContain(m);
+      expect(isRemoteForbidden(m), m).toBe(false);
+    }
+    for (const e of ['feed.changed', 'consents.changed']) expect(REMOTE_STAGES.A.events as readonly string[]).toContain(e);
+    for (const m of ['trust.grant', 'trust.revoke', 'trust.list']) expect(isRemoteForbidden(m), m).toBe(true);
+  });
+
   it('text rules (rooms.send moved to stage A and needs a room)', () => {
     const room = { roomId: 'r-1' };
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'a' })).toBe(true);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'decision', text: 'a' })).toBe(false);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8193) })).toBe(false);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8192) })).toBe(true);
-    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16385) })).toBe(false);
-    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16384) })).toBe(true);
+    expect(checkRemoteParams('pty.send', { ...ptySend, text: 'a'.repeat(16385) })).toBe(false);
+    expect(checkRemoteParams('pty.send', { ...ptySend, text: 'a'.repeat(16384) })).toBe(true);
   });
 });
 
@@ -142,11 +179,13 @@ describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
     expect(checkRemoteParams('sessions.create', { ...session, task: '' })).toBe(true);
   });
 
-  it('sessions.create: agent, effort, lean, new work, child session, long task or label → rejected', () => {
+  it('sessions.create: agent, effort, lean, child session, long task or label → rejected', () => {
     for (const extra of [{ agent: 'x' }, { effort: 'high' }, { lean: true }, { other: 1 }]) {
       expect(checkRemoteParams('sessions.create', { ...session, ...extra }), JSON.stringify(extra)).toBe(false);
     }
-    expect(checkRemoteParams('sessions.create', { ...session, workId: null })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, workId: null })).toBe(true);
+    expect(checkRemoteParams('sessions.create', { ...session, trustFolder: true })).toBe(true);
+    expect(checkRemoteParams('sessions.create', { ...session, trustFolder: 'yes' })).toBe(false);
     expect(checkRemoteParams('sessions.create', { ...session, workId: '' })).toBe(false);
     expect(checkRemoteParams('sessions.create', { ...session, parent: { sessionId: 's-01' } })).toBe(false);
     const noParent: Record<string, unknown> = { ...session };
@@ -396,12 +435,9 @@ describe('hardened strings and frames (critic A1)', () => {
 
 describe('bridge reads in stage A (wave 3)', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
-  it('W7: feed.snapshot only with scope attention and without agentId', () => {
+  it('A27: feed.snapshot has no param rule any more', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(true);
     expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention' })).toBe(true);
-    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention', agentId: 'a1' })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', { scope: 'attention' })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', null)).toBe(false);
   });
   it('W12: session.closing knows the protocol reason', () => {
     expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'protocol' }).success).toBe(true);
