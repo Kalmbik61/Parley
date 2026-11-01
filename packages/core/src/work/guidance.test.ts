@@ -692,9 +692,22 @@ it('plan hints preserve the fourteen-line bound with either navigator snapshot',
   for (const skillNavigator of [false, true]) {
     const text = systemGuidance(mapOf('All features', 'A task'), 's-03', { skillNavigator });
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
-    expect(text).toContain('plan_update/plan_submit/plan_verify');
+    expect(text).toContain('plan_update/plan_progress/plan_submit/plan_verify');
     expect(text).toContain('read_guide(topic: plans)');
     expect(text.includes('find_skill')).toBe(skillNavigator);
+  }
+});
+
+it('the read_guide line names plan_tasks and plan_progress without a new line or a budget overrun', () => {
+  const clause = 'plan_tasks, plan_update/plan_progress/plan_submit/plan_verify: planId/rev; autonomous: engine and attempt_*; read_guide(topic: plans).';
+  for (const skillNavigator of [false, true]) for (const skillList of [undefined, 'names', 'removed'] as const) {
+    const options = { skillNavigator, ...(skillList === undefined ? {} : { skillList }) };
+    const stable = stableGuidance(options);
+    const text = systemGuidance(mapOf('All features', 'A task'), 's-03', options);
+    expect(stable).toContain(clause);
+    // Строка заменена, а не добавлена: чтение гида и план — по-прежнему одна строка.
+    expect(stable.split('\n').find((line) => line.includes('plan_tasks'))).toContain('read_guide — the Parley guide');
+    expect(guidanceBudgetProblems(text, stable)).toEqual([]);
   }
 });
 

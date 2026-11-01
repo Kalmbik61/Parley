@@ -63,7 +63,8 @@ Keep completed steps until starting a new task. Use explanation for a blocker; d
 An empty steps list clears the personal plan.
 This works for every provider, including code mode, without a native planning tool or Chat view.
 It updates your card and the Agents panel, without sending messages or waking the feature lead.
-These personal steps do not authorize work, accept assignments or replace plan_update/plan_submit.
+These personal steps do not authorize work or accept assignments. publish_agent_plan is for your
+personal steps; it does not replace plan_progress, plan_update, plan_submit or plan_verify.
 Room leads consolidate milestone evidence for the owner. Notify only when a milestone is ready,
 a blocker requires intervention, agreements change or another room depends on the result.
 Do not forward routine steps, individual tests, repeated status or acknowledgements.
@@ -93,7 +94,22 @@ In checklist and verified, the live lead calls propose_decision(room, text, plan
 The plan contains mode, goal, numbered items (title, owner, scope, after), optional
 backlog IDs, and in verified mode criteria and an independent verifier. For an
 amendment include the exact current plan id and rev. Do not start before human acceptance.
+In an amendment the decision text lists the remaining work and what changes (new, changed,
+reassigned or dropped items); do not restate completed items. The plan field stays the full
+plan, but the human sees only unfinished items and those the amendment resets.
 The accepted plan in get_map is authoritative. Use its exact planId/rev for every action.
+In checklist and verified rooms plan_tasks lists your assignments in the order to act on them
+(verify, rework, continue, start) and what each one waits for: dependencies, a blocker, a
+submission or a verification. Reading a letter does not finish an assignment: after a restart,
+a resume or a long turn call plan_tasks, then act with plan_update, plan_progress, plan_submit
+or plan_verify. Open assignments also appear as a reminder line right after the guidance in the
+session layer.
+plan_progress(planId, rev, item, done, next, artifacts?, blocker?) saves your position on an item you
+own (after plan_update in_progress) or verify (after the owner submitted): the latest checkpoint
+per item and role, overwritten by the next one. Call it after you start, before ending a turn
+without plan_submit or plan_verify, and at a soft obstacle; not after every step. It does not
+change the status and does not verify anything or send messages. A verifier's checkpoint
+belongs to one submission; a new submission makes it stale.
 Owners call plan_update(planId, rev, item, status, note?) to start or block work;
 blocked requires a reason. Work only within the accepted scope. If a skill is useful,
 load it through your native CLI when available; role and human rules still apply.
@@ -114,7 +130,7 @@ host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
 exports and linked backlog closures are captured separately from the map transaction;
 a disk/conflict failure stays pending. Human Retry retries the original captured intent,
 never overwrites an edited/reopened backlog row or an immutable foreign snapshot.
-A revision conflict means refresh get_map and use the accepted current revision.`,
+On a revision conflict in checklist and verified, call plan_tasks and use the current revision.`,
   },
   {
     topic: 'overview',

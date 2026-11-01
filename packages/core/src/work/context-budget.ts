@@ -43,6 +43,8 @@ export const BRIEF_MAX_BYTES = 32768;
 export const READ_GUIDE_MAX_BYTES = 65536;
 /** Ответ `find_skill` целиком. */
 export const FIND_SKILL_MAX_BYTES = 8192;
+/** Блок открытых заданий комнаты в слое сессии (`assignmentsBlock`): напоминание, а не список — за списком идут в `plan_tasks`. */
+export const ASSIGNMENTS_BLOCK_MAX_BYTES = 1024;
 
 /**
  * Размер текста в бюджете: байты UTF-8 после JSON-экранирования. Codex получает слой строкой TOML через

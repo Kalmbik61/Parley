@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { addSession, transitionSession } from "./map.js";
 import { mapLetterTx } from "./letter-store.js";
 import { viewBytes } from "./context-pages.js";
+import { ASSIGNMENTS_BLOCK_MAX_BYTES, contextBytes } from "./context-budget.js";
 import {
   PLAN_TASKS_MAX_BYTES,
+  assignmentsBlock,
   planTasksNext,
   planTasksView,
 } from "./plan-tasks.js";
@@ -736,5 +738,245 @@ describe("planTasksNext", () => {
     });
     expect(JSON.stringify(next).length).toBeLessThan(1500);
     expect(planTasksNext(map, "s-04")).toEqual({ total: 0, assignments: [] });
+  });
+});
+
+describe("assignmentsBlock: the open-assignments block of the session layer (C6)", () => {
+  const HEAD =
+    "Open room assignments (reading a letter does not finish them; call plan_tasks): ";
+  /** Пункты одного владельца s-02: по одному заданию на каждый. */
+  function owned(count: number, extra: Partial<PlanDraft["items"][number]> = {}) {
+    const map = fixture();
+    const many = draft();
+    many.items = Array.from({ length: count }, (_, index) => ({
+      id: index + 1,
+      title: `Item ${index + 1} ${"t".repeat(300)}`,
+      owner: "s-02",
+      scope: "s".repeat(300),
+      criteria: ["Works"],
+      verifier: "s-03",
+      ...extra,
+    }));
+    const plan = accept(map, many);
+    return { map, plan };
+  }
+
+  it("no assignments: an empty string for a session outside the room, an empty map and an unknown session", () => {
+    const map = fixture();
+    expect(assignmentsBlock(map, "s-02")).toBe("");
+    accept(map);
+    expect(assignmentsBlock(map, "s-04")).toBe("");
+    expect(assignmentsBlock(map, "s-99")).toBe("");
+  });
+
+  it("one assignment: the header, the action and a full stop, no tail", () => {
+    const map = fixture();
+    const one = draft();
+    one.items = [one.items[0]!];
+    const plan = accept(map, one);
+    unchanged(map, () => {
+      expect(assignmentsBlock(map, "s-02")).toBe(
+        `${HEAD}${plan.id} rev 0 #1 start.`,
+      );
+    });
+  });
+
+  it("the owner position: a continue entry carries its checkpoint next", () => {
+    const map = fixture();
+    const plan = accept(map);
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-02",
+      { done: "Parser done", next: "Wire the tests" },
+      AT,
+    );
+    expect(assignmentsBlock(map, "s-02")).toBe(
+      `${HEAD}${plan.id} rev 0 #1 continue — next: Wire the tests; ${plan.id} rev 0 #3 start.`,
+    );
+  });
+
+  it("plan_tasks order: verify before wait, the verifier entry carries the verifier next", () => {
+    const map = fixture();
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-03",
+      { done: "Read the diff", next: "Run the suite" },
+      AT,
+    );
+    expect(assignmentsBlock(map, "s-03")).toBe(
+      `${HEAD}${plan.id} rev 0 #1 verify — next: Run the suite; ${plan.id} rev 0 #2 wait; ${plan.id} rev 0 #3 wait.`,
+    );
+  });
+
+  it("rework shows the owner next; wait and start entries carry none", () => {
+    const map = fixture();
+    const plan = accept(map);
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-02",
+      { done: "Parser done", next: "Fix the edge case" },
+      AT,
+    );
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    // Сдан и ждёт проверки: это запись wait, позиция в блок не идёт.
+    expect(assignmentsBlock(map, "s-02")).not.toContain("next:");
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "returned", "Fix it", AT);
+    expect(assignmentsBlock(map, "s-02")).toBe(
+      `${HEAD}${plan.id} rev 0 #1 rework — next: Fix the edge case; ${plan.id} rev 0 #3 start.`,
+    );
+  });
+
+  it("a verifier checkpoint of an earlier submission is stale and stays out of the block", () => {
+    const map = fixture();
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-03",
+      { done: "Read the diff", next: "Run the suite" },
+      AT,
+    );
+    map.plans![0]!.items[0]!.log.push({
+      at: AT,
+      by: "s-02",
+      status: "done",
+      note: null,
+    });
+    const block = assignmentsBlock(map, "s-03");
+    expect(block).toContain(`${plan.id} rev 0 #1 verify;`);
+    expect(block).not.toContain("Run the suite");
+  });
+
+  it("a whole-plan assignment has no item number", () => {
+    const map = fixture();
+    const plan = accept(map);
+    for (const [id, owner] of [
+      [1, "s-02"],
+      [2, "s-01"],
+      [3, "s-02"],
+    ] as const) {
+      submitPlanItem(map, lt(map), plan.id, 0, id, owner, evidence, AT);
+      verifyPlanItem(map, lt(map), plan.id, 0, id, "s-03", "verified", "Seen", AT);
+    }
+    expect(assignmentsBlock(map, "s-01")).toBe(
+      `${HEAD}${plan.id} rev 0 propose-completion.`,
+    );
+  });
+
+  it("six assignments: five are shown and the rest is counted as +1 more", () => {
+    const { map, plan } = owned(6);
+    expect(assignmentsBlock(map, "s-02")).toBe(
+      `${HEAD}${[1, 2, 3, 4, 5].map((id) => `${plan.id} rev 0 #${id} start`).join("; ")}; +1 more.`,
+    );
+    const nine = owned(9);
+    expect(assignmentsBlock(nine.map, "s-02")).toMatch(/; \+4 more\.$/);
+  });
+
+  it("the entries are those of plan_tasks, in the same order", () => {
+    const map = fixture();
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    updatePlanItem(map, plan.id, 0, 3, "s-02", "blocked", "No fixture", AT);
+    for (const session of ["s-01", "s-02", "s-03"]) {
+      const view = planTasksView(map, session, {});
+      const expected = view.assignments
+        .map((entry) =>
+          entry.item === null
+            ? `${entry.planId} rev ${entry.rev} ${entry.action}`
+            : `${entry.planId} rev ${entry.rev} #${entry.item} ${entry.action}`,
+        )
+        .join("; ");
+      const block = assignmentsBlock(map, session);
+      expect(block.slice(HEAD.length, -1).replace(/ — next: [^;]*/g, "")).toBe(
+        expected,
+      );
+    }
+  });
+
+  it("bounds: a long multibyte next is cut per entry, the block stays within 1024 bytes and never splits a character", () => {
+    const { map, plan } = owned(7);
+    for (const [index, text] of [
+      "я".repeat(300),
+      "😀".repeat(75),
+      '"\n\t'.repeat(60),
+      "ж".repeat(299) + "é",
+      "n".repeat(300),
+      "\u0001".repeat(40),
+      "x",
+    ].entries()) {
+      updatePlanItem(map, plan.id, 0, index + 1, "s-02", "in_progress", undefined, AT);
+      savePlanCheckpoint(
+        map,
+        plan.id,
+        0,
+        index + 1,
+        "s-02",
+        { done: "d", next: text },
+        AT,
+      );
+    }
+    const block = assignmentsBlock(map, "s-02");
+    expect(ASSIGNMENTS_BLOCK_MAX_BYTES).toBe(1024);
+    expect(contextBytes(block)).toBeLessThanOrEqual(ASSIGNMENTS_BLOCK_MAX_BYTES);
+    expect(block.startsWith(HEAD)).toBe(true);
+    expect(block.endsWith("+2 more.")).toBe(true);
+    expect(block.split("\n")).toHaveLength(1);
+    expect(/\p{Surrogate}/u.test(block)).toBe(false);
+    expect(block).not.toContain("\uFFFD");
+    expect(block).toContain("[cut:");
+  });
+
+  it("a block with very long identifiers stays within the bound: the surplus entries go to +N more", () => {
+    const { map, plan } = owned(5);
+    for (const id of [1, 2, 3, 4, 5]) {
+      updatePlanItem(map, plan.id, 0, id, "s-02", "in_progress", undefined, AT);
+      savePlanCheckpoint(
+        map,
+        plan.id,
+        0,
+        id,
+        "s-02",
+        { done: "d", next: "я".repeat(300) },
+        AT,
+      );
+    }
+    map.plans![0]!.id = "pl-" + "9".repeat(60);
+    map.plans![0]!.rev = 123456789;
+    const block = assignmentsBlock(map, "s-02");
+    expect(contextBytes(block)).toBeLessThanOrEqual(ASSIGNMENTS_BLOCK_MAX_BYTES);
+    expect(block).toMatch(/\+\d+ more\.$/);
+  });
+
+  it("an autonomous plan gives no block: its items are driven by the engine", () => {
+    const map = fixture();
+    accept(map);
+    expect(assignmentsBlock(map, "s-02")).not.toBe("");
+    map.plans![0]!.mode = "autonomous";
+    expect(assignmentsBlock(map, "s-02")).toBe("");
+  });
+
+  it("does not change the map and survives a JSON round trip", () => {
+    const { map } = owned(3);
+    unchanged(map, () => {
+      assignmentsBlock(map, "s-02");
+    });
+    const reloaded = JSON.parse(JSON.stringify(map)) as WorkMap;
+    expect(assignmentsBlock(reloaded, "s-02")).toBe(assignmentsBlock(map, "s-02"));
   });
 });
