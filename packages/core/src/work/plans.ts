@@ -31,6 +31,12 @@ export class PlanConflictError extends Error {
 }
 export const PLAN_ITEM_MAX = 30;
 export const PLAN_TEXT_MAX = 10_000;
+/** Сколько последних сдач хранит пункт и до скольких знаков режется текст улик старых сдач. */
+export const PLAN_SUBMISSIONS_MAX = 5;
+export const PLAN_OLD_EVIDENCE_MAX = 2_000;
+/** Сколько путей улик и до скольких знаков каждый путь хранит старая сдача. */
+export const PLAN_OLD_ARTIFACTS_MAX = 10;
+const PLAN_OLD_ARTIFACT_PATH_MAX = 300;
 const text = (value: string, required = true): boolean =>
   typeof value === "string" &&
   (!required || !!value.trim()) &&
@@ -520,11 +526,15 @@ export function acceptRoomPlan(
           item.evidence = structuredClone(previous.evidence);
           item.note = previous.note;
           item.log = structuredClone(previous.log);
+          if (previous.submissions)
+            item.submissions = structuredClone(previous.submissions);
           if (promotionExempt.has(item.id))
             item.acceptedChecklistRevision = existing.rev;
           else if (previous.acceptedChecklistRevision !== undefined)
             item.acceptedChecklistRevision = previous.acceptedChecklistRevision;
-        } else if (previous)
+        } else if (previous) {
+          if (previous.submissions)
+            item.submissions = structuredClone(previous.submissions);
           item.log = [
             ...structuredClone(previous.log),
             {
@@ -534,6 +544,7 @@ export function acceptRoomPlan(
               note: "Assignment changed; previous evidence invalidated.",
             },
           ];
+        }
       }
       draft.plans![draft.plans!.indexOf(existing)] = plan;
     } else draft.plans!.push(plan);
@@ -646,6 +657,25 @@ export function submitPlanItem(
     )
       throw new RoomRuleError("invalid evidence");
     item.evidence = structuredClone(evidence);
+    const submissions = (item.submissions ??= []);
+    for (const older of submissions) {
+      older.evidence.text = older.evidence.text.slice(0, PLAN_OLD_EVIDENCE_MAX);
+      older.evidence.artifacts = older.evidence.artifacts
+        .slice(0, PLAN_OLD_ARTIFACTS_MAX)
+        .map((file) => file.slice(0, PLAN_OLD_ARTIFACT_PATH_MAX));
+    }
+    submissions.push({
+      n: (submissions.at(-1)?.n ?? 0) + 1,
+      by: actor,
+      at,
+      evidence: structuredClone(evidence),
+      verdict: null,
+      verdictBy: null,
+      verdictAt: null,
+      note: null,
+    });
+    if (submissions.length > PLAN_SUBMISSIONS_MAX)
+      submissions.splice(0, submissions.length - PLAN_SUBMISSIONS_MAX);
     log(item, actor, "done", null, at);
     recalculate(draft, letters, plan, at);
   }, letters);
@@ -680,6 +710,15 @@ export function verifyPlanItem(
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");
     log(item, actor, verdict, note, at);
+    const last = item.submissions?.at(-1);
+    // Возврат человека не затирает вердикт проверяющего: у него свои поля.
+    if (last)
+      Object.assign(
+        last,
+        humanReturn
+          ? { returnedBy: actor, returnedAt: at, returnNote: note }
+          : { verdict, verdictBy: actor, verdictAt: at, note },
+      );
     if (humanReturn) {
       plan.status = "active";
       plan.completionSummary = null;
@@ -915,6 +954,32 @@ export function completeRoomPlan(
   });
 }
 
+function validSubmissions(value: unknown): boolean {
+  // Длину не ограничиваем: запись режет историю до PLAN_SUBMISSIONS_MAX, а длинную чужую читаем как есть.
+  if (!Array.isArray(value)) return false;
+  const orNull = (field: unknown): boolean =>
+    field === null || typeof field === "string";
+  return value.every(
+    (entry) =>
+      !!entry &&
+      Number.isSafeInteger(entry.n) &&
+      entry.n >= 1 &&
+      typeof entry.by === "string" &&
+      typeof entry.at === "string" &&
+      !!entry.evidence &&
+      typeof entry.evidence.text === "string" &&
+      Array.isArray(entry.evidence.artifacts) &&
+      entry.evidence.artifacts.every((file: unknown) => typeof file === "string") &&
+      [null, "verified", "returned"].includes(entry.verdict) &&
+      orNull(entry.verdictBy) &&
+      orNull(entry.verdictAt) &&
+      orNull(entry.note) &&
+      [entry.returnedBy, entry.returnedAt, entry.returnNote].every(
+        (field: unknown) => field === undefined || orNull(field),
+      ),
+  );
+}
+
 /** Stored historical plans may reference departed participants; validate data, not present-day permissions. */
 export function validatePlanStorage(map: WorkMap): void {
   if (
@@ -976,6 +1041,7 @@ export function validatePlanStorage(map: WorkMap): void {
           "returned",
         ].includes(item.status) ||
         !Array.isArray(item.log) ||
+        (item.submissions !== undefined && !validSubmissions(item.submissions)) ||
         (item.acceptedChecklistRevision !== undefined &&
           (plan.mode !== "verified" ||
             item.status !== "done" ||
