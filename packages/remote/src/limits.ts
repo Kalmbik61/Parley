@@ -20,6 +20,10 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'sessions.create',
   'rooms.create',
   'rooms.send',
+  // Сообщение агенту (A27, правки 13): повтор с тем же `clientMsgId` лимит не тратит (A30).
+  'pty.send',
+  // Решение по карточке согласия (A27): как `feed.decide`; цель в журнале — `id` карточки.
+  'consents.decide',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */

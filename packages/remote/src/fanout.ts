@@ -1,5 +1,6 @@
 import type { WorksSnapshot } from '@parley/protocol';
 import { REMOTE_EVENTS, projectWorksSnapshot } from '@parley/protocol/remote';
+import type { SessionRef } from '@parley/protocol';
 import type { HostLink, HostLinkEvent } from './host-link.js';
 import { refKey } from './host-link.js';
 import type { PhoneSessions } from './session-contract.js';
@@ -11,6 +12,8 @@ export interface FanoutOptions {
   sessions: PhoneSessions;
   log: BridgeLog;
   coalesceMs?: number;
+  /** Телефоны, подписанные на ленту `ref` (A30): `feed.changed` идёт только им. Нет — никому. */
+  feedSubscribers?: (ref: SessionRef) => ReadonlySet<string>;
 }
 
 export interface Fanout {
@@ -173,6 +176,16 @@ export function createFanout(options: FanoutOptions): Fanout {
       return;
     }
     if (!LIVE_EVENTS.has(event.event)) return;
+    if (event.event === 'feed.changed') {
+      // Дельта ленты — только подписанным на этот `ref`; остальные события (и `consents.changed`) — всем.
+      const ref = (event.data as { ref?: SessionRef } | null)?.ref;
+      if (!ref) return;
+      for (const deviceId of [...(options.feedSubscribers?.(ref) ?? [])]) {
+        const phone = phones.get(deviceId);
+        if (phone?.live) send(deviceId, { event: event.event, data: event.data });
+      }
+      return;
+    }
     for (const [deviceId, phone] of [...phones]) {
       if (!phone.live || phones.get(deviceId) !== phone) continue;
       if (event.event === 'works.changed') onWorksChanged(deviceId, phone, event.data);
