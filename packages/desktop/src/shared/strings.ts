@@ -1425,8 +1425,8 @@ export const S = {
         relay: { connected: 'Relay: connected', connecting: 'Relay: connecting…', error: 'Relay: error' },
       },
       pair: {
-        heading: 'Pair a device',
         start: 'Pair a device',
+        startHint: 'Shows a QR code to scan in Parley on your iPhone',
         stop: 'Cancel',
         hint: 'Scan this code with the Parley app on your phone. It works once and expires soon.',
         qrAlt: 'Pairing QR code',
