@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type ConsentCard, type SendResult, type SessionRef } from '@parley/protocol';
+import { refKey, type Capabilities, type ConsentCard, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -29,7 +29,7 @@ import { useWorksStore } from '../store/works.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
@@ -1713,6 +1713,59 @@ describe('ChatView — очередь отправки', () => {
     setFeed([prompt('p1', 'go'), turn('u1')], 2);
     await act(async () => {});
     expect(sentTexts()).toEqual([]);
+  });
+
+  it('во время сжатия сообщение держит окно: серое с «Send now» и ×; сжатие кончилось — уходит один раз', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    const compaction = (phase: 'running' | 'compacted'): void => {
+      const metrics = { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, compaction: phase };
+      useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle', { metrics })]), loaded: true });
+    };
+    goLive();
+    compaction('running');
+    renderBody(makeSession('s-01', 'S01'));
+    // Хост напечатал `/compact`: слэш-команда и заметка сжатия хода не открывают.
+    setFeed([prompt('p0', 'go'), turn('u0'), prompt('p1', '/compact'), { id: 'n1', at: AT, kind: 'notice', notice: { type: 'compact', phase: 'pre', trigger: 'manual' } }]);
+    type('later');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('waiting');
+    expect(within(grey).getByRole('button', { name: S.outbox.sendNow })).not.toBeNull();
+    expect(within(grey).getByRole('button', { name: S.outbox.remove })).not.toBeNull();
+    expect(sentTexts()).toEqual([]);
+    act(() => compaction('compacted'));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['later']);
+  });
+
+  it('письма, которые сессия ещё не забрала, — серыми в очереди без кнопок, с отправителем, комнатой и причиной; забрала — уходят', async () => {
+    const pending = (pendingLetters: PendingLetter[], compaction: 'running' | null = 'running'): void => {
+      const metrics = { tokensIn: null, tokensOut: null, durationMs: null, unread: pendingLetters.length, subagents: 0, model: null, mailWaiting: 'busy' as const, compaction, pendingLetters };
+      useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle', { metrics })]), loaded: true });
+    };
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'S01'), makeSession('s-02', 'reviewer')], rooms: [makeRoom('r-01', 'Review room')] })],
+    });
+    const letters: PendingLetter[] = [
+      { id: 'm-1', from: 's-02', roomId: 'r-01', text: 'please review' },
+      { id: 'm-2', from: 'human', roomId: null, text: 'and mine' },
+    ];
+    pending(letters);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p0', 'go'), turn('u0')]);
+    const rows = screen.getAllByTestId('chat-letter');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.textContent).toContain(S.chat.letter.from('S02 reviewer', 'Review room'));
+    expect(rows[0]!.textContent).toContain('please review');
+    expect(rows[0]!.textContent).toContain(S.chat.letter.waiting(S.chat.letter.compacting));
+    expect(rows[1]!.textContent).toContain(S.chat.letter.from(S.chat.letter.you, null));
+    for (const row of rows) expect(within(row).queryAllByRole('button')).toEqual([]);
+    // Сжатия нет — причина та же, что в строке доставки комнаты.
+    act(() => pending(letters, null));
+    expect(screen.getAllByTestId('chat-letter')[0]!.textContent).toContain(S.chat.letter.waiting(S.rooms.mailWait.busy));
+    act(() => pending([]));
+    expect(screen.queryAllByTestId('chat-letter')).toEqual([]);
   });
 
   it('«Send now» отдаёт ждущее сообщение в CLI во время хода; ход закрылся — второе уходит само', async () => {

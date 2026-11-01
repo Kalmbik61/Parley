@@ -46,6 +46,7 @@ import {
   selectUsage,
   sessionTag,
   unreadCount,
+  unreadLetters,
   watchEvents,
   workPaths,
   type Activity,
@@ -73,6 +74,7 @@ import {
   type UsageSegment,
   type MailWait,
   type LiveTask,
+  type PendingLetter,
   type SessionRef,
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
@@ -233,6 +235,17 @@ const DEFAULT_STARTUP_WAIT_MS = 20_000;
 export const CODEX_CALL_GRACE_MS = 120_000;
 /** Ожидание вызова code mode, когда оно не указано (`yieldMs === null`): по умолчанию у Codex около 30 с. */
 export const CODEX_DEFAULT_YIELD_MS = 30_000;
+
+/** Сколько последних незабранных писем сессии уходит окну в `pendingLetters`; полное число — `unread`. */
+export const PENDING_LETTERS_MAX = 20;
+/** Сколько знаков текста письма уходит окну в `pendingLetters`; длиннее — с «…». */
+export const PENDING_LETTER_TEXT_MAX = 200;
+
+/** Начало текста письма для очереди Chat: одной строкой, длиннее `PENDING_LETTER_TEXT_MAX` — с «…». */
+function letterPreview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > PENDING_LETTER_TEXT_MAX ? `${flat.slice(0, PENDING_LETTER_TEXT_MAX)}…` : flat;
+}
 
 /**
  * Рычаг E2E окна: `PARLEY_CODEX_STARTUP_MS` (и прежняя `HARNAS_CODEX_STARTUP_MS`) — срок экранов старта Codex в миллисекундах. Тест не может
@@ -486,6 +499,8 @@ export function createActivityService(
   const mailWaits = new Map<string, MailWait>();
   const contexts = new Map<string, ContextFill>();
   const compactions = new Map<string, CompactionTrack>();
+  /** Незабранные письма по ключу сессии (`pendingOf`) и число непрочитанного, при котором их прочли. */
+  const pendingLetters = new Map<string, { unread: number; letters: PendingLetter[] }>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -773,6 +788,26 @@ export function createActivityService(
     unreadCount(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map }).total;
 
   /**
+   * Незабранные письма сессии для очереди Chat: последние `PENDING_LETTERS_MAX` неудалённых — удалённые будильник не
+   * доставляет. Метрики пересчитываются на каждый хук, а письма читаются из базы с текстом, поэтому список помнится до
+   * записи писем этой сессии (`handleMail`) или карты (`handleWorksChange`) и до другого числа непрочитанного.
+   */
+  const pendingOf = (key: string, entry: WorkEntry, sessionId: string, unread: number): PendingLetter[] => {
+    if (unread === 0) {
+      pendingLetters.delete(key);
+      return [];
+    }
+    const cached = pendingLetters.get(key);
+    if (cached?.unread === unread) return cached.letters;
+    const letters = unreadLetters(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map })
+      .filter((message) => message.deleted !== true)
+      .slice(-PENDING_LETTERS_MAX)
+      .map((message) => ({ id: message.id, from: message.from, roomId: message.roomId, text: letterPreview(message.text) }));
+    pendingLetters.set(key, { unread, letters });
+    return letters;
+  };
+
+  /**
    * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —
    * описание кладётся в кэш сессии и сессия пересчитывается. Не нашлось — запоминается время неудачи, и
    * пересчёт не раньше чем через `META_RETRY_MS` попробует снова: Claude может записать файл чуть позже
@@ -964,6 +999,7 @@ export function createActivityService(
     // Все провайдеры — из `ContextService`: Claude и GLM — файл строки статуса, Codex — хвост rollout.
     const fill = contexts.get(key) ?? null;
     const view = contextView(fill, compactions.get(key));
+    const unread = unreadOf(entry, session.id);
     return {
       usage,
       ...(segments === null ? {} : { usageSegments: segments.list }),
@@ -973,7 +1009,7 @@ export function createActivityService(
         usage.source === 'native-index'
           ? (indexed?.durationMs ?? snapshot?.durationMs ?? null)
           : (snapshot?.durationMs ?? indexed?.durationMs ?? null),
-      unread: unreadOf(entry, session.id),
+      unread,
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,
       plan: latestAgentPlan(session.agentPlan, indexed?.plan),
@@ -982,6 +1018,7 @@ export function createActivityService(
       mailWaiting: mailWaits.get(key) ?? null,
       context: view.context,
       compaction: view.compaction,
+      pendingLetters: pendingOf(key, entry, session.id, unread),
     };
   }
 
@@ -1522,6 +1559,8 @@ export function createActivityService(
 
   function handleWorksChange(snapshot: WorksView): void {
     if (stopped) return;
+    // Комнаты и участники карты решают, чьё письмо непрочитано (`isUnreadFor`): список писем читается заново.
+    pendingLetters.clear();
     for (const entry of snapshot.entries) {
       const { watch, renewed } = ensureWorkWatch(entry);
       for (const session of entry.map.sessions) {
@@ -1556,6 +1595,7 @@ export function createActivityService(
     const { watch } = ensureWorkWatch(entry);
     for (const sessionId of mailSessions(notice, entry.map)) {
       const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
+      pendingLetters.delete(refKey(ref));
       mailDirty.set(refKey(ref), { ref, journal: watch.journal });
     }
     if (mailDirty.size === 0 || mailFlushQueued) return;

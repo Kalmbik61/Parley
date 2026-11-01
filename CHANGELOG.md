@@ -17,6 +17,7 @@ All notable changes to Parley are documented in this file.
 - The status bar shows how many agents run on the machine: `Agents 17/18 · 3 queued · memory warn`, or just `Agents 5` when there is no cap and nothing else to report. A click lists the queued launches with their reasons and waiting time, the memory pressure and swap, and when idle agents fall asleep; "Limits in Settings" opens the agent settings. These are the same numbers `get_capacity` gives agents.
 - A workspace can let its agents close finished sessions: turn on "Agents close finished sessions" in the workspace card menu. An agent then closes its own session once its part is accepted, and a room lead closes the room's finished members, so you no longer have to write "wrap up" in every room. It is off by default, and sessions you start yourself still wait for you.
 - An agent can answer your direct letter: it replies with `send_message` to `human`, and the reply arrives in the workspace mail like any letter to you.
+- A session's Chat queue shows the letters it has not picked up yet, from other sessions, rooms or you: grey, after your own queued messages, with the sender, the room, the start of the text and why the letter still waits, for example `Not picked up yet (compacting context)`. They have no buttons: Parley delivers them by itself, and a letter leaves the queue once the agent reads it.
 
 ### Changed
 
@@ -28,6 +29,7 @@ All notable changes to Parley are documented in this file.
 ### Fixed
 
 - Clearing "Session wake-ups per hour" in Settings no longer saves 0, which silently stopped every wake-up by letter.
+- A message you send in Chat while the agent's context is being compacted now waits in the queue with "Send now" and ×, and goes to the agent once the compaction ends. Before, it hung as "Sending…" with no way to remove it.
 
 ## 0.26.0
 

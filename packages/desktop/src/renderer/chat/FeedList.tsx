@@ -18,7 +18,8 @@
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
  * сообщения из очереди (`queued`, решение 8), за ними — очередь окна
- * (`outbox`, спека 2026-10-16). Несколько агентов подряд — стопкой: между ними отступ меньше.
+ * (`outbox`, спека 2026-10-16), последними — письма, которые сессия ещё не забрала (`letters`).
+ * Несколько агентов подряд — стопкой: между ними отступ меньше.
  *
  * Строка элемента — `memo`: дельта ленты сохраняет ссылки нетронутых элементов (`applyDelta`), а
  * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
@@ -37,6 +38,7 @@ import { imagesExtraPx, type SwitchDivider } from './feed-model.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
+import { LetterItem } from './items/LetterItem.js';
 import { NoticeItem } from './items/NoticeItem.js';
 import { PromptItem } from './items/PromptItem.js';
 import { TextItem } from './items/TextItem.js';
@@ -67,8 +69,18 @@ export interface OutboxPrompt {
   flying: boolean;
 }
 
+/** Письмо, которое сессия ещё не забрала (`metrics.pendingLetters`): подписи уже готовы, кнопок нет. */
+export interface PendingLetterRow {
+  id: string;
+  from: string;
+  room: string | null;
+  text: string;
+  reason: string | null;
+}
+
 const NO_DIVIDERS: readonly SwitchDivider[] = [];
 const NO_OUTBOX: readonly OutboxPrompt[] = [];
+const NO_LETTERS: readonly PendingLetterRow[] = [];
 
 /** Ключ раскрытия группы в `expanded`: ключ группы — `id` её первого элемента, а у вызова тот же `id` занят его собственным раскрытием. */
 const groupOpenKey = (key: string): string => `group:${key}`;
@@ -78,6 +90,7 @@ type Row =
   | { key: string; divider: SwitchDivider }
   | { key: string; queued: QueuedPrompt }
   | { key: string; outbox: OutboxPrompt }
+  | { key: string; letter: PendingLetterRow }
   | { key: string; control: { status: TurnStatus; durationMs: number | null; groupKeys: string[] } }
   | { key: string; group: Extract<FoldRow, { kind: 'group' }> };
 
@@ -89,6 +102,8 @@ export interface FeedListProps {
   onRetryOutbox?: (id: string) => void;
   onSendNowOutbox?: (id: string) => void;
   onRemoveOutbox?: (id: string) => void;
+  /** Письма, которые сессия ещё не забрала, — после очереди окна, только чтобы видеть. */
+  letters?: readonly PendingLetterRow[];
   /** Подпись пустой ленты: загрузка, пусто, ошибка; `null` — не нужна. */
   note: string | null;
   /** Есть — рядом с подписью кнопка «Retry» (лента не загрузилась). */
@@ -170,7 +185,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies' }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies' }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
@@ -233,6 +248,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     ...rows,
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
     ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
+    ...letters.map((entry) => ({ key: `letter:${entry.id}`, letter: entry })),
   ];
   // «У низа» — по последнему `scroll`: после роста ленты по DOM уже не понять, где стоял человек.
   const atBottomRef = useRef(true);
@@ -404,6 +420,8 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                     />
                   ) : 'queued' in row ? (
                     <PromptItem text={row.queued.text} state="queued" />
+                  ) : 'letter' in row ? (
+                    <LetterItem from={row.letter.from} room={row.letter.room} text={row.letter.text} reason={row.letter.reason} />
                   ) : (
                     <PromptItem
                       text={row.outbox.text}

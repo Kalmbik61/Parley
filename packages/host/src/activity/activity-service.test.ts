@@ -24,7 +24,7 @@ import type { HostContext } from '../context.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { createActivityService, wholeSessionUsage } from './activity-service.js';
+import { createActivityService, PENDING_LETTER_TEXT_MAX, wholeSessionUsage } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 import type { SubagentMeta } from './subagent-meta.js';
 import { createWindowCounters } from '../health/window-counters.js';
@@ -417,6 +417,61 @@ describe('createActivityService', () => {
     });
     expect(a.get(ref)?.metrics?.unread).toBe(0);
     expect(worksChanged()).toBe(before);
+  }, 20_000);
+
+  // Очередь Chat: письма, которые сессия ещё не забрала, окно показывает серыми, пока будильник их держит (сжатие, ход).
+  it('5г: недоставленные письма — в metrics.pendingLetters по порядку, текст сокращён; прочитанное оттуда уходит', async () => {
+    const { ref, workId } = await activeSession();
+    let first = '';
+    await updateMap(project, workId, (_map, letters) => {
+      first = letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' }).id;
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'прочитано', kind: 'note', readBy: { [ref.sessionId]: new Date().toISOString() } });
+      letters.add({ roomId: null, from: 'human', to: [ref.sessionId], text: 'x'.repeat(PENDING_LETTER_TEXT_MAX + 50), kind: 'note' });
+    });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    const pending = (): Array<[string, string]> => (a.get(ref)?.metrics?.pendingLetters ?? []).map((letter) => [letter.from, letter.text]);
+    expect(pending()).toEqual([
+      ['s-00', 'привет'],
+      ['human', `${'x'.repeat(PENDING_LETTER_TEXT_MAX)}…`],
+    ]);
+
+    await updateMap(project, workId, (_map, letters) => {
+      letters.markRead(ref.sessionId, [first], new Date().toISOString());
+    });
+    expect(pending().map(([from]) => from)).toEqual(['human']);
+  }, 20_000);
+
+  // Метрики пересчитываются на каждый хук, а письма читаются из базы с текстом: без новых писем список берётся из памяти.
+  it('5д: хуки без новых писем список незабранных писем заново не читают; новое письмо — читают', async () => {
+    const { ref, workId } = await activeSession();
+    await updateMap(project, workId, (_map, letters) => {
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' });
+    });
+    const counters = createWindowCounters();
+    const w = await works();
+    const a = activity(w, { windowCounters: counters });
+    await a.start();
+    await settle();
+    const base = counters.read().recomputes;
+    const reads = vi.spyOn(core, 'unreadLetters');
+    try {
+      await appendFile(path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`), hook('UserPromptSubmit') + hook('Stop'));
+      await settle();
+      expect(counters.read().recomputes).toBeGreaterThan(base);
+      expect(reads).not.toHaveBeenCalled();
+
+      await updateMap(project, workId, (_map, letters) => {
+        letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'ещё', kind: 'note' });
+      });
+      expect(a.get(ref)?.metrics?.pendingLetters?.map((letter) => letter.text)).toEqual(['привет', 'ещё']);
+      expect(reads).toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
   }, 20_000);
 
   // Тот же рисунок, что у будильника: каждое уведомление `onMail` пересчитывало адресата и перечитывало его журнал заново.

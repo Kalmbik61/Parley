@@ -26,6 +26,7 @@ export type {
   CapacitySnapshot,
   CompactResult,
   NoticeKind,
+  PendingLetter,
   ProfileStatus,
   ProtocolError,
   ProviderCheck,

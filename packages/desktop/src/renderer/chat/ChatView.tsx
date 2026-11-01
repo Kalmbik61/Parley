@@ -13,7 +13,8 @@
  * отдаёт его в CLI сразу — тогда это серый «Queued» CLI, пока не придёт промпт с тем же текстом, и отменить его
  * нельзя. Очередь сама повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний
  * (`showSendToast`). Поле больше не возвращает набранное: не ушедшее видно в ленте. Очередь живёт вне вида, поэтому
- * переживает смену вида и вкладки.
+ * переживает смену вида и вкладки. За очередью окна — письма этой сессии, которые она ещё не забрала
+ * (`metrics.pendingLetters`): серые, без кнопок, с причиной ожидания; письмо доставит хост.
  * «Stop» — `feed.interrupt` хоста (Esc агенту и присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
  * Черновик и серые «Queued» живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
@@ -65,7 +66,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
-import { HOST_ERROR_REASONS, refKey, type ModelOption, type SessionRef } from '@parley/protocol';
+import { HOST_ERROR_REASONS, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
@@ -79,6 +80,7 @@ import { defaultRoot } from '../files/store.js';
 import { cn } from '../lib/cn.js';
 import { effortChoices } from '../lib/effort-choices.js';
 import { sessionRowLabel } from '../lib/participant.js';
+import { mailWaitText } from '../attention/derive.js';
 import { activityFor, useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostConfigStore } from '../store/config.js';
 import { trustCardFor, useConsentsStore } from '../store/consents.js';
@@ -104,7 +106,7 @@ import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
-import { FeedList } from './FeedList.js';
+import { FeedList, type PendingLetterRow } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { pasteClipboardImage } from './paste-image.js';
 import { isSlashCommand, withQuote } from './reply.js';
@@ -158,6 +160,11 @@ function useHeldFor(condition: boolean, delayMs: number): boolean {
 const NO_ITEMS: readonly FeedItem[] = [];
 const NO_DIVIDERS: readonly SwitchDivider[] = [];
 const NO_QUEUED: readonly Queued[] = [];
+const NO_PENDING: readonly PendingLetter[] = [];
+const NO_LETTERS: readonly PendingLetterRow[] = [];
+// Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из корня core рендерер берёт только типы.
+const HUMAN = 'human';
+const SYSTEM = 'system';
 const NO_MODELS: readonly ModelOption[] = [];
 const NO_PATHS: readonly string[] = [];
 
@@ -271,6 +278,28 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed', flying: item.id === flyingId })),
     [outboxItems, flyingId],
   );
+  // Письма, которые сессия ещё не забрала, — серыми за очередью окна. Причина та же, что в строке доставки комнаты, а пока
+  // сжатие ждёт или идёт — сжатие: будильник тогда пишет просто `busy`.
+  const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
+  const letters = useMemo(() => {
+    const pending = metrics?.pendingLetters ?? NO_PENDING;
+    if (pending.length === 0) return NO_LETTERS;
+    const compacting = metrics?.compaction === 'pending' || metrics?.compaction === 'running';
+    const reason = compacting ? S.chat.letter.compacting : mailWaitText(metrics?.mailWaiting ?? null, need, Date.now());
+    const sender = (from: string): string => {
+      if (from === HUMAN) return S.chat.letter.you;
+      if (from === SYSTEM) return S.participants.system;
+      const author = entry?.map.sessions.find((item) => item.id === from);
+      return author === undefined ? from : sessionRowLabel(author.id, author.label);
+    };
+    return pending.map((letter) => ({
+      id: letter.id,
+      from: sender(letter.from),
+      room: letter.roomId === null ? null : (entry?.map.rooms.find((room) => room.id === letter.roomId)?.title ?? null),
+      text: letter.text,
+      reason,
+    }));
+  }, [metrics, need, entry]);
   const history = useMemo(
     () => promptHistory(items, [...queued.map((entry) => entry.text), ...outboxItems.map((item) => item.payload.text)]),
     [items, queued, outboxItems],
@@ -493,6 +522,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() })}
             onSendNowOutbox={(id) => chatOutbox.prioritize(sessionKey, id, { now: true })}
             onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
+            letters={letters}
             note={noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
             {...(showWorking ? { working: { since: turnStart } } : {})}
