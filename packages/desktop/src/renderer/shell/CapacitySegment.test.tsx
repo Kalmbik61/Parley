@@ -61,22 +61,22 @@ describe('CapacitySegment', () => {
     expect(trigger().getAttribute('title')).toBe('Agents 2/4');
   });
 
-  it('три вида по ширине: иконка ниже 960 px, короткая форма 17/18 или 17 от 960 до 1100, полный текст от 1100 px', () => {
+  it('три вида по ширине: иконка ниже 960 px, короткая форма 17/18 или 17 от 960 до 1280, полный текст от 1280 px', () => {
     show(snapshot({ live: 17, limit: 18, queued: 3 }));
     const { unmount } = render(<CapacitySegment />);
     const full = screen.getByText('Agents 17/18 · 3 queued');
     const short = screen.getByText('17/18');
     expect(full.className).toContain('hidden');
-    expect(full.className).toContain('min-[1100px]:inline');
+    expect(full.className).toContain('min-[1280px]:inline');
     expect(short.className).toContain('hidden');
     expect(short.className).toContain('min-[960px]:inline');
-    expect(short.className).toContain('min-[1100px]:hidden');
+    expect(short.className).toContain('min-[1280px]:hidden');
     unmount();
     show(snapshot({ live: 17 }));
     render(<CapacitySegment />);
     const shortOnly = screen.getByText('17');
     expect(shortOnly.className).toContain('min-[960px]:inline');
-    expect(shortOnly.className).toContain('min-[1100px]:hidden');
+    expect(shortOnly.className).toContain('min-[1280px]:hidden');
   });
 
   it('ниже 960 px остаётся иконка: тон предупреждения на кнопке, полный текст в title и aria-label', () => {
