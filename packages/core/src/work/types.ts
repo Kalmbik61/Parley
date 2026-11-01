@@ -325,6 +325,8 @@ export type AttemptChannelRequest =
 export interface PlanSubmission {
   n: number; by: string; at: string; evidence: PlanEvidence;
   verdict: 'verified' | 'returned' | null; verdictBy: string | null; verdictAt: string | null; note: string | null;
+  /** Возврат человеком пишется отдельно и не затирает вердикт проверяющего; нет поля — null. */
+  returnedBy?: string | null; returnedAt?: string | null; returnNote?: string | null;
 }
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;

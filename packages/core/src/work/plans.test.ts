@@ -22,6 +22,8 @@ import {
   proposedRoomPlan,
   acceptRoomPlan,
   PlanConflictError,
+  PLAN_OLD_ARTIFACTS_MAX,
+  PLAN_OLD_EVIDENCE_MAX,
 } from "./plans.js";
 import { ENGINE, HUMAN } from "./types.js";
 import type { AutonomousDraft, PlanDraft, WorkMap } from "./types.js";
@@ -1122,8 +1124,64 @@ describe("history of plan item submissions", () => {
     verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Fine", AT);
     expect(item().submissions![1]).toMatchObject({ verdict: "verified", verdictBy: "s-03", note: "Fine" });
     verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "returned", "Regression", AT);
-    expect(item().submissions![1]).toMatchObject({ verdict: "returned", verdictBy: HUMAN, note: "Regression" });
+    // Возврат человека не затирает вердикт проверяющего: он пишет только свои поля.
+    expect(item().submissions![1]).toMatchObject({
+      verdict: "verified",
+      verdictBy: "s-03",
+      note: "Fine",
+      returnedBy: HUMAN,
+      returnedAt: AT,
+      returnNote: "Regression",
+    });
     expect(item().submissions![0]!.verdictBy).toBe("s-03");
+    expect(item().submissions![0]).not.toHaveProperty("returnedBy");
+  });
+
+  it("a human return on a submission without a verdict sets only the return fields", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "returned", "No", AT);
+    expect(map.plans![0]!.items[0]!.submissions![0]).toMatchObject({
+      verdict: null,
+      verdictBy: null,
+      verdictAt: null,
+      note: null,
+      returnedBy: HUMAN,
+      returnedAt: AT,
+      returnNote: "No",
+    });
+  });
+
+  it("stored return fields survive normalisation and a malformed one is rejected", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "returned", "No", AT);
+    const reread = parseMap(JSON.stringify(map), "fixture");
+    expect(reread.plans![0]!.items[0]!.submissions![0]!.returnNote).toBe("No");
+    (map.plans![0]!.items[0]!.submissions![0] as unknown as { returnedBy: unknown }).returnedBy = 7;
+    expect(() => parseMap(JSON.stringify(map), "fixture")).toThrow();
+  });
+
+  it("older submissions stay bounded in text and in paths over many submits, the newest stays whole", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    const paths = Array.from({ length: 12 }, (_, i) => `src/${i}/${"p".repeat(395)}`);
+    for (let i = 1; i <= 12; i++) {
+      submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", { text: "t".repeat(3000), artifacts: paths }, AT);
+      const submissions = map.plans![0]!.items[0]!.submissions!;
+      for (const older of submissions.slice(0, -1)) {
+        expect(older.evidence.text.length).toBeLessThanOrEqual(PLAN_OLD_EVIDENCE_MAX);
+        expect(older.evidence.artifacts.length).toBeLessThanOrEqual(PLAN_OLD_ARTIFACTS_MAX);
+        for (const file of older.evidence.artifacts) expect(file.length).toBeLessThanOrEqual(300);
+      }
+      const newest = submissions.at(-1)!;
+      expect(newest.evidence.text).toHaveLength(3000);
+      expect(newest.evidence.artifacts).toEqual(paths);
+      returnOnce(map, plan.id);
+    }
+    expect(map.plans![0]!.items[0]!.submissions).toHaveLength(5);
   });
 
   it("a sixth submission drops the oldest and the numbers keep growing", () => {
@@ -1173,6 +1231,36 @@ describe("history of plan item submissions", () => {
     const amended = map.rooms[0]!.proposal!.plan!;
     resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", { rev: p.rev, planId: amended.id, planRev: amended.rev }, AT);
     expect(map.plans![0]!.items[0]!.submissions).toEqual(before);
+  });
+
+  it("an amendment that changes the assignment keeps the submissions", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    const before = structuredClone(map.plans![0]!.items[0]!.submissions);
+    const draft = input("verified");
+    draft.items[0]!.owner = "s-01";
+    const p = setProposal(map, "r-01", "s-01", "Amend", AT, { plan: { ...draft, id: plan.id, rev: 0 } });
+    const amended = map.rooms[0]!.proposal!.plan!;
+    resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", { rev: p.rev, planId: amended.id, planRev: amended.rev }, AT);
+    const item = map.plans![0]!.items[0]!;
+    expect(item.owner).toBe("s-01");
+    expect(item.status).not.toBe("done");
+    expect(item.submissions).toEqual(before);
+  });
+
+  it("a human return that clears a dependent's evidence keeps the dependent's submissions", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitOnce(map, plan.id, "first");
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Fine", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", { text: "second item", artifacts: [] }, AT);
+    const before = structuredClone(map.plans![0]!.items[1]!.submissions);
+    expect(before).toHaveLength(1);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "returned", "Regression", AT);
+    const dependent = map.plans![0]!.items[1]!;
+    expect(dependent.evidence).toBeNull();
+    expect(dependent.submissions).toEqual(before);
   });
 
   it.each([
