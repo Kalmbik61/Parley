@@ -15,7 +15,7 @@ export interface TrustRecord {
   /** Когда выдано, ISO-8601. */
   grantedAt: string;
   /** Кто дал согласие: окно, остров или Telegram. */
-  by: 'window' | 'island' | 'telegram';
+  by: 'window' | 'island' | 'telegram' | 'phone';
 }
 
 export interface TrustFile {

@@ -82,7 +82,7 @@ describe('белый список против запретного списка
     const session = { projectPath: '/p', workId: 'w-1', provider: 'claude', label: 'x', task: 't', parent: null };
     const room = { projectPath: '/p', workId: 'w-1', title: 'T', members: ['s-1'] };
     expect(checkRemoteParams('sessions.create', session)).toBe(true);
-    for (const extra of [{ agent: 'a' }, { effort: 'high' }, { lean: true }, { workId: null }, { parent: 's-1' }]) {
+    for (const extra of [{ agent: 'a' }, { effort: 'high' }, { lean: true }, { parent: 's-1' }]) {
       expect(checkRemoteParams('sessions.create', { ...session, ...extra }), JSON.stringify(extra)).toBe(false);
     }
     expect(checkRemoteParams('rooms.create', room)).toBe(true);
@@ -91,7 +91,6 @@ describe('белый список против запретного списка
     }
     expect(checkRemoteParams('rooms.send', { projectPath: '/p', workId: 'w-1', roomId: null, to: [], text: 'x', kind: 'note' })).toBe(false);
     expect(checkRemoteParams('rooms.send', { projectPath: '/p', workId: 'w-1', roomId: 'r-1', to: [], text: 'x', kind: 'decision' })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' } })).toBe(false); // полная лента — этап B
   });
 });
 

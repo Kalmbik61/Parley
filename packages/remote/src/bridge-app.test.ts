@@ -299,14 +299,10 @@ describe('dispatcher', () => {
     expect(audits[1]!.detail).toContain('choice=manual');
   });
 
-  it('W7: feed.snapshot from a phone only with scope attention', async () => {
+  it('A27: feed.snapshot from a phone has no scope rule', async () => {
     call('d1', 'a', 'feed.snapshot', { ref: ref('s-1') });
-    call('d1', 'b', 'feed.snapshot', { ref: ref('s-1'), scope: 'attention', agentId: 'x' });
-    call('d1', 'c', 'feed.snapshot', { ref: ref('s-1'), scope: 'attention' });
     await flush();
-    expect(sessions.of('d1').find((f) => f.id === 'a')).toMatchObject({ error: { code: 'bad_request' } });
-    expect(sessions.of('d1').find((f) => f.id === 'b')).toMatchObject({ error: { code: 'bad_request' } });
-    expect(sessions.of('d1').find((f) => f.id === 'c')).toMatchObject({ result: { ok: true } });
+    expect(sessions.of('d1').find((f) => f.id === 'a')).toMatchObject({ result: { ok: true } });
     expect(host.calls.map((c) => c.method)).toEqual(['feed.snapshot']);
   });
 
@@ -646,7 +642,7 @@ describe('fanout', () => {
     host.event('rooms.mail', { n: 1 });
     host.event('host.notice', { m: 'x' });
     host.event('pty.output', { secret: 1 });
-    host.event('feed.changed', {});
+    host.event('pty.exit', {});
     expect(sessions.of('d1').slice(3)).toEqual([
       { event: 'rooms.mail', data: { n: 1 } },
       { event: 'host.notice', data: { m: 'x' } },

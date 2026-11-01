@@ -23,30 +23,37 @@ const A_METHODS = [
   'rooms.send',
   'providers.list',
   'roles.list',
+  // Лента сессии, сообщения агенту, согласия и доверие к папке с телефона (правки 13 плана, спека 4.2).
+  'feed.subscribe',
+  'feed.unsubscribe',
+  'pty.send',
+  'consents.list',
+  'consents.decide',
+  'trust.check',
 ] as const;
-const A_EVENTS = ['works.changed', 'rooms.mail', 'activity.changed', 'host.notice'] as const;
+const A_EVENTS = [
+  'works.changed',
+  'rooms.mail',
+  'activity.changed',
+  'host.notice',
+  'feed.changed',
+  'consents.changed',
+] as const;
 
 const B_METHODS = [
   'mail.markRead',
   'sessions.resume',
   'sessions.stop',
-  'pty.send',
-  'feed.subscribe',
-  'feed.unsubscribe',
   'feed.interrupt',
   'pty.attach',
   'pty.detach',
-  'consents.list',
-  'consents.decide',
   'rooms.usage',
 ] as const;
 const B_NOTIFICATIONS = ['activity.seen'] as const;
 const B_EVENTS = [
-  'feed.changed',
   'pty.output',
   'pty.resync',
   'pty.exit',
-  'consents.changed',
   'providers.limitsChanged',
 ] as const;
 
@@ -116,7 +123,9 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'providers.check',
   'providers.refreshLimits',
   'telegram.*',
-  'trust.*',
+  'trust.grant',
+  'trust.revoke',
+  'trust.list',
   'capabilities.*',
   'memory.*',
   'backlog.*',
@@ -182,7 +191,10 @@ const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
   'model',
   'role',
   'worktree',
+  'trustFolder',
 ]);
+const PTY_SEND_KEYS: ReadonlySet<string> = new Set(['ref', 'text', 'submit', 'requestedAt', 'clientMsgId']);
+const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
   'projectPath',
   'workId',
@@ -216,20 +228,14 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
     const p = record(params);
     return p !== null && typeof p.rev === 'number' && Number.isInteger(p.rev) && p.rev >= 0;
   },
-  // Этап A читает только урезанную ленту: ждущие карточки и последний ответ модели. Полная лента несёт входы и выходы
-  // инструментов, в том числе напечатанные секреты; лента субагента (`agentId`) тоже закрыта до этапа B.
-  'feed.snapshot': params => {
-    const p = record(params);
-    return p !== null && p.scope === 'attention' && p.agentId === undefined && typeof p.ref === 'object' && p.ref !== null;
-  },
-  // Запуск с телефона (спека 4.2): новую работу, дочернюю сессию, `agent`, `effort` и `lean` с телефона не задать.
+  // Запуск с телефона (спека 4.2): дочернюю сессию, `agent`, `effort` и `lean` с телефона не задать.
   'sessions.create': params => {
     const p = record(params);
     return (
       p !== null &&
       onlyKeys(p, SESSION_CREATE_KEYS) &&
-      typeof p.workId === 'string' &&
-      p.workId.length > 0 &&
+      (p.workId === null || (typeof p.workId === 'string' && p.workId.length > 0)) &&
+      (p.trustFolder === undefined || typeof p.trustFolder === 'boolean') &&
       p.parent === null &&
       charsBetween(p.label, 1, REMOTE_LABEL_MAX) &&
       textUpTo(p.task, REMOTE_TEXT_LIMIT_BYTES)
@@ -261,10 +267,26 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       textUpTo(p.text, REMOTE_TEXT_LIMIT_BYTES)
     );
   },
-  // Этап B.
+  // Сообщение агенту: `clientMsgId` обязателен — по нему мост не пускает дубль при повторе.
   'pty.send': params => {
     const p = record(params);
-    return p !== null && typeof p.text === 'string' && utf8Length(p.text) <= REMOTE_TEXT_LIMIT_BYTES;
+    return (
+      p !== null &&
+      onlyKeys(p, PTY_SEND_KEYS) &&
+      typeof p.ref === 'object' &&
+      p.ref !== null &&
+      typeof p.text === 'string' &&
+      p.text.length > 0 &&
+      utf8Length(p.text) <= REMOTE_TEXT_LIMIT_BYTES &&
+      typeof p.submit === 'boolean' &&
+      (p.requestedAt === undefined || typeof p.requestedAt === 'number') &&
+      typeof p.clientMsgId === 'string' &&
+      CLIENT_MSG_ID.test(p.clientMsgId)
+    );
+  },
+  'consents.decide': params => {
+    const p = record(params);
+    return p !== null && (p.decision === 'allow' || p.decision === 'deny');
   },
 };
 
