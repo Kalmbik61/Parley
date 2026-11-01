@@ -85,6 +85,23 @@ describe('parseIncoming', () => {
     });
   });
 
+  // Имена с Object.prototype не методы: поиск идёт только по собственным ключам таблиц.
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])('имя %s из прототипа — unknown_method у запроса, без исключения', (method) => {
+    expect(parseIncoming({ id: 7, method, params: {} })).toEqual({
+      kind: 'invalid',
+      id: 7,
+      error: { code: 'unknown_method', message: `unknown method: ${method}` },
+    });
+  });
+
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])('имя %s из прототипа — unknown_method у уведомления, без исключения', (method) => {
+    expect(parseIncoming({ method, params: {} })).toEqual({
+      kind: 'invalid',
+      id: null,
+      error: { code: 'unknown_method', message: `unknown method: ${method}` },
+    });
+  });
+
   it('неверные params дают bad_request с текстом zod', () => {
     const result = parseIncoming({ id: 4, method: 'sessions.resume', params: { ref: 'не объект' } });
     expect(result.kind).toBe('invalid');
