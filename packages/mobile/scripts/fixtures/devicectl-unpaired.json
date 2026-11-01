@@ -1,0 +1,20 @@
+{
+  "result": {
+    "devices": [
+      {
+        "hardwareProperties": {
+          "udid": "00008150-001179DA0E50C01C"
+        },
+        "deviceProperties": {
+          "name": "Kalmbik",
+          "developerModeStatus": "enabled"
+        },
+        "connectionProperties": {
+          "pairingState": "unpaired",
+          "transportType": "wired",
+          "tunnelState": "disconnected"
+        }
+      }
+    ]
+  }
+}
