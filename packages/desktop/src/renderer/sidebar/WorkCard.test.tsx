@@ -871,6 +871,13 @@ it('passes active room-plan progress through the real room row',()=>{
  renderCard(entry);expect(screen.getByText('0/1 done')).toBeTruthy();
 });
 
+it('passes the awaiting-verification count through the real room row without raising verified',()=>{
+ const entry=makeWork('w-01',{projectPath:'/tmp/proj',rooms:[makeRoom('r-01','Delivery')],sessions:[]});
+ const item=(id:number,status:import('@parley/core').PlanItemStatus):import('@parley/core').PlanItem=>({id,title:`Item ${id}`,owner:'s-01',scope:'x',after:[],criteria:[],verifier:'s-02',status,evidence:null,note:null,log:[]});
+ entry.map.plans=[{id:'pl-01',roomId:'r-01',rev:1,mode:'verified',status:'active',goal:'Ship',items:[item(1,'verified'),item(2,'verified'),item(3,'verified'),item(4,'verified'),item(5,'done'),item(6,'done'),item(7,'ready')],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null}];
+ renderCard(entry);expect(screen.getByText('4/7 verified')).toBeTruthy();expect(screen.getByText('2 awaiting verification')).toBeTruthy();
+});
+
 // Архив комнат (спека 2026-10-08, 5.1): архивные комнаты уходят из основных строк под ссылку внизу карточки.
 describe('WorkCard — архивные комнаты под ссылкой (5.1)', () => {
   const KEY = workKey('/tmp/proj', 'w-01');

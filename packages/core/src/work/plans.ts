@@ -9,6 +9,12 @@ import {
   RoomRuleError,
 } from "./rooms.js";
 import { capturePlanSnapshot } from "./plan-snapshots.js";
+import {
+  amendmentChanges,
+  planItemReady as ready,
+  planItemSatisfied,
+  planSubmission,
+} from "./plan-state.js";
 import { hasDigestOnly } from "./stored-texts.js";
 import { ENGINE, HUMAN } from "./types.js";
 import type {
@@ -22,6 +28,9 @@ import type {
   RoomPlan,
   WorkMap,
 } from "./types.js";
+
+// `planItemSatisfied` живёт в plan-state.ts (источник один); отсюда его по-прежнему импортируют остальные модули.
+export { planItemSatisfied } from "./plan-state.js";
 
 export class PlanConflictError extends Error {
   constructor(message = "plan revision or status changed") {
@@ -377,24 +386,6 @@ export function proposedRoomPlan(
     completionSummary: null,
   };
 }
-const semantics = (item: PlanItem): string =>
-  JSON.stringify([
-    item.title,
-    item.owner,
-    item.scope,
-    item.after,
-    item.criteria,
-    item.verifier,
-  ]);
-export function planItemSatisfied(plan: RoomPlan, item: PlanItem): boolean {
-  return plan.mode === "checklist"
-    ? item.status === "done"
-    : item.status === "verified" ||
-        (item.status === "done" &&
-          Number.isSafeInteger(item.acceptedChecklistRevision) &&
-          item.acceptedChecklistRevision! >= 0 &&
-          item.acceptedChecklistRevision! < plan.rev);
-}
 export function planItemsComplete(plan: RoomPlan): boolean {
   if (plan.mode === "autonomous") {
     const a = plan.autonomous;
@@ -416,12 +407,6 @@ export function planItemsComplete(plan: RoomPlan): boolean {
       return false;
   }
   return plan.items.every((item) => planItemSatisfied(plan, item));
-}
-function ready(plan: RoomPlan, item: PlanItem): boolean {
-  return item.after.every((id) => {
-    const dependency = plan.items.find((other) => other.id === id);
-    return dependency !== undefined && planItemSatisfied(plan, dependency);
-  });
 }
 function log(
   item: PlanItem,
@@ -482,43 +467,8 @@ export function acceptRoomPlan(
     const plan = { ...structuredClone(proposed), items: validated };
     plan.status = "active";
     plan.acceptedAt = at;
-    const changed = new Set<number>();
-    const promotionExempt = new Set<number>();
     if (existing) {
-      for (const item of plan.items) {
-        const previous = existing.items.find((old) => old.id === item.id);
-        const sameCore =
-          previous &&
-          JSON.stringify([
-            previous.title,
-            previous.owner,
-            previous.scope,
-            previous.after,
-          ]) ===
-            JSON.stringify([item.title, item.owner, item.scope, item.after]);
-        if (
-          existing.mode === "checklist" &&
-          plan.mode === "verified" &&
-          existing.acceptedAt !== null &&
-          previous?.status === "done" &&
-          sameCore
-        )
-          promotionExempt.add(item.id);
-        else if (!previous || semantics(previous) !== semantics(item))
-          changed.add(item.id);
-      }
-      let grew = true;
-      while (grew) {
-        grew = false;
-        for (const item of plan.items)
-          if (
-            !changed.has(item.id) &&
-            item.after.some((id) => changed.has(id))
-          ) {
-            changed.add(item.id);
-            grew = true;
-          }
-      }
+      const { changed, promotionExempt } = amendmentChanges(existing, plan);
       for (const item of plan.items) {
         const previous = existing.items.find((old) => old.id === item.id);
         if (previous && !changed.has(item.id)) {
@@ -526,6 +476,8 @@ export function acceptRoomPlan(
           item.evidence = structuredClone(previous.evidence);
           item.note = previous.note;
           item.log = structuredClone(previous.log);
+          if (previous.progress)
+            item.progress = structuredClone(previous.progress);
           if (previous.submissions)
             item.submissions = structuredClone(previous.submissions);
           if (promotionExempt.has(item.id))
@@ -583,6 +535,104 @@ function itemOf(plan: RoomPlan, id: number): PlanItem {
   const item = plan.items.find((item) => item.id === id);
   if (!item) throw new PlanConflictError("plan item not found");
   return item;
+}
+/** Границы позиции на пункте (контракт C1): записи, которых нет в `log`, не должны раздувать карту. */
+function checkpointFieldsValid(fields: {
+  done: string;
+  next: string;
+  artifacts: string[];
+  blocker: string | null;
+}): boolean {
+  return (
+    text(fields.done) &&
+    fields.done.length <= 600 &&
+    text(fields.next) &&
+    fields.next.length <= 300 &&
+    Array.isArray(fields.artifacts) &&
+    fields.artifacts.length <= 5 &&
+    fields.artifacts.every((path) => text(path) && path.length <= 256) &&
+    (fields.blocker === null ||
+      (text(fields.blocker) && fields.blocker.length <= 300))
+  );
+}
+/** Позиция проверяющего относится к одной проверке: вердикт, сброс пункта и смена режима её снимают. */
+function dropVerifierCheckpoint(item: PlanItem): void {
+  if (!item.progress) return;
+  delete item.progress.verifier;
+  if (!item.progress.owner) delete item.progress;
+}
+/**
+ * Сохраняет последнюю позицию владельца (пункт `in_progress`) или независимого проверяющего (пункт сдан, но не
+ * подтверждён). Статус, `note`, `log` и `evidence` не трогает: `occurrence` письма `verify` — длина `log`, и запись
+ * позиции не должна поднимать новое поручение. Неверная роль или статус — `RoomRuleError` с понятным текстом;
+ * `PlanConflictError` только для устаревшей ревизии: `planTool` прячет его текст от агента.
+ */
+export function savePlanCheckpoint(
+  map: WorkMap,
+  id: string,
+  rev: number,
+  itemId: number,
+  actor: string,
+  input: {
+    done: string;
+    next: string;
+    artifacts?: string[];
+    blocker?: string | null;
+  },
+  at = new Date().toISOString(),
+): { role: "owner" | "verifier"; submission: number | null } {
+  return edit(map, (draft) => {
+    const plan = mutablePlan(draft, id, rev, actor);
+    // Пункты автономного плана ведёт движок через attempt_*: позиции там не нужны.
+    if (plan.mode === "autonomous")
+      throw new RoomRuleError("checkpoints are not used in autonomous plans");
+    const item = itemOf(plan, itemId);
+    let role: "owner" | "verifier";
+    if (actor === item.owner) {
+      if (item.status !== "in_progress")
+        throw new RoomRuleError(
+          ["ready", "returned", "blocked"].includes(item.status)
+            ? "start the item with plan_update(in_progress) first"
+            : `the item is ${item.status}, not in progress`,
+        );
+      role = "owner";
+    } else if (
+      plan.mode === "verified" &&
+      actor !== HUMAN &&
+      actor === item.verifier
+    ) {
+      if (item.status !== "done" || planItemSatisfied(plan, item))
+        throw new RoomRuleError(
+          "the owner has not submitted the item for review",
+        );
+      role = "verifier";
+    } else
+      throw new RoomRuleError(
+        "only the item owner or its independent verifier can save a checkpoint",
+      );
+    const fields = {
+      done: input.done,
+      next: input.next,
+      artifacts: input.artifacts ?? [],
+      blocker: input.blocker || null,
+    };
+    if (!checkpointFieldsValid(fields))
+      throw new RoomRuleError(
+        "invalid checkpoint: done 1..600 characters, next 1..300, up to 5 artifacts of 1..256, blocker up to 300",
+      );
+    const submission = role === "verifier" ? planSubmission(item) : null;
+    item.progress = {
+      ...item.progress,
+      [role]: {
+        by: actor,
+        at,
+        submission,
+        ...fields,
+        artifacts: [...fields.artifacts],
+      },
+    };
+    return { role, submission };
+  });
 }
 export function updatePlanItem(
   map: WorkMap,
@@ -710,6 +760,7 @@ export function verifyPlanItem(
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");
     log(item, actor, verdict, note, at);
+    dropVerifierCheckpoint(item);
     const last = item.submissions?.at(-1);
     // Возврат человека не затирает вердикт проверяющего: у него свои поля.
     if (last)
@@ -736,6 +787,7 @@ export function verifyPlanItem(
             invalid.add(dependent.id);
             grew = true;
             dependent.evidence = null;
+            dropVerifierCheckpoint(dependent);
             log(
               dependent,
               HUMAN,
@@ -881,6 +933,7 @@ export function setRoomMode(
         item.criteria = [];
         item.verifier = null;
         delete item.acceptedChecklistRevision;
+        dropVerifierCheckpoint(item);
       }
       written.push(...recalculate(draft, letters, plan, at));
     }
@@ -951,6 +1004,32 @@ export function completeRoomPlan(
     plan.completedAt = at;
     plan.completionSummary = summary;
     capturePlanSnapshot(draft, plan, "completed");
+  });
+}
+
+/** Поле `progress` необязательно: карты без него валидны, а записанные позиции держат те же пределы, что и ввод. */
+function storedProgressValid(progress: PlanItem["progress"]): boolean {
+  if (progress === undefined) return true;
+  if (
+    typeof progress !== "object" ||
+    progress === null ||
+    Array.isArray(progress)
+  )
+    return false;
+  return (["owner", "verifier"] as const).every((role) => {
+    const checkpoint = progress[role];
+    return (
+      checkpoint === undefined ||
+      (typeof checkpoint === "object" &&
+        checkpoint !== null &&
+        typeof checkpoint.by === "string" &&
+        !!checkpoint.by &&
+        typeof checkpoint.at === "string" &&
+        (checkpoint.submission === null ||
+          (Number.isSafeInteger(checkpoint.submission) &&
+            checkpoint.submission >= 0)) &&
+        checkpointFieldsValid(checkpoint))
+    );
   });
 }
 
@@ -1041,6 +1120,7 @@ export function validatePlanStorage(map: WorkMap): void {
           "returned",
         ].includes(item.status) ||
         !Array.isArray(item.log) ||
+        !storedProgressValid(item.progress) ||
         (item.submissions !== undefined && !validSubmissions(item.submissions)) ||
         (item.acceptedChecklistRevision !== undefined &&
           (plan.mode !== "verified" ||

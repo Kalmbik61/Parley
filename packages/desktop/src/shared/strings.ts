@@ -60,11 +60,33 @@ export const S = {
     reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
+    /** Карточка поправки: что станет с пунктом после принятия. */
+    marks: { new: 'New', changed: 'Changed', redo: 'Will be redone' },
+    doneHidden: (n: number) => n + ' done ' + (n === 1 ? 'item' : 'items') + ' hidden',
+    removed: (items: string[]) => 'Removed: ' + items.join(', '),
+    showFullPlan: 'Show the full plan',
     owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
     submissions: 'Submissions', submission: (n: number, by: string, time: string) => '#' + n + ' · ' + by + (time ? ' · ' + time : ''),
     submissionVerified: (by: string) => 'verified by ' + by, submissionReturned: (by: string) => 'returned by ' + by, returnedByYou: 'returned by you',
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
+    /** Отдельно от `progress`: пункты `done`, ещё не прошедшие проверку, — работа осталась, хотя `verified` её не считает. */
+    awaiting: (n: number) => n + ' awaiting verification',
+    /** Кто должен действовать по пункту и почему он ждёт (`planItemDuties` ядра). */
+    duty: {
+      role: { owner: 'Owner', verifier: 'Verifier', lead: 'Lead' },
+      action: { start: 'must start', continue: 'must continue', rework: 'must rework the returned item', verify: 'must verify', 'resolve-block': 'must resolve the block', wait: 'is waiting' },
+      dependencies: (ids: number[]) => ids.length > 0 ? 'Waiting for ' + ids.map((id) => '#' + id).join(', ') : 'Waiting for dependencies',
+      verification: (by: string | null) => by === null ? 'Awaiting verification' : 'Awaiting verification by ' + by,
+      submission: (by: string) => 'Waiting for ' + by + ' to submit',
+      blocked: (note: string | null) => note ? 'Blocked: ' + note : 'Blocked',
+    },
+    /** Последняя сохранённая позиция владельца или проверяющего на пункте (`PlanItem.progress`). */
+    checkpoint: {
+      owner: 'Owner position', verifier: 'Verifier position', done: 'Done so far', next: 'Next', blocker: 'Blocker',
+      artifacts: (n: number) => n + (n === 1 ? ' artifact' : ' artifacts'),
+      stale: 'Stale · saved before the latest submission',
+    },
     markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
     halted: 'Execution stopped', continue: 'Continue', fullText: 'Show full proposal',
     haltReason: { budget: 'budget', no_progress: 'no progress', stuck: 'stuck', restart: 'restart', confinement: 'confinement' },
@@ -712,6 +734,18 @@ export const S = {
       [fiveHour === null ? '' : `${fiveHour}% 5h`, week === null ? '' : `${week}% wk`]
         .filter((part) => part !== '')
         .join(' · '),
+    /**
+     * Окно в тексте сегмента (P7): «58% 5h» / «41% wk». Проценты и время сброса — отдельными спанами, поэтому не одной
+     * строкой, как `limitsText`: при нехватке места первым уходит сброс, а не процент.
+     */
+    limitWindowText: (percent: number, window: '5h' | 'wk'): string => `${percent}% ${window}`,
+    /**
+     * Сброс окна рядом с процентом: « ↻9:30 PM» у пяти часов, « ↻Sat 9:30 PM» у недели (день передаёт вызывающий).
+     * Пробел впереди — часть строки: спан его не схлопывает (`whitespace-pre`). Время и день уже местные и короткие.
+     */
+    limitReset: (time: string, day: string | null): string => ` ↻${day === null ? '' : `${day} `}${time}`,
+    /** Разделитель окон в тексте сегмента, с пробелами — как внутри `limitsText`. */
+    limitsSeparator: ' · ',
     /**
      * Тултип лимитов: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM».
      * Неизвестное время сброса пропускается; «Updated» — всегда. Время и день приходят уже местными

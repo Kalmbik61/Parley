@@ -1,15 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import type { CheckResult, PlanItem, RoomMode, RoomPlan, WindowWorkEntry } from "@parley/core";
+import type {
+  CheckResult,
+  PlanCheckpoint,
+  PlanItem,
+  RoomMode,
+  RoomPlan,
+  WindowWorkEntry,
+} from "@parley/core";
+import {
+  planItemDuties,
+  planItemSatisfied,
+  planSubmission,
+  type PlanDuty,
+} from "@parley/core/plan-state";
 import type { PlanActionResult } from "@parley/protocol";
 import type { ParleyBridge } from "../../../shared/bridge.js";
 import { decodeIpcError } from "../../../shared/ipc-error.js";
 import { S } from "../../../shared/strings.js";
 import { hostMethods } from "../../lib/capabilities.js";
 import { isRoomArchived } from "../../lib/room-archive.js";
-import { relativeTime } from "../../lib/relative-time.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
+import { relativeTime } from "../../lib/relative-time.js";
+import { roomLiveLead } from "../../lib/room-lead.js";
+import { useNow } from "../../lib/use-now.js";
 import { useHostStore } from "../../store/host.js";
+import { badgeVariants } from "../../ui/badge.js";
 import { Button } from "../../ui/button.js";
 import { Textarea } from "../../ui/textarea.js";
 import { PlanHaltBadge } from "./PlanChip.js";
@@ -39,6 +55,18 @@ export function planProgress(plan: RoomPlan): string {
       item.status === "done" && item.acceptedChecklistRevision !== undefined,
   ).length;
   return P.progress(plan.mode, done, plan.items.length, basis);
+}
+/**
+ * Пункты `done`, которые ещё ждут проверки (verified-режим): работа сдана, но `verified` её не считает, и поднимать его
+ * по сдаче нельзя. Принятый из Checklist `done` (`planItemSatisfied`) сюда не входит. В checklist `done` — это сделано,
+ * в автономном плане проверяет движок: там счётчика нет.
+ */
+export function planAwaitingCount(plan: RoomPlan): number {
+  return plan.mode === "verified"
+    ? plan.items.filter(
+        (item) => item.status === "done" && !planItemSatisfied(plan, item),
+      ).length
+    : 0;
 }
 /**
  * Replies cannot settle another room/revision, connection, bridge or unmounted view. Human form text survives.
@@ -300,12 +328,101 @@ export function RoomModeControl({
     </div>
   );
 }
-function ownerLabel(entry: WindowWorkEntry | undefined, id: string): string {
+/** Подпись участника плана: человек, сессия (`S03 бэкенд`) или как есть, если сессии в снимке нет. */
+export function ownerLabel(entry: WindowWorkEntry | undefined, id: string): string {
   if (id === "human") return S.participants.human;
   const session = entry?.map.sessions.find((session) => session.id === id);
   return session ? sessionRowLabel(session.id, session.label) : id;
 }
-/** Read-only content shared by accepted plans, proposed revisions and completion cards. */
+/** Что ждёт участника или почему он ждёт: те же обязанности, что видит агент в `plan_tasks` (таблица — `planItemDuties` ядра). */
+function dutyText(duty: PlanDuty, entry: WindowWorkEntry | undefined): JSX.Element {
+  const who = `${P.duty.role[duty.role]} ${ownerLabel(entry, duty.sessionId)}`;
+  const waiting = duty.waitingFor;
+  if (waiting === null) return <>{`${who} ${P.duty.action[duty.action]}`}</>;
+  const reason =
+    waiting.kind === "dependencies"
+      ? P.duty.dependencies(waiting.items)
+      : waiting.kind === "verification"
+        ? P.duty.verification(
+            waiting.by === null ? null : ownerLabel(entry, waiting.by),
+          )
+        : waiting.kind === "submission"
+          ? P.duty.submission(ownerLabel(entry, waiting.by))
+          : P.duty.blocked(waiting.note);
+  return (
+    <>
+      {who}: <span data-plan-waiting="">{reason}</span>
+    </>
+  );
+}
+/** Последняя сохранённая позиция участника на пункте: сделано, дальше, препятствие. Для проверяющего — `stale` после новой сдачи. */
+function CheckpointView({
+  role,
+  checkpoint,
+  stale,
+  entry,
+  now,
+}: {
+  role: "owner" | "verifier";
+  checkpoint: PlanCheckpoint;
+  stale: boolean;
+  entry: WindowWorkEntry | undefined;
+  now: Date;
+}): JSX.Element {
+  return (
+    <div
+      data-plan-checkpoint={role}
+      {...(stale ? { "data-stale": "" } : {})}
+      className="min-w-0 space-y-0.5 break-words rounded border border-dashed px-2 py-1 text-xs [overflow-wrap:anywhere]"
+    >
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <strong>{P.checkpoint[role]}</strong>
+        <span>{ownerLabel(entry, checkpoint.by)}</span>
+        <span data-checkpoint-time="" title={checkpoint.at}>
+          {relativeTime(checkpoint.at, now)}
+        </span>
+        {stale ? (
+          <span
+            data-checkpoint-stale=""
+            className={badgeVariants({ variant: "neutral" })}
+          >
+            {P.checkpoint.stale}
+          </span>
+        ) : null}
+      </p>
+      <p>
+        {P.checkpoint.done}:{" "}
+        <span data-checkpoint-done="" className="whitespace-pre-wrap">
+          {checkpoint.done}
+        </span>
+      </p>
+      <p>
+        {P.checkpoint.next}:{" "}
+        <span data-checkpoint-next="" className="whitespace-pre-wrap">
+          {checkpoint.next}
+        </span>
+      </p>
+      {checkpoint.blocker ? (
+        <p>
+          {P.checkpoint.blocker}:{" "}
+          <span data-checkpoint-blocker="" className="whitespace-pre-wrap">
+            {checkpoint.blocker}
+          </span>
+        </p>
+      ) : null}
+      {checkpoint.artifacts.length > 0 ? (
+        <p data-checkpoint-artifacts="">
+          {P.checkpoint.artifacts(checkpoint.artifacts.length)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+/**
+ * Read-only content shared by accepted plans, proposed revisions and completion cards. Who must act on each item and the
+ * saved owner/verifier positions come from the pure `@parley/core/plan-state` (one table, shared with `plan_tasks`); the
+ * live lead is the one the window already shows (`roomLiveLead`). Only an active or completing plan has duties.
+ */
 export function PlanSummary({
   plan,
   entry,
@@ -317,14 +434,30 @@ export function PlanSummary({
   bridge?: ParleyBridge;
   renderActions?: (item: PlanItem) => JSX.Element | null;
 }): JSX.Element {
+  const now = useNow(60_000);
+  const awaiting = planAwaitingCount(plan);
+  const room = entry?.map.rooms.find((candidate) => candidate.id === plan.roomId);
+  const liveLeadId = entry && room ? roomLiveLead(entry.map, room) : null;
+  // Обязанности и позиции — только у checklist и verified: пункты автономного плана ведёт движок (попытки, attempt_*).
+  const checkpoints = plan.mode !== "autonomous";
+  const working =
+    checkpoints && (plan.status === "active" || plan.status === "completing");
   return (
-    <div data-plan-summary="" className="space-y-3 text-sm">
-      <div className="flex flex-wrap gap-2">
-        <strong>{plan.goal}</strong>
+    <div
+      data-plan-summary=""
+      className="min-w-0 space-y-3 break-words text-sm [overflow-wrap:anywhere]"
+    >
+      <div className="flex flex-wrap gap-x-2 gap-y-1">
+        <strong className="min-w-0 break-words [overflow-wrap:anywhere]">
+          {plan.goal}
+        </strong>
         <span>{P.modes[plan.mode]}</span>
         <span>{P.status[plan.status]}</span>
         <span>{P.revision(plan.rev)}</span>
         <span>{planProgress(plan)}</span>
+        {awaiting > 0 ? (
+          <span data-plan-awaiting="">{P.awaiting(awaiting)}</span>
+        ) : null}
       </div>
       <ol className="space-y-2">
         {plan.items.map((item) => {
@@ -341,14 +474,20 @@ export function PlanSummary({
             .sort((a, b) => a.at.localeCompare(b.at)).at(-1) : undefined;
           const summary = check?.summary.replace(/\s+/g, " ") ?? "";
           const verdict = check ? `${check.specId} → ${check.verdict} · ${summary.slice(0, 160)}${summary.length > 160 ? "…" : ""}` : "";
+          const satisfied = planItemSatisfied(plan, item);
+          const duties = working ? planItemDuties(plan, item, liveLeadId) : [];
+          const submission = planSubmission(item);
           return (
             <li
               key={item.id}
               data-plan-item={item.id}
-              className="rounded border p-2"
+              className="min-w-0 rounded border p-2"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <strong>
+                <strong
+                  data-plan-item-title=""
+                  className="min-w-0 break-words [overflow-wrap:anywhere]"
+                >
                   {item.id}. {item.title}
                 </strong>
                 <span>{P.itemStatus[item.status]}</span>
@@ -373,6 +512,38 @@ export function PlanSummary({
               {item.acceptedChecklistRevision === undefined ? null : (
                 <p>{P.basis(item.acceptedChecklistRevision)}</p>
               )}
+              {duties.length > 0 ? (
+                <ul data-plan-duties="" className="space-y-0.5">
+                  {duties.map((duty) => (
+                    <li
+                      key={duty.role}
+                      data-plan-duty={duty.role}
+                      data-plan-duty-action={duty.action}
+                      className="min-w-0"
+                    >
+                      {dutyText(duty, entry)}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {checkpoints && !satisfied && item.progress?.owner ? (
+                <CheckpointView
+                  role="owner"
+                  checkpoint={item.progress.owner}
+                  stale={false}
+                  entry={entry}
+                  now={now}
+                />
+              ) : null}
+              {checkpoints && !satisfied && item.progress?.verifier ? (
+                <CheckpointView
+                  role="verifier"
+                  checkpoint={item.progress.verifier}
+                  stale={item.progress.verifier.submission !== submission}
+                  entry={entry}
+                  now={now}
+                />
+              ) : null}
               <details>
                 <summary>
                   {P.scope}, {P.criteria}, {P.evidence}, {P.note}
