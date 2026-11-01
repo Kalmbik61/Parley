@@ -66,6 +66,8 @@ export const S = {
     removed: (items: string[]) => 'Removed: ' + items.join(', '),
     showFullPlan: 'Show the full plan',
     owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
+    submissions: 'Submissions', submission: (n: number, by: string, time: string) => '#' + n + ' · ' + by + (time ? ' · ' + time : ''),
+    submissionVerified: (by: string) => 'verified by ' + by, submissionReturned: (by: string) => 'returned by ' + by, returnedByYou: 'returned by you',
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
     /** Отдельно от `progress`: пункты `done`, ещё не прошедшие проверку, — работа осталась, хотя `verified` её не считает. */
@@ -1787,6 +1789,11 @@ export const S = {
     },
     /** Лента прокручена вверх, а снизу пришло новое. */
     jumpToLatest: 'Jump to latest',
+    /** Панель поиска ⌘F по ленте Chat (`ChatFindBar`); стрелки и × — `S.terminal.previousMatch`, `nextMatch`, `S.common.close`. */
+    find: {
+      placeholder: 'Find in chat…',
+      label: 'Find in chat',
+    },
     /** Подпись курсора текста, который ещё пишется. */
     streaming: 'Writing…',
     textTruncated: 'Text truncated — open the terminal for the rest',
@@ -2430,6 +2437,7 @@ export const S = {
     previousRecentTab: 'Previous recent tab',
     tabNumber: (n: number): string => `Tab ${n}`,
     find: 'Find',
+    findInChat: 'Find in chat',
     clearTerminal: 'Clear terminal',
     toggleChatTerminal: 'Toggle chat / terminal',
     settings: 'Settings',

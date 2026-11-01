@@ -76,6 +76,11 @@ export type Incoming =
   | { kind: 'notification'; message: NotificationMessage; params: unknown }
   | { kind: 'invalid'; id: number | null; error: ProtocolError };
 
+/** Схема метода только из собственных ключей таблицы: `constructor`, `__proto__` и прочие имена прототипа — неизвестные методы. */
+function schemaFor(table: object, method: string): ZodTypeAny | undefined {
+  return Object.hasOwn(table, method) ? (table as Record<string, ZodTypeAny>)[method] : undefined;
+}
+
 /** Разбор и проверка по схеме: `params` в результате уже прошли zod. */
 export function parseIncoming(raw: unknown): Incoming {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -89,7 +94,7 @@ export function parseIncoming(raw: unknown): Incoming {
   }
 
   if (id !== null) {
-    const schema = (METHODS as Record<string, ZodTypeAny>)[method];
+    const schema = schemaFor(METHODS, method);
     if (!schema) {
       return {
         kind: 'invalid',
@@ -108,7 +113,7 @@ export function parseIncoming(raw: unknown): Incoming {
     };
   }
 
-  const schema = (NOTIFICATIONS as Record<string, ZodTypeAny>)[method];
+  const schema = schemaFor(NOTIFICATIONS, method);
   if (!schema) {
     return {
       kind: 'invalid',

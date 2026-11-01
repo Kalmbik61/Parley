@@ -335,17 +335,23 @@ describe('feed.progress source, quota and lifecycle', () => {
       fakes.setSessions([{ ref: REF, provider: 'codex' }]);
       release.resolve(undefined);
       expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
-      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+      // Журнал сменился (b-005): лента пересеяна на новый (пустой) журнал и не хранит чужую историю.
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(change === 'nonce' ? 1 : 0);
       writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
       fakes.emitLog();
-      await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
-      const progress = await service.progress(REF, fakeClient());
-      if (change === 'nonce') expect(progress.recent.map((line) => line.id)).toEqual([toolId('cmd-2')]);
-      else {
-        expect(progress.availability).toBe('unavailable');
+      if (change === 'nonce') {
+        await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+        expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-2')]);
+      } else {
+        // Хвост идёт по новому журналу: запись в прежний не приходит.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(0);
+        // Пересев на журнал, который сошёлся с доказательством, — прошлые вызовы в progress не попадают.
+        expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] });
         fakes.setLogFile(file);
         fakes.setSessions([{ ref: REF, provider: 'codex' }]);
-        expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+        await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+        expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] });
       }
     } finally { release.resolve(undefined); create.mockRestore(); }
   });
@@ -695,14 +701,15 @@ describe('feed.progress source, quota and lifecycle', () => {
     fakes.setSessions([{ ref: REF, provider: 'codex' }]);
     writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
     fakes.emitLog();
-    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    // Другой тред (b-005): лента пересеяна на его (пустой) журнал, запись в прежний не приходит.
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(0));
     expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
     stamp.providerSessionId = THREAD;
     fakes.setSessions([{ ref: REF, provider: 'codex' }]);
     writeFileSync(file, `${row(3)}\n`, { flag: 'a' });
     fakes.emitLog();
     await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(3));
-    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] });
   });
 
   it('caps retained eligibility at FEED_MAX_ITEMS even with a larger configured raw ring', async () => {
@@ -2463,6 +2470,139 @@ describe('лента Codex', () => {
     start();
     service.interrupt(REF);
     expect(fakes.writes).toEqual(['\x1b']);
+  });
+
+  describe('привязка треда меняется (b-005, часть A)', () => {
+    const T_A = 'th-a';
+    const T_B = 'th-b';
+    let fileA: string;
+    let fileB: string;
+    let thread: string | null;
+
+    /** Карта работ с настоящим `providerSessionId`; журнал индекса следует за ним. */
+    function bind(next: string, logFile: string): void {
+      thread = next;
+      fakes.setLogFile(logFile);
+    }
+    const toolIds = async (): Promise<string[]> =>
+      (await service.snapshot(REF)).items.flatMap((entry) => (entry.kind === 'tool' ? [entry.toolUseId] : []));
+    const rebind = (next: string, logFile: string): void => {
+      bind(next, logFile);
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    };
+
+    beforeEach(async () => {
+      fileA = path.join(dir, 'a.jsonl');
+      fileB = path.join(dir, 'b.jsonl');
+      await writeRollout(fileA, [meta(T_A), started(1), command(2, 'a1', 'ls a')]);
+      await writeRollout(fileB, [meta(T_B), started(1), command(2, 'b1', 'ls b')]);
+      thread = T_B;
+      const entry = fakes.deps.works.entry;
+      vi.spyOn(fakes.deps.works, 'entry').mockImplementation((...args) => {
+        const value = entry(...args);
+        return value === undefined
+          ? undefined
+          : ({ ...value, map: { ...value.map, sessions: value.map.sessions.map((session) => ({ ...session, providerSessionId: thread })) } } as typeof value);
+      });
+      bind(T_B, fileB);
+    });
+
+    it('смена привязки пересевает ленту: чужих элементов нет, в дельте они в removed', async () => {
+      start();
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      expect(await toolIds()).toEqual(['b1']);
+      const bItem = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'tool')!;
+      rebind(T_A, fileA);
+      await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1']));
+      const deltas = feedChanged(client);
+      expect(deltas.flatMap((delta) => delta.removed)).toContain(bItem.id);
+      expect(deltas.flatMap((delta) => delta.upsert).some((entry) => entry.kind === 'tool' && entry.toolUseId === 'a1')).toBe(true);
+    });
+
+    it('после пересева хвост идёт только по новому файлу', async () => {
+      start();
+      await service.snapshot(REF);
+      rebind(T_A, fileA);
+      await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1']));
+      await appendRollout(fileB, [command(3, 'b2', 'ls b2')]);
+      fakes.emitLog();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await toolIds()).toEqual(['a1']);
+      await appendRollout(fileA, [command(3, 'a2', 'ls a2')]);
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1', 'a2']));
+    });
+
+    it('смена привязки во время сева: устаревший результат отброшен, итог — только файл A', async () => {
+      const entered = (() => {
+        let resolve!: () => void;
+        return { promise: new Promise<void>((done) => { resolve = done; }), resolve };
+      })();
+      let release!: () => void;
+      const gate = new Promise<void>((done) => { release = done; });
+      const original = codexSource.createRolloutTail;
+      let first = true;
+      const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+        const tail = original(...args);
+        return { ...tail, read: async () => {
+          const records = await tail.read();
+          if (first) { first = false; entered.resolve(); await gate; }
+          return records;
+        } };
+      });
+      try {
+        start();
+        const pending = service.snapshot(REF);
+        await entered.promise;
+        rebind(T_A, fileA);
+        release();
+        await pending;
+        await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1']));
+        await appendRollout(fileB, [command(3, 'b2', 'ls b2')]);
+        fakes.emitLog();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await toolIds()).toEqual(['a1']);
+      } finally {
+        release();
+        create.mockRestore();
+      }
+    });
+
+    it('привязка снята (тред null, журнал неизвестен): лента пуста, чужие элементы в removed, хвост снят; новая привязка сеет заново', async () => {
+      start();
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      expect(await toolIds()).toEqual(['b1']);
+      const bItem = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'tool')!;
+      thread = null;
+      fakes.setLogFile(null);
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+      await vi.waitFor(async () => expect(await toolIds()).toEqual([]));
+      expect(feedChanged(client).flatMap((delta) => delta.removed)).toContain(bItem.id);
+      // Старый файл больше не читается: запись в него не попадает в ленту.
+      await appendRollout(fileB, [command(3, 'b2', 'ls b2')]);
+      fakes.emitLog();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await toolIds()).toEqual([]);
+      // Появился журнал другого треда: пустая лента сеется из него.
+      rebind(T_A, fileA);
+      fakes.emitLog();
+      await vi.waitFor(async () => expect(await toolIds()).toEqual(['a1']));
+    });
+
+    it('та же привязка (тот же тред и файл) не пересевает: элементы те же, removed нет', async () => {
+      start();
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      const before = (await service.snapshot(REF)).items;
+      rebind(T_B, fileB);
+      fakes.emitLog();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const after = (await service.snapshot(REF)).items;
+      expect(after).toEqual(before);
+      expect(feedChanged(client).flatMap((delta) => delta.removed)).toEqual([]);
+    });
   });
 
   describe('картинки результатов инструментов (план 2026-10-09)', () => {

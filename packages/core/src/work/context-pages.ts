@@ -918,7 +918,12 @@ export function mapTopology(map: WorkMap, callerId: string | null, letters: Lett
       // Журнал шагов растёт с работой и агенту для следующего действия не нужен: хвост и счёт остаются.
       return {
         ...capped,
-        items: capped.items.map((item) => ({ ...item, log: item.log.slice(-3) })),
+        // Из сдач в обзоре — только последняя; вся история — в `get_map {field: "plan"}`.
+        items: capped.items.map(({ submissions, ...item }) => ({
+          ...item,
+          log: item.log.slice(-3),
+          ...(submissions ? { submissions: submissions.slice(-1) } : {}),
+        })),
       };
     });
 

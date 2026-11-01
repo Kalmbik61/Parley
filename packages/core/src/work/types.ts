@@ -333,9 +333,18 @@ export type AttemptChannelRequest =
   | { action: 'propose-plan'; roomId: string; planId?: string; rev?: number; requestKey: string; text: string; plan: PlanDraft & { autonomous: AutonomousDraft } }
   | { action: 'submit'; attemptId: string; submissionKey?: string; manifest: Omit<HandoffManifestInput, 'sha'> }
   | { action: 'verify'; attemptId: string; sha: string; criterion: number; verdict: CheckResult['verdict']; note: string };
+/** Одна сдача пункта плана: что принесли и что ответил проверяющий (или человек при возврате). */
+export interface PlanSubmission {
+  n: number; by: string; at: string; evidence: PlanEvidence;
+  verdict: 'verified' | 'returned' | null; verdictBy: string | null; verdictAt: string | null; note: string | null;
+  /** Возврат человеком пишется отдельно и не затирает вердикт проверяющего; нет поля — null. */
+  returnedBy?: string | null; returnedAt?: string | null; returnNote?: string | null;
+}
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
   evidence: PlanEvidence | null; note: string | null;
+  /** История последних сдач, старые первыми; нет поля — пусто (карты читаются без миграции). `evidence` остаётся указателем на последнюю. */
+  submissions?: PlanSubmission[];
   /** Human-accepted Checklist completion retained on promotion; never a verification claim. */
   acceptedChecklistRevision?: number;
   /** Resume points kept outside `log`, so saving one never changes a submission or a plan effect. */

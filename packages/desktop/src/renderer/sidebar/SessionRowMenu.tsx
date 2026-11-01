@@ -39,6 +39,7 @@ import { useReviewStore } from '../review/store.js';
 import { useProviderMissing } from '../store/provider-missing.js';
 import { openSwitchAgent } from '../store/switch-agent.js';
 import { useUiStore } from '../store/ui.js';
+import { canResume } from '../terminal/send.js';
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -51,7 +52,6 @@ import { DESTRUCTIVE_ITEM } from './CardMenu.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
 import { focusSidebarItem, returnCursorFocus } from './use-sidebar-keys.js';
 
-const RESUMABLE: ReadonlySet<SessionStatus> = new Set(['exited', 'done', 'failed']);
 const STOPPABLE: ReadonlySet<SessionStatus> = new Set(['active', 'pending']);
 
 export interface SessionRowMenuProps {
@@ -185,7 +185,8 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           ) : null}
           <ContextMenuItem onSelect={onOpen}>{S.sidebar.sessionMenu.open}</ContextMenuItem>
           <ContextMenuItem onSelect={openBeside}>{S.sidebar.sessionMenu.openBeside}</ContextMenuItem>
-          {RESUMABLE.has(status) ? (
+          {/* Resume — по `canResume`: у закрытой хост `sessions.resume` отвергает, пункт ей не показываем. */}
+          {canResume(session) ? (
             <ContextMenuItem onSelect={() => call('sessions.resume')}>{S.sidebar.sessionMenu.resume}</ContextMenuItem>
           ) : null}
           {STOPPABLE.has(status) ? (

@@ -19,6 +19,7 @@ import { decodeIpcError } from "../../../shared/ipc-error.js";
 import { S } from "../../../shared/strings.js";
 import { hostMethods } from "../../lib/capabilities.js";
 import { isRoomArchived } from "../../lib/room-archive.js";
+import { relativeTime } from "../../lib/relative-time.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
 import { relativeTime } from "../../lib/relative-time.js";
@@ -580,6 +581,40 @@ export function PlanSummary({
                       {item.evidence.artifacts.map((text, index) => (
                         <li key={index} className="whitespace-pre-wrap">
                           {text}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(plan.mode === "checklist" || plan.mode === "verified") &&
+                item.submissions && item.submissions.length > 1 ? (
+                  <div data-plan-submissions="">
+                    {P.submissions}
+                    <ul>
+                      {[...item.submissions].reverse().map((row, index) => (
+                        <li key={row.n} data-plan-submission={row.n} className="break-words">
+                          <p className="whitespace-pre-wrap">
+                            {P.submission(row.n, ownerLabel(entry, row.by), relativeTime(row.at, new Date()))}
+                            {row.verdict && row.verdictBy
+                              ? " · " + (row.verdict === "verified" ? P.submissionVerified : P.submissionReturned)(ownerLabel(entry, row.verdictBy))
+                              : ""}
+                            {row.returnedBy ? " · " + P.returnedByYou : ""}
+                          </p>
+                          {row.note ? <p className="whitespace-pre-wrap break-words">{row.note}</p> : null}
+                          {row.returnNote ? <p className="whitespace-pre-wrap break-words">{row.returnNote}</p> : null}
+                          {index > 0 ? (
+                            <details>
+                              <summary>{P.evidence}</summary>
+                              <p className="whitespace-pre-wrap break-words">{row.evidence.text}</p>
+                              <ul>
+                                {row.evidence.artifacts.map((text, at) => (
+                                  <li key={at} className="whitespace-pre-wrap break-words">
+                                    {text}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
                         </li>
                       ))}
                     </ul>

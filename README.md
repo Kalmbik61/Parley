@@ -135,8 +135,9 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
   workspace map, sends and reads messages, and proposes decisions. When mail comes, the host
   types a short pointer into the agent's terminal, only after the agent has finished its turn.
 - **You stay in charge.** No YOLO flags and no work before you accept the decision. Parley
-  never closes a session or puts it to sleep on its own; quitting the app (⌘Q) asks first and
-  stops the running agents.
+  never closes a session on its own. It puts an idle agent to sleep after 60 minutes (the
+  session stays, a letter wakes it with the same history; set the delay to 0 in Settings to
+  turn this off). Quitting the app (⌘Q) asks first and stops the running agents.
 
 ### Codex: folder trust and approvals
 

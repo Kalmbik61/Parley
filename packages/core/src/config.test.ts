@@ -40,9 +40,9 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 20,
       resumeRate: 6,
-      sleepAfterMinutes: 0,
+      sleepAfterMinutes: 60,
       sleepUnderPressureMinutes: 5,
-      machineConcurrent: 'off',
+      machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -85,9 +85,9 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       resumeRate: 6,
-      sleepAfterMinutes: 0,
+      sleepAfterMinutes: 60,
       sleepUnderPressureMinutes: 5,
-      machineConcurrent: 'off',
+      machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -115,9 +115,9 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 7,
       resumeRate: 6,
-      sleepAfterMinutes: 0,
+      sleepAfterMinutes: 60,
       sleepUnderPressureMinutes: 5,
-      machineConcurrent: 'off',
+      machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
       codexWriteApprovals: 'auto',
@@ -682,15 +682,15 @@ describe('leanAgents setting', () => {
 });
 
 describe('sleepAfterMinutes setting', () => {
-  it('по умолчанию 0 — сон выключен; файл и окружение задают порог, окружение запирает ключ', async () => {
-    expect(DEFAULT_CONFIG.sleepAfterMinutes).toBe(0);
-    expect((await loadConfig(file(), {})).config.sleepAfterMinutes).toBe(0);
+  it('по умолчанию 60 — сон включён; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepAfterMinutes).toBe(60);
+    expect((await loadConfig(file(), {})).config.sleepAfterMinutes).toBe(60);
 
     // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
-    expect(parseSetting('sleepAfterMinutes', '60')).toEqual({ value: 60 });
-    await saveConfig({ sleepAfterMinutes: 60 }, file());
+    expect(parseSetting('sleepAfterMinutes', '30')).toEqual({ value: 30 });
+    await saveConfig({ sleepAfterMinutes: 30 }, file());
     const fromFile = await loadConfig(file(), {});
-    expect(fromFile.config.sleepAfterMinutes).toBe(60);
+    expect(fromFile.config.sleepAfterMinutes).toBe(30);
     expect(fromFile.warning).toBeNull();
     expect(fromFile.fromEnv).toEqual([]);
 
@@ -722,7 +722,7 @@ describe('sleepAfterMinutes setting', () => {
   it('пробелы вместо числа в окружении — жалоба с именем, значение без переменной, ключ не заперт', async () => {
     // Number('  ') === 0: без проверки такая переменная молча заперла бы сон на «выключен».
     const noFile = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: '  ' });
-    expect(noFile.config.sleepAfterMinutes).toBe(0);
+    expect(noFile.config.sleepAfterMinutes).toBe(60);
     expect(noFile.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
     expect(noFile.fromEnv).toEqual([]);
 
@@ -742,15 +742,15 @@ describe('sleepAfterMinutes setting', () => {
     expect(empty.fromEnv).toEqual([]);
   });
 
-  it('вне границ в файле и в окружении — жалоба с именем и умолчание 0; ключ в окружении не запирается', async () => {
+  it('вне границ в файле и в окружении — жалоба с именем и умолчание 60; ключ в окружении не запирается', async () => {
     await write({ sleepAfterMinutes: 1441 });
     const fromFile = await loadConfig(file(), {});
-    expect(fromFile.config.sleepAfterMinutes).toBe(0);
+    expect(fromFile.config.sleepAfterMinutes).toBe(60);
     expect(fromFile.warning).toBe('sleepAfterMinutes: expected an integer from 0 to 1440');
 
     await write({});
     const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_AFTER_MINUTES: 'abc' });
-    expect(fromEnv.config.sleepAfterMinutes).toBe(0);
+    expect(fromEnv.config.sleepAfterMinutes).toBe(60);
     expect(fromEnv.warning).toBe('PARLEY_SLEEP_AFTER_MINUTES: expected an integer from 0 to 1440');
     expect(fromEnv.fromEnv).toEqual([]);
   });
@@ -824,10 +824,10 @@ describe('sleepUnderPressureMinutes setting', () => {
 describe('machineConcurrent setting', () => {
   const EXPECTED = 'expected "off", "auto" or an integer from 1 to 128';
 
-  it('по умолчанию off — потолок, очередь и допуск выключены', async () => {
-    expect(DEFAULT_CONFIG.machineConcurrent).toBe('off');
+  it('по умолчанию auto — потолок, очередь и допуск включены', async () => {
+    expect(DEFAULT_CONFIG.machineConcurrent).toBe('auto');
     const loaded = await loadConfig(file(), {});
-    expect(loaded.config.machineConcurrent).toBe('off');
+    expect(loaded.config.machineConcurrent).toBe('auto');
     expect(loaded.warning).toBeNull();
   });
 
@@ -850,11 +850,11 @@ describe('machineConcurrent setting', () => {
     }
   });
 
-  it('вне границ или не того вида в файле — жалоба с именем и умолчание off', async () => {
+  it('вне границ или не того вида в файле — жалоба с именем и умолчание auto', async () => {
     for (const bad of [0, 129, 1.5, -3, 'max', '', '  ', true, null, [8], { n: 8 }]) {
       await write({ machineConcurrent: bad });
       const loaded = await loadConfig(file(), {});
-      expect(loaded.config.machineConcurrent, JSON.stringify(bad)).toBe('off');
+      expect(loaded.config.machineConcurrent, JSON.stringify(bad)).toBe('auto');
       expect(loaded.warning, JSON.stringify(bad)).toBe(`machineConcurrent: ${EXPECTED}`);
     }
   });

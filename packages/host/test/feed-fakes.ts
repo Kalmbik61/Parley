@@ -186,6 +186,7 @@ export function fakeClient(sendResult: () => boolean = () => true): Client & {
   return {
     id: randomUUID(),
     name: 'test',
+    features: new Set<string>(),
     sent,
     send(message) {
       sent.push(message);
