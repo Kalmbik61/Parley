@@ -94,7 +94,7 @@ export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads
   if (session.workspace?.kind === 'artifacts') {
     lines.push(`Artifacts: engine-owned review evidence in \`${session.workspace.path}\`. Read only these artifacts; do not read source code or execute commands.`, '');
   } else if (session.workspace?.kind === 'clone') {
-    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it from captured trees. Folder: \`${session.workspace.path}\`.`, '');
+    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it, and the root folders .omc, .omx, .claude, .codex and .agents, from captured trees. Folder: \`${session.workspace.path}\`.`, '');
   } else if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(

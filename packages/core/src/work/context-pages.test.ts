@@ -964,6 +964,25 @@ describe('топология для агента', () => {
     expect(topology.plans.map((row) => row.id)).toEqual(['pl-2']);
     expect(topology.plans[0]?.items[0]?.log).toHaveLength(3);
   });
+
+  it('комната: в обзоре плана у пункта не больше одной сдачи, полная история — в field: plan', () => {
+    const map = baseMap();
+    const evidence = { text: 'e', artifacts: [] };
+    const submission = (n: number) => ({ n, by: 's-02', at: 'x', evidence, verdict: null, verdictBy: null, verdictAt: null, note: null });
+    const item = (id: number, submissions?: ReturnType<typeof submission>[]) => ({
+      id, title: 't', owner: 's-02', scope: 's', after: [], criteria: [], verifier: null, status: 'in_progress' as const,
+      evidence: null, note: null, log: [], ...(submissions ? { submissions } : {}),
+    });
+    map.plans = [{
+      id: 'pl-1', roomId: 'r-01', mode: 'checklist' as const, status: 'active' as const, rev: 1, goal: 'g', backlog: [],
+      items: [item(1, [submission(1), submission(2), submission(3)]), item(2)],
+      acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null,
+    }];
+    const items = mapTopology(map, 's-01').plans[0]!.items;
+    expect(items[0]!.submissions?.map((entry) => entry.n)).toEqual([3]);
+    expect(items[1]).not.toHaveProperty('submissions');
+    expect(map.plans[0]!.items[0]!.submissions).toHaveLength(3);
+  });
 });
 
 describe('кандидаты в упоминания человека', () => {

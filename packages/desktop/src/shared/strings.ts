@@ -61,6 +61,8 @@ export const S = {
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
     owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
+    submissions: 'Submissions', submission: (n: number, by: string, time: string) => '#' + n + ' · ' + by + (time ? ' · ' + time : ''),
+    submissionVerified: (by: string) => 'verified by ' + by, submissionReturned: (by: string) => 'returned by ' + by, returnedByYou: 'returned by you',
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
     markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',

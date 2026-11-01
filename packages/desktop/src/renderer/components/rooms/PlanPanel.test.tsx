@@ -665,3 +665,56 @@ it('an old host without gitRoot is unknown: no hint', async () => {
   await act(async () => {});
   expect(screen.queryByText(NEEDS_GIT)).toBeNull();
 });
+
+const submissionOf = (n: number, patch: Partial<NonNullable<RoomPlan["items"][number]["submissions"]>[number]> = {}) => ({
+  n, by: "s-01", at: "2025-01-05T12:00:00.000Z",
+  evidence: { text: `Evidence ${n}`, artifacts: [`file-${n}.txt`] },
+  verdict: null, verdictBy: null, verdictAt: null, note: null, ...patch,
+});
+const planWithSubmissions = (submissions: ReturnType<typeof submissionOf>[], mode: RoomPlan["mode"] = "verified") => {
+  const plan = planOf({ mode });
+  plan.items[0]!.submissions = submissions;
+  return plan;
+};
+
+it("a plan item with one submission shows no submission list", () => {
+  render(<PlanPanel entry={entryOf(planWithSubmissions([submissionOf(1)]))} roomId="r-01" bridge={createFakeBridge()} />);
+  expect(document.querySelector("[data-plan-submissions]")).toBeNull();
+});
+
+it("lists submissions newest first with the older evidence folded", () => {
+  const plan = planWithSubmissions([submissionOf(1, { verdict: "returned", verdictBy: "s-02", note: "Missing case" }), submissionOf(2)]);
+  render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={createFakeBridge()} />);
+  const rows = [...document.querySelectorAll("[data-plan-submission]")];
+  expect(rows.map((row) => row.getAttribute("data-plan-submission"))).toEqual(["2", "1"]);
+  expect(rows[0]!.textContent).toMatch(/^#2 · .* · Jan \d+, 2025/);
+  expect(rows[0]!.querySelector("details")).toBeNull();
+  expect(rows[1]!.querySelector("details")?.textContent).toContain("Evidence 1");
+  expect(rows[1]!.querySelector("details")?.textContent).toContain("file-1.txt");
+});
+
+it("shows the verdict, the note and the return by the human", () => {
+  const plan = planWithSubmissions([
+    submissionOf(1, { verdict: "verified", verdictBy: "s-02", note: "Looks fine", returnedBy: "human", returnedAt: "2025-01-06T12:00:00.000Z", returnNote: "Regression found" }),
+    submissionOf(2, { verdict: "returned", verdictBy: "s-02", note: "Not enough" }),
+  ]);
+  render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={createFakeBridge()} />);
+  const [newest, oldest] = [...document.querySelectorAll("[data-plan-submission]")];
+  expect(newest!.textContent).toContain("returned by s-02");
+  expect(newest!.textContent).toContain("Not enough");
+  expect(newest!.textContent).not.toContain("returned by you");
+  expect(oldest!.textContent).toContain("verified by s-02");
+  expect(oldest!.textContent).toContain("returned by you");
+  expect(oldest!.textContent).toContain("Looks fine");
+  expect(oldest!.textContent).toContain("Regression found");
+});
+
+it("a long unbroken note wraps instead of widening the row", () => {
+  const note = "n".repeat(3000);
+  const plan = planWithSubmissions([submissionOf(1, { note }), submissionOf(2)]);
+  render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={createFakeBridge()} />);
+  const paragraph = screen.getByText(note);
+  expect(paragraph.className).toContain("break-words");
+  expect(paragraph.className).toContain("whitespace-pre-wrap");
+  expect(paragraph.closest("[data-plan-submission]")!.className).toContain("break-words");
+});
