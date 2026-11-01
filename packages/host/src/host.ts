@@ -20,6 +20,7 @@ import {
   findRunnerBinary,
   grantTrust,
   isMember,
+  isTrusted,
   isRoomArchived,
   isStaleHostLock,
   loadConfig,
@@ -915,6 +916,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         worksService.entry(projectPath, workId)?.map.rooms.find((room) => room.id === roomId)?.mode === 'autonomous',
       projectKnown: (projectPath) => worksService.snapshot().entries.some((entry) => entry.projectPath === projectPath),
       workKnown: (projectPath, workId) => worksService.entry(projectPath, workId) !== undefined,
+      sessionKnown: (projectPath, workId, sessionId) =>
+        worksService.entry(projectPath, workId)?.map.sessions.some((session) => session.id === sessionId) === true,
+      // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
+      // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
+      trustFolder: async (projectPath) => {
+        if (!(await isTrusted(projectPath, parleyHome()))) await grantTrust(projectPath, 'phone', parleyHome());
+      },
     },
     // Активность хост шлёт только при изменении, а живёт дольше окна: окно,
     // перезапущенное при живом хосте, до следующего события считало бы

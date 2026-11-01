@@ -168,7 +168,7 @@ describe('RemoteSettings', () => {
     await waitFor(() => expect(bridge.remoteCalls.some((c) => c.name === 'reset')).toBe(true));
   });
 
-  it('the «Allow creating sessions and rooms» switch is on by default and writes remoteCreate', async () => {
+  it('the «Allow starting and messaging agents» switch is on by default and writes remoteCreate', async () => {
     const { save } = mount();
     const toggle = await screen.findByTestId('remote-allow-create');
     expect(toggle.getAttribute('aria-checked')).toBe('true');

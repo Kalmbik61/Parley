@@ -14,7 +14,7 @@ export interface TrustRecord {
   folder: string;
   /** Когда выдано, ISO-8601. */
   grantedAt: string;
-  /** Кто дал согласие: окно, остров или Telegram. */
+  /** Кто дал согласие: окно, остров, Telegram или телефон. */
   by: 'window' | 'island' | 'telegram' | 'phone';
 }
 
@@ -23,7 +23,7 @@ export interface TrustFile {
   folders: Record<string, Omit<TrustRecord, 'folder'>>;
 }
 
-const TRUST_BY: readonly string[] = ['window', 'island', 'telegram'];
+const TRUST_BY: readonly string[] = ['window', 'island', 'telegram', 'phone'];
 
 export function trustFilePath(home: string = parleyHome()): string {
   return path.join(home, 'trust.json');
