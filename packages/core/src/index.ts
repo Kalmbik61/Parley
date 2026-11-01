@@ -712,6 +712,19 @@ export type { BacklogRule, ProjectPreferences } from './work/project-preferences
 export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, savePlanCheckpoint, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
 export { planItemDuties, planSubmission } from './work/plan-state.js';
 export type { PlanDuty, PlanDutyAction, PlanDutyRole, PlanWaitingFor } from './work/plan-state.js';
+export { PLAN_TASKS_MAX_BYTES, planTasksNext, planTasksView } from './work/plan-tasks.js';
+export type {
+  PlanFinishedItem,
+  PlanItemDetail,
+  PlanNextAssignment,
+  PlanTaskAction,
+  PlanTaskCheckpoint,
+  PlanTaskEntry,
+  PlanTaskLog,
+  PlanTasksNext,
+  PlanTasksQuery,
+  PlanTasksView,
+} from './work/plan-tasks.js';
 export {
   intendOp, settleOp, startAttempt, normalizeAttemptSubmission, submitAttempt, receipt, recordCheck, coverageVerdict,
   returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,

@@ -77,6 +77,7 @@ import {
 } from '../work/resource-policy.js';
 import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
+import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
@@ -357,6 +358,7 @@ const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWo
 export const TOOLS: Tool[] = [
   AGENT_PLAN_TOOL,
   ...PLAN_TOOLS,
+  PLAN_TASKS_TOOL,
   {
     name: 'backlog_list', annotations: READS,
     description: 'Read this project backlog before suggesting work outside your task.',
@@ -1569,6 +1571,7 @@ async function dispatch(
   if (sessionId === null) throw new Error(NO_SESSION);
 
   if (name === 'publish_agent_plan') return publishAgentPlan(context, args);
+  if (name === 'plan_tasks') return planTasks(context, sessionId, args);
   if (name === 'report') return report(context, sessionId, args);
   if (name === 'wait_for') return waitFor(context, sessionId, args, signal);
   if (name === 'send_message') return sendMessage(context, sessionId, args);

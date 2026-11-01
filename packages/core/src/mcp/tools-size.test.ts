@@ -10,9 +10,12 @@ import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from './swarm-tools.js';
  * Правила и исключения живут в `read_guide`, а не в описаниях.
  * Потолки подняты ровно на `get_capacity` (план 3, спека 4.3): описание 232 байта, схема целиком 386 с запятой —
  * прежний запас остался прежним.
+ * Ещё подняты ровно на `plan_progress` и `plan_tasks` (задания комнаты): строки description — 357 байт, JSON обоих
+ * инструментов с запятыми — 1421; запас прежний. Нужны они, чтобы агент не терял позицию на пункте плана и видел
+ * свои задания, когда письмо уже прочитано.
  */
-const DESCRIPTIONS_MAX_BYTES = 5600 + 232;
-const SCHEMAS_MAX_BYTES = 21000 + 386;
+const DESCRIPTIONS_MAX_BYTES = 5600 + 232 + 357;
+const SCHEMAS_MAX_BYTES = 21000 + 386 + 1421;
 
 /** Сумма байт всех строк `description` на любой глубине схемы (описания свойств включены). */
 function descriptionBytes(node: unknown): number {

@@ -671,6 +671,7 @@ describe("trusted plan tool integration", () => {
       "plan_update",
       "plan_submit",
       "plan_verify",
+      "plan_progress",
       "propose_completion",
     ]) {
       const tool = result.tools.find((row) => row.name === name)!;
@@ -978,6 +979,7 @@ describe("archived room", () => {
       ["s-02", "plan_update", { planId: "pl-01", rev: 0, item: 1, status: "in_progress" }],
       ["s-02", "plan_submit", { planId: "pl-01", rev: 0, item: 1, evidence: { text: "Done", artifacts: [] } }],
       ["s-03", "plan_verify", { planId: "pl-01", rev: 0, item: 1, verdict: "verified", note: "Fine" }],
+      ["s-02", "plan_progress", { planId: "pl-01", rev: 0, item: 1, done: "Half", next: "Rest" }],
       ["s-01", "propose_completion", { planId: "pl-01", rev: 0, summary: "All done" }],
     ];
     for (const [actor, name, args] of cases) {
@@ -986,5 +988,477 @@ describe("archived room", () => {
       expect(result.text, name).toBe(REFUSAL);
     }
     expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+});
+
+describe("plan_progress", () => {
+  const base = { planId: "pl-01", rev: 0, item: 1 };
+  const position = { done: "Parser done", next: "Wire the tests" };
+  /** Всё, что чекпоинт не вправе менять: письма, эффекты, статусы, журнал пункта. */
+  async function untouched() {
+    const map = await readMap(project, context.workId);
+    const plan = map.plans![0]!;
+    return {
+      effects: JSON.stringify(map.planEffects ?? []),
+      messages: readStoredMap(project, context.workId).messages.length,
+      statuses: plan.items.map((row) => row.status),
+      log: JSON.stringify(plan.items.map((row) => row.log)),
+      evidence: JSON.stringify(plan.items.map((row) => row.evidence)),
+      note: JSON.stringify(plan.items.map((row) => row.note)),
+    };
+  }
+  async function started() {
+    await accepted();
+    expect(
+      (await call("s-02", "plan_update", { ...base, status: "in_progress" }))
+        .failed,
+    ).toBe(false);
+  }
+  async function submitted() {
+    await started();
+    expect(
+      (
+        await call("s-02", "plan_submit", {
+          ...base,
+          evidence: { text: "Measured", artifacts: ["src/a.ts"] },
+        })
+      ).failed,
+    ).toBe(false);
+  }
+
+  it("is registered as a write with the exact input schema and the agreed description", async () => {
+    const tool = (await (await connect("s-02")).listTools()).tools.find(
+      (row) => row.name === "plan_progress",
+    )!;
+    expect(tool.description).toBe(
+      "Save your position on a plan item you own (in progress) or verify (submitted); replaces your last checkpoint, changes nothing else. Call it before a turn ends without plan_submit or plan_verify.",
+    );
+    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual([
+      "artifacts",
+      "blocker",
+      "done",
+      "item",
+      "next",
+      "planId",
+      "rev",
+    ]);
+    expect(tool.inputSchema.required).toEqual([
+      "planId",
+      "rev",
+      "item",
+      "done",
+      "next",
+    ]);
+  });
+
+  it("the owner saves a position after starting, and nothing else changes", async () => {
+    await started();
+    const before = await untouched();
+    const result = await call("s-02", "plan_progress", {
+      ...base,
+      ...position,
+      artifacts: ["src/a.ts"],
+      blocker: "Waiting for a fixture",
+    });
+    expect(result.failed).toBe(false);
+    const body = JSON.parse(result.text);
+    const saved = (await readMap(project, context.workId)).plans![0]!.items[0]!
+      .progress!.owner!;
+    expect(body.saved).toEqual({
+      role: "owner",
+      submission: null,
+      at: saved.at,
+    });
+    expect(saved).toMatchObject({
+      by: "s-02",
+      ...position,
+      artifacts: ["src/a.ts"],
+      blocker: "Waiting for a fixture",
+    });
+    expect(body.next).toEqual({
+      total: 1,
+      assignments: [
+        {
+          planId: "pl-01",
+          rev: 0,
+          item: 1,
+          role: "owner",
+          action: "continue",
+          title: "Implement",
+        },
+      ],
+    });
+    expect(body.effects).toBeDefined();
+    expect(await untouched()).toEqual(before);
+  });
+
+  it("the verifier saves a position on a submitted item without verifying it, sending a letter or creating an effect", async () => {
+    await submitted();
+    const before = await untouched();
+    const result = await call("s-03", "plan_progress", {
+      ...base,
+      done: "Read the diff",
+      next: "Run the suite",
+    });
+    expect(result.failed).toBe(false);
+    const body = JSON.parse(result.text);
+    const map = await readMap(project, context.workId);
+    const item = map.plans![0]!.items[0]!;
+    expect(body.saved).toEqual({
+      role: "verifier",
+      submission: item.log.length,
+      at: item.progress!.verifier!.at,
+    });
+    expect(body.next.assignments).toEqual([
+      {
+        planId: "pl-01",
+        rev: 0,
+        item: 1,
+        role: "verifier",
+        action: "verify",
+        title: "Implement",
+      },
+    ]);
+    expect(await untouched()).toEqual(before);
+    expect(item.status).toBe("done");
+    expect(
+      map.plans![0]!.items.filter((row) => row.status === "verified"),
+    ).toEqual([]);
+  });
+
+  it("passes the domain rule text through for a wrong status or a wrong role", async () => {
+    await accepted();
+    const early = await call("s-02", "plan_progress", {
+      ...base,
+      ...position,
+    });
+    expect(early.failed).toBe(true);
+    expect(early.text).toBe("start the item with plan_update(in_progress) first");
+    const premature = await call("s-03", "plan_progress", {
+      ...base,
+      ...position,
+    });
+    expect(premature.failed).toBe(true);
+    expect(premature.text).toBe(
+      "the owner has not submitted the item for review",
+    );
+    const stranger = await call("s-01", "plan_progress", {
+      ...base,
+      ...position,
+    });
+    expect(stranger.failed).toBe(true);
+    expect(stranger.text).toBe(
+      "only the item owner or its independent verifier can save a checkpoint",
+    );
+  });
+
+  it("a stale revision gets the plan_tasks hint, and nothing is written", async () => {
+    await started();
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const result = await call("s-02", "plan_progress", {
+      ...base,
+      rev: 1,
+      ...position,
+    });
+    expect(result.failed).toBe(true);
+    expect(result.text).toBe(
+      "Plan revision or item changed; call plan_tasks for the current revision.",
+    );
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+
+  it("rejects spoofed fields, a missing session and out-of-range text without writing", async () => {
+    await started();
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const long = (length: number) => "x".repeat(length);
+    for (const [actor, args] of [
+      ["s-02", { ...base, ...position, actor: "s-03" }],
+      ["s-02", { ...base, ...position, projectPath: "/foreign" }],
+      [null, { ...base, ...position }],
+      ["s-02", { ...base, next: "No done" }],
+      ["s-02", { ...base, done: "No next" }],
+      ["s-02", { ...base, done: long(601), next: "ok" }],
+      ["s-02", { ...base, done: "ok", next: long(301) }],
+      ["s-02", { ...base, ...position, blocker: long(301) }],
+      ["s-02", { ...base, ...position, artifacts: Array(6).fill("a") }],
+      ["s-02", { ...base, ...position, artifacts: [long(257)] }],
+      ["s-02", { ...base, ...position, artifacts: [7] }],
+      ["s-02", { ...base, done: 5, next: "ok" }],
+      ["s-02", { ...base, item: 0, ...position }],
+      ["s-02", { ...base, planId: "x", ...position }],
+    ] as const)
+      expect(
+        (await call(actor, "plan_progress", args as Record<string, unknown>))
+          .failed,
+        JSON.stringify(args),
+      ).toBe(true);
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+
+  it("overwrites the previous position and accepts the documented limits", async () => {
+    await started();
+    const long = (length: number) => "x".repeat(length);
+    expect(
+      (await call("s-02", "plan_progress", { ...base, ...position })).failed,
+    ).toBe(false);
+    const result = await call("s-02", "plan_progress", {
+      ...base,
+      done: long(600),
+      next: long(300),
+      blocker: long(300),
+      artifacts: Array(5).fill(long(256)),
+    });
+    expect(result.failed).toBe(false);
+    const owner = (await readMap(project, context.workId)).plans![0]!.items[0]!
+      .progress!.owner!;
+    expect(owner.done).toHaveLength(600);
+    expect(owner.artifacts).toHaveLength(5);
+  });
+});
+
+describe("next actions after a mutation", () => {
+  const base = { planId: "pl-01", rev: 0, item: 1 };
+  const entry = (role: string, action: string) => ({
+    planId: "pl-01",
+    rev: 0,
+    item: 1,
+    role,
+    action,
+    title: "Implement",
+  });
+
+  it("plan_update, plan_submit and plan_verify answer with the caller's next actions after the change", async () => {
+    await accepted();
+    const started = JSON.parse(
+      (await call("s-02", "plan_update", { ...base, status: "in_progress" }))
+        .text,
+    );
+    expect(started.next).toEqual({
+      total: 1,
+      assignments: [entry("owner", "continue")],
+    });
+    expect(started.effects).toBeDefined();
+
+    const submitted = JSON.parse(
+      (
+        await call("s-02", "plan_submit", {
+          ...base,
+          evidence: { text: "Measured", artifacts: [] },
+        })
+      ).text,
+    );
+    expect(submitted.next).toEqual({
+      total: 1,
+      assignments: [entry("owner", "wait")],
+    });
+
+    const returned = JSON.parse(
+      (
+        await call("s-03", "plan_verify", {
+          ...base,
+          verdict: "returned",
+          note: "Needs a regression test",
+        })
+      ).text,
+    );
+    expect(returned.next).toEqual({
+      total: 1,
+      assignments: [entry("verifier", "wait")],
+    });
+
+    const again = JSON.parse(
+      (await call("s-02", "plan_update", { ...base, status: "in_progress" }))
+        .text,
+    );
+    expect(again.next.assignments).toEqual([entry("owner", "continue")]);
+    await call("s-02", "plan_submit", {
+      ...base,
+      evidence: { text: "Fixed", artifacts: [] },
+    });
+    const verified = JSON.parse(
+      (
+        await call("s-03", "plan_verify", {
+          ...base,
+          verdict: "verified",
+          note: "Looks right",
+        })
+      ).text,
+    );
+    expect(verified.next).toEqual({ total: 0, assignments: [] });
+  });
+
+  it("propose_completion keeps its old output", async () => {
+    await accepted();
+    await call("s-02", "plan_submit", {
+      ...base,
+      evidence: { text: "Measured", artifacts: [] },
+    });
+    await call("s-03", "plan_verify", {
+      ...base,
+      verdict: "verified",
+      note: "Fine",
+    });
+    const completion = JSON.parse(
+      (
+        await call("s-01", "propose_completion", {
+          planId: "pl-01",
+          rev: 0,
+          summary: "All verified",
+        })
+      ).text,
+    );
+    expect(Object.keys(completion).sort()).toEqual([
+      "effects",
+      "proposalId",
+      "rev",
+    ]);
+  });
+
+  it("set_room_mode keeps its old output", async () => {
+    await updateMap(project, context.workId, (map) => {
+      map.rooms[0]!.mode = "free";
+    });
+    const result = JSON.parse(
+      (
+        await call("s-01", "set_room_mode", {
+          room: "r-01",
+          mode: "checklist",
+          reason: "Need a plan",
+        })
+      ).text,
+    );
+    expect(Object.keys(result)).toEqual(["effects"]);
+  });
+
+  it("the conflict message points at plan_tasks", async () => {
+    await accepted();
+    const result = await call("s-02", "plan_update", {
+      ...base,
+      rev: 3,
+      status: "in_progress",
+    });
+    expect(result.failed).toBe(true);
+    expect(result.text).toBe(
+      "Plan revision or item changed; call plan_tasks for the current revision.",
+    );
+  });
+});
+
+describe("plan_tasks tool", () => {
+  const base = { planId: "pl-01", rev: 0, item: 1 };
+
+  it("is a read with no session parameter and a one-sentence description", async () => {
+    const tool = (await (await connect("s-02")).listTools()).tools.find(
+      (row) => row.name === "plan_tasks",
+    )!;
+    expect(tool.annotations).toEqual({ readOnlyHint: true });
+    expect(tool.inputSchema.additionalProperties).toBe(false);
+    expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual([
+      "cursor",
+      "item",
+      "planId",
+    ]);
+    expect(tool.inputSchema.required ?? []).toEqual([]);
+    expect(tool.description).toMatch(
+      /reading a letter does not finish one/i,
+    );
+  });
+
+  it("lists the caller's open assignments and writes nothing", async () => {
+    await accepted();
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const owner = JSON.parse((await call("s-02", "plan_tasks", {})).text);
+    expect(owner).toMatchObject({
+      session: "s-02",
+      total: 1,
+      next: null,
+      finished: { count: 0, items: [] },
+    });
+    expect(owner.assignments[0]).toMatchObject({
+      planId: "pl-01",
+      rev: 0,
+      room: "r-01",
+      item: 1,
+      role: "owner",
+      action: "start",
+      title: "Implement",
+    });
+    const verifier = JSON.parse((await call("s-03", "plan_tasks", {})).text);
+    expect(verifier.assignments[0]).toMatchObject({
+      role: "verifier",
+      action: "wait",
+      waitingFor: { kind: "submission", by: "s-02" },
+    });
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+
+  it("shows the verification as soon as the owner submits, even after the letters were read", async () => {
+    await accepted();
+    await call("s-02", "plan_submit", {
+      ...base,
+      evidence: { text: "Measured", artifacts: [] },
+    });
+    await call("s-03", "check_inbox", {});
+    const view = JSON.parse((await call("s-03", "plan_tasks", {})).text);
+    expect(view.assignments.map((row: { action: string }) => row.action)).toEqual(
+      ["verify"],
+    );
+  });
+
+  it("reads one item in full when planId and item are given", async () => {
+    await accepted();
+    const view = JSON.parse(
+      (await call("s-01", "plan_tasks", { planId: "pl-01", item: 1 })).text,
+    );
+    expect(view.assignments).toEqual([]);
+    expect(view.detail).toMatchObject({
+      planId: "pl-01",
+      item: 1,
+      owner: "s-02",
+      verifier: "s-03",
+      scope: "src/a.ts",
+    });
+  });
+
+  it("refuses a missing session, a session argument and bad input", async () => {
+    await accepted();
+    const noSession = await call(null, "plan_tasks", {});
+    expect(noSession.failed).toBe(true);
+    expect(noSession.text).toMatch(/no session/i);
+    for (const args of [
+      { session: "s-03" },
+      { item: 1 },
+      { planId: "x" },
+      { planId: "pl-01", item: 0 },
+      { cursor: 5 },
+      { maxBytes: 100 },
+    ])
+      expect(
+        (await call("s-02", "plan_tasks", args)).failed,
+        JSON.stringify(args),
+      ).toBe(true);
+  });
+
+  it("lists nothing for an autonomous plan and plan_progress refuses it", async () => {
+    await autonomousAccepted();
+    for (const id of ["s-01", "s-02", "s-03"])
+      expect(JSON.parse((await call(id, "plan_tasks", {})).text)).toMatchObject(
+        { total: 0, assignments: [], finished: { count: 0 } },
+      );
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const result = await call("s-02", "plan_progress", {
+      ...base,
+      done: "Half",
+      next: "Rest",
+    });
+    expect(result.failed).toBe(true);
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+
+  it("refuses an invalid cursor with the retry hint", async () => {
+    await accepted();
+    const result = await call("s-02", "plan_tasks", { cursor: "junk" });
+    expect(result.failed).toBe(true);
+    expect(result.text).toMatch(/call plan_tasks without cursor/);
   });
 });
