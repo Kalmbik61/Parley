@@ -213,6 +213,8 @@ interface CodexFeed {
   /** Binding конкретного tail неизменен; другой thread/file требует настоящего пересоздания source. */
   progressBinding: { providerSessionId: string; file: string } | null;
   progressBindingValid: boolean;
+  /** Привязка, из которой посеяна лента: другая привязка сессии (тред или файл) требует пересева (b-005). */
+  seedBinding: { providerSessionId: string | null; file: string };
 }
 
 interface Batch {
@@ -812,11 +814,18 @@ export function createFeedService(
     if (file === null) return Promise.resolve();
     const proof = captureProgress(feed);
     const binding = sessionOf(feed.ref).providerSessionId;
-    feed.seeding = (async () => {
+    const seedBinding = { providerSessionId: typeof binding === 'string' && binding.length > 0 ? binding : null, file };
+    // Привязка сменилась, пока журнал читался: прочитанное принадлежит прежнему журналу, сев повторяется.
+    let stale = false;
+    const run = (async () => {
       try {
         const tail = createRolloutTail(file);
         const records = await tail.read();
         if (!feedCurrent(feed)) return;
+        if (codexRebound(feed, seedBinding)) {
+          stale = true;
+          return;
+        }
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
@@ -827,6 +836,7 @@ export function createFeedService(
           tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve(),
           progressBinding: typeof binding === 'string' && binding.length > 0 ? { providerSessionId: binding, file } : null,
           progressBindingValid: typeof binding === 'string' && binding.length > 0,
+          seedBinding,
         };
         feed.sizes = new Map();
         feed.bytes = 0;
@@ -854,7 +864,52 @@ export function createFeedService(
       }
       if (feedCurrent(feed)) await serialCodex(feed, () => syncCodexAgents(feed));
     })();
+    feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed) : undefined));
     return feed.seeding;
+  }
+
+  /**
+   * Сессия привязана к другому треду или журналу, чем тот, из которого посеяна лента. Догадка по папке и
+   * времени могла отдать чужой тред; доказательство MCP потом его исправило, а лента осталась на чужом журнале.
+   * Пока привязки нет (`null`) или журнал индексу неизвестен, лента остаётся как есть.
+   */
+  function codexRebound(feed: SessionFeed, seed: { providerSessionId: string | null; file: string }): boolean {
+    let session: WorkSession;
+    try { session = sessionOf(feed.ref); } catch { return false; }
+    const file = deps.activity.logFile(feed.ref);
+    if (file === null) return false;
+    const id = session.providerSessionId;
+    return file !== seed.file ||
+      (typeof id === 'string' && id.length > 0 && seed.providerSessionId !== null && id !== seed.providerSessionId);
+  }
+
+  /**
+   * Лента Codex посеяна из другого треда или журнала, чем сессия привязана сейчас: прежние элементы
+   * уходят подписчикам в `removed`, хвост создаётся заново и читает только новый журнал с начала.
+   */
+  async function reseedCodexIfRebound(feed: SessionFeed): Promise<void> {
+    const codex = feed.codex;
+    // Идущий сев сам проверит привязку, когда дочитает.
+    if (codex === undefined || feed.seeding !== undefined || !codexRebound(feed, codex.seedBinding)) return;
+    const before = feed.state;
+    invalidateProgress(feed);
+    const waiting = before.items.filter(isPendingCard).map((card) => card.cardId);
+    if (waiting.length > 0) pending.settle(feed.ref, waiting);
+    feed.batch.upsert.clear();
+    for (const item of before.items) feed.batch.removed.add(item.id);
+    feed.state = emptyFeedState();
+    delete feed.codex;
+    feed.sizes = new Map();
+    feed.bytes = 0;
+    feed.seeded = false;
+    await seedCodex(feed);
+    if (!feedCurrent(feed)) return;
+    for (const item of feed.state.items) {
+      feed.batch.upsert.set(item.id, item);
+      feed.batch.removed.delete(item.id);
+    }
+    if (feed.state.permissionMode !== before.permissionMode) feed.modeChanged = true;
+    flush(feed);
   }
 
   function serialCodex(feed: SessionFeed, task: () => Promise<void>): Promise<void> {
@@ -873,7 +928,8 @@ export function createFeedService(
       if (codex === undefined || !feedCurrent(feed)) return;
       const proof = captureProgress(feed);
       const records = await codex.tail.read();
-      if (!feedCurrent(feed)) return;
+      // Лента пересеяна на другой журнал, пока хвост читал: его записи чужие.
+      if (!feedCurrent(feed) || feed.codex !== codex) return;
       if (records.length > 0) {
         const { update, cursor } = applyCodexRecords(feed.state, stashCodex(records), codex.cursor);
         codex.cursor = cursor;
@@ -902,7 +958,7 @@ export function createFeedService(
         track.tail = createRolloutTail(file);
       }
       const records = await track.tail.read();
-      if (!feedCurrent(feed)) return;
+      if (!feedCurrent(feed) || feed.codex !== codex) return;
       if (records.length > 0) {
         const firstRead = track.meta.threadId === null;
         track.meta = codexAgentMeta(records, track.meta);
@@ -1163,6 +1219,7 @@ export function createFeedService(
     if (provider === 'codex') {
       const known = feedOf(ref);
       if (known.codex !== undefined) {
+        await reseedCodexIfRebound(known);
         await pollCodex(known);
         flush(known);
         return;
@@ -1312,7 +1369,10 @@ export function createFeedService(
     for (const start of progressStarts.values()) confirmStart(start.ref);
     for (const feed of feeds.values()) {
       const stamp = observeSource(feed);
-      if (feed.codex !== undefined) codexBindingCurrent(feed, stamp);
+      if (feed.codex !== undefined) {
+        codexBindingCurrent(feed, stamp);
+        void reseedCodexIfRebound(feed);
+      }
     }
     for (const [key, ref] of [...graceWaiting]) {
       if (!alive.has(key)) continue;
