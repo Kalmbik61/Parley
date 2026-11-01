@@ -563,6 +563,24 @@ describe('autonomous integration', () => {
     expect(create.workspace).toMatchObject({ kind: 'clone', path: f.clone(), sha: f.sha });
   });
 
+  it('integrates two attempts that wrote the same excluded path with different content', async () => {
+    const f = await fixture(false, 2);
+    await f.engine.flush(f.projectPath, 'w-01');
+    for (const i of [0, 1]) {
+      await fs.mkdir(path.join(f.clone(i), '.omc'), { recursive: true });
+      await fs.writeFile(path.join(f.clone(i), '.omc', 'state.json'), `state of attempt ${i}`);
+      await fs.writeFile(path.join(f.clone(i), `item-${i + 1}.txt`), 'implemented');
+      expect(await f.submit(i)).toMatchObject({ ok: true });
+    }
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(f.read().autonomous!.halted).toBeNull();
+    expect(f.read().autonomous!.integration.suspended).toBeNull();
+    expect(f.read().items.map(item => item.status)).toEqual(['verified', 'verified']);
+    const head = f.read().autonomous!.integration.verifiedHead;
+    const files = (await exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, 'ls-tree', '-r', '--name-only', head])).stdout.trim().split('\n');
+    expect(files).toEqual(['.gitignore', 'item-1.txt', 'item-2.txt', 'test.js']);
+  });
+
   it('rechecks an unchanged old-base submission on verifiedHead without moving the head', async () => {
     const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
     await fs.writeFile(path.join(f.clone(), 'item-1.txt'), 'A');
@@ -977,6 +995,38 @@ it('excludes .parley-tmp from captures even when clone gitignore explicitly incl
   expect((await exec('git', [...args, 'ls-tree', '-r', f.attempt().sha!, '--', '.parley-tmp'])).stdout).toBe('');
   expect((await exec('git', [...args, 'show', `${f.attempt().sha}:retained.txt`])).stdout).toBe('temporary bytes');
   expect(await fs.readFile(path.join(f.clone(), '.parley-tmp', 'temporary.txt'), 'utf8')).toBe('temporary bytes');
+});
+
+it('excludes agent runtime folders in the repository root from captures and keeps nested ones', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  const clone = f.clone();
+  for (const file of ['.omc/state.json', '.omx/log', '.claude/x', '.codex/y', '.agents/z', 'packages/x/.claude/file', 'src.txt']) {
+    await fs.mkdir(path.dirname(path.join(clone, file)), { recursive: true });
+    await fs.writeFile(path.join(clone, file), 'bytes');
+  }
+  expect(await f.submit()).toMatchObject({ ok: true });
+  const tree = (await exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, 'ls-tree', '-r', '--name-only', f.attempt().sha!])).stdout.trim().split('\n');
+  // Только корень репозитория: вложенная папка того же имени — обычный файл проекта.
+  expect(tree).toEqual(['.gitignore', 'packages/x/.claude/file', 'src.txt', 'test.js']);
+  expect(await fs.readFile(path.join(clone, '.omc/state.json'), 'utf8')).toBe('bytes');
+});
+
+it('keeps base entries under an excluded folder unchanged instead of recording them as deleted', async () => {
+  const f = await fixture();
+  await fs.mkdir(path.join(f.projectPath, '.claude'));
+  await fs.writeFile(path.join(f.projectPath, '.claude', 'settings.json'), 'base settings');
+  await f.git('add', '.claude');
+  await f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@test', 'commit', '-m', 'Tracked runtime file');
+  const base = await f.git('rev-parse', 'HEAD');
+  f.read().autonomous!.integration.baseSha = base; f.read().autonomous!.integration.verifiedHead = base;
+  await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), '.claude', 'settings.json'), 'agent edit');
+  await fs.writeFile(path.join(f.clone(), '.claude', 'new.json'), 'agent file');
+  await fs.writeFile(path.join(f.clone(), 'result.txt'), 'result');
+  expect(await f.submit()).toMatchObject({ ok: true });
+  const args = [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`];
+  expect((await exec('git', [...args, 'show', `${f.attempt().sha}:.claude/settings.json`])).stdout).toBe('base settings');
+  expect((await exec('git', [...args, 'ls-tree', '-r', '--name-only', f.attempt().sha!, '--', '.claude'])).stdout.trim()).toBe('.claude/settings.json');
 });
 
 it('halts before Go when the base tracks the reserved temporary path', async () => {
