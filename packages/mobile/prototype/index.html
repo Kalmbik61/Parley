@@ -380,9 +380,12 @@ textarea.field { min-height: 160px; resize: none; }
   backdrop-filter: blur(22px) saturate(1.7); -webkit-backdrop-filter: blur(22px) saturate(1.7); transition: border-color .15s; }
 .chead.edge { border-bottom-color: var(--sep); }
 .chead .navrow { padding: 0 12px; position: relative; }
-.ctitle { position: absolute; left: 92px; right: 92px; top: 2px; text-align: center; color: var(--label); }
+.ctitle { position: absolute; left: 44px; right: 60px; top: 2px; text-align: left; color: var(--label); }
 .ctitle .t-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cstate { display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--label2); white-space: nowrap; overflow: hidden; }
+.cstate { display: flex; align-items: center; justify-content: flex-start; gap: 5px; color: var(--label2); white-space: nowrap; overflow: hidden; }
+.cstate .cword { flex: none; font-weight: 600; color: var(--label); }
+.nstrip .grow { flex: 1; min-width: 0; }
+.nstrip { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--needsSoft); color: var(--needs); cursor: pointer; font-weight: 600; }
 .cstate .dot { width: 8px; height: 8px; }
 .chead .banner { margin-top: 2px; }
 /* Accessibility sizes: the name moves under the back/menu row, two lines at most, the state line never squeezed. */
@@ -452,6 +455,24 @@ textarea.field { min-height: 160px; resize: none; }
 .more { color: var(--tint); font-weight: 600; cursor: pointer; }
 .trustrow .grow { min-width: 0; }
 .bottombar .card { margin: 0 0 2px; padding: 0; background: transparent; }
+/* room chat */
+.rfeed { gap: 8px; }
+.ravatar { width: 28px; height: 28px; border-radius: 50%; background: var(--tint); color: var(--onTint); font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.ravatar.ghost { background: transparent; }
+.rmsg { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.rmsg.cont { margin-top: -4px; }
+.rmsg .md { margin-top: 2px; }
+.rquote { border-left: 3px solid var(--tint); padding: 2px 8px; color: var(--label2); margin: 4px 0; background: var(--tintSoft); border-radius: 0 8px 8px 0; }
+.rquote.mine { align-self: flex-end; max-width: 80%; }
+.mchip { color: var(--tint); font-weight: 600; }
+.bub.mine .mchip { color: var(--tint); }
+.ractions { display: flex; gap: 8px; margin-top: 6px; } .ractions .btn { flex: none; padding: 0 12px; }
+.loadearlier { align-self: center; border: 0; background: var(--surface); color: var(--tint); font: inherit; font-weight: 600; border-radius: 16px; padding: 6px 14px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.rto { margin: 0 0 6px 4px; }
+.replyplate { display: flex; align-items: center; gap: 6px; background: var(--surface); border-radius: 12px; padding: 4px 4px 4px 10px; margin-bottom: 6px; color: var(--label2); }
+.mmenu { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px); background: var(--surface); border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.18); overflow: hidden; max-height: 230px; overflow-y: auto; }
+.mmenu .cell { gap: 10px; }
+.csend.at { color: var(--tint); font-weight: 700; font-size: 22px; width: 32px; }
 /* tool sheet */
 .sheet.tool { top: 300px; padding: 8px 0 0; }
 .diff { white-space: pre; overflow-x: auto; }
@@ -595,7 +616,7 @@ const PROVIDERS = [
 ];
 const ROLES = ['executor', 'planner', 'architect', 'critic', 'reviewer', 'designer', 'verifier'];
 const DECISIONS = {
-  d1: { room: 'iOS app: stage A (no device)', work: 'Improvements', pid: 'p-03', rev: 2, from: 's-174', age: '12 min', kind: 'decision',
+  d1: { roomId: 'r-18', room: 'iOS app: stage A (no device)', work: 'Improvements', pid: 'p-03', rev: 2, from: 's-174', age: '12 min', kind: 'decision',
         text: '### Ship A1 before A6a\n- A1 (`@parley/protocol/remote`) is reviewed by the critic and merged into `feat/mobile-stage-a`\n- A6a starts from the merged A1\n- No device runs until the human brings the iPhone\n\n![diagram](https://example.com/diagram.png)\n\nThe plan is in `docs/plans/2026-10-29-mobile-app-plan.md`.',
         text3: '### Ship A1 before A6a — revised\n- A1 is merged **after** the critic signs off on the projection type\n- A6a waits for A1 and the S7 confirmation\n- No device runs until the human brings the iPhone' },
 };
@@ -727,7 +748,7 @@ const S = {
   gone: {}, itemState: {}, answers: {}, other: {}, dec: {}, letterOpened: {}, open: {}, hier: 'cards',
   sheet: null, alert: null, toast: null, haptic: null, next: 'applied', notif: 'on', sasLeft: 120, faceIdReq: 'on', bio: 'faceid', nextAuth: 'success', auth: null, macCreate: 'on', nextStart: 'ok', create: null,
   pairName: 'iPhone 16 Pro', retryIn: 12, scrollTop: 0,
-  msgs: {}, drafts: {}, notListed: {}, nextSend: 'auto', trustCheck: 'auto', scrollBottom: false, atBottom: true, kb: false, more: {}, itemText: {},
+  msgs: {}, drafts: {}, notListed: {}, rmDraft: {}, rmTo: {}, rmReply: {}, rmSel: null, rmEarlier: {}, rmLoading: false, nextSend: 'auto', trustCheck: 'auto', scrollBottom: false, atBottom: true, kb: false, more: {}, itemText: {},
 };
 const timers = [];
 function later(ms, fn) { const t = setTimeout(function () { fn(); render(); }, ms); timers.push(t); return t; }
@@ -762,7 +783,7 @@ const BLOCKED = ['revoked', 'updatePhone', 'updateMac'];
 function host() { return HOSTS[S.cur]; }
 function stack() { return S.stacks[S.tab]; }
 function topRoute() { const st = stack(); return st[st.length - 1]; }
-function push(route) { stack().push(route); S.scrollTop = 0; if (route.s === 'session') { S.scrollBottom = true; S.atBottom = true; } }
+function push(route) { stack().push(route); S.scrollTop = 0; if (route.s === 'session' || route.s === 'room') { S.scrollBottom = true; S.atBottom = true; S.rmSel = null; } }
 function pop() { if (stack().length > 1) stack().pop(); S.scrollTop = 0; }
 
 /* ---------- inbox model ---------- */
@@ -1089,10 +1110,10 @@ function ancestry(sessionId) {
       if (sw.creator.kind === 'session') up = sw.creator.sessionId;
       else if (sw.creator.kind === 'room') {
         const cr = w.rooms.find(function (x) { return x.id === sw.creator.roomId; });
-        if (cr) { parts.unshift({ label: '# ' + cr.title, kind: 'room', id: roomDecision(cr) ? cr.decision : null }); up = cr.ownerId; }
+        if (cr) { parts.unshift({ label: '# ' + cr.title, kind: 'room', id: cr.id }); up = cr.ownerId; }
       }
     } else if (room && room.ownerId !== cur.id) {
-      parts.unshift({ label: '# ' + room.title, kind: 'room', id: roomDecision(room) ? room.decision : null });
+      parts.unshift({ label: '# ' + room.title, kind: 'room', id: room.id });
       up = room.ownerId;
     } else up = cur.createdBy;
     if (!up || !byId[up]) break;
@@ -1104,7 +1125,7 @@ function ancestry(sessionId) {
 function crumbs(parts, linked) {
   if (!parts.length) return '';
   return '<div class="crumb t-foot">' + ic('teamUp', 14) + parts.map(function (p) {
-    const act = linked && p.kind === 'session' ? ' data-act="openSession" data-id="' + p.id + '"' : linked && p.kind === 'room' && p.id ? ' data-act="openDecision" data-id="' + p.id + '"' : '';
+    const act = linked && p.kind === 'session' ? ' data-act="openSession" data-id="' + p.id + '"' : linked && p.kind === 'room' && p.id ? ' data-act="openRoom" data-id="' + p.id + '"' : '';
     return '<span class="' + (act ? 'clink' : '') + '"' + act + '>' + h(p.label) + '</span>';
   }).join('<span class="csep">›</span>') + '</div>';
 }
@@ -1167,12 +1188,12 @@ function roomRow(row, guides) {
   const lead = row.members.find(function (m) { return m.id === room.lead; }) || row.members[0];
   const word = d ? '<span class="pill tint t-cap">Decision</span>' : room.unread ? '<span class="pill t-cap" style="background:var(--neutralBg)">' + room.unread + ' new</span>' : '';
   let html = '<div class="trow bubblerow" style="--d:' + row.depth + '">' + guidesHtml(guides, row.depth) +
-    '<div class="bubble' + (d ? ' dec' : '') + '"><div class="bhead" data-act="toggle" data-k="room:' + room.id + '" data-open="' + open + '" role="button" aria-expanded="' + open + '" aria-label="' +
+    '<div class="bubble' + (d ? ' dec' : '') + '"><div class="bhead" data-act="openRoom" data-id="' + room.id + '" role="button" aria-label="' +
     h('Room ' + room.title + (d ? ', decision waiting' : '') + ', ' + row.members.length + ' agents' + (lead ? ', lead ' + lead.label : '')) + '">' +
     '<span class="bicon" style="color:' + (d ? 'var(--tint)' : 'var(--label2)') + '">' + (d ? ic('seal', 20) : ic('hash', 20)) + '</span>' +
     '<div class="grow"><div class="t-sub clamp2" style="font-weight:600">' + h(room.title) + '</div>' +
     '<div class="mdots">' + word + (open ? '' : row.members.map(function (m) { return attDot(sessAtt(m)); }).join('')) + '<span class="t-foot l2">Room · ' + row.members.length + ' agents' + (open && lead ? ' · lead ' + h(lead.label) : '') + '</span></div></div>' +
-    '<span class="chev" style="transform:rotate(' + (open ? 90 : 0) + 'deg);transition:transform .15s">' + ic('chevR', 16) + '</span></div>';
+    toggleBtn('room:' + room.id, open, 'room ' + room.title) + '</div>';
   if (d) html += '<div class="mrow" data-act="openDecision" data-id="' + room.decision + '" role="button"><div class="grow t-foot"><b>' + d.pid + ' · rev ' +
     (S.dec[room.decision] && S.dec[room.decision].rev || d.rev) + '</b> <span class="l2">' + h(d.text.split('\n')[0].replace(/^#+ /, '')) + '</span></div><span class="link t-foot">Review' + ic('chevR', 14) + '</span></div>';
   if (open) html += row.members.map(function (m) { return memberRow(m, { lead: m.id === room.lead }); }).join('');
@@ -1985,17 +2006,19 @@ function myMessagesHtml(sid) {
     return '<div class="bub mine t-body' + cls + '" title="clientMsgId ' + m.cmid + '">' + h(m.text) + '</div><div class="bubmeta t-cap ' + meta[0] + '" role="status">' + meta[1] + '</div>';
   }).join('');
 }
+/* Subtitle of the compact bar: a short state word first (never truncated), then role · model · time (D1 §9.1, pins 1–2).
+   Needs-you without action buttons gets a one-line strip under the bar instead of a big card. */
 function headerState(s) {
   const att = sessAtt(s);
   const card = s.card && !S.gone[s.card] ? CARDS[s.card] : null;
-  if (s.starting) return ['working', s.line];
-  if (card && (card.kind === 'limit')) return ['needs', card.reason];
-  if (card && card.kind === 'blocked') return ['needs', 'Needs you · Answer at your Mac'];
-  if (card) return ['needs', 'Needs you · ' + (card.kind === 'permission' ? 'Waiting for your approval' : card.kind === 'question' ? 'Asked you a question' : 'Plan ready for review')];
-  if (pendingConsentFor(s.id)) return ['needs', 'Needs you · Asks to switch the provider'];
-  const m = { working: 'Working · ' + (s.line && s.line !== 'Working' ? s.line.replace(/^Working · /, '') : 'on your message'), unseen: s.line, idle: s.line, sleeping: s.line,
-    done: 'Done · 1 h ago', failed: 'Failed · 2 h ago', needs: 'Working' };
-  return [att, m[att] || s.line];
+  const r = { att: att, word: '', extra: '', strip: null };
+  if (s.starting) { r.att = pendingConsentFor(s.id) ? 'needs' : 'working'; r.word = pendingConsentFor(s.id) ? 'Needs you' : s.queued ? 'Queued' : 'Starting'; if (s.queued) r.strip = ['clock', 'Queued — starts when a slot frees on your Mac']; return r; }
+  if (card && card.kind === 'limit') { r.att = 'needs'; r.word = 'Limit'; r.strip = ['hourglass', card.reason]; return r; }
+  if (card && card.kind === 'blocked') { r.att = 'needs'; r.word = 'Needs you'; r.strip = ['desktop', 'Answer at your Mac — in its terminal']; return r; }
+  if (card || pendingConsentFor(s.id)) { r.att = 'needs'; r.word = 'Needs you'; return r; }
+  if (att === 'working') { r.word = 'Working'; const m = (s.line || '').match(/(\d+ subagents|Waiting for s-\d+)/); if (m) r.extra = m[1].replace('Waiting', 'waiting'); return r; }
+  r.word = { unseen: 'Finished a turn', idle: 'Idle', sleeping: 'Sleeping', done: 'Done', failed: 'Failed', needs: 'Working' }[att] || att;
+  return r;
 }
 function pendingConsentFor(sid) {
   const id = Object.keys(CONSENTS).find(function (k) { const c = CONSENTS[k]; return !S.gone[k] && ((c.kind === 'agent-switch' && c.ref === sid) || (c.kind === 'folder-trust' && c.sessionId === sid)); });
@@ -2036,18 +2059,18 @@ function sessionScreen(r) {
   const s = x.s, w = x.w;
   const back = S.tab === 'inbox' ? 'Inbox' : w.title;
   const hs = headerState(s);
-  const dotCls = { needs: 'needs', working: 'working', unseen: 'unseen', idle: 'idle', sleeping: 'off', done: 'off', failed: 'off' }[hs[0]] || 'idle';
-  const stateIcon = hs[0] === 'done' ? '<span style="color:var(--ok);display:flex">' + ic('checkCircle', 12) + '</span>' : hs[0] === 'failed' ? '<span style="color:var(--danger);display:flex">' + ic('xCircle', 12) + '</span>' : '<span class="dot ' + dotCls + '" aria-hidden="true"></span>';
-  // A long back title collapses to the chevron (iOS does the same), so the centred name never collides with it.
-  const head = '<div class="chead" id="chead"><div class="navrow"><button class="navbtn" data-act="back" aria-label="Back to ' + h(back) + '">' + ic('chevL', 22) + (back.length > 8 ? '' : h(back)) + '</button>' +
-    '<div class="ctitle" role="heading" aria-label="' + h(s.label + '. ' + hs[1]) + '"><div class="t-head" data-act="toTop">' + h(s.label) + '</div><div class="cstate t-cap"' + (hs[0] === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + stateIcon + '<span class="ellips">' + h(hs[1]) + '</span></div></div>' +
-    '<button class="navbtn glass" data-act="sessMenu" data-id="' + s.id + '" aria-label="More">' + ic('ellipsisCircle', 20) + '</button></div>' + banner() + '</div>';
-  const teamRows = buildRows(w, s.id);
-  const passport = '<div class="passport"><div class="t-cap l2">' + h((s.role ? s.role + ' · ' : '') + s.model + ' · started ' + s.since + (s.since === 'now' ? '' : ' ago')) + '</div>' +
-    (ancestry(s.id).length ? crumbs(ancestry(s.id), true) : '') +
-    (teamRows.length > 1 ? '<span class="teamlink t-foot" data-act="teamSheet" data-id="' + s.id + '">' + ic('people', 14) + 'Team · ' + h(teamCounts(teamRows)) + ' ›</span>' : '') + '</div>';
-  if (s.starting && S.notListed && S.notListed[s.id]) { /* shown in passport below */ }
-  let body = head + passport;
+  const dotCls = { needs: 'needs', working: 'working', unseen: 'unseen', idle: 'idle', sleeping: 'off', done: 'off', failed: 'off' }[hs.att] || 'idle';
+  const stateIcon = hs.att === 'done' ? '<span style="color:var(--ok);display:flex">' + ic('checkCircle', 12) + '</span>' : hs.att === 'failed' ? '<span style="color:var(--danger);display:flex">' + ic('xCircle', 12) + '</span>' : '<span class="dot ' + dotCls + '" aria-hidden="true"></span>';
+  const meta = (s.role ? s.role + ' · ' : '') + s.model + ' · ' + s.since;
+  const word = hs.word + (hs.extra ? ' · ' + hs.extra : '');
+  // Chat screens show only the chevron; the name sits on its row, the subtitle under it, all pinned (pins 1–2).
+  const head = '<div class="chead" id="chead"><div class="navrow"><button class="navbtn" data-act="back" aria-label="Back to ' + h(back) + '" title="' + h(back) + '">' + ic('chevL', 24) + '</button>' +
+    '<div class="ctitle" role="heading" aria-label="' + h(s.label + '. ' + word + '. ' + meta) + '"><div class="t-head" data-act="toTop">' + h(s.label) + '</div>' +
+    '<div class="cstate t-cap">' + stateIcon + '<span class="cword"' + (hs.att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
+    '<button class="navbtn glass" data-act="sessMenu" data-id="' + s.id + '" aria-label="More">' + ic('ellipsisCircle', 20) + '</button></div>' +
+    (hs.strip ? '<div class="nstrip t-sub" data-act="jump" role="status">' + ic(hs.strip[0], 18) + '<span class="ellips">' + h(hs.strip[1]) + '</span></div>' : '') + banner() + '</div>';
+  // Origin is the first line of the history; Team lives in the ••• menu (pins 5–6).
+  let body = head + (ancestry(s.id).length ? '<div class="passport">' + crumbs(ancestry(s.id), true) + '</div>' : '<div style="height:8px"></div>');
   if (s.starting && S.notListed && S.notListed[s.id]) body += '<div class="t-foot l2" style="margin:0 16px 6px">Session started — it will appear on your Mac shortly</div>';
   let bottom = '';
   const consentId = pendingConsentFor(s.id);
@@ -2137,6 +2160,131 @@ function deliver(sid, m) {
   });
 }
 
+/* ---------- room chat (D1 §9.7): context.messages pages + rooms.mail, rooms.send with @mentions and Face ID ---------- */
+const ROOM_MSGS = {
+  'r-18': [
+    { id: 'm-2140', from: 's-174', to: [], at: '09:12', text: 'Screen review merged. Fixes go to **s-187**, **s-190** and **s-189**; one commit each.' },
+    { id: 'm-2161', from: 's-174', to: [], at: '09:49', text: 'Merged `origin/master` into the branch; the boundary test lists the three new host methods.' },
+    { id: 'm-2191', from: 's-174', to: [], at: '11:04', text: 'New wave on `feat/mobile-device-run`: D1 update, A27 protocol, A29 Claude folder trust.' },
+    { id: 'm-2198', from: 's-175', to: ['s-174'], at: '11:14', kind: 'question', text: 'A28: the bridge strips `clientMsgId` before the host — should the host treat it as optional?' },
+    { id: 'm-2202', from: 's-174', to: [], at: '11:15', replyTo: 'm-2198', text: 'No: the bridge forwards the params as received and the host applies the same rule.' },
+    { id: 'm-2203', from: 'system', to: [], at: '11:20', text: 'Mobile-stage-A-lead proposed a decision · p-03 rev 2' },
+    { id: 'm-2205', from: 's-177', to: [], at: '11:31', text: 'Critic pass on A27 is done: **no blockers**, two minors in the allowlist test.' },
+  ],
+  'r-12': [
+    { id: 'm-1850', from: 's-12', to: [], at: 'Yesterday', text: 'The background browser spike is merged.' },
+    { id: 'm-1852', from: 's-13', to: ['s-12'], at: 'Yesterday', text: 'Agreed. Closing my review.' },
+  ],
+  'r-03': [],
+};
+const ROOM_EARLIER = { 'r-18': [
+  { id: 'm-2091', from: 's-174', to: [], at: 'Yesterday', text: 'Wave 3 reviews are merged; last fix round below.' },
+  { id: 'm-2095', from: 's-183', to: ['s-174'], at: 'Yesterday', text: 'A7 wave-3 fixes: `d7e96afb`. All checks green.' },
+] };
+function findRoom(id) { for (const w of WORKS) { const r = w.rooms.find(function (x) { return x.id === id; }); if (r) return { room: r, w: w }; } return null; }
+function senderLabel(w, from) { if (from === 'human') return 'You'; if (from === 'system') return 'Parley'; const s = w.sessions.find(function (x) { return x.id === from; }); return s ? s.label : from; }
+function avatar(label) { return '<span class="ravatar" aria-hidden="true">' + h(label.charAt(0).toUpperCase()) + '</span>'; }
+function roomState(room, w) {
+  const members = room.members.map(function (m) { return w.sessions.find(function (x) { return x.id === m; }); }).filter(Boolean);
+  const d = roomDecision(room);
+  const needy = members.find(function (m) { return sessAtt(m) === 'needs'; });
+  const working = members.filter(function (m) { return sessAtt(m) === 'working'; }).length;
+  if (d) return { att: 'needs', word: 'Decision', d: d, needy: needy, members: members };
+  if (needy) return { att: 'needs', word: 'Needs you', needy: needy, members: members };
+  return { att: working ? 'working' : 'idle', word: working ? working + ' working' : 'Idle', needy: null, members: members };
+}
+function mentionHtml(text, w) {
+  // Mentions are chips in the app; here they are "@Label" tokens painted as chips.
+  return text.replace(/@([A-Za-z0-9-]+)/g, function (all, name) { return w.sessions.some(function (x) { return x.label === name; }) ? '<span class="mchip">@' + name + '</span>' : all; });
+}
+function roomMsgHtml(m, prev, w, rid) {
+  if (m.from === 'system') return '<div class="notice t-cap">' + (m.text.indexOf('decision') >= 0 && DECISIONS.d1 && !S.gone.d1 && rid === 'r-18' ? '<span class="link t-cap" data-act="openDecision" data-id="d1">◆ ' + h(m.text) + ' · Review ›</span>' : h(m.text)) + '</div>';
+  const label = senderLabel(w, m.from);
+  const quote = m.replyTo ? (function () { const o = (ROOM_MSGS[rid] || []).concat(ROOM_EARLIER[rid] || []).find(function (x) { return x.id === m.replyTo; }); return o ? '<div class="rquote t-foot">' + h(senderLabel(w, o.from) + ': ' + o.text.replace(/[`*]/g, '').slice(0, 60)) + '…</div>' : ''; })() : '';
+  if (m.from === 'human') {
+    const st = m.state || 'done';
+    const metaTxt = st === 'sending' ? '<span class="spin sm"></span> Sending…' : st === 'sent' ? 'Sent' : st === 'lost' ? ic('conflict', 14) + " We couldn't confirm it was sent" : st === 'notsent' ? ic('exclCircle', 14) + ' Not sent <button data-act="roomRetry" data-id="' + rid + '" data-m="' + m.id + '">Retry</button>' :
+      m.picked ? ic('check', 14) + ' Picked up by ' + h(m.picked) : '▤ Not picked up yet by ' + h(m.waiting || 'everyone');
+    return quote.replace('rquote', 'rquote mine') + '<div class="bub mine t-body' + (st === 'sending' ? ' sending' : st === 'lost' || st === 'notsent' ? ' bad' : '') + '">' + mentionHtml(h(m.text), w) + '</div>' +
+      '<div class="bubmeta t-cap' + (st === 'notsent' ? ' err' : st === 'lost' ? ' warn' : '') + '">' + metaTxt + '</div>';
+  }
+  const same = prev && prev.from === m.from && !m.replyTo;
+  const to = m.to && m.to.length ? '<span class="l2"> → ' + m.to.map(function (t) { return '@' + h(senderLabel(w, t)); }).join(', ') + '</span>' : '';
+  const sel = S.rmSel === m.id;
+  return '<div class="rmsg' + (same ? ' cont' : '') + '" data-act="rmSel" data-id="' + m.id + '" role="text" aria-label="' + h(label + ', ' + m.at + (m.to && m.to.length ? ', to ' + m.to.map(function (t) { return senderLabel(w, t); }).join(', ') : '') + ': ' + m.text) + '">' +
+    (same ? '<span class="ravatar ghost"></span>' : avatar(label)) + '<div class="grow">' +
+    (same ? '' : '<div class="t-foot"><b>' + h(label) + '</b> <span class="l2">· ' + h(m.at) + '</span>' + to + (m.kind === 'question' ? ' <span class="pill tint t-cap">Question</span>' : '') + '</div>') +
+    quote + md(m.text) + (sel ? '<div class="ractions"><button class="btn sm" data-act="rmReply" data-id="' + m.id + '">' + ic('uturn', 16) + 'Reply</button><button class="btn sm" data-act="rmCopy">' + ic('copy', 16) + 'Copy</button></div>' : '') + '</div></div>';
+}
+function roomComposer(rid, room, w) {
+  if (S.macCreate === 'off') return '<div class="cclosed t-sub">' + ic('desktop', 18) + 'Messaging agents from the phone is turned off on your Mac</div>';
+  if (room.mode === 'autonomous') return '<div class="cclosed t-sub">' + ic('desktop', 18) + 'This room runs on its own — write to it on your Mac</div>';
+  if (room.archived) return '<div class="cclosed t-sub">This room is archived</div>';
+  const draft = S.rmDraft[rid] || '';
+  const to = (S.rmTo[rid] || []).map(function (id) { return senderLabel(w, id); });
+  const reply = S.rmReply[rid] ? (ROOM_MSGS[rid] || []).concat(ROOM_EARLIER[rid] || []).find(function (x) { return x.id === S.rmReply[rid]; }) : null;
+  return (reply ? '<div class="replyplate t-foot">' + ic('uturn', 14) + '<span class="ellips grow">Reply to ' + h(senderLabel(w, reply.from)) + ': ' + h(reply.text.replace(/[`*]/g, '')) + '</span><button class="iconbtn" data-act="rmReplyOff" data-id="' + rid + '" aria-label="Remove quote">' + ic('xmark', 16) + '</button></div>' : '') +
+    '<div class="rto t-cap l2" id="rto" aria-live="polite">' + (to.length ? 'To ' + h(to.join(', ')) : 'To everyone') + '</div>' +
+    '<div id="mentionMenu"></div>' +
+    '<div class="composer"><button class="csend at" data-act="rmAt" data-id="' + rid + '" aria-label="Mention an agent">@</button><textarea class="cfield" id="rcomposer" data-room="' + rid + '" rows="1" maxlength="16384" placeholder="Write to everyone · type @ to mention an agent" aria-label="Message">' + h(draft) + '</textarea>' +
+    '<button class="csend" data-act="rmSend" data-id="' + rid + '" aria-label="Send" title="Send · requires Face ID"' + (ready() && draft.trim() ? '' : ' disabled') + '>' + ic('arrowUpCircle', 32) + '</button></div>' +
+    (ready() ? '' : '<div class="chint t-foot">Reconnecting — actions are paused</div>');
+}
+function mentionMenuHtml(rid, query) {
+  const x = findRoom(rid); const w = x.w;
+  const members = x.room.members.map(function (m) { return w.sessions.find(function (s) { return s.id === m; }); }).filter(Boolean)
+    .filter(function (s) { return s.label.toLowerCase().indexOf(query.toLowerCase()) === 0 || s.label.toLowerCase().indexOf(query.toLowerCase()) >= 0; });
+  return '<div class="mmenu" role="listbox" aria-label="Agents in this room"><div class="t-cap l2" style="padding:6px 12px 2px">Agents in this room</div>' +
+    (members.length ? members.map(function (s) { return '<div class="cell" data-act="rmPick" data-id="' + rid + '" data-s="' + s.id + '" role="option">' + avatar(s.label) + '<div class="grow"><div class="t-sub" style="font-weight:600">' + h(s.label) + '</div><div class="t-cap l2">' + h(s.model + ' · ' + ATT_WORD[sessAtt(s)].toLowerCase()) + '</div></div></div>'; }).join('')
+      : '<div class="t-sub l2" style="padding:10px 12px">No agents match</div>') + '</div>';
+}
+function roomScreen(r) {
+  const x = findRoom(r.id);
+  if (!x) return { body: navbar({ back: 'Back' }) + empty('triangle', 'This room is no longer on your Mac', 'It was deleted or archived.'), notabs: true };
+  const room = x.room, w = x.w, rs = roomState(room, w);
+  const lead = rs.members.find(function (m) { return m.id === room.lead; });
+  const meta = rs.members.length + ' agents' + (lead ? ' · lead ' + lead.label : '') + ' · ' + (room.mode || 'free');
+  const dot = rs.att === 'needs' ? (rs.d ? '<span style="color:var(--needs);display:flex">' + ic('seal', 12) + '</span>' : '<span class="dot needs"></span>') : '<span class="dot ' + rs.att + '"></span>';
+  let strip = '';
+  if (rs.d) strip += '<div class="nstrip t-sub" data-act="openDecision" data-id="' + room.decision + '" role="link">' + ic('seal', 18) + '<span class="ellips grow">Decision ' + rs.d.pid + ' · rev ' + (S.dec[room.decision] && S.dec[room.decision].rev || rs.d.rev) + '</span><span>Review ›</span></div>';
+  if (rs.needy) strip += '<div class="nstrip t-sub" data-act="openSession" data-id="' + rs.needy.id + '" role="link">' + ic('hand', 18) + '<span class="ellips grow">' + h(rs.needy.label) + ' needs you</span><span>›</span></div>';
+  const head = '<div class="chead" id="chead"><div class="navrow"><button class="navbtn" data-act="back" aria-label="Back">' + ic('chevL', 24) + '</button>' +
+    '<div class="ctitle" role="heading" aria-label="' + h('Room ' + room.title + '. ' + rs.word + '. ' + meta) + '"><div class="t-head" data-act="toTop">' + ic(rs.d ? 'seal' : 'hash', 15) + ' ' + h(room.title) + '</div>' +
+    '<div class="cstate t-cap">' + dot + '<span class="cword"' + (rs.att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(rs.word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
+    '<button class="navbtn glass" data-act="roomMenu" data-id="' + room.id + '" aria-label="More">' + ic('ellipsisCircle', 20) + '</button></div>' + strip + banner() + '</div>';
+  const bottom = roomComposer(room.id, room, w);
+  if (S.conn === 'cold' || S.scenario === 'loading') return { body: head + '<div class="feed">' + skeleton(4).replace(/card static/g, 'card static" style="margin:0') + '</div>', bottom: bottom, notabs: true, chat: true };
+  const list = (S.rmEarlier[room.id] ? (ROOM_EARLIER[room.id] || []) : []).concat(S.scenario === 'empty' ? [] : (ROOM_MSGS[room.id] || []));
+  const writable = S.macCreate !== 'off' && room.mode !== 'autonomous' && !room.archived;
+  if (!list.length) return { body: head + empty('bubbles', 'No messages yet', writable ? 'Write the task for everyone below.' : 'Messages of this room appear here.'), bottom: bottom, notabs: true, chat: true };
+  let feed = (ROOM_EARLIER[room.id] && !S.rmEarlier[room.id]) ? '<button class="loadearlier t-foot" data-act="rmEarlier" data-id="' + room.id + '">' + (S.rmLoading ? '<span class="spin sm"></span>' : 'Load earlier messages') + '</button>' : '';
+  list.forEach(function (m, i) { feed += roomMsgHtml(m, list[i - 1], w, room.id); });
+  return { body: head + '<div class="feed rfeed" id="feed">' + feed + '</div>', bottom: bottom, notabs: true, chat: true };
+}
+function roomMenuSheet(rid) {
+  const x = findRoom(rid);
+  return '<div class="dim" data-act="closeSheet"></div><div class="sheet tall" role="dialog" aria-label="Members"><div class="grab"></div><div class="sheethead"><span class="t-head">Members</span><button class="navbtn" data-act="closeSheet">Done</button></div><div class="sheetbody">' +
+    '<div class="group" style="margin-top:8px">' + x.room.members.map(function (m) { const s = x.w.sessions.find(function (y) { return y.id === m; }); if (!s) return '';
+      return '<div class="cell" data-act="openSession" data-id="' + s.id + '"><span class="ibox sm">' + statusIcon(sessAtt(s)) + '</span><div class="grow"><div class="t-body">' + h(s.label) + (s.id === x.room.lead ? ' <span class="star">★</span>' : '') + '</div><div class="t-foot l2">' + h((s.role ? s.role + ' · ' : '') + s.model) + '</div></div><span class="chev">' + ic('chevR', 16) + '</span></div>'; }).join('') + '</div>' +
+    '<div class="group" style="margin-top:16px"><div class="cell" data-act="menuWorkRoom" data-id="' + x.w.id + '"><span style="color:var(--tint)">' + ic('stack', 20) + '</span><div class="grow t-body">Open work</div></div></div></div></div>';
+}
+/* rooms.send: no idempotency key, so a lost send is never repeated by itself; the re-read room decides Sent / Not sent. */
+function sendRoom(rid, text, reuse) {
+  const x = findRoom(rid); const list = ROOM_MSGS[rid] || (ROOM_MSGS[rid] = []);
+  const to = (S.rmTo[rid] || []).slice();
+  const m = reuse || { id: 'h' + Date.now(), from: 'human', to: to, at: 'now', text: text, replyTo: S.rmReply[rid] || undefined };
+  if (!reuse) { list.push(m); S.rmTo[rid] = []; S.rmReply[rid] = null; }
+  m.state = 'sending'; S.atBottom = true;
+  const out = S.nextSend;
+  later(800, function () {
+    if (out === 'lost') { S.nextSend = 'auto'; S.conn = 'updating'; later(1600, function () { S.conn = 'ready'; m.state = 'notsent'; haptic('warning'); }); return; }
+    m.state = 'sent'; haptic('impact light');
+    const names = (m.to.length ? m.to : x.room.members).map(function (id) { return senderLabel(x.w, id); });
+    later(900, function () { m.state = 'done'; m.waiting = names.join(', '); });
+    later(2600, function () { m.picked = names.join(', '); });
+  });
+}
+
 function decisionScreen(r) {
   const d = DECISIONS[r.id]; const ds = S.dec[r.id] || (S.dec[r.id] = { rev: d.rev, conflict: false, result: null, note: '' });
   const back = S.tab === 'inbox' ? 'Inbox' : 'Improvements';
@@ -2150,6 +2298,7 @@ function decisionScreen(r) {
   }
   if (ds.conflict) body += '<div class="banner warn" style="cursor:default">' + ic('conflict', 20) + '<div class="bt"><div class="t-sub" style="font-weight:600">The lead changed the decision — review the new text</div><div class="t-foot l2">Your previous answer was not applied.</div></div></div>';
   if (ds.unconfirmed) body += '<div style="margin:0 16px 8px">' + itemNote('unconfirmedDec') + '</div>';
+  body += '<div style="margin:-4px 16px 10px"><span class="link t-foot" data-act="openRoom" data-id="' + d.roomId + '" role="link">' + ic('hash', 14) + 'Open room' + ic('chevR', 14) + '</span></div>';
   body += '<div class="card static">' + md(ds.conflict ? d.text3 : d.text) + '</div>';
   const busy = S.sendingV && S.sendingV.indexOf(r.id) === 0;
   const bottom = pausedNote() + '<div class="row"><button class="btn" data-act="returnSheet" data-id="' + r.id + '"' + dis() + (busy ? ' disabled' : '') + '>' + (S.sendingV === r.id + 'return' ? '<span class="spin"></span>' : 'Return for rework') + '</button>' +
@@ -2417,6 +2566,7 @@ function screen() {
   if (r.s === 'works') return worksScreen();
   if (r.s === 'work') return workScreen(r);
   if (r.s === 'session') return sessionScreen(r);
+  if (r.s === 'room') return roomScreen(r);
   if (r.s === 'decision') return decisionScreen(r);
   if (r.s === 'letter') return letterScreen(r);
   if (r.s === 'settings') return settingsScreen();
@@ -2452,10 +2602,12 @@ function overlays() {
     if (sh.kind === 'create') o += createSheet();
     if (sh.kind === 'tool') o += toolSheet(sh.id, sh.i);
     if (sh.kind === 'team') o += teamSheet(sh.id);
+    if (sh.kind === 'roomMenu') o += roomMenuSheet(sh.id);
     if (sh.kind === 'sessMenu') {
       const sm = findSession(sh.id), n = buildRows(sm.w, sh.id).length - 1;
       o += '<div class="dim" data-act="closeSheet"></div><div class="sheet" style="top:600px" role="menu" aria-label="Session menu"><div class="grab"></div><div class="group" style="margin:8px 0">' +
         '<div class="cell" data-act="menuWork" data-id="' + sh.id + '" role="menuitem"><span style="color:var(--tint)">' + ic('stack', 20) + '</span><div class="grow t-body">Open work</div></div>' +
+        (homeRoom(sm.w, sh.id) ? '<div class="cell" data-act="openRoom" data-id="' + homeRoom(sm.w, sh.id).id + '" role="menuitem"><span style="color:var(--tint)">' + ic('hash', 20) + '</span><div class="grow t-body">Open room</div></div>' : '') +
         (n > 0 ? '<div class="cell" data-act="teamSheet" data-id="' + sh.id + '" role="menuitem"><span style="color:var(--tint)">' + ic('people', 20) + '</span><div class="grow t-body">Team (' + n + ')</div></div>' : '') +
         '<div class="cell" data-act="menuCopy" role="menuitem"><span style="color:var(--tint)">' + ic('copy', 20) + '</span><div class="grow t-body">Copy session ID</div></div></div></div>';
     }
@@ -2527,9 +2679,9 @@ function render() {
       if (head) head.classList.toggle('edge', ns.scrollTop > 4);
     };
     ns.addEventListener('scroll', onScroll); onScroll();
-    if (S.kb) { const f = phone.querySelector('#composer'); if (f && document.activeElement !== f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
+    if (S.kb) { const f = phone.querySelector('.cfield'); if (f && document.activeElement !== f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
   }
-  const cf = phone.querySelector('#composer');
+  const cf = phone.querySelector('.cfield');
   if (cf) { cf.style.height = 'auto'; cf.style.height = Math.min(cf.scrollHeight, 22 * 5 * S.fs + 18) + 'px'; }
   renderPanel();
 }
@@ -2702,6 +2854,41 @@ function act(el, e) {
       if (i >= 0) { S.drafts[id] = list[i].text.replace(/\n+/g, ' '); list.splice(i, 1); S.nextSend = 'auto'; }
       break;
     }
+    case 'openRoom': S.sheet = null; push({ s: 'room', id: id }); break;
+    case 'roomMenu': S.sheet = { kind: 'roomMenu', id: id }; break;
+    case 'menuWorkRoom': S.sheet = null; push({ s: 'work', id: id }); break;
+    case 'rmSel': S.rmSel = S.rmSel === id ? null : id; break;
+    case 'rmReply': S.rmReply[topRoute().id] = id; S.rmSel = null; haptic('selection'); S.kb = true; break;
+    case 'rmReplyOff': S.rmReply[id] = null; break;
+    case 'rmCopy': S.rmSel = null; toast('Copied', 'copy'); break;
+    case 'rmEarlier': S.rmLoading = true; later(700, function () { S.rmLoading = false; S.rmEarlier[id] = true; S.atBottom = false; }); break;
+    case 'rmAt': {
+      const f = document.getElementById('rcomposer'); if (!f) return;
+      const v = f.value; f.value = v + (v && !/\s$/.test(v) ? ' @' : '@'); f.focus(); f.setSelectionRange(f.value.length, f.value.length);
+      S.rmDraft[id] = f.value; roomInput(f, id); return;
+    }
+    case 'rmPick': {
+      const f = document.getElementById('rcomposer'); if (!f) return;
+      const x = findRoom(id); const label = senderLabel(x.w, el.dataset.s);
+      const before = f.value.slice(0, f.selectionStart).replace(/@([A-Za-z0-9-]*)$/, '@' + label + ' ');
+      f.value = before + f.value.slice(f.selectionStart); f.setSelectionRange(before.length, before.length);
+      const to = S.rmTo[id] || (S.rmTo[id] = []); if (to.indexOf(el.dataset.s) < 0) to.push(el.dataset.s);
+      S.rmDraft[id] = f.value; haptic('selection'); roomInput(f, id); return;
+    }
+    case 'rmSend': {
+      if (!ready()) return;
+      const f = document.getElementById('rcomposer'); const text = f ? f.value : (S.rmDraft[id] || '');
+      if (!text.trim()) return;
+      // Every room letter asks Face ID, whatever the approvals setting says (spec 11.4).
+      guardSend('send', function () { S.rmDraft[id] = ''; sendRoom(id, text, null); });
+      break;
+    }
+    case 'roomRetry': {
+      if (!ready()) return;
+      const m = (ROOM_MSGS[id] || []).find(function (x) { return x.id === el.dataset.m; }); if (!m) return;
+      S.nextSend = 'auto'; guardSend('send', function () { sendRoom(id, m.text, m); });
+      break;
+    }
     case 'noop': break;
     default: return;
   }
@@ -2715,12 +2902,24 @@ document.getElementById('phone').addEventListener('click', function (e) {
   const el = e.target.closest('[data-act]');
   if (el && !el.disabled) act(el, e);
 });
+/* Room composer: "@" opens the mention menu; a mention removed from the text leaves the recipients (D1 §9.7). */
+function roomInput(t, rid) {
+  t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 22 * 5 * S.fs + 18) + 'px';
+  const x = findRoom(rid);
+  S.rmTo[rid] = (S.rmTo[rid] || []).filter(function (id) { return t.value.indexOf('@' + senderLabel(x.w, id)) >= 0; });
+  const before = t.value.slice(0, t.selectionStart);
+  const q = before.match(/(^|\s)@([A-Za-z0-9-]*)$/);
+  const menu = document.getElementById('mentionMenu'); if (menu) menu.innerHTML = q ? mentionMenuHtml(rid, q[2]) : '';
+  const to = document.getElementById('rto'); const names = (S.rmTo[rid] || []).map(function (id) { return senderLabel(x.w, id); });
+  if (to) to.textContent = names.length ? 'To ' + names.join(', ') : 'To everyone';
+  const b = document.querySelector('#phone [data-act="rmSend"]'); if (b) b.disabled = !(t.value.trim() && ready());
+}
 /* Keyboard stand-in: the composer sticks to it (D1 §9.5); Send keeps the focus so the keyboard stays up. */
-document.getElementById('phone').addEventListener('mousedown', function (e) { if (e.target.closest('.csend')) e.preventDefault(); });
-document.getElementById('phone').addEventListener('focusin', function (e) { if (e.target.id === 'composer' && !S.kb) { S.kb = true; S.atBottom = true; render(); } });
+document.getElementById('phone').addEventListener('mousedown', function (e) { if (e.target.closest('.csend') || e.target.closest('.mmenu')) e.preventDefault(); });
+document.getElementById('phone').addEventListener('focusin', function (e) { if (e.target.classList.contains('cfield') && !S.kb) { S.kb = true; S.atBottom = true; render(); } });
 document.getElementById('phone').addEventListener('focusout', function (e) {
-  if (e.target.id !== 'composer') return;
-  setTimeout(function () { const a = document.activeElement; if (S.kb && !(a && a.id === 'composer')) { S.kb = false; render(); } }, 0);
+  if (!e.target.classList.contains('cfield')) return;
+  setTimeout(function () { const a = document.activeElement; if (S.kb && !(a && a.classList.contains('cfield'))) { S.kb = false; render(); } }, 0);
 });
 document.getElementById('phone').addEventListener('input', function (e) {
   const t = e.target;
@@ -2730,6 +2929,9 @@ document.getElementById('phone').addEventListener('input', function (e) {
     document.getElementById('retSend').disabled = t.value.length === 0 || !ready();
   }
   if (t.dataset && t.dataset.other) { S.other[t.dataset.other] = t.value; }
+  if (t.id === 'rcomposer') {
+    const rid = t.dataset.room; S.rmDraft[rid] = t.value; roomInput(t, rid);
+  }
   if (t.id === 'composer') {
     const sid = topRoute().id; S.drafts[sid] = t.value;
     t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 22 * 5 * S.fs + 18) + 'px';
@@ -2793,6 +2995,16 @@ const JUMPS = [
   ['Session chat: tool call sheet (Edit with diff)', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'session', id: 's-177' }]); const f = feedFor(findSession('s-177').s); S.sheet = { kind: 'tool', id: 's-177', i: f.findIndex(function (x) { return x.name === 'Edit'; }) }; }],
   ['Session chat: provider switch consent above the composer', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'session', id: 's-12' }]); }],
   ['Session chat: sleeping (no composer)', function () { go('works', [{ s: 'work', id: 'w2' }, { s: 'session', id: 's-192' }]); }],
+  ['Session chat: Answer at your Mac (strip under the bar)', function () { go('works', [{ s: 'work', id: 'w2' }, { s: 'session', id: 's-190' }]); }],
+  ['Session chat: usage limit (strip under the bar)', function () { go('works', [{ s: 'work', id: 'w2' }, { s: 'session', id: 's-191' }]); }],
+  ['Session chat: ••• menu (Team, Open room)', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'session', id: 's-174' }]); S.sheet = { kind: 'sessMenu', id: 's-174' }; }],
+  ['Room chat: decision waiting', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'room', id: 'r-18' }]); }],
+  ['Room chat: mention menu', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'room', id: 'r-18' }]); S.rmDraft['r-18'] = '@'; S.kb = true;
+    setTimeout(function () { const f = document.getElementById('rcomposer'); if (f) roomInput(f, 'r-18'); }, 0); }],
+  ['Room chat: reply to an agent, to Critic-A1', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'room', id: 'r-18' }]); S.rmReply['r-18'] = 'm-2205'; S.rmDraft['r-18'] = '@Critic-A1 please file the two minors as one commit.'; S.rmTo['r-18'] = ['s-177']; }],
+  ['Room chat: my letter delivered', function () { go('works', [{ s: 'work', id: 'w1' }, { s: 'room', id: 'r-12' }]); ROOM_MSGS['r-12'].push({ id: 'hx', from: 'human', to: ['s-12'], at: 'now', text: '@Astra-browser can you re-run the spike on Safari?', state: 'done', picked: 'Astra-browser' }); }],
+  ['Room chat: autonomous room (no composer)', function () { go('works', [{ s: 'work', id: 'w3' }, { s: 'room', id: 'r-03' }]); findRoom('r-03').room.mode = 'autonomous'; }],
+  ['Room chat: empty', function () { go('works', [{ s: 'work', id: 'w3' }, { s: 'room', id: 'r-03' }]); findRoom('r-03').room.mode = 'free'; }],
   ['Inbox: consent cards (folder trust, provider switch)', function () { go('inbox', []); S.inboxSeg = 'need'; }],
   ['Session: permission, no Always', function () { go('inbox', [{ s: 'session', id: 's-05' }]); }],
   ['Session: question', function () { go('inbox', [{ s: 'session', id: 's-175' }]); }],
