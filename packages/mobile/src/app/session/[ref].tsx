@@ -351,7 +351,7 @@ export default function SessionScreen() {
         </Pressable>
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
-        <SwitchCards sessionRef={ref} notify={toast.show} />
+        <SwitchCards sessionRef={ref} />
         {first !== undefined && parts !== null ? (
           parts.actions
         ) : (
@@ -386,8 +386,8 @@ export default function SessionScreen() {
 }
 
 /** A provider-switch request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
-function SwitchCards({ sessionRef, notify }: { sessionRef: SessionRef; notify: (text: string) => void }) {
-  const consents = useConsents(notify);
+function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
+  const consents = useConsents();
   const canAct = useCanAct();
   const now = useNow(30_000);
   const mine = consents.rows.filter((r) => r.card.kind === 'agent-switch' && r.card.ref.sessionId === sessionRef.sessionId && r.card.ref.workId === sessionRef.workId);

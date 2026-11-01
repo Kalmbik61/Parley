@@ -1,11 +1,9 @@
-// New session / New room (D1 §8.4): start an agent or open a room from the phone. Face ID before every launch and every
-// send; the Mac decides (rules, known works, limits) and its words come back as they are.
+// New session / New room (D1 §8.4): start an agent or open a room from the phone. The Mac decides (rules, known works, limits) and its words come back as they are.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { approve } from '../auth/instance';
-import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
+import { Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { DEMO } from '../dev/flags';
 import { haptic } from '../haptics';
@@ -122,8 +120,7 @@ export default function NewScreen() {
 
   const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws === null ? '' : ws.workId, provider, model, role, name, task, worktree, trustFolder: trusted === false && trustOn };
   const roomForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', title, mode, members, agents, lead };
-  // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so and
-  // Face ID is not asked for a call that will not go (D1 §12a).
+  // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so.
   const gone = state === null || DEMO ? null : methodMissing(state, step === 'letter' ? 'letter' : kind, kind === 'room' ? agents.length : 0);
 
   const problem = step === 'letter' ? letterProblem(letter) : kind === 'session' ? sessionProblem(sessionForm, providers) : roomProblem(roomForm, providers);
@@ -163,19 +160,16 @@ export default function NewScreen() {
     setError(null);
     try {
       if (step === 'letter' && made !== null) {
-        const res = await sendFirstLetter(client, approve, made.ref, letter);
-        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+        const res = await sendFirstLetter(client, made.ref, letter);
         if (res.kind !== 'sent') return fail(res);
         return finish(`/work/${workParam({ projectPath: made.ref.projectPath, workId: made.ref.workId })}`, 'Task sent to the room');
       }
       if (kind === 'session') {
-        const res = await launchSession(client, approve, sessionForm);
-        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+        const res = await launchSession(client, sessionForm);
         if (res.kind !== 'created') return fail(res);
         return finish(`/session/${sessionParam(res.ref)}?fresh=1`, 'Session started');
       }
-      const res = await launchRoom(client, approve, roomForm);
-      if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+      const res = await launchRoom(client, roomForm);
       if (res.kind === 'partial') {
         // Agents that started stay: they become members, so a retry starts only what is missing.
         const next = afterPartial(roomForm, res.startedAgents);
@@ -442,10 +436,7 @@ export default function NewScreen() {
             {busy ? (
               <ActivityIndicator color={c.onTint} />
             ) : (
-              <>
-                <SymbolView name="faceid" size={18} tintColor={c.onTint} />
-                <Text allowFontScaling style={[typography.button, { color: c.onTint }]}>{actionTitle}</Text>
-              </>
+              <Text allowFontScaling style={[typography.button, { color: c.onTint }]}>{actionTitle}</Text>
             )}
           </Pressable>
         </View>

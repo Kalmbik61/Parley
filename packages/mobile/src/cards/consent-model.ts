@@ -1,8 +1,7 @@
 // Consent cards (D1 §7.3): folder trust and provider switch. Words follow the window's `shared/strings.ts`.
-// Allow asks Face ID, Deny does not. No React.
+// The app lock replaced Face ID on single actions. No React.
 import type { ConsentCard, FolderTrustCard } from '@parley/protocol';
 import type { DecideConsentOutcome, RemoteClient } from '@parley/remote-client';
-import type { Approve, NotSent } from '../auth/approve';
 
 export const TRUST_BODY =
   "Codex in this folder and its worktrees starts without its own trust screen, gets write access to the working folder (workspace-write) and runs the repository's own .codex/ configuration — config, hooks, rules and MCP servers. The consent lasts until you revoke it in Settings → Projects. For Claude Code nothing changes yet.";
@@ -37,7 +36,6 @@ export type ConsentUi =
   | { kind: 'already-answered' }
   | { kind: 'no-longer-pending' }
   | { kind: 'unconfirmed' }
-  | { kind: 'cancelled'; reason: NotSent }
   | { kind: 'error'; text: string };
 
 export const CONSENT_TEXT = {
@@ -63,16 +61,11 @@ function uiOf(card: ConsentCard, decision: 'allow' | 'deny', o: DecideConsentOut
   }
 }
 
-/** One decision: Allow asks Face ID first and sends nothing if it fails; Deny goes straight. Never retried. */
+/** One decision. Never retried. */
 export async function runConsent(
   client: Pick<RemoteClient, 'decideConsent'>,
-  approve: Approve,
   card: ConsentCard,
   decision: 'allow' | 'deny',
 ): Promise<ConsentUi> {
-  if (decision === 'allow') {
-    const asked = await approve('consent');
-    if (asked !== 'ok') return { kind: 'cancelled', reason: asked };
-  }
   return uiOf(card, decision, await client.decideConsent(card.id, decision));
 }

@@ -2,17 +2,18 @@ import '../polyfills';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { BlockedView, useBlockedScreen } from '../components/BlockedView';
-import { cardsApprove } from '../auth/instance';
-import { ApproveContext } from '../cards/approve-context';
+import { LockGate } from '../components/LockGate';
 import { useClearOnOpen, usePushTaps } from '../push/notifications';
 import { runtime } from '../runtime/instance';
 import { useRuntimeState } from '../runtime/use-runtime';
+import { useColors } from '../theme';
 
 export default function RootLayout() {
   const { phase, hosts } = useRuntimeState();
   const segments = useSegments();
   const router = useRouter();
   const blocked = useBlockedScreen();
+  const colors = useColors();
   usePushTaps(router);
   useClearOnOpen();
   useEffect(() => {
@@ -30,8 +31,9 @@ export default function RootLayout() {
     if (devRoute && phase === 'ready') router.replace(devRoute as never);
   }, [devRoute, phase, router]);
   return (
-    <ApproveContext.Provider value={cardsApprove}>
-    <Stack>
+    <LockGate>
+    {/* Bar buttons: plain, in the Parley accent in both themes (plan A33). */}
+    <Stack screenOptions={{ headerTintColor: colors.tint }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="bench" options={{ title: 'Crypto bench' }} />
       <Stack.Screen name="new" options={{ presentation: 'modal', headerBackVisible: false }} />
@@ -42,6 +44,6 @@ export default function RootLayout() {
     </Stack>
     {/* Blocked supervisor (D1 §11.4–11.5): a full screen over the tabs; the pairing flow stays reachable for "Pair again". */}
     {blocked !== null && !inPairing && <BlockedView />}
-    </ApproveContext.Provider>
+    </LockGate>
   );
 }

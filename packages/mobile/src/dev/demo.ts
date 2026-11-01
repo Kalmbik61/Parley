@@ -93,7 +93,7 @@ export function installDemo(client: RemoteClient): void {
     { kind: 'prompt', id: 'f1', at: at(40), text: 'Update the D1 doc for the human decisions', images: 0 },
     { kind: 'tool', id: 'f2', at: at(39), toolUseId: 't2', name: 'Read', input: { file_path: 'docs/design/mobile.md' }, status: 'done' },
     { kind: 'tool', id: 'f3', at: at(38), toolUseId: 't3', name: 'Bash', input: { command: 'pnpm lint' }, status: 'done' },
-    { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer with Face ID\n\n```\npnpm lint\n```' },
+    { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer\n\n```\npnpm lint\n```' },
     { kind: 'turn', id: 'f5', at: at(36), durationMs: 372_000 },
     { kind: 'prompt', id: 'f6', at: at(5), text: 'Run the linter once more', images: 0 },
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },

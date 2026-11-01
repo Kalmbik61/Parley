@@ -164,12 +164,12 @@ export class AppRuntime {
     }
   }
 
-  requireBiometric(): Promise<boolean> {
-    return this.#deps.settings.requireBiometric();
+  lockEnabled(): Promise<boolean> {
+    return this.#deps.settings.lockEnabled();
   }
 
-  setRequireBiometric(on: boolean): Promise<void> {
-    return this.#deps.settings.setRequireBiometric(on);
+  setLockEnabled(on: boolean): Promise<void> {
+    return this.#deps.settings.setLockEnabled(on);
   }
 
   notificationsEnabled(): Promise<boolean> {

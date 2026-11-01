@@ -101,8 +101,7 @@ relay (`src/dev/seed-host.ts`). The relay does not know the route, so the banner
 Until pairing and a real Mac are in the loop, the A15 screens can be looked at with made-up data
 (`src/dev/demo.ts`): add `PARLEY_MOBILE_DEV_DEMO=1` (and `PARLEY_MOBILE_DEV_RELAY=...` so a host exists) to the
 `expo start` line. `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain` opens that screen once.
-`PARLEY_MOBILE_DEV_APPROVE=1` lets Allow pass without the Face ID gate (A16 provides the real one; without a provider
-approvals are refused). None of this exists in the release variant.
+None of this exists in the release variant.
 
 ## Release variant
 

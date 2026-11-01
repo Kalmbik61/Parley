@@ -8,7 +8,6 @@ import { goneEntries, useGoneDismiss, type GoneEntry } from '../../cards/gone';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { useConsents } from '../../cards/use-consents';
 import { InboxRow, GoneRow } from '../../cards/InboxRow';
-import { Toast, useToast } from '../../components/Toast';
 import { fullCommand } from '../../cards/model';
 import { Segmented } from '../../launch/form-parts';
 import { LettersList } from '../../letters/LettersList';
@@ -59,8 +58,7 @@ export default function InboxScreen() {
   const items = useMemo(() => (state === null ? [] : withoutLetters(selectInbox(state)).slice(0, MAX_ROWS)), [state]);
   const gone = useMemo(() => (state === null ? [] : goneEntries(state)), [state]);
   useGoneDismiss(client, gone);
-  const toast = useToast();
-  const consents = useConsents(toast.show);
+  const consents = useConsents();
   const rows = useMemo<Row[]>(
     () => [
       ...consents.rows.map((row): Row => ({ t: 'consent', row })),
@@ -177,7 +175,6 @@ export default function InboxScreen() {
           }
         />
       )}
-    <Toast message={toast.message} />
     </View>
   );
 }

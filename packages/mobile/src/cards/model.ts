@@ -133,7 +133,6 @@ export type DecisionUi =
   | { kind: 'no-longer-pending' }
   /** `lost` and the card still waits (or the re-read failed): nothing was confirmed; the card stays. */
   | { kind: 'unconfirmed' }
-  | { kind: 'cancelled' }
   | { kind: 'error' };
 
 export const DECISION_TEXT: Record<DecisionUi['kind'], string | null> = {
@@ -142,7 +141,6 @@ export const DECISION_TEXT: Record<DecisionUi['kind'], string | null> = {
   conflict: 'This request changed — review it again',
   'no-longer-pending': 'This request is no longer pending',
   unconfirmed: "We couldn't confirm your answer",
-  cancelled: 'Face ID cancelled — nothing was sent',
   error: "Couldn't send the answer",
 };
 
@@ -163,37 +161,11 @@ export function uiOfDecide(result: DecideResult): DecisionUi {
   }
 }
 
-/** Which approvals the Face ID gate covers (A16 wires `approve`; here it only receives the kind). */
-export type ApproveKind = 'allow' | 'always' | 'plan';
-export type Approve = (kind: ApproveKind) => Promise<boolean>;
-/** Tests only: no gate. The app's default fails closed (approve-context.tsx). */
-export const passThroughApprove: Approve = async () => true;
-
-export function approveKindOf(decision: FeedDecision): ApproveKind | null {
-  if (decision.kind === 'plan') return 'plan';
-  if (decision.kind === 'permission' && decision.behavior === 'allow') return decision.always === true ? 'always' : 'allow';
-  return null;
-}
-
-/**
- * One decision, per spec §11.4: the gate runs first for approvals (Deny/answers skip it); a cancelled gate sends nothing
- * and leaves the card; the call is never retried — a `lost` result comes from the client's re-read.
- */
+/** One decision: the call is never retried — a `lost` result comes from the client's re-read. */
 export async function runDecision(
   decision: FeedDecision,
-  approve: Approve,
   send: (decision: FeedDecision) => Promise<DecideResult>,
 ): Promise<DecisionUi> {
-  const kind = approveKindOf(decision);
-  if (kind !== null) {
-    let ok = false;
-    try {
-      ok = await approve(kind);
-    } catch {
-      ok = false;
-    }
-    if (!ok) return { kind: 'cancelled' };
-  }
   try {
     return uiOfDecide(await send(decision));
   } catch {

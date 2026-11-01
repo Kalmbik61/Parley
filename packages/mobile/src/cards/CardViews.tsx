@@ -88,8 +88,6 @@ export function PermissionCardView({ card, sessionRef, projectPath, canAct, chil
         <View style={{ gap: 4 }}>
           <Button
             title="Allow and don't ask again"
-            icon="faceid"
-            hint="Requires Face ID"
             disabled={off}
             onPress={() => void d.submit({ kind: 'permission', behavior: 'allow', always: true })}
           />
@@ -100,7 +98,7 @@ export function PermissionCardView({ card, sessionRef, projectPath, canAct, chil
       )}
       <View style={styles.pair}>
         <Button title="Deny" flex disabled={off} onPress={() => void d.submit({ kind: 'permission', behavior: 'deny' })} />
-        <Button title="Allow" variant="prominent" icon="faceid" hint="Requires Face ID" flex loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'permission', behavior: 'allow' })} />
+        <Button title="Allow" variant="prominent" flex loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'permission', behavior: 'allow' })} />
       </View>
       <Note text={!canAct ? PAUSED : d.message} />
     </View>
@@ -197,8 +195,8 @@ export function PlanCardView({ card, sessionRef, canAct, children }: CardProps<F
   );
   const actions = (
     <View style={{ gap: 12 }}>
-      <Button title="Approve, auto-accept edits" variant="prominent" icon="faceid" hint="Requires Face ID" loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'plan', choice: 'auto-accept' })} />
-      <Button title="Approve, approve each edit" icon="faceid" hint="Requires Face ID" disabled={off} onPress={() => void d.submit({ kind: 'plan', choice: 'manual' })} />
+      <Button title="Approve, auto-accept edits" variant="prominent" loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'plan', choice: 'auto-accept' })} />
+      <Button title="Approve, approve each edit" disabled={off} onPress={() => void d.submit({ kind: 'plan', choice: 'manual' })} />
       <Text allowFontScaling style={[typography.footnote, { color: c.label2, textAlign: 'center' }]}>
         To keep planning, answer at your Mac
       </Text>

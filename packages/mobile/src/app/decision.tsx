@@ -1,14 +1,13 @@
-// Decision (D1 §10.1): accept or return a room's proposal. Both go with the shown `rev`; Accept asks Face ID.
+// Decision (D1 §10.1): accept or return a room's proposal. Both go with the shown `rev`.
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
-import { approve } from '../auth/instance';
 import { DEMO } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
-import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
+import { Toast, useToast } from '../components/Toast';
 import { haptic } from '../haptics';
 import { RETURN_NOTE_MAX, canSendReturn, hapticFor, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
 import { useRemoteState } from '../hooks/use-remote';
@@ -59,11 +58,10 @@ export default function DecisionScreen() {
     sending.current = true;
     setBusy(action);
     try {
-      const res = await submitDecision(client, approve, { projectPath, workId, roomId, shown, action, note: action === 'return' ? note : undefined });
+      const res = await submitDecision(client, { projectPath, workId, roomId, shown, action, note: action === 'return' ? note : undefined });
       const h = hapticFor(res);
       if (h !== null) haptic[h]();
-      if (res.kind === 'cancelled') toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
-      else if (res.kind === 'rejected') toast.show(res.message);
+      if (res.kind === 'rejected') toast.show(res.message);
       else {
         setView(res.view);
         if (res.view.kind !== 'pending') setSheet(false);
@@ -146,10 +144,7 @@ export default function DecisionScreen() {
             {busy === 'accept' ? (
               <ActivityIndicator color={colors.onTint} />
             ) : (
-              <>
-                <SymbolView name="faceid" tintColor={colors.onTint} size={18} />
-                <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Accept</Text>
-              </>
+              <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Accept</Text>
             )}
           </Pressable>
         </View>

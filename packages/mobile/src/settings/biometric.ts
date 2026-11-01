@@ -1,5 +1,5 @@
-// "Require Face ID to allow" (D1 §11.6): the label depends on the biometry the phone has; turning the switch OFF
-// is itself behind biometry. The gate that reads the flag on Allow / Accept is A16's.
+// "Lock Parley with Face ID" (D1 §11.6): the label depends on the biometry the phone has; turning the switch OFF
+// is itself behind biometry (plan A33).
 import * as LocalAuthentication from 'expo-local-authentication';
 
 export type BiometryKind = 'faceid' | 'touchid' | 'passcode';
