@@ -1,0 +1,14 @@
+/*
+ * Подсветка поиска ⌘F по ленте Chat (план 2026-11-01, задача 9): CSS Custom Highlight API, диапазоны ставит
+ * `chat/highlight.ts`. Цвета — те же, что у поиска терминала (`terminal/SearchBar.tsx`), текст тёмный на обеих темах:
+ * жёлтый и оранжевый фон светлые.
+ */
+::highlight(chat-find) {
+  background-color: #f0c674;
+  color: #000;
+}
+
+::highlight(chat-find-active) {
+  background-color: #ff9e3b;
+  color: #000;
+}

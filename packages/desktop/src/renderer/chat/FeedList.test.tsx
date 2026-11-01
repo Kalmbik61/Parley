@@ -410,3 +410,118 @@ describe('FeedList — свёртка законченного хода', () => 
     expect(onRevealed).toHaveBeenCalledWith(7);
   });
 });
+
+describe('FeedList — поиск ⌘F (план 2026-11-01, задача 9)', () => {
+  const ROW_PX = 100;
+  const prompt = (id: string): FeedItem => ({ id, at: AT, kind: 'prompt', text: 'go', images: 0 });
+  const tool = (id: string, output: string, name = 'Read'): FeedItem =>
+    ({ id, at: AT, kind: 'tool', toolUseId: id, name, input: { file_path: `/src/${id}.ts` }, status: 'done', response: { text: output, size: output.length, truncated: false } }) as FeedItem;
+  const turn = (id: string): FeedItem => ({ id, at: AT, kind: 'turn', durationMs: 1000 });
+  // Законченный ход свёрнут: вызовы t1 и t2 лежат в группе, их вывод в DOM не лежит.
+  const finished = (): FeedItem[] => [prompt('p1'), tool('t1', 'first needle here'), tool('t2', 'second needle here', 'Bash'), text('a1', 'answer'), turn('u1')];
+  type Find = NonNullable<React.ComponentProps<typeof FeedList>['find']>;
+  const target = (itemId: string, nonce: number, part: 'tool-output' | 'tool-name' | 'text' = 'tool-output'): Find => ({
+    query: 'needle',
+    target: { itemId, part, itemNth: 0, nonce },
+  });
+  const withFind = (items: readonly FeedItem[], find?: Find): JSX.Element => (
+    <ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}>
+      <FeedList items={items} queued={[]} note={null} {...(find === undefined ? {} : { find })}>
+        <div data-testid="slot" />
+      </FeedList>
+    </ChatEnvContext.Provider>
+  );
+
+  function fakeScroller(): { scrollTo: ReturnType<typeof vi.fn> } {
+    const el = screen.getByTestId('chat-feed');
+    let top = 0;
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 });
+    Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => top, set: (value: number) => { top = value; } });
+    const scrollTo = vi.fn((options: { top: number }) => {
+      top = options.top;
+      queueMicrotask(() => el.dispatchEvent(new Event('scroll')));
+    });
+    (el as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
+    return { scrollTo };
+  }
+  const settle = (): Promise<void> => act(async () => {});
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute('data-testid') === 'chat-feed' ? 600 : this.hasAttribute('data-index') ? ROW_PX : 0;
+      },
+    });
+  });
+
+  it('children лежат в рамке ленты (сюда встаёт полоса поиска)', () => {
+    render(withFind(finished()));
+    expect(screen.getByTestId('chat-feed').parentElement).toBe(screen.getByTestId('slot').parentElement);
+  });
+
+  it('цель в свёрнутой группе раскрывает группу, раскрывает вызов с выводом и прокручивает к строке', async () => {
+    const view = render(withFind(finished()));
+    const scroller = fakeScroller();
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    view.rerender(withFind(finished(), target('t2', 1)));
+    await settle();
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(screen.getByTestId('chat-tool-result').textContent).toBe('second needle here');
+    expect(scroller.scrollTo).toHaveBeenCalled();
+  });
+
+  it('совпадение в имени вызова вызов не раскрывает, а вывод остаётся в DOM только у раскрытого', async () => {
+    const view = render(withFind(finished()));
+    fakeScroller();
+    view.rerender(withFind(finished(), target('t1', 1, 'tool-name')));
+    await settle();
+    expect(screen.getAllByTestId('chat-tool')).toHaveLength(2);
+    expect(screen.queryByTestId('chat-tool-result')).toBeNull();
+  });
+
+  it('поиск снимает прилипание к низу: «Jump to latest» появилась, новый элемент ленту не уводит', async () => {
+    const view = render(withFind(finished()));
+    fakeScroller();
+    expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).toBeNull();
+    view.rerender(withFind(finished(), target('t1', 1)));
+    await settle();
+    expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
+  });
+
+  it('цель с тем же nonce исполняется один раз; новый nonce на ту же цель — снова', async () => {
+    const view = render(withFind(finished()));
+    const scroller = fakeScroller();
+    view.rerender(withFind(finished(), target('t1', 4)));
+    await settle();
+    const first = scroller.scrollTo.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 4)));
+    await settle();
+    expect(scroller.scrollTo.mock.calls.length).toBe(first);
+    view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 5)));
+    await settle();
+    expect(scroller.scrollTo.mock.calls.length).toBeGreaterThan(first);
+  });
+
+  it('закрытая полоса забывает исполненную цель: тот же nonce в новой полосе снова работает', async () => {
+    const view = render(withFind(finished()));
+    const scroller = fakeScroller();
+    view.rerender(withFind(finished(), target('t1', 1)));
+    await settle();
+    const first = scroller.scrollTo.mock.calls.length;
+    view.rerender(withFind(finished()));
+    view.rerender(withFind(finished(), target('t1', 1)));
+    await settle();
+    expect(scroller.scrollTo.mock.calls.length).toBeGreaterThan(first);
+  });
+
+  it('цели нет в ленте — ничего не прокручивается', async () => {
+    const view = render(withFind(finished()));
+    const scroller = fakeScroller();
+    view.rerender(withFind(finished(), target('nope', 1)));
+    await settle();
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+});

@@ -16,6 +16,7 @@ import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { TerminalBody } from '../layout/bodies/TerminalBody.js';
+import { setVisibilityCheck } from '../keys/type-to-focus.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
@@ -2424,5 +2425,118 @@ describe('ChatView — замена агента (баннер и раздели
       'Continued on Claude Code (codex: usage limit)'.replace('Claude Code', 'Claude Code · 10:05').replace('codex', 'Codex'),
       'Continued on Claude Code · opus · 11:40 (Claude Code: switched by @s02)',
     ]);
+  });
+});
+
+describe('ChatView — поиск ⌘F по ленте (план 2026-11-01, задача 9)', () => {
+  const tool = (id: string, output: string): FeedItem =>
+    ({ id, at: AT, kind: 'tool', toolUseId: id, name: 'Bash', input: { command: 'ls' }, status: 'done', response: { text: output, size: output.length, truncated: false } }) as FeedItem;
+
+  beforeEach(() => setVisibilityCheck(() => true));
+  afterEach(() => setVisibilityCheck());
+
+  it('просьба открыть поиск рисует полосу над лентой и ставит фокус в её поле; без просьбы полосы нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi'), text('t1', 'hello')]);
+    expect(screen.queryByTestId('chat-find')).toBeNull();
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    const bar = screen.getByTestId('chat-find');
+    expect(bar.parentElement).toBe(screen.getByTestId('chat-feed').parentElement);
+    expect(document.activeElement).toBe(within(bar).getByRole('textbox'));
+  });
+
+  it('набранное находит слово в выводе вызова из свёрнутого хода: 1/1, группа раскрыта, вывод на экране', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go'), tool('c1', 'result with needle inside'), text('t1', 'done'), turn('u1')]);
+    expect(screen.queryAllByTestId('chat-tool')).toHaveLength(0);
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    fireEvent.change(within(screen.getByTestId('chat-find')).getByRole('textbox'), { target: { value: 'needle' } });
+    expect(screen.getByTestId('chat-find-count').textContent).toBe('1/1');
+    expect(screen.getByTestId('chat-tool-result').textContent).toBe('result with needle inside');
+  });
+
+  it('Esc закрывает полосу и возвращает фокус в поле сообщения; повторное открытие — пустая полоса', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    const field = within(screen.getByTestId('chat-find')).getByRole('textbox');
+    fireEvent.change(field, { target: { value: 'hi' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.queryByTestId('chat-find')).toBeNull();
+    expect(useChatUiStore.getState().find[refKey(REF)]?.open).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message to Claude' }));
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    expect((within(screen.getByTestId('chat-find')).getByRole('textbox') as HTMLInputElement).value).toBe('');
+  });
+
+  it('перемонтирование ChatView возвращает открытую полосу с набранным запросом; закрытая открывается пустой', () => {
+    const session = makeSession('s-01', 'S01');
+    const view = renderBody(session);
+    setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+    act(() => useChatUiStore.getState().openFind(refKey(REF)));
+    fireEvent.change(within(screen.getByTestId('chat-find')).getByRole('textbox'), { target: { value: 'hello' } });
+    view.unmount();
+    renderBody(session);
+    setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+    const field = within(screen.getByTestId('chat-find')).getByRole('textbox') as HTMLInputElement;
+    expect(field.value).toBe('hello');
+    expect(screen.getByTestId('chat-find-count').textContent).toBe('1/1');
+  });
+
+  describe('подсветка в окне с несколькими вкладками Chat', () => {
+    class FakeHighlight {
+      readonly ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    }
+    const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown };
+    const original = { css: g.CSS, highlight: g.Highlight };
+    let registry: Map<string, unknown>;
+    beforeEach(() => {
+      registry = new Map();
+      g.CSS = { highlights: registry };
+      g.Highlight = FakeHighlight;
+    });
+    afterEach(() => {
+      g.CSS = original.css;
+      g.Highlight = original.highlight;
+    });
+
+    const tabBody = (session: WorkSession, active: boolean): JSX.Element => (
+      <TerminalBody workKey="/tmp/p w-01" tab={{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }} session={session} sessionRef={REF} active={active} bridge={bridge} sendDeps={sendDeps} />
+    );
+    const type = (value: string): void => {
+      fireEvent.change(within(screen.getByTestId('chat-find')).getByRole('textbox'), { target: { value } });
+    };
+
+    it('скрытая вкладка с открытой полосой общую подсветку окна не трогает', () => {
+      const session = makeSession('s-01', 'S01');
+      const view = render(tabBody(session, false));
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+      const foreign = new FakeHighlight();
+      registry.set('chat-find', foreign);
+      act(() => useChatUiStore.getState().openFind(refKey(REF)));
+      type('hello');
+      // Ещё одна отрисовка скрытой вкладки (так её перерисовывает стрим).
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there, and more')], 2);
+      expect(registry.get('chat-find')).toBe(foreign);
+      expect(registry.has('chat-find-active')).toBe(false);
+      view.unmount();
+    });
+
+    it('вкладка, что красила подсветку, при скрытии её снимает; при возврате красит снова', () => {
+      const session = makeSession('s-01', 'S01');
+      const view = render(tabBody(session, true));
+      setFeed([prompt('p1', 'hi'), text('t1', 'hello there')]);
+      act(() => useChatUiStore.getState().openFind(refKey(REF)));
+      type('hello');
+      expect(registry.has('chat-find')).toBe(true);
+      view.rerender(tabBody(session, false));
+      expect(registry.has('chat-find')).toBe(false);
+      expect(registry.has('chat-find-active')).toBe(false);
+      view.rerender(tabBody(session, true));
+      expect(registry.has('chat-find')).toBe(true);
+    });
   });
 });

@@ -26,6 +26,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 - A plan item keeps its last five submissions: who handed it in and when, the evidence, the verifier's verdict and a return by you. The item details list the earlier ones; before, a new submission replaced the old evidence.
 - An agent can answer your direct letter: it replies with `send_message` to `human`, and the reply arrives in the workspace mail like any letter to you.
 - A session's Chat queue shows the letters it has not picked up yet, from other sessions, rooms or you: grey, after your own queued messages, with the sender, the room, the start of the text and why the letter still waits, for example `Not picked up yet (compacting context)`. They have no buttons: Parley delivers them by itself, and a letter leaves the queue once the agent reads it.
+- Find text in the Chat view with ⌘F. It searches the whole feed, including the input and output of tool calls, subagents, cards and errors, also inside folded turns and in rows not yet on screen, and unfolds and scrolls to the match. Enter and Shift+Enter move between matches, the counter shows where you are, and Escape closes the bar.
 
 ### Changed
 
@@ -40,6 +41,7 @@ An iPhone app can now see what waits for you on this Mac and answer it, through 
 - Clearing "Session wake-ups per hour" in Settings no longer saves 0, which silently stopped every wake-up by letter.
 - A message you send in Chat while the agent's context is being compacted now waits in the queue with "Send now" and ×, and goes to the agent once the compaction ends. Before, it hung as "Sending…" with no way to remove it.
 - The autonomous engine leaves the agents' own folders at the repository root (`.omc`, `.omx`, `.claude`, `.codex`, `.agents`) out of attempts, so two attempts no longer collide on them when they are integrated.
+- A Codex session's Chat no longer shows another Codex session's history when two sessions start in the same folder at about the same time. The Chat follows the thread the agent itself reports and reloads when it changes, and Parley does not guess a log while another Codex session in that folder started less than a minute apart and is still unbound.
 
 ### What is not proven yet
 

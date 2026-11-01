@@ -119,7 +119,7 @@ export function AgentItem({ item, expanded, onToggle, transcript, onTranscript: 
           )}
           {item.result === undefined ? null : (
             <div className="min-w-0 text-sm [overflow-wrap:anywhere]">
-              <span className="text-xs text-muted-foreground">{S.chat.agent.result}</span>
+              <span data-find-label className="text-xs text-muted-foreground">{S.chat.agent.result}</span>
               <RoomMarkdown text={item.result} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
             </div>
           )}

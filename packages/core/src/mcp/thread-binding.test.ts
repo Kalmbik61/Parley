@@ -268,6 +268,63 @@ describe('_meta.threadId → providerSessionId', () => {
     expect(await providerSessionId('s-01')).toBe(THREAD);
   });
 
+  it('чужой тред, взятый запасным путём другой сессией, снимается с неё: у соседки он теперь с доказательством', async () => {
+    // s-01 запасным путём получила тред s-03 (догадка по папке и времени); s-03 первым же вызовом сообщает, что он её.
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'codex', label: 'кодекс-2', task: 'сделать' });
+      const wrong = map.sessions.find((item) => item.id === 's-01');
+      if (wrong !== undefined) {
+        wrong.providerSessionId = THREAD;
+        wrong.lifecycle = 'active';
+      }
+    });
+    const second = await connect('s-03');
+    await call(second, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-03')).toBe(THREAD);
+    expect(await providerSessionId('s-01')).toBeNull();
+
+    // Теперь s-01 привязывается сама, без гонки за общий тред.
+    const first = await connect('s-01');
+    await call(first, { threadId: OTHER_THREAD, sessionId: OTHER_THREAD });
+    expect(await providerSessionId('s-01')).toBe(OTHER_THREAD);
+    expect(await providerSessionId('s-03')).toBe(THREAD);
+  });
+
+  it('тред спящей или ожидающей сессии не снимается: для неё это handle возобновления', async () => {
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'codex', label: 'кодекс-2', task: 'сделать' });
+      addSession(map, { provider: 'codex', label: 'кодекс-3', task: 'сделать' });
+      for (const [id, lifecycle] of [['s-01', 'sleeping'], ['s-03', 'pending']] as const) {
+        const holder = map.sessions.find((item) => item.id === id);
+        if (holder !== undefined) {
+          holder.providerSessionId = THREAD;
+          holder.lifecycle = lifecycle;
+        }
+      }
+    });
+    const third = await connect('s-04');
+    await call(third, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-04')).toBe(THREAD);
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+    expect(await providerSessionId('s-03')).toBe(THREAD);
+  });
+
+  it('тред с доказательством у другой сессии не снимается', async () => {
+    const revision = '12345678-1234-1234-1234-123456789abc';
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'codex', label: 'кодекс-2', task: 'сделать' });
+    });
+    await startSession(project, workId, 's-01', null, { pid: 42, startedAtProcess: 'exact-process-A', launchedBy: 'host' }, revision);
+    await updateMap(project, workId, (map) => {
+      const holder = map.sessions.find((item) => item.id === 's-01');
+      if (holder?.codexThreadBinding !== undefined) holder.codexThreadBinding = { ...holder.codexThreadBinding, threadId: THREAD };
+      if (holder !== undefined) holder.providerSessionId = THREAD;
+    });
+    const second = await connect('s-03');
+    await call(second, { threadId: THREAD, sessionId: THREAD });
+    expect(await providerSessionId('s-01')).toBe(THREAD);
+  });
+
   it('в карте уже тот же id (resume) — карта не переписывается', async () => {
     await updateMap(project, workId, (map) => {
       const session = map.sessions.find((item) => item.id === 's-01');

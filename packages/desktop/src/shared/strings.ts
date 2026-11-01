@@ -1755,6 +1755,11 @@ export const S = {
     },
     /** Лента прокручена вверх, а снизу пришло новое. */
     jumpToLatest: 'Jump to latest',
+    /** Панель поиска ⌘F по ленте Chat (`ChatFindBar`); стрелки и × — `S.terminal.previousMatch`, `nextMatch`, `S.common.close`. */
+    find: {
+      placeholder: 'Find in chat…',
+      label: 'Find in chat',
+    },
     /** Подпись курсора текста, который ещё пишется. */
     streaming: 'Writing…',
     textTruncated: 'Text truncated — open the terminal for the rest',
@@ -2398,6 +2403,7 @@ export const S = {
     previousRecentTab: 'Previous recent tab',
     tabNumber: (n: number): string => `Tab ${n}`,
     find: 'Find',
+    findInChat: 'Find in chat',
     clearTerminal: 'Clear terminal',
     toggleChatTerminal: 'Toggle chat / terminal',
     settings: 'Settings',

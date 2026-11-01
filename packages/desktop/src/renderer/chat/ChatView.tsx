@@ -101,8 +101,10 @@ import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
 import { promptHistory } from './history.js';
 import { useOutboxFlying, useOutboxItems } from '../lib/outbox.js';
+import { ChatFindBar, type FindView } from './ChatFindBar.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
+import { focusComposer } from '../keys/type-to-focus.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
@@ -307,6 +309,17 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
   const clearReveal = useChatUiStore((state) => state.clearReveal);
+  // Поиск ⌘F по ленте (`ChatFindBar`): открыта ли полоса — в сторе (⌘F и палитра ставят её снаружи), запрос и цель — здесь.
+  // Подсветка общая на окно, а ChatView скрытой вкладки живёт дальше: красит только видимая, скрытая лента `find` не получает.
+  const findOpen = useChatUiStore((state) => state.find[sessionKey]?.open === true);
+  const findFocusNonce = useChatUiStore((state) => state.find[sessionKey]?.focusNonce ?? 0);
+  const [findView, setFindView] = useState<FindView | null>(null);
+  const setFindQuery = useCallback((query: string): void => useChatUiStore.getState().setFindQuery(sessionKey, query), [sessionKey]);
+  const closeFind = useCallback((): void => {
+    useChatUiStore.getState().closeFind(sessionKey);
+    setFindView(null);
+    focusComposer();
+  }, [sessionKey]);
   const agents = runningAgents(items);
   useEffect(() => {
     useUiStore.getState().setSessionVisible(sessionKey, visible);
@@ -528,7 +541,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             {...(showWorking ? { working: { since: turnStart } } : {})}
             {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
             fold={chatFold}
-          />
+            {...(findOpen && visible && findView !== null ? { find: findView } : {})}
+          >
+            {findOpen ? <ChatFindBar items={items} focusNonce={findFocusNonce} onChange={setFindView} initialQuery={useChatUiStore.getState().find[sessionKey]?.query ?? ''} onQueryChange={setFindQuery} onClose={closeFind} /> : null}
+          </FeedList>
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
