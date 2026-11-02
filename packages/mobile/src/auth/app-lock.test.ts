@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAppLock, LOCK_AFTER_MS, type LocalAuth } from './app-lock';
+import { createAppLock, LOCK_AFTER_MS, shouldCover, type LocalAuth } from './app-lock';
 
 const auth = (ok: boolean, error = 'user_cancel') => ({
   authenticateAsync: vi.fn<LocalAuth['authenticateAsync']>(async () => (ok ? { success: true } : { success: false, error })),
@@ -78,5 +78,21 @@ describe('app lock', () => {
     lock.subscribe(() => seen.push(lock.state()));
     await lock.unlock();
     expect(seen).toEqual(['unlocking', 'unlocked']);
+  });
+});
+
+describe('the cover (R1)', () => {
+  it('covers while locked, before the setting is read, and away from the foreground with the lock on', async () => {
+    expect(shouldCover(null, true)).toBe(true);
+    const lock = createAppLock({ auth: auth(true), enabled: true });
+    expect(shouldCover(lock, true)).toBe(true); // locked
+    await lock.unlock();
+    expect(shouldCover(lock, true)).toBe(false);
+    expect(shouldCover(lock, false)).toBe(true); // inactive or background: no data in the app switcher
+  });
+  it('with the lock off nothing is covered', () => {
+    const lock = createAppLock({ auth: auth(true), enabled: false });
+    expect(shouldCover(lock, true)).toBe(false);
+    expect(shouldCover(lock, false)).toBe(false);
   });
 });

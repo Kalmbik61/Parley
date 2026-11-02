@@ -5,7 +5,7 @@ import { AppState, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { DEMO } from '../dev/flags';
 import { appLock, startLock } from '../auth/lock-instance';
-import type { AppLock, UnlockResult } from '../auth/app-lock';
+import { shouldCover, type AppLock, type UnlockResult } from '../auth/app-lock';
 import { runtime } from '../runtime/instance';
 import { typography, useColors } from '../theme';
 import { Button } from '../ui/Button';
@@ -33,7 +33,7 @@ function RealLockGate({ children }: { children: ReactNode }) {
   const [active, setActive] = useState(AppState.currentState === 'active');
   const [kind, setKind] = useState<BiometryKind>('faceid');
   const [note, setNote] = useState<string | null>(null);
-  const { covered, locked } = useLockState(lock);
+  const { locked } = useLockState(lock);
 
   // The setting decides whether the lock exists at all; until it is read the app stays covered.
   useEffect(() => {
@@ -67,7 +67,7 @@ function RealLockGate({ children }: { children: ReactNode }) {
   const label = biometryLabel(kind);
   // Locked (or still reading the setting), or away from the foreground with the lock on (the app switcher snapshot is
   // taken as the app goes inactive): nothing of the app shows.
-  const hide = lock === null || covered || (!active && lock.enabled());
+  const hide = shouldCover(lock, active);
   return (
     <View style={styles.flex}>
       {children}

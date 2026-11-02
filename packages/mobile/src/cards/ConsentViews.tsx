@@ -92,6 +92,10 @@ export function ConsentCardView({
             {row.message}
           </Text>
         </View>
+      ) : !row.canDecide ? (
+        <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
+          Answer at your Mac — approving from the phone is turned off there
+        </Text>
       ) : (
         <>
           <View style={styles.pair}>
