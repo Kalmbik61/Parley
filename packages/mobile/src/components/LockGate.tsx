@@ -57,11 +57,16 @@ function RealLockGate({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener('change', (s) => {
       setActive(s === 'active');
       if (s === 'active') {
-        lock.onForeground(Date.now());
+        lock.onForeground();
         if (lock.state() === 'locked') ask(lock);
-      } else lock.onBackground(Date.now());
+      } else lock.onBackground();
     });
-    return () => sub.remove();
+    // Five minutes without a touch while on screen lock again (plan A34): the term is checked every few seconds.
+    const timer = setInterval(() => lock.tick(), 10_000);
+    return () => {
+      sub.remove();
+      clearInterval(timer);
+    };
   }, [lock]);
 
   const label = biometryLabel(kind);
@@ -69,7 +74,8 @@ function RealLockGate({ children }: { children: ReactNode }) {
   // taken as the app goes inactive): nothing of the app shows.
   const hide = shouldCover(lock, active);
   return (
-    <View style={styles.flex}>
+    // `onTouchStart` bubbles from every touch inside, whoever handles it: it only restarts the idle term.
+    <View style={styles.flex} onTouchStart={() => lock?.touch()}>
       {children}
       {hide && (
         <View accessibilityViewIsModal style={[styles.cover, { backgroundColor: c.bg }]}>
