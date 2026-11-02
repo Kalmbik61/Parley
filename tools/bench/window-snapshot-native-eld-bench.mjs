@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, setImmediate, setTimeout, structuredClone */
 // M4 final native-page cooperative ELD evidence. No service, database, provider calls, or production changes.
 // node tools/bench/window-snapshot-native-eld-bench.mjs [--out file]
 import { mkdir, writeFile } from 'node:fs/promises';

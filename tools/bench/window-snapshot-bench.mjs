@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable @typescript-eslint/no-unused-expressions */
-/* global Buffer, setImmediate, setTimeout, structuredClone */
+/* global Buffer, setImmediate, setTimeout */
 // Window snapshot (`works.changed`) measurement. Standalone, no production changes.
 //
 //   pnpm -r build            # the bench imports packages/*/dist

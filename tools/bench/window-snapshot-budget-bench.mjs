@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, setImmediate, setTimeout, structuredClone */
 // One approved 128/512KiB native-page budget diagnostic. No service, database, provider calls, or production changes.
 // node tools/bench/window-snapshot-budget-bench.mjs [--out file]
 import { mkdir, writeFile } from 'node:fs/promises';

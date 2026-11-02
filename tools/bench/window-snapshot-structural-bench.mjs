@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, setImmediate, setTimeout, structuredClone */
 // M2 supplement only. No service, database, provider calls, or production changes.
 // node tools/bench/window-snapshot-structural-bench.mjs [--quick] [--out file]
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -42,7 +43,6 @@ const stat = (arr) => ({
   max: round(Math.max(...arr)),
 });
 const round = (v) => (v === null ? null : Math.round(v * 1000) / 1000);
-const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v), 'utf8');
 
 function rowDeltaOf(cache, rows) {
   // cache = { ids: string[], objs: Map<id,row>, enc: Map<id,string> }; returns delta + next cache + counters

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, setImmediate, structuredClone */
 // M4 dense-case stage diagnosis only. No service, database, provider calls, or production changes.
 // node tools/bench/window-snapshot-diagnose-bench.mjs [--sparse-control | --test-hypothesis [--evolving-control]] [--out file]
 import { mkdir, writeFile } from 'node:fs/promises';

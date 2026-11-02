@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Buffer, setImmediate, setTimeout, structuredClone */
 // M3 bounded-page supplement only. No service, database, provider calls, or production changes.
 // node tools/bench/window-snapshot-pages-bench.mjs [--quick] [--out file]
 import { mkdir, writeFile } from 'node:fs/promises';
