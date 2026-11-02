@@ -119,6 +119,14 @@ describe('allowlist', () => {
     expect(checkRemoteParams('consents.decide', null)).toBe(false);
   });
 
+  it('A28 (critic m6): consents.decide takes only id c-NN and decision', () => {
+    expect(checkRemoteParams('consents.decide', { id: 'c-07', decision: 'deny' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow', extra: 1 })).toBe(false);
+    for (const id of ['', 'c-', 'c-x', 'c-1 ', 'C-1', 'm-1', 7, undefined]) {
+      expect(checkRemoteParams('consents.decide', { id, decision: 'allow' }), String(id)).toBe(false);
+    }
+  });
+
   it('A27: stage A has feed/pty/consents/trust.check; trust.grant, revoke, list stay forbidden', () => {
     for (const m of ['feed.subscribe', 'feed.unsubscribe', 'pty.send', 'consents.list', 'consents.decide', 'trust.check']) {
       expect(REMOTE_STAGES.A.methods as readonly string[]).toContain(m);
@@ -435,9 +443,13 @@ describe('hardened strings and frames (critic A1)', () => {
 
 describe('bridge reads in stage A (wave 3)', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
-  it('A27: feed.snapshot has no param rule any more', () => {
+  it('A27: feed.snapshot takes the full feed and the attention scope', () => {
     expect(checkRemoteParams('feed.snapshot', { ref })).toBe(true);
     expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention' })).toBe(true);
+  });
+  it('A28 (critic m5): a subagent feed (agentId) is not for the phone', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref, agentId: 'a1' })).toBe(false);
+    expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention', agentId: 'a1' })).toBe(false);
   });
   it('W12: session.closing knows the protocol reason', () => {
     expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'protocol' }).success).toBe(true);

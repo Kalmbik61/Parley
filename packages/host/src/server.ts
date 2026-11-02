@@ -53,7 +53,10 @@ export interface RemoteLaunchPolicy {
   projectKnown(projectPath: string): boolean;
   /** Работа этого проекта существует, архивная тоже: чтения и решения по ней. */
   workKnown(projectPath: string, workId: string): boolean;
-  /** Сессия есть в карте этой работы известного проекта: сообщение агенту `pty.send` (спека 4.2, правки 15). */
+  /**
+   * Сессия есть в карте неархивной работы известного проекта: сообщение агенту `pty.send` (спека 4.2, правки 15).
+   * Архивная работа закрыта для сообщений явно, как для запуска (критик s-199, нит).
+   */
   sessionKnown(projectPath: string, workId: string, sessionId: string): boolean;
   /**
    * `sessions.create` с `trustFolder: true`: доверить папку проекта до запуска тем же путём, что окно (`trust.check`,
@@ -83,12 +86,19 @@ const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATION
 /** Методы запуска с телефона: только в существующую неархивную работу (`sessions.create` — ещё и в новую). */
 const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
 /**
- * За одним переключателем `remoteCreate` (спека 4.2): запуск и сообщение агенту; доверие к папке идёт только
- * ключом `sessions.create`. `providers.list`, `roles.list` и `trust.check` — чтение.
+ * За одним переключателем `remoteCreate` (спека 4.2, правки 17): запуск, сообщение агенту и согласия — `trustFolder`
+ * ключом `sessions.create`, `consents.decide` (Allow — доверие к папке или агент на другом провайдере; критик M2).
+ * `providers.list`, `roles.list`, `consents.list` и `trust.check` — чтение.
  */
-const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([...REMOTE_LAUNCH_METHODS, 'pty.send']);
+const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([...REMOTE_LAUNCH_METHODS, 'pty.send', 'consents.decide']);
 
-/** Метод белого списка, открытый клиенту `remote` сейчас: запуск и сообщения — только при включённом `remoteCreate`. */
+/**
+ * Клиенты, чей сокет уже закрыт: после `await` записи доверия запуск для ушедшего телефона не идёт (критик m9).
+ * WeakSet — запись живёт, пока жив сам `Client`.
+ */
+const closedClients = new WeakSet<Client>();
+
+/** Метод белого списка, открытый клиенту `remote` сейчас: запуск, сообщения и согласия — только при включённом `remoteCreate`. */
 function remoteMethodOpen(name: string, options: ServerOptions): boolean {
   if (!REMOTE_METHOD_SET.has(name)) return false;
   return !REMOTE_SWITCHED_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
@@ -146,7 +156,10 @@ function handleConnection(socket: Socket, options: ServerOptions): void {
 
   socket.on('close', () => {
     clearTimeout(helloTimer);
-    if (client) options.unregisterClient(client);
+    if (client) {
+      closedClients.add(client);
+      options.unregisterClient(client);
+    }
   });
 
   // 'error' без обработчика роняет процесс; 'close' придёт следом сам по себе
@@ -294,12 +307,13 @@ function remoteTargetsKnown(method: string, params: unknown, options: ServerOpti
   if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(method, params, options);
   if (method === 'pty.send') return remoteSessionKnown(params, options);
   const policy = options.remoteLaunch;
-  if (policy === undefined) return true;
-  // `trust.check {folder}` — ответ только для известного проекта: телефон не узнаёт, доверена ли чужая папка.
+  // `trust.check {folder}` — ответ только для известного проекта: телефон не узнаёт, доверена ли чужая папка. Без
+  // политики известных проектов нет — отказ, а не пропуск.
   if (method === 'trust.check') {
     const { folder } = params as Record<string, unknown>;
-    return typeof folder === 'string' && policy.projectKnown(folder);
+    return typeof folder === 'string' && policy?.projectKnown(folder) === true;
   }
+  if (policy === undefined) return true;
   return remoteTargets(params).every(({ projectPath, workId }) =>
     workId === null ? policy.projectKnown(projectPath) : policy.workKnown(projectPath, workId),
   );
@@ -396,7 +410,13 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   // Без доверия обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не меняется.
   const pending = trustFirst === null || policy === undefined
     ? Promise.resolve(handler(parsed.params as never, request))
-    : policy.trustFolder(trustFirst).then(() => handler(parsed.params as never, request));
+    : policy.trustFolder(trustFirst).then(() => {
+        // Пока писалось доверие, переключатель могли выключить, а телефон — уйти (критик m9): тогда запуска нет.
+        // Доверие уже записано, как у окна при отказе запуска после согласия (критик m7, спека 4.2).
+        if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
+        if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected before the launch');
+        return handler(parsed.params as never, request);
+      });
   pending
     .then(async (result) => {
       const prepared = await resolvePreparedWorksSyncReply(result, id);

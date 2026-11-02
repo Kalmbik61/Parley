@@ -866,6 +866,8 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       const remote = await s.connect('remote');
       for (const name of LAUNCH) expect(remote.methods).not.toContain(name);
       expect((await answer(remote.client, 110, 'sessions.create', session)).error).toMatchObject({ code: 'unknown_method' });
+      // Без политики известных проектов нет: trust.check отказывает, а не пропускает (критик s-199, нит).
+      expect((await answer(remote.client, 111, 'trust.check', { folder: '/p' })).error).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
       expect(s.spies['sessions.create']).not.toHaveBeenCalled();
       s.close();
     });
@@ -1038,7 +1040,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
     const message = { ref, text: 'hello agent', submit: true, clientMsgId: 'msg-00000001' };
     const session = { projectPath: '/p', workId: 'w-01', provider: 'claude', label: 'fix', task: 'do it', parent: null };
 
-    async function a28Server(options: { enabled: boolean; trustFails?: boolean }) {
+    async function a28Server(options: { enabled: boolean; trustFails?: boolean; trustGate?: Promise<void> }) {
       const home = await tempHome();
       homes.push(home);
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -1060,7 +1062,9 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       const trustFolder = vi.fn(async (projectPath: string) => {
         if (options.trustFails === true) throw new HostError('internal', 'trust.json is not writable');
         order.push(`trust:${projectPath}`);
+        await options.trustGate;
       });
+      const unregistered = vi.fn();
       const state = { enabled: options.enabled };
       const server = createHostServer({
         context,
@@ -1069,7 +1073,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         methodHandlers: spies as never,
         notificationHandlers: {},
         registerClient: () => {},
-        unregisterClient: () => {},
+        unregisterClient: unregistered,
         remoteLaunch: {
           enabled: () => state.enabled,
           workOpen: (projectPath, workId) => projectPath === '/p' && workId === 'w-01',
@@ -1090,24 +1094,28 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         const reply = await hello(client, 't', { client: name });
         return { client, methods: (reply.result as { methods: string[] }).methods };
       };
-      return { spies, trustFolder, order, state, connect, close: () => { for (const c of clients) c.close(); server.close(); } };
+      return { spies, trustFolder, unregistered, order, state, connect, close: () => { for (const c of clients) c.close(); server.close(); } };
     }
 
-    it('переключатель выключен: pty.send и запуск с trustFolder — unknown_method и не в hello.methods; согласия и trust.check открыты', async () => {
+    it('переключатель выключен: pty.send, запуск с trustFolder и consents.decide — unknown_method и не в hello.methods; чтения открыты', async () => {
       const s = await a28Server({ enabled: false });
       const remote = await s.connect('remote');
-      expect(remote.methods).not.toContain('pty.send');
-      expect(remote.methods).not.toContain('sessions.create');
-      for (const name of ['consents.list', 'consents.decide', 'trust.check', 'feed.subscribe', 'feed.unsubscribe']) {
+      for (const name of ['pty.send', 'sessions.create', 'consents.decide']) expect(remote.methods, name).not.toContain(name);
+      for (const name of ['consents.list', 'trust.check', 'feed.subscribe', 'feed.unsubscribe']) {
         expect(remote.methods, name).toContain(name);
       }
       expect((await answer(remote.client, 600, 'pty.send', message)).error).toMatchObject({ code: 'unknown_method' });
       expect((await answer(remote.client, 601, 'sessions.create', { ...session, trustFolder: true })).error).toMatchObject({ code: 'unknown_method' });
+      // Согласия за тем же переключателем (критик M2, спека 4.2 правки 17): и Allow, и Deny.
+      for (const decision of ['allow', 'deny']) {
+        expect((await answer(remote.client, 602, 'consents.decide', { id: 'c-01', decision })).error, decision).toMatchObject({ code: 'unknown_method' });
+      }
       expect(s.spies['pty.send']).not.toHaveBeenCalled();
       expect(s.spies['sessions.create']).not.toHaveBeenCalled();
+      expect(s.spies['consents.decide']).not.toHaveBeenCalled();
       expect(s.trustFolder).not.toHaveBeenCalled();
-      expect((await answer(remote.client, 602, 'consents.decide', { id: 'c-01', decision: 'deny' })).error).toBeUndefined();
       expect((await answer(remote.client, 603, 'trust.check', { folder: '/p' })).error).toBeUndefined();
+      expect((await answer(remote.client, 607, 'consents.list', {})).error).toBeUndefined();
       // Включили после hello — следующий вызов проходит; выключили — снова unknown_method.
       s.state.enabled = true;
       expect((await answer(remote.client, 604, 'pty.send', message)).error).toBeUndefined();
@@ -1117,6 +1125,8 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       // Окно переключатель не трогает.
       const desktop = await s.connect('desktop');
       expect(desktop.methods).toContain('pty.send');
+      expect(desktop.methods).toContain('consents.decide');
+      expect((await answer(desktop.client, 608, 'consents.decide', { id: 'c-01', decision: 'deny' })).error).toBeUndefined();
       expect((await answer(desktop.client, 606, 'pty.send', { ref: { projectPath: '/other', workId: 'w-09', sessionId: 's-09' }, text: 'x', submit: true })).error).toBeUndefined();
       s.close();
     });
@@ -1204,6 +1214,34 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    it('переключатель выключили, пока писалось доверие, — запуска нет, ответ unknown_method (критик m9)', async () => {
+      let release!: () => void;
+      const s = await a28Server({ enabled: true, trustGate: new Promise<void>((resolve) => { release = resolve; }) });
+      const remote = await s.connect('remote');
+      remote.client.send({ id: 690, method: 'sessions.create', params: { ...session, trustFolder: true } });
+      await vi.waitFor(() => expect(s.trustFolder).toHaveBeenCalledTimes(1));
+      s.state.enabled = false;
+      release();
+      expect((await collectUntil(remote.client, 690)).at(-1)?.error).toMatchObject({ code: 'unknown_method' });
+      expect(s.spies['sessions.create']).not.toHaveBeenCalled();
+      s.close();
+    });
+
+    it('телефон ушёл, пока писалось доверие, — запуска нет (критик m9)', async () => {
+      let release!: () => void;
+      const s = await a28Server({ enabled: true, trustGate: new Promise<void>((resolve) => { release = resolve; }) });
+      const remote = await s.connect('remote');
+      remote.client.send({ id: 691, method: 'sessions.create', params: { ...session, trustFolder: true } });
+      await vi.waitFor(() => expect(s.trustFolder).toHaveBeenCalledTimes(1));
+      remote.client.close();
+      await vi.waitFor(() => expect(s.unregistered).toHaveBeenCalledTimes(1));
+      release();
+      // Ответ уходить некуда; ждём, пока цепочка после доверия отработает.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(s.spies['sessions.create']).not.toHaveBeenCalled();
+      s.close();
+    });
+
     it('trust.check — только для известного проекта; consents.decide от remote доходит до обработчика', async () => {
       const s = await a28Server({ enabled: true });
       const remote = await s.connect('remote');
@@ -1215,7 +1253,12 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect((await answer(remote.client, 684, 'consents.decide', { id: 'c-01', decision: 'allow' })).error).toBeUndefined();
       expect((await answer(remote.client, 685, 'consents.decide', { id: 'c-02', decision: 'deny' })).error).toBeUndefined();
       expect((await answer(remote.client, 686, 'consents.decide', { id: 'c-03', decision: 'maybe' })).error).toMatchObject({ code: 'bad_request' });
+      // Правило A28 (критик m6): только `id` вида `c-NN` и `decision`.
+      expect((await answer(remote.client, 687, 'consents.decide', { id: 'x-1', decision: 'allow' })).error).toMatchObject({ code: 'bad_request' });
+      expect((await answer(remote.client, 688, 'consents.decide', { id: 'c-04', decision: 'allow', by: 'window' })).error).toMatchObject({ code: 'bad_request' });
       expect(s.spies['consents.decide']).toHaveBeenCalledTimes(2);
+      // Лента субагента с телефона не читается (критик m5): правило отказывает до обработчика.
+      expect((await answer(remote.client, 689, 'feed.snapshot', { ref, agentId: 'a1' })).error).toMatchObject({ code: 'bad_request' });
       s.close();
     });
   });
@@ -1370,11 +1413,21 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         const fromWindow = await answer(desktop.client, 707, 'pty.send', { text: 'hi', submit: true, ref: own });
         expect(sent.error?.message).not.toBe('unknown project or work');
         expect(sent.error ?? null).toEqual(fromWindow.error ?? null);
-        desktop.client.close();
         expect((await answer(remote.client, 705, 'pty.send', { ...message, ref: { projectPath: p.dir, workId: p.workId, sessionId: 's-99' } })).error)
           .toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
         expect((await answer(remote.client, 706, 'pty.send', { ...message, ref: { projectPath: foreign, workId: p.workId, sessionId: p.sessions[0] } })).error)
           .toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
+        // Архивная работа закрыта для сообщений явно (критик s-199, нит): та же сессия — bad_request, у окна — как раньше.
+        expect((await answer(desktop.client, 708, 'works.setStatus', { projectPath: p.dir, workId: p.workId, status: 'archived' })).error).toBeUndefined();
+        const deadline = Date.now() + 10_000;
+        for (let id = 720; ; id++) {
+          const reply = await answer(remote.client, id, 'pty.send', { ...message, ref: own });
+          if (reply.error?.message === 'unknown project or work') break;
+          if (Date.now() > deadline) throw new Error('archived work stayed open for agent messages');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect((await answer(desktop.client, 709, 'pty.send', { text: 'hi', submit: true, ref: own })).error?.message).not.toBe('unknown project or work');
+        desktop.client.close();
         remote.client.close();
       } finally {
         delete process.env['PARLEY_CLAUDE_BIN'];
