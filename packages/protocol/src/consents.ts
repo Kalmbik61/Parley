@@ -70,6 +70,11 @@ export interface ProjectMcpCard extends ConsentCardBase {
   kind: 'project-mcp';
   /** Форма карточки (спека 2026-11-02, 7.2): новая форма — новый номер; клиент не рисует карточку без `version` или с неизвестной. */
   version: 1;
+  /**
+   * Номер списка серверов: 1 у новой карточки, +1 при каждом изменении `servers` (спека 7.2). Решение должно прийти с
+   * `revision` карточки, которую человек видел; другая — `bad_request`, человек смотрит список заново.
+   */
+  revision: number;
   /** realpath корня основного репозитория: worktree одного проекта делят решение. */
   repo: string;
   servers: ProjectMcpServer[];
@@ -83,12 +88,14 @@ export const consentMethodSchemas = {
   'consents.list': z.object({}),
   /**
    * `enabled` — только для карточки `project-mcp`: пары `{name, fingerprint}` серверов, которые человек включил, ровно
-   * как в карточке; пара, не совпавшая с нынешней карточкой, — `bad_request`. Нет поля — все выключены.
+   * как в карточке; пара, не совпавшая с нынешней карточкой, — `bad_request`. Нет поля — все выключены. `revision` — номер
+   * списка, который видел человек (`ProjectMcpCard.revision`): у `project-mcp` обязателен, другой — `bad_request`.
    */
   'consents.decide': z.object({
     id: z.string().min(1),
     decision: z.enum(['allow', 'deny']),
     enabled: z.array(z.object({ name: z.string().min(1).max(200), fingerprint: z.string().min(1).max(200) })).max(200).optional(),
+    revision: z.number().int().min(1).optional(),
   }),
   'trust.list': z.object({}),
   /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */

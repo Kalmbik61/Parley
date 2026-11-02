@@ -86,7 +86,7 @@ export function ConsentPrompt(): JSX.Element | null {
         onCancel={() => useConsentsStore.getState().stopAsking()}
         onDecide={async (decision, enabled) => {
           try {
-            await useConsentsStore.getState().decide(card.id, decision, decision === 'allow' ? enabled : undefined);
+            await useConsentsStore.getState().decide(card.id, decision, decision === 'allow' ? enabled : undefined, card.revision);
             useConsentsStore.getState().stopAsking();
             return 'done';
           } catch (err: unknown) {

@@ -151,6 +151,20 @@ describe('launch(): серверы MCP проекта у Claude', () => {
     expect(pty.get(ref)).toBeUndefined();
   });
 
+  it('requestProjectMcp вернул null (решение уже записано): запуск не удерживается и идёт сразу', async () => {
+    await writeMcp({ a: server('node') });
+    const { ref } = await pendingPeer();
+    const consents = fakeConsents();
+    consents.requestProjectMcp.mockReturnValue(null);
+    const { service } = build({ consents });
+
+    expect(await service.launch(ref, 'launch', { by: 'auto' })).toBe('started');
+
+    expect(consents.requestProjectMcp).toHaveBeenCalledTimes(1);
+    // Решения в хранилище нет, поэтому финальная проверка не включает сервер: он уходит в disabled.
+    expect(lastOptions()).toMatchObject({ projectMcp: { enabled: [], disabled: ['a'] } });
+  });
+
   it('create() агента: ответ с held "project-mcp"', async () => {
     await writeMcp({ a: server('node') });
     const { workId } = await pendingPeer();

@@ -15,7 +15,7 @@ vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }))
 const card = (patch: Partial<ProjectMcpCard> = {}): ProjectMcpCard => ({
   id: 'c-07',
   kind: 'project-mcp',
-  version: 1,
+  version: 1, revision: 4,
   repo: '/Users/me/work/my_harnas',
   servers: [
     { name: 'a', fingerprint: 'fa', command: 'node a.js --flag' },
@@ -71,20 +71,20 @@ describe('ProjectMcpDialog', () => {
     await open();
     fireEvent.click(toggle('b'));
     fireEvent.click(screen.getByRole('button', { name: 'Enable selected' }));
-    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [{ name: 'b', fingerprint: 'fb' }] }]));
+    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [{ name: 'b', fingerprint: 'fb' }], revision: 4 }]));
   });
 
   it('ничего не включено → allow с пустым списком (сессия стартует без серверов)', async () => {
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Enable selected' }));
-    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [] }]));
+    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [], revision: 4 }]));
   });
 
   it('«Reject all» шлёт deny без списка, даже если что-то включено', async () => {
     await open();
     fireEvent.click(toggle('a'));
     fireEvent.click(screen.getByRole('button', { name: 'Reject all' }));
-    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'deny' }]));
+    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'deny', revision: 4 }]));
   });
 
   it('хост отказал как устаревшему (bad_request): строка «The server list changed — review again», диалог и карточка остаются', async () => {
@@ -125,7 +125,18 @@ describe('ProjectMcpDialog', () => {
     expect(toggle('a').getAttribute('aria-checked')).toBe('false');
     expect(toggle('b').getAttribute('aria-checked')).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: 'Enable selected' }));
-    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [{ name: 'b', fingerprint: 'fb' }] }]));
+    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'allow', enabled: [{ name: 'b', fingerprint: 'fb' }], revision: 4 }]));
+  });
+
+  it('решение уходит с revision нынешней карточки: после обновления списка — с новой', async () => {
+    await open();
+    act(() => bridge.emit('consents.changed', {
+      upsert: [card({ revision: 5, servers: [...card().servers, { name: 'c', fingerprint: 'fc', command: 'node c.js' }] })],
+      removed: [],
+    }));
+    await waitFor(() => expect(screen.getByText('node c.js')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Reject all' }));
+    await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'deny', revision: 5 }]));
   });
 
   it('«Cancel» закрывает диалог, карточка остаётся для острова', async () => {

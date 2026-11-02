@@ -20,7 +20,7 @@ export interface ConsentViewProps {
   /** Решение по этой карточке в пути. */
   deciding: boolean;
   note: 'done' | 'elsewhere' | 'failed' | 'stale' | null;
-  onDecide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>): void;
+  onDecide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number): void;
 }
 
 export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps): JSX.Element {
@@ -53,10 +53,10 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
           <div data-testid="island-consent-done" className="text-[var(--color-accent)]">{S.island.consentDone}</div>
         ) : note === 'elsewhere' ? null : (
           <div className="flex flex-wrap gap-2">
-            <Button data-testid="island-project-mcp-enable" size="default" className="cursor-pointer text-sm" disabled={deciding || !armed} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow', selection.enabled)}>
+            <Button data-testid="island-project-mcp-enable" size="default" className="cursor-pointer text-sm" disabled={deciding || !armed} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow', selection.enabled, card.revision)}>
               {text.enable}
             </Button>
-            <Button data-testid="island-project-mcp-reject" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding || !armed} onClick={() => onDecide(card.id, 'deny')}>
+            <Button data-testid="island-project-mcp-reject" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding || !armed} onClick={() => onDecide(card.id, 'deny', undefined, card.revision)}>
               {text.rejectAll}
             </Button>
           </div>

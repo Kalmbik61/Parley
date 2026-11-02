@@ -25,7 +25,8 @@ export interface ConsentsState {
   /** Подписывается на мост и один раз запрашивает `consents.list`; возвращает отписку. */
   init: (bridge: ConsentBridge) => () => void;
   /** `consents.decide`; ошибку хоста бросает вызывающему (тост — у него). */
-  decide: (id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>) => Promise<{ applied: boolean }>;
+  /** `enabled` и `revision` — только для карточки `project-mcp`: включённые пары и номер списка, который видел человек. */
+  decide: (id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number) => Promise<{ applied: boolean }>;
   ask: (id: string) => void;
   stopAsking: () => void;
 }
@@ -76,9 +77,9 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
       unsubscribe();
     };
   },
-  decide: async (id, decision, enabled) => {
+  decide: async (id, decision, enabled, revision) => {
     if (current === null) throw new Error('consents: not connected');
-    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }) });
+    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }) });
     return { applied };
   },
   ask: (id) => set({ asking: id }),

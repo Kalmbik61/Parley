@@ -46,12 +46,14 @@ export interface ConsentsService {
   requestSwitch(input: Omit<AgentSwitchCard, 'id' | 'kind' | 'projectPath' | 'at' | 'state'>): ConsentCard;
   /**
    * Новые серверы MCP из `.mcp.json` перед запуском Claude (спека 2026-11-02, 7): одна карточка `project-mcp` на репозиторий,
-   * второй запуск добавляет к ней своё удержание и недостающие серверы. Запуск ждёт решения человека.
+   * второй запуск добавляет к ней своё удержание и недостающие серверы (`revision` растёт). Запуск ждёт решения человека.
+   * Серверы, о которых решение уже записано (человек решил, пока запуск шёл), в карточку не попадают; не осталось ни
+   * одного — `null`: спрашивать нечего, запуск идёт сразу.
    */
   requestProjectMcp(
     input: { projectPath: string; repo: string; servers: ProjectMcpCard['servers']; requestedBy: ProjectMcpCard['requestedBy'] },
     hold: HeldLaunch,
-  ): ConsentCard;
+  ): ConsentCard | null;
   /**
    * `by` — откуда пришло решение (запись в `trust.json`); окно и остров — `window`. Второе решение по той же
    * карточке — `applied: false`. Продолжение или отказ удержанных запусков идут в фоне: ответ не ждёт запуска
@@ -63,6 +65,7 @@ export interface ConsentsService {
     decision: 'allow' | 'deny',
     by?: TrustRecord['by'],
     enabled?: ReadonlyArray<{ name: string; fingerprint: string }>,
+    revision?: number,
   ): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
   onChange(listener: (change: ConsentChange) => void): () => void;
   stop(): void;
@@ -73,7 +76,7 @@ export interface ConsentsDeps {
   host: Pick<HostContext, 'broadcast' | 'log'>;
   trust: { grant(folder: string, by: TrustRecord['by']): Promise<unknown> };
   /** Решения о серверах MCP (`mcp-consent.json`): сюда решение `project-mcp` записывается перед продолжением запуска. */
-  projectMcp?: { record: McpConsentStore['record'] };
+  projectMcp?: Pick<McpConsentStore, 'record' | 'lookup'>;
   continueLaunch(hold: HeldLaunch): Promise<void>;
   refuseLaunch(hold: HeldLaunch): Promise<void>;
   /** Замена агента от имени человека: `allow` карточки `agent-switch` (`requestId` — id карточки). */
@@ -138,6 +141,8 @@ function validCard(value: unknown): value is ConsentCard {
         typeof value['requestedBy']['sessionId'] === 'string'
       : value['kind'] === 'project-mcp'
         ? value['version'] === 1 &&
+          Number.isInteger(value['revision']) &&
+          (value['revision'] as number) >= 1 &&
           typeof value['repo'] === 'string' &&
           Array.isArray(value['servers']) &&
           value['servers'].every(
@@ -359,11 +364,15 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
     },
 
     requestProjectMcp(input, hold) {
+      // Решение могло быть записано, пока запуск готовился (гонка с карточкой, которую только что закрыли): такие серверы
+      // не спрашиваем, а если спрашивать нечего — не держим запуск.
+      const servers = input.servers.filter((server) => deps.projectMcp?.lookup(input.repo, server.name, server.fingerprint) === undefined);
+      if (servers.length === 0) return null;
       const existing = pending().find((card): card is ProjectMcpCard => card.kind === 'project-mcp' && card.repo === input.repo);
       if (existing !== undefined) {
         // Событие — только когда у карточки изменился список серверов; новое удержание окно не касается.
         let changed = false;
-        for (const server of input.servers) {
+        for (const server of servers) {
           if (!existing.servers.some((known) => known.name === server.name && known.fingerprint === server.fingerprint)) {
             // Тот же сервер с другим отпечатком заменяет прежнюю строку: решение будет о нынешнем.
             existing.servers = [...existing.servers.filter((known) => known.name !== server.name), server];
@@ -373,6 +382,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         const holds = state.holds[existing.id] ?? [];
         const same = (candidate: HeldLaunch): boolean => refKey(candidate.ref) === refKey(hold.ref) && candidate.mode === hold.mode;
         if (!holds.some(same)) state.holds[existing.id] = [...holds, hold];
+        if (changed) existing.revision += 1;
         save();
         if (changed) emit({ upsert: [{ ...existing }], removed: [] });
         return { ...existing };
@@ -382,8 +392,9 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         id: `c-${String(state.seq).padStart(2, '0')}`,
         kind: 'project-mcp',
         version: 1,
+        revision: 1,
         repo: input.repo,
-        servers: input.servers.map((server) => ({ ...server })),
+        servers: servers.map((server) => ({ ...server })),
         projectPath: input.projectPath,
         requestedBy: input.requestedBy,
         at: new Date().toISOString(),
@@ -396,7 +407,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       return { ...card };
     },
 
-    async decide(id, decision, by = 'window', enabled) {
+    async decide(id, decision, by = 'window', enabled, revision) {
       const card = state.cards.find((candidate) => candidate.id === id);
       // Незнакомая карточка — уже закрытая (решена давно и забыта): «уже решено», а не ошибка.
       if (card === undefined) return { applied: false, state: 'denied' };
@@ -406,6 +417,8 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         // Чужое имя отвергается до любого изменения: карточка остаётся ждать.
         // Решение привязано к тому, что человек видел: имя И отпечаток должны совпасть с нынешней карточкой (список мог
         // смениться, пока он смотрел). Всё остальное в карточке записывается выключенным.
+        // Ещё и номер списка: решение о карточке, которую человек видел, а не о той, что стала другой за это время.
+        if (revision !== card.revision) throw new HostError('bad_request', 'The MCP server list changed since the card was shown');
         const pairs = decision === 'allow' ? (enabled ?? []) : [];
         const current = new Map(card.servers.map((server) => [server.name, server.fingerprint]));
         if (pairs.some((pair) => current.get(pair.name) !== pair.fingerprint)) throw new HostError('bad_request', 'Unknown or changed MCP server in the decision');

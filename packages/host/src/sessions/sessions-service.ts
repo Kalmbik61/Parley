@@ -899,7 +899,7 @@ export function createSessionsService(
         if (found.undecided.length > 0) {
           const by = options.by ?? 'human';
           const requester = session.parent ?? (map.sessions.some((candidate) => candidate.id === by) ? by : undefined);
-          feed.consents.requestProjectMcp(
+          const card = feed.consents.requestProjectMcp(
             {
               projectPath: ref.projectPath,
               repo: found.repo,
@@ -913,10 +913,13 @@ export function createSessionsService(
             },
             { ref, mode: mode === 'resume' ? 'resume' : 'launch', by },
           );
-          heldKinds.set(key, 'project-mcp');
-          held = true;
-          failed = false;
-          return 'held';
+          // `null` — решение о всех этих серверах уже записано (человек решил, пока запуск готовился): запуск идёт сразу.
+          if (card !== null) {
+            heldKinds.set(key, 'project-mcp');
+            held = true;
+            failed = false;
+            return 'held';
+          }
         }
       }
 

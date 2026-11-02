@@ -54,6 +54,15 @@ it('consents.decide: решение окна и острова пишет дов
   expect(consents.decide).toHaveBeenCalledWith('c-01', 'allow', 'window');
 });
 
+it('consents.decide: enabled и revision (карточка project-mcp) доходят до сервиса', async () => {
+  const { consents, handlers } = build();
+  const enabled = [{ name: 'a', fingerprint: 'fa' }];
+  await handlers['consents.decide']?.({ id: 'c-01', decision: 'allow', enabled, revision: 3 }, request);
+  expect(consents.decide).toHaveBeenCalledWith('c-01', 'allow', 'window', enabled, 3);
+  await handlers['consents.decide']?.({ id: 'c-01', decision: 'deny', revision: 3 }, request);
+  expect(consents.decide).toHaveBeenLastCalledWith('c-01', 'deny', 'window', undefined, 3);
+});
+
 it('trust.grant → trust.list → trust.revoke: запись в trust.json выбранного дома', async () => {
   const { handlers } = build();
   const folder = await mkdtemp(path.join(tmpdir(), 'parley-consent-folder-'));

@@ -146,7 +146,7 @@ describe('карточка согласия острова', () => {
 
 describe('карточка серверов MCP на острове (спека 2026-11-02, 7)', () => {
   const MCP: ConsentCard = {
-    id: 'c-09', kind: 'project-mcp', version: 1, repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',
+    id: 'c-09', kind: 'project-mcp', version: 1, revision: 4, repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',
     servers: [{ name: 'a', fingerprint: 'fa', command: 'node a.js' }, { name: 'b', fingerprint: 'fb', command: 'https://b.example/mcp' }],
     requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03 Ruslan' },
     at: '2026-11-02T10:00:00.000Z', state: 'pending',
@@ -169,9 +169,9 @@ describe('карточка серверов MCP на острове (спека 
     arm();
     fireEvent.click(sw('a'));
     fireEvent.click(enable);
-    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'allow', [{ name: 'a', fingerprint: 'fa' }]);
+    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'allow', [{ name: 'a', fingerprint: 'fa' }], 4);
     fireEvent.click(screen.getByTestId('island-project-mcp-reject'));
-    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'deny');
+    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'deny', undefined, 4);
   });
 
   it('без выбора «Enable selected» шлёт пустой список', () => {
@@ -179,7 +179,7 @@ describe('карточка серверов MCP на острове (спека 
     render(<ConsentView {...props({ card: MCP, onDecide })} />);
     arm();
     fireEvent.click(screen.getByTestId('island-project-mcp-enable'));
-    expect(onDecide).toHaveBeenCalledWith('c-09', 'allow', []);
+    expect(onDecide).toHaveBeenCalledWith('c-09', 'allow', [], 4);
   });
 
   it('устаревший список (note stale): строка «The server list changed — review again», кнопки остаются', () => {
