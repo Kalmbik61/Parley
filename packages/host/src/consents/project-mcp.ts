@@ -33,6 +33,11 @@ export interface ProjectMcpInspection {
   /** Решения Parley: имена для `enabledMcpjsonServers` и `disabledMcpjsonServers`. */
   enabled: string[];
   disabled: string[];
+  /**
+   * Серверы `.mcp.json`, которые Parley не умеет отпечатать (форма записи не та, имя пустое или длиннее 200 знаков). На
+   * карточку не попадают; запуск выключает их (`disabledMcpjsonServers`), если у самого Claude о них нет решения.
+   */
+  unmanaged: string[];
 }
 
 export interface ProjectMcpDecisionEntry {
@@ -47,7 +52,11 @@ export interface McpConsentStore {
 }
 
 export interface ProjectMcp {
-  inspect(cwd: string): Promise<ProjectMcpInspection>;
+  /**
+   * `launch.configDir` — папка настроек Claude того провайдера, чей запуск проверяется (`claudeConfigDirFor`; `undefined`
+   * — своей нет, действует `~/.claude`): решения Claude читаются оттуда, а не из папки хоста. Без `launch` — папка хоста.
+   */
+  inspect(cwd: string, launch?: { configDir: string | undefined }): Promise<ProjectMcpInspection>;
   store: McpConsentStore;
 }
 
@@ -57,7 +66,7 @@ const NAME_MAX = 200;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const EMPTY: ProjectMcpInspection = { repo: '', undecided: [], enabled: [], disabled: [] };
+const EMPTY: ProjectMcpInspection = { repo: '', undecided: [], enabled: [], disabled: [], unmanaged: [] };
 
 /** JSON с рекурсивно отсортированными ключами: порядок ключей в `.mcp.json` отпечаток не меняет. */
 function canonicalJson(value: unknown): string {
@@ -93,8 +102,16 @@ export function mcpFingerprint(entry: unknown): { fingerprint: string; command: 
  * одного имени побеждает ближайший файл. Файл не читается или не JSON — предупреждение и «серверов нет»: Claude
  * об этих серверах всё равно спросит сам.
  */
-export async function readProjectMcpServers(cwd: string, home: string, log: Pick<Log, 'warn'>): Promise<McpServerInfo[]> {
+export async function readProjectMcpServers(
+  cwd: string,
+  home: string,
+  log: Pick<Log, 'warn'>,
+): Promise<{ servers: McpServerInfo[]; unmanaged: string[] }> {
   const servers = new Map<string, McpServerInfo>();
+  /** Имена, которые Parley отпечатать не смог: Claude о них спросит, значит, запуск их выключает. */
+  const unmanaged = new Set<string>();
+  /** Имя занято ближайшим файлом (хорошей записью или плохой): дальние файлы его не перекрывают. */
+  const seen = new Set<string>();
   const start = await realpath(cwd);
   const stop = await realpath(home).catch(() => home);
   const inside = start === stop || start.startsWith(`${stop}${path.sep}`);
@@ -116,15 +133,20 @@ export async function readProjectMcpServers(cwd: string, home: string, log: Pick
         if (!isRecord(list)) {
           log.warn('project MCP: .mcp.json has no mcpServers object, no servers taken from it', { file });
         } else {
+          const skipped: string[] = [];
           for (const [name, entry] of Object.entries(list)) {
-            if (servers.has(name)) continue;
+            if (seen.has(name)) continue;
+            seen.add(name);
             const info = name.length > 0 && name.length <= NAME_MAX ? mcpFingerprint(entry) : null;
             if (info === null) {
-              log.warn('project MCP: a server entry has an unknown shape, skipped (Claude will still ask)', { file, name: name.slice(0, NAME_MAX) });
+              unmanaged.add(name);
+              skipped.push(name.slice(0, 60));
               continue;
             }
             servers.set(name, { name, ...info });
           }
+          // Один раз на файл: список имён, которые не показываются человеку и выключаются в запуске.
+          if (skipped.length > 0) log.warn('project MCP: server entries Parley cannot fingerprint are disabled for the launch (Claude would ask about them)', { file, names: skipped });
         }
       } catch (error) {
         log.warn('project MCP: .mcp.json is malformed, no servers taken from it (Claude will still ask)', { file, error: String(error) });
@@ -135,21 +157,24 @@ export async function readProjectMcpServers(cwd: string, home: string, log: Pick
     if (parent === dir) break;
     dir = parent;
   }
-  return [...servers.values()];
+  return { servers: [...servers.values()], unmanaged: [...unmanaged] };
 }
 
-/** Корень основного репозитория: для worktree — родитель общего `.git`; не репозиторий — сама папка. Всегда realpath. */
+/**
+ * Корень основного репозитория: первый `worktree <путь>` из `git worktree list --porcelain` — основной рабочий каталог, а
+ * не папка `.git` (линкованные worktree, подмодули и `--separate-git-dir` дают тот же ответ). Не репозиторий или git не
+ * ответил — сама папка. Всегда realpath.
+ */
 export async function repoKeyOf(cwd: string): Promise<string> {
   const real = await realpath(cwd);
-  const common = await new Promise<string | null>((resolve) => {
-    execFile('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: real, timeout: 5000, windowsHide: true }, (error, stdout) => {
-      resolve(error === null ? stdout.trim() : null);
+  const listing = await new Promise<string | null>((resolve) => {
+    execFile('git', ['worktree', 'list', '--porcelain'], { cwd: real, timeout: 5000, windowsHide: true }, (error, stdout) => {
+      resolve(error === null ? stdout : null);
     });
   });
-  if (common === null || common === '' || !path.isAbsolute(common)) return real;
-  const commonReal = await realpath(common).catch(() => null);
-  if (commonReal === null) return real;
-  return path.basename(commonReal) === '.git' ? path.dirname(commonReal) : real;
+  const main = listing?.split('\n').find((line) => line.startsWith('worktree '))?.slice('worktree '.length).trim();
+  if (main === undefined || main === '' || !path.isAbsolute(main)) return real;
+  return realpath(main).catch(() => real);
 }
 
 interface ClaudeDecisions {
@@ -276,14 +301,17 @@ export function createProjectMcp(options: ProjectMcpOptions): ProjectMcp {
   const store = createMcpConsentStore(options.home, options.log);
   return {
     store,
-    async inspect(cwd) {
+    async inspect(cwd, launch) {
       try {
         const real = await realpath(cwd);
-        const servers = await readProjectMcpServers(real, options.userHome, options.log);
-        if (servers.length === 0) return { ...EMPTY };
+        const { servers, unmanaged } = await readProjectMcpServers(real, options.userHome, options.log);
+        if (servers.length === 0 && unmanaged.length === 0) return { ...EMPTY };
         const repo = await repoKeyOf(real);
-        const claude = readClaudeDecisions({ repo, cwd: real, configDir: options.claudeConfigDir });
-        const result: ProjectMcpInspection = { repo, undecided: [], enabled: [], disabled: [] };
+        const configDir = launch === undefined ? options.claudeConfigDir : (launch.configDir ?? path.join(options.userHome, '.claude'));
+        const claude = readClaudeDecisions({ repo, cwd: real, configDir });
+        const result: ProjectMcpInspection = { repo, undecided: [], enabled: [], disabled: [], unmanaged: [] };
+        // Не отпечатанные серверы: человеку не показываются, запуск их выключает; решение самого Claude о них главнее.
+        for (const name of unmanaged) if (!claude.enableAll && !claude.decided.has(name)) result.unmanaged.push(name);
         for (const server of servers) {
           // Решение Claude сильнее флага: о таком сервере не спрашиваем и ключами не перебиваем.
           if (claude.enableAll || claude.decided.has(server.name)) continue;

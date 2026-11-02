@@ -34,6 +34,8 @@ export type CliUpdateResult = { state: 'busy' } | CliUpdateOutcome;
 
 export interface CliUpdateRunner {
   run(command: UpdateCommand, who: string): Promise<CliUpdateResult>;
+  /** Остановка хоста: идущие установщики убиваются целыми группами. */
+  stop(): void;
 }
 
 export interface CliUpdateRunnerOptions {
@@ -61,23 +63,46 @@ function updateEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return clean;
 }
 
-/** Один дочерний процесс: без shell, stdin закрыт, по таймауту SIGKILL, от вывода хранится только хвост. */
-function exec(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<Exit> {
+/** SIGKILL всей группе процессов `pid` (установщик и его потомки); группы уже нет — не ошибка. */
+function killGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+/** Сколько ждать хвост вывода после выхода процесса, прежде чем закрыть трубы силой. */
+const DRAIN_MS = 100;
+
+/**
+ * Один дочерний процесс: без shell, stdin закрыт, от вывода хранится только хвост. Он стартует лидером своей группы
+ * (`detached`): установщик запускает потомков, и убить надо всю группу — иначе потомок, держащий трубы, оставил бы вызов
+ * висеть, а установку идущей. По таймауту — SIGKILL группе; итог по `exit`, не по `close`; после выхода группа добивается
+ * (хвосты установщика), трубы закрываются.
+ */
+function exec(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, groups: Set<number>): Promise<Exit> {
   return new Promise((resolve) => {
     let tail = Buffer.alloc(0);
     let timedOut = false;
     let settled = false;
+    let drain: NodeJS.Timeout | undefined;
     const finish = (code: number | null, note = ''): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const text = tail.toString('utf8') + note;
-      resolve({ code, output: text, timedOut });
+      if (drain !== undefined) clearTimeout(drain);
+      if (child.pid !== undefined) groups.delete(child.pid);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve({ code, output: tail.toString('utf8') + note, timedOut });
     };
-    const child = spawn(binary, args, { shell: false, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(binary, args, { shell: false, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true });
+    if (child.pid !== undefined) groups.add(child.pid);
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killGroup(child.pid);
     }, timeoutMs);
     const collect = (chunk: Buffer): void => {
       tail = Buffer.concat([tail, chunk]);
@@ -86,16 +111,26 @@ function exec(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs:
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
     child.on('error', (error) => finish(null, `\n${error.message}`));
+    child.on('exit', (code) => {
+      // Потомки установщика, ещё живые в группе, — тоже конец установки; без них трубы закроются и хвост дочитается.
+      killGroup(child.pid);
+      drain = setTimeout(() => finish(code), DRAIN_MS);
+    });
     child.on('close', (code) => finish(code));
   });
 }
 
 export function createCliUpdateRunner(options: CliUpdateRunnerOptions): CliUpdateRunner {
   const running = new Set<UpdateCommand>();
+  /** Группы живых установщиков (`pid` лидера): их добивает `stop()`. */
+  const groups = new Set<number>();
   const timeoutMs = options.timeoutMs ?? CLI_UPDATE_TIMEOUT_MS;
   const smokeTimeoutMs = options.smokeTimeoutMs ?? CLI_SMOKE_TIMEOUT_MS;
 
   return {
+    stop() {
+      for (const pid of [...groups]) killGroup(pid);
+    },
     async run(command, who) {
       if (!UPDATE_COMMANDS.includes(command)) throw new Error(`unsupported command: ${command}`);
       if (running.has(command)) return { state: 'busy' };
@@ -105,14 +140,14 @@ export function createCliUpdateRunner(options: CliUpdateRunnerOptions): CliUpdat
         const binary = await findRunnerBinary(command, options.env ?? process.env);
         const from = options.versions.get(command);
         const sessions = options.runningSessions(command).catch(() => 0);
-        const result = await exec(binary, ['update'], env, timeoutMs);
+        const result = await exec(binary, ['update'], env, timeoutMs, groups);
         const to = await options.versions.fresh(command);
         const latest = await options.updates.latest(command);
         const grew = to !== null && (from === null || isNewer(from, to) || to === latest);
         const ok = result.code === 0 && !result.timedOut && grew;
         let smoke: CliUpdateOutcome['smoke'];
         if (command === 'codex') {
-          const check = await exec(binary, ['-c', 'check_for_update_on_startup=false', '--version'], env, smokeTimeoutMs);
+          const check = await exec(binary, ['-c', 'check_for_update_on_startup=false', '--version'], env, smokeTimeoutMs, groups);
           smoke = { ok: check.code === 0 && !check.timedOut, output: check.output };
         }
         const output = result.timedOut ? `${result.output}\n(timed out after ${Math.round(timeoutMs / 1000)} s and killed)` : result.output;

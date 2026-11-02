@@ -15,6 +15,7 @@ import {
   installMethod,
   isNewer,
   parleyHome,
+  userClaudeConfigDir,
   type CliUpdateProvider,
   type LatestVersionSource,
 } from '@parley/core';
@@ -111,9 +112,10 @@ async function saveCache(file: string, cache: Cache): Promise<void> {
 }
 
 /** Канал Claude из пользовательских настроек (только чтение): `autoUpdatesChannel`, иначе `latest`. */
-async function claudeChannel(userHome: string): Promise<string> {
+async function claudeChannel(userHome: string, env: NodeJS.ProcessEnv): Promise<string> {
   try {
-    const data: unknown = JSON.parse(await readFile(path.join(userHome, '.claude', 'settings.json'), 'utf8'));
+    // Папка настроек Claude человека — `CLAUDE_CONFIG_DIR` или `~/.claude`, как у самого Claude.
+    const data: unknown = JSON.parse(await readFile(path.join(userClaudeConfigDir(env, userHome), 'settings.json'), 'utf8'));
     const channel = isObject(data) ? data['autoUpdatesChannel'] : undefined;
     return typeof channel === 'string' && channel !== '' ? channel : 'latest';
   } catch {
@@ -156,7 +158,7 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
     }
     const source: LatestVersionSource =
       command === 'claude'
-        ? { kind: 'claude-npm', channel: await claudeChannel(options.userHome) }
+        ? { kind: 'claude-npm', channel: await claudeChannel(options.userHome, env) }
         : method === 'brew'
           ? { kind: 'codex-brew' }
           : { kind: 'codex-github' };

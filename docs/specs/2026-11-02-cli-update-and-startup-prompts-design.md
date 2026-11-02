@@ -168,10 +168,40 @@
   ничего не пишется;
 - доверие и решения по серверам Claude хранит на репозиторий, worktree их делят; `settings.local.json`
   основного checkout действует и в его worktree;
-- уже сохранённое в Claude решение («Esc — отклонить все», в `~/.claude.json`) сильнее флага: в одном прогоне
+- уже сохранённое в Claude решение («Esc — отклонить все»; где оно лежит — в 7.1а) сильнее флага: в одном прогоне
   сервер из `enabledMcpjsonServers` не подключился. Поэтому сервер, о котором у Claude уже есть решение, считается
   решённым, и карточка о нём не спрашивает;
 - не проверено: `enableAllProjectMcpServers`, настоящие серверы MCP, другие версии Claude.
+
+### 7.1а Что именно гасит вопрос и кто сильнее (спайки T5b и C5, 2026-11-02, Claude 2.1.316)
+
+Временные репозитории и папки, серверы `a`, `b` — `node -e "process.stdin.resume()"`, TUI в pty, `claude mcp list`.
+
+Где Claude хранит «Esc — отклонить все» и что он слушает (T5b; папка внутри доверенного родителя с `.mcp.json`):
+
+| Вариант | Вопрос о серверах |
+|---|---|
+| Папка без собственного доверия: `.claude/settings.local.json` = `enabledMcpjsonServers: [a, b]` | **есть** (включение из проекта не слушается) |
+| Та же папка, `--settings` с `disabledMcpjsonServers: [a, b]` или с enabled `[a]` и disabled `[b]` | нет (`mcp list`: a подключается, b скрыт) |
+| Esc в вопросе | пишется `<папка>/.claude/settings.local.json` = `disabledMcpjsonServers: [a, b]`; во второй раз вопроса нет; в `~/.claude.json` решение не попадает, соседняя папка спрашивает снова |
+| Папка с собственным доверием (git): `.claude/settings.local.json` с enabled | нет (проектные настройки применяются целиком) |
+
+Кто сильнее (C5; доверенный временный git-репозиторий):
+
+| Вариант | `claude mcp list`: a | Вопрос |
+|---|---|---|
+| `.claude/settings.local.json` `enabledMcpjsonServers: [a]`, без флага | a подключается | нет |
+| то же + `--settings` `disabledMcpjsonServers: [a]` | **a не показан: флаг сильнее включения проекта** | нет |
+| `.claude/settings.local.json` `enableAllProjectMcpServers: true`, без флага | a подключается | нет |
+| то же + `--settings` `disabledMcpjsonServers: [a]` | **a не показан: флаг сильнее «включить все»** | нет |
+| `--settings` `disabledMcpjsonServers: [a]`, без файла проекта | a не показан | нет |
+| имена `my-server`, `my.server`, `my_server`, `my server` в `.mcp.json`; `--settings` disabled с этими именами как есть | ни один не показан | нет |
+| те же имена, `--settings` enabled | все четыре показаны под своими именами (`my server` с пробелом тоже) | нет |
+
+Выводы: отказ побеждает включение в любом месте, поэтому «выключить» (`disabledMcpjsonServers`) надёжно; имена с `-`,
+`.`, `_` и пробелом работают как есть, без экранирования. Решением Claude о сервере считаются настройки пользователя и
+отказы (`disabledMcpjsonServers`) из настроек проекта; включение из проекта и `enableAllProjectMcpServers` проекта не
+считаются (в папке без собственного доверия они не гасят вопрос).
 
 ### 7.2 Форма карточки `project-mcp`, версия 1
 
@@ -184,6 +214,7 @@ the phone», плюс блокировка приложения (решения 
 interface ProjectMcpCard {            // ConsentCardBase: id, state, at, projectPath
   kind: 'project-mcp';
   version: 1;                         // форма карточки; новая форма — новый номер
+  revision: number;                  // номер списка серверов: 1 у новой карточки, +1 при каждом изменении `servers`
   repo: string;                       // realpath корня основного репозитория
   servers: Array<{
     name: string;                     // ключ сервера в .mcp.json, 1–200 символов
@@ -195,12 +226,18 @@ interface ProjectMcpCard {            // ConsentCardBase: id, state, at, project
 }
 
 // Выбор по каждому серверу: включены ровно перечисленные пары, остальные серверы карточки записываются выключенными.
-consents.decide({ id, decision: 'allow', enabled: Array<{ name: string; fingerprint: string }> })   // ≤200 пар
-consents.decide({ id, decision: 'deny' })                                                            // все выключены
+consents.decide({ id, decision: 'allow', revision, enabled: Array<{ name: string; fingerprint: string }> })   // ≤200 пар
+consents.decide({ id, decision: 'deny', revision })                                                  // все выключены
 ```
 
 - Пара, не совпавшая с нынешними `name` + `fingerprint` карточки, — `bad_request` до любого изменения: карточка ждёт,
   клиент показывает «The server list changed — review again».
+- `revision` обязательна: решение с другим номером (список сменился, пока человек смотрел, даже если пары старых серверов
+  совпадают) — тот же `bad_request` до любого изменения. Клиент шлёт `revision` карточки, которую показывает.
+- Сервер, о котором решение уже записано (человек решил, пока запуск готовился), в карточку не попадает; не осталось
+  ни одного — карточки нет, запуск идёт сразу.
+- Серверы `.mcp.json`, которые хост не умеет отпечатать (запись не той формы, имя пустое или длиннее 200 знаков), на
+  карточку не попадают: запуск выключает их (`disabledMcpjsonServers`), если у самого Claude о них нет решения.
 - Решение записывается о каждом сервере карточки; запуск продолжается и при отказе («без этих серверов»).
 - Карточка без `version` или с неизвестной версией клиентом не рисуется; хост такие не создаёт.
 
