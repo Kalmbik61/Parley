@@ -195,6 +195,9 @@ const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
 ]);
 const PTY_SEND_KEYS: ReadonlySet<string> = new Set(['ref', 'text', 'submit', 'requestedAt', 'clientMsgId']);
 const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision']);
+/** Номер карточки согласия хоста: `c-NN`. */
+const CONSENT_ID = /^c-\d+$/;
 const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
   'projectPath',
   'workId',
@@ -286,7 +289,18 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
   },
   'consents.decide': params => {
     const p = record(params);
-    return p !== null && (p.decision === 'allow' || p.decision === 'deny');
+    return (
+      p !== null &&
+      onlyKeys(p, CONSENT_DECIDE_KEYS) &&
+      typeof p.id === 'string' &&
+      CONSENT_ID.test(p.id) &&
+      (p.decision === 'allow' || p.decision === 'deny')
+    );
+  },
+  // Лента сессии — да, лента субагента (`agentId`) — нет: для телефона она не решена (спека 4.2, критик s-199 m5).
+  'feed.snapshot': params => {
+    const p = record(params);
+    return p !== null && p.agentId === undefined;
   },
 };
 

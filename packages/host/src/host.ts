@@ -919,8 +919,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         worksService.entry(projectPath, workId)?.map.rooms.find((room) => room.id === roomId)?.mode === 'autonomous',
       projectKnown: (projectPath) => worksService.snapshot().entries.some((entry) => entry.projectPath === projectPath),
       workKnown: (projectPath, workId) => worksService.entry(projectPath, workId) !== undefined,
-      sessionKnown: (projectPath, workId, sessionId) =>
-        worksService.entry(projectPath, workId)?.map.sessions.some((session) => session.id === sessionId) === true,
+      sessionKnown: (projectPath, workId, sessionId) => {
+        const entry = worksService.entry(projectPath, workId);
+        return entry !== undefined && entry.map.work.status !== 'archived' && entry.map.sessions.some((session) => session.id === sessionId);
+      },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
       trustFolder: async (projectPath) => {

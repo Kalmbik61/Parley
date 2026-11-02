@@ -1388,7 +1388,7 @@ export const S = {
       enabled: 'Remote access (beta)',
       enabledHint: 'Lets your paired phone see and answer your agents while this Mac is on. Traffic goes through your own relay, end-to-end encrypted.',
       allowCreate: 'Allow starting and messaging agents from the phone',
-      allowCreateHint: 'Off: the phone can read and answer, but cannot start agents, message them, trust folders or send tasks to rooms.',
+      allowCreateHint: 'Off: the phone can read and answer, but cannot start agents, message them, trust folders, decide consent cards or send tasks to rooms.',
       relayLabel: 'Relay',
       relayPlaceholder: 'relay.example.com',
       relayInvalid: 'Enter a host, optionally with a port: relay.example.com or 192.168.1.10:8787',
