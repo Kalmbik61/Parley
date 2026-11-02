@@ -319,6 +319,7 @@ const bridge = {
     pathForFile: (file: File) => webUtils.getPathForFile(file),
     saveDropImage: (source: 'clipboard') =>
       ipcRenderer.invoke('app:save-drop-image', source) as Promise<string | null>,
+    importDropImage: (absPath: string) => ipcRenderer.invoke('app:import-drop-image', absPath) as Promise<string>,
     imageThumbnail: (path: string, maxPx?: number) =>
       ipcRenderer.invoke('app:image-thumbnail', path, maxPx) as Promise<string | null>,
     setDirtyBuffers: (count: number) => {

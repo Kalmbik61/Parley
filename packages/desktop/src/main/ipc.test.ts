@@ -12,6 +12,7 @@ import { ISLAND_EVENTS } from '../shared/island.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
+import * as drops from './drops.js';
 import { HostError, type HostConnection } from './host-connection.js';
 import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
@@ -557,6 +558,22 @@ describe('registerIpc', () => {
       });
     }
     expect(saveDropImage).not.toHaveBeenCalled();
+  });
+
+  it('app:import-drop-image возвращает копию, а отказ передаёт окну без исходного пути вместо копии', async () => {
+    const { ipcMain } = setup();
+    const copy = vi.spyOn(drops, 'importDropImage').mockResolvedValue('/h/drops/copy.jpg');
+    try {
+      expect(await ipcMain.invoke('app:import-drop-image', '/external/image.jpg')).toBe('/h/drops/copy.jpg');
+      expect(copy).toHaveBeenCalledWith('/external/image.jpg');
+      copy.mockRejectedValue(new DropTooLargeError(MAX_DROP_IMAGE_BYTES + 1));
+      await expect(ipcMain.invoke('app:import-drop-image', '/external/image.jpg')).rejects.toSatisfy((error: unknown) => {
+        expect(decodeIpcError(error).code).toBe('drops:too-large');
+        return true;
+      });
+    } finally {
+      copy.mockRestore();
+    }
   });
 
   it('app:image-thumbnail отдаёт путь из окна модулю миниатюр как есть и возвращает его ответ; сбой доходит с кодом failed', async () => {

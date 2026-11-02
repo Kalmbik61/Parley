@@ -1085,6 +1085,7 @@ export function createFakeBridge(): FakeBridge {
       },
       // Подставной путь по имени файла: у `File` jsdom пути на диске нет (кусок 5.4).
       pathForFile: (file) => (file.name === '' ? '' : `/fake/${file.name}`),
+      importDropImage: async (path) => path,
       saveDropImage: async (source) => {
         saveDropImageCalls.push(source);
         const answer = saveDropImageAnswer;

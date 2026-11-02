@@ -2,7 +2,7 @@ import { lstat, lutimes, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, u
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, importDropImage, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 
 let base: string;
 let dir: string;
@@ -78,6 +78,58 @@ describe('saveImage (тест 1)', () => {
     expect(await readFile(outside, 'utf8')).toBe('чужое');
     expect(await readFile(path.join(dir, '20260927-140509-0001.png'), 'utf8')).toBe('занято');
     expect((await lstat(path.join(dir, '20260927-140509-0000.png'))).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe('importDropImage', () => {
+  it('копирует JPEG из внешнего каталога без перекодирования, с правами 0600; повтор не создаёт дубль', async () => {
+    const source = path.join(base, 'IMAGE 2026-11-02 11:39:12.jpg');
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]);
+    await writeFile(source, bytes);
+    const saved = await importDropImage(source, dir);
+    expect(path.dirname(saved)).toBe(dir);
+    expect(path.extname(saved)).toBe('.jpg');
+    expect(await readFile(saved)).toEqual(bytes);
+    expect((await stat(saved)).mode & 0o777).toBe(0o600);
+    expect(await importDropImage(source, dir)).toBe(saved);
+    await rm(source);
+    expect(await readFile(saved)).toEqual(bytes);
+  });
+
+  it('не импортирует не-картинки, каталоги, пустые и слишком большие файлы; ошибку чтения не скрывает', async () => {
+    for (const input of [null, 12, 'relative.png', '/tmp/a.txt']) {
+      await expect(importDropImage(input, dir)).rejects.toThrow();
+    }
+    const source = path.join(base, 'image.png');
+    await expect(importDropImage(source, dir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await mkdir(source);
+    await expect(importDropImage(source, dir)).rejects.toThrow();
+    await rm(source, { recursive: true });
+    await writeFile(source, '');
+    await expect(importDropImage(source, dir)).rejects.toThrow();
+    await writeFile(source, Buffer.alloc(MAX_DROP_IMAGE_BYTES + 1));
+    await expect(importDropImage(source, dir)).rejects.toBeInstanceOf(DropTooLargeError);
+    expect(await readdir(dir).catch(() => [])).toEqual([]);
+  });
+
+  it('не использует подложенную ссылку вместо копии', async () => {
+    const source = path.join(base, 'source.png');
+    await writeFile(source, PNG);
+    const saved = await importDropImage(source, dir);
+    await rm(saved);
+    await symlink(source, saved);
+    await expect(importDropImage(source, dir)).rejects.toThrow();
+    expect(await readFile(source)).toEqual(PNG);
+  });
+
+  it('параллельное добавление одной картинки возвращает одну готовую копию без временных файлов', async () => {
+    const source = path.join(base, 'source.png');
+    const bytes = Buffer.alloc(1024 * 1024, 7);
+    await writeFile(source, bytes);
+    const copies = await Promise.all(Array.from({ length: 4 }, () => importDropImage(source, dir)));
+    expect(new Set(copies).size).toBe(1);
+    expect(await readFile(copies[0]!)).toEqual(bytes);
+    expect(await readdir(dir)).toEqual([path.basename(copies[0]!)]);
   });
 });
 

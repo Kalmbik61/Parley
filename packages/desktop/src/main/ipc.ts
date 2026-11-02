@@ -11,7 +11,7 @@ import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../share
 import type { AgentOpenTabResult, AgentPageRegistration, ContextInput, SavedContext } from '../shared/browser-types.js';
 import type { BrowserOwner } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
-import { DropTooLargeError } from './drops.js';
+import { DropTooLargeError, importDropImage } from './drops.js';
 import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
@@ -694,6 +694,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
       return saveDropImage();
     }),
   );
+
+  ipcMain.handle('app:import-drop-image', withIpcError(async (_event, absPath: unknown) => importDropImage(absPath)));
 
   // Миниатюра картинки для «Chat» (чипы вложений, картинки из результатов инструментов): путь любой (файлы из Finder
   // и скрепки лежат вне корней работ), поэтому доступ ограничен самим модулем — только картинки по расширению, обычные
