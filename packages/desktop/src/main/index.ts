@@ -924,29 +924,31 @@ if (!gotLock) {
     // through the local control socket (mobile spec 5.1, 12).
     const bridge = bridgePaths();
     const phoneTexts = S.settings.remote.phoneAction;
+    const confirmRevoke = async (deviceName: string): Promise<boolean> => {
+      const parent = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow : null;
+      const options = {
+        type: 'warning' as const,
+        message: phoneTexts.confirmTitle(deviceName),
+        detail: phoneTexts.confirmBody,
+        buttons: [phoneTexts.confirmRevoke, phoneTexts.confirmCancel],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+      return response === 0;
+    };
     const phoneActions = createPhoneActionNotifier({
       create: (options) => new Notification(options),
       deviceName: async (deviceId) =>
         (await remoteService.call('devices.list', {})).find((device) => device.deviceId === deviceId)?.name ?? null,
       focusWindow: focusMainWindow,
-      confirmRevoke: async (deviceName) => {
-        const parent = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow : null;
-        const options = {
-          type: 'warning' as const,
-          message: phoneTexts.confirmTitle(deviceName),
-          detail: phoneTexts.confirmBody,
-          buttons: [phoneTexts.confirmRevoke, phoneTexts.confirmCancel],
-          defaultId: 1,
-          cancelId: 1,
-        };
-        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
-        return response === 0;
-      },
+      confirmRevoke,
       revoke: async (deviceId) => {
         await remoteService.call('devices.revoke', { deviceId });
       },
     });
     const remoteService = createRemoteService({
+      confirmRevoke,
       onPhoneAction: (data) => phoneActions.handle(data),
       launcher: createRemoteLauncher({
         paths: bridge,

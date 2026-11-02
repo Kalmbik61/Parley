@@ -359,7 +359,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                   data-testid="remote-revoke"
                   onClick={() =>
                     void run(S.errors.actions.saveSettings, async () => {
-                      await remote.call('devices.revoke', { deviceId: device.deviceId });
+                      await remote.call('devices.revokeConfirm', { deviceId: device.deviceId });
                       await loadLists();
                     })
                   }

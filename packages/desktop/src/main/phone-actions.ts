@@ -1,41 +1,34 @@
 import path from 'node:path';
+import { phoneActionEvent, type PhoneActionEvent } from '@parley/protocol/remote';
 import { S } from '../shared/strings.js';
 
 const TEXT = S.settings.remote.phoneAction;
 
-export const PHONE_ACTION_KINDS = ['trust-folder', 'allow-always', 'plan-auto-accept', 'provider-switch', 'session-start'] as const;
-export type PhoneActionKind = (typeof PHONE_ACTION_KINDS)[number];
+export type PhoneAction = PhoneActionEvent;
 
-/** Control-socket event `phone.action`. Local definition until the @parley/protocol/remote schema lands. */
-export interface PhoneAction {
-  deviceId: string;
-  kind: PhoneActionKind;
-  target: string;
-}
-
-/** The only place that reads the raw event; swap its body for the protocol schema parser later. */
+/** Parses the raw `phone.action` control event with the protocol schema. */
 export function parsePhoneAction(data: unknown): PhoneAction | null {
-  if (typeof data !== 'object' || data === null) return null;
-  const { deviceId, kind, target } = data as Record<string, unknown>;
-  if (typeof deviceId !== 'string' || deviceId.length === 0) return null;
-  if (typeof kind !== 'string' || !(PHONE_ACTION_KINDS as readonly string[]).includes(kind)) return null;
-  return { deviceId, kind: kind as PhoneActionKind, target: typeof target === 'string' ? target : '' };
+  const parsed = phoneActionEvent.safeParse(data);
+  return parsed.success ? parsed.data : null;
 }
 
 const clip = (value: string): string => (value.length > 120 ? `${value.slice(0, 119)}…` : value);
 
+const targetText = (target: PhoneAction['target']): string => (typeof target === 'string' ? target : path.basename(target.projectPath));
+
 export function phoneActionBody(action: PhoneAction): string {
+  const target = targetText(action.target);
   switch (action.kind) {
     case 'trust-folder':
-      return TEXT.trustFolder(path.basename(action.target.replace(/\/+$/, '')) || action.target);
+      return TEXT.trustFolder(path.basename(target.replace(/\/+$/, '')) || target);
     case 'allow-always':
-      return TEXT.allowAlways(clip(action.target));
+      return TEXT.allowAlways(clip(target));
     case 'plan-auto-accept':
       return TEXT.planAutoAccept;
     case 'provider-switch':
-      return TEXT.providerSwitch(clip(action.target));
-    case 'session-start':
-      return TEXT.sessionStart(clip(action.target));
+      return TEXT.providerSwitch(clip(target));
+    case 'session-create':
+      return TEXT.sessionStart(clip(target));
   }
 }
 

@@ -11,6 +11,7 @@ import {
   type RemotePairOffer,
   type RemoteState,
 } from '../shared/remote-types.js';
+import { S } from '../shared/strings.js';
 import { normalizeRelayInput } from '../shared/relay-input.js';
 import { ControlCallError, startPresence, type PowerMonitorLike, type PresenceState } from './remote-control.js';
 import type { RemoteLauncher } from './remote-launcher.js';
@@ -28,6 +29,8 @@ export interface RemoteServiceOptions {
   broadcast: (event: RemoteEvent) => void;
   /** The offer string is turned into an image here, in main (spec 12). */
   qrDataUrl?: (text: string) => Promise<string>;
+  /** Native «Revoke <device>?» dialog; true = revoke. Without it a revoke is refused. */
+  confirmRevoke?: (deviceName: string) => Promise<boolean>;
   /** Control event `phone.action` (a weighty action taken from a phone). */
   onPhoneAction?: (data: unknown) => void;
   /** Delays of the reconnect to a dropped control socket, ms; the last one repeats. */
@@ -206,6 +209,14 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
       await refreshStatus();
       publish();
       return null;
+    },
+    async 'devices.revokeConfirm'({ deviceId }) {
+      const id = text(deviceId, 64);
+      if (!options.confirmRevoke) throw new ControlCallError('bad_request', 'invalid argument');
+      const list = (await control('devices.list')) as { devices: RemoteDevice[] };
+      const name = list.devices.find((device) => device.deviceId === id)?.name ?? S.settings.remote.phoneAction.unknownDevice;
+      if (!(await options.confirmRevoke(name))) return false;
+      return handlers['devices.revoke']({ deviceId: id }).then(() => true);
     },
     async reset() {
       await control('reset');
