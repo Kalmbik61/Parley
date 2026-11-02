@@ -129,7 +129,7 @@ export function installDemo(client: RemoteClient): void {
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
 
-/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|decision-sheet|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -144,6 +144,8 @@ export function demoRoute(name: unknown): string | null {
       return s('a13');
     case 'decision':
       return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
+    case 'decision-sheet':
+      return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03&devSheet=1`;
     case 'letters':
       return '/?segment=letters';
     case 'letter':

@@ -3,3 +3,9 @@ import Constants from 'expo-constants';
 /** Developer build with PARLEY_MOBILE_DEV_DEMO=1: made-up data, and decisions look possible (nothing is sent). */
 export const DEMO = __DEV__ && Constants.expoConfig?.extra?.devDemo === true;
 export const DEMO_ROUTE: unknown = Constants.expoConfig?.extra?.devRoute;
+/**
+ * Developer build with PARLEY_MOBILE_DEV_LOCK_MS=<ms>: the app lock locks after that much idle time instead of five
+ * minutes, and stays on with demo data, so the lock can be looked at on a simulator (plan A35b). Never in release.
+ */
+const devLockMs: unknown = Constants.expoConfig?.extra?.devLockMs;
+export const DEV_LOCK_MS: number | null = __DEV__ && typeof devLockMs === 'number' && devLockMs > 0 ? devLockMs : null;

@@ -6,6 +6,8 @@ import { SymbolView } from 'expo-symbols';
 import { Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { DEMO } from '../dev/flags';
+import { touchAppLock } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { haptic } from '../haptics';
 import { selectLaunchCapabilities } from '@parley/remote-client';
 import { useCanAct, useRemoteState } from '../hooks/use-remote';
@@ -146,6 +148,9 @@ export default function NewScreen() {
   usePreventRemove(draft && exit === null && !busy, ({ data }) => askDiscard(() => navigation.dispatch(data.action)));
 
   const close = () => (draft && !busy ? askDiscard(() => setExit({ route: null })) : setExit({ route: null }));
+  // The app locked (plan A35b): the screen closes without the "Discard this draft?" question, which would stand above the
+  // lock screen. A launch in flight is left to finish: it navigates on its own, under the lock screen.
+  useCloseOnLock(!busy && exit === null, () => setExit({ route: null }));
 
   const finish = (route: string, message: string) => {
     haptic.success();
@@ -235,7 +240,7 @@ export default function NewScreen() {
   const off = !online ? 'Reconnecting — actions are paused' : gone;
 
   return (
-    <View style={[styles.page, { backgroundColor: c.bg }]}>
+    <View onTouchStart={touchAppLock} style={[styles.page, { backgroundColor: c.bg }]}>
       <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', headerBackVisible: false, headerLeft: () => (
         <Pressable accessibilityRole="button" hitSlop={8} onPress={step === 'letter' ? later : close}>
           <Text allowFontScaling style={[typography.body, { color: c.tint }]}>{step === 'letter' ? 'Later' : 'Cancel'}</Text>

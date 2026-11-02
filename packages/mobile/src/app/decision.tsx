@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { DEMO } from '../dev/flags';
+import { touchAppLock } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
@@ -19,7 +21,7 @@ const str = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v
 export default function DecisionScreen() {
   const colors = useColors();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref: string; room: string; proposal?: string }>();
+  const params = useLocalSearchParams<{ ref: string; room: string; proposal?: string; devSheet?: string }>();
   const roomId = str(params.room);
   const { projectPath, workId } = parseWorkParam(str(params.ref)) ?? { projectPath: '', workId: '' };
   const remote = useRemoteState();
@@ -33,7 +35,9 @@ export default function DecisionScreen() {
   // What the human is looking at. A conflict replaces it; a live change of the proposal never silently re-targets a tap.
   const [view, setView] = useState<DecisionView | null>(null);
   const [busy, setBusy] = useState<'accept' | 'return' | null>(null);
-  const [sheet, setSheet] = useState(false);
+  // Developer build: `PARLEY_MOBILE_DEV_ROUTE=decision-sheet` opens with the "Return for rework" sheet up (screenshots, A35b).
+  const [sheet, setSheet] = useState(() => __DEV__ && str(params.devSheet) === '1');
+  useCloseOnLock(sheet, () => setSheet(false));
   const [note, setNote] = useState('');
   const sending = useRef(false);
 
@@ -151,7 +155,8 @@ export default function DecisionScreen() {
       ) : null}
 
       <Modal visible={sheet} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => void (busy === null && setSheet(false))}>
-        <View style={[styles.page, { backgroundColor: colors.bg, padding: spacing.screenMargin, gap: 12 }]}>
+        {/* A touch in the sheet restarts the idle term; the lock closes the sheet (plan A35b). */}
+        <View onTouchStart={touchAppLock} style={[styles.page, { backgroundColor: colors.bg, padding: spacing.screenMargin, gap: 12 }]}>
           <View style={styles.sheetHead}>
             <Text accessibilityRole="header" allowFontScaling style={[typography.title3, { color: colors.label }]}>Return for rework</Text>
             <Pressable accessibilityRole="button" disabled={busy !== null} onPress={() => setSheet(false)}>
