@@ -7,6 +7,22 @@ import { createPhoneActionNotifier } from './phone-actions.js';
 const D = 'AAAAAAAAAAAAAAAAAAAAAA';
 const ref = (sessionId: string) => ({ projectPath: '/Users/a/proj', workId: 'w-1', sessionId });
 const enc = new TextEncoder();
+const FP_A = 'a'.repeat(64);
+const FP_B = 'b'.repeat(64);
+const mcpCard = (id: string) => ({
+  id,
+  kind: 'project-mcp',
+  version: 1,
+  projectPath: '/Users/a/repo',
+  repo: '/Users/a/repo',
+  servers: [
+    { name: 'github', fingerprint: FP_A, command: 'npx SECRET-CMD' },
+    { name: 'files', fingerprint: FP_B, command: 'node SECRET.js' },
+  ],
+  at: 'a',
+  state: 'pending',
+  requestedBy: { source: 'launch' },
+});
 
 function bridge(handler: (method: string, params: unknown) => unknown) {
   const events: PhoneActionEvent[] = [];
@@ -57,14 +73,21 @@ describe('bridge phone.action → window notification text', () => {
     b.emit('consents.changed', {
       upsert: [
         { id: 'c-12', kind: 'agent-switch', projectPath: '/p', ref: ref('s-1'), provider: 'codex', providerLabel: 'Codex', model: null, reason: 'SECRET', at: 'a', state: 'pending', requestedBy: { sessionId: 's-1', label: 'l' } },
+        mcpCard('c-13'),
+        mcpCard('c-14'),
+        mcpCard('c-15'),
       ],
       removed: [],
     });
     b.call('sessions.create', { projectPath: '/Users/a/proj', workId: 'w-1', provider: 'claude', label: 'L', task: 'SECRET TASK', parent: null, trustFolder: true });
     b.call('consents.decide', { id: 'c-12', decision: 'allow' });
+    b.call('consents.decide', { id: 'c-13', decision: 'allow', enabled: [{ name: 'github', fingerprint: FP_A }, { name: 'files', fingerprint: FP_B }] });
+    // No notification: a deny and an allow that enables nothing.
+    b.call('consents.decide', { id: 'c-14', decision: 'deny' });
+    b.call('consents.decide', { id: 'c-15', decision: 'allow', enabled: [] });
     b.call('feed.decide', { ref: ref('s-1'), cardId: 'k', decision: { kind: 'permission', behavior: 'allow', always: true } });
     b.call('feed.decide', { ref: ref('s-1'), cardId: 'k2', decision: { kind: 'plan', choice: 'auto-accept' } });
-    await vi.waitFor(() => expect(b.events).toHaveLength(5));
+    await vi.waitFor(() => expect(b.events).toHaveLength(6));
 
     const bodies: string[] = [];
     let t = 0;
@@ -81,11 +104,19 @@ describe('bridge phone.action → window notification text', () => {
       now: () => (t += 20_000),
     });
     for (const event of b.events) notifier.handle(event);
-    await vi.waitFor(() => expect(bodies).toHaveLength(5));
+    await vi.waitFor(() => expect(bodies).toHaveLength(6));
     expect([...bodies].sort()).toEqual(
-      ['Allowed always: Auth rework', 'Approved a plan with auto-accept', 'Approved a switch to Codex', 'Started a session in Auth rework', 'Trusted folder proj'].sort(),
+      [
+        'Allowed always: Auth rework',
+        'Approved a plan with auto-accept',
+        'Approved a switch to Codex',
+        'Enabled 2 MCP servers in repo: github, files',
+        'Started a session in Auth rework',
+        'Trusted folder proj',
+      ].sort(),
     );
-    expect(bodies.join(' ')).not.toMatch(/c-12|SECRET/);
+    expect(bodies.join(' ')).not.toMatch(/c-1[2-5]|SECRET|aaaa|bbbb/);
+    expect(b.events.filter((e) => e.kind === 'mcp-enable')).toEqual([{ deviceId: D, kind: 'mcp-enable', target: { repo: '/Users/a/repo', servers: ['github', 'files'] } }]);
   });
 
   it('a launch that fails after the host wrote the trust still reports the trusted folder', async () => {

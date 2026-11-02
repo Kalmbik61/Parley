@@ -17,21 +17,29 @@ const clip = (value: string): string => (value.length > 120 ? `${value.slice(0, 
 /** Title of the work a session `ref` belongs to; `null` when the window does not know the work. */
 export type WorkTitleLookup = (ref: { projectPath: string; workId: string }) => Promise<string | null>;
 
-/** What the notification names: the work title, then basename(projectPath) only for an unknown work. */
+const baseName = (folder: string): string => path.basename(folder.replace(/\/+$/, '')) || folder;
+
+/** What the notification names: the work title, then basename(projectPath) only for an unknown work; the repo name for MCP. */
 async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLookup | undefined): Promise<string> {
   if (typeof target === 'string') return target;
+  if ('repo' in target) return baseName(target.repo);
   const title = await workTitle?.(target).catch(() => null);
   return title && title.trim() !== '' ? title : path.basename(target.projectPath) || target.projectPath;
 }
 
 /** Same work (or same string target) = same coalescing key; two folders trusted in a row both notify. */
-const targetKey = (target: PhoneAction['target']): string => (typeof target === 'string' ? target : `${target.projectPath}\0${target.workId}`);
+const targetKey = (target: PhoneAction['target']): string =>
+  typeof target === 'string' ? target : 'repo' in target ? `${target.repo}\0${target.servers.join('\0')}` : `${target.projectPath}\0${target.workId}`;
 
-/** `target` is the already resolved text (see `targetText`). */
-export function phoneActionBody(action: Pick<PhoneAction, 'kind'>, target: string): string {
+/** `target` is the already resolved text (see `targetText`); `mcp-enable` also lists the server names of `action.target`. */
+export function phoneActionBody(action: Pick<PhoneAction, 'kind'> & { target?: PhoneAction['target'] }, target: string): string {
   switch (action.kind) {
     case 'trust-folder':
-      return TEXT.trustFolder(path.basename(target.replace(/\/+$/, '')) || target);
+      return TEXT.trustFolder(baseName(target));
+    case 'mcp-enable': {
+      const servers = typeof action.target === 'object' && 'servers' in action.target ? action.target.servers : [];
+      return TEXT.mcpEnable(servers.length, clip(target), clip(servers.join(', ')));
+    }
     case 'allow-always':
       return TEXT.allowAlways(clip(target));
     case 'plan-auto-accept':

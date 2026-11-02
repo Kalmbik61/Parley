@@ -144,6 +144,50 @@ it('consents.decide с телефона на настоящем сервисе: 
   }
 });
 
+it('A36a: consents.decide project-mcp с телефона: пары доходят до сервиса, решение пишется с by: phone; несовпавшая пара — bad_request', async () => {
+  const { createConsentsService } = await import('../consents/consents-service.js');
+  const record = vi.fn();
+  const continueLaunch = vi.fn(async () => {});
+  const service = createConsentsService({
+    home,
+    host: { broadcast: () => {}, log: { info: () => {}, warn: () => {}, error: () => {} } },
+    trust: { grant: async () => undefined },
+    projectMcp: { record },
+    continueLaunch,
+    refuseLaunch: async () => {},
+    isLive: async () => false,
+    switchAgent: vi.fn(async () => ({ outcome: 'started' })),
+    tellRequester: async () => {},
+    noticeFailure: () => {},
+  });
+  try {
+    const remote = { client: { role: 'remote' } } as unknown as RequestInfo;
+    const handlers = createConsentHandlers({ consents: service, home }) as unknown as Record<string, Call>;
+    const fpA = 'a'.repeat(64);
+    const fpB = 'b'.repeat(64);
+    const hold = { ref: { projectPath: '/repo', workId: 'w-01', sessionId: 's-02' }, mode: 'launch' as const, by: 'human' };
+    const card = service.requestProjectMcp(
+      {
+        projectPath: '/repo',
+        repo: '/repo',
+        servers: [{ name: 'github', fingerprint: fpA, command: 'npx gh' }, { name: 'files', fingerprint: fpB, command: 'node f' }],
+        requestedBy: { source: 'launch' },
+      },
+      hold,
+    );
+    await expect(handlers['consents.decide']?.({ id: card.id, decision: 'allow', enabled: [{ name: 'github', fingerprint: fpB }] }, remote)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(record).not.toHaveBeenCalled();
+    expect(await handlers['consents.decide']?.({ id: card.id, decision: 'allow', enabled: [{ name: 'github', fingerprint: fpA }] }, remote)).toEqual({ applied: true, state: 'allowed' });
+    expect(record).toHaveBeenCalledWith('/repo', [
+      { name: 'github', fingerprint: fpA, enabled: true },
+      { name: 'files', fingerprint: fpB, enabled: false },
+    ], 'phone');
+    await vi.waitFor(() => expect(continueLaunch).toHaveBeenCalledWith(hold));
+  } finally {
+    service.stop();
+  }
+});
+
 it('consents.decide: allow карточки agent-switch из окна доходит до сервиса, который вызывает switchAgent', async () => {
   const { createConsentsService } = await import('../consents/consents-service.js');
   const switchAgent = vi.fn(async () => ({ outcome: 'started' }));

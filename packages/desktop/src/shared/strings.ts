@@ -1538,6 +1538,8 @@ export const S = {
         planAutoAccept: 'Approved a plan with auto-accept',
         providerSwitch: (provider: string): string => `Approved a switch to ${provider}`,
         sessionStart: (work: string): string => `Started a session in ${work}`,
+        mcpEnable: (count: number, repo: string, servers: string): string =>
+          `Enabled ${count} MCP ${count === 1 ? 'server' : 'servers'} in ${repo}: ${servers}`,
         revokeButton: 'Revoke this phone',
         confirmTitle: (device: string): string => `Revoke ${device}?`,
         confirmBody: 'This phone loses access and must be paired again with a new code.',

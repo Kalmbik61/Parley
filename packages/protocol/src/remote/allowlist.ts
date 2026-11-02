@@ -181,6 +181,26 @@ function charsBetween(value: unknown, min: number, max: number): boolean {
   return n >= min && n <= max;
 }
 
+/**
+ * `enabled` у `consents.decide` (A36a): массив не длиннее `REMOTE_MCP_ENABLED_MAX`, у пары строго `name` (1–200) и
+ * `fingerprint` (sha256 hex). Совпадение пар с карточкой сверяет хост (`bad_request` на несовпавшую пару).
+ */
+function mcpPairs(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > REMOTE_MCP_ENABLED_MAX) return false;
+  return value.every(item => {
+    const pair = record(item);
+    return (
+      pair !== null &&
+      onlyKeys(pair, MCP_PAIR_KEYS) &&
+      typeof pair.name === 'string' &&
+      pair.name.length >= 1 &&
+      pair.name.length <= MCP_NAME_MAX &&
+      typeof pair.fingerprint === 'string' &&
+      MCP_FINGERPRINT.test(pair.fingerprint)
+    );
+  });
+}
+
 const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
   'projectPath',
   'workId',
@@ -195,7 +215,14 @@ const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
 ]);
 const PTY_SEND_KEYS: ReadonlySet<string> = new Set(['ref', 'text', 'submit', 'requestedAt', 'clientMsgId']);
 const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
-const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision']);
+const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision', 'enabled', 'revision']);
+/** Пара сервера MCP из карточки `project-mcp` (спека 2026-11-02, 7.2): строго имя и отпечаток. */
+const MCP_PAIR_KEYS: ReadonlySet<string> = new Set(['name', 'fingerprint']);
+/** Отпечаток сервера MCP — sha256 в hex, как его считает хост. */
+const MCP_FINGERPRINT = /^[0-9a-f]{64}$/;
+/** Не больше пар, чем принимает схема хоста. */
+export const REMOTE_MCP_ENABLED_MAX = 200;
+const MCP_NAME_MAX = 200;
 /** Номер карточки согласия хоста: `c-NN`. */
 const CONSENT_ID = /^c-\d+$/;
 const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
@@ -294,7 +321,10 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       onlyKeys(p, CONSENT_DECIDE_KEYS) &&
       typeof p.id === 'string' &&
       CONSENT_ID.test(p.id) &&
-      (p.decision === 'allow' || p.decision === 'deny')
+      (p.decision === 'allow' || p.decision === 'deny') &&
+      (p.enabled === undefined || (p.decision === 'allow' && mcpPairs(p.enabled))) &&
+      // Ревизия карточки `project-mcp` (ревью s-209): с `allow` и с `deny`; нужна ли она, решает хост.
+      (p.revision === undefined || (Number.isSafeInteger(p.revision) && (p.revision as number) >= 0))
     );
   },
   // Лента сессии — да, лента субагента (`agentId`) — нет: для телефона она не решена (спека 4.2, критик s-199 m5).

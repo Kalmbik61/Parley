@@ -34,6 +34,9 @@ describe('phone action notifications', () => {
     expect(phoneActionBody({ kind: 'plan-auto-accept' }, 'secret plan text')).toBe('Approved a plan with auto-accept');
     expect(phoneActionBody({ kind: 'provider-switch' }, 'codex')).toBe('Approved a switch to codex');
     expect(phoneActionBody({ kind: 'session-create' }, 'Work A')).toBe('Started a session in Work A');
+    const mcp = (servers: string[]) => ({ kind: 'mcp-enable' as const, target: { repo: '/Users/a/repo', servers } });
+    expect(phoneActionBody(mcp(['github', 'files']), 'repo')).toBe('Enabled 2 MCP servers in repo: github, files');
+    expect(phoneActionBody(mcp(['github']), 'repo')).toBe('Enabled 1 MCP server in repo: github');
   });
 
   it('shows a notification titled with the device name and a Revoke button', async () => {
@@ -42,6 +45,18 @@ describe('phone action notifications', () => {
     await flush();
     expect(t.shown).toHaveLength(1);
     expect(t.shown[0]).toMatchObject({ title: 'Parley — Anna iPhone', body: 'Approved a plan with auto-accept', shownCalls: 1 });
+    expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
+  });
+
+  it('mcp-enable names the repo folder and the servers, with the Revoke button', async () => {
+    const t = setup();
+    t.notifier.handle({ deviceId: ID, kind: 'mcp-enable', target: { repo: '/Users/a/repo/', servers: ['github'] } });
+    // Not without servers, not with commands in the target.
+    t.notifier.handle({ deviceId: ID, kind: 'mcp-enable', target: { repo: '/Users/a/repo', servers: [] } });
+    t.notifier.handle({ deviceId: ID, kind: 'mcp-enable', target: { repo: '/Users/a/repo', servers: ['x'], commands: ['npx x'] } });
+    await flush();
+    expect(t.shown).toHaveLength(1);
+    expect(t.shown[0]).toMatchObject({ title: 'Parley — Anna iPhone', body: 'Enabled 1 MCP server in repo: github' });
     expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
   });
 

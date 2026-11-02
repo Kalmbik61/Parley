@@ -12,6 +12,7 @@ import {
   REMOTE_NOTIFICATIONS,
   REMOTE_STAGES,
   REMOTE_PARAM_RULES,
+  REMOTE_MCP_ENABLED_MAX,
   checkRemoteParams,
   isRemoteForbidden,
   b64urlDecode,
@@ -125,6 +126,42 @@ describe('allowlist', () => {
     expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow', extra: 1 })).toBe(false);
     for (const id of ['', 'c-', 'c-x', 'c-1 ', 'C-1', 'm-1', 7, undefined]) {
       expect(checkRemoteParams('consents.decide', { id, decision: 'allow' }), String(id)).toBe(false);
+    }
+  });
+
+  it('A36a: consents.decide takes enabled MCP pairs only with allow, strictly {name, fingerprint}', () => {
+    const fp = 'a'.repeat(64);
+    const allow = (enabled: unknown): unknown => ({ id: 'c-3', decision: 'allow', enabled });
+    expect(checkRemoteParams('consents.decide', allow([{ name: 'github', fingerprint: fp }, { name: 'n'.repeat(200), fingerprint: '0123456789abcdef'.repeat(4) }]))).toBe(true);
+    expect(checkRemoteParams('consents.decide', allow([]))).toBe(true);
+    expect(checkRemoteParams('consents.decide', allow(Array.from({ length: REMOTE_MCP_ENABLED_MAX }, (_, i) => ({ name: `s${i}`, fingerprint: fp }))))).toBe(true);
+    // Больше 200 пар.
+    expect(checkRemoteParams('consents.decide', allow(Array.from({ length: REMOTE_MCP_ENABLED_MAX + 1 }, (_, i) => ({ name: `s${i}`, fingerprint: fp }))))).toBe(false);
+    // `enabled` с отказом.
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', enabled: [] })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', enabled: [{ name: 'a', fingerprint: fp }] })).toBe(false);
+    // Лишний ключ у пары и у параметров.
+    expect(checkRemoteParams('consents.decide', allow([{ name: 'a', fingerprint: fp, command: 'rm -rf /' }]))).toBe(false);
+    expect(checkRemoteParams('consents.decide', { ...(allow([{ name: 'a', fingerprint: fp }]) as object), extra: 1 })).toBe(false);
+    // Отпечаток не sha256 hex.
+    for (const fingerprint of ['A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), `${'a'.repeat(63)} `, '', 7, undefined]) {
+      expect(checkRemoteParams('consents.decide', allow([{ name: 'a', fingerprint }])), String(fingerprint)).toBe(false);
+    }
+    // Имя: строка 1–200.
+    for (const name of ['', 'n'.repeat(201), 7, null, undefined]) {
+      expect(checkRemoteParams('consents.decide', allow([{ name, fingerprint: fp }])), String(name)).toBe(false);
+    }
+    for (const enabled of [null, {}, 'a', [null], [[]], [{ name: 'a' }], [{ fingerprint: fp }]]) {
+      expect(checkRemoteParams('consents.decide', allow(enabled)), JSON.stringify(enabled)).toBe(false);
+    }
+  });
+
+  it('A36a: consents.decide takes revision, a non-negative integer, with allow and with deny', () => {
+    const fp = 'a'.repeat(64);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'allow', revision: 0, enabled: [{ name: 'a', fingerprint: fp }] })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision: 7 })).toBe(true);
+    for (const revision of [-1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+      expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision }), String(revision)).toBe(false);
     }
   });
 
@@ -443,6 +480,14 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow', target: ref }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow-always', target: { ...ref, text: 'agent text' } }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'plan-auto-accept', target: ref, text: 'x' }).success).toBe(false);
+    // A36a: `mcp-enable` — realpath репозитория и имена серверов, без команд и отпечатков; эта цель только у него.
+    const mcp = { repo: '/private/tmp/repo', servers: ['github', 'files'] };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: mcp }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: { ...mcp, servers: [] } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: { ...mcp, commands: ['npx x'] } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: '/private/tmp/repo' }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'trust-folder', target: mcp }).success).toBe(false);
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);

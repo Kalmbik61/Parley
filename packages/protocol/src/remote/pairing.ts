@@ -57,21 +57,31 @@ export const pairOfferClosedEvent = z.strictObject({ reason: z.enum(PAIR_OFFER_C
 
 /**
  * Весомое действие телефона (спека 12, правки 18): окно показывает уведомление macOS с «Revoke this phone». Без текстов
- * агентов: цель — `ref` сессии (`session-create`, `allow-always`, `plan-auto-accept`), realpath папки (`trust-folder`)
- * или `id` карточки согласия (`provider-switch`).
+ * агентов: цель — `ref` сессии (`session-create`, `allow-always`, `plan-auto-accept`), realpath папки (`trust-folder`),
+ * имя провайдера (`provider-switch`) или realpath репозитория и имена включённых серверов MCP (`mcp-enable`, A36a: без
+ * команд, `env` и отпечатков).
  */
-export const PHONE_ACTION_KINDS = ['session-create', 'trust-folder', 'provider-switch', 'allow-always', 'plan-auto-accept'] as const;
+export const PHONE_ACTION_KINDS = ['session-create', 'trust-folder', 'provider-switch', 'allow-always', 'plan-auto-accept', 'mcp-enable'] as const;
 export type PhoneActionKind = (typeof PHONE_ACTION_KINDS)[number];
 const phoneActionRef = z.strictObject({
   projectPath: z.string().min(1).max(4096),
   workId: z.string().min(1).max(256),
   sessionId: z.string().min(1).max(256),
 });
-export const phoneActionEvent = z.strictObject({
-  deviceId: deviceIdSchema,
-  kind: z.enum(PHONE_ACTION_KINDS),
-  target: z.union([phoneActionRef, z.string().min(1).max(4096)]),
+const phoneActionMcp = z.strictObject({
+  repo: z.string().min(1).max(4096),
+  servers: z.array(z.string().min(1).max(200)).min(1).max(200),
 });
+export const phoneActionEvent = z
+  .strictObject({
+    deviceId: deviceIdSchema,
+    kind: z.enum(PHONE_ACTION_KINDS),
+    target: z.union([phoneActionRef, phoneActionMcp, z.string().min(1).max(4096)]),
+  })
+  // Цель `{repo, servers}` — только у `mcp-enable`, и у него только она.
+  .refine((event) => (event.kind === 'mcp-enable') === (typeof event.target === 'object' && 'repo' in event.target), {
+    message: 'mcp-enable takes {repo, servers} and only it does',
+  });
 export type PhoneActionEvent = z.infer<typeof phoneActionEvent>;
 
 export const pairStartResult = z.strictObject({ qr: z.string().max(256), expiresAt: z.number().int().positive() });
