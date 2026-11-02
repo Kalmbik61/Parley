@@ -108,6 +108,60 @@ describe('applyCodexRecords', () => {
   });
 });
 
+describe('асинхронные вопросы Codex в Chat', () => {
+  const at = '2026-11-02T08:27:00.186Z';
+  const question = (payload: Record<string, unknown>): RolloutRecord => ({
+    ordinal: null,
+    at,
+    type: 'response_item',
+    payload,
+  });
+  const input = {
+    questions: [
+      { title: 'Что не устроило в проверке?', options: ['Ошибки в ответах', 'Медленная работа'] },
+      { title: 'Приведите один пример.' },
+    ],
+  };
+
+  it.each(['function_call', 'custom_tool_call'])('%s показывает текст и варианты без ожидания item_completed', (type) => {
+    const record = question({ type, name: 'request_user_input_async', call_id: 'call-question',
+      [type === 'function_call' ? 'arguments' : 'input']: JSON.stringify(input) });
+    const { update } = applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor());
+    const text = ofKind(update.state.items, 'text')[0];
+    expect(text).toMatchObject({ id: 'text:codex-question:call-question', at, streaming: false, messageId: null });
+    expect(text?.text).toContain('Что не устроило в проверке?');
+    expect(text?.text).toContain('1. Ошибки в ответах');
+    expect(text?.text).toContain('2. Медленная работа');
+    expect(text?.text).toContain('Приведите один пример.');
+    expect(text?.text).toContain('Shift+Left');
+    // Нативный вопрос не имеет удержанного хука Parley: ложной формы feed.decide быть не должно.
+    expect(ofKind(update.state.items, 'question')).toEqual([]);
+  });
+
+  it('accepted:true и повторное чтение не скрывают и не дублируют вопрос', () => {
+    const record = question({ type: 'function_call', name: 'request_user_input_async', call_id: 'call-question', arguments: JSON.stringify(input) });
+    const first = applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor());
+    const again = applyCodexRecords(first.update.state, [record,
+      question({ type: 'function_call_output', call_id: 'call-question', output: '{"accepted":true}' }),
+    ], first.cursor);
+    expect(ofKind(again.update.state.items, 'text')).toHaveLength(1);
+    expect(ofKind(again.update.state.items, 'text')[0]?.text).toContain('Что не устроило в проверке?');
+  });
+
+  it.each(['{broken', '{}', '{"questions":[null,{}, {"title":42}]}'])('битые вопросы не ломают ленту: %s', (args) => {
+    const { update } = applyCodexRecords(emptyFeedState(), [question({
+      type: 'function_call', name: 'request_user_input_async', call_id: 'bad', arguments: args,
+    })], emptyCodexCursor());
+    expect(update.state.items).toEqual([]);
+  });
+
+  it('посторонние вызовы и вопрос дочернего журнала не выдаются за вопрос основного агента', () => {
+    const record = question({ type: 'function_call', name: 'request_user_input_async', call_id: 'call-question', arguments: JSON.stringify(input) });
+    expect(applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor(), 'child').update.state.items).toEqual([]);
+    expect(applyCodexRecords(emptyFeedState(), [question({ ...record.payload, name: 'other_tool' })], emptyCodexCursor()).update.state.items).toEqual([]);
+  });
+});
+
 describe('картинки в ленте Codex', () => {
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
   const JPEG_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4R';
