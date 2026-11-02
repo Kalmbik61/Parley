@@ -232,6 +232,8 @@ export interface ParleyBridge {
      * 'clipboard'; null — картинки нет или в буфере есть текст.
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
+    /** Копия внешнего изображения в drops/: доступна CLI независимо от прав на исходный каталог. */
+    importDropImage(absPath: string): Promise<string>;
     /**
      * Миниатюра картинки «Chat» для чипов поля ввода и ленты, для картинок из результатов инструментов и их просмотра
      * (`main/image-thumbnail.ts`): data-URL по длинной стороне не больше `maxPx`. `maxPx` — целое 64–2048, без него и вне

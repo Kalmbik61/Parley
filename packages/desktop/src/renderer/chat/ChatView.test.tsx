@@ -2046,6 +2046,39 @@ describe('ChatView — Codex', () => {
     expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true, requestedAt: expect.any(Number) }]);
   });
 
+  it.each(['pick', 'drop'])('Codex: %s отправляет копию изображения вместо исходного пути', async (via) => {
+    const source = via === 'pick' ? '/Library/Containers/Telegram/IMAGE 11:39.jpg' : '/fake/IMAGE 11:39.jpg';
+    const saved = '/h/drops/attachment.jpg';
+    const imported = vi.spyOn(bridge.app, 'importDropImage').mockResolvedValue(saved);
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    if (via === 'pick') {
+      bridge.setChosenFiles([source, '/tmp/notes.txt']);
+      fireEvent.click(screen.getByTestId('chat-attach'));
+    } else {
+      fireEvent.drop(screen.getByTestId('chat-view'), { dataTransfer: { types: ['Files'], files: [new File([], 'IMAGE 11:39.jpg')] } });
+    }
+    await act(async () => {});
+    expect(imported).toHaveBeenCalledTimes(1);
+    expect(imported).toHaveBeenCalledWith(source);
+    fireEvent.change(field(), { target: { value: 'look' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const sent = bridge.calls.find((call) => call.method === 'pty.send')?.params;
+    expect(sent).toMatchObject({ text: composeRoomMessage('look', via === 'pick' ? [saved, '/tmp/notes.txt'] : [saved]) });
+  });
+
+  it('Codex: отказ копирования виден сразу, исходный путь не становится вложением', async () => {
+    vi.spyOn(bridge.app, 'importDropImage').mockRejectedValue(new Error('Operation not permitted'));
+    bridge.setChosenFiles(['/Library/Containers/Telegram/photo.jpg']);
+    fireEvent.change(field(), { target: { value: 'draft' } });
+    fireEvent.click(screen.getByTestId('chat-attach'));
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledWith(S.terminal.imageImportFailed);
+    expect(useChatUiStore.getState().attachments[refKey(REF)] ?? []).toEqual([]);
+    expect(field().value).toBe('draft');
+    expect(bridge.calls.some((call) => call.method === 'pty.send')).toBe(false);
+  });
+
   describe('подсказка про хуки', () => {
     const setDecisions = (decisions: 'window' | 'terminal' | null): void => {
       act(() => {

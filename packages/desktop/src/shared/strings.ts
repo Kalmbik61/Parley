@@ -1716,6 +1716,7 @@ export const S = {
     imageTooLarge: 'Image is larger than 20 MB — not sent',
     /** Окно видело картинку в буфере, а main её не прочитал (`saveDropImage` вернул `null`). */
     imageUnreadable: "Couldn't read the image from the clipboard",
+    imageImportFailed: "Couldn't copy the image — attachment not added",
     /** Связь окна с хостом оборвалась (раунд lane-r3, п. 2): терминал ввод не принимает. */
     disconnected: 'Disconnected — reconnecting…',
     /** Мета карточки неживой сессии (спека окна 2026-09-29, 1.8): `Claude Code · last event 3h ago`. */

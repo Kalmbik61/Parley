@@ -96,6 +96,7 @@ import { ContextChip } from '../components/context/ContextChip.js';
 import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
+import { isImagePath } from '../../shared/image-path.js';
 import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
@@ -399,14 +400,29 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
 
   // Скриншот из буфера → drops/ (main) → путь; отказы — теми же тостами, что у терминала.
   const pasteImage = useCallback((): Promise<string | null> => pasteClipboardImage(bridge), [bridge]);
+  // Codex читает вложение инструментом по пути; контейнер исходного приложения может быть недоступен CLI.
+  const importImages = useCallback(async (paths: string[]): Promise<string[]> => {
+    if (!codex) return paths;
+    const saved: string[] = [];
+    for (const path of paths) {
+      try {
+        saved.push(isImagePath(path) ? await bridge.app.importDropImage(path) : path);
+      } catch (error) {
+        const { code, message } = decodeIpcError(error);
+        console.warn('[parley] importDropImage', message);
+        toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : S.terminal.imageImportFailed);
+      }
+    }
+    return saved;
+  }, [bridge, codex]);
   const pickFiles = useCallback(async (): Promise<string[]> => {
     try {
-      return await bridge.app.chooseFiles();
+      return await importImages(await bridge.app.chooseFiles());
     } catch (error) {
       console.warn('[parley] chooseFiles', decodeIpcError(error).message);
       return [];
     }
-  }, [bridge]);
+  }, [bridge, importImages]);
 
   // Файлы из Finder на весь вид: подсветка, затем пути вложениями над полем ввода.
   const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
@@ -426,7 +442,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const paths = Array.from(event.dataTransfer.files)
       .map((file) => bridge.app.pathForFile(file))
       .filter((path) => path !== '');
-    useChatUiStore.getState().setAttachments(sessionKey, addAttachments(attachments, paths));
+    const attach = (saved: string[]): void => {
+      const state = useChatUiStore.getState();
+      state.setAttachments(sessionKey, addAttachments(state.attachments[sessionKey] ?? [], saved));
+    };
+    if (codex) void importImages(paths).then(attach);
+    else attach(paths);
   };
 
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
