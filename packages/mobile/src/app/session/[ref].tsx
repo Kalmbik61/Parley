@@ -426,12 +426,16 @@ export default function SessionScreen() {
   );
 }
 
-/** A provider-switch request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
+/** A provider-switch or project-MCP request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
 function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
   const consents = useConsents();
   const canAct = useCanAct();
   const now = useNow(30_000);
-  const mine = consents.rows.filter((r) => r.card.kind === 'agent-switch' && r.card.ref.sessionId === sessionRef.sessionId && r.card.ref.workId === sessionRef.workId);
+  const mine = consents.rows.filter(({ card }) =>
+    card.kind === 'agent-switch'
+      ? card.ref.sessionId === sessionRef.sessionId && card.ref.workId === sessionRef.workId
+      : card.kind === 'project-mcp' && card.requestedBy.sessionId === sessionRef.sessionId && card.requestedBy.workId === sessionRef.workId,
+  );
   if (mine.length === 0) return null;
   return (
     <View style={styles.switchWrap}>

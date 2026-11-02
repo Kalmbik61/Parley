@@ -50,7 +50,8 @@ const question: FeedCard = {
   questions: [{ question: 'Which branch should I rebase onto?', header: 'Branch', multiSelect: false, options: [{ label: 'main', description: 'The default branch' }, { label: 'feat/mobile-stage-a', description: null }] }],
 } as unknown as FeedCard;
 
-export function installDemo(client: RemoteClient): void {
+/** `onlyConsent`: show only that consent card (screenshots, PARLEY_MOBILE_DEV_CONSENT). */
+export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   const { store } = client;
   if (store.getState().snapshot !== null) return;
   store.dispatch({ t: 'bridge.status', host: 'online', epoch: 'demo' });
@@ -121,13 +122,29 @@ export function installDemo(client: RemoteClient): void {
   store.dispatch({
     t: 'consents.loaded', epoch: 'demo',
     items: [
-      { id: 'c-1', kind: 'folder-trust', projectPath: P, folder: `${P}`, at: ago(1), state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } },
-      { id: 'c-2', kind: 'agent-switch', projectPath: P, at: ago(3), state: 'pending', ref: ref('greta'), provider: 'codex', providerLabel: 'Codex', model: 'gpt-6-astra', reason: 'Usage limit until 14:30; continue the review there.', requestedBy: { sessionId: 'd1', label: 'Greta' } },
-    ] as never,
+      { id: 'c-1', kind: 'folder-trust', projectPath: P, folder: `${P}`, at: ago(6), state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } },
+      { id: 'c-3', kind: 'project-mcp', version: 1, revision: 1, projectPath: P, repo: P, at: ago(1), state: 'pending', servers: [
+        { name: 'filesystem', fingerprint: 'fp-fs', command: 'npx -y @modelcontextprotocol/server-filesystem /Users/me/parley' },
+        { name: 'github', fingerprint: 'fp-gh', command: 'https://api.githubcopilot.com/mcp/' },
+        { name: 'postgres', fingerprint: 'fp-pg', command: 'node ./tools/pg-mcp.js --readonly' },
+      ], requestedBy: { source: 'launch' } },
+      { id: 'c-4', kind: 'project-mcp', version: 1, revision: 1, projectPath: P, repo: '/Users/me/parley-web', at: ago(4), state: 'pending', servers: [
+        { name: 'filesystem', fingerprint: 'fp-fs', command: 'npx -y @modelcontextprotocol/server-filesystem /Users/me/parley-web' },
+        { name: 'postgres', fingerprint: 'fp-pg', command: 'node ./tools/pg-mcp.js --readonly' },
+      ], requestedBy: { source: 'launch' } },
+      { id: 'c-5', kind: 'project-mcp', version: 1, revision: 2, projectPath: P, repo: '/Users/me/parley-docs', at: ago(5), state: 'pending', servers: [
+        { name: 'search', fingerprint: 'fp-s2', command: 'uvx docs-search-mcp --index ./docs' },
+      ], requestedBy: { source: 'launch' } },
+      { id: 'c-2', kind: 'agent-switch', projectPath: P, at: ago(7), state: 'pending', ref: ref('greta'), provider: 'codex', providerLabel: 'Codex', model: 'gpt-6-astra', reason: 'Usage limit until 14:30; continue the review there.', requestedBy: { sessionId: 'd1', label: 'Greta' } },
+    ].filter((card) => typeof onlyConsent !== 'string' || card.id === onlyConsent) as never,
   });
   store.dispatch({ t: 'cards.loaded', ref: ref('d1'), epoch: 'demo', items: [permission], at: Date.now() });
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
+
+/** Screenshots only (developer build): a partly switched-on project-mcp card and the "list changed" line under another. */
+export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
+export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
 /** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {

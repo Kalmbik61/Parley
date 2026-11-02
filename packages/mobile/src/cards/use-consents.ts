@@ -2,6 +2,8 @@
 // or "Answered at your Mac" when `consents.changed` removed it without us.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
+import { DEMO_CONSENT_NOTES } from '../dev/demo';
+import { DEMO } from '../dev/flags';
 import { haptic } from '../haptics';
 import { useClient, useRemoteState } from '../hooks/use-remote';
 import { CONSENT_TEXT, canDecideConsent, pendingConsents, runConsent, type ConsentUi } from './consent-model';
@@ -19,7 +21,7 @@ export interface ConsentRow {
 
 const LINGER_MS = 2000;
 
-export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, decision: 'allow' | 'deny'): Promise<void> } {
+export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, decision: 'allow' | 'deny', enabled?: ReadonlyArray<{ name: string; fingerprint: string }>): Promise<void> } {
   const client = useClient();
   const state = useRemoteState();
   const items = state?.consents.items;
@@ -30,7 +32,7 @@ export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, d
   const ours = useRef(new Map<string, string>());
   const [lingering, setLingering] = useState<Record<string, { card: ConsentCard; message: string }>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>(() => (DEMO ? DEMO_CONSENT_NOTES : {}));
 
   // A card that was pending and is gone: show how it ended for two seconds.
   useEffect(() => {
@@ -47,12 +49,12 @@ export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, d
   }, [pending]);
 
   const decide = useCallback(
-    async (card: ConsentCard, decision: 'allow' | 'deny'): Promise<void> => {
+    async (card: ConsentCard, decision: 'allow' | 'deny', enabled?: ReadonlyArray<{ name: string; fingerprint: string }>): Promise<void> => {
       if (client === null || busyId !== null) return;
       setBusyId(card.id);
       setNotes((n) => Object.fromEntries(Object.entries(n).filter(([k]) => k !== card.id)));
       try {
-        const ui: ConsentUi = await runConsent(client, card, decision);
+        const ui: ConsentUi = await runConsent(client, card, decision, enabled);
         switch (ui.kind) {
           case 'allowed':
             haptic.success();

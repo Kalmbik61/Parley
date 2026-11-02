@@ -462,7 +462,19 @@ export type DecideConsentOutcome =
   | Rejected;
 
 /** Решить карточку согласия (доверие к папке, смена провайдера). Не повторяется: после потери итог — по `consents.list`. */
-export async function decideConsent(store: RemoteStore, rpc: Rpc, id: string, decision: 'allow' | 'deny'): Promise<DecideConsentOutcome> {
+export interface ConsentExtra {
+  enabled?: ReadonlyArray<{ name: string; fingerprint: string }>;
+  revision?: number;
+}
+
+export async function decideConsent(
+  store: RemoteStore,
+  rpc: Rpc,
+  id: string,
+  decision: 'allow' | 'deny',
+  /** Карточка `project-mcp`: `enabled` — пары включённых серверов (только `allow`), `revision` — ревизия карточки (с обоими решениями). */
+  extra?: ConsentExtra,
+): Promise<DecideConsentOutcome> {
   const epoch = store.getState().epoch;
   const reread = async (): Promise<boolean | null> => {
     try {
@@ -475,12 +487,16 @@ export async function decideConsent(store: RemoteStore, rpc: Rpc, id: string, de
     }
   };
   try {
-    const res = (await rpc.call('consents.decide', { id, decision })) as { applied?: boolean } | null;
+    const res = (await rpc.call('consents.decide', { id, decision, ...(decision === 'allow' && extra?.enabled !== undefined ? { enabled: extra.enabled } : {}), ...(extra?.revision !== undefined ? { revision: extra.revision } : {}) })) as { applied?: boolean } | null;
     store.dispatch({ t: 'consents.resolved', id });
     if (store.getState().epoch === epoch) return { outcome: res?.applied === true ? 'applied' : 'stale' };
   } catch (error) {
     const rejected = rejection(error);
-    if (rejected !== null) return rejected;
+    if (rejected !== null) {
+      // `bad_request` на `enabled`: список серверов мог измениться — карточка перечитывается, человек смотрит её заново.
+      if (rejected.code === 'bad_request') await reread();
+      return rejected;
+    }
   }
   return { outcome: 'lost', stillPending: await reread() };
 }
