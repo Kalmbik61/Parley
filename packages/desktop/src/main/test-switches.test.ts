@@ -12,18 +12,8 @@ const ALL_ON = {
 };
 
 describe('testSwitches', () => {
-  it('works sync requires an explicit integration flag and isolated home, and respects packaged test gating', () => {
-    expect(testSwitches({}, false).worksSync).toBe(false);
-    expect(testSwitches({ PARLEY_WORKS_SYNC: '1' }, false).worksSync).toBe(false);
-    const env = { PARLEY_WORKS_SYNC: '1', PARLEY_HOME: '/tmp/isolated-sync' };
-    expect(testSwitches(env, false).worksSync).toBe(true);
-    expect(testSwitches(env, true).worksSync).toBe(false);
-    expect(testSwitches({ ...env, PARLEY_E2E: '1' }, true).worksSync).toBe(true);
-  });
-
   it('неупакованное окно (E2E, pnpm dev) слушает все семь переключателей набора ALL_ON', () => {
     expect(testSwitches(ALL_ON, false)).toEqual({
-      worksSync: false,
       downloads: true,
       dialogs: true,
       notifications: true,
@@ -38,7 +28,6 @@ describe('testSwitches', () => {
 
   it('собранное приложение их не слушает: уведомления, ссылки и загрузки не глохнут молча', () => {
     expect(testSwitches(ALL_ON, true)).toEqual({
-      worksSync: false,
       downloads: false,
       dialogs: false,
       notifications: false,
@@ -53,7 +42,6 @@ describe('testSwitches', () => {
 
   it('собранное приложение с явным PARLEY_E2E=1 слушает их — для проверок сборки', () => {
     expect(testSwitches({ ...ALL_ON, PARLEY_E2E: '1' }, true)).toEqual({
-      worksSync: false,
       downloads: true,
       dialogs: true,
       notifications: true,
@@ -104,7 +92,6 @@ describe('testSwitches', () => {
       HARNAS_ISLAND: 'off',
     };
     const all = {
-      worksSync: false,
       downloads: true,
       dialogs: true,
       notifications: true,
@@ -149,7 +136,6 @@ describe('testSwitches', () => {
 
   it('без переменных и в неупакованном окне всё выключено; значение должно совпасть точно', () => {
     expect(testSwitches({}, false)).toEqual({
-      worksSync: false,
       downloads: false,
       dialogs: false,
       notifications: false,

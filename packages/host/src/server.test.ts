@@ -183,8 +183,7 @@ describe('уведомления', () => {
 });
 
 /** Все методы и уведомления протокола — то, что понимает хост этой сборки. */
-// works.sync остаётся opt-in до принятия P7; обычный хост его не регистрирует.
-const protocolMethods = (): string[] => [...Object.keys(METHODS).filter(name => name !== 'works.sync' && name !== 'works.mailState'), ...Object.keys(NOTIFICATIONS)].sort();
+const protocolMethods = (): string[] => [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
 
 describe('список методов в hello', () => {
   it('advertises a registered feed.progress handler and validates its strict params', async () => {
@@ -203,7 +202,7 @@ describe('список методов в hello', () => {
     client.close();
   });
 
-  it('methods — отсортированные обычные METHODS и NOTIFICATIONS, works.sync до P7 выключен', async () => {
+  it('methods — отсортированные METHODS и NOTIFICATIONS с включённой синхронизацией карты', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);
     await waitConnected(client.socket);
@@ -211,9 +210,9 @@ describe('список методов в hello', () => {
     const response = await hello(client, token);
     const methods = (response.result as { methods: string[] }).methods;
     expect(methods).toEqual(protocolMethods());
-    expect(methods).not.toContain('works.sync');
-    expect(methods).not.toContain('works.mailState');
-    expect((response.result as { features: string[] }).features).not.toContain(WORKS_SYNC_FEATURE);
+    expect(methods).toContain('works.sync');
+    expect(methods).toContain('works.mailState');
+    expect((response.result as { features: string[] }).features).toContain(WORKS_SYNC_FEATURE);
     expect(methods).toContain('hello');
     expect(methods).toContain('works.rename');
     expect(methods).toContain('works.setStatus');

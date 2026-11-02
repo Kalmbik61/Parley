@@ -213,7 +213,7 @@ if (!gotLock) {
     const connection = new HostConnection({
       paths,
       env: shellEnv.env,
-      worksSync: switches.worksSync,
+      worksSync: true,
       // Процесс хоста — соединению: пока он жив, второй не запускается (раунд lane-r4).
       spawn: async () => {
         // Собранное окно запускает хост своим встроенным node 22 (`Resources/node`), разработка и сборка
@@ -254,8 +254,7 @@ if (!gotLock) {
       },
     });
 
-    // Isolated integration opt-in; neither default desktop nor host activation changes.
-    const worksBinding = switches.worksSync ? bindHostWorksSync(connection) : null;
+    const worksBinding = bindHostWorksSync(connection);
 
     // Операции агента над браузером (спека браузера 2026-10-07, 3.7; этап B2). Подписка — до первого подключения: операция,
     // пришедшая, пока окно поднимается, получает внятный отказ, а не тайм-аут хоста.
@@ -320,7 +319,7 @@ if (!gotLock) {
     // экрана терминала, им нужен DOM-рендер xterm вместо WebGL.
     const searchFlags = [
       envValue(process.env, 'TERMINAL_RENDERER') === 'dom' ? 'renderer=dom' : null,
-      switches.worksSync ? 'worksSync=1' : null,
+      'worksSync=1',
     ].filter((flag): flag is string => flag !== null);
 
     // Нативные вопросы main в E2E — в журнал (`globalThis.__parleyDialogs`), ответ «ждать».
@@ -520,7 +519,7 @@ if (!gotLock) {
       createWindow: () => {
         const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
         guardNavigation(window.webContents, `file://${islandHtmlPath}`);
-        void window.loadFile(islandHtmlPath, switches.worksSync ? { search: 'worksSync=1' } : {}).catch((error: unknown) => console.warn('[parley] island load failed', error));
+        void window.loadFile(islandHtmlPath, { search: 'worksSync=1' }).catch((error: unknown) => console.warn('[parley] island load failed', error));
         return window;
       },
       displays: () => screen.getAllDisplays(),

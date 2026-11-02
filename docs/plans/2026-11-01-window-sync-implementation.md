@@ -623,3 +623,13 @@ independent s211 verification. P7 performance/native acceptance remains separate
 reload cost on epoch retirement, the preserved small CPU finding and item11 Retry remain
 unmeasured/unresolved here. Default capability is OFF; no live database was migrated,
 restarted, or deployed by this work.
+
+### Human-authorized activation in PR #164 (2026-11-02)
+
+The human explicitly asked to enable this synchronization in PR #164 before merging, so the
+previous default-off gate is removed in the PR branch: the host registers `works.sync` and
+`works.mailState`, and the desktop main window and island negotiate and consume the paged
+protocol by default. Older clients continue to use the existing negotiated legacy path.
+This authorization is a deliberate override of the planned P7-before-default-activation
+sequence; it does not change the verification record. P7 performance acceptance and the
+human's live UI runs remain unverified, so no performance or no-regression claim is made.
