@@ -5,7 +5,7 @@ import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
 import { withMail } from '../lib/window-merge.js';
-import { MAIL_PAGES_MAX, awaitsOpen, followRoom, heldPolicy, openMail, openRoom, repairWork, rereadRoom, stopOpenRetries, useRoomPagesStore } from './room-pages.js';
+import { MAIL_PAGES_MAX, awaitsOpen, followRoom, heldPolicy, openMail, openRoom, repairWork, rereadRoom, stopOpenRetries, retireWorkPages, useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
 const note = (id: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' } });
@@ -738,5 +738,45 @@ describe('снимок без писем: открытие комнаты, Mail 
       stopOpenRetries();
       expect(useRoomPagesStore.getState().quotes).toEqual({});
     });
+  });
+});
+
+
+describe('retired page/quote request identities', () => {
+  it.each(['success', 'failure'] as const)('old quote %s/finally cannot overwrite or release a replacement request', async outcome => {
+    const bridge = createFakeBridge(), current = makeWork('w-01');
+    let resolveOld!: (value: { message: Message }) => void, rejectOld!: (error: Error) => void, resolveNew!: (value: { message: Message }) => void;
+    let calls = 0;
+    bridge.setHandler('context.letter', () => ++calls === 1 ? new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }) : new Promise(resolve => { resolveNew = resolve; }));
+    const old = useRoomPagesStore.getState().loadQuote(bridge, current, 'm-01');
+    const oldDone = old.catch(() => {});
+    retireWorkPages(current.projectPath, current.map.work.id);
+    const replacement = useRoomPagesStore.getState().loadQuote(bridge, current, 'm-01');
+    if (outcome === 'success') resolveOld({ message: makeLetter('m-01', { text: 'old' }) }); else rejectOld(new Error('old failure'));
+    await oldDone;
+    expect(Object.keys(useRoomPagesStore.getState().quotes)).toHaveLength(0);
+    await useRoomPagesStore.getState().loadQuote(bridge, current, 'm-01'); expect(calls).toBe(2);
+    resolveNew({ message: makeLetter('m-01', { text: 'new' }) }); await replacement;
+    expect(Object.values(useRoomPagesStore.getState().quotes)[0]!['m-01']!.text).toBe('new');
+  });
+
+  it.each(['success', 'failure'] as const)('old earlier-page %s/finally cannot apply bodies/chains or clear replacement loading', async outcome => {
+    const bridge = createFakeBridge(), current = entry([note('m-09')], 9, 9);
+    useWorksStore.setState({ entries: [current] });
+    let resolveOld!: (value: never) => void, rejectOld!: (error: Error) => void, resolveNew!: (value: never) => void;
+    let calls = 0;
+    bridge.setHandler('context.messages', () => ++calls === 1 ? new Promise((resolve, reject) => { resolveOld = resolve as never; rejectOld = reject; }) : new Promise(resolve => { resolveNew = resolve as never; }));
+    const apply = vi.fn();
+    const old = useRoomPagesStore.getState().loadEarlier(bridge, current, 'r-01', apply), oldDone = old.catch(() => {});
+    retireWorkPages(current.projectPath, current.map.work.id);
+    const replacement = useRoomPagesStore.getState().loadEarlier(bridge, current, 'r-01', apply);
+    const answer = (text: string) => ({ messages: [makeLetter('m-01', { text })], page: { complete: true, next: null } });
+    if (outcome === 'success') resolveOld(answer('old') as never); else rejectOld(new Error('old failure'));
+    await oldDone;
+    expect(apply).not.toHaveBeenCalled(); expect(Object.values(useRoomPagesStore.getState().loading)).toEqual([true]);
+    expect(Object.keys(useRoomPagesStore.getState().chains)).toHaveLength(0);
+    resolveNew(answer('new') as never); await replacement;
+    expect(apply).toHaveBeenCalledOnce(); expect(apply.mock.calls[0]![0][0].text).toBe('new');
+    expect(Object.values(useRoomPagesStore.getState().loading)).toEqual([false]);
   });
 });

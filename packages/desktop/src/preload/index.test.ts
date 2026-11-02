@@ -50,6 +50,48 @@ function emit(channel: string, ...args: unknown[]): void {
 
 const CONNECTED: HostStatus = { state: 'connected', hostVersion: '0.1.1', methods: null };
 
+it('works sync preload acknowledges only after its consumer completes', async () => {
+  const bridge = await loadPreload();
+  const { ipcRenderer } = await import('electron');
+  vi.mocked(ipcRenderer.send).mockClear();
+  let complete!: () => void;
+  const handled = new Promise<void>((resolve) => { complete = resolve; });
+  const stop = bridge.worksSync.subscribe(() => handled, () => {});
+  const stream = vi.mocked(ipcRenderer.send).mock.calls[0]?.[1];
+  handlers.get('works-sync:batch')?.({}, stream, 1, { index: 0, records: [] });
+  expect(ipcRenderer.send).not.toHaveBeenCalledWith('works-sync:ack', stream, 1);
+  complete();
+  await vi.waitFor(() => expect(ipcRenderer.send).toHaveBeenCalledWith('works-sync:ack', stream, 1));
+  stop();
+});
+
+it('works sync consumer failure stays visible and explicit repair resubscribes without acknowledging invalid batches', async () => {
+  const bridge = await loadPreload();
+  const { ipcRenderer } = await import('electron');
+  const send = vi.mocked(ipcRenderer.send);
+  send.mockClear();
+  const batch = vi.fn().mockRejectedValueOnce(new Error('reducer rejected')).mockResolvedValue(undefined);
+  const status = vi.fn();
+  bridge.worksSync.subscribe(batch, status);
+  const oldStream = send.mock.calls[0]?.[1];
+  const payload = { kind: 'works-sync-batch', transaction: { mode: 'reset', epoch: 'a', base: 0, target: 1 }, index: 0, records: [], commit: true };
+  handlers.get('works-sync:batch')?.({}, oldStream, 1, payload);
+  await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.objectContaining({ state: 'error', retryable: true })));
+  expect(send).not.toHaveBeenCalledWith('works-sync:ack', oldStream, 1);
+  handlers.get('works-sync:status')?.({}, oldStream, { state: 'current', epoch: 'a', applied: 1 });
+  expect(status).toHaveBeenCalledTimes(1);
+  bridge.worksSync.retry();
+  const streams = send.mock.calls.filter(([channel]) => channel === 'works-sync:subscribe');
+  expect(streams).toHaveLength(2);
+  const newStream = streams[1]?.[1];
+  expect(newStream).not.toBe(oldStream);
+  handlers.get('works-sync:batch')?.({}, oldStream, 2, payload);
+  handlers.get('works-sync:batch')?.({}, newStream, 3, payload);
+  await vi.waitFor(() => expect(send).toHaveBeenCalledWith('works-sync:ack', newStream, 3));
+  expect(batch).toHaveBeenCalledTimes(2);
+  expect(send).not.toHaveBeenCalledWith('works-sync:ack', oldStream, 2);
+});
+
 describe('preload: последний статус и тема', () => {
   let bridge: ParleyBridge;
 

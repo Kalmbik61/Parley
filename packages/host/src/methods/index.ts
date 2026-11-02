@@ -78,7 +78,7 @@ import { settingsGet, settingsSet } from './settings.js';
 import { createSwarmsCreate, swarmsCancel, swarmsSeen } from './swarms.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, createWorksDelete, worksList, worksRename, worksSetCloseFinished, worksSetStatus } from './works.js';
+import { worksCreate, createWorksDelete, worksList, worksMailState, worksSync, worksRename, worksSetCloseFinished, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -167,6 +167,8 @@ export const WORKS_GATED_METHODS = [
   'plans.cancel',
   'plans.retryEffects',
   'works.list',
+  'works.sync',
+  'works.mailState',
   'capacity.get',
   'decisions.list',
   'sessions.create',
@@ -247,6 +249,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
+    ...(deps.works.sync === undefined ? {} : { 'works.sync': worksSync(deps.works), 'works.mailState': worksMailState(deps.works) }),
     // Читают карту с диска, снимка работ не ждут: не в `WORKS_GATED_METHODS`.
     'context.messages': contextMessages as AnyHandler,
     'context.letter': contextLetter as AnyHandler,
@@ -411,5 +414,5 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: pty.dropClient };
+  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: (client) => { pty.dropClient(client); deps.works.sync?.dropClient(client.id); } };
 }

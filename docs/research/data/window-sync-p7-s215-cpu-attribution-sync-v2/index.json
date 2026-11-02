@@ -1,0 +1,457 @@
+{
+  "schemaVersion": 1,
+  "classification": "ADDITIONAL UNREVIEWED FIVE-PAIR SET. Ten trial runs completed after the original authorized set; preserved for audit but not used to alter acceptance. No further runs are authorized.",
+  "description": "Five alternating short3k pairs; full raw traces, source/runtime/dependency manifests, identical runtime observer file graph and calibrated synchronous observer overhead.",
+  "originalBytes": 40960616,
+  "compressedBytes": 2014721,
+  "manifestObserverSourceMismatches": [
+    {
+      "path": "phase-calibration.mjs",
+      "frozenSha256": "1cfd2aafc2330d98d61146ef2d0b501170f0643039d932e44d6860e433541948",
+      "currentSha256": "cf399459ba250e18dd9780592d3724276586468f06aa9b8c77c422b521760c55",
+      "reason": "calibration script edited after build; external utility is not imported into either runtime"
+    }
+  ],
+  "files": [
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/00-short3k-base-minimal-probe1.json",
+      "archivePath": "00-short3k-base-minimal-probe1.json.gz",
+      "originalBytes": 20378,
+      "originalSha256": "c8500780369e2b04faf86dadc0ae70acf7f753be9016af7bd842b2ec3ed33d1d",
+      "gzipBytes": 3302,
+      "gzipSha256": "9d8295a5bb1dcc12160fe3c4451fd4825885f179414aea51742ec68813cb9b5b"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/00-short3k-base-minimal-probe1.json.log",
+      "archivePath": "00-short3k-base-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "8147cafc36b0ea871f8d85c1fa36691184568106b864aaf946e734a1f6d5e01f",
+      "gzipBytes": 159,
+      "gzipSha256": "e9c0404a680f51496081048e538565501f051caa7e284fd824402dae75d9dc95"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/01-short3k-head-minimal-probe1.json",
+      "archivePath": "01-short3k-head-minimal-probe1.json.gz",
+      "originalBytes": 7250351,
+      "originalSha256": "f70a94cd1562f32e38a7ac9a87717953275c883f130e85816f7165075fdd4aa4",
+      "gzipBytes": 156442,
+      "gzipSha256": "d6952d150c2ff8a0ab5aa46b2c4ca07c0fe12951bd983c9454716fdff310ecab"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/01-short3k-head-minimal-probe1.json.log",
+      "archivePath": "01-short3k-head-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "f948f99fde39170abe68f8724c542a3b90a857a2de684bd9a73f6ecd3feb1389",
+      "gzipBytes": 161,
+      "gzipSha256": "5cba7debb1f5e6ab26da3cbab41da8e6bd89ab75f3bde0967990a9a9c063a2d0"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/02-short3k-head-minimal-probe1.json",
+      "archivePath": "02-short3k-head-minimal-probe1.json.gz",
+      "originalBytes": 7250317,
+      "originalSha256": "5282922f96b767b09c7d09e0a9d7d286102610716a1aad06b7dbb731839ab0b3",
+      "gzipBytes": 157453,
+      "gzipSha256": "19cd05478dbb60d521f79c596cbda3a3db4a46e5478c3a90218edeca815608f4"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/02-short3k-head-minimal-probe1.json.log",
+      "archivePath": "02-short3k-head-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "7949a2decfc1cc07ad107f982dd7f991c7d6b969504f1766cf9d40a159895f14",
+      "gzipBytes": 164,
+      "gzipSha256": "10256fffdcbd3e080a447e023fc5a158282e4ec11414b7842fdf0cf24f429ce3"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/03-short3k-base-minimal-probe1.json",
+      "archivePath": "03-short3k-base-minimal-probe1.json.gz",
+      "originalBytes": 20390,
+      "originalSha256": "f0b02284df5da3e2b0c9d3a2b90a77617a09daca2c6ba340b6191a656e4c9e29",
+      "gzipBytes": 3295,
+      "gzipSha256": "fa793b92da64f1008324398480c30b20e5e4c690ba8dfcaddab18f8244cbdf80"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/03-short3k-base-minimal-probe1.json.log",
+      "archivePath": "03-short3k-base-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "552e8ec89ee0d67efeeeaa876b2d5ceef16fa8c43258771fa8d910094b0247c0",
+      "gzipBytes": 161,
+      "gzipSha256": "69db589dfdbd8d94b872736e8ca2f3b893d34eecea44d4da0f0ec5ee6b5b7761"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/04-short3k-base-minimal-probe1.json",
+      "archivePath": "04-short3k-base-minimal-probe1.json.gz",
+      "originalBytes": 20408,
+      "originalSha256": "b67b9c922fd50457a08101e8ffe3fe75d836d258a9e7c5d5edce4fca37ffc8c5",
+      "gzipBytes": 3321,
+      "gzipSha256": "33765bb6e3e96beae0d7cc4955e0edc1412dcd4ce9bb18fad544cb33a0bd24a1"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/04-short3k-base-minimal-probe1.json.log",
+      "archivePath": "04-short3k-base-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "d25a704f28c1a1cdae772d7cf4853cdbe29e79306322bdfaa898e87959415229",
+      "gzipBytes": 164,
+      "gzipSha256": "8ece772a614359de20a1d06bad5c2afcd3b2659beff1ba3b0ca1f533937c1b5f"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/05-short3k-head-minimal-probe1.json",
+      "archivePath": "05-short3k-head-minimal-probe1.json.gz",
+      "originalBytes": 7256113,
+      "originalSha256": "2e4b8313917af143bba230b227dc3ef1ee3a97cc314a23159bad5a3f7ebde196",
+      "gzipBytes": 149974,
+      "gzipSha256": "af1b1f5755406d4154a728dfb5dad6b29a7a0e805545722339eabff838a36992"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/05-short3k-head-minimal-probe1.json.log",
+      "archivePath": "05-short3k-head-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "c7c307f9a2fa3013767da8b9c48cdc7cd7793aaa59dc08ca6f49039948320ec4",
+      "gzipBytes": 161,
+      "gzipSha256": "9188200d2c456a6555b2064b30cec742a5f0f023c7111f691540d48d55fba458"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/06-short3k-head-minimal-probe1.json",
+      "archivePath": "06-short3k-head-minimal-probe1.json.gz",
+      "originalBytes": 7253263,
+      "originalSha256": "4f4bd42fbd541d341652ae6e8f07e50bef7f4c47a3b155fe8ab25e7b6d69a8b0",
+      "gzipBytes": 156037,
+      "gzipSha256": "fc657aa317fbfa6c135c0d52513c19850c130eb5efb9631a96131846dc1245bc"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/06-short3k-head-minimal-probe1.json.log",
+      "archivePath": "06-short3k-head-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "627bddecd1413db215d17a937db74e3396f3d7fd3ca30bdc1b38f545c4182c09",
+      "gzipBytes": 164,
+      "gzipSha256": "a378feedfae1efc69793e781aac07f3abf90e0f5a8b081d9275f78f066df39be"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/07-short3k-base-minimal-probe1.json",
+      "archivePath": "07-short3k-base-minimal-probe1.json.gz",
+      "originalBytes": 20407,
+      "originalSha256": "0a1ee702cea058ccebd0a197fc0812639ed4a164221b3449c603f4b4799e84ac",
+      "gzipBytes": 3305,
+      "gzipSha256": "4818bc0fb09ca2403a4a129d6aca3e2e08147bf91d103af8ba1033eec04ebd45"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/07-short3k-base-minimal-probe1.json.log",
+      "archivePath": "07-short3k-base-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "5a078200e27038ff9b6bc73789960c010efaa30c999c5da929063d254316ed36",
+      "gzipBytes": 163,
+      "gzipSha256": "2a5ab4ceb2b5884ace90b34cdeee75c31e899ac46be072aa054858ad56ef642a"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/08-short3k-base-minimal-probe1.json",
+      "archivePath": "08-short3k-base-minimal-probe1.json.gz",
+      "originalBytes": 20417,
+      "originalSha256": "7b35b901584d7dcb8ecdddb446fec3fb54e0384028eec02290d785b94355dd3b",
+      "gzipBytes": 3318,
+      "gzipSha256": "9adcd25e232dcbff423ada405b704c6022606b61ba5317e8a45050fe85911e2e"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/08-short3k-base-minimal-probe1.json.log",
+      "archivePath": "08-short3k-base-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "5df4095470b61482fc699d532a948412bfc9561648ee9851fcef064d64611231",
+      "gzipBytes": 163,
+      "gzipSha256": "37e78cc605ae7573faad3b895f1ec869783e46307d2d2520517357a040671c46"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/09-short3k-head-minimal-probe1.json",
+      "archivePath": "09-short3k-head-minimal-probe1.json.gz",
+      "originalBytes": 7251296,
+      "originalSha256": "a5747a2c51ac2d9e195d8ca3c805dfe003e0202e7a8b8dc4384b3031d4a4d85d",
+      "gzipBytes": 156590,
+      "gzipSha256": "8f857cf815d51c6cb4983860d150e3f9a683cb51aeca64bcd9d2a0655688485a"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/09-short3k-head-minimal-probe1.json.log",
+      "archivePath": "09-short3k-head-minimal-probe1.json.log.gz",
+      "originalBytes": 208,
+      "originalSha256": "3e3650065fa06128b39121106259cc0ffdb09260b5527b6f9704c576bb5a8adb",
+      "gzipBytes": 159,
+      "gzipSha256": "eceaf666b18ddd5a28a1b04c13bc82c4d9a8cb81dd340a4e262bf8281550ad28"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/declaration.json",
+      "archivePath": "declaration.json.gz",
+      "originalBytes": 2473,
+      "originalSha256": "8d892eabb679bc3b78137b30b767997f2160aa84d1352c1fc2980e348834348e",
+      "gzipBytes": 726,
+      "gzipSha256": "d0b4e826c346effb08573b35103d9051d07cd2af2572e8731d91454c71ce648d"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v3/summary.json",
+      "archivePath": "summary.json.gz",
+      "originalBytes": 29655,
+      "originalSha256": "048eb685a18a8c62695765387d5ccc230e4e1495cd4e761ea581795a26e5417a",
+      "gzipBytes": 4211,
+      "gzipSha256": "c54f10f66729cc3dd00792b3386eec98fa56de2017630b14faa240aa90cf4204"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-base-phases-v3/manifest.json",
+      "archivePath": "base-manifest.json.gz",
+      "originalBytes": 2195515,
+      "originalSha256": "273ff04614c40982299f477d03dbf3cbda8dc3095ca50ec510c0c51db548cd57",
+      "gzipBytes": 582896,
+      "gzipSha256": "dc4281cdf690204b52cae9f255011004a23ced0f9d5f11116b34f323d7cfd930"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-base-phases-v3/provenance.json",
+      "archivePath": "base-provenance.json.gz",
+      "originalBytes": 2251,
+      "originalSha256": "c58e6988145a1f1e482eae0c0f58de292146c5b72f8e46bb782aa737287b34f5",
+      "gzipBytes": 914,
+      "gzipSha256": "0046c6a8823f7afd12dbbe76043e2096441cfddf97a132a1806800f98dae1673"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-head-phases-v4/manifest.json",
+      "archivePath": "head-manifest.json.gz",
+      "originalBytes": 2255805,
+      "originalSha256": "28551a31be154e198628fd7203d6273df61ee95f3a95b4ed03321d053c26c00c",
+      "gzipBytes": 589330,
+      "gzipSha256": "b541bfdd77fe895b5729a02a2306eb4a5886d41fc7e2fad8fae498c6468535ad"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-head-phases-v4/provenance.json",
+      "archivePath": "head-provenance.json.gz",
+      "originalBytes": 3194,
+      "originalSha256": "60ceda92ca21e6d5b58cdc28140b902b3d8adf3ee23420d18960c4109650e56e",
+      "gzipBytes": 1213,
+      "gzipSha256": "a21e681dc2910d7dfad30782f84843dfba27241e78840fb42b7e29a32d0bc6f0"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-calibration-v3.json",
+      "archivePath": "phase-calibration-v3.json.gz",
+      "originalBytes": 539,
+      "originalSha256": "a0c6465f858078af35a5a4d4f625864c3481824779da29f9bff368dd3cb14b07",
+      "gzipBytes": 356,
+      "gzipSha256": "321414be659c0816cd47146e781dd7abed34556ed3b70889aaba7cf72f75c384"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-phase-pairs-v1/00-short3k-base-minimal-probe1.json.error",
+      "archivePath": "first-sandbox-attempt.json.error.gz",
+      "originalBytes": 1706,
+      "originalSha256": "064b9ac31be507b42cf0efc849341256d2b65cea6b2b67616a895a3e7bfa77f1",
+      "gzipBytes": 710,
+      "gzipSha256": "34922dd60b077b05a2ff7d67fcc22c16b1941723d6b48e3b7aae1aa6a3605c5d"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s215-p7-repaired-source-check.json",
+      "archivePath": "reviewed-production-source-check.json.gz",
+      "originalBytes": 5347,
+      "originalSha256": "f1e5d15c5c5cc592495141e2a82785e0ff4b23478df38bac1fe43b7e4472d830",
+      "gzipBytes": 1340,
+      "gzipSha256": "dc7cafe8804171858f734ba4feb9de5c6f5bd649dae7c614febacb5025797665"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/analyze.mjs",
+      "archivePath": "observer-analyze.mjs.gz",
+      "originalBytes": 6569,
+      "originalSha256": "122f9208dd8bb77ee9b269649f9bcd53c9c51be5af19d3066a18bddf930a5fd1",
+      "gzipBytes": 2420,
+      "gzipSha256": "8ec65745c7cb7d67d3f61138754d5b3fd8e10ed3020d549a9ad0cae020dde911"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/build.mjs",
+      "archivePath": "observer-build.mjs.gz",
+      "originalBytes": 8365,
+      "originalSha256": "0faeb241a069b5a6890a9e174da1e1fe3fa622eb34170344eb218c2a6a83cd8b",
+      "gzipBytes": 2522,
+      "gzipSha256": "90eef2ed34903c90b7603a22af670cbd3aa0258d94e6f2bd981590a918063cb7"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/calibration-pilot.mjs",
+      "archivePath": "observer-calibration-pilot.mjs.gz",
+      "originalBytes": 1469,
+      "originalSha256": "106c8df2d8fbb7ca5c117b15eaedad49300064bf38b5e3eaae04417481940fe0",
+      "gzipBytes": 663,
+      "gzipSha256": "9f9846a34e95780bf0fe38d8f85bf4f4d7f6210156e1dda722c4838ee4b63417"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/collect-evidence.mjs",
+      "archivePath": "observer-collect-evidence.mjs.gz",
+      "originalBytes": 3787,
+      "originalSha256": "02948b3cf14b68baccc4b60ca42a6c6903a93f44fa29728adae30ec8ebfd7e35",
+      "gzipBytes": 1410,
+      "gzipSha256": "3b38379c861314952343a9036bcb5ca75ef92783be393599fc531e70ca029c8b"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/cooperative-profiler.mjs",
+      "archivePath": "observer-cooperative-profiler.mjs.gz",
+      "originalBytes": 1843,
+      "originalSha256": "895b67ec793e72f2b63fbaab6b65d59473b83c3cc27927f25108cabb950c614f",
+      "gzipBytes": 808,
+      "gzipSha256": "2dbc043fe3ba6e2d3c2a22978a8abc028a66932970764ab6d68e7f2976387478"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/driver.mjs",
+      "archivePath": "observer-driver.mjs.gz",
+      "originalBytes": 11534,
+      "originalSha256": "95fc94cc93c21f8363c885cbb716ce217aa53a7156d075b96ba99e44f8d4ace9",
+      "gzipBytes": 4067,
+      "gzipSha256": "54dc6bbe1280dcc32f4a838da559ebb387d97c338f00cf80ac744f28a2b62fc9"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/host-fixture.mjs",
+      "archivePath": "observer-host-fixture.mjs.gz",
+      "originalBytes": 5413,
+      "originalSha256": "15122caa8896f1c798230cfec0129cbd72568d32c72b97bb6e4cc76cf820b36a",
+      "gzipBytes": 1839,
+      "gzipSha256": "be04fc4819203acbe208d0f42b81702e45fb48bc0872ab36c3420bc4bca2e6e3"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/host-phase-transform.mjs",
+      "archivePath": "observer-host-phase-transform.mjs.gz",
+      "originalBytes": 4901,
+      "originalSha256": "6a1b7be3c95ee121de7651c9cf664df9c6f70d9f3c2a016d2913d2ee70840c9c",
+      "gzipBytes": 1592,
+      "gzipSha256": "37ebbbeacbd16133cd616011175cec4c574549f72c71f47c02401541bae04a1a"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/main-profiler.mjs",
+      "archivePath": "observer-main-profiler.mjs.gz",
+      "originalBytes": 2575,
+      "originalSha256": "273a1e19bdaca6f0e61d57c7c13916131ba20f091a6bea52d0b9dfa1f86a4182",
+      "gzipBytes": 1149,
+      "gzipSha256": "428597a40468ccd3b7d6939994e8a57d98563d8a03b9c776b3eb34feb069fbd2"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/manifest.mjs",
+      "archivePath": "observer-manifest.mjs.gz",
+      "originalBytes": 4445,
+      "originalSha256": "83f7b1132e17a1375c0fccc7a8ba14775d97d5959ebc96a4b4e72160b9f7a29f",
+      "gzipBytes": 1608,
+      "gzipSha256": "a76d3ec7be5f66db836ec86fb873346a0d20c14ca96739c791b8f608dd5280f6"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/native-recovery.mjs",
+      "archivePath": "observer-native-recovery.mjs.gz",
+      "originalBytes": 4670,
+      "originalSha256": "1929de7a48dbe3114b17881e872e8ea7d4322b889eec97d71311ee0bee9b1b8c",
+      "gzipBytes": 1933,
+      "gzipSha256": "eb971122cdb1fc5b0eae4a70d20aa22b309d9adc8671d343a54f5c62c2b9adda"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/node-profiler.mjs",
+      "archivePath": "observer-node-profiler.mjs.gz",
+      "originalBytes": 5910,
+      "originalSha256": "9b3f5c557a6cc5138aff20b55cc51ce25bfb42ee6253805341ab2046ba2b3ad4",
+      "gzipBytes": 1954,
+      "gzipSha256": "c72bf057953beee8e4d77d77361cb0a7e541f32d1cb474492cc7e9e2d45ce68f"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/observer.test.mjs",
+      "archivePath": "observer-observer.test.mjs.gz",
+      "originalBytes": 2986,
+      "originalSha256": "374d62ef4122166880200486fabfdbcb284f0d0694e7d8a71bdfda49cc3f4c1b",
+      "gzipBytes": 1230,
+      "gzipSha256": "16a839891778f0b272d4ff3245715b56a8283e97f4e06efce5fe37769fc5bdbf"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/paired.mjs",
+      "archivePath": "observer-paired.mjs.gz",
+      "originalBytes": 3232,
+      "originalSha256": "8034f9570a047903628ce8f23cedb1cde7c3e5d8d738b9943081a1f2e8286ef8",
+      "gzipBytes": 1488,
+      "gzipSha256": "1a6c7b0ecdff608926a887fa50259ec6327a07fa4e5eca0701061d8d8f92355d"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/phase-transform.mjs",
+      "archivePath": "observer-phase-transform.mjs.gz",
+      "originalBytes": 2076,
+      "originalSha256": "f0061941a4c6d82f641f96b3387a83dc91f7183928891bc806f06fedc69b91df",
+      "gzipBytes": 941,
+      "gzipSha256": "7fa347ec0ae390db2dff7c9fc12d4f10b76072610a5aedcff10ba12674fa79c4"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/preload-profiler.cjs",
+      "archivePath": "observer-preload-profiler.cjs.gz",
+      "originalBytes": 2575,
+      "originalSha256": "82220ba6ad5db8b47c987cfb08f81032e15466eaaf4bd6b8966fbee3cb24ace6",
+      "gzipBytes": 981,
+      "gzipSha256": "0efcc36039d4c30d835662e6581c257f973837ecc22f77965618b3d0cf14b803"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/prepare-base.mjs",
+      "archivePath": "observer-prepare-base.mjs.gz",
+      "originalBytes": 1195,
+      "originalSha256": "8c15e74262415daaa4df1923e8733d2c3727968f08dc27b520416e81f41f7ec8",
+      "gzipBytes": 610,
+      "gzipSha256": "716024f32bcc72232cdc90cfe176448ac2f39cbd3c3e0898d2f06a7050654fed"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/preview.mjs",
+      "archivePath": "observer-preview.mjs.gz",
+      "originalBytes": 1833,
+      "originalSha256": "ca434c514f2ab3c544e20c7d4f36d1fdc3b2197caeb8928cd49a744616a089c5",
+      "gzipBytes": 995,
+      "gzipSha256": "f9a159bcd4787f7b9a911c75b4f0bd9604311841f950168affea343cfe95d43b"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/recovery-diagnosis.mjs",
+      "archivePath": "observer-recovery-diagnosis.mjs.gz",
+      "originalBytes": 4391,
+      "originalSha256": "ce668405036dce02265b0cb4735df00d928452f2ea72971a6b0be8fdaf4a2c47",
+      "gzipBytes": 1901,
+      "gzipSha256": "6fafdbe94fadc1dbe97d5da79d085cc1bb01c9e03176739608023d5e57d0d210"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/recovery.mjs",
+      "archivePath": "observer-recovery.mjs.gz",
+      "originalBytes": 3035,
+      "originalSha256": "d004978cd5522c8a9f5d550bc20540171b1e42d7f57a52f96b756e6501b4b080",
+      "gzipBytes": 1405,
+      "gzipSha256": "613ac2c1e04884ddf0d8770c9ba8e0bdf69ea277a4936364da39c5cc560d658c"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/renderer-profiler.ts",
+      "archivePath": "observer-renderer-profiler.ts.gz",
+      "originalBytes": 3181,
+      "originalSha256": "a456d47b0c143acc27e5e71800ff6ea0cb5ba8c853eb01b170f0c52a7dcb1a4a",
+      "gzipBytes": 1284,
+      "gzipSha256": "badddde25feaf054df091007eebc2bbe382b4ed99faa15336b1843ec567dd259"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/scenarios.mjs",
+      "archivePath": "observer-scenarios.mjs.gz",
+      "originalBytes": 3137,
+      "originalSha256": "cbd7bc54faf5d96ed11c8393396053ae5525b241a67b9101b84878cc9b6ed6f1",
+      "gzipBytes": 1345,
+      "gzipSha256": "d4f6109c20cecbdd09d18710762008878042928c214cd2999f8983a987a9693d"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/seed.mjs",
+      "archivePath": "observer-seed.mjs.gz",
+      "originalBytes": 2637,
+      "originalSha256": "0e8861a7e850eb1852b2567893b51e39ae482559e9d94059981da1085c288fff",
+      "gzipBytes": 1273,
+      "gzipSha256": "77975b7eb2ec2b57e60c25e9d9a460aff7b316e19d44de462e320435b3905744"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/small-diagnostic.mjs",
+      "archivePath": "observer-small-diagnostic.mjs.gz",
+      "originalBytes": 3551,
+      "originalSha256": "60591cdf21df8a0f576fe4f03c3e8f7250c0a7a3cb6f188e405d9ac5920ef56f",
+      "gzipBytes": 1458,
+      "gzipSha256": "6a69f63f60b6190070e6c76d297903890e0b1a53ba7bec05770e68e0e7d678ed"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/wire-meter.mjs",
+      "archivePath": "observer-wire-meter.mjs.gz",
+      "originalBytes": 1506,
+      "originalSha256": "09900a6068058dbf79167173d257340e0edc3b393f66d6eed0a7824b9d239737",
+      "gzipBytes": 633,
+      "gzipSha256": "630e1cf0e0258854d6bccbbbbb4d6c0abd307169e94d997ac928122a9106d0ff"
+    },
+    {
+      "originalPath": "/private/tmp/parley-s203-snapshot/tools/bench/window-sync/phase-calibration.mjs",
+      "archivePath": "external-phase-calibration-script.mjs.gz",
+      "originalBytes": 1895,
+      "originalSha256": "cf399459ba250e18dd9780592d3724276586468f06aa9b8c77c422b521760c55",
+      "gzipBytes": 860,
+      "gzipSha256": "7f788799ac36f97884ddb282b3db0de8b815e58cedd9a5cecbeb44bac43404d7"
+    }
+  ]
+}

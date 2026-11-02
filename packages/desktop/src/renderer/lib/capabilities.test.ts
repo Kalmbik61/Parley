@@ -7,13 +7,14 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { METHODS, NOTIFICATIONS, WORKS_SYNC_FEATURE } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { useHostStore } from '../store/host.js';
 import {
   BASELINE_METHODS,
   REQUIRED_METHODS,
   hostFeatures,
+  worksSyncEnabled,
   hostMethods,
   missingMethods,
   otherHostBuild,
@@ -31,6 +32,15 @@ afterEach(() => {
 });
 
 describe('capabilities', () => {
+  it('selects sync only for an explicitly opted-in renderer and both supported host methods/feature', () => {
+    const status: HostStatus = { state: 'connected', hostVersion: 'test', methods: ['works.sync', 'works.mailState'], features: [WORKS_SYNC_FEATURE] };
+    expect(worksSyncEnabled(status, '')).toBe(false);
+    expect(worksSyncEnabled(status, '?worksSync=1')).toBe(true);
+    expect(worksSyncEnabled({ ...status, features: [] }, '?worksSync=1')).toBe(false);
+    expect(worksSyncEnabled({ ...status, methods: ['works.sync'] }, '?worksSync=1')).toBe(false);
+    expect(worksSyncEnabled({ state: 'disconnected', reason: 'lost' }, '?worksSync=1')).toBe(false);
+  });
+
   it('ручное обновление лимитов требует нового метода; старому хосту предлагается перезапуск', () => {
     expect(REQUIRED_METHODS).toContain('providers.refreshLimits');
     expect(BASELINE_METHODS).not.toContain('providers.refreshLimits');

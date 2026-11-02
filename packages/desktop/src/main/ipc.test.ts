@@ -18,7 +18,7 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
+import { bindWorksSyncWindow, forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError, type RegisterIpcOptions } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 import { TTS_VOICES, type TtsModelId } from '../shared/tts-types.js';
 import type { TtsService, TtsState } from './assistant/tts.js';
@@ -134,6 +134,7 @@ function fakeBrowserContents(
 
 function setup(
   overrides: {
+    worksSync?: RegisterIpcOptions['worksSync'];
     uiStore?: UiStore;
     layoutStore?: LayoutStore;
     notesStore?: NotesStore;
@@ -235,6 +236,7 @@ function setup(
   registerIpc({
     ipcMain: ipcMain as unknown as IpcMain,
     connection,
+    ...(overrides.worksSync === undefined ? {} : { worksSync: overrides.worksSync }),
     layoutStore,
     uiStore,
     notesStore,
@@ -671,6 +673,15 @@ describe('registerIpc', () => {
     }
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
+
+  it('P4a main lookup uses the committed sync view instead of another global works.list RPC', async () => {
+    const snapshotForLookup = vi.fn().mockResolvedValue({ entries: [{ projectPath: '/tmp/proj', map: { work: { id: 'w-0001' } } }], branches: {} });
+    const { ipcMain, connection, showItemInFolder } = setup({ worksSync: { snapshotForLookup } });
+    await ipcMain.invoke('app:reveal-work', '/tmp/proj', 'w-0001');
+    expect(snapshotForLookup).toHaveBeenCalledTimes(1);
+    expect(connection.call).not.toHaveBeenCalled();
+    expect(showItemInFolder).toHaveBeenCalledWith('/tmp/proj');
+  });
 });
 
 describe('нейроголос помощника для настроек (план 3b, B15)', () => {
@@ -1001,6 +1012,66 @@ describe('host:call от острова', () => {
   const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
   const at = '2026-10-26T10:00:00.000Z';
   const progress = { revision: 1, availability: 'available', current: null, recent: [], truncated: false };
+
+  it('admits mail only from registered main frames and bounds pending calls across both surfaces', async () => {
+    const { ipcMain, connection } = setup(options);
+    const channels = new EventEmitter();
+    const contents = [island, { id: 100 }, { id: 101 }].map(value => Object.assign(new EventEmitter(), value, { mainFrame: {}, send: vi.fn() }));
+    const windows = contents.map(webContents => Object.assign(new EventEmitter(), { webContents, isDestroyed: () => false }));
+    const sync = { retry: vi.fn() } as unknown as import('./works-sync.js').DesktopWorksSync;
+    const dispose = windows.map((window, index) => bindWorksSyncWindow(channels as IpcMain, window as unknown as BrowserWindow, sync, index === 0));
+    const pending: Array<{ resolve(value: unknown): void; reject(error: Error): void }> = [];
+    vi.mocked(connection.call).mockImplementation(() => new Promise((resolve, reject) => { pending.push({ resolve, reject }); }));
+    const params = { projectPath: '/p', workId: 'w-1', cursor: 'mail-cursor' };
+    const invoke = (index: number, frame = contents[index]!.mainFrame) => ipcMain.invokeWithEvent('host:call',
+      { sender: contents[index], senderFrame: frame }, 'works.mailState', params) as Promise<unknown>;
+    try {
+      await expect(ipcMain.invoke('host:call', 'works.mailState', params)).rejects.toBeTruthy();
+      await expect(invoke(0, {})).rejects.toBeTruthy();
+      const a = invoke(0), b = invoke(1);
+      expect(await invoke(0)).toEqual({ kind: 'mail-unavailable', reason: 'busy' });
+      expect(await invoke(2)).toEqual({ kind: 'mail-unavailable', reason: 'busy' });
+      expect(connection.call).toHaveBeenCalledTimes(2);
+      // Reload/reset and sender destruction cannot release ownership of an unresolved RPC.
+      contents[0]!.emit('did-start-navigation', {}, 'about:blank', false, true);
+      expect(await invoke(0)).toEqual({ kind: 'mail-unavailable', reason: 'busy' });
+      contents[0]!.emit('destroyed');
+      const ended = a.catch(error => error);
+      await expect(invoke(0)).rejects.toBeTruthy();
+      expect(await invoke(2)).toEqual({ kind: 'mail-unavailable', reason: 'busy' });
+      pending[0]!.resolve({ kind: 'mail-unavailable', reason: 'retry' });
+      expect(await ended).toBeInstanceOf(Error);
+      const c = invoke(2);
+      expect(connection.call).toHaveBeenCalledTimes(3);
+      pending[1]!.reject(new Error('connection lost'));
+      pending[2]!.resolve({ kind: 'mail-unavailable', reason: 'retry' });
+      await expect(b).rejects.toBeTruthy();
+      await expect(c).resolves.toEqual({ kind: 'mail-unavailable', reason: 'retry' });
+      await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'works.sync', { base: 0 })).rejects.toBeTruthy();
+      expect(connection.call).not.toHaveBeenCalledWith('works.sync', expect.anything());
+    } finally { dispose.forEach(fn => fn()); }
+  });
+
+  it('routes trusted retry through main-owned disconnected recovery while normal structural retry stays unchanged', async () => {
+    const channels = new EventEmitter();
+    const contents = Object.assign(new EventEmitter(), { mainFrame: {}, send: vi.fn() });
+    const window = Object.assign(new EventEmitter(), { webContents: contents, isDestroyed: () => false });
+    const sync = { retry: vi.fn() } as unknown as import('./works-sync.js').DesktopWorksSync;
+    const recovery = vi.fn<() => Promise<void> | null>(() => Promise.reject(new Error('failed handshake')));
+    const dispose = bindWorksSyncWindow(channels as IpcMain, window as unknown as BrowserWindow, sync, false, recovery);
+    try {
+      const event = { sender: contents, senderFrame: contents.mainFrame };
+      channels.emit('works-sync:retry', { ...event, senderFrame: {} });
+      expect(recovery).not.toHaveBeenCalled();
+      channels.emit('works-sync:retry', event);
+      await Promise.resolve();
+      expect(recovery).toHaveBeenCalledTimes(1);
+      expect(sync.retry).not.toHaveBeenCalled();
+      recovery.mockReturnValue(null);
+      channels.emit('works-sync:retry', event);
+      expect(sync.retry).toHaveBeenCalledTimes(1);
+    } finally { dispose(); }
+  });
 
   it('progress строго валидирует params/result и ограничивает каждый sender интервалом 250ms', async () => {
     vi.useFakeTimers();
@@ -1722,9 +1793,9 @@ describe('канал агента — только для main (этап B2, с�
     return 'resolved';
   };
 
-  it('host:call не пускает browser.agentResult: ответ на операцию агента шлёт только main', async () => {
+  it.each(['browser.agentResult', 'works.sync'])('host:call не пускает main-only метод %s', async (method) => {
     const { ipcMain, connection } = setup();
-    await expect(ipcMain.invoke('host:call', 'browser.agentResult', { opId: 'op-1', ok: true, result: {} })).rejects.toBeDefined();
+    await expect(ipcMain.invoke('host:call', method, method === 'works.sync' ? { base: 0 } : { opId: 'op-1', ok: true, result: {} })).rejects.toBeDefined();
     expect(connection.call).not.toHaveBeenCalled();
     // Положительный контроль: обычный метод проходит тем же путём.
     await ipcMain.invoke('host:call', 'works.list', {});

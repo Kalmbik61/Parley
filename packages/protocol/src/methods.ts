@@ -37,6 +37,10 @@ import { contextPageMethodSchemas } from './context-pages.js';
 import type { ContextPageMethodResults } from './context-pages.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
+import { worksSyncRequest } from './works-sync.js';
+import type { WorksSyncResult } from './works-sync.js';
+import { worksMailStateRequest } from './works-mail-state.js';
+import type { WorksMailStateResult } from './works-mail-state.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
@@ -118,6 +122,11 @@ export const METHODS = {
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
   'providers.clearKey': z.object({ provider: z.string() }),
   'works.list': z.object({}),
+  // Ограниченная синхронизация снимка работ (спека 2026-11-01): пагинированные reset/delta-транзакции
+  // вместо одного глобального снимка; только с клиентами с признаком `works-sync`. Запрос — либо курсор
+  // продолжения, либо применённая ревизия для новой транзакции. Форму ответа см. `works-sync.ts`.
+  'works.sync': worksSyncRequest,
+  'works.mailState': worksMailStateRequest,
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
   'works.rename': z.object({ projectPath: z.string(), workId: z.string(), title: renameTitle }),
@@ -441,6 +450,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'providers.setKey': { keyHint: string };
   'providers.clearKey': { ok: true };
   'works.list': WorksSnapshot;
+  'works.sync': WorksSyncResult;
+  'works.mailState': WorksMailStateResult;
   'works.create': { workId: string };
   'works.delete': { ok: true };
   'works.rename': { ok: true };

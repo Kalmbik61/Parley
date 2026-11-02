@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { buildRoleCatalog } from '@parley/core';
+import { WORKS_SYNC_FEATURE } from '@parley/protocol';
 import type { RequestInfo } from '../context.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { FeedService } from '../feed/feed-service.js';
+import { WorksSyncHost, resolvePreparedWorksSyncReply } from '../works/works-sync.js';
 import { createHostHandlers, WORKS_GATED_METHODS, WORKS_GATED_NOTIFICATIONS } from './index.js';
 import type { MethodDeps } from './index.js';
 
@@ -22,7 +24,7 @@ function fakeDeps(worksReady: Promise<void>): { deps: MethodDeps; touched: () =>
       {},
       {
         get: (_target, key) => {
-          if (key === 'then') return undefined;
+          if (key === 'then' || key === 'sync') return undefined;
           return () => {
             calls += 1;
             return key === 'on' ? () => {} : undefined;
@@ -48,6 +50,33 @@ it('registers the window-only decisions list and room history actions', () => {
   const handlers = createHostHandlers(deps);
   for (const name of ['decisions.list', 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] as const)
     expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
+it('registers opt-in works.sync behind readiness and releases its client on disconnect', async () => {
+  let ready!: () => void;
+  const { deps } = fakeDeps(new Promise<void>(resolve => { ready = resolve; }));
+  expect(createHostHandlers(deps).methods['works.sync']).toBeUndefined();
+  expect(createHostHandlers(deps).methods['works.mailState']).toBeUndefined();
+  const sync = new WorksSyncHost();
+  const pull = vi.spyOn(sync, 'pull');
+  const drop = vi.spyOn(sync, 'dropClient');
+  const handlers = createHostHandlers({ ...deps, works: { ...deps.works, sync } });
+  expect(handlers.methods['works.mailState']).toBeTypeOf('function');
+  const client = { id: 'fixture', features: new Set([WORKS_SYNC_FEATURE]), writableLength: () => 0 } as RequestInfo['client'];
+  let settled = false;
+  try {
+    const pending = handlers.methods['works.sync']!({ base: 0 } as never, { client } as RequestInfo).then(value => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(pull).not.toHaveBeenCalled();
+    ready();
+    const token = await pending;
+    expect(pull).not.toHaveBeenCalled();
+    expect((await resolvePreparedWorksSyncReply(token, 42))?.result.kind).toBe('page');
+    expect(pull).toHaveBeenCalledWith(client, { base: 0 }, 42);
+    handlers.dropClient(client);
+    expect(drop).toHaveBeenCalledWith(client.id);
+  } finally { sync.stop(); }
 });
 
 it('capacity.get регистрируется, только если лента ёмкости передана', () => {
@@ -210,6 +239,8 @@ describe('методы на старте хоста ждут первого чт
         'plans.cancel',
         'plans.retryEffects',
         'works.list',
+        'works.sync',
+        'works.mailState',
         'capacity.get',
         'decisions.list',
         'sessions.create',

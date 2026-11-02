@@ -72,7 +72,33 @@ const QUOTES_MAX = 200;
 
 /** Запросы, что уже в пути: открытие комнаты и цитаты. Одно и то же дважды (повторная отрисовка, StrictMode) не шлётся. */
 const opening = new Map<string, Promise<void>>();
-const quoting = new Set<string>();
+const quoting = new Map<string, object>();
+const earlier = new Map<string, object>();
+const pageLives = new Map<string, object>();
+const pageLife = (entry: WindowWorkEntry): object => {
+  const key = quoteKeyOf(entry.projectPath, entry.map.work.id);
+  let life = pageLives.get(key);
+  if (life === undefined) { life = {}; pageLives.set(key, life); }
+  return life;
+};
+
+/** Загруженные данные и работа старой жизни не переходят в новую. Open intent — отдельно от тел/курсоров. */
+export function invalidateWorkPages(projectPath: string, workId: string): void {
+  const key = quoteKeyOf(projectPath, workId), prefix = `${key}\u0000`;
+  pageLives.delete(key);
+  for (const id of opening.keys()) if (id.startsWith(prefix)) opening.delete(id);
+  for (const id of quoting.keys()) if (id.startsWith(prefix)) quoting.delete(id);
+  for (const id of earlier.keys()) if (id.startsWith(prefix)) earlier.delete(id);
+  for (const id of openRetries.keys()) if (id.startsWith(prefix)) forgetRetry(id);
+}
+
+export function retireWorkPages(projectPath: string, workId: string, keepOpen = false): void {
+  invalidateWorkPages(projectPath, workId);
+  const key = quoteKeyOf(projectPath, workId), prefix = `${key}\u0000`;
+  const keep = <T>(values: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(values).filter(([id]) => !id.startsWith(prefix)));
+  useRoomPagesStore.setState(state => ({ chains: keep(state.chains), loading: keep(state.loading), pending: keep(state.pending),
+    opened: keepOpen ? state.opened : keep(state.opened), quotes: Object.fromEntries(Object.entries(state.quotes).filter(([id]) => id !== key)) }));
+}
 
 /** Отступ повтора открытия после сбоя: первый, удвоение за каждый сбой подряд, потолок. Успешное открытие счёт обнуляет. */
 const OPEN_BACKOFF_MS = 1000;
@@ -199,10 +225,11 @@ function readPage(
  * починенным (спека rooms.mail 6.5).
  */
 async function readDown(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null, reach: number): Promise<void> {
+  const life = pageLife(entry), key = quoteKeyOf(entry.projectPath, entry.map.work.id);
   let cursor: string | null = null;
   for (let page = 0; page < MAIL_PAGES_MAX; page += 1) {
     const answer = await readPage(bridge, entry, roomId, cursor);
-    if (answer === null) return;
+    if (answer === null || pageLives.get(key) !== life) return;
     addPage(entry.projectPath, entry.map.work.id, answer.messages);
     const oldest = Math.min(...answer.messages.map(messageSeq));
     if (answer.page.complete || answer.page.next === null || oldest <= reach) return;
@@ -272,22 +299,23 @@ export function openRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEn
     clearTimeout(retry.timer);
     retry.timer = null;
   }
-  const epoch = retryEpoch;
+  const epoch = retryEpoch, life = pageLife(entry), workKey = quoteKeyOf(entry.projectPath, entry.map.work.id);
+  const alive = () => pageLives.get(workKey) === life;
   const read = readPage(bridge, entry, roomId, null)
     .then(
       (answer) => {
+        if (!alive()) return;
         forgetRetry(key);
         if (answer !== null) addPage(entry.projectPath, entry.map.work.id, answer.messages);
       },
       (error: unknown) => {
         // Связь оборвалась, пока страница была в пути (`stopOpenRetries`): открытые панели начнут заново сами.
-        if (epoch === retryEpoch) scheduleReopen(bridge, entry.projectPath, entry.map.work.id, roomId);
-        throw error;
+        if (alive() && epoch === retryEpoch) scheduleReopen(bridge, entry.projectPath, entry.map.work.id, roomId);
+        if (alive()) throw error;
       },
     )
     .finally(() => {
-      opening.delete(key);
-      syncOpen(key, false);
+      if (alive() && opening.get(key) === read) { opening.delete(key); syncOpen(key, false); }
     });
   opening.set(key, read);
   syncOpen(key, true);
@@ -350,9 +378,11 @@ export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
     const workKey = quoteKeyOf(entry.projectPath, entry.map.work.id);
     const key = `${workKey}\u0000${id}`;
     if (get().quotes[workKey]?.[id] !== undefined || quoting.has(key)) return;
-    quoting.add(key);
+    const life = pageLife(entry), request = {};
+    quoting.set(key, request);
     try {
       const { message } = await bridge.call('context.letter', { projectPath: entry.projectPath, workId: entry.map.work.id, id });
+      if (pageLives.get(workKey) !== life || quoting.get(key) !== request) return;
       set((state) => {
         // Ключи идут в порядке загрузки (`m-N` — не целое число): уходят загруженные раньше всех, только что пришедший остаётся.
         const kept = { ...state.quotes[workKey], [id]: message };
@@ -360,13 +390,17 @@ export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
         for (const stale of ids.slice(0, Math.max(0, ids.length - QUOTES_MAX))) Reflect.deleteProperty(kept, stale);
         return { quotes: { ...state.quotes, [workKey]: kept } };
       });
+    } catch (error) {
+      if (pageLives.get(workKey) === life && quoting.get(key) === request) throw error;
     } finally {
-      quoting.delete(key);
+      if (quoting.get(key) === request) quoting.delete(key);
     }
   },
   loadEarlier: async (bridge, entry, roomId, apply) => {
     const key = keyOf(entry, roomId);
     if (get().loading[key] === true) return;
+    const life = pageLife(entry), workKey = quoteKeyOf(entry.projectPath, entry.map.work.id), request = {};
+    earlier.set(key, request);
     const chain = get().chains[key];
     const cursor = chain !== undefined && !chain.done ? chain.next : earlierCursor(entry, roomId);
     set((state) => ({ loading: { ...state.loading, [key]: true } }));
@@ -377,11 +411,15 @@ export const useRoomPagesStore = create<RoomPagesState>((set, get) => ({
         roomId,
         ...(cursor === null || cursor === undefined ? {} : { cursor }),
       });
+      if (pageLives.get(workKey) !== life || earlier.get(key) !== request) return;
       apply(answer.messages);
+      if (pageLives.get(workKey) !== life || earlier.get(key) !== request) return;
       const next: Chain = answer.page.complete ? { next: null, done: true } : { next: answer.page.next, done: false };
       set((state) => ({ chains: { ...state.chains, [key]: next } }));
+    } catch (error) {
+      if (pageLives.get(workKey) === life && earlier.get(key) === request) throw error;
     } finally {
-      set((state) => ({ loading: { ...state.loading, [key]: false } }));
+      if (earlier.get(key) === request) { earlier.delete(key); set((state) => ({ loading: { ...state.loading, [key]: false } })); }
     }
   },
 }));

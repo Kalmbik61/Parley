@@ -1972,3 +1972,35 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     });
   });
 });
+
+
+describe('explicit notice presence across compact island modes', () => {
+  const notch = { width: 185, height: 32, centerX: 240 };
+  it.each(['bare', 'capsule', 'non-notch'] as const)('expands %s for an active notice and restores the prior compact mode when it clears', mode => {
+    const retry = vi.fn();
+    const props = viewProps({ model: mode === 'capsule' ? MODEL : IDLE_MODEL, retracted: mode !== 'capsule',
+      config: { ...ISLAND_BASE, anchor: 'center', topInset: mode === 'non-notch' ? 0 : 32, notch: mode === 'non-notch' ? null : notch },
+      syncNoticeActive: true, syncNotice: <div role="alert">Sync failure<button onClick={retry}>Retry notice</button></div> });
+    const { rerender } = render(<IslandView {...props} />);
+    const shape = screen.getByTestId('island'), button = screen.getByRole('button', { name: 'Retry notice' });
+    expect(shape.contains(button)).toBe(true); expect(shape.getAttribute('aria-hidden')).toBeNull();
+    expect(screen.queryByTestId('island-notch')).toBeNull(); expect(screen.queryByTestId('island-capsule')).toBeNull();
+    if (mode !== 'non-notch') {
+      expect(screen.getByTestId('island-content').style.paddingTop).toBe('32px');
+      expect(screen.getByTestId('island-content').style.minWidth).toBe('257px');
+    }
+    fireEvent.click(button); expect(retry).toHaveBeenCalledOnce();
+    rerender(<IslandView {...props} syncNoticeActive={false} syncNotice={null} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    if (mode === 'bare') expect(screen.getByTestId('island-notch')).toBeTruthy();
+    else if (mode === 'capsule') expect(screen.getByTestId('island-capsule')).toBeTruthy();
+    else expect(shape.getAttribute('data-retracted')).toBe('true');
+  });
+
+  it.each([IDLE_MODEL, MODEL])('a React element that renders null is not an active notice', model => {
+    const Empty = () => null;
+    view({ model, config: { ...ISLAND_BASE, anchor: 'center', topInset: 32, notch }, syncNotice: <Empty />, syncNoticeActive: false });
+    expect(screen.getByTestId(model.active ? 'island-capsule' : 'island-notch')).toBeTruthy();
+    expect(screen.getByTestId('island-content').style.paddingTop).toBe('0px');
+  });
+});

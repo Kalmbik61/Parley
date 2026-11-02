@@ -7,6 +7,14 @@
 
 import type { HostStatus } from '../../shared/bridge.js';
 import { useHostStore } from '../store/host.js';
+import { WORKS_SYNC_FEATURE } from '@parley/protocol';
+
+/** Main supplies this flag only for an explicitly isolated integration launch. */
+export function worksSyncEnabled(status: HostStatus, search: string): boolean {
+  return new URLSearchParams(search).get('worksSync') === '1' && status.state === 'connected'
+    && (status.features ?? []).includes(WORKS_SYNC_FEATURE)
+    && (status.methods ?? []).includes('works.sync') && (status.methods ?? []).includes('works.mailState');
+}
 
 /**
  * Методы и уведомления протокола 1 до этого плана — их умеет любой хост.

@@ -7,9 +7,9 @@ import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
 import { writeLetters, type NewLetter } from './letter-store.js';
 import { addSession } from './map.js';
 import { addRoom } from './rooms.js';
-import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths, workVersion } from './store.js';
+import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths, workVersion, workVersionKey } from './store.js';
 import type { Room } from './types.js';
-import { readWorks, watchWorks, type WorkEntry } from './works.js';
+import { captureWorks, readWorks, watchWorks, type WorkEntry } from './works.js';
 
 let home = '';
 let project = '';
@@ -638,4 +638,95 @@ describe('watchWorks', () => {
       watcher.close();
     }
   });
+});
+
+
+describe('bounded coherent work observation', () => {
+  it('owns a coherent version/map and invalidates catalogue/lifetime changes, not later ordinary writes', async () => {
+    const a = await createWork(project, { title: 'a' }), b = await createWork(other, { title: 'b' });
+    const captured = captureWorks(entry => entry);
+    expect(captured.values.map(entry => entry.map.work.id)).toEqual([a.work.id, b.work.id]);
+    expect(captured.values[0]!.version).toBe(workVersion(project, a.work.id));
+    await updateMap(project, a.work.id, map => { map.work.goal = 'new'; });
+    expect(captured.isCurrent()).toBe(true);
+    expect(captured.values[0]!.map.work.goal).not.toBe('new');
+    const fresh = captureWorks(entry => entry);
+    expect(fresh.values[0]!.map.work.goal).toBe('new');
+    await createWork(project, { title: 'added' }); expect(captured.isCurrent()).toBe(false);
+    const beforeDelete = captureWorks(entry => entry);
+    await deleteWorkFiles(other, b.work.id); expect(beforeDelete.isCurrent()).toBe(false);
+  });
+
+  it.each([25, 75, 100])('never postpones first admission under %ims invalidations and coalesces in-flight follow-up', async interval => {
+    const created = await createWork(project, { title: 'hot' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    let release!: () => void, reads = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const watcher = watchWorks(() => {}, { debounceMs: 100, pollMs: 10000, read: async () => { reads += 1; if (reads === 1) await gate; return readWorks(); } });
+    try {
+      for (let elapsed = 0; elapsed < 300; elapsed += interval) {
+        await updateMap(project, created.work.id, map => { map.work.goal = String(elapsed); });
+        await vi.advanceTimersByTimeAsync(interval);
+        if (elapsed + interval >= 100) expect(reads).toBe(1);
+      }
+      release(); await vi.advanceTimersByTimeAsync(1);
+      expect(reads).toBe(2);
+      await vi.advanceTimersByTimeAsync(300); expect(reads).toBe(2);
+      await updateMap(project, created.work.id, map => { map.work.goal = 'closed'; });
+      watcher.close(); await vi.advanceTimersByTimeAsync(300); expect(reads).toBe(2);
+    } finally { watcher.close(); vi.useRealTimers(); }
+  });
+});
+
+
+it('coherent capture isolates corrupt maps without hiding healthy works', async () => {
+  const a = await createWork(project, { title: 'corrupt' }), b = await createWork(other, { title: 'healthy' });
+  workDb().prepare('UPDATE works SET work_json = ?, version = version + 1 WHERE project_path = ? AND id = ?').run('{', project, a.work.id);
+  const captured = captureWorks(entry => entry);
+  expect(captured.values.map(entry => entry.map.work.id)).toEqual([b.work.id]);
+  expect(captured.isCurrent()).toBe(true);
+});
+
+
+it('distinguishes same-clock same-key/version/birth/rowid recreations and invalidates captures on connection replacement', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(1900000000000);
+  try {
+    const a = await createWork(project, { title: 'life A' });
+    const versionKey = workVersionKey(project, a.work.id);
+    const captured = captureWorks(entry => entry), before = await readWorks();
+    await deleteWorkFiles(project, a.work.id);
+    const b = await createWork(project, { title: 'life B' });
+    expect(b.work.id).toBe(a.work.id); expect(b.work.createdAt).toBe(a.work.createdAt);
+    expect(workVersionKey(project, b.work.id)).not.toBe(versionKey);
+    expect(workVersion(project, b.work.id)).toBe(captured.values[0]!.version);
+    expect(captured.isCurrent()).toBe(false);
+    const current = captureWorks(entry => entry);
+    expect(current.values[0]!.incarnation).toBeGreaterThan(captured.values[0]!.incarnation);
+    expect(current.values[0]!.map.work.title).toBe('life B');
+    expect((await readWorks())[0]!.map.work.title).toBe('life B');
+    expect((await readWorks())[0]!.map).not.toBe(before[0]!.map);
+    closeWorkDb();
+    expect(current.isCurrent()).toBe(false);
+    expect(captureWorks(entry => entry).values[0]!.map).not.toBe(current.values[0]!.map);
+  } finally { vi.useRealTimers(); }
+});
+
+it('observes foreign equal-version reincarnation and cannot hit an old underlying map cache', async () => {
+  const a = await createWork(project, { title: 'life A' }); await createWork(other, { title: 'other' });
+  await readWorks();
+  const captured = captureWorks(entry => entry), seen: WorkEntry[][] = [];
+  const watcher = watchWorks(works => seen.push(works), { debounceMs: 5, pollMs: 10 });
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  const db = new DatabaseSync(path.join(home, WORK_DB_FILE));
+  try {
+    const row = db.prepare('SELECT * FROM works WHERE project_path = ? AND id = ?').get(project, a.work.id)!;
+    const work = JSON.parse(String(row['work_json'])); work.title = 'life B';
+    db.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE');
+    db.prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(project, a.work.id);
+    db.prepare('INSERT INTO works(project_path,id,title,status,updated_at,version,work_json,extra_json) VALUES(?,?,?,?,?,?,?,?)').run(project,a.work.id,'life B',row['status']!,row['updated_at']!,row['version']!,JSON.stringify(work),row['extra_json']!);
+    db.exec('COMMIT');
+    expect(captured.isCurrent()).toBe(false);
+    await vi.waitFor(() => expect(seen.at(-1)?.find(entry => entry.map.work.id === a.work.id)?.map.work.title).toBe('life B'));
+    expect(captureWorks(entry => entry).values.find(entry => entry.map.work.id === a.work.id)!.map.work.title).toBe('life B');
+  } finally { db.close(); watcher.close(); }
 });

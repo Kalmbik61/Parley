@@ -19,6 +19,9 @@ import {
   keepNewestWithin,
   listPage,
   mailWorkMap,
+  mailWorkMapCooperative,
+  captureWindowMail,
+  projectWindowMail,
   mapTopology as mapTopologyOf,
   messagePage as messagePageOf,
   type MessagePageOptions,
@@ -1242,5 +1245,55 @@ describe('снимок без писем (rooms.mail 6.8)', () => {
         expect(plan.join('\n')).not.toMatch(/SCAN|TEMP B-TREE/);
       }
     });
+  });
+});
+
+
+describe('кооперативная проекция окна', () => {
+  it('точно сохраняет старую проекцию, опциональные поля и скрывает приватную привязку', async () => {
+    const map = windowFixture() as WindowWorkMap;
+    map.sessions[0]!.task = '😀'.repeat(40000);
+    map.sessions[0]!.codexThreadBinding = { threadId: 'private' } as never;
+    map.work.deletedSessions = ['s-old'];
+    map.planExports = [{ file: 'p.md', planId: 'pl-1', rev: 1, event: 'accepted', content: 'secret', status: 'pending' }];
+    const expected = structuredClone(mailWorkMap(map, arrayReader(map.messages)));
+    const actual = await mailWorkMapCooperative(map, arrayReader(map.messages));
+    expect(actual).toEqual(expected);
+    map.sessions[0]!.history.push({ event: 'active', at: 'later' });
+    map.work.deletedSessions.push('s-new');
+    expect(actual).toEqual(expected);
+    expect(Object.isFrozen(actual.sessions[0]!.history)).toBe(true);
+  });
+
+  it.each([500, WINDOW_TEXT_MAX])('сохраняет ограничения массивов, неизвестные и явно пустые поля (%i)', async (textMax) => {
+    const map = windowFixture() as WindowWorkMap;
+    const session = map.sessions[0]!;
+    session.history = Array.from({ length: 150 }, () => ({ event: 'active' as const, at: 'x'.repeat(2000) }));
+    session.artifacts = Array.from({ length: 150 }, () => ({ kind: 'file', path: 'я'.repeat(2000) }));
+    map.planEffects = [{ future: 'я'.repeat(2000) }] as never;
+    map.swarms = Array.from({ length: 130 }, (_, i) => ({ id: `sw-${i}`, objective: 'я'.repeat(2000) })) as never;
+    Object.assign(map, { future: { empty: [], value: null }, plans: undefined });
+    const expected = mailWorkMap(map, arrayReader(map.messages), { textMax });
+    expect(await mailWorkMapCooperative(map, arrayReader(map.messages), { textMax })).toEqual(expected);
+  });
+
+  it('захватывает почтовые данные до первой уступки, затем уступает на 3k сессиях', async () => {
+    const map = emptyMap();
+    for (let i = 0; i < 3000; i += 1) addSession(map, { provider: 'codex', label: 'session', task: 'task' });
+    let yielded = false;
+    const reader = arrayReader([]);
+    for (const key of ['page', 'count', 'unreadCount', 'humanUnread'] as const) {
+      const original = reader[key].bind(reader);
+      vi.spyOn(reader, key).mockImplementation(((...args: never[]) => {
+        expect(yielded).toBe(false);
+        return (original as (...args: never[]) => unknown)(...args);
+      }) as never);
+    }
+    const stats = { yields: 0, maxSliceMs: 0 };
+    const captured = captureWindowMail(map, reader);
+    const actual = await projectWindowMail(map, captured, { batchSize: 128, stats, yield: async () => { yielded = true; } });
+    expect(actual).toEqual(mailWorkMap(map, arrayReader([])));
+    expect(stats.yields).toBeGreaterThan(0);
+    expect(stats.maxSliceMs).toBeGreaterThanOrEqual(0);
   });
 });
