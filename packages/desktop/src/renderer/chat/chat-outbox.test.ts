@@ -15,7 +15,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
 import { useWorksStore } from '../store/works.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { attemptChatSend, CHAT_AWAIT_PROMPT_MS, CHAT_RETRY_MS, chatOutbox, type ChatOutboxPayload } from './chat-outbox.js';
+import { attemptChatSend, CHAT_AWAIT_PROMPT_MS, CHAT_RETRY_MS, chatOutbox, promptCount, type ChatOutboxPayload } from './chat-outbox.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
@@ -62,6 +62,24 @@ afterEach(() => {
   chatOutbox.resetForTests();
   useWorksStore.setState(useWorksStore.getInitialState(), true);
   useActivityStore.setState({ byRef: {}, loaded: false });
+});
+
+describe('promptCount — подтверждение принятого CLI сообщения', () => {
+  const pointer = 'New messages (1). Call check_inbox.';
+
+  it('Codex объединяет старые указатели и сообщение человека в один промпт', () => {
+    const text = 'Замеры:\n\n| CPU | Time |\n| --- | --- |\n| 12 | 30 |\n\nвот что еще нашли';
+    expect(promptCount([prompt('p1', `${pointer}\n${pointer}\n${text}\n${pointer}`)], text)).toBe(1);
+    expect(promptCount([prompt('p1', `${pointer}\n${text}`), prompt('p2', text)], text)).toBe(2);
+    expect(promptCount([prompt('p1', `New messages (2) in r-01 "Review". Call check_inbox.\n\n${text}\n\n${pointer}`)], text)).toBe(1);
+  });
+
+  it('не считает принятым совпадение только с частью другого сообщения', () => {
+    expect(promptCount([prompt('p1', `${pointer}\nquoted: next\n${pointer}`)], 'next')).toBe(0);
+    expect(promptCount([prompt('p1', `${pointer}\nnext\nsomething else\n${pointer}`)], 'next')).toBe(0);
+    expect(promptCount([prompt('p1', pointer)], 'next')).toBe(0);
+    expect(promptCount([prompt('p1', pointer)], pointer)).toBe(1);
+  });
 });
 
 describe('attemptChatSend', () => {

@@ -96,13 +96,16 @@ import { ContextChip } from '../components/context/ContextChip.js';
 import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
+import { isImagePath } from '../../shared/image-path.js';
 import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
 import { promptHistory } from './history.js';
 import { useOutboxFlying, useOutboxItems } from '../lib/outbox.js';
+import { ChatFindBar, type FindView } from './ChatFindBar.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
+import { focusComposer } from '../keys/type-to-focus.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
@@ -307,19 +310,30 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
   const clearReveal = useChatUiStore((state) => state.clearReveal);
+  // Поиск ⌘F по ленте (`ChatFindBar`): открыта ли полоса — в сторе (⌘F и палитра ставят её снаружи), запрос и цель — здесь.
+  // Подсветка общая на окно, а ChatView скрытой вкладки живёт дальше: красит только видимая, скрытая лента `find` не получает.
+  const findOpen = useChatUiStore((state) => state.find[sessionKey]?.open === true);
+  const findFocusNonce = useChatUiStore((state) => state.find[sessionKey]?.focusNonce ?? 0);
+  const [findView, setFindView] = useState<FindView | null>(null);
+  const setFindQuery = useCallback((query: string): void => useChatUiStore.getState().setFindQuery(sessionKey, query), [sessionKey]);
+  const closeFind = useCallback((): void => {
+    useChatUiStore.getState().closeFind(sessionKey);
+    setFindView(null);
+    focusComposer();
+  }, [sessionKey]);
   const agents = runningAgents(items);
   useEffect(() => {
     useUiStore.getState().setSessionVisible(sessionKey, visible);
   }, [sessionKey, visible]);
   useEffect(() => () => useUiStore.getState().setSessionVisible(sessionKey, false), [sessionKey]);
 
-  // Настоящий промпт с тем же текстом пришёл — серый элемент уходит.
+  // Принятый промпт и ответ pty.send могут прийти в любом порядке — сверяем и при изменении очереди.
   useEffect(() => {
     useChatUiStore.getState().updateQueued(sessionKey, (was) => {
       const left = was.filter((entry) => promptCount(items, entry.text) <= entry.seen);
       return left.length === was.length ? was : left;
     });
-  }, [items, sessionKey]);
+  }, [items, queued, sessionKey]);
 
   // Цитата Reply (`reply.ts`) — своя у сессии вида: другая сессия во вкладке её не видит.
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | null>(null);
@@ -386,14 +400,29 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
 
   // Скриншот из буфера → drops/ (main) → путь; отказы — теми же тостами, что у терминала.
   const pasteImage = useCallback((): Promise<string | null> => pasteClipboardImage(bridge), [bridge]);
+  // Codex читает вложение инструментом по пути; контейнер исходного приложения может быть недоступен CLI.
+  const importImages = useCallback(async (paths: string[]): Promise<string[]> => {
+    if (!codex) return paths;
+    const saved: string[] = [];
+    for (const path of paths) {
+      try {
+        saved.push(isImagePath(path) ? await bridge.app.importDropImage(path) : path);
+      } catch (error) {
+        const { code, message } = decodeIpcError(error);
+        console.warn('[parley] importDropImage', message);
+        toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : S.terminal.imageImportFailed);
+      }
+    }
+    return saved;
+  }, [bridge, codex]);
   const pickFiles = useCallback(async (): Promise<string[]> => {
     try {
-      return await bridge.app.chooseFiles();
+      return await importImages(await bridge.app.chooseFiles());
     } catch (error) {
       console.warn('[parley] chooseFiles', decodeIpcError(error).message);
       return [];
     }
-  }, [bridge]);
+  }, [bridge, importImages]);
 
   // Файлы из Finder на весь вид: подсветка, затем пути вложениями над полем ввода.
   const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
@@ -413,7 +442,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const paths = Array.from(event.dataTransfer.files)
       .map((file) => bridge.app.pathForFile(file))
       .filter((path) => path !== '');
-    useChatUiStore.getState().setAttachments(sessionKey, addAttachments(attachments, paths));
+    const attach = (saved: string[]): void => {
+      const state = useChatUiStore.getState();
+      state.setAttachments(sessionKey, addAttachments(state.attachments[sessionKey] ?? [], saved));
+    };
+    if (codex) void importImages(paths).then(attach);
+    else attach(paths);
   };
 
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
@@ -528,7 +562,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             {...(showWorking ? { working: { since: turnStart } } : {})}
             {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
             fold={chatFold}
-          />
+            {...(findOpen && visible && findView !== null ? { find: findView } : {})}
+          >
+            {findOpen ? <ChatFindBar items={items} focusNonce={findFocusNonce} onChange={setFindView} initialQuery={useChatUiStore.getState().find[sessionKey]?.query ?? ''} onQueryChange={setFindQuery} onClose={closeFind} /> : null}
+          </FeedList>
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}

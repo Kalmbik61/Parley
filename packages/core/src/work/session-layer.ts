@@ -11,6 +11,8 @@ const SPAWN_RESERVE_BYTES = 32768;
 
 export interface SessionLayerInput {
   guidance: string;
+  /** Открытые задания комнаты (`assignmentsBlock`): сразу после вставки; пусто — блока нет. */
+  assignments?: string;
   /** Приоритет браузера Parley (`BROWSER_PRIORITY_RULE`): только запуску с каналом агента и сервером MCP. */
   browser?: string;
   bridge?: string;
@@ -30,7 +32,7 @@ export interface SessionLayerInput {
 }
 
 export type LayerBlockBytes = Record<
-  'guidance' | 'browser' | 'bridge' | 'links' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
+  'guidance' | 'assignments' | 'browser' | 'bridge' | 'links' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
   number
 >;
 export interface SessionLayer {
@@ -115,6 +117,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
   if (memory?.truncated) warnings.push({ code: 'memory-truncated', message: 'Parley cut project memory at 12 KiB; clean up memory.md to include the remaining facts.' });
   const parts = {
     guidance: input.guidance,
+    assignments: input.assignments ?? '',
     browser: input.browser ?? '',
     bridge: input.bridge ?? '',
     links: input.links ?? '',
@@ -131,6 +134,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     throw new SessionLayerTooLargeError({ memoryBytes: blockBytes.memoryFacts, blockBytes });
   const text = [
     parts.guidance,
+    parts.assignments,
     parts.browser,
     parts.bridge,
     parts.links,

@@ -44,6 +44,7 @@ function pressFor(accelerator: string): KeyLike {
 }
 
 function whenOverlaps(a: ActionDef['when'], b: ActionDef['when']): boolean {
+  // 'chat' (фокус в виде Chat) и 'terminal' (фокус в xterm) вместе не бывают: один и тот же ⌘F в обоих — не пересечение.
   return a === b || a === 'always' || b === 'always';
 }
 
@@ -63,7 +64,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'tab.close': true, 'tab.reopen': true, 'tab.prev': true, 'tab.next': true, 'tab.mruNext': true, 'tab.mruPrev': true,
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
   'tab.goto.6': true, 'tab.goto.7': true, 'tab.goto.8': true, 'tab.goto.9': true,
-  find: true, 'voice.toggle': true, 'terminal.clear': true, 'chat.toggleView': true, 'settings.open': true,
+  find: true, 'chat.find': true, 'voice.toggle': true, 'terminal.clear': true, 'chat.toggleView': true, 'settings.open': true,
   'attention.next': true, 'wake.toggle': true, 'host.restart': true, 'host.diagnostics': true, 'assistant.open': true,
   'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
   'browser.newTab': true,
@@ -104,6 +105,11 @@ describe('ACTIONS (тест 1)', () => {
         expect(matchesAccelerator(a.keys as string, pressFor(b.keys as string)), `${a.id} / ${b.id}`).toBe(false);
       }
     }
+  });
+
+  it('chat.find — ⌘F, when chat, без пункта меню, в палитре; «find» терминала остаётся при том же сочетании', () => {
+    expect(ACTIONS.find((action) => action.id === 'chat.find')).toMatchObject({ keys: 'CmdOrCtrl+F', menu: null, when: 'chat', inPalette: true });
+    expect(ACTIONS.find((action) => action.id === 'find')).toMatchObject({ keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal' });
   });
 
   it('у каждого действия непустой title из S.actions, кириллицы нет; keywords английские', () => {

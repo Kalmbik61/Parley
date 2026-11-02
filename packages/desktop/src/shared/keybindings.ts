@@ -20,7 +20,7 @@ export type ActionId =
   | 'tab.close' | 'tab.reopen' | 'tab.prev' | 'tab.next' | 'tab.mruNext' | 'tab.mruPrev'
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
   | 'tab.goto.6' | 'tab.goto.7' | 'tab.goto.8' | 'tab.goto.9'
-  | 'find' | 'voice.toggle' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
+  | 'find' | 'chat.find' | 'voice.toggle' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
   | 'attention.next' | 'wake.toggle' | 'host.restart' | 'host.diagnostics' | 'assistant.open'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
@@ -35,7 +35,8 @@ export interface ActionDef {
   menu: MenuName | null; // null — без пункта меню (⌃Tab, ⌃1–9, палитровые действия)
   // 'editor' из брифа убран в раунде исправлений 1: ни одно действие его не берёт (план 7 тоже),
   // сочетания Monaco гасит список MONACO_KEYS обработчика.
-  when: 'always' | 'terminal' | 'browser';
+  // 'chat' — фокус в виде Chat (нужен `inChat` обработчика клавиш: у ленты и поля ввода своих FocusContext нет).
+  when: 'always' | 'terminal' | 'browser' | 'chat';
   inPalette: boolean; // false — служебное: palette.open, work.goto.N, tab.goto.N, tab.mruNext/Prev
   // Удержание клавиши повторяет действие — только шаги навигации и масштаба. У прочих
   // автоповтор гасится без запуска: удержанный ⌘N иначе создал бы несколько работ.
@@ -56,6 +57,8 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'settings.open', title: S.actions.settings, keywords: ['preferences', 'options'], keys: 'CmdOrCtrl+,', menu: 'app', when: 'always', inPalette: true },
 
   { id: 'find', title: S.actions.find, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },
+  // Поиск по ленте Chat: тот же ⌘F, но фокус в виде Chat; пункт меню «Find» один и шлёт `find`, палитровая ветка выбирает вид.
+  { id: 'chat.find', title: S.actions.findInChat, keywords: ['chat', 'search', 'find'], keys: 'CmdOrCtrl+F', menu: null, when: 'chat', inPalette: true },
   // Диктовка (спека 2026-10-06-voice-input-design.md, 3.4): поле или терминал с фокусом; идёт запись — её стоп.
   { id: 'voice.toggle', title: S.actions.toggleDictation, keywords: ['voice', 'dictation', 'microphone', 'speech'], keys: 'CmdOrCtrl+Shift+M', menu: 'edit', when: 'always', inPalette: true },
   { id: 'assistant.open', title: S.actions.askAssistant, keywords: ['assistant', 'jarvis', 'ask', 'voice'], keys: null, menu: null, when: 'always', inPalette: true },

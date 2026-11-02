@@ -26,6 +26,7 @@
 import type { FeedItem } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { createOutbox, type AttemptResult, type OutboxItem } from '../lib/outbox.js';
+import { isCompletePointerText } from '../lib/participant.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { sendToAgent, showSendToast, type SendWithToastDeps } from '../terminal/send.js';
@@ -53,7 +54,19 @@ export const CHAT_AWAIT_PROMPT_MS = 5000;
 /** Сколько промптов с этим текстом уже в ленте — по нему серый «Queued» узнаёт свой настоящий промпт. */
 export function promptCount(items: readonly FeedItem[], text: string): number {
   const wanted = text.trim();
-  return items.filter((item) => item.kind === 'prompt' && item.text.trim() === wanted).length;
+  return items.filter((item) => {
+    if (item.kind !== 'prompt') return false;
+    const received = item.text.trim();
+    if (received === wanted) return true;
+    // Codex склеивает очередь Tab в один промпт. Убираем только служебные строки по краям:
+    // совпадения с цитатой или частью другого сообщения недостаточно для подтверждения.
+    const lines = received.split(/\r?\n/);
+    let start = 0;
+    let end = lines.length;
+    while (start < end && (lines[start]!.trim() === '' || isCompletePointerText(lines[start]!))) start += 1;
+    while (end > start && (lines[end - 1]!.trim() === '' || isCompletePointerText(lines[end - 1]!))) end -= 1;
+    return wanted !== '' && lines.slice(start, end).join('\n').trim() === wanted;
+  }).length;
 }
 
 const NO_ITEMS: readonly FeedItem[] = [];

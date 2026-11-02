@@ -74,6 +74,17 @@ describe('SessionRowMenu — пункты', () => {
     expect(screen.queryByText('Resume')).toBeNull();
   });
 
+  it('закрытая сессия: пункта Resume нет — хост закрытую не поднимает', () => {
+    renderMenu(makeSession('s-06', 'FAQ', { lifecycle: 'closed', closedAt: '2026-10-19T12:20:14.362Z' }));
+    expect(screen.getByText('Open')).toBeTruthy();
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+
+  it('спящая сессия: Resume есть', () => {
+    renderMenu(makeSession('s-05', 'Roman', { lifecycle: 'sleeping' }));
+    expect(screen.getByText('Resume')).toBeTruthy();
+  });
+
   it('Stop — только после подтверждения; пункта «Create room with…» больше нет: комнату из сессий собирает бросок (диалог 1.6)', () => {
     bridge.setHandler('sessions.stop', () => ({ ok: true as const }));
     renderMenu(makeSession('s-01', 'plan'));

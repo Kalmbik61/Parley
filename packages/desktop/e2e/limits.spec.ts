@@ -26,6 +26,19 @@ let project = '';
 /** Метка провайдера, которой нечем уместиться в 800×500 (около 400 px): потолков ширины у имени нет, урезает её только нехватка места. */
 const LONG_LABEL = 'Extremely Long Provider Label For The Status Bar Layout Check';
 
+/** `E2E_DPR=2` запускает окно с `--force-device-scale-factor=2`; без неё — как было, без флага. */
+const dprArgs = process.env.E2E_DPR === '2' ? ['--force-device-scale-factor=2'] : [];
+
+/**
+ * Время сброса в тексте лимитов (P7), только в широкой строке (от 1060 px содержимого, окно ≈ 1092 и шире): «↻9:30 PM» у
+ * пяти часов, «↻Sat 9:30 PM» у недели — местное, как в тултипе. В узкой строке (800×500) текст прежний, без сбросов.
+ */
+const FIVE_HOUR_RESET = String.raw`↻\d{1,2}:\d{2}\s[AP]M`;
+const WEEK_RESET = String.raw`↻[A-Z][a-z]{2} \d{1,2}:\d{2}\s[AP]M`;
+/** Весь текст лимитов в широкой строке: «58% 5h ↻9:30 PM · 41% wk ↻Sat 9:30 PM»; недели нет — без второй половины. */
+const limitsLine = (fiveHour: number, week: number | null): RegExp =>
+  new RegExp(`^${fiveHour}% 5h ${FIVE_HOUR_RESET}${week === null ? '' : ` · ${week}% wk ${WEEK_RESET}`}$`);
+
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
     ([m, p]) => (globalThis as unknown as { parley: { call: (m: string, p: unknown) => Promise<unknown> } }).parley.call(m, p),
@@ -121,7 +134,7 @@ test.describe('лимиты подписок в строке статуса (к�
       PARLEY_LIMITS_POLL_MS: '200',
       ...extraEnv,
     };
-    const electronApp = await electron.launch({ args: [mainEntry], env });
+    const electronApp = await electron.launch({ args: [mainEntry, ...dprArgs], env });
     app = electronApp;
     const window = await electronApp.firstWindow();
     await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, ...bounds }), size);
@@ -142,24 +155,33 @@ test.describe('лимиты подписок в строке статуса (к�
 
     await writeLimits(workId, sessionId, 58.7, 41.9);
     const limits = segment.locator('[data-limits]');
-    // 58.7 → 58, 41.9 → 41: проценты целые, округление вниз.
-    await expect(limits).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
+    // 58.7 → 58, 41.9 → 41: проценты целые, округление вниз; 1400 — строка широкая, рядом с процентами время сброса (P7).
+    await expect(limits).toHaveText(limitsLine(58, 41), { timeout: 15_000 });
+    // Места хватает: времена сброса показаны целиком, без многоточия.
+    const resets = limits.locator('[data-limit-reset]');
+    await expect(resets).toHaveCount(2);
+    for (const reset of await resets.all()) {
+      const fit = await reset.evaluate((el) => ({ width: el.getBoundingClientRect().width, cut: el.scrollWidth > el.clientWidth }));
+      expect(fit.width).toBeGreaterThan(30);
+      expect(fit.cut).toBe(false);
+    }
     await expect(limits).toHaveAttribute('title', /^5-hour window resets at .+ · Weekly window resets [A-Z][a-z]{2} .+ · Updated .+$/);
     // До порога — обычные цвета: заливка полоски neutral-800, текст без accent-700.
     await expect(limits.locator('[data-limits-fill]')).toHaveClass(/\bbg-neutral-800\b/);
     // Заливка — пятичасовое окно, целые проценты: 58 % трека.
     await expect(limits.locator('[data-limits-fill]')).toHaveAttribute('style', /width:\s*58%/);
-    await expect(segment.getByText('58% 5h · 41% wk')).not.toHaveClass(/text-accent-700/);
+    const text = limits.locator(':scope > span').last();
+    await expect(text).not.toHaveClass(/text-accent-700/);
 
     // Новые числа: пятичасовое окно перешло 80 % — то же событие меняет текст и красит его и полоску.
     await writeLimits(workId, sessionId, 85.2, 41.9);
-    await expect(limits).toHaveText('85% 5h · 41% wk', { timeout: 15_000 });
-    await expect(segment.getByText('85% 5h · 41% wk')).toHaveClass(/text-accent-700/);
+    await expect(limits).toHaveText(limitsLine(85, 41), { timeout: 15_000 });
+    await expect(text).toHaveClass(/text-accent-700/);
     await expect(limits.locator('[data-limits-fill]')).toHaveClass(/\bbg-accent-700\b/);
 
     // Одно окно остаётся одним: недельного нет — «70% 5h», без «wk».
     await writeLimits(workId, sessionId, 70, null);
-    await expect(limits).toHaveText('70% 5h', { timeout: 15_000 });
+    await expect(limits).toHaveText(limitsLine(70, null), { timeout: 15_000 });
     await expect(limits).toHaveAttribute('title', /^5-hour window resets at .+ · Updated .+$/);
   });
 
@@ -268,6 +290,103 @@ test.describe('лимиты подписок в строке статуса (к�
     expect(Math.max(...sweep.bars)).toBeCloseTo(44, 0);
   });
 
+  test('800×500 и время сброса: сбросов в тексте нет, проценты целы и видны, строка без горизонтального переполнения', async () => {
+    const window = await launch({ width: 800, height: 500 });
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-resets-narrow', goal: '' });
+    const claude = await newSession(window, workId, 'claude', 'один');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await writeLimits(workId, claude, 58.7, 41.9);
+    const limits = window.locator('[data-provider-segment="claude"] [data-limits]');
+    // Строка уже порога: текст прежний, времена сброса — только в тултипе.
+    await expect(limits).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
+    await expect(limits.locator('[data-limit-reset]')).toHaveCount(0);
+    await expect(limits).toHaveAttribute('title', /^5-hour window resets at .+ · Weekly window resets [A-Z][a-z]{2} .+ · Updated .+$/);
+
+    const measured = await window.evaluate(() => {
+      const block = document.querySelector('[data-provider-segment="claude"] [data-limits]') as HTMLElement;
+      const text = block.lastElementChild as HTMLElement;
+      const row = block.closest('[data-provider-segment]')?.parentElement as HTMLElement;
+      const wake = [...document.querySelectorAll('button')].find((el) => el.textContent === 'Auto-wake on');
+      return {
+        textCut: text.scrollWidth > text.clientWidth,
+        textWidth: text.getBoundingClientRect().width,
+        rowOverflow: row.scrollWidth - row.clientWidth,
+        wakeRight: wake?.getBoundingClientRect().right ?? Infinity,
+        viewport: window.innerWidth,
+      };
+    });
+    expect(measured.textCut).toBe(false);
+    expect(measured.textWidth).toBeGreaterThan(80);
+    expect(measured.rowOverflow).toBeLessThanOrEqual(0);
+    expect(measured.wakeRight).toBeLessThanOrEqual(measured.viewport);
+  });
+
+  test('1100×600, у порога ширины: сбросы появляются и сжимаются первыми — проценты целы, имена и правые сегменты на месте; уже порога сбросов нет', async () => {
+    const codexRoot = path.join(home, 'codex-sessions');
+    await writeCodexLimits(codexRoot, 85.4);
+    const window = await launch(
+      { width: 1100, height: 600 },
+      { PARLEY_CODEX_BIN: stubAgent, PARLEY_GLM_BIN: stubAgent, PARLEY_CODEX_SESSIONS_DIR: codexRoot },
+    );
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-limits-resets-edge', goal: '' });
+    const claude = await newSession(window, workId, 'claude', 'один');
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await hookEvent(workId, claude, { hook_event_name: 'Notification', notification_type: 'permission_prompt' });
+    await writeLimits(workId, claude, 58.7, 41.9);
+    await expect(window.locator('[data-provider-segment="claude"] [data-limits]')).toHaveText(limitsLine(58, 41), { timeout: 15_000 });
+    await expect(window.locator('[data-provider-segment="codex"] [data-limits]')).toHaveText(limitsLine(85, null), { timeout: 15_000 });
+    // Сегмент внимания — часть правого блока: без него (он появляется позже текста) места было бы больше, и сбросы не резались бы.
+    await expect(window.getByRole('button', { name: '1 needs you' })).toBeVisible({ timeout: 15_000 });
+
+    const measure = (): Promise<{
+      names: string[];
+      nameCut: boolean[];
+      percentsWhole: boolean[];
+      resetsCut: boolean[];
+      wakeRight: number;
+      viewport: number;
+    }> =>
+      window.evaluate(() => {
+        const segments = ['claude', 'codex', 'glm'].map((id) => document.querySelector(`[data-provider-segment="${id}"]`) as HTMLElement);
+        const blocks = segments.map((segment) => segment.querySelector('[data-limits]') as HTMLElement | null).filter((block) => block !== null);
+        const wake = [...document.querySelectorAll('button')].find((el) => el.textContent === 'Auto-wake on');
+        return {
+          names: segments.map((segment) => (segment.children[1] as HTMLElement).textContent ?? ''),
+          nameCut: segments.map((segment) => {
+            const name = segment.children[1] as HTMLElement;
+            return name.scrollWidth > name.clientWidth;
+          }),
+          // Проценты целы: текст не обрезан, пока сбросы хоть что-то отдают.
+          percentsWhole: blocks.map((block) => {
+            const text = block.lastElementChild as HTMLElement;
+            return text.scrollWidth <= text.clientWidth;
+          }),
+          resetsCut: blocks.flatMap((block) => [...block.querySelectorAll<HTMLElement>('[data-limit-reset]')].map((el) => el.scrollWidth > el.clientWidth)),
+          wakeRight: wake?.getBoundingClientRect().right ?? Infinity,
+          viewport: window.innerWidth,
+        };
+      });
+
+    await expect.poll(async () => (await measure()).resetsCut.some(Boolean)).toBe(true);
+    const edge = await measure();
+    expect(edge.names).toEqual(['Claude Code', 'Codex', 'GLM']);
+    expect(edge.nameCut).toEqual([false, false, false]);
+    expect(edge.percentsWhole).toEqual([true, true]);
+    // У порога места на все сбросы целиком нет: хотя бы один обрезан многоточием — и это единственное, что обрезано.
+    expect(edge.resetsCut.some(Boolean)).toBe(true);
+    expect(edge.wakeRight).toBeLessThanOrEqual(edge.viewport);
+
+    // Уже порога (содержимое 1058 < 1060): сбросов нет, текст прежний.
+    await (app as ElectronApplication).evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1090, height: 600 }));
+    await expect(window.locator('[data-limit-reset]')).toHaveCount(0);
+    await expect(window.locator('[data-provider-segment="claude"] [data-limits]')).toHaveText('58% 5h · 41% wk');
+    // Снова шире порога — сбросы возвращаются.
+    await (app as ElectronApplication).evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 600 }));
+    await expect(window.locator('[data-limit-reset]')).toHaveCount(3);
+    const wide = await measure();
+    expect(wide.resetsCut).toEqual([false, false, false]);
+  });
+
   test('1400×900 и провайдер с очень длинной меткой: имя показано целиком — потолка ширины у имени нет', async () => {
     await writeFile(
       path.join(home, 'providers.json'),
@@ -311,6 +430,9 @@ test.describe('лимиты подписок в строке статуса (к�
     await expect(codexSegment.locator('[data-limits]')).toHaveText('85% 5h', { timeout: 15_000 });
     await expect(codexSegment.getByText('85% 5h')).toHaveClass(/text-accent-700/);
     await expect(window.getByRole('button', { name: '1 needs you · 1 unseen' })).toBeVisible({ timeout: 15_000 });
+    // 800×500 — строка уже порога: времён сброса в тексте нет (они отняли бы место у процентов и имён), только проценты; время — в тултипе.
+    await expect(window.locator('[data-limit-reset]')).toHaveCount(0);
+    await expect(claudeSegment.locator('[data-limits]')).toHaveAttribute('title', /^5-hour window resets at .+ · Weekly window resets [A-Z][a-z]{2} .+ · Updated .+$/);
 
     await expect(window.locator('[data-provider-segment="glm"]')).toContainText('GLM');
 

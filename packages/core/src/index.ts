@@ -216,6 +216,11 @@ export {
   keepNewestWithin,
   listPage,
   mailWorkMap,
+  mailWorkMapCooperative,
+  captureWindowMail,
+  projectWindowMail,
+  CooperativeWork,
+  cloneWindowValue,
   mapTopology,
   messagePage,
   pageBySeq,
@@ -228,7 +233,7 @@ export {
   WINDOW_TEXT_MAX,
   WINDOW_UNREAD_MAX,
 } from './work/context-pages.js';
-export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
+export type { CapturedWindowMail, CooperativeWorkOptions, CooperativeWorkStats, LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
@@ -347,6 +352,7 @@ export {
   workExists,
   workPaths,
   workVersion,
+  workIdentity,
   worksIndexPath,
 } from './work/store.js';
 export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
@@ -429,7 +435,7 @@ export {
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { collectHandover, formatHandover, HANDOVER_BUDGET } from './work/handover.js';
 export type { HandoverInput } from './work/handover.js';
-export { readWorks, watchWorks } from './work/works.js';
+export { captureWorks, readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
   LINK_TOLERANCE_MS,
@@ -709,7 +715,22 @@ export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions
 export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
-export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PLAN_SUBMISSIONS_MAX, PLAN_OLD_EVIDENCE_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, savePlanCheckpoint, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export { planItemDuties, planSubmission } from './work/plan-state.js';
+export type { PlanDuty, PlanDutyAction, PlanDutyRole, PlanWaitingFor } from './work/plan-state.js';
+export { PLAN_TASKS_MAX_BYTES, planTasksNext, planTasksView } from './work/plan-tasks.js';
+export type {
+  PlanFinishedItem,
+  PlanItemDetail,
+  PlanNextAssignment,
+  PlanTaskAction,
+  PlanTaskCheckpoint,
+  PlanTaskEntry,
+  PlanTaskLog,
+  PlanTasksNext,
+  PlanTasksQuery,
+  PlanTasksView,
+} from './work/plan-tasks.js';
 export {
   intendOp, settleOp, startAttempt, normalizeAttemptSubmission, submitAttempt, receipt, recordCheck, coverageVerdict,
   returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,
@@ -720,7 +741,7 @@ export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact, MapCompactMail } from './work/types.js';
-export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
+export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, PlanSubmission, PlanCheckpoint, RoomPlan, PlanExportIntent } from './work/types.js';
 export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';

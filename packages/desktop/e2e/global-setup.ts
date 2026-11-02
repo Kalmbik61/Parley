@@ -47,6 +47,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // Хост на старте спрашивает версию CLI (`<команда> --version`). В E2E настоящие claude и codex
   // запускать нельзя, а подменён у спеков только claude (и не у всех): пробу отключаем целиком.
   process.env.PARLEY_SKIP_VERSION_PROBE = '1';
+  // Умолчания хоста — сон простаивающих агентов (60 минут) и потолок машины по памяти (auto) — гасят и
+  // будят сессии сами; спекам нужен предсказуемый хост, как в его тестах. Спек потолка
+  // (`capacity.spec.ts`) задаёт `PARLEY_MACHINE_CONCURRENT` у себя после `...process.env` и это закрепление перекрывает.
+  process.env.PARLEY_SLEEP_AFTER_MINUTES = '0';
+  process.env.PARLEY_MACHINE_CONCURRENT = 'off';
 
   return async () => {
     const homes = (await readFile(list, 'utf8').catch(() => ''))

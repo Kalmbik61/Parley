@@ -1,3 +1,6 @@
+import type { IpcRenderer } from 'electron';
+import type { WorksSyncSurfaceBatch, WorksSyncSurfaceStatus } from '@parley/protocol';
+import type { WorksSyncBridge } from '../shared/bridge.js';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
 import type { AppNote, AssistantVoiceProgress, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
@@ -196,7 +199,61 @@ ipcRenderer.on('app:assistant-voice-progress', (_event, progress: AssistantVoice
 // стирает связь между методом и его параметрами/результатом на границе
 // процессов, а вызывающая сторона (`ParleyBridge`) типизирована как раз для
 // того, чтобы эту связь вернуть на стороне рендерера.
+// Песочница не умеет require локального shared CJS chunk: initializer намеренно
+// повторён из works-sync.ts, иначе два preload-входа выделяют его в общий chunk.
+function createWorksSyncBridge(ipc: Pick<IpcRenderer, 'on' | 'send'>): WorksSyncBridge {
+  let nextStream = 0;
+  type Consumer = { stream: number; batch: Parameters<WorksSyncBridge['subscribe']>[0];
+    status: Parameters<WorksSyncBridge['subscribe']>[1]; last: WorksSyncSurfaceStatus | null; failed: boolean };
+  let consumer: Consumer | null = null;
+  ipc.on('works-sync:batch', async (_event, stream: number, delivery: number, batch: WorksSyncSurfaceBatch) => {
+    const current = consumer;
+    if (current === null || current.stream !== stream || current.failed) return;
+    try {
+      await current.batch(batch);
+      if (consumer === current && current.stream === stream && !current.failed) ipc.send('works-sync:ack', stream, delivery);
+    } catch {
+      if (consumer !== current || current.stream !== stream) return;
+      current.failed = true;
+      const failure: WorksSyncSurfaceStatus = { state: 'error', epoch: current.last?.epoch ?? batch.transaction.epoch,
+        applied: current.last?.applied ?? batch.transaction.base, error: 'protocol', retryable: true };
+      current.last = failure;
+      ipc.send('works-sync:unsubscribe', stream);
+      // Ошибка сохраняется до явного ремонта; callback остаётся для новой подписки.
+      try { current.status(failure); } catch { /* Consumer status callback also failed. */ }
+    }
+  });
+  ipc.on('works-sync:status', (_event, stream: number, status: WorksSyncSurfaceStatus) => {
+    if (consumer?.stream !== stream || consumer.failed) return;
+    consumer.last = status;
+    consumer.status(status);
+  });
+  return {
+    subscribe(batch, status) {
+      if (consumer !== null) ipc.send('works-sync:unsubscribe', consumer.stream);
+      const current: Consumer = { stream: ++nextStream, batch, status, last: null, failed: false };
+      consumer = current;
+      ipc.send('works-sync:subscribe', current.stream);
+      return () => {
+        if (consumer !== current) return;
+        consumer = null;
+        ipc.send('works-sync:unsubscribe', current.stream);
+      };
+    },
+    retry: () => {
+      if (consumer?.failed) {
+        consumer.stream = ++nextStream;
+        consumer.failed = false;
+        ipc.send('works-sync:subscribe', consumer.stream);
+      }
+      ipc.send('works-sync:retry');
+    },
+  };
+}
+
+
 const bridge = {
+  worksSync: createWorksSyncBridge(ipcRenderer),
   call: (method: MethodName, params: unknown) => ipcRenderer.invoke('host:call', method, params),
   notify: (method: NotificationName, params: unknown) => {
     ipcRenderer.send('host:notify', method, params);
@@ -319,6 +376,7 @@ const bridge = {
     pathForFile: (file: File) => webUtils.getPathForFile(file),
     saveDropImage: (source: 'clipboard') =>
       ipcRenderer.invoke('app:save-drop-image', source) as Promise<string | null>,
+    importDropImage: (absPath: string) => ipcRenderer.invoke('app:import-drop-image', absPath) as Promise<string>,
     imageThumbnail: (path: string, maxPx?: number) =>
       ipcRenderer.invoke('app:image-thumbnail', path, maxPx) as Promise<string | null>,
     setDirtyBuffers: (count: number) => {

@@ -54,6 +54,8 @@ const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.m
 const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const bytesHash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 const context = (plan: RoomPlan, at: string) => ({ actor: ENGINE, rev: plan.rev, now: at });
+// Папки рантайма агентов только в корне репозитория: pathspec не трогает записи базы и вложенные одноимённые папки.
+const CAPTURE_EXCLUDED = ['.omc', '.omx', '.claude', '.codex', '.agents', '.parley-tmp'] as const;
 const fenced = new Set(['returned', 'blocked', 'aborted', 'superseded']);
 const active = (plan: RoomPlan) => plan.mode === 'autonomous' && plan.acceptedAt !== null && ['active', 'completing'].includes(plan.status) && !!plan.autonomous;
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -436,7 +438,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       await io.fs.rm(index, { force: true });
       const env = { GIT_INDEX_FILE: index, GIT_WORK_TREE: cloneDirectory(loc, attempt.id) };
       await bare(loc, ['read-tree', attempt.baseSha], env);
-      await bare(loc, ['add', '-A', '--', '.'], env);
+      await bare(loc, ['add', '-A', '--', '.', ...CAPTURE_EXCLUDED.map(name => `:(exclude,top)${name}`)], env);
       await bare(loc, ['rm', '-r', '--cached', '--ignore-unmatch', '-q', '--', '.parley-tmp'], env);
       const tree = (await bare(loc, ['write-tree'], env)).toString('utf8').trim();
       const baseTree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);

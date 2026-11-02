@@ -6,7 +6,7 @@ import type { HostPaths } from '@parley/host';
 import { ASSISTANT_ACTIONS_FEATURE, BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
-import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
+import { answerBrowserAgentOps, HostConnection, realProcesses } from './host-connection.js';
 
 interface FakeServerOptions {
   hostVersion?: string;
@@ -739,7 +739,11 @@ describe('HostConnection: остановка хоста при выходе', ()
   });
 
   /** Процессы-заглушки: `alive` решает, жив ли pid; сигналы — в журнал. */
-  function fakeProcesses(alive: (pid: number) => boolean, isHost: (pid: number) => boolean = () => true) {
+  function fakeProcesses(
+    alive: (pid: number) => boolean,
+    isHost: (pid: number) => boolean = () => true,
+    identity: (pid: number) => string | null = (pid) => `${pid}:t0`,
+  ) {
     const signals: Array<[number, string]> = [];
     return {
       signals,
@@ -749,6 +753,7 @@ describe('HostConnection: остановка хоста при выходе', ()
         }),
         isAlive: vi.fn(alive),
         isHost: vi.fn(isHost),
+        identity: vi.fn(identity),
       },
     };
   }
@@ -846,6 +851,54 @@ describe('HostConnection: остановка хоста при выходе', ()
     expect(foreign.signals).toEqual([]);
   }, 10_000);
 
+  it('pid жив, isHost истинно, но поколение процесса сменилось после shutdown: сигнала нет — «none»', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_010, ignoreShutdown: true });
+    let generation = 't0';
+    const { processes, signals } = fakeProcesses(() => true, () => true, (pid) => `${pid}:${generation}`);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+    // Старый хост вышел, а его pid занял другой Parley-хост: жив, команда та же, время старта другое.
+    const timer = setTimeout(() => { generation = 't1'; }, 50);
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    clearTimeout(timer);
+    expect(signals).toEqual([]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('время старта живого pid установить нельзя: сигнала нет — «none»', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_011, ignoreShutdown: true });
+    const { processes, signals } = fakeProcesses(() => true, () => true, () => null);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    expect(signals).toEqual([]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('поколение сменилось между SIGTERM и SIGKILL: SIGKILL не шлётся', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_012, ignoreShutdown: true });
+    let generation = 't0';
+    const { processes, signals } = fakeProcesses(() => true, () => true, (pid) => `${pid}:${generation}`);
+    processes.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      generation = 't1';
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([[999_012, 'SIGTERM']]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
   it('связи нет и pid-файла нет — «none», сигналов нет', async () => {
     const { processes, signals } = fakeProcesses(() => true);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes });
@@ -925,6 +978,7 @@ describe('HostConnection: ограниченный Restart Host', () => {
   function processes() {
     let alive = true;
     let isHost = true;
+    let generation: string | null = 't0';
     const signals: NodeJS.Signals[] = [];
     return {
       signals,
@@ -934,9 +988,14 @@ describe('HostConnection: ограниченный Restart Host', () => {
         for (const server of servers) server.close();
       },
       foreign() { isHost = false; },
+      /** Тот же pid и та же команда, но другое время старта процесса. */
+      regenerate() { generation = 't1'; },
+      /** Время старта установить нельзя (`ps` не ответил). */
+      unknownIdentity() { generation = null; },
       hooks: {
         isAlive: vi.fn(() => alive),
         isHost: vi.fn(() => isHost),
+        identity: vi.fn((pid: number) => (alive && generation !== null ? `${pid}:${generation}` : null)),
         kill: vi.fn((_pid: number, signal: NodeJS.Signals) => { signals.push(signal); }),
       },
     };
@@ -1066,6 +1125,95 @@ describe('HostConnection: ограниченный Restart Host', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['SIGTERM', 'SIGKILL'] as const)('pid жив и isHost истинно, но поколение сменилось перед %s: этот сигнал не отправляется', async (signalToSkip) => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    const replacePid = () => {
+      proc.regenerate();
+      for (const socket of sockets) socket.destroy();
+      for (const server of servers) server.close();
+    };
+    proc.hooks.kill.mockImplementation((_pid, signal) => { proc.signals.push(signal); replacePid(); });
+    const spawn = vi.fn(async () => { await host(); return null; });
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const timer = signalToSkip === 'SIGTERM' ? setTimeout(replacePid, 20) : undefined;
+    try { await connection.restartHost(deadlines); } finally { clearTimeout(timer); }
+    expect(proc.signals).toEqual(signalToSkip === 'SIGTERM' ? [] : ['SIGTERM']);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('время старта живого pid установить нельзя: сигналов нет, ограниченный отказ без нового процесса', async () => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    proc.unknownIdentity();
+    const spawn = vi.fn();
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    const started = Date.now();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/teardown/);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(proc.signals).toEqual([]);
+    await settle(600);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('живой pid с неустановленным временем старта не считается ушедшим: отказ, а не второй хост', async () => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    const spawn = vi.fn();
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    // Тождество при подключении снято; теперь `ps` перестал отвечать при живом pid.
+    proc.unknownIdentity();
+    await expect(connection.restartHost(deadlines)).rejects.toThrow(/did not exit/);
+    expect(proc.signals).toEqual([]);
+    await settle(600);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('тождество hello снято при подключении: pid, занятый другим поколением позже, не получает сигналов', async () => {
+    await host({ pid: 999_201, shutdownHangs: true });
+    const proc = processes();
+    // Первое чтение — при hello; всё, что позже, видит уже другое поколение под тем же pid.
+    let reads = 0;
+    proc.hooks.identity.mockImplementation((pid: number) => `${pid}:${reads++ === 0 ? 't0' : 't1'}`);
+    const spawn = vi.fn(async () => { await host(); return null; });
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    expect(proc.hooks.identity).toHaveBeenCalledTimes(1);
+    for (const socket of sockets) socket.destroy();
+    for (const server of servers) server.close();
+    await connection.restartHost(deadlines);
+    expect(proc.signals).toEqual([]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('pid из pid-файла: тождество читается до host.shutdown, а не после', async () => {
+    await host({ pid: 999_299, protocolOk: false, shutdownHangs: true });
+    await writeFile(paths.pid, '999201\n2026-10-30T00:00:00.000Z\n');
+    const proc = processes();
+    proc.hooks.isHost.mockImplementation((pid?: number) => pid === 999_201);
+    // Для pid-файла первое чтение — до shutdown (t0); позже под pid уже другое поколение (t1).
+    const reads: number[] = [];
+    proc.hooks.identity.mockImplementation((pid: number) => {
+      if (pid !== 999_201) return `${pid}:t0`;
+      reads.push(pid);
+      return `${pid}:${reads.length === 1 ? 't0' : 't1'}`;
+    });
+    const spawn = vi.fn(async () => { await host(); return null; });
+    connection = new HostConnection({ paths, env: process.env, spawn, processes: proc.hooks, connectTimeoutMs: 500 });
+    await connection.connect();
+    // Хост принял shutdown и закрыл сокет; новый hello идёт уже к заменившему серверу.
+    const closing = setTimeout(() => {
+      for (const socket of sockets) socket.destroy();
+      for (const server of servers) server.close();
+    }, 20);
+    try { await connection.restartHost(deadlines); } finally { clearTimeout(closing); }
+    expect(proc.signals).toEqual([]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('неизвестный/чужой pid и открытый сокет: ограниченный отказ без сигналов и автоповтора', async () => {
     const received: unknown[] = [];
     await host({ pid: 999_201, shutdownHangs: true, received });
@@ -1132,5 +1280,17 @@ describe('HostConnection: ограниченный Restart Host', () => {
     expect(statuses).not.toContain('connected');
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(connection.recentCalls().filter((call) => call.error === 'pending')).toEqual([]);
+  });
+});
+
+describe('realProcesses.identity', () => {
+  it('у живого процесса — "pid:время старта", и оно стабильно между чтениями', () => {
+    const first = realProcesses.identity(process.pid);
+    expect(first).toMatch(/^\d+:.+/);
+    expect(realProcesses.identity(process.pid)).toBe(first);
+  });
+
+  it('у несуществующего pid — null', () => {
+    expect(realProcesses.identity(2 ** 22 + 1)).toBeNull();
   });
 });

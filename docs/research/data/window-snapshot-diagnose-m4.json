@@ -1,0 +1,511 @@
+{
+  "kind": "M4 diagnosis only, 1w/3000 allChanged; no final performance claim",
+  "generatedAt": "2026-11-01T14:29:56.686Z",
+  "node": "v22.23.3",
+  "cpu": "Apple M4 Pro",
+  "samples": 8,
+  "warmup": 2,
+  "method": "Eight alternating original-M3/staged pairs, two warmups; fresh cloned dense inputs outside timing. CPU=process.cpuUsage user+system, elapsed=performance.now. Seven batched phase probes avoid per-row timer calls but split the original interleaved row loop into passes and move final byte validation after packing. Additional arrays, changed allocation/GC/layout and 7x CPU/timer probes perturb totals; difference is not a pure instrumentation-overhead estimate. No ELD measurement; this small diagnostic locates stage cost only. Projection/compare/encoding/cache/frames all included; correctness outside timing.",
+  "original": {
+    "elapsedMs": {
+      "n": 8,
+      "p50": 64.311,
+      "p95": 75.75,
+      "max": 75.75
+    },
+    "processCpuMs": {
+      "n": 8,
+      "p50": 69.962,
+      "p95": 85.342,
+      "max": 85.342
+    }
+  },
+  "staged": {
+    "elapsedMs": {
+      "n": 8,
+      "p50": 64.868,
+      "p95": 73.97,
+      "max": 73.97
+    },
+    "processCpuMs": {
+      "n": 8,
+      "p50": 71.214,
+      "p95": 82.27,
+      "max": 82.27
+    }
+  },
+  "stages": {
+    "projection": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 3.677,
+        "p95": 4.671,
+        "max": 4.671
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 5.683,
+        "p95": 7.739,
+        "max": 7.739
+      }
+    },
+    "comparison": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 1.354,
+        "p95": 1.763,
+        "max": 1.763
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 1.383,
+        "p95": 2.275,
+        "max": 2.275
+      }
+    },
+    "rowStringify": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 50.965,
+        "p95": 52.548,
+        "max": 52.548
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 52.088,
+        "p95": 53.052,
+        "max": 53.052
+      }
+    },
+    "rowByteCounts": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.621,
+        "p95": 1.316,
+        "max": 1.316
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.624,
+        "p95": 1.262,
+        "max": 1.262
+      }
+    },
+    "nextCacheAndTokens": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.865,
+        "p95": 0.985,
+        "max": 0.985
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 1.513,
+        "p95": 2.317,
+        "max": 2.317
+      }
+    },
+    "packingAndConcatenation": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 5.25,
+        "p95": 7.334,
+        "max": 7.334
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 6.276,
+        "p95": 9.472,
+        "max": 9.472
+      }
+    },
+    "finalFrameByteValidation": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 2.092,
+        "p95": 5.916,
+        "max": 5.916
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 3.037,
+        "p95": 9.566,
+        "max": 9.566
+      }
+    }
+  },
+  "raw": {
+    "original": [
+      {
+        "elapsedMs": 64.31100000000004,
+        "processCpuMs": 85.342,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 64.75704200000018,
+        "processCpuMs": 71.906,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 75.75,
+        "processCpuMs": 84.51,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 64.38283300000012,
+        "processCpuMs": 69.274,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 62.441749999999956,
+        "processCpuMs": 68.672,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 64.91474999999991,
+        "processCpuMs": 71.921,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 64.23079099999995,
+        "processCpuMs": 69.962,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      },
+      {
+        "elapsedMs": 62.81187499999942,
+        "processCpuMs": 68.147,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000
+      }
+    ],
+    "staged": [
+      {
+        "elapsedMs": 73.96979199999987,
+        "processCpuMs": 82.27,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 4.671000000000049,
+            "processCpuMs": 7.107
+          },
+          "comparison": {
+            "elapsedMs": 1.7630420000000413,
+            "processCpuMs": 1.766
+          },
+          "rowStringify": {
+            "elapsedMs": 51.88229200000001,
+            "processCpuMs": 52.716
+          },
+          "rowByteCounts": {
+            "elapsedMs": 1.3156249999999545,
+            "processCpuMs": 1.262
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.9771250000001146,
+            "processCpuMs": 0.97
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 7.3335000000001855,
+            "processCpuMs": 8.777
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 5.915791999999783,
+            "processCpuMs": 9.566
+          }
+        }
+      },
+      {
+        "elapsedMs": 66.675209,
+        "processCpuMs": 77.834,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 4.505541999999878,
+            "processCpuMs": 7.739
+          },
+          "comparison": {
+            "elapsedMs": 1.3540000000000418,
+            "processCpuMs": 1.437
+          },
+          "rowStringify": {
+            "elapsedMs": 50.539833000000044,
+            "processCpuMs": 52.12
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.6972089999999298,
+            "processCpuMs": 0.99
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.9849999999999,
+            "processCpuMs": 2.251
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 6.419916999999941,
+            "processCpuMs": 9.472
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 2.062249999999949,
+            "processCpuMs": 3.721
+          }
+        }
+      },
+      {
+        "elapsedMs": 65.08883399999968,
+        "processCpuMs": 71.214,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.9794999999999163,
+            "processCpuMs": 6.385
+          },
+          "comparison": {
+            "elapsedMs": 1.4035829999997986,
+            "processCpuMs": 1.444
+          },
+          "rowStringify": {
+            "elapsedMs": 51.455832999999984,
+            "processCpuMs": 52.885
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.7110830000001442,
+            "processCpuMs": 0.797
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.8645419999998012,
+            "processCpuMs": 1.648
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 4.257000000000062,
+            "processCpuMs": 5.632
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 2.307416000000103,
+            "processCpuMs": 2.317
+          }
+        }
+      },
+      {
+        "elapsedMs": 63.66904199999999,
+        "processCpuMs": 67.844,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.631166000000121,
+            "processCpuMs": 5.33
+          },
+          "comparison": {
+            "elapsedMs": 1.2247499999998581,
+            "processCpuMs": 1.226
+          },
+          "rowStringify": {
+            "elapsedMs": 50.965082999999595,
+            "processCpuMs": 51.219
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.5637080000001333,
+            "processCpuMs": 0.56
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.8347499999999854,
+            "processCpuMs": 0.836
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 4.255457999999635,
+            "processCpuMs": 5.025
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 2.0917920000001686,
+            "processCpuMs": 3.431
+          }
+        }
+      },
+      {
+        "elapsedMs": 63.55524999999943,
+        "processCpuMs": 71.828,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.4108329999999114,
+            "processCpuMs": 5.016
+          },
+          "comparison": {
+            "elapsedMs": 1.3806249999997817,
+            "processCpuMs": 1.383
+          },
+          "rowStringify": {
+            "elapsedMs": 50.70537500000046,
+            "processCpuMs": 52.088
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.5930840000000899,
+            "processCpuMs": 0.596
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.8832089999996242,
+            "processCpuMs": 2.317
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 4.236875000000509,
+            "processCpuMs": 6.052
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 2.245875000000524,
+            "processCpuMs": 4.281
+          }
+        }
+      },
+      {
+        "elapsedMs": 64.8677090000001,
+        "processCpuMs": 67.839,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.819416999999703,
+            "processCpuMs": 5.683
+          },
+          "comparison": {
+            "elapsedMs": 1.3546249999999418,
+            "processCpuMs": 1.356
+          },
+          "rowStringify": {
+            "elapsedMs": 51.81274999999914,
+            "processCpuMs": 51.896
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.5708330000006754,
+            "processCpuMs": 0.572
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.6751670000003287,
+            "processCpuMs": 0.675
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 5.250332999999955,
+            "processCpuMs": 6.276
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 1.2941249999994398,
+            "processCpuMs": 1.295
+          }
+        }
+      },
+      {
+        "elapsedMs": 67.46966699999939,
+        "processCpuMs": 72.849,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.3344999999999345,
+            "processCpuMs": 4.886
+          },
+          "comparison": {
+            "elapsedMs": 1.3432080000002316,
+            "processCpuMs": 2.275
+          },
+          "rowStringify": {
+            "elapsedMs": 52.548000000000684,
+            "processCpuMs": 53.052
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.6212080000004789,
+            "processCpuMs": 0.624
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.8550420000001395,
+            "processCpuMs": 1.559
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 5.644500000000335,
+            "processCpuMs": 7.323
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 3.006833999999799,
+            "processCpuMs": 3.037
+          }
+        }
+      },
+      {
+        "elapsedMs": 63.064666000000216,
+        "processCpuMs": 70.418,
+        "frames": 215,
+        "maxFrameBytes": 122786,
+        "totalFrameBytes": 26284891,
+        "encodedRows": 3000,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.677375000000211,
+            "processCpuMs": 6.316
+          },
+          "comparison": {
+            "elapsedMs": 1.2792919999992591,
+            "processCpuMs": 1.282
+          },
+          "rowStringify": {
+            "elapsedMs": 49.738250000000335,
+            "processCpuMs": 51.32
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.6729999999997744,
+            "processCpuMs": 0.677
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.8933329999999842,
+            "processCpuMs": 1.513
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 5.428541999999652,
+            "processCpuMs": 7.404
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 1.2723750000004657,
+            "processCpuMs": 1.807
+          }
+        }
+      }
+    ]
+  }
+}

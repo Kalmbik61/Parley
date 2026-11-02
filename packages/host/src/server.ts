@@ -8,6 +8,7 @@ import {
   LineTooLongError,
   PROTOCOL_VERSION,
   ROOMS_MAIL_FEATURE,
+  WORKS_SYNC_FEATURE,
   parseIncoming,
 } from '@parley/protocol';
 import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
@@ -21,6 +22,7 @@ import { createClient } from './client.js';
 import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';
 import { HostError } from './errors.js';
+import { resolvePreparedWorksSyncReply } from './works/works-sync.js';
 
 export interface ServerOptions {
   context: HostContext;
@@ -208,7 +210,7 @@ function handleHello(
       methods: remote
         ? methods.filter((name) => name === 'hello' || remoteMethodOpen(name, options) || REMOTE_NOTIFICATION_SET.has(name))
         : methods,
-      features: HOST_FEATURES,
+      features: !remote && options.methodHandlers['works.sync'] !== undefined ? [...HOST_FEATURES, WORKS_SYNC_FEATURE] : HOST_FEATURES,
     },
   });
   options.registerClient(registered);
@@ -366,7 +368,7 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   const begin = now();
   // Уведомление о медленном запросе — после `client.send`, чтобы `queuedBytes` показывал очередь с ответом.
   // Сбой лога (или JSON.stringify) не должен попасть в `.catch` ниже: ответ уже отправлен, и второй ответ с тем же id был бы ложным.
-  const logIfSlow = (outcome: { ok: true; result: unknown } | { ok: false; code: string }): void => {
+  const logIfSlow = (outcome: { ok: true; result: unknown; bytes?: number } | { ok: false; code: string }): void => {
     try {
       const ms = now() - begin;
       if (ms < SLOW_REQUEST_MS) return;
@@ -376,7 +378,7 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
         client: client.name,
         queuedBytes: client.writableLength(),
         ...(outcome.ok
-          ? { bytes: Buffer.byteLength(JSON.stringify(outcome.result) ?? '', 'utf8') }
+          ? { bytes: outcome.bytes ?? Buffer.byteLength(JSON.stringify(outcome.result) ?? '', 'utf8') }
           : { error: outcome.code }),
       });
     } catch {
@@ -396,7 +398,20 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     ? Promise.resolve(handler(parsed.params as never, request))
     : policy.trustFolder(trustFirst).then(() => handler(parsed.params as never, request));
   pending
-    .then((result) => {
+    .then(async (result) => {
+      const prepared = await resolvePreparedWorksSyncReply(result, id);
+      if (prepared !== undefined) {
+        // false означает возможную уже поставленную в очередь запись: не повторять через send.
+        try {
+          const writable = client.sendLine !== undefined ? client.sendLine(prepared.line) : client.send({ id, result: prepared.result });
+          prepared.sent(writable);
+        } catch {
+          // Попытка записи могла уже отправить кадр; второй ответ с тем же id запрещён.
+          prepared.sent(false);
+        }
+        logIfSlow({ ok: true, result: prepared.result, bytes: prepared.resultBytes });
+        return;
+      }
       client.send({ id, result });
       logIfSlow({ ok: true, result });
     })

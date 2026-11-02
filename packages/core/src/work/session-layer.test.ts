@@ -41,6 +41,24 @@ describe('common session layer', () => {
     ).toBe('GUIDE');
   });
 
+  it('puts open assignments right after the guidance, counts their bytes and omits the empty block', () => {
+    const block = 'Open room assignments (call plan_tasks): pl-01 rev 0 #1 start.';
+    const result = buildSessionLayer({
+      guidance: 'GUIDE',
+      assignments: block,
+      browser: 'BROWSER',
+      bridge: 'BRIDGE',
+    });
+    expect(result.text).toBe(`GUIDE\n\n${block}\n\nBROWSER\n\nBRIDGE`);
+    expect(result.blockBytes.assignments).toBe(Buffer.byteLength(block, 'utf8'));
+    // Без заданий слой прежний: ни пустых строк, ни следа в тексте, в счётчике нуль.
+    for (const assignments of [undefined, '']) {
+      const empty = buildSessionLayer({ guidance: 'GUIDE', browser: 'BROWSER', ...(assignments === undefined ? {} : { assignments }) });
+      expect(empty.text).toBe('GUIDE\n\nBROWSER');
+      expect(empty.blockBytes.assignments).toBe(0);
+    }
+  });
+
   it('marks role and lead playbook truncation with retained boundaries and bounded bytes', () => {
     const source = 'first\n' + 'Ж'.repeat(20000);
     const result = buildSessionLayer({

@@ -39,12 +39,12 @@ export async function sendToAgent(
 }
 
 /**
- * Тот же набор, что `RESUMABLE` меню сессии (`sidebar/SessionRowMenu.tsx`): у активной без PTY
- * хост поднял бы второй процесс.
+ * Меню сессии (`sidebar/SessionRowMenu.tsx`) теперь тоже берёт `canResume` — одно правило для меню, карточки терминала
+ * и тоста отправки: у активной без PTY хост поднял бы второй процесс.
  */
 const RESUMABLE: ReadonlySet<string> = new Set(['exited', 'done', 'failed']);
 
-/** «Resume» уместна: status exited, done или failed и lifecycle не closed — как RESUMABLE меню сессии. */
+/** «Resume» уместна: status exited, done или failed и lifecycle не closed — её же берёт меню сессии. */
 export function canResume(session: WorkSession): boolean {
   // У закрытой `sessions.resume` падает (host/sessions/sessions-service.ts).
   return session.lifecycle !== 'closed' && RESUMABLE.has(liveStatus(session));

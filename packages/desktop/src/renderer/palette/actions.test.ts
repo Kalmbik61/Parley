@@ -8,6 +8,8 @@ import type { ActionId } from '../../shared/keybindings.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey } from '../../shared/work-keys.js';
+import { refKey } from '@parley/protocol';
+import { useChatUiStore, resetChatUiStoreForTests } from '../chat/ui-store.js';
 import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
 import { useDevtoolsStore } from '../browser/devtools/store.js';
 import { IMPLEMENTED_ACTIONS, isActionAvailable } from '../keys/handler.js';
@@ -186,6 +188,8 @@ function expectation(id: ActionId): (spies: Spies) => void {
     // Спека 2026-10-07, 4.3: панель вкладки браузера активной группы.
     'browser.devtools': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(true),
     'browser.console': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' }),
+    // Активная вкладка s-09 в чате: полоса поиска по ленте её сессии открыта.
+    'chat.find': () => expect(useChatUiStore.getState().find[refKey({ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-09' })]?.open).toBe(true),
     // План 2026-10-01: активная вкладка s-09 — Claude без поля view, то есть в чате; действие ставит terminal.
     'chat.toggleView': ({ layout }) => {
       expect(layout.apply).toHaveBeenCalledTimes(1);
@@ -397,6 +401,42 @@ describe('runAction — тема и поиск (тесты 4, 5 куска 6.3)'
     const spies = makeContext({ source: 'palette', focused: false });
     runAction('terminal.clear', spies.ctx);
     expect(spies.active.clear).toHaveBeenCalledTimes(1);
+  });
+
+  describe('find и chat.find на вкладке в виде Chat', () => {
+    const chatKey = refKey({ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-09' });
+    beforeEach(() => {
+      withFeedHost();
+      resetChatUiStoreForTests();
+    });
+    afterEach(() => {
+      resetFeedHost();
+      resetChatUiStoreForTests();
+    });
+
+    it.each(['menu', 'palette'] as const)('find (%s) без терминала в фокусе открывает поиск по ленте, а не по терминалу', (source) => {
+      const spies = makeContext({ source, focused: false });
+      runAction('find', spies.ctx);
+      expect(useChatUiStore.getState().find[chatKey]?.open).toBe(true);
+      expect(spies.active.openSearch).not.toHaveBeenCalled();
+    });
+
+    it('find с терминалом в фокусе — поиск терминала, лента не трогается', () => {
+      const spies = makeContext({ source: 'menu' });
+      runAction('find', spies.ctx);
+      expect(spies.focused.openSearch).toHaveBeenCalledTimes(1);
+      expect(useChatUiStore.getState().find[chatKey]).toBeUndefined();
+    });
+
+    it('вкладка в терминале (view terminal) — find ищет по активному терминалу, chat.find ничего не открывает', () => {
+      const spies = makeContext({ source: 'palette', focused: false });
+      const group = groups(spies.layout.layouts[KEY] as WorkLayout)[0]!;
+      group.tabs = group.tabs.map((tab) => (tab.kind === 'terminal' && tab.sessionId === 's-09' ? { ...tab, view: 'terminal' } : tab));
+      runAction('find', spies.ctx);
+      expect(spies.active.openSearch).toHaveBeenCalledTimes(1);
+      runAction('chat.find', spies.ctx);
+      expect(useChatUiStore.getState().find[chatKey]).toBeUndefined();
+    });
   });
 
   it('оба терминала null — find и terminal.clear без ошибки', () => {

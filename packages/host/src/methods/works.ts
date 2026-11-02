@@ -11,7 +11,9 @@ import {
 } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS, ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
-import type { Handler } from '../context.js';
+import type { AnyHandler, Handler } from '../context.js';
+import { prepareWorksMailStateReply, prepareWorksSyncReply } from '../works/works-sync.js';
+import type { Params } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { WorksService } from '../works/works-service.js';
 import type { HistoryService } from '../rooms/history-service.js';
@@ -41,6 +43,20 @@ export function worksList(works: WorksService): Handler<'works.list'> {
       });
     }
     return legacy;
+  };
+}
+
+/** Доверенный результат готовится сервером с фактическим RPC id, не клиентским raw JSON. */
+export function worksSync(works: WorksService): AnyHandler {
+  return async (params, request) => {
+    if (works.sync === undefined) throw new HostError('bad_request', 'Works sync is not enabled.');
+    return prepareWorksSyncReply(works.sync, request.client, params as Params<'works.sync'>);
+  };
+}
+export function worksMailState(works: WorksService): AnyHandler {
+  return async (params, request) => {
+    if (works.sync === undefined) throw new HostError('bad_request', 'Works sync is not enabled.');
+    return prepareWorksMailStateReply(works.sync, request.client, params as Params<'works.mailState'>);
   };
 }
 

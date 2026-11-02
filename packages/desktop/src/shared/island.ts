@@ -196,7 +196,7 @@ export interface IslandApi {
   failed(): void;
 }
 
-export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };
+export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot' | 'worksSync'> & { island: IslandApi };
 /** Только desktop delivery: число валидных уникальных tasks до ограничения списка. */
 export type IslandActivityEntry = EventData<'activity.changed'> & { islandTasksTotal?: number };
 
@@ -237,6 +237,7 @@ export interface IslandPresentationOutcome {
  */
 export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'works.list',
+  'works.mailState',
   'providers.list',
   'context.messages',
   'feed.snapshot',

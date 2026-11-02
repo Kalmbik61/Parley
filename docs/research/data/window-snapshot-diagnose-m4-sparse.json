@@ -1,0 +1,512 @@
+{
+  "kind": "M4 diagnosis only, 1w/3000 single-edit sparse control; no final performance claim",
+  "sparseControl": true,
+  "generatedAt": "2026-11-01T14:37:48.898Z",
+  "node": "v22.23.3",
+  "cpu": "Apple M4 Pro",
+  "samples": 8,
+  "warmup": 2,
+  "method": "Eight alternating original-M3/staged pairs, two warmups; fresh cloned selected dense/sparse inputs outside timing. CPU=process.cpuUsage user+system, elapsed=performance.now. Seven batched phase probes avoid per-row timer calls but split the original interleaved row loop into passes and move final byte validation after packing. Additional arrays, changed allocation/GC/layout and 7x CPU/timer probes perturb totals; difference is not a pure instrumentation-overhead estimate. No ELD measurement; this small diagnostic locates stage cost only. Projection/compare/encoding/cache/frames all included; correctness outside timing.",
+  "original": {
+    "elapsedMs": {
+      "n": 8,
+      "p50": 10.073,
+      "p95": 11.529,
+      "max": 11.529
+    },
+    "processCpuMs": {
+      "n": 8,
+      "p50": 12.493,
+      "p95": 20.539,
+      "max": 20.539
+    }
+  },
+  "staged": {
+    "elapsedMs": {
+      "n": 8,
+      "p50": 9.71,
+      "p95": 13.092,
+      "max": 13.092
+    },
+    "processCpuMs": {
+      "n": 8,
+      "p50": 13.598,
+      "p95": 22.292,
+      "max": 22.292
+    }
+  },
+  "stages": {
+    "projection": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 3.317,
+        "p95": 4.938,
+        "max": 4.938
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 5.585,
+        "p95": 8.749,
+        "max": 8.749
+      }
+    },
+    "comparison": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 5.078,
+        "p95": 7.234,
+        "max": 7.234
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 5.794,
+        "p95": 11.964,
+        "max": 11.964
+      }
+    },
+    "rowStringify": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.34,
+        "p95": 0.559,
+        "max": 0.559
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.34,
+        "p95": 0.752,
+        "max": 0.752
+      }
+    },
+    "rowByteCounts": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.112,
+        "p95": 0.294,
+        "max": 0.294
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.112,
+        "p95": 0.597,
+        "max": 0.597
+      }
+    },
+    "nextCacheAndTokens": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.43,
+        "p95": 0.711,
+        "max": 0.711
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.442,
+        "p95": 1.816,
+        "max": 1.816
+      }
+    },
+    "packingAndConcatenation": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.028,
+        "p95": 0.086,
+        "max": 0.086
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.03,
+        "p95": 0.533,
+        "max": 0.533
+      }
+    },
+    "finalFrameByteValidation": {
+      "elapsedMs": {
+        "n": 8,
+        "p50": 0.002,
+        "p95": 0.003,
+        "max": 0.003
+      },
+      "processCpuMs": {
+        "n": 8,
+        "p50": 0.002,
+        "p95": 0.003,
+        "max": 0.003
+      }
+    }
+  },
+  "raw": {
+    "original": [
+      {
+        "elapsedMs": 10.072999999999979,
+        "processCpuMs": 12.493,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 11.529457999999977,
+        "processCpuMs": 14.915,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 10.79512499999987,
+        "processCpuMs": 20.539,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 10.492917000000034,
+        "processCpuMs": 13.495,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 9.411791999999878,
+        "processCpuMs": 11.906,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 9.602499999999964,
+        "processCpuMs": 11.463,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 8.821917000000212,
+        "processCpuMs": 10.946,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      },
+      {
+        "elapsedMs": 10.165667000000212,
+        "processCpuMs": 13.306,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1
+      }
+    ],
+    "staged": [
+      {
+        "elapsedMs": 13.091625000000022,
+        "processCpuMs": 22.292,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 4.517374999999902,
+            "processCpuMs": 7.842
+          },
+          "comparison": {
+            "elapsedMs": 7.233583999999951,
+            "processCpuMs": 11.964
+          },
+          "rowStringify": {
+            "elapsedMs": 0.5455829999999651,
+            "processCpuMs": 0.551
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.19079199999998764,
+            "processCpuMs": 0.548
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.488207999999986,
+            "processCpuMs": 1.269
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.03150000000005093,
+            "processCpuMs": 0.032
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.002124999999978172,
+            "processCpuMs": 0.002
+          }
+        }
+      },
+      {
+        "elapsedMs": 11.845250000000078,
+        "processCpuMs": 15.657,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 4.937750000000051,
+            "processCpuMs": 8.749
+          },
+          "comparison": {
+            "elapsedMs": 5.932833000000073,
+            "processCpuMs": 5.928
+          },
+          "rowStringify": {
+            "elapsedMs": 0.3397500000000946,
+            "processCpuMs": 0.34
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.1013749999999618,
+            "processCpuMs": 0.102
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.4408329999998841,
+            "processCpuMs": 0.442
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.028416999999990367,
+            "processCpuMs": 0.03
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0017499999999017746,
+            "processCpuMs": 0.002
+          }
+        }
+      },
+      {
+        "elapsedMs": 9.203082999999879,
+        "processCpuMs": 13.598,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 2.878834000000097,
+            "processCpuMs": 4.811
+          },
+          "comparison": {
+            "elapsedMs": 4.947541999999885,
+            "processCpuMs": 5.794
+          },
+          "rowStringify": {
+            "elapsedMs": 0.4002920000002632,
+            "processCpuMs": 0.404
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.1749590000003991,
+            "processCpuMs": 0.177
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.7106250000001637,
+            "processCpuMs": 1.816
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.03037499999982174,
+            "processCpuMs": 0.533
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.00204200000007404,
+            "processCpuMs": 0.002
+          }
+        }
+      },
+      {
+        "elapsedMs": 8.961333000000195,
+        "processCpuMs": 11.404,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.316541000000143,
+            "processCpuMs": 5.748
+          },
+          "comparison": {
+            "elapsedMs": 4.72891699999991,
+            "processCpuMs": 4.73
+          },
+          "rowStringify": {
+            "elapsedMs": 0.24499999999989086,
+            "processCpuMs": 0.246
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.1039159999995718,
+            "processCpuMs": 0.104
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.43029200000000856,
+            "processCpuMs": 0.431
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.08612499999981083,
+            "processCpuMs": 0.086
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0023339999997915584,
+            "processCpuMs": 0.003
+          }
+        }
+      },
+      {
+        "elapsedMs": 9.709875000000011,
+        "processCpuMs": 13.879,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.396291999999903,
+            "processCpuMs": 5.585
+          },
+          "comparison": {
+            "elapsedMs": 5.127375000000029,
+            "processCpuMs": 5.982
+          },
+          "rowStringify": {
+            "elapsedMs": 0.4481670000000122,
+            "processCpuMs": 0.452
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.17320900000004258,
+            "processCpuMs": 0.174
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.48462500000005093,
+            "processCpuMs": 1.607
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.0215000000002874,
+            "processCpuMs": 0.022
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0018750000003819878,
+            "processCpuMs": 0.002
+          }
+        }
+      },
+      {
+        "elapsedMs": 9.77841699999999,
+        "processCpuMs": 12.307,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.947791000000052,
+            "processCpuMs": 6.474
+          },
+          "comparison": {
+            "elapsedMs": 5.045165999999881,
+            "processCpuMs": 5.044
+          },
+          "rowStringify": {
+            "elapsedMs": 0.3118340000000899,
+            "processCpuMs": 0.312
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.11179199999969569,
+            "processCpuMs": 0.112
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.2855829999998605,
+            "processCpuMs": 0.286
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.021000000000185537,
+            "processCpuMs": 0.021
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0018329999998059066,
+            "processCpuMs": 0.002
+          }
+        }
+      },
+      {
+        "elapsedMs": 10.15466699999979,
+        "processCpuMs": 14.08,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.317250000000058,
+            "processCpuMs": 5.312
+          },
+          "comparison": {
+            "elapsedMs": 5.42504099999951,
+            "processCpuMs": 6.403
+          },
+          "rowStringify": {
+            "elapsedMs": 0.5588749999997162,
+            "processCpuMs": 0.752
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.29412499999943975,
+            "processCpuMs": 0.597
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.4199589999998352,
+            "processCpuMs": 0.88
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.07912500000020373,
+            "processCpuMs": 0.08
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0020830000003115856,
+            "processCpuMs": 0.003
+          }
+        }
+      },
+      {
+        "elapsedMs": 8.94995899999958,
+        "processCpuMs": 10.676,
+        "frames": 1,
+        "maxFrameBytes": 8919,
+        "totalFrameBytes": 8919,
+        "encodedRows": 1,
+        "stages": {
+          "projection": {
+            "elapsedMs": 3.105583999999908,
+            "processCpuMs": 4.853
+          },
+          "comparison": {
+            "elapsedMs": 5.078166999999667,
+            "processCpuMs": 5.053
+          },
+          "rowStringify": {
+            "elapsedMs": 0.29195899999922403,
+            "processCpuMs": 0.292
+          },
+          "rowByteCounts": {
+            "elapsedMs": 0.10054200000013225,
+            "processCpuMs": 0.101
+          },
+          "nextCacheAndTokens": {
+            "elapsedMs": 0.29191699999955745,
+            "processCpuMs": 0.292
+          },
+          "packingAndConcatenation": {
+            "elapsedMs": 0.019416000000092026,
+            "processCpuMs": 0.019
+          },
+          "finalFrameByteValidation": {
+            "elapsedMs": 0.0027090000003227033,
+            "processCpuMs": 0.003
+          }
+        }
+      }
+    ]
+  }
+}

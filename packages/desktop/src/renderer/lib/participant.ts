@@ -40,7 +40,9 @@ const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: мет�
  */
 const POINTER_TEXT = /^\s*New messages \(\d+\)(?: in r-[\s\S]*)?\. Call check_inbox\.\s*$/;
 const CUT_POINTER_TEXT = /^\s*New messages \(\d+\) in r-[\s\S]*…$/;
-const isPointerText = (text: string): boolean => POINTER_TEXT.test(text) || CUT_POINTER_TEXT.test(text);
+/** Полный служебный указатель: подходит и для сверки промпта, принятого CLI вместе с уведомлениями. */
+export const isCompletePointerText = (text: string): boolean => POINTER_TEXT.test(text);
+const isPointerText = (text: string): boolean => isCompletePointerText(text) || CUT_POINTER_TEXT.test(text);
 
 /**
  * Ярлык сессии для окна: метка новой сессии из core и указатель на письма показываются именем по умолчанию

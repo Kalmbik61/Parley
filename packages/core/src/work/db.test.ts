@@ -60,16 +60,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 2', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 3', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(2);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(3);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(2);
+    expect(pragma('user_version')).toBe(3);
   });
 
   it('ставит synchronous=NORMAL, busy_timeout=5000 и включает внешние ключи', () => {
@@ -114,7 +114,7 @@ describe('workDb', () => {
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
   });
 
-  it('база версии 2 без индекса messages_sender получает его при открытии: версия 2, письма и работа целы (схема 2 не выпущена, версию не поднимаем)', () => {
+  it('существующая база без индекса messages_sender получает его при открытии: схема 3, письма и работа целы', () => {
     insertWork('w-0001');
     workDb()
       .prepare(
@@ -126,7 +126,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(2);
+    expect(pragma('user_version')).toBe(3);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -160,7 +160,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(2);
+    expect(pragma('user_version')).toBe(3);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -187,7 +187,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(2);
+    expect(pragma('user_version')).toBe(3);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -199,7 +199,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(2);
+    expect(pragma('user_version')).toBe(3);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);
@@ -282,5 +282,54 @@ describe('workDb', () => {
 
     expect(() => insert(1, 'm-02')).toThrow(/UNIQUE|PRIMARY/);
     expect(() => insert(2, 'm-01')).toThrow(/UNIQUE/);
+  });
+});
+
+
+describe('durable work incarnations', () => {
+  const incarnation = (id: string) => Number(workDb().prepare('SELECT incarnation FROM works WHERE id = ?').get(id)?.['incarnation']);
+  it('allocates on all inserts independently of caller fields and RETURNING, survives deletion/reopen/two connections', () => {
+    insertWork('w-0001'); const first = incarnation('w-0001');
+    expect(Number.isSafeInteger(first)).toBe(true); expect(first).toBeGreaterThan(0);
+    workDb().prepare('UPDATE works SET version = version + 1 WHERE id = ?').run('w-0001');
+    expect(incarnation('w-0001')).toBe(first);
+    workDb().exec('DELETE FROM works'); closeWorkDb();
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    const foreign = new DatabaseSync(path.join(home, WORK_DB_FILE));
+    try {
+      foreign.prepare("INSERT INTO works(project_path,id,title,status,updated_at,work_json,extra_json,incarnation) VALUES('/p','w-0001','B','active','x','{}','{}',999999)").run();
+    } finally { foreign.close(); }
+    expect(incarnation('w-0001')).toBe(first + 1);
+    const returned = workDb().prepare("INSERT INTO works(project_path,id,title,status,updated_at,work_json,extra_json) VALUES('/p','w-0002','C','active','x','{}','{}') RETURNING incarnation").get();
+    expect(returned?.['incarnation']).toBe(0);
+    expect(incarnation('w-0002')).toBe(first + 2);
+  });
+
+  it('backfills schema2 atomically and never reuses an allocation after committed deletion', () => {
+    insertWork('w-0001'); insertWork('w-0002');
+    workDb().exec('DROP TRIGGER works_assign_incarnation; ALTER TABLE works DROP COLUMN incarnation; DROP TABLE work_incarnation_clock; PRAGMA user_version = 2');
+    closeWorkDb();
+    expect(incarnation('w-0001')).toBe(1); expect(incarnation('w-0002')).toBe(2);
+    workDb().exec('DELETE FROM works'); insertWork('w-0001'); expect(incarnation('w-0001')).toBe(3);
+  });
+
+  it('rolls schema and data back on migration failure, and bounds allocator exhaustion', () => {
+    insertWork('w-0001');
+    workDb().exec('DROP TRIGGER works_assign_incarnation; ALTER TABLE works DROP COLUMN incarnation; PRAGMA user_version = 2');
+    closeWorkDb(); // existing clock intentionally makes migration fail before schema adoption
+    expect(() => workDb()).toThrow('already exists');
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    const check = new DatabaseSync(path.join(home, WORK_DB_FILE));
+    try {
+      expect(check.prepare('PRAGMA user_version').get()?.['user_version']).toBe(2);
+      expect(check.prepare('PRAGMA table_info(works)').all().some(row => row['name'] === 'incarnation')).toBe(false);
+      expect(check.prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
+      check.exec('DROP TABLE work_incarnation_clock');
+    } finally { check.close(); }
+    expect(incarnation('w-0001')).toBe(1);
+    workDb().exec('UPDATE work_incarnation_clock SET value = 9007199254740991');
+    expect(() => insertWork('w-0002')).toThrow('exhausted');
+    expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
+    expect(workDb().prepare('SELECT value FROM work_incarnation_clock').get()?.['value']).toBe(Number.MAX_SAFE_INTEGER);
   });
 });

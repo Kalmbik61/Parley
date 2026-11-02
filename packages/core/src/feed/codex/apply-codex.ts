@@ -10,6 +10,8 @@
  *
  * `Reasoning` пропускается (thinking у Claude тоже не показывается); `ContextCompaction` — заметка `compact`; запись
  * `compacted` её не дублирует. Незнакомый тип элемента — пропуск и счётчик `skipped` для `host.log`.
+ * Нативный `request_user_input_async` не даёт `item_completed`: его `response_item` показывается текстом с вариантами.
+ * Ответ остаётся в диалоге Codex: у такого вопроса нет удержанного хука для `feed.decide`.
  *
  * Картинки (план 2026-10-09): записи приходят после обхода картинок хоста (`stash.ts`), поэтому картинка `McpToolCall`
  * в `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` хост снабжает
@@ -299,9 +301,43 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
   cursor.skipped += 1;
 }
 
+function onAsyncQuestion(draft: FeedDraft, record: RolloutRecord): void {
+  const payload = record.payload;
+  const type = str(payload, 'type');
+  if ((type !== 'function_call' && type !== 'custom_tool_call') || str(payload, 'name') !== 'request_user_input_async') return;
+  const callId = str(payload, 'call_id');
+  const args = str(payload, type === 'function_call' ? 'arguments' : 'input');
+  if (callId === null || args === null) return;
+  let input: unknown;
+  try {
+    input = JSON.parse(args);
+  } catch {
+    return;
+  }
+  if (!isRecord(input) || !Array.isArray(input['questions'])) return;
+  const questions: string[] = [];
+  for (const raw of input['questions']) {
+    if (!isRecord(raw)) continue;
+    const title = str(raw, 'title');
+    if (title === null || title.trim() === '') continue;
+    const options = Array.isArray(raw['options'])
+      ? raw['options'].filter((option): option is string => typeof option === 'string' && option.trim() !== '')
+      : [];
+    questions.push([title, ...options.map((option, index) => `${index + 1}. ${option}`)].join('\n\n'));
+  }
+  if (questions.length === 0) return;
+  const text = `**Question from Codex**\n\n${questions.join('\n\n---\n\n')}\n\nTo answer, open Terminal and press Shift+Left (←) to open the question dialog.`;
+  // accepted:true означает только постановку вопроса в очередь, а не ответ человека. Текст остаётся в истории.
+  draft.put(newText(`text:codex-question:${callId}`, record.at, null, text, false));
+}
+
 function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null): void {
   if (record.type === 'turn_context') {
     if (agentId === null) onTurnContext(draft, record);
+    return;
+  }
+  if (record.type === 'response_item') {
+    if (agentId === null) onAsyncQuestion(draft, record);
     return;
   }
   if (record.type !== 'event_msg') return;

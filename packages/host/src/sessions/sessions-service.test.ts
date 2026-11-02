@@ -679,6 +679,26 @@ describe('create(): модель и усилие из диалога (дизай
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, work.work.id)).sessions.map((session) => session.id)).toEqual([sessionId]);
   });
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'имя из прототипа Object «%s» — тот же bad_request «неизвестный провайдер», не внутренняя ошибка',
+    async (name) => {
+      const work = await createWork(project, { title: 'Работа', goal: '' });
+      const argsFile = await tempArgsFile();
+      setEnv('STUB_ARGS_FILE', argsFile);
+      const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+
+      await expect(
+        service.create({ projectPath: project, workId: work.work.id, provider: name, label: '', task: 'сделай штуку', parent: null }),
+      ).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'bad_request',
+        message: `unknown provider ${name}; see get_map {field: "providers"}`,
+      });
+      expect(existsSync(argsFile)).toBe(false);
+      expect((await readMap(project, work.work.id)).sessions).toEqual([]);
+    },
+  );
 });
 
 describe('create(): карта после старта', () => {

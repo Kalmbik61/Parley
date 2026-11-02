@@ -70,7 +70,7 @@ export interface ParleyConfig extends ResourceLimits {
   resumeRate: number;
   /**
    * Через сколько минут простоя хост усыпляет агента Claude Code без процесса: письмо будит его с той же историей
-   * (план сна агентов). 0 — сон выключен, это умолчание. 0…1440.
+   * (план сна агентов). 60 — умолчание, 0 — сон выключен. 0…1440.
    */
   sleepAfterMinutes: number;
   /**
@@ -79,8 +79,8 @@ export interface ParleyConfig extends ResourceLimits {
    */
   sleepUnderPressureMinutes: number;
   /**
-   * Общий потолок живых CLI агентов на машине (спека сна агентов и ёмкости, 4.2): `off` — потолок, очередь и допуск
-   * выключены (умолчание), `auto` — `max(1, round(ГиБ памяти × 0.75))`, число — 1…128.
+   * Общий потолок живых CLI агентов на машине (спека сна агентов и ёмкости, 4.2): `auto` (умолчание) —
+   * `max(1, round(ГиБ памяти × 0.75))`, `off` — потолок, очередь и допуск выключены, число — 1…128.
    */
   machineConcurrent: MachineConcurrent;
   /**
@@ -135,9 +135,9 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
-  sleepAfterMinutes: 0,
+  sleepAfterMinutes: 60,
   sleepUnderPressureMinutes: 5,
-  machineConcurrent: 'off',
+  machineConcurrent: 'auto',
   agentSkills: true,
   skillNavigator: true,
   codexWriteApprovals: 'auto',

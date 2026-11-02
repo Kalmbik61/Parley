@@ -13,6 +13,7 @@ import {
   NOTIFICATIONS,
   PROTOCOL_VERSION,
   ROOMS_MAIL_FEATURE,
+  WORKS_SYNC_FEATURE,
   encodeLine,
 } from '@parley/protocol';
 import { REMOTE_EVENTS, REMOTE_METHODS, REMOTE_POLICY_FEATURE } from '@parley/protocol/remote';
@@ -201,7 +202,7 @@ describe('список методов в hello', () => {
     client.close();
   });
 
-  it('methods — ровно отсортированные ключи METHODS и NOTIFICATIONS, hello среди них', async () => {
+  it('methods — отсортированные METHODS и NOTIFICATIONS с включённой синхронизацией карты', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);
     await waitConnected(client.socket);
@@ -209,6 +210,9 @@ describe('список методов в hello', () => {
     const response = await hello(client, token);
     const methods = (response.result as { methods: string[] }).methods;
     expect(methods).toEqual(protocolMethods());
+    expect(methods).toContain('works.sync');
+    expect(methods).toContain('works.mailState');
+    expect((response.result as { features: string[] }).features).toContain(WORKS_SYNC_FEATURE);
     expect(methods).toContain('hello');
     expect(methods).toContain('works.rename');
     expect(methods).toContain('works.setStatus');

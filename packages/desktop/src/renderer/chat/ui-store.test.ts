@@ -28,6 +28,61 @@ describe('ui-store: вложения поля ввода', () => {
   });
 });
 
+describe('ui-store: полоса поиска ⌘F (план 2026-11-01, задача 9)', () => {
+  it('openFind открывает по сессии, повторный — тот же open и растущий focusNonce; closeFind гасит, не трогая соседей', () => {
+    const { openFind, closeFind } = useChatUiStore.getState();
+    openFind('a');
+    openFind('b');
+    expect(useChatUiStore.getState().find).toEqual({ a: { open: true, focusNonce: 1, query: '' }, b: { open: true, focusNonce: 1, query: '' } });
+    openFind('a');
+    expect(useChatUiStore.getState().find['a']).toEqual({ open: true, focusNonce: 2, query: '' });
+    closeFind('a');
+    expect(useChatUiStore.getState().find).toEqual({ a: { open: false, focusNonce: 2, query: '' }, b: { open: true, focusNonce: 1, query: '' } });
+  });
+
+  it('closeFind закрытой или неизвестной сессии стор не трогает; сброс для тестов стирает', () => {
+    const listener = vi.fn();
+    const off = useChatUiStore.subscribe(listener);
+    useChatUiStore.getState().closeFind('nobody');
+    expect(listener).not.toHaveBeenCalled();
+    off();
+    useChatUiStore.getState().openFind('a');
+    resetChatUiStoreForTests();
+    expect(useChatUiStore.getState().find).toEqual({});
+  });
+});
+
+describe('ui-store: запрос полосы поиска', () => {
+  it('setFindQuery хранит запрос открытой полосы по сессии; повторный ⌘F его не стирает, закрытие стирает', () => {
+    const { openFind, closeFind, setFindQuery } = useChatUiStore.getState();
+    openFind('a');
+    openFind('b');
+    setFindQuery('a', 'needle');
+    expect(useChatUiStore.getState().find['a']?.query).toBe('needle');
+    expect(useChatUiStore.getState().find['b']?.query).toBe('');
+    openFind('a');
+    expect(useChatUiStore.getState().find['a']).toEqual({ open: true, focusNonce: 2, query: 'needle' });
+    closeFind('a');
+    expect(useChatUiStore.getState().find['a']?.query).toBe('');
+    openFind('a');
+    expect(useChatUiStore.getState().find['a']?.query).toBe('');
+  });
+
+  it('setFindQuery закрытой, неизвестной сессии или того же запроса стор не трогает', () => {
+    useChatUiStore.getState().openFind('a');
+    useChatUiStore.getState().setFindQuery('a', 'x');
+    const listener = vi.fn();
+    const off = useChatUiStore.subscribe(listener);
+    useChatUiStore.getState().setFindQuery('a', 'x');
+    useChatUiStore.getState().setFindQuery('nobody', 'x');
+    useChatUiStore.getState().closeFind('a');
+    listener.mockClear();
+    useChatUiStore.getState().setFindQuery('a', 'late');
+    expect(listener).not.toHaveBeenCalled();
+    off();
+  });
+});
+
 describe('ui-store: просьба показать карточку агента (кусок 4b)', () => {
   afterEach(() => {
     vi.useRealTimers();

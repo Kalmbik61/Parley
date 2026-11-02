@@ -4,9 +4,12 @@
  * при старте.
  */
 
-import { lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
+import { isImagePath } from '../shared/image-path.js';
 
 /** `~/.parley/desktop/drops` — рядом с `ui.json` и `layouts.json`; дом — `parleyHome()` (`PARLEY_HOME`, прежний `HARNAS_HOME`, `~/.parley`, `~/.harnas`). */
 export function dropsDir(home: string = parleyHome()): string {
@@ -83,6 +86,71 @@ export async function saveImage(input: {
     return file;
   }
   throw new Error(`no free file name in ${dir}`);
+}
+
+/**
+ * Внешнее изображение → собственная копия Parley: CLI может не иметь доступа к контейнеру приложения,
+ * откуда человек перетащил файл. Байты и формат сохраняются; хеш не даёт повторному добавлению создать дубль.
+ */
+export async function importDropImage(input: unknown, dir: string = dropsDir()): Promise<string> {
+  if (typeof input !== 'string' || !path.isAbsolute(input) || !isImagePath(input)) {
+    throw new Error('Expected an absolute image path');
+  }
+  const source = await open(input, constants.O_RDONLY | constants.O_NONBLOCK);
+  let bytes: Buffer;
+  try {
+    const info = await source.stat();
+    if (!info.isFile() || info.size === 0) throw new Error('Expected a non-empty image file');
+    if (info.size > MAX_DROP_IMAGE_BYTES) throw new DropTooLargeError(info.size);
+    // Ограниченное чтение даже если исходник вырос после stat; короткое чтение не означает конец файла.
+    const buffer = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await source.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length !== info.size) throw new Error('Image changed while importing; attach it again');
+    bytes = buffer.subarray(0, length);
+  } finally {
+    await source.close();
+  }
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const file = path.join(dir, `attachment-${digest}${path.extname(input).toLowerCase()}`);
+  // Публикуем только целый файл: два одновременных добавления не увидят недописанную копию.
+  const temporary = path.join(dir, `attachment-${randomUUID()}.tmp`);
+  const target = await open(temporary, 'wx', 0o600);
+  try {
+    await target.writeFile(bytes);
+    await target.close();
+    await link(temporary, file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // Повторное вложение: не следуем по ссылке и не возвращаем повреждённую копию.
+    const existing = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await existing.stat();
+      if (!info.isFile() || info.size !== bytes.length) throw new Error('Invalid attachment copy');
+      const buffer = Buffer.alloc(bytes.length);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await existing.read(buffer, length, buffer.length - length, length);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+      if (length !== bytes.length || !buffer.equals(bytes)) throw new Error('Invalid attachment copy');
+      await existing.chmod(0o600);
+      const now = new Date();
+      await existing.utimes(now, now);
+    } finally {
+      await existing.close();
+    }
+  } finally {
+    await target.close();
+    await unlink(temporary);
+  }
+  return file;
 }
 
 /**

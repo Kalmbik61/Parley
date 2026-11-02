@@ -78,6 +78,18 @@ describe('resolveAction (тест 4)', () => {
     expect(resolveAction(cmd('f', 'KeyF'), 'other', false)).toBeNull();
   });
 
+  it('⌘F в виде Chat (лента или поле ввода) — chat.find; в terminal по-прежнему find; вне чата — null', () => {
+    const f = cmd('f', 'KeyF');
+    expect(resolveAction(f, 'other', false, true)).toBe('chat.find');
+    expect(resolveAction(f, 'input', false, true)).toBe('chat.find');
+    expect(resolveAction(f, 'terminal', false, true)).toBe('find');
+    expect(resolveAction(f, 'other', false, false)).toBeNull();
+    expect(resolveAction(f, 'input', false, false)).toBeNull();
+    expect(resolveAction(f, 'monaco', false, true)).toBeNull();
+    expect(resolveAction(f, 'dialog', false, true)).toBeNull();
+    expect(resolveAction(f, 'other', true, true)).toBeNull();
+  });
+
   it('⌃C в terminal — null', () => {
     expect(resolveAction(CTRL_C, 'terminal', false)).toBeNull();
   });
@@ -143,6 +155,7 @@ describe('installKeyHandler (тест 5)', () => {
       palette: boolean;
       available: (id: ActionId) => boolean;
       run: (id: ActionId) => void;
+      inChat: boolean;
     }> = {},
   ) {
     const run = vi.fn<(id: ActionId) => void>(overrides.run);
@@ -153,6 +166,7 @@ describe('installKeyHandler (тест 5)', () => {
       pickPaletteRow,
       endMruCycle,
       context: () => overrides.context ?? 'other',
+      inChat: () => overrides.inChat ?? false,
       paletteOpen: () => overrides.palette ?? false,
       available: overrides.available ?? (() => true),
     });
@@ -170,6 +184,17 @@ describe('installKeyHandler (тест 5)', () => {
     const event = keydown({ key: 'd', code: 'KeyD', metaKey: true });
     expect(event.defaultPrevented).toBe(true);
     expect(run).toHaveBeenCalledWith('group.splitRight');
+  });
+
+  it('⌘F с фокусом в чате — run(chat.find) и defaultPrevented; вне чата событие идёт дальше', () => {
+    const inChat = install({ context: 'input', inChat: true });
+    const event = keydown({ key: 'f', code: 'KeyF', metaKey: true });
+    expect(event.defaultPrevented).toBe(true);
+    expect(inChat.run).toHaveBeenCalledWith('chat.find');
+    uninstall?.();
+    const elsewhere = install({ context: 'input', inChat: false });
+    expect(keydown({ key: 'f', code: 'KeyF', metaKey: true }).defaultPrevented).toBe(false);
+    expect(elsewhere.run).not.toHaveBeenCalled();
   });
 
   it('palette.row — defaultPrevented и pickPaletteRow(0), run не вызван', () => {

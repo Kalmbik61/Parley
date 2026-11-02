@@ -91,19 +91,19 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
       )}
       {open ? (
         <div data-testid="chat-tool-details" className="flex min-w-0 flex-col gap-1.5 pl-6">
-          <span className="text-xs text-muted-foreground">{S.chat.arguments}</span>
+          <span data-find-label className="text-xs text-muted-foreground">{S.chat.arguments}</span>
           <pre className={cn(PRE, 'max-h-48')}>{args}</pre>
           {item.truncated === true ? <Note>{S.chat.inputTruncated}</Note> : null}
           {item.patch === undefined || item.patch.length === 0 ? null : (
             <>
-              <span className="text-xs text-muted-foreground">{S.chat.changes}</span>
+              <span data-find-label className="text-xs text-muted-foreground">{S.chat.changes}</span>
               <DiffHunks hunks={item.patch} />
               {item.patchTruncated === true ? <Note>{S.chat.patchTruncated}</Note> : null}
             </>
           )}
           {/* Законченный вызов без результата (правка файла Codex: в журнале у неё нет вывода) — без раздела Result. */}
           {item.response === undefined && item.status !== 'running' ? null : (
-            <span className="text-xs text-muted-foreground">{S.chat.result}</span>
+            <span data-find-label className="text-xs text-muted-foreground">{S.chat.result}</span>
           )}
           {item.response === undefined ? (
             item.status === 'running' ? <span className="text-xs text-muted-foreground">{S.chat.noResult}</span> : null

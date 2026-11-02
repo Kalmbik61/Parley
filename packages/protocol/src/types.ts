@@ -463,6 +463,8 @@ export interface RoomsMailRoom {
 
 /** Событие `rooms.mail`: письма одной работы за пачку, только окнам с признаком `rooms-mail` (спека rooms.mail 6.3). */
 export interface RoomsMailEvent {
+  /** Только sync-клиентам: требуемая версия структурной карты этой работы, не глобальная ревизия sync и не последняя версия писем. */
+  requiredStructuralVersion?: number;
   projectPath: string;
   workId: string;
   /** Версия работы в базе после этой пачки и до неё (`works.version`). */

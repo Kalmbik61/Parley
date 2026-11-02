@@ -438,6 +438,8 @@ export function createFakeBridge(): FakeBridge {
   const setupListeners = new Set<(event: RelaySetupEvent) => void>();
   const relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }> = [];
   const bridge: FakeBridge = {
+    // P4a: типизированный мост доступен, но fake не запускает renderer sync до P6.
+    worksSync: { subscribe: () => () => {}, retry: () => {} },
     setRelaySetupHandler: (name, handler) => {
       setupHandlers.set(name, handler as (params: never) => unknown);
     },
@@ -1085,6 +1087,7 @@ export function createFakeBridge(): FakeBridge {
       },
       // Подставной путь по имени файла: у `File` jsdom пути на диске нет (кусок 5.4).
       pathForFile: (file) => (file.name === '' ? '' : `/fake/${file.name}`),
+      importDropImage: async (path) => path,
       saveDropImage: async (source) => {
         saveDropImageCalls.push(source);
         const answer = saveDropImageAnswer;

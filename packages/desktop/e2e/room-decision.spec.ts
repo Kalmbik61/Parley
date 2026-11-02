@@ -2,7 +2,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { addRoom, addSession, HUMAN, setProposal, updateMap } from '@parley/core';
+import { addRoom, addSession, HUMAN, setProposal, updateMap, type PlanItem, type PlanItemInput } from '@parley/core';
 import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { readStoredMapE2E } from './stored-map.js';
@@ -25,6 +25,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * жив и молчал именно из-за базы, а не потому, что сломан. Третий — клик по уведомлению macOS (запись журнала) ведёт
  * во вкладку комнаты: цель `FocusTarget { kind: 'room' }`. Четвёртый — стопка карточек в окне 800×500: не больше двух,
  * новая сверху, кнопки в окне, а тост sonner встаёт над ними, не на кнопки (раскладку считает только настоящий Chromium).
+ * Пятый — карточка поправки плана в окне 800×500 при длинном пути проекта и длинных названиях пунктов: только несделанное,
+ * ничто не выходит за правый край карточки (план 2026-10-19, D6).
  *
  * Уведомления main пишет в журнал (`PARLEY_NOTIFICATIONS=log`, `playwright.config.ts`): настоящее всплыло бы на экране
  * человека. Окно в фокусе или без него тест задаёт событиями `focus` / `blur` — фокус ОС между окнами гуляет
@@ -460,5 +462,92 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await cards.nth(0).getByRole('button', { name: 'Later', exact: true }).click();
     await expect(cards).toHaveCount(0);
     await expect.poll(inset).toBe('');
+  });
+
+  test('карточка поправки плана в окне 800×500: только несделанное, длинные названия и длинный путь проекта не выталкивают поля', async () => {
+    test.setTimeout(90_000);
+    // Длинный путь проекта (правило визуальных проверок): подмена каталога, созданного `beforeEach`.
+    await rm(project, { recursive: true, force: true });
+    project = await makeTempProject(`room-decision-${'very-long-project-directory-name-'.repeat(5)}`);
+    const { electronApp, window } = await launch();
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
+    await expect(window.getByTestId('landing')).toBeVisible();
+
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: 'e2e-amendment', goal: '' });
+    const unbroken = `packages/desktop/src/renderer/components/rooms/${'PlanRemainingView-'.repeat(8)}.tsx`;
+    const longWords = 'Rebuild the whole export pipeline so that every stage reports progress and recovers after a restart '.repeat(3).trim();
+    const itemOf = (id: number, title: string, owner: string, status: PlanItem['status'], after: number[] = []): PlanItem => ({
+      id,
+      title,
+      owner,
+      scope: `src/${id}.ts`,
+      after,
+      criteria: ['Works'],
+      verifier: HUMAN,
+      status,
+      evidence: null,
+      note: null,
+      log: [],
+    });
+    const draftItem = (item: PlanItem): PlanItemInput => ({ id: item.id, title: item.title, owner: item.owner, scope: item.scope, after: item.after, criteria: item.criteria, verifier: HUMAN });
+    let roomId = '';
+    await updateMap(project, workId, (map) => {
+      const lead = addSession(map, { provider: 'claude', label: 'lead', task: '' }).id;
+      const member = addSession(map, { provider: 'claude', label: 'member', task: '' }).id;
+      const room = addRoom(map, { title: 'Amendment', creator: HUMAN, members: [lead, member], lead, mode: 'verified' });
+      roomId = room.id;
+      // Принятый план: два проверенных пункта остаются, `in_progress` и `done` на проверке — несделанные, пятый поправка убирает.
+      const accepted = [
+        itemOf(1, 'Schema', member, 'verified'),
+        itemOf(2, 'Api', member, 'verified', [1]),
+        itemOf(3, `${longWords} ${unbroken}`, member, 'in_progress', [1]),
+        itemOf(4, 'Docs', member, 'done'),
+        itemOf(5, `Remove ${unbroken}`, member, 'in_progress'),
+      ];
+      map.work.planSeq = 1;
+      map.plans = [{ id: 'pl-01', roomId: room.id, mode: 'verified', status: 'active', rev: 2, goal: 'Ship the amendment', items: accepted, backlog: [], acceptedAt: new Date().toISOString(), completedAt: null, cancelledAt: null, completionSummary: null }];
+      const added = itemOf(6, `${longWords} ${longWords}`, member, 'waiting', [2]);
+      setProposal(map, room.id, lead, 'Only the export pipeline changes.', new Date().toISOString(), {
+        plan: { id: 'pl-01', rev: 2, mode: 'verified', goal: 'Ship the amendment', items: [...accepted.slice(0, 4), added].map(draftItem) },
+      });
+    });
+    await expect(window.locator('[data-room-row]')).toHaveCount(1, { timeout: 20_000 });
+    await sendFocusTarget(electronApp, { kind: 'room', projectPath: project, workId, roomId });
+    const card = window.locator('[data-decision-card]');
+    await expect(card).toHaveCount(1, { timeout: 20_000 });
+
+    // Только несделанное: `in_progress` как есть, `done` на проверке, новый пункт; проверенные скрыты, убранный — одной строкой.
+    const remaining = card.locator('[data-plan-remaining]');
+    await expect(remaining).toBeVisible();
+    await expect(remaining.locator('[data-remaining-item]')).toHaveCount(3);
+    await expect(remaining.locator('[data-remaining-item="3"]')).toContainText('In progress');
+    await expect(remaining.locator('[data-remaining-item="4"]')).toContainText('Done');
+    await expect(remaining.locator('[data-remaining-item="6"]')).toContainText('New');
+    await expect(remaining.locator('[data-remaining-item="6"]')).toContainText('Ready');
+    await expect(remaining.locator('[data-plan-done-hidden]')).toHaveText('2 done items hidden');
+    await expect(remaining.locator('[data-plan-removed]')).toContainText('Removed: #5 Remove packages/desktop');
+    await expect(remaining.locator('details[data-plan-full]')).not.toHaveAttribute('open', '');
+
+    // Ничто не выходит за правый край карточки и окна: длинные названия переносятся, строка Removed тоже. Закрытое
+    // раскрытие браузер раскладывает по запросу, но не показывает, — его содержимое не считаем.
+    const overflow = (): Promise<{ scroll: number; outside: string[]; windowFit: boolean }> =>
+      card.evaluate((node) => {
+        const right = node.getBoundingClientRect().right;
+        const outside = Array.from(node.querySelectorAll<HTMLElement>('[data-plan-remaining] *'))
+          .filter((child) => child.closest('details:not([open]) > :not(summary)') === null)
+          .filter((child) => child.getBoundingClientRect().width > 0 && child.getBoundingClientRect().right > right + 1)
+          .map((child) => `${child.tagName.toLowerCase()} right=${Math.round(child.getBoundingClientRect().right)}/${Math.round(right)} ${(child.textContent ?? '').slice(0, 30)}`);
+        return { scroll: node.scrollWidth - node.clientWidth, outside, windowFit: right <= globalThis.innerWidth };
+      });
+    expect(await overflow()).toEqual({ scroll: 0, outside: [], windowFit: true });
+    expect((await window.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)) <= 0).toBe(true);
+
+    // Полный план — под раскрытием: и сделанные, и убранные из списка оставшихся пункты там есть.
+    await remaining.locator('details[data-plan-full] > summary').click();
+    await expect(remaining.locator('details[data-plan-full] [data-plan-item]')).toHaveCount(5);
+    await expect(remaining.locator('details[data-plan-full] [data-plan-item="1"]')).toContainText('Schema');
+    // Название без пробелов в `PlanSummary` переносится (`[overflow-wrap:anywhere]`; обёртки с прокруткой больше нет), поэтому
+    // раскрытый полный план карточку не раздвигает.
+    expect((await overflow()).scroll).toBe(0);
   });
 });

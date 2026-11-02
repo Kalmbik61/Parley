@@ -15,6 +15,11 @@
  * Просьба показать карточку агента (`reveal`: бейдж агентов в сайдбаре и комнате, «N agents running» в тулбаре) —
  * прокрутка к карточке с этим `agentId` (или к элементу с `itemId`) и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
  *
+ * Поиск ⌘F (`find`, `ChatFindBar`): полоса ищет по модели ленты и говорит, к какому элементу прыгнуть. Лента раскрывает
+ * свёрнутую группу с ним (как для `reveal`), раскрывает вызов или карточку агента, если совпадение в их входе, выводе или
+ * итоге, прокручивает к строке (по центру), снимает прилипание к низу и подсвечивает вхождения в DOM (`highlight.ts`).
+ * Цель с тем же `nonce` исполняется один раз; свой слот `find`, а не `reveal`: тот в сторе один на окно.
+ *
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
  * сообщения из очереди (`queued`, решение 8), за ними — очередь окна
@@ -25,7 +30,7 @@
  * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
  */
 
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FeedError, FeedItem } from '@parley/core';
@@ -34,7 +39,9 @@ import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
+import type { FindView } from './ChatFindBar.js';
 import { imagesExtraPx, type SwitchDivider } from './feed-model.js';
+import { applyFindHighlights, clearFindHighlights } from './highlight.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
@@ -122,6 +129,10 @@ export interface FeedListProps {
   viaIds?: ReadonlySet<string>;
   /** Свёртка законченных ходов (настройка «Finished turns»); по умолчанию — `replies`. */
   fold?: FoldMode;
+  /** Поиск ⌘F: запрос для подсветки и цель прокрутки (`ChatFindBar`); нет — поиск закрыт. */
+  find?: FindView;
+  /** Лежит поверх ленты в её рамке (`relative`): полоса поиска. */
+  children?: ReactNode;
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
@@ -185,7 +196,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies' }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies', find, children }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
@@ -346,6 +357,54 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     onRevealed?.(reveal.nonce);
   }, [reveal, items, foldRows, onRevealed]);
 
+  // Поиск: цель исполняется один раз на `nonce` (шаг человека), а закрытая полоса забывает исполненный.
+  const handledFind = useRef(0);
+  const findTarget = find?.target ?? null;
+  useLayoutEffect(() => {
+    if (findTarget === null) {
+      if (find === undefined) handledFind.current = 0;
+      return;
+    }
+    if (findTarget.nonce === handledFind.current) return;
+    const at = allRows.findIndex((row) => 'item' in row && row.item.id === findTarget.itemId);
+    if (at === -1) {
+      // Совпадение в свёрнутой группе: раскрываем её, цель сработает на следующей отрисовке.
+      const hiding = foldRows.find((row) => row.kind === 'group' && !row.open && row.items.some((item) => item.id === findTarget.itemId));
+      if (hiding !== undefined) setExpanded((was) => new Set(was).add(groupOpenKey(hiding.key)));
+      return;
+    }
+    handledFind.current = findTarget.nonce;
+    const row = allRows[at]!;
+    // Вывод и вход вызова, итог и вложенные вызовы агента в DOM только у раскрытого.
+    if ('item' in row && ((row.item.kind === 'tool' && findTarget.part !== 'tool-name') || (row.item.kind === 'agent' && findTarget.part === 'agent'))) {
+      const id = row.item.id;
+      setExpanded((was) => (was.has(id) ? was : new Set(was).add(id)));
+    }
+    atBottomRef.current = false;
+    setAtBottom(false);
+    virtualizer.scrollToIndex(at, { align: 'center' });
+  }, [find, findTarget, items, foldRows]);
+
+  // Подсветка идёт за DOM: после каждой отрисовки, пока поиск открыт (строки приходят и уходят с прокруткой).
+  const lit = useRef(false);
+  useLayoutEffect(() => {
+    if (find === undefined || find.query.trim() === '') {
+      // Подсветка общая на окно: гасит только тот, кто её зажёг.
+      if (lit.current) clearFindHighlights();
+      lit.current = false;
+      return;
+    }
+    if (scroller === null) return;
+    lit.current = true;
+    applyFindHighlights(scroller, find.query, findTarget === null ? null : { itemId: findTarget.itemId, nth: findTarget.itemNth });
+  });
+  useEffect(
+    () => () => {
+      if (lit.current) clearFindHighlights();
+    },
+    [],
+  );
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {/* Прокрутчик берёт фокус программно: просмотр картинки возвращает его сюда, если строки с миниатюрой уже нет
@@ -450,6 +509,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
           {S.chat.jumpToLatest}
         </Button>
       )}
+      {children}
     </div>
   );
 }

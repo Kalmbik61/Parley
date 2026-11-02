@@ -50,7 +50,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
 import { mailSessions } from '../mail-sessions.js';
-import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
+import { CODEX_SUBMIT_DELAY_MS, codexPaste } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
@@ -683,8 +683,8 @@ export function createWakeService(
 
   /**
    * Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. Codex — своим
-   * порядком (спека комнат, 3.6): вставка в маркерах bracketed paste, пауза десятки миллисекунд, а
-   * клавиша — Tab занятому агенту (очередь на следующий ход) и Enter у приглашения.
+   * порядком: вставка в маркерах bracketed paste, пауза десятки миллисекунд и Enter у приглашения.
+   * Если за паузу начался ход или письма прочитаны, указатель отзывается, а не уходит в очередь Tab.
    */
   function beginAttempt(
     ref: SessionRef,
@@ -697,18 +697,31 @@ export function createWakeService(
     // правила будильника (спека 7.3) прежние.
     // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
     const startedAt = performance.now();
+    let withdrawn = false;
     const typing = typeAndSubmit(
       { pty, enterDelayMs },
       ref,
-      codex ? codexPaste(action.text) : action.text,
+      // Одна логическая строка: свой указатель можно безопасно убрать Ctrl+U перед Enter.
+      codex ? codexPaste(action.text.replace(/[\r\n]/g, ' ')) : action.text,
       true,
       {
         // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
-        beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked' && !choiceNow(ref),
+        beforeEnter: () => {
+          const live = activity.get(ref)?.activity;
+          if (live?.activity === 'blocked' || choiceNow(ref)) return false;
+          if (codex) {
+            const entry = works.entry(ref.projectPath, ref.workId);
+            const busy = live?.activity === 'working' && !live.heldByBackground;
+            // Возврат после лимита нужен и без писем; обычный указатель — только пока его письма не прочитаны.
+            const read = state.returnTurn !== 'pending' &&
+              (entry === undefined || !unreadOf(entry, ref.sessionId).some((letter) => action.letterIds.includes(letter.id)));
+            withdrawn = busy || read;
+          }
+          return !withdrawn;
+        },
         ...(codex
           ? {
               delayMs: CODEX_SUBMIT_DELAY_MS,
-              submitKey: () => codexSubmitKey(activity.get(ref)?.activity.activity),
             }
           : {}),
       },
@@ -750,6 +763,21 @@ export function createWakeService(
         abandonReturn(state);
         notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
       } else if (outcome === 'blocked') {
+        if (withdrawn) {
+          // typeAndSubmit уже проверил pid и отсутствие ввода человека. Убираем только собственную вставку.
+          try {
+            pty.write(ref, '\x15');
+          } catch (error) {
+            host.log.error('Указатель Codex не удалось убрать', { ref, error: String(error) });
+            return;
+          }
+          clearTimers(state);
+          state.inFlight = false;
+          for (const id of action.letterIds) state.pointed.delete(id);
+          abandonReturn(state);
+          recompute(ref);
+          return;
+        }
         // Агент показал диалог за паузу перед Enter: отвечать на него нельзя (рамка 15.1).
         // Указатель остаётся в поле ввода, письма — в `pointed`, как при вводе человека.
         clearTimers(state);
@@ -1119,7 +1147,8 @@ export function createWakeService(
       state.pointerAfter = null;
     }
 
-    // Codex занятому агенту письмо ставит в очередь (Tab): указатель не ждёт конца хода.
+    // Указатель ждёт конца хода и строится по актуальному непрочитанному. Очередь Tab
+    // внутри Codex не отзывается, даже если агент уже забрал письма через check_inbox / wait_for.
     const codex = handle.provider === 'codex';
     const action = deliveryAction({
       session,
@@ -1132,7 +1161,6 @@ export function createWakeService(
       inFlight: state.inFlight,
       resumeAllowed: false,
       hooked: hookedSince(live?.activity, handle.startedAt),
-      queueWhileBusy: codex,
       now: Date.now(),
       ...settle,
     });

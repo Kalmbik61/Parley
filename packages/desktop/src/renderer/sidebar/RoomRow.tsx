@@ -69,7 +69,7 @@ import { useUiStore } from '../store/ui.js';
 import { RoomInlineRename } from './InlineRename.js';
 import { RoomRowMenu } from './RoomRowMenu.js';
 import { SessionRow } from './SessionRow.js';
-import { planProgress } from '../components/rooms/PlanPanel.js';
+import { planAwaitingCount, planProgress } from '../components/rooms/PlanPanel.js';
 import { RoomContextChip, type ContextMember } from '../components/rooms/RoomContextChip.js';
 import type { RoomPlan } from '@parley/core';
 import { NO_GUIDES, type CardRoomRow, type TreeGuide } from './sort.js';
@@ -143,6 +143,7 @@ export function RoomRow({
 }: RoomRowProps): JSX.Element {
   const { room } = row;
   const stateKey = roomKey(workKey, room.id);
+  const awaiting = plan ? planAwaitingCount(plan) : 0;
   const providers = useProvidersStore((state) => state.providers);
   const override = useUiStore((state) => state.roomExpanded[stateKey]);
   const setRoomExpanded = useUiStore((state) => state.setRoomExpanded);
@@ -287,6 +288,12 @@ export function RoomRow({
           {relativeTime(row.lastAt, now)}
         </span>
       </div>
+      {/* Сданное, но не проверенное: отдельным счётчиком на своей строке, а не в шапке — длинная фраза вытеснила бы название. `verified` в шапке не растёт. */}
+      {awaiting > 0 ? (
+        <div data-room-plan-awaiting="" title={S.plans.awaiting(awaiting)} className="truncate pl-[37px] text-[11px]">
+          {S.plans.awaiting(awaiting)}
+        </div>
+      ) : null}
       {!expanded && badges.length > 0 ? (
         <div title={tooltip} className="flex items-center gap-3.5 pl-[37px]">
           {badges.map((badge) => (

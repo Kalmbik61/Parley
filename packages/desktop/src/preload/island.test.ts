@@ -65,6 +65,29 @@ const config = (patch: Partial<IslandConfig> = {}): IslandConfig => ({
 });
 
 describe('preload острова', () => {
+  it('consumer failure is persistent and explicit retry restores callbacks under a new stream', async () => {
+    const bridge = await loadPreload();
+    send.mockClear();
+    const batch = vi.fn().mockRejectedValueOnce(new Error('rejected')).mockResolvedValue(undefined);
+    const status = vi.fn();
+    bridge.worksSync.subscribe(batch, status);
+    const oldStream = send.mock.calls[0]?.[1];
+    const payload = { kind: 'works-sync-batch', transaction: { mode: 'reset', epoch: 'a', base: 0, target: 1 }, index: 0, records: [], commit: true };
+    emit('works-sync:batch', oldStream, 1, payload);
+    await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.objectContaining({ state: 'error', retryable: true })));
+    expect(send).not.toHaveBeenCalledWith('works-sync:ack', oldStream, 1);
+    emit('works-sync:status', oldStream, { state: 'current', epoch: 'a', applied: 1 });
+    expect(status).toHaveBeenCalledTimes(1);
+    bridge.worksSync.retry();
+    const streams = send.mock.calls.filter(([channel]) => channel === 'works-sync:subscribe');
+    expect(streams).toHaveLength(2);
+    const newStream = streams[1]?.[1];
+    emit('works-sync:batch', oldStream, 2, payload);
+    emit('works-sync:batch', newStream, 3, payload);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('works-sync:ack', newStream, 3));
+    expect(batch).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalledWith('works-sync:ack', oldStream, 2);
+  });
   beforeEach(() => {
     send.mockClear();
     invoke.mockClear();
@@ -72,7 +95,7 @@ describe('preload острова', () => {
 
   it('в мосте только узкий набор: ни app, ни files, ни browser, ни voice, ни notify', async () => {
     const bridge = await loadPreload();
-    expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
+    expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus', 'worksSync']);
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
         'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
@@ -162,7 +185,7 @@ describe('preload острова', () => {
     expect(exposedKey).toBe('parley');
     expect([...subscribed].sort()).toEqual([
       'host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur', 'island:navigate-pending',
-      'island:session-visibility', 'island:tts-port',
+      'island:session-visibility', 'island:tts-port', 'works-sync:batch', 'works-sync:status',
     ]);
   });
 
@@ -269,7 +292,8 @@ describe('preload острова в песочнице', () => {
 
   it('значения — только из electron и модулей без импортов: песочница не может require пакеты npm (B25, BUG-1)', () => {
     const imports = valueImports('./island.ts');
-    expect(imports.filter((specifier) => specifier !== 'electron')).toEqual(['../shared/island-port.js']);
+    expect(imports.filter((specifier) => specifier !== 'electron')).toEqual(['./works-sync.js', '../shared/island-port.js']);
+    expect(valueImports('./works-sync.ts')).toEqual([]);
     expect(valueImports('../shared/island-port.ts')).toEqual([]);
   });
 });

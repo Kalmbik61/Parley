@@ -294,6 +294,18 @@ export type PlanMode = Exclude<RoomMode, 'free'>;
 export type PlanStatus = 'proposed' | 'active' | 'completing' | 'completed' | 'cancelled';
 export type PlanItemStatus = 'waiting' | 'ready' | 'in_progress' | 'done' | 'blocked' | 'verified' | 'returned';
 export interface PlanEvidence { text: string; artifacts: string[] }
+/** Last saved position of one participant on one plan item; latest only, never a history. */
+export interface PlanCheckpoint {
+  by: string;                 // s-NN
+  at: string;                 // ISO
+  /** Verifier: planSubmission(item) at save time; owner: null. */
+  submission: number | null;
+  done: string;               // 1..600 chars
+  next: string;               // 1..300 chars, the resume point
+  artifacts: string[];        // ≤ 5 paths, each 1..256 chars
+  /** Soft obstacle without status change; verifier: why the review waits. ≤ 300 chars. */
+  blocker: string | null;
+}
 export interface PlanItemInput {
   id: number; title: string; owner: string; scope: string; after?: number[];
   criteria?: string[]; verifier?: string | null;
@@ -321,11 +333,22 @@ export type AttemptChannelRequest =
   | { action: 'propose-plan'; roomId: string; planId?: string; rev?: number; requestKey: string; text: string; plan: PlanDraft & { autonomous: AutonomousDraft } }
   | { action: 'submit'; attemptId: string; submissionKey?: string; manifest: Omit<HandoffManifestInput, 'sha'> }
   | { action: 'verify'; attemptId: string; sha: string; criterion: number; verdict: CheckResult['verdict']; note: string };
+/** Одна сдача пункта плана: что принесли и что ответил проверяющий (или человек при возврате). */
+export interface PlanSubmission {
+  n: number; by: string; at: string; evidence: PlanEvidence;
+  verdict: 'verified' | 'returned' | null; verdictBy: string | null; verdictAt: string | null; note: string | null;
+  /** Возврат человеком пишется отдельно и не затирает вердикт проверяющего; нет поля — null. */
+  returnedBy?: string | null; returnedAt?: string | null; returnNote?: string | null;
+}
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
   evidence: PlanEvidence | null; note: string | null;
+  /** История последних сдач, старые первыми; нет поля — пусто (карты читаются без миграции). `evidence` остаётся указателем на последнюю. */
+  submissions?: PlanSubmission[];
   /** Human-accepted Checklist completion retained on promotion; never a verification claim. */
   acceptedChecklistRevision?: number;
+  /** Resume points kept outside `log`, so saving one never changes a submission or a plan effect. */
+  progress?: { owner?: PlanCheckpoint; verifier?: PlanCheckpoint };
   log: { at: string; by: string; status: PlanItemStatus; note: string | null }[];
 }
 export interface RoomPlan {

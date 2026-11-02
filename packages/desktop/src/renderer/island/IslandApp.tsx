@@ -65,9 +65,11 @@ import { ISLAND_TTS_PORT, markSeenBatches, parseVisibilitySnapshot, type IslandB
 import { DEFAULT_VOICE } from '../../shared/tts-types.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
+import { worksSyncEnabled } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
+import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { browserRecorderDeps } from '../voice/browser-recorder.js';
 import { startRecording } from '../voice/recorder.js';
 import { listen } from './assistant/listen.js';
@@ -193,6 +195,7 @@ function hideAssistant(): boolean {
 
 export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; onPresentation?: (outcome: IslandPresentationOutcome) => void }): JSX.Element {
   const [connected, setConnected] = useState(false);
+  const [syncWorks, setSyncWorks] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
   const configRef = useRef(config);
   configRef.current = config;
@@ -221,6 +224,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
   const entries = useWorksStore((state) => state.entries);
+  const syncStatus = useWorksStore((state) => state.syncStatus);
+  const mailRepairPending = useWorksStore((state) => state.mailRepairPending);
+  const worksError = useWorksStore((state) => state.error);
+  // Та же проверка присутствия, что у WorksErrorBanner: его JSX element существует и при null output.
+  const syncNoticeActive = (syncStatus !== null && (syncStatus.state !== 'current' || mailRepairPending > 0)) || worksError !== null;
+  const available = connected || (syncWorks && syncStatus !== null);
   const byRef = useActivityStore((state) => state.byRef);
   const items = useIslandRequests((state) => state.items);
   const selectedKey = useIslandRequests((state) => state.selectedKey);
@@ -283,6 +292,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     () =>
       bridge.onStatus((status) => {
         const ok = status.state === 'connected';
+        if (ok) setSyncWorks(worksSyncEnabled(status, window.location.search));
         setConnected(ok);
         setProgressConnection((current) => status.state === 'connected'
           ? { generation: current.generation + 1, methods: status.methods }
@@ -297,13 +307,28 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       }),
     [bridge, releaseKeyboard],
   );
+  // Keep opt-in state/Retry subscribed through failed recovery; legacy stays connection-bound.
+  useEffect(() => {
+    let consumer: { sync: boolean; dispose(): void } | null = null;
+    const offStatus = bridge.onStatus(status => {
+      if (status.state !== 'connected') {
+        if (consumer?.sync === false) { consumer.dispose(); consumer = null; }
+        return;
+      }
+      const sync = worksSyncEnabled(status, window.location.search);
+      if (consumer?.sync === sync) return;
+      consumer?.dispose();
+      consumer = { sync, dispose: useWorksStore.getState().init(bridge, { sync }) };
+    });
+    return () => { offStatus(); consumer?.dispose(); };
+  }, [bridge]);
   useEffect(() => {
     if (!connected) return undefined;
     connectedAt.current = Date.now();
     useIslandRequests.getState().bind(bridge.call);
     useIslandReplies.getState().bind(bridge.call);
     // Стор провайдеров — для значков `AgentIcon`: вендор своего провайдера узнаётся по его строке.
-    const disposers = [useWorksStore.getState().init(bridge), useActivityStore.getState().init(bridge), useProvidersStore.getState().init(bridge)];
+    const disposers = [useActivityStore.getState().init(bridge), useProvidersStore.getState().init(bridge)];
     return () => {
       useIslandRequests.getState().bind(null);
       useIslandReplies.getState().bind(null);
@@ -476,7 +501,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
 
   const idle = !model.active && items.length === 0 && consents.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
-  const [retracted, setRetracted] = useState(idle);
+  const [retractedState, setRetracted] = useState(idle);
+  const retracted = retractedState && !syncNoticeActive;
   const cues = useIslandCues({ sound: config.islandSound, active: model.active, hovered, speaking: () => speaker.speaking() });
   /** Реакции роёв: мини-рой (события агентов, наведение, фазы помощника) и большой рой помощника (только его фазы). */
   const [miniPulse, setMiniPulse] = useState<SwarmPulse | null>(null);
@@ -601,16 +627,16 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   // дольше; Clear (Done стало 0) возвращает короткий срок.
   const holdMs = model.done > 0 ? DONE_HOLD_MS : IDLE_RETRACT_MS;
   useEffect(() => {
-    if (retracted || !idle || hovered || dragging) return undefined;
+    if (retracted || !idle || hovered || dragging || syncNoticeActive) return undefined;
     const timer = setTimeout(retract, holdMs);
     return () => clearTimeout(timer);
-  }, [retracted, idle, hovered, dragging, retract, holdMs, freshDone]);
+  }, [retracted, idle, hovered, dragging, retract, holdMs, freshDone, syncNoticeActive]);
 
-  // Хост не подключён — окна нет: сторы остались от прошлого подключения, и счётчики пилюли были бы устаревшими.
-  // Подключён — окно видно всегда: убранный остров лишь сжимается в брусок (или в `✅ N`) под прозрачной зоной нажатия.
+  // Старый путь прячет остров без связи. Opt-in sync оставляет подтверждённый вид и живую кнопку ремонта.
+  // Убранный остров сжимается в брусок (или в `✅ N`) под прозрачной зоной нажатия.
   useEffect(
-    () => bridge.island.setVisible(connected && (config.islandEnabled || assistant.open || busy)),
-    [connected, bridge, config.islandEnabled, assistant.open, busy],
+    () => bridge.island.setVisible(available && (config.islandEnabled || assistant.open || busy)),
+    [available, bridge, config.islandEnabled, assistant.open, busy],
   );
   // Режим помощника открыт при убранном острове — форма выдвигается, иначе вида не видно.
   useEffect(() => {
@@ -649,7 +675,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [assistant.open, keyboardOwner, releaseKeyboard, items, bridge]);
-  const shown = connected && !retracted;
+  const shown = available && !retracted;
   const progressKey = progressSelected === null ? null : refKey(progressSelected);
   const progressSession = progressSelected === null ? undefined : entries
     .find((entry) => entry.projectPath === progressSelected.projectPath && entry.map.work.id === progressSelected.workId)
@@ -660,7 +686,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   ]);
   const progressScope = JSON.stringify([progressKey, progressConnection.generation, progressLifecycle]);
   const progressRowPresent = progressKey !== null && model.groups.some((group) => group.rows.some((row) => row.kind === 'session' && refKey(row.ref) === progressKey));
-  const progressActive = shown && progressDocumentVisible && config.islandEnabled && listOpen && progressRowPresent &&
+  const progressActive = connected && shown && progressDocumentVisible && config.islandEnabled && listOpen && progressRowPresent &&
     progressSession !== undefined && !assistant.open && !busy && items.length === 0 && consents.length === 0 && pendingProposals.length === 0;
   const progressState: ProgressState = progressData.scope === progressScope ? progressData.state : { kind: 'loading' };
   const displayedProgress = !progressActive && progressState.kind === 'available' ? { ...progressState, delayed: true } : progressState;
@@ -714,16 +740,16 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const tabRef = useRef<HTMLButtonElement>(null);
   /** Последняя область, отправленная main: равную ей не шлём повторно (`undefined` — ещё ничего не слали). */
   const sentHitRect = useRef<IslandHitRect | null | undefined>(undefined);
-  // Область под мышь: форма у выдвинутого острова, зона нажатия у убранного, ничего — пока хост не подключён (окно спрятано).
+  // Область под мышь совпадает с доступностью окна, включая ремонт retained sync без связи.
   const reportHitRect = useCallback(() => {
-    const target = !connected ? null : retracted ? tabRef.current : shapeRef.current;
+    const target = !available ? null : retracted ? tabRef.current : shapeRef.current;
     const box = target?.getBoundingClientRect();
     const next: IslandHitRect | null = box === undefined ? null : { x: box.x, y: box.y, width: box.width, height: box.height };
     const last = sentHitRect.current;
     if (last !== undefined && sameRect(last, next)) return;
     sentHitRect.current = next;
     bridge.island.setHitRect(next);
-  }, [bridge, connected, retracted]);
+  }, [bridge, available, retracted]);
   // Область меняется при монтировании, смене вида, размере формы или зоны нажатия и при смене места в кадре (точка,
   // отступ под чёлку, вырез); переход, что размера формы не меняет (отступ сверху у бруска), ловит `transitionend` на корне.
   useLayoutEffect(() => {
@@ -782,6 +808,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   return (
     <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`} onTransitionEnd={reportHitRect}>
       <IslandView
+        syncNotice={<WorksErrorBanner />}
+        syncNoticeActive={syncNoticeActive}
         model={model}
         items={items}
         index={index}

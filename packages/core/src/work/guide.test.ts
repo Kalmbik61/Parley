@@ -383,3 +383,39 @@ describe('профиль short в гиде', () => {
     expect(guide({ skillNavigator: true, toolProfile: 'short' })).not.toContain('memory_read');
   });
 });
+
+describe('the plans topic: assignments, checkpoints and amendments', () => {
+  const plans = (): string => (guideTopic('plans') ?? '').replace(/\s+/g, ' ');
+
+  it('plan_tasks lists your assignments and what each waits for; reading a letter does not finish one', () => {
+    expect(plans()).toContain('plan_tasks');
+    expect(plans()).toContain('your assignments');
+    expect(plans()).toContain('what each one waits for');
+    expect(plans()).toContain('Reading a letter does not finish an assignment');
+  });
+
+  it('plan_progress saves the latest checkpoint per item and role, before a turn ends without submit or verify, and changes nothing else', () => {
+    const text = plans();
+    expect(text).toContain('plan_progress(planId, rev, item, done, next, artifacts?, blocker?)');
+    expect(text).toContain('latest checkpoint per item and role');
+    expect(text).toContain('before ending a turn without plan_submit or plan_verify');
+    expect(text).toContain('does not change the status and does not verify');
+  });
+
+  it('personal publish_agent_plan steps stay separate from plan checkpoints', () => {
+    const text = plans();
+    expect(text).toContain('publish_agent_plan is for your personal steps');
+    expect(text).toContain('does not replace plan_progress');
+  });
+
+  it('an amendment text lists the remaining work and what changes; the human sees unfinished items only', () => {
+    const text = plans();
+    expect(text).toContain('the decision text lists the remaining work and what changes');
+    expect(text).toContain('do not restate completed items');
+    expect(text).toContain('the human sees only unfinished items');
+  });
+
+  it('a revision conflict sends checklist and verified to plan_tasks and autonomous to get_map', () => {
+    expect(plans()).toContain('call plan_tasks and use the current revision; in autonomous, refresh with get_map');
+  });
+});

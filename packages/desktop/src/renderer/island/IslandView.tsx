@@ -40,7 +40,7 @@
  * форму мгновенно: два кадра у формы нет класса перехода (§12.4).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
@@ -94,6 +94,10 @@ export interface IslandAssistantProps {
 export type IslandConsentProps = ConsentViewProps;
 
 export interface IslandViewProps {
+  /** Статус sync внутри замеряемой формы: Retry входит в native hit rect. */
+  syncNotice?: ReactNode;
+  /** Наличие настоящего сообщения: React element сам по себе может вернуть null. */
+  syncNoticeActive?: boolean;
   model: IslandModel;
   items: readonly IslandRequest[];
   index: number;
@@ -518,7 +522,8 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant, consent, showId } = props;
+  const { model, items, listOpen, config, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant, consent, showId } = props;
+  const retracted = props.retracted && !props.syncNoticeActive;
   // Один draft выбранного вопроса живёт выше условного Card. showId не входит в identity: уборка и перекрытие не стирают ввод.
   const selected = items[props.index] ?? items[0];
   const question = selected?.inWindow && selected.note !== 'elsewhere' && selected.card?.kind === 'question' && selected.card.state === 'pending' ? selected.card : null;
@@ -590,7 +595,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
   // В вырезе: выдвинутый вид, капсула фона или голый вырез. Наведение форму не выдвигает: открывают клик, язычок и
   // хоткеи (`listOpen`, помощник), а запросы к человеку — сами, и предложение комнаты тоже (B26 F-B26-3).
-  const dropped = !retracted && (listOpen || assistantBig || consent !== null || items.length > 0 || (model.proposals ?? 0) > 0 ||
+  const dropped = !retracted && (props.syncNoticeActive === true || listOpen || assistantBig || consent !== null || items.length > 0 || (model.proposals ?? 0) > 0 ||
     props.navigationKey != null || props.navigationEmpty === true);
   const capsule = notch === null || dropped ? null : capsuleContent(model, doneCount, assistant);
   const notchView = notch === null ? null : dropped ? 'dropped' : capsule !== null ? 'capsule' : 'bare';
@@ -638,6 +643,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
             )
           ) : (
             <>
+              {props.syncNoticeActive ? props.syncNotice : null}
               {assistantBig ? (
                 <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} reducedMotion={config.motion === 'reduce'} />
               ) : consent !== null ? (
