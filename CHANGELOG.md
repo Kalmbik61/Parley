@@ -6,6 +6,20 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.27.0
+
+**Impact**
+
+- **Goal:** Remove the 5 MiB window-map update cliff while preserving the complete map and reliable UI updates.
+- **Behaviour:** The host sends the initial map in bounded pages and later changes as versioned deltas. The desktop window and island detect missed updates and recover; mail is acknowledged only after receipt. Older clients retain the legacy path.
+- **Numbers:** 1,376 focused tests passed across protocol, core, host, desktop and activation checks; `pnpm build` and `pnpm lint` passed. The full suite still had 30 unrelated Corepack/CLI failures caused by a missing matching keyid. P7 performance acceptance was not measured to completion.
+- **Screens:** No visual redesign; live visual behaviour is not measured.
+- **For the human:** The new path is enabled by default. Verify large maps, normal updates, recovery and the island in live use.
+- **Risk:** Live UI behaviour and P7 performance, including CPU, IPC, cold-start and memory cases, remain unverified.
+- **Cost:** Runtime CPU, latency and memory cost are not measured to P7 acceptance criteria.
+- **Verdict:** The paged sync is enabled by default after focused integration checks; performance and live-use acceptance remain open.
+
+
 An iPhone app can now see what waits for you on this Mac and answer it, through a relay on your own server. It is a beta, off by default, and built without a phone in the loop: see "What is not proven yet".
 
 ### Added
