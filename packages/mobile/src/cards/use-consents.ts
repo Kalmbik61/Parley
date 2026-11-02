@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
 import { haptic } from '../haptics';
 import { useClient, useRemoteState } from '../hooks/use-remote';
-import { CONSENT_TEXT, pendingConsents, runConsent, type ConsentUi } from './consent-model';
+import { CONSENT_TEXT, canDecideConsent, pendingConsents, runConsent, type ConsentUi } from './consent-model';
 
 export interface ConsentRow {
   card: ConsentCard;
@@ -13,6 +13,8 @@ export interface ConsentRow {
   /** The card is already answered and only lingers. */
   settled: boolean;
   busy: boolean;
+  /** `consents.decide` is in the bridge hello (the Mac switch is on); `false` — no buttons, answer at the Mac. */
+  canDecide: boolean;
 }
 
 const LINGER_MS = 2000;
@@ -21,6 +23,8 @@ export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, d
   const client = useClient();
   const state = useRemoteState();
   const items = state?.consents.items;
+  // A hello without `consents.decide`: the Mac switch is off (or an old Mac) — the call would be refused, so no buttons.
+  const canDecide = canDecideConsent(state?.methods ?? null);
   const pending = useMemo(() => pendingConsents(items ?? []), [items]);
   const known = useRef(new Map<string, ConsentCard>());
   const ours = useRef(new Map<string, string>());
@@ -80,8 +84,8 @@ export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, d
   );
 
   const rows: ConsentRow[] = [
-    ...Object.values(lingering).map((l): ConsentRow => ({ card: l.card, message: l.message, settled: true, busy: false })),
-    ...pending.map((card): ConsentRow => ({ card, message: notes[card.id] ?? null, settled: false, busy: busyId === card.id })),
+    ...Object.values(lingering).map((l): ConsentRow => ({ card: l.card, message: l.message, settled: true, busy: false, canDecide })),
+    ...pending.map((card): ConsentRow => ({ card, message: notes[card.id] ?? null, settled: false, busy: busyId === card.id, canDecide })),
   ];
   return { rows, decide };
 }

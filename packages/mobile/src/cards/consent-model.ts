@@ -30,6 +30,9 @@ export function pendingConsents(items: readonly ConsentCard[]): ConsentCard[] {
   return items.filter((c) => c.state === 'pending').sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
 
+/** `consents.decide` is in the bridge hello; an unknown hello (`null`) lets the buttons show until it arrives. */
+export const canDecideConsent = (methods: readonly string[] | null): boolean => methods === null || methods.includes('consents.decide');
+
 export type ConsentUi =
   | { kind: 'allowed'; text: string }
   | { kind: 'denied'; text: string }

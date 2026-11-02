@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConsentCard } from '@parley/protocol';
 import type { DecideConsentOutcome, RemoteClient } from '@parley/remote-client';
-import { pendingConsents, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
+import { canDecideConsent, pendingConsents, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
 
 const trust: ConsentCard = { id: 'c-1', kind: 'folder-trust', projectPath: '/p', folder: '/Users/me/parley', at: '2026-11-01T10:00:00.000Z', state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } };
 const swit: ConsentCard = { id: 'c-2', kind: 'agent-switch', projectPath: '/p', at: '2026-11-01T11:00:00.000Z', state: 'pending', ref: { projectPath: '/p', workId: 'w', sessionId: 's' }, provider: 'codex', providerLabel: 'Codex', model: null, reason: 'Usage limit', requestedBy: { sessionId: 's', label: 'Greta' } };
@@ -31,5 +31,13 @@ describe('consent cards', () => {
     expect(trustRequestedBy(trust as never)).toBe('Requested by Task1-types · create_session');
     expect(switchText('Greta', 'S', 'Codex', 'Usage limit')).toBe('Greta asks to continue S on Codex: Usage limit. Allow stops S now and continues it there.');
     expect(pendingConsents([trust, swit, { ...trust, id: 'c-3', state: 'allowed' }]).map((c) => c.id)).toEqual(['c-2', 'c-1']);
+  });
+});
+
+describe('the Mac switch (M2)', () => {
+  it('no Allow/Deny when consents.decide is not in the hello; an unknown hello shows them', () => {
+    expect(canDecideConsent(['consents.list', 'consents.decide'])).toBe(true);
+    expect(canDecideConsent(['consents.list'])).toBe(false);
+    expect(canDecideConsent(null)).toBe(true);
   });
 });
