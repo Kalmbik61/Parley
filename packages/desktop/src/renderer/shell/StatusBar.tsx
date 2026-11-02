@@ -6,8 +6,8 @@
  *
  * Облик Organic (спека окна 2026-09-29, 1.1, решение 3): 28px на фоне окна, без линии и подложки,
  * отступ `0 14 2 18`, зазор 14, 12px `neutral-800`. Слева — сегмент на провайдера: значок 14, имя и версия
- * CLI моноширинным 11px `neutral-700`. Claude/Codex/GLM видны всегда в этом порядке;
- * недоступная кнопка приглушена, без версии и лимитов. Клик открывает общую карточку подключения. Справа — сегменты спеки Orca-UI 5.9: последнее уведомление хоста
+ * CLI моноширинным 11px `neutral-700`. Только подключённые провайдеры; не поместившиеся — в поповере «…».
+ * Клик открывает общую карточку провайдера. Справа — сегменты спеки Orca-UI 5.9: последнее уведомление хоста
  * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», ёмкость машины (`CapacitySegment`), диагностика (`DiagnosticsSegment`), будильник.
  *
  * Лимиты подписки (кусок 9b, спека комнат Organic, 3.5) — после версии: полоска пятичасового окна (нет
@@ -21,8 +21,8 @@
  * видит и `notice.text` хоста показать не может, даже случайно.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Hourglass, Plus, RefreshCw } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Ellipsis, Hourglass, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
@@ -71,10 +71,8 @@ export interface StatusBarProps {
 const LIMIT_WARNING_PERCENT = 80;
 
 /**
- * От какой ширины содержимого строки (без отступов) рядом с процентами пишется время сброса (P7). Строка делит нехватку
- * места между кнопками-сегментами пропорционально их ширине, а ширину кнопки со сбросами давали бы и сбросы: в окне уже
- * ~1000 px они отнимали бы место у процентов соседей и у имени Codex (замер E2E 800–1000). Выше порога места хватает, а
- * то, что не хватило, забирают сами сбросы (многоточие, затем ноль). Ширину меряет `ResizeObserver`, а не контейнерный
+ * От какой ширины содержимого строки (без отступов) рядом с процентами пишется время сброса (P7).
+ * В узком окне показываем проценты, чтобы больше подписок помещалось до «…». Ширину меряет `ResizeObserver`, а не контейнерный
  * запрос: у размерного контейнера Chromium порой не пересчитывает `:disabled` потомков (см. `BrowserChrome.tsx`), а в
  * строке есть кнопка с `disabled:`.
  */
@@ -163,14 +161,12 @@ function ProviderLimitsMeter({ limits, resets }: { limits: ProviderLimits | null
   );
 }
 
-/** Основные кнопки видны и без ответа хоста; свои провайдеры добавляются после них. */
+/** Порядок основных подключённых провайдеров; остальные — в порядке ответа хоста. */
 const CORE_PROVIDERS = ['claude', 'codex', 'glm'] as const;
 
 /**
- * Сегмент — кнопка поповера, и строка делит нехватку места между кнопками целиком, пропорционально вес × ширина: порядок
- * «лимиты, версия, имя» держится только внутри кнопки. Сегмент из значка и имени (недоступный GLM) иначе получал свою долю и
- * терял имя, пока у соседей ещё широк текст лимитов. Поэтому у сегмента с лимитами или версией вес строки — как у блока
- * лимитов внутри, на порядки больше единицы у сегмента из одного имени.
+ * В поповере длинные сегменты могут сжиматься до ширины окна: сначала уступают лимиты, затем версия и имя.
+ * В самой строке целые сегменты переносит в «…» ConnectedProviders.
  */
 const YIELDING_SEGMENT = 'shrink-[1000000000]';
 
@@ -182,8 +178,9 @@ const YIELDING_SEGMENT = 'shrink-[1000000000]';
 const segmentFloor = (version: boolean, meter: boolean): number =>
   14 + 7 * (1 + Number(version) + Number(meter)) + (meter ? 4 + 44 : 0);
 
-function ProviderSegment({ provider, resets, onRestartHost }: { provider: ProviderInfo; resets: boolean; onRestartHost: () => void }): JSX.Element {
+function ProviderSegment({ provider, resets, onRestartHost, hidden = false }: { provider: ProviderInfo; resets: boolean; onRestartHost: () => void; hidden?: boolean }): JSX.Element {
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (hidden) setOpen(false); }, [hidden]);
   const reload = useProvidersStore((state) => state.reload);
   const name = providerName(provider.id, provider.label);
   const title = S.statusBar.providerTitle(name, provider.available);
@@ -202,6 +199,8 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
       {limits ? <ProviderLimitsMeter limits={provider.limits} resets={resets} /> : null}
     </>
   );
+  // Скрытый сегмент остаётся только для измерения, без кнопки и всплывающей карточки.
+  if (hidden) return <span className={segmentClass}>{segmentContent}</span>;
   // Свой провайдер с адресом: вместо поповера — Settings на нём (спека своих провайдеров, раздел 4). Аккаунт подписки
   // (спека подписок 4.2) открывает поповер с карточкой, как основные: состояние, лимиты, Sign in и Open in Settings.
   if (kindOf(provider.custom) === 'endpoint')
@@ -230,6 +229,70 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Сегменты меряются целиком; скрытые остаются вне потока, чтобы расширение окна вернуло их на место. */
+function ConnectedProviders({ providers, resets, onRestartHost }: {
+  providers: ProviderInfo[]; resets: boolean; onRestartHost: () => void;
+}): JSX.Element | null {
+  const ref = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState({ width: 0, count: Infinity });
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const row = ref.current;
+    if (row === null) return;
+    const slots = [...row.querySelectorAll<HTMLElement>('[data-provider-slot]')];
+    const measure = (): void => {
+      const widths = slots.map((slot) => slot.getBoundingClientRect().width);
+      if (widths.some((width) => width === 0)) return;
+      const gap = 14;
+      const width = widths.reduce((sum, value) => sum + value, 0) + gap * Math.max(0, widths.length - 1);
+      const available = row.getBoundingClientRect().width;
+      let count = widths.length;
+      if (width > available) {
+        let used = 24; // Кнопка «…».
+        count = 0;
+        for (const item of widths) {
+          if (used + gap + item > available) break;
+          used += gap + item;
+          count += 1;
+        }
+      }
+      setLayout((was) => was.width === width && was.count === count ? was : { width, count });
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    slots.forEach((slot) => observer.observe(slot));
+    return () => observer.disconnect();
+  }, [providers, resets]);
+  const overflow = providers.slice(layout.count);
+  useEffect(() => { if (overflow.length === 0) setOpen(false); }, [overflow.length]);
+  if (providers.length === 0) return null;
+  return (
+    <div ref={ref} data-connected-providers className="relative flex min-w-6 items-center gap-3.5" style={layout.width > 0 ? { width: layout.width } : undefined}>
+      {providers.map((provider, index) => (
+        <div key={provider.id} data-provider-slot className="w-max shrink-0" aria-hidden={index >= layout.count || undefined}
+          style={index >= layout.count ? { position: 'absolute', visibility: 'hidden', pointerEvents: 'none' } : undefined}>
+          <ProviderSegment provider={provider} resets={resets} hidden={index >= layout.count} onRestartHost={onRestartHost} />
+        </div>
+      ))}
+      {overflow.length === 0 ? null : (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button type="button" aria-label={S.statusBar.moreProviders} title={S.statusBar.moreProviders}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full hover:bg-foreground/8">
+              <Ellipsis aria-hidden size={16} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent aria-label={S.statusBar.moreProviders} side="top" align="start" className="flex max-h-[calc(100vh-48px)] w-max max-w-[calc(100vw-24px)] flex-col gap-3 overflow-auto">
+            {overflow.map((provider) => <ProviderSegment key={provider.id} provider={provider} resets onRestartHost={onRestartHost} />)}
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
   );
 }
 
@@ -294,11 +357,10 @@ export function StatusBar({
     };
   }, [connections, status.state]);
   const canRefresh = hostMethods(status).has('providers.refreshLimits') && snapshot.some((provider) => provider.available);
-  const providers = [
-    ...CORE_PROVIDERS.map((id): ProviderInfo => snapshot.find((provider) => provider.id === id) ??
-      { id, label: providerName(id, id), available: false, version: null, limits: null }),
-    ...snapshot.filter((provider) => (provider.available || provider.custom != null) && !CORE_PROVIDERS.some((id) => id === provider.id)),
-  ];
+  const providers = useMemo(() => [
+    ...CORE_PROVIDERS.flatMap((id) => snapshot.filter((provider) => provider.id === id && provider.available)),
+    ...snapshot.filter((provider) => provider.available && !CORE_PROVIDERS.some((id) => id === provider.id)),
+  ], [snapshot]);
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
@@ -326,18 +388,7 @@ export function StatusBar({
         <RefreshCw aria-hidden size={14} className={cn(refreshBusy && 'animate-spin motion-reduce:animate-none motion-reduce:hidden')} />
         {refreshBusy ? <Hourglass aria-hidden size={14} className="hidden motion-reduce:block" /> : null}
       </button>
-      {providers.map((provider) => (
-        <ProviderSegment key={provider.id} provider={provider} resets={roomy} onRestartHost={() => onRestartHostOpenChange(true)} />
-      ))}
-      <button
-        type="button"
-        title={S.statusBar.addProvider}
-        aria-label={S.statusBar.addProvider}
-        className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/8"
-        onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: 'new' })}
-      >
-        <Plus aria-hidden size={14} />
-      </button>
+      <ConnectedProviders providers={providers} resets={roomy} onRestartHost={() => onRestartHostOpenChange(true)} />
       {/* Уведомление хоста — заполнитель: берёт то, что осталось, и уступает первым. */}
       <span className="min-w-0 flex-1 truncate text-right">{noticeLine}</span>
       {/* Ниже 960 px зазоры между правыми сегментами тесные: места хватает именам провайдеров. */}
