@@ -161,6 +161,8 @@ const MAX_CONSENT_CARDS = 500;
 interface ConsentCardInfo {
   kind: string;
   folder: string | null;
+  /** Имя провайдера для людей у `agent-switch`. */
+  provider: string | null;
 }
 
 /** `ref` из трёх строк без лишних ключей — цель `phone.action`. */
@@ -245,10 +247,11 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   function learnCards(items: unknown): void {
     if (!Array.isArray(items)) return;
     for (const item of items as unknown[]) {
-      const card = item as { id?: unknown; kind?: unknown; folder?: unknown } | null;
+      const card = item as { id?: unknown; kind?: unknown; folder?: unknown; providerLabel?: unknown; provider?: unknown } | null;
       if (typeof card?.id !== 'string' || typeof card.kind !== 'string') continue;
       consentCards.delete(card.id);
-      consentCards.set(card.id, { kind: card.kind, folder: typeof card.folder === 'string' ? card.folder : null });
+      const provider = [card.providerLabel, card.provider].find((value): value is string => typeof value === 'string' && value !== '') ?? null;
+      consentCards.set(card.id, { kind: card.kind, folder: typeof card.folder === 'string' ? card.folder : null, provider });
       if (consentCards.size > MAX_CONSENT_CARDS) consentCards.delete(consentCards.keys().next().value as string);
     }
   }
@@ -289,13 +292,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (method === 'sessions.create') {
       const ref = cleanRef(r.ref);
       if (ref) actions.push({ kind: 'session-create', target: ref });
-      if (p.trustFolder === true && typeof p.projectPath === 'string') {
-        // Хост пишет в `trust.json` realpath проекта; мост на том же Маке берёт его так же.
-        actions.push({ kind: 'trust-folder', target: await realpath(p.projectPath).catch(() => p.projectPath as string) });
-      }
     } else if (method === 'consents.decide' && card !== null && typeof p.id === 'string') {
       if (card.kind === 'folder-trust' && card.folder) actions.push({ kind: 'trust-folder', target: card.folder });
-      else if (card.kind === 'agent-switch') actions.push({ kind: 'provider-switch', target: p.id });
+      // Имя провайдера, не `id` карточки; если карточка его не назвала — нейтральный текст.
+      else if (card.kind === 'agent-switch') actions.push({ kind: 'provider-switch', target: card.provider ?? 'another provider' });
     } else if (method === 'feed.decide') {
       const ref = cleanRef(p.ref);
       const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
@@ -317,6 +317,31 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     } catch (error) {
       log.error('dispatch.phone_action_failed', { method, error });
     }
+  }
+
+  /**
+   * `sessions.create` с `trustFolder: true`: хост пишет доверие до запуска, и запуск после этого может не удаться. Событие
+   * идёт по факту записи: папка не была доверена до вызова и доверена после него (успех или отказ запуска).
+   */
+  async function trustWrittenBy(params: unknown): Promise<(deviceId: string) => Promise<void>> {
+    const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    if (!options.onPhoneAction || p.trustFolder !== true || typeof p.projectPath !== 'string') return async () => undefined;
+    const folder = p.projectPath;
+    const trusted = async (): Promise<boolean | null> => {
+      try {
+        return ((await host.call('trust.check', { folder })) as { trusted?: unknown } | null)?.trusted === true;
+      } catch {
+        return null;
+      }
+    };
+    const before = await trusted();
+    return async (deviceId) => {
+      if (before !== false || (await trusted()) !== true) return;
+      // Хост пишет в `trust.json` realpath проекта; мост на том же Маке берёт его так же.
+      const target = await realpath(folder).catch(() => folder);
+      const event = phoneActionEvent.safeParse({ deviceId, kind: 'trust-folder', target });
+      if (event.success) options.onPhoneAction?.(event.data);
+    };
   }
 
   /** Нарушение протокола: `session.closing protocol` — телефон переподключится с отступом, а не примет это за остановку моста. */
@@ -463,7 +488,14 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         raw = await feedSubs.subscribe(deviceId, feedRef);
       } else {
         const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
-        raw = await host.call(method, params ?? {});
+        const trustAfter = method === 'sessions.create' ? await trustWrittenBy(params) : null;
+        try {
+          raw = await host.call(method, params ?? {});
+        } catch (error) {
+          await trustAfter?.(deviceId);
+          throw error;
+        }
+        if (trustAfter !== null) await trustAfter(deviceId);
         if (method === 'consents.list') learnCards((raw as { items?: unknown } | null)?.items);
         if (mutating) void emitPhoneActions(deviceId, method, params, raw, card);
       }

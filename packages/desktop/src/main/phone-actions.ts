@@ -14,10 +14,21 @@ export function parsePhoneAction(data: unknown): PhoneAction | null {
 
 const clip = (value: string): string => (value.length > 120 ? `${value.slice(0, 119)}…` : value);
 
-const targetText = (target: PhoneAction['target']): string => (typeof target === 'string' ? target : path.basename(target.projectPath));
+/** Title of the work a session `ref` belongs to; `null` when the window does not know the work. */
+export type WorkTitleLookup = (ref: { projectPath: string; workId: string }) => Promise<string | null>;
 
-export function phoneActionBody(action: PhoneAction): string {
-  const target = targetText(action.target);
+/** What the notification names: the work title, then basename(projectPath) only for an unknown work. */
+async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLookup | undefined): Promise<string> {
+  if (typeof target === 'string') return target;
+  const title = await workTitle?.(target).catch(() => null);
+  return title && title.trim() !== '' ? title : path.basename(target.projectPath) || target.projectPath;
+}
+
+/** Same work (or same string target) = same coalescing key; two folders trusted in a row both notify. */
+const targetKey = (target: PhoneAction['target']): string => (typeof target === 'string' ? target : `${target.projectPath}\0${target.workId}`);
+
+/** `target` is the already resolved text (see `targetText`). */
+export function phoneActionBody(action: Pick<PhoneAction, 'kind'>, target: string): string {
   switch (action.kind) {
     case 'trust-folder':
       return TEXT.trustFolder(path.basename(target.replace(/\/+$/, '')) || target);
@@ -43,6 +54,7 @@ export const PHONE_ACTION_COALESCE_MS = 10_000;
 export interface PhoneActionNotifierOptions {
   create(options: { title: string; body: string; actions: Array<{ type: 'button'; text: string }> }): PhoneNotificationLike;
   deviceName(deviceId: string): Promise<string | null>;
+  workTitle?: WorkTitleLookup;
   focusWindow(): void;
   /** Asks the human; true = revoke. */
   confirmRevoke(deviceName: string): Promise<boolean>;
@@ -60,7 +72,7 @@ export function createPhoneActionNotifier(options: PhoneActionNotifierOptions): 
     const name = (await options.deviceName(action.deviceId).catch(() => null)) ?? TEXT.unknownDevice;
     const notification = options.create({
       title: TEXT.title(name),
-      body: phoneActionBody(action),
+      body: phoneActionBody(action, await targetText(action.target, options.workTitle)),
       actions: [{ type: 'button', text: TEXT.revokeButton }],
     });
     alive.add(notification);
@@ -79,7 +91,7 @@ export function createPhoneActionNotifier(options: PhoneActionNotifierOptions): 
     handle(data) {
       const action = parsePhoneAction(data);
       if (action === null) return;
-      const key = `${action.deviceId}\0${action.kind}`;
+      const key = `${action.deviceId}\0${action.kind}\0${targetKey(action.target)}`;
       const at = now();
       const previous = lastShown.get(key);
       if (previous !== undefined && at - previous < PHONE_ACTION_COALESCE_MS) return;
