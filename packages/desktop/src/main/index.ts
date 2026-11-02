@@ -86,6 +86,7 @@ import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createRemoteLauncher, bridgePaths, resolveBridgeEntry } from './remote-launcher.js';
 import { createRemoteService, registerRemoteIpc } from './remote-ipc.js';
+import { createPhoneActionNotifier } from './phone-actions.js';
 import { createAppRelaySetup, registerRelaySetupIpc } from './relay-setup/ipc.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
@@ -922,7 +923,31 @@ if (!gotLock) {
     // Settings → Remote access: the bridge is a separate process started like the host; the window talks to it only
     // through the local control socket (mobile spec 5.1, 12).
     const bridge = bridgePaths();
+    const phoneTexts = S.settings.remote.phoneAction;
+    const phoneActions = createPhoneActionNotifier({
+      create: (options) => new Notification(options),
+      deviceName: async (deviceId) =>
+        (await remoteService.call('devices.list', {})).find((device) => device.deviceId === deviceId)?.name ?? null,
+      focusWindow: focusMainWindow,
+      confirmRevoke: async (deviceName) => {
+        const parent = mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow : null;
+        const options = {
+          type: 'warning' as const,
+          message: phoneTexts.confirmTitle(deviceName),
+          detail: phoneTexts.confirmBody,
+          buttons: [phoneTexts.confirmRevoke, phoneTexts.confirmCancel],
+          defaultId: 1,
+          cancelId: 1,
+        };
+        const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+        return response === 0;
+      },
+      revoke: async (deviceId) => {
+        await remoteService.call('devices.revoke', { deviceId });
+      },
+    });
     const remoteService = createRemoteService({
+      onPhoneAction: (data) => phoneActions.handle(data),
       launcher: createRemoteLauncher({
         paths: bridge,
         spawn: async () => {
