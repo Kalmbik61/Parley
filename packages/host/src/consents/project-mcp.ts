@@ -58,10 +58,21 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const EMPTY: ProjectMcpInspection = { repo: '', undecided: [], enabled: [], disabled: [] };
 
+/** JSON с рекурсивно отсортированными ключами: порядок ключей в `.mcp.json` отпечаток не меняет. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 /**
- * Отпечаток сервера: sha256 канонического JSON `{type, command, args, url}` — без `env` и `headers`, у которых бывают
- * секреты. `null` — запись не той формы (не объект, нет ни `command`, ни `url`, поля не тех типов): такой сервер Parley
- * не включает и не спрашивает о нём, Claude спросит сам.
+ * Отпечаток сервера: sha256 канонического JSON ВСЕЙ записи (ключи отсортированы рекурсивно): всё, что меняет запуск,
+ * в том числе `env` (`NODE_OPTIONS`) и `headers`, меняет отпечаток, и включённый сервер снова требует решения. Это только
+ * хеш: значения секретов нигде не хранятся и не показываются, а `summary` — по-прежнему только команда с аргументами
+ * или адрес. `null` — запись не той формы (не объект, нет ни `command`, ни `url`, `type`/`command`/`args`/`url` не тех
+ * типов): такой сервер Parley не включает и не спрашивает о нём, Claude спросит сам.
  */
 export function mcpFingerprint(entry: unknown): { fingerprint: string; summary: string } | null {
   if (!isRecord(entry)) return null;
@@ -71,7 +82,7 @@ export function mcpFingerprint(entry: unknown): { fingerprint: string; summary: 
   if (url !== undefined && typeof url !== 'string') return null;
   if (args !== undefined && !(Array.isArray(args) && args.every((arg) => typeof arg === 'string'))) return null;
   if (command === undefined && url === undefined) return null;
-  const canonical = JSON.stringify({ type: type ?? null, command: command ?? null, args: args ?? null, url: url ?? null });
+  const canonical = canonicalJson(entry);
   const summary = (command !== undefined ? [command, ...((args as string[] | undefined) ?? [])].join(' ') : (url as string)).slice(0, SUMMARY_MAX);
   return { fingerprint: createHash('sha256').update(canonical).digest('hex'), summary };
 }

@@ -60,8 +60,8 @@ export interface ProjectMcpServer {
 
 /**
  * Новые серверы MCP из `.mcp.json` перед запуском Claude (спека 2026-11-02, 7): запуск удерживается, пока человек не
- * выберет, какие серверы включить. По умолчанию всё выключено; `consents.decide` принимает `enabled` — имена из `servers`.
- * Отказ или ответ без `enabled` — все выключены. Запуск после решения идёт в любом случае.
+ * выберет, какие серверы включить. По умолчанию всё выключено; `consents.decide` принимает `enabled` — пары имя и отпечаток
+ * из `servers`: решение привязано к тому, что человек видел. Отказ или ответ без `enabled` — все выключены. Запуск после решения идёт в любом случае.
  */
 export interface ProjectMcpCard extends ConsentCardBase {
   kind: 'project-mcp';
@@ -76,11 +76,14 @@ export type ConsentCard = FolderTrustCard | AgentSwitchCard | ProjectMcpCard;
 
 export const consentMethodSchemas = {
   'consents.list': z.object({}),
-  /** `enabled` — только для карточки `project-mcp`: имена серверов, которые человек включил; нет поля — все выключены. */
+  /**
+   * `enabled` — только для карточки `project-mcp`: пары `{name, fingerprint}` серверов, которые человек включил, ровно
+   * как в карточке; пара, не совпавшая с нынешней карточкой, — `bad_request`. Нет поля — все выключены.
+   */
   'consents.decide': z.object({
     id: z.string().min(1),
     decision: z.enum(['allow', 'deny']),
-    enabled: z.array(z.string().min(1).max(200)).max(200).optional(),
+    enabled: z.array(z.object({ name: z.string().min(1).max(200), fingerprint: z.string().min(1).max(200) })).max(200).optional(),
   }),
   'trust.list': z.object({}),
   /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */

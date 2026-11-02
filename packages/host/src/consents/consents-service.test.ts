@@ -360,7 +360,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
     const { service, continueLaunch, refuseLaunch, projectMcp, trust } = mcpBuild();
     const card = service.requestProjectMcp(mcpInput, hold('s-02'));
     service.requestProjectMcp(mcpInput, hold('s-03', 'resume'));
-    expect(await service.decide(card.id, 'allow', 'island', ['a'])).toEqual({ applied: true, state: 'allowed' });
+    expect(await service.decide(card.id, 'allow', 'island', [{ name: 'a', fingerprint: 'fa' }])).toEqual({ applied: true, state: 'allowed' });
     expect(projectMcp.record).toHaveBeenCalledWith(
       '/real/p',
       [{ name: 'a', fingerprint: 'fa', enabled: true }, { name: 'b', fingerprint: 'fb', enabled: false }],
@@ -371,15 +371,15 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
     expect(trust.grant).not.toHaveBeenCalled();
     expect(service.list()).toEqual([]);
     // Второе решение по той же карточке — уже решено.
-    expect(await service.decide(card.id, 'allow', 'window', ['b'])).toEqual({ applied: false, state: 'allowed' });
+    expect(await service.decide(card.id, 'allow', 'window', [{ name: 'b', fingerprint: 'fb' }])).toEqual({ applied: false, state: 'allowed' });
     expect(projectMcp.record).toHaveBeenCalledTimes(1);
   });
 
   it('deny и allow без списка — все выключены, запуск при этом идёт', async () => {
-    for (const answer of [() => ['deny', undefined], () => ['allow', undefined], () => ['deny', ['a']]] as const) {
+    for (const answer of [() => ['deny', undefined], () => ['allow', undefined], () => ['deny', [{ name: 'a', fingerprint: 'fa' }]]] as const) {
       const { service, continueLaunch, refuseLaunch, projectMcp } = mcpBuild();
       const card = service.requestProjectMcp(mcpInput, hold('s-02'));
-      const [decision, enabled] = answer() as ['allow' | 'deny', string[] | undefined];
+      const [decision, enabled] = answer() as ['allow' | 'deny', Array<{ name: string; fingerprint: string }> | undefined];
       await service.decide(card.id, decision, 'window', enabled);
       expect(projectMcp.record.mock.calls[0]![1]).toEqual([
         { name: 'a', fingerprint: 'fa', enabled: false },
@@ -393,11 +393,41 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
   it('имя, которого нет в карточке, — bad_request до любого изменения: карточка ждёт, ничего не записано и не запущено', async () => {
     const { service, continueLaunch, projectMcp } = mcpBuild();
     const card = service.requestProjectMcp(mcpInput, hold('s-02'));
-    await expect(service.decide(card.id, 'allow', 'window', ['a', 'evil'])).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa' }, { name: 'evil', fingerprint: 'fe' }])).rejects.toMatchObject({ code: 'bad_request' });
     expect(projectMcp.record).not.toHaveBeenCalled();
     expect(continueLaunch).not.toHaveBeenCalled();
     expect(service.list()).toHaveLength(1);
     expect(service.list()[0]!.state).toBe('pending');
+  });
+
+  it('устаревший отпечаток (список карточки сменился, пока человек смотрел) — bad_request, карточка ждёт, ничего не записано', async () => {
+    const { service, continueLaunch, projectMcp } = mcpBuild();
+    const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+    // Второй запуск принёс другой отпечаток для `a`: карточка теперь про него.
+    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', summary: 'node a2.js' }] }, hold('s-03'));
+    await expect(service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa' }])).rejects.toMatchObject({ code: 'bad_request' });
+    expect(projectMcp.record).not.toHaveBeenCalled();
+    expect(continueLaunch).not.toHaveBeenCalled();
+    expect(service.list()).toHaveLength(1);
+    expect(service.list()[0]!.state).toBe('pending');
+  });
+
+  it('подходящая пара включает сервер, всё остальное в карточке записывается выключенным', async () => {
+    const { service, projectMcp } = mcpBuild();
+    const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', summary: 'node a2.js' }] }, hold('s-03'));
+    await service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa-new' }]);
+    expect(projectMcp.record.mock.calls[0]![1]).toEqual([
+      { name: 'b', fingerprint: 'fb', enabled: false },
+      { name: 'a', fingerprint: 'fa-new', enabled: true },
+    ]);
+  });
+
+  it('имя из карточки с чужим отпечатком отвергается так же, как незнакомое имя', async () => {
+    const { service, projectMcp } = mcpBuild();
+    const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+    await expect(service.decide(card.id, 'allow', 'window', [{ name: 'b', fingerprint: 'fa' }])).rejects.toMatchObject({ code: 'bad_request' });
+    expect(projectMcp.record).not.toHaveBeenCalled();
   });
 
   it('карточка и удержание переживают перезапуск хоста', async () => {
@@ -406,7 +436,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
     first.service.stop();
     const second = mcpBuild();
     expect(second.service.list()).toEqual([expect.objectContaining({ id: card.id, kind: 'project-mcp', repo: '/real/p', servers })]);
-    await second.service.decide(card.id, 'allow', 'window', ['a']);
+    await second.service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa' }]);
     expect(second.continueLaunch).toHaveBeenCalledTimes(1);
   });
 });

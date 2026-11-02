@@ -51,18 +51,39 @@ function service() {
 }
 
 describe('mcpFingerprint', () => {
-  it('sha256 от type/command/args/url: env и headers в отпечаток не входят, summary — команда с аргументами', () => {
+  it('sha256 всей записи: summary — только команда с аргументами или адрес, значения env и headers нигде не видны', () => {
     const a = mcpFingerprint(stdio('node', ['server.js'], { env: { TOKEN: 'one' } }))!;
-    const b = mcpFingerprint(stdio('node', ['server.js'], { env: { TOKEN: 'two' } }))!;
     expect(a.fingerprint).toMatch(/^[0-9a-f]{64}$/);
-    expect(a.fingerprint).toBe(b.fingerprint);
     expect(a.summary).toBe('node server.js');
     expect(mcpFingerprint(stdio('node', ['other.js']))!.fingerprint).not.toBe(a.fingerprint);
-    const http1 = mcpFingerprint({ type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer secret' } })!;
-    const http2 = mcpFingerprint({ type: 'http', url: 'https://x.example/mcp' })!;
-    expect(http1.fingerprint).toBe(http2.fingerprint);
-    expect(http1.summary).toBe('https://x.example/mcp');
-    expect(http1.summary).not.toContain('secret');
+    const http = mcpFingerprint({ type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer secret' } })!;
+    expect(http.summary).toBe('https://x.example/mcp');
+    expect(JSON.stringify(http)).not.toContain('secret');
+  });
+
+  it('env меняется — отпечаток другой (NODE_OPTIONS меняет то, что запускается)', () => {
+    const plain = mcpFingerprint(stdio('node', ['server.js']))!;
+    const withEnv = mcpFingerprint(stdio('node', ['server.js'], { env: { NODE_OPTIONS: '--require ./evil.js' } }))!;
+    const otherEnv = mcpFingerprint(stdio('node', ['server.js'], { env: { NODE_OPTIONS: '--require ./other.js' } }))!;
+    expect(withEnv.fingerprint).not.toBe(plain.fingerprint);
+    expect(otherEnv.fingerprint).not.toBe(withEnv.fingerprint);
+    expect(withEnv.summary).toBe(plain.summary);
+  });
+
+  it('headers меняются — отпечаток другой', () => {
+    const base = { type: 'http', url: 'https://x.example/mcp' };
+    const a = mcpFingerprint({ ...base, headers: { Authorization: 'Bearer one' } })!;
+    const b = mcpFingerprint({ ...base, headers: { Authorization: 'Bearer two' } })!;
+    expect(a.fingerprint).not.toBe(b.fingerprint);
+    expect(mcpFingerprint(base)!.fingerprint).not.toBe(a.fingerprint);
+  });
+
+  it('порядок ключей на любой глубине отпечаток не меняет', () => {
+    const one = mcpFingerprint({ command: 'node', args: ['a'], type: 'stdio', env: { A: '1', B: { y: 2, x: 1 } } })!;
+    const two = mcpFingerprint({ env: { B: { x: 1, y: 2 }, A: '1' }, type: 'stdio', args: ['a'], command: 'node' })!;
+    expect(one.fingerprint).toBe(two.fingerprint);
+    // Порядок элементов массива — часть записи.
+    expect(mcpFingerprint(stdio('node', ['a', 'b']))!.fingerprint).not.toBe(mcpFingerprint(stdio('node', ['b', 'a']))!.fingerprint);
   });
 
   it('summary не длиннее 200 знаков', () => {
@@ -226,6 +247,18 @@ describe('inspect', () => {
     await git('git', ['-C', dir, 'worktree', 'add', '-q', '-b', 'feature', worktree]);
     const second = await mcp.inspect(worktree);
     expect(second).toMatchObject({ repo: dir, undecided: [], enabled: ['a'], disabled: ['b'] });
+  });
+
+  it('добавили env к включённому серверу — вопрос снова, сервер не остаётся включённым', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('node', ['a.js']) }));
+    const mcp = service();
+    const first = await mcp.inspect(dir);
+    mcp.store.record(first.repo, first.undecided.map((server) => ({ name: server.name, fingerprint: server.fingerprint, enabled: true })), 'window');
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('node', ['a.js'], { env: { NODE_OPTIONS: '--require ./evil.js' } }) }));
+    const second = await mcp.inspect(dir);
+    expect(second.undecided.map((server) => server.name)).toEqual(['a']);
+    expect(second.enabled).toEqual([]);
   });
 
   it('изменённый отпечаток — снова вопрос только об этом сервере', async () => {

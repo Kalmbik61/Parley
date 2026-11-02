@@ -984,10 +984,12 @@ describe('consents.decide: enabled для карточки project-mcp (спек
   it('enabled необязателен и должен быть списком непустых строк', () => {
     const decide = METHODS['consents.decide'];
     expect(decide.safeParse({ id: 'c-01', decision: 'allow' }).success).toBe(true);
-    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: ['a', 'b'] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a', fingerprint: 'f1' }] }).success).toBe(true);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [] }).success).toBe(true);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: 'a' }).success).toBe(false);
-    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [1] }).success).toBe(false);
-    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [''] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: ['a'] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a' }] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: '', fingerprint: 'f' }] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: Array.from({ length: 201 }, (_, i) => ({ name: `n${i}`, fingerprint: 'f' })) }).success).toBe(false);
   });
 });

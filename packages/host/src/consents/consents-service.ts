@@ -55,13 +55,14 @@ export interface ConsentsService {
   /**
    * `by` — откуда пришло решение (запись в `trust.json`); окно и остров — `window`. Второе решение по той же
    * карточке — `applied: false`. Продолжение или отказ удержанных запусков идут в фоне: ответ не ждёт запуска
-   * процессов. `enabled` — только для `project-mcp`: имена из карточки; чужое имя — `bad_request`, до всякого изменения.
+   * процессов. `enabled` — только для `project-mcp`: пары имя и отпечаток ровно из нынешней карточки; несовпавшая пара —
+   * `bad_request`, до всякого изменения.
    */
   decide(
     id: string,
     decision: 'allow' | 'deny',
     by?: TrustRecord['by'],
-    enabled?: readonly string[],
+    enabled?: ReadonlyArray<{ name: string; fingerprint: string }>,
   ): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
   onChange(listener: (change: ConsentChange) => void): () => void;
   stop(): void;
@@ -401,9 +402,12 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       if (card.kind === 'project-mcp') {
         // Включается только то, что человек назвал и что есть в карточке; отказ и ответ без списка — всё выключено.
         // Чужое имя отвергается до любого изменения: карточка остаётся ждать.
-        const known = new Set(card.servers.map((server) => server.name));
-        const chosen = new Set(decision === 'allow' ? (enabled ?? []) : []);
-        if ([...chosen].some((name) => !known.has(name))) throw new HostError('bad_request', 'Unknown MCP server in the decision');
+        // Решение привязано к тому, что человек видел: имя И отпечаток должны совпасть с нынешней карточкой (список мог
+        // смениться, пока он смотрел). Всё остальное в карточке записывается выключенным.
+        const pairs = decision === 'allow' ? (enabled ?? []) : [];
+        const current = new Map(card.servers.map((server) => [server.name, server.fingerprint]));
+        if (pairs.some((pair) => current.get(pair.name) !== pair.fingerprint)) throw new HostError('bad_request', 'Unknown or changed MCP server in the decision');
+        const chosen = new Set(pairs.map((pair) => pair.name));
         card.state = decision === 'allow' ? 'allowed' : 'denied';
         // Решение о каждом названном в карточке сервере, и о выключенных тоже: иначе вопрос повторялся бы.
         deps.projectMcp?.record(card.repo, card.servers.map((server) => ({ name: server.name, fingerprint: server.fingerprint, enabled: chosen.has(server.name) })), by);
