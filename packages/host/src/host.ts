@@ -87,6 +87,7 @@ import { startCodexCatalog } from './providers/codex-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
+import { createCliUpdateRunner } from './providers/update-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSender } from './pty/send.js';
@@ -855,6 +856,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           onChange: (command) => handle.context.broadcast('providers.changed', { provider: command }),
         });
   cliUpdates?.start();
+  // Обновление CLI по просьбе человека (`providers.update`): сессии считаются, но не трогаются.
+  const cliUpdateRunner =
+    cliUpdates === undefined
+      ? undefined
+      : createCliUpdateRunner({
+          log,
+          versions: providerVersions,
+          updates: cliUpdates,
+          ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
+          runningSessions: async (command) => {
+            const registry = await loadProviders();
+            return ptyManager.list().filter((pty) => pty.provider !== null && registry[pty.provider]?.runner.command === command).length;
+          },
+        });
   handle.context.onShutdown(async () => cliUpdates?.stop());
 
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
@@ -876,6 +891,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worksReady,
     providerVersions,
     ...(cliUpdates === undefined ? {} : { cliUpdates }),
+    ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
     codexCatalog,
     limits: limitsService,
     glmCheck,

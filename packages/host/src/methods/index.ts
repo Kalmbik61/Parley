@@ -27,6 +27,7 @@ import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
+import type { CliUpdateRunner } from '../providers/update-run.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
@@ -56,6 +57,7 @@ import {
   createProvidersList,
   createProvidersRefreshLimits,
   createProvidersSkipUpdate,
+  createProvidersUpdate,
   createProvidersSetKey,
 } from './providers.js';
 import {
@@ -111,6 +113,8 @@ export interface MethodDeps {
   providerVersions?: ProviderVersions;
   /** Проверка новых версий CLI (`providers.list.update`, `providers.skipUpdate`); без неё поля нет, а пропускать нечего. */
   cliUpdates?: CliUpdates;
+  /** Запуск `<cli> update`; без него `providers.update` отвечает `bad_request`. */
+  cliUpdateRunner?: CliUpdateRunner;
   /** Каталог моделей Codex из пробы CLI: `providers.list` просит его обновиться, когда он устарел; без него — не просит. */
   codexCatalog?: CodexCatalog;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
@@ -268,6 +272,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     // Метод есть всегда (hello перечисляет все METHODS); без службы проверки пропускать нечего.
     'providers.skipUpdate': createProvidersSkipUpdate(deps.cliUpdates) as AnyHandler,
+    'providers.update': createProvidersUpdate(deps.cliUpdateRunner) as AnyHandler,
     ...(deps.limits === undefined
       ? {}
       : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions, deps.auth) as AnyHandler }),

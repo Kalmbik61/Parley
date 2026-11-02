@@ -23,6 +23,8 @@ import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
+import { UPDATE_COMMANDS, type UpdateCommand } from '../providers/updates.js';
+import type { CliUpdateRunner } from '../providers/update-run.js';
 
 /**
  * Состояние входа аккаунтов подписки для `providers.list` (спека подписок 5.5): его даёт служба входа, пока её нет —
@@ -187,6 +189,30 @@ export function createProvidersSkipUpdate(updates?: Pick<CliUpdates, 'skip'>): H
     }
     request.host.broadcast('providers.changed', { provider });
     return { ok: true };
+  };
+}
+
+/**
+ * Обновить CLI провайдера (спека 2026-11-02, раздел 4). Провайдер выбирает команду реестра: GLM и свои провайдеры
+ * делят `claude`. Запись — в журнал хоста (кто, когда, from → to, ok); окно узнаёт о новой версии событием
+ * `providers.changed`.
+ */
+export function createProvidersUpdate(runner?: CliUpdateRunner): Handler<'providers.update'> {
+  return async ({ provider }, request) => {
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    const command = entry?.runner.command as UpdateCommand | undefined;
+    if (runner === undefined || command === undefined || !UPDATE_COMMANDS.includes(command)) {
+      throw new HostError('bad_request', 'Provider CLI cannot be updated from Parley');
+    }
+    let result;
+    try {
+      result = await runner.run(command, `${request.client.name} (${request.client.id})`);
+    } catch {
+      throw new HostError('internal', 'Unable to start the provider update');
+    }
+    if (result.state === 'done') request.host.broadcast('providers.changed', { provider });
+    return result;
   };
 }
 

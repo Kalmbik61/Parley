@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
 import type { CliUpdates } from '../providers/updates.js';
-import { createProvidersList, createProvidersSkipUpdate } from './providers.js';
+import { createProvidersList, createProvidersSkipUpdate, createProvidersUpdate } from './providers.js';
 
 let home = '';
 beforeEach(async () => {
@@ -60,5 +60,37 @@ describe('providers.skipUpdate', () => {
     const handler = createProvidersSkipUpdate({ skip } as Pick<CliUpdates, 'skip'>);
     await expect(handler({ provider: 'нет-такого' }, request().info)).rejects.toMatchObject({ code: 'bad_request' });
     await expect(handler({ provider: 'codex' }, request().info)).rejects.toMatchObject({ code: 'bad_request' });
+  });
+});
+
+describe('providers.update', () => {
+  const request = () => {
+    const broadcast = vi.fn();
+    return { broadcast, req: { client: { id: 'c-1', name: 'window' }, host: { broadcast } } as unknown as RequestInfo };
+  };
+  const done = { state: 'done', ok: true, from: '0.162.0', to: '0.166.0', output: '', runningSessions: 1 } as const;
+
+  it('провайдер → команда реестра (GLM делит claude); кто звал — в запуск; providers.changed после обновления', async () => {
+    const run = vi.fn(async () => done);
+    const { broadcast, req } = request();
+    expect(await createProvidersUpdate({ run })({ provider: 'glm' }, req)).toEqual(done);
+    expect(run).toHaveBeenCalledWith('claude', 'window (c-1)');
+    expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'glm' });
+  });
+
+  it('busy отдаётся как есть и событие не шлёт', async () => {
+    const { broadcast, req } = request();
+    expect(await createProvidersUpdate({ run: async () => ({ state: 'busy' }) })({ provider: 'codex' }, req)).toEqual({ state: 'busy' });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('неизвестный провайдер или нет службы — bad_request; сбой запуска — internal без деталей', async () => {
+    const ok = createProvidersUpdate({ run: vi.fn(async () => done) });
+    await expect(ok({ provider: 'нет-такого' }, request().req)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(createProvidersUpdate()({ provider: 'codex' }, request().req)).rejects.toMatchObject({ code: 'bad_request' });
+    const failing = createProvidersUpdate({ run: async () => { throw new Error('/private/path leaked'); } });
+    const error = await failing({ provider: 'codex' }, request().req).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'internal' });
+    expect(JSON.stringify(error)).not.toContain('/private/path');
   });
 });

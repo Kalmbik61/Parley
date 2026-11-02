@@ -119,6 +119,8 @@ export const METHODS = {
   'providers.refreshLimits': z.object({}),
   // Пропустить найденную версию CLI провайдера (спека 2026-11-02): строка вернётся, когда выйдет следующая.
   'providers.skipUpdate': z.object({ provider: z.string() }),
+  // Обновить CLI провайдера его собственной командой `update` (спека 2026-11-02, раздел 4); сессии не трогаются.
+  'providers.update': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -391,6 +393,23 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'providers.refreshLimits': { ok: true };
   /** Версия `update.latest` провайдера помечена пропущенной; пропускать нечего — `bad_request`. */
   'providers.skipUpdate': { ok: true };
+  /**
+   * `busy` — обновление этого CLI уже идёт. `done`: `ok` — выход 0 и версия выросла (или равна найденной);
+   * `output` — последние 4 КБ stdout и stderr; `manualCommand` — при `ok: false`; `smoke` — пробный запуск Codex с
+   * флагами Parley; `runningSessions` — активные сессии этого CLI, они остаются на старой версии до перезапуска.
+   */
+  'providers.update':
+    | { state: 'busy' }
+    | {
+        state: 'done';
+        ok: boolean;
+        from: string | null;
+        to: string | null;
+        output: string;
+        runningSessions: number;
+        manualCommand?: string;
+        smoke?: { ok: boolean; output: string };
+      };
   /**
    * Явная проверка сохранённого ключа тестовым сообщением (только у провайдера с ключом — GLM).
    * `null` — провайдер не готов локально (нет CLI нужной версии или ключа: см. `providers.list.needs`),

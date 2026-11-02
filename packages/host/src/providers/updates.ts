@@ -34,6 +34,8 @@ export interface CliUpdates {
   checkAll(): Promise<void>;
   /** Обновление для команды: `null`, если версия не новее установленной, её пропустили или проверки не было. */
   current(command: string, installed: string | null): Promise<CliUpdateInfo | null>;
+  /** Последняя найденная версия как есть (даже пропущенная); `null` — проверки не было или сеть молчала. */
+  latest(command: string): Promise<string | null>;
   /** Пропустить найденную версию; `false` — пропускать нечего. */
   skip(command: string): Promise<boolean>;
   stop(): void;
@@ -196,6 +198,10 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
       if (record?.latest == null || installed === null) return null;
       if (record.skipped === record.latest || !isNewer(installed, record.latest)) return null;
       return { latest: record.latest, method: record.method, checkedAt: record.checkedAt };
+    },
+    async latest(command) {
+      if (!UPDATE_COMMANDS.includes(command as UpdateCommand)) return null;
+      return (await loaded())[command as UpdateCommand]?.latest ?? null;
     },
     async skip(command) {
       if (!UPDATE_COMMANDS.includes(command as UpdateCommand)) return false;

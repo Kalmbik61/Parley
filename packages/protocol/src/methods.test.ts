@@ -364,6 +364,17 @@ describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)'
     expectTypeOf<Result<'providers.skipUpdate'>>().toEqualTypeOf<{ ok: true }>();
   });
 
+  it('providers.update: {provider}, ответ busy или done с итогом', () => {
+    expect(METHODS['providers.update'].safeParse({ provider: 'codex' }).success).toBe(true);
+    expect(METHODS['providers.update'].safeParse({}).success).toBe(false);
+    const busy: Result<'providers.update'> = { state: 'busy' };
+    const finished: Result<'providers.update'> = {
+      state: 'done', ok: false, from: '0.162.0', to: null, output: 'EACCES', runningSessions: 2,
+      manualCommand: '/usr/local/bin/codex update', smoke: { ok: true, output: '' },
+    };
+    expect([busy.state, finished.state]).toEqual(['busy', 'done']);
+  });
+
   it('update в providers.list необязателен (старый хост молчит) и может быть null', () => {
     const update: CliUpdate = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
     const list: Result<'providers.list'> = {
