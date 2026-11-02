@@ -79,6 +79,7 @@ import {
   readCustomProviders,
   mirrorProjectTrust,
   syncApiKeyApproval,
+  claudeConfigDirFor,
   userClaudeConfigDir,
   userClaudeJsonPath,
   readSecret,
@@ -767,24 +768,32 @@ export function createSessionsService(
     }
   }
 
-  async function launch(
+  /** Исход запуска и, для `held`, причина удержания; запись причины живёт ровно один вызов — подъёмы и продолжения её не копят. */
+  async function launchDetailed(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
-  ): Promise<LaunchOutcome> {
+  ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
-    if (launching.has(key) || closing.has(key)) return 'started';
+    if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
       await repairLive(ref, live);
-      return 'started';
+      return { outcome: 'started' };
     }
     launching.add(key);
     try {
-      return await launchHeld(ref, mode, options);
+      const outcome = await launchHeld(ref, mode, options);
+      const heldKind = outcome === 'held' ? heldKinds.get(key) ?? 'folder-trust' : undefined;
+      return heldKind === undefined ? { outcome } : { outcome, heldKind };
     } finally {
       launching.delete(key);
+      heldKinds.delete(key);
     }
+  }
+
+  async function launch(ref: SessionRef, mode: LaunchMode, options: LaunchChoice = {}): Promise<LaunchOutcome> {
+    return (await launchDetailed(ref, mode, options)).outcome;
   }
 
   /**
@@ -895,7 +904,7 @@ export function createSessionsService(
       // Серверы без решения — карточка и `held`, до бюджета, worktree и процесса, как у доверия к папке Codex. Папка —
       // worktree сессии, если он уже есть, иначе проект: решение хранится по репозиторию и от выбора не зависит.
       if (entry.runner.command === 'claude' && feed.projectMcp !== undefined && feed.consents?.requestProjectMcp !== undefined) {
-        const found = await timer.step('projectMcp', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath));
+        const found = await timer.step('projectMcp', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           const by = options.by ?? 'human';
           const requester = session.parent ?? (map.sessions.some((candidate) => candidate.id === by) ? by : undefined);
@@ -1052,11 +1061,11 @@ export function createSessionsService(
       // решения не включается, а вопрос Claude из-за этого не возникает. Только Claude-семейство.
       let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
       if (entry.runner.command === 'claude' && feed.projectMcp !== undefined) {
-        const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath));
+        const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
         }
-        const disabled = [...found.disabled, ...found.undecided.map((server) => server.name)];
+        const disabled = [...found.disabled, ...found.undecided.map((server) => server.name), ...found.unmanaged];
         if (found.enabled.length > 0 || disabled.length > 0) projectMcp = { enabled: found.enabled, disabled };
       }
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
@@ -1303,13 +1312,9 @@ export function createSessionsService(
     mode: LaunchMode,
     choice: LaunchChoice,
   ): Promise<CreatedSession> {
-    const outcome = await launch(ref, mode, choice);
+    const { outcome, heldKind } = await launchDetailed(ref, mode, choice);
     activity.markSeen(ref);
-    if (outcome === 'held') {
-      const kind = heldKinds.get(refKey(ref)) ?? 'folder-trust';
-      heldKinds.delete(refKey(ref));
-      return { ...ref, held: kind };
-    }
+    if (outcome === 'held') return { ...ref, held: heldKind ?? 'folder-trust' };
     if (outcome === 'queued') {
       // Причина — в записи очереди; записи нет (сессию успели поднять или закрыть) — потолок машины.
       const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2037,6 +2042,7 @@ export function createSessionsService(
       }
       // `held`: запуск Codex ждёт согласия на папку; `queued`: машине тесно, запуск ждёт слота в очереди. И там и там
       // `switching` остаётся до старта нового агента, снимет его сам запуск (`finishSwitch`).
+      heldKinds.delete(refKey(ref));
       return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
     } catch (error) {
       if (!applied) {

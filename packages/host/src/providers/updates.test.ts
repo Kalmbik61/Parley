@@ -223,6 +223,25 @@ describe('проверка версий CLI', () => {
     expect(JSON.parse(await readFile(path.join(userHome, '.claude/settings.json'), 'utf8'))).toEqual({ autoUpdatesChannel: 'stable' });
   });
 
+  it('Claude: при CLAUDE_CONFIG_DIR канал берётся из его settings.json, а не из ~/.claude', async () => {
+    await mkdir(path.join(userHome, '.claude'), { recursive: true });
+    await writeFile(path.join(userHome, '.claude/settings.json'), JSON.stringify({ autoUpdatesChannel: 'latest' }));
+    const custom = path.join(root, 'custom-claude');
+    await mkdir(custom, { recursive: true });
+    await writeFile(path.join(custom, 'settings.json'), JSON.stringify({ autoUpdatesChannel: 'stable' }));
+    const n = net();
+    const updates = createCliUpdates({
+      fetchImpl: n.fetchImpl,
+      log,
+      home: parley,
+      userHome,
+      env: { PARLEY_CODEX_BIN: codexBin, PARLEY_CLAUDE_BIN: claudeBin, PATH: '', CLAUDE_CONFIG_DIR: custom },
+      now: () => Date.UTC(2026, 10, 2),
+    });
+    await updates.checkAll();
+    expect(await updates.current('claude', '2.1.200')).toMatchObject({ latest: '2.1.300' });
+  });
+
   it('onChange зовётся, когда пришла новая версия, и не зовётся при повторе той же', async () => {
     const n = net();
     let at = Date.UTC(2026, 10, 2);
