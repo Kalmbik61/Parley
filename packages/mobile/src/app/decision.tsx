@@ -179,7 +179,9 @@ export default function DecisionScreen() {
             accessibilityRole="button"
             disabled={!canSendReturn(note) || !canAct}
             onPress={() => void send('return')}
-            style={[styles.btn, { backgroundColor: colors.tint, borderColor: colors.tint, opacity: canSendReturn(note) && canAct ? 1 : 0.4 }]}
+            // `flex: 0`: in the sheet's column the row button's `flex: 1` stretched it to the bottom, and its label sat
+            // under the keyboard (plan A35e).
+            style={[styles.btn, { flex: 0, backgroundColor: colors.tint, borderColor: colors.tint, opacity: canSendReturn(note) && canAct ? 1 : 0.4 }]}
           >
             {busy === 'return' ? <ActivityIndicator color={colors.onTint} /> : <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Send</Text>}
           </Pressable>

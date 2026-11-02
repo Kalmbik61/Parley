@@ -1,6 +1,7 @@
 // The message field of the session screen (D1 §9.5): multiline, Return is a newline, ⬆ sends through `useChat`.
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
+import { DEV_FOCUS } from '../dev/flags';
 import { typography, useColors } from '../theme';
 import { messageProblem, sizeCounter, type ComposerMode } from './send';
 
@@ -39,6 +40,7 @@ export function Composer({
       )}
       <View style={styles.row}>
         <TextInput
+          autoFocus={DEV_FOCUS}
           accessibilityLabel={`Message ${label}`}
           multiline
           editable={!busy && mode.sendEnabled}

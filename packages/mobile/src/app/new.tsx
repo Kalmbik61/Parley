@@ -1,13 +1,14 @@
 // New session / New room (D1 §8.4): start an agent or open a room from the phone. The Mac decides (rules, known works, limits) and its words come back as they are.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
-import { DEMO } from '../dev/flags';
+import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { touchAppLock } from '../auth/lock-instance';
 import { useCloseOnLock } from '../auth/use-lock-sheet';
+import { KeyboardAvoider } from '../ui/KeyboardAvoider';
 import { haptic } from '../haptics';
 import { selectLaunchCapabilities } from '@parley/remote-client';
 import { useCanAct, useRemoteState } from '../hooks/use-remote';
@@ -246,7 +247,8 @@ export default function NewScreen() {
           <Text allowFontScaling style={[typography.body, { color: c.tint }]}>{step === 'letter' ? 'Later' : 'Cancel'}</Text>
         </Pressable>
       ) }} />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* The footer rides on the keyboard: the sheet's offset in the window counts (plan A35e). */}
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {/* First child of the scroll view, so it sits below a translucent sheet header (as on the M1 screens). */}
           <View style={styles.banner}>
@@ -339,7 +341,7 @@ export default function NewScreen() {
                   <Label>Session name</Label>
                   <TextInput accessibilityLabel="Session name" value={name} onChangeText={setName} placeholder="Optional" placeholderTextColor={c.label3} maxLength={64} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
                   <Label>Task</Label>
-                  <TextInput accessibilityLabel="Task" multiline value={task} onChangeText={setTask} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]} />
+                  <TextInput autoFocus={DEV_FOCUS} accessibilityLabel="Task" multiline value={task} onChangeText={setTask} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]} />
                   <Card>
                     <View style={[styles.row, styles.pad]}>
                       <SymbolView name="arrow.triangle.branch" size={18} tintColor={c.label2} />
@@ -351,7 +353,7 @@ export default function NewScreen() {
               ) : (
                 <>
                   <Label>Room name</Label>
-                  <TextInput accessibilityLabel="Room name" value={title} onChangeText={setTitle} placeholder="What the agents will discuss" placeholderTextColor={c.label3} maxLength={128} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
+                  <TextInput autoFocus={DEV_FOCUS} accessibilityLabel="Room name" value={title} onChangeText={setTitle} placeholder="What the agents will discuss" placeholderTextColor={c.label3} maxLength={128} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
                   <Label>Mode</Label>
                   <Segmented<RoomMode> label="Mode" value={mode} onChange={setMode} options={ROOM_MODES.map((m) => ({ value: m.mode, label: m.title }))} />
                   <Text allowFontScaling style={[typography.footnote, styles.note, { color: c.label2 }]}>
@@ -445,7 +447,7 @@ export default function NewScreen() {
             )}
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
       <Toast message={toast.message} />
     </View>
   );

@@ -9,3 +9,5 @@ export const DEMO_ROUTE: unknown = Constants.expoConfig?.extra?.devRoute;
  */
 const devLockMs: unknown = Constants.expoConfig?.extra?.devLockMs;
 export const DEV_LOCK_MS: number | null = __DEV__ && typeof devLockMs === 'number' && devLockMs > 0 ? devLockMs : null;
+/** Developer build with PARLEY_MOBILE_DEV_FOCUS=1: the main text field of a screen takes focus, so the keyboard is up in screenshots (plan A35e). */
+export const DEV_FOCUS = __DEV__ && Constants.expoConfig?.extra?.devFocus === true;
