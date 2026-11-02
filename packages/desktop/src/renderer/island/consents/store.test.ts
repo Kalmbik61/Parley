@@ -155,6 +155,17 @@ describe('стор: карточка серверов MCP (спека 2026-11-02
     expect(call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-02', decision: 'deny' });
   });
 
+  it('карточка неизвестной версии формы в items не попадает (apply и replace)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { store } = setup();
+    const future = { ...mcp('c-50'), version: 2 } as unknown as ConsentCard;
+    store.getState().apply({ upsert: [future, mcp('c-51')], removed: [] });
+    expect(store.getState().items.map((item) => item.id)).toEqual(['c-51']);
+    store.getState().replace([future, mcp('c-52')]);
+    expect(store.getState().items.map((item) => item.id)).toEqual(['c-52']);
+    warn.mockRestore();
+  });
+
   it('bad_request хоста — пометка «stale», карточка остаётся; другая ошибка — «failed»', async () => {
     const stale = setup(new Error('parley-error:{"code":"bad_request","message":"Unknown or changed MCP server in the decision"}'));
     stale.store.getState().replace([mcp('c-01')]);

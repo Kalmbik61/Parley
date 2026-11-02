@@ -199,6 +199,14 @@ describe('карточка серверов MCP на острове (спека 
     expect(sw('b').getAttribute('aria-checked')).toBe('true');
   });
 
+  it('карточка неизвестной версии формы не рисуется', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { container } = render(<ConsentView {...props({ card: { ...MCP, version: 2 } as unknown as ConsentCard })} />);
+    expect(container.textContent).toBe('');
+    expect(screen.queryByTestId('island-project-mcp-enable')).toBeNull();
+    warn.mockRestore();
+  });
+
   it('«Done ✓» вместо кнопок после решения', () => {
     render(<ConsentView {...props({ card: MCP, note: 'done' })} />);
     expect(screen.getByTestId('island-consent-done')).toBeTruthy();

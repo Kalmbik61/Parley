@@ -139,6 +139,23 @@ describe('ProjectMcpDialog', () => {
     await waitFor(() => expect(decideCalls()).toEqual([{ id: 'c-07', decision: 'deny', revision: 5 }]));
   });
 
+  it('карточка неизвестной версии формы не рисуется и не занимает диалог: следующая карточка показывается', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<ConsentPrompt />);
+    const future = { ...card({ id: 'c-90' }), version: 2 } as unknown as ConsentCard;
+    const noVersion = { ...card({ id: 'c-91' }), version: undefined } as unknown as ConsentCard;
+    act(() => bridge.emit('consents.changed', { upsert: [future, noVersion], removed: [] }));
+    act(() => bridge.emit('consents.changed', { upsert: [future], removed: [] }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useConsentsStore.getState().cards).toEqual([]);
+    // Лог — один раз на карточку и версию.
+    expect(warn.mock.calls.filter((call) => String(call[0]).includes('unknown form'))).toHaveLength(2);
+    // Следующая, известная карточка показывается как обычно.
+    act(() => bridge.emit('consents.changed', { upsert: [card({ id: 'c-92' })], removed: [] }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    warn.mockRestore();
+  });
+
   it('«Cancel» закрывает диалог, карточка остаётся для острова', async () => {
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));

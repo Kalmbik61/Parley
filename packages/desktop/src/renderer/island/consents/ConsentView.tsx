@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
+import { isKnownConsent } from '../../lib/known-consent.js';
 import { shortenMiddle } from '../../lib/shorten-middle.js';
 import { switchRequestText } from '../../store/consents.js';
 import { ProjectMcpServerList, repoName, useServerSelection } from '../../components/dialogs/ProjectMcpServers.js';
@@ -38,6 +39,7 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
   const selection = useServerSelection(card.kind === 'project-mcp' ? card.servers : []);
   // Карточка серверов MCP (спека 2026-11-02, 7): выбор серверов, а не доверие к папке.
   if (card.kind === 'project-mcp') {
+    if (!isKnownConsent(card)) return <></>;
     const text = S.dialogs.projectMcp;
     const who = card.requestedBy.label ?? card.requestedBy.sessionId ?? '—';
     return (

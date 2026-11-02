@@ -14,6 +14,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { ConsentCard, EventData } from '@parley/protocol';
 import type { IslandBridge } from '../../../shared/island.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
+import { isKnownConsent } from '../../lib/known-consent.js';
 import { ELSEWHERE_MS } from '../requests.js';
 
 /** Сколько «Done ✓» держится на карточке после решения. */
@@ -37,7 +38,7 @@ export interface ConsentsState {
   decide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number): Promise<void>;
 }
 
-const pending = (cards: readonly ConsentCard[]): ConsentCard[] => cards.filter((card) => card.state === 'pending');
+const pending = (cards: readonly ConsentCard[]): ConsentCard[] => cards.filter((card) => card.state === 'pending' && isKnownConsent(card));
 
 export function createConsentsStore(): UseBoundStore<StoreApi<ConsentsState>> {
   let deps: ConsentsDeps | null = null;
@@ -75,7 +76,7 @@ export function createConsentsStore(): UseBoundStore<StoreApi<ConsentsState>> {
           const byId = new Map(state.items.map((card) => [card.id, card]));
           for (const card of upsert) {
             if (held.has(card.id)) continue;
-            if (card.state === 'pending') byId.set(card.id, card);
+            if (card.state === 'pending' && isKnownConsent(card)) byId.set(card.id, card);
             else byId.delete(card.id);
           }
           for (const id of removed) if (!held.has(id)) byId.delete(id);

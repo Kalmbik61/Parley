@@ -13,6 +13,7 @@ import type { WindowWorkEntry } from '@parley/core';
 import type { AgentSwitchCard, ConsentCard, FolderTrustCard } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
+import { isKnownConsent } from '../lib/known-consent.js';
 import { sessionRowLabel } from '../lib/participant.js';
 
 type ConsentBridge = Pick<ParleyBridge, 'call' | 'on'>;
@@ -46,11 +47,11 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
     const gone = new Set<string>();
     const apply = (upsert: readonly ConsentCard[], removed: readonly string[]): void => {
       for (const id of removed) gone.add(id);
-      for (const card of upsert) if (card.state !== 'pending') gone.add(card.id);
+      for (const card of upsert) if (card.state !== 'pending' || !isKnownConsent(card)) gone.add(card.id);
       set((state) => {
         const next = new Map(state.cards.map((card) => [card.id, card]));
         for (const id of gone) next.delete(id);
-        for (const card of upsert) if (card.state === 'pending') next.set(card.id, card);
+        for (const card of upsert) if (card.state === 'pending' && isKnownConsent(card)) next.set(card.id, card);
         return { cards: [...next.values()] };
       });
     };
@@ -61,7 +62,7 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
         // Событие свежее снимка: карточка, что уже пришла событием, остаётся его версией.
         set((state) => {
           const known = new Set(state.cards.map((card) => card.id));
-          const fresh = result.items.filter((card) => card.state === 'pending' && !gone.has(card.id) && !known.has(card.id));
+          const fresh = result.items.filter((card) => card.state === 'pending' && isKnownConsent(card) && !gone.has(card.id) && !known.has(card.id));
           return { cards: [...fresh, ...state.cards] };
         });
       },
