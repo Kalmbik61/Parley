@@ -57,6 +57,8 @@ describe('белый список против запретного списка
     'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
     // Из master 0.27.0 (ограниченная синхронизация окна, #164): мост остаётся на works.list / works.changed.
     'works.sync', 'works.mailState',
+    // Из ветки s-209 (обновление CLI провайдера из Parley): действие на Маке, телефону не открыто.
+    'providers.update', 'providers.skipUpdate',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);

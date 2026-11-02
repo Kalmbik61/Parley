@@ -68,7 +68,7 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
   if (entry.id !== 'codex') return { verified: false, configArgs: [] };
   const configArgs: string[] = [];
   const knownGenerated = new Set(['tui.terminal_title', 'tui.notifications', 'tui.notification_method',
-    'tui.notification_condition', 'project_doc_fallback_filenames']);
+    'tui.notification_condition', 'project_doc_fallback_filenames', 'check_for_update_on_startup']);
   const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{skillCatalog}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
   for (let i = 0; i < template.length; i++) {
     const item = template[i]!;

@@ -179,8 +179,8 @@ const YIELDING_SEGMENT = 'shrink-[1000000000]';
  * трек 44. Без пола при весе 10⁹ кнопка сжималась бы до нуля раньше сегментов из одного имени, и значок с полоской налезали
  * бы на соседей.
  */
-const segmentFloor = (version: boolean, meter: boolean): number =>
-  14 + 7 * (1 + Number(version) + Number(meter)) + (meter ? 4 + 44 : 0);
+const segmentFloor = (version: boolean, meter: boolean, mark = false): number =>
+  14 + 7 * (1 + Number(version) + Number(meter)) + (meter ? 4 + 44 : 0) + (mark ? 7 + 8 : 0);
 
 function ProviderSegment({ provider, resets, onRestartHost }: { provider: ProviderInfo; resets: boolean; onRestartHost: () => void }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -192,6 +192,8 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
   // Блок лимитов рисуется, только когда есть хоть одно окно (`ProviderLimitsMeter`); у старого хоста поля нет вовсе.
   const meter = limits && (provider.limits?.fiveHour != null || provider.limits?.week != null);
   const yields = version || meter;
+  // Новая версия CLI (T2/T4): тихая «↑» рядом с версией. Только у самих Claude Code и Codex — GLM делит с Claude его CLI.
+  const mark = provider.available && provider.update != null && (provider.id === 'claude' || provider.id === 'codex');
   const segmentClass = cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', yields && YIELDING_SEGMENT, !provider.available && 'opacity-50');
   const segmentContent = (
     <>
@@ -199,6 +201,18 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
       <span className="min-w-0 truncate">{name}</span>
       {version ?
         <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
+      {mark && provider.update != null ?
+        <span
+          data-update-mark={provider.id}
+          title={S.statusBar.updateMark(provider.update.latest)}
+          className="shrink-0 text-[11px] text-neutral-600"
+          onClick={(event) => {
+            // Щелчок по метке — сразу в Settings → Providers этого провайдера, а не в поповер сегмента.
+            event.stopPropagation();
+            event.preventDefault();
+            useUiStore.getState().openSettingsDialog('providers', { provider: provider.id });
+          }}
+        >↑</span> : null}
       {limits ? <ProviderLimitsMeter limits={provider.limits} resets={resets} /> : null}
     </>
   );
@@ -207,7 +221,7 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
   if (kindOf(provider.custom) === 'endpoint')
     return (
       <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
-        style={yields ? { minWidth: segmentFloor(version, meter) } : undefined} className={segmentClass}
+        style={yields ? { minWidth: segmentFloor(version, meter, mark) } : undefined} className={segmentClass}
         onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: provider.id })}>
         {segmentContent}
       </button>
@@ -216,7 +230,7 @@ function ProviderSegment({ provider, resets, onRestartHost }: { provider: Provid
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
-          style={yields ? { minWidth: segmentFloor(version, meter) } : undefined}
+          style={yields ? { minWidth: segmentFloor(version, meter, mark) } : undefined}
           className={segmentClass}>
           {segmentContent}
         </button>

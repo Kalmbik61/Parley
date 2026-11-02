@@ -138,3 +138,32 @@ describe('стор карточек согласия острова', () => {
     expect(call).not.toHaveBeenCalled();
   });
 });
+
+describe('стор: карточка серверов MCP (спека 2026-11-02, 7)', () => {
+  const mcp = (id: string): ConsentCard => ({
+    id, kind: 'project-mcp', version: 1, repo: '/r', projectPath: '/r', servers: [{ name: 'a', fingerprint: 'fa', command: 'node a.js' }],
+    requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03' }, at: '2026-11-02T10:00:00.000Z', state: 'pending',
+  });
+
+  it('decide с enabled отправляет пары в consents.decide; без enabled поля в вызове нет', async () => {
+    const { store, call } = setup();
+    store.getState().replace([mcp('c-01')]);
+    await store.getState().decide('c-01', 'allow', [{ name: 'a', fingerprint: 'fa' }]);
+    expect(call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-01', decision: 'allow', enabled: [{ name: 'a', fingerprint: 'fa' }] });
+    store.getState().replace([mcp('c-02')]);
+    await store.getState().decide('c-02', 'deny');
+    expect(call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-02', decision: 'deny' });
+  });
+
+  it('bad_request хоста — пометка «stale», карточка остаётся; другая ошибка — «failed»', async () => {
+    const stale = setup(new Error('parley-error:{"code":"bad_request","message":"Unknown or changed MCP server in the decision"}'));
+    stale.store.getState().replace([mcp('c-01')]);
+    await stale.store.getState().decide('c-01', 'allow', []);
+    expect(stale.store.getState().note).toBe('stale');
+    expect(stale.store.getState().items.map((item) => item.id)).toEqual(['c-01']);
+    const other = setup(new Error('parley-error:{"code":"internal","message":"boom"}'));
+    other.store.getState().replace([mcp('c-02')]);
+    await other.store.getState().decide('c-02', 'allow', []);
+    expect(other.store.getState().note).toBe('failed');
+  });
+});

@@ -117,6 +117,11 @@ export interface LaunchOptions {
    */
   trust?: { project: string; cwd: string };
   /**
+   * Решения человека о серверах MCP из `.mcp.json` (спека 2026-11-02, 7): уходят в файл `--settings` сессии ключами
+   * `enabledMcpjsonServers` и `disabledMcpjsonServers`. Файл тогда всегда свой у сессии. Нет поля или пусто — ключей нет.
+   */
+  projectMcp?: { enabled: readonly string[]; disabled: readonly string[] };
+  /**
    * Режим одобрений пишущих ролей Codex, который хост выбрал после пробы версии (`auto` ниже `CODEX_AUTO_MIN_VERSION`
    * идёт как `terminal`). Нет поля — режим из настроек запуска (`codexWriteApprovals`).
    */
@@ -454,6 +459,7 @@ async function plan(
     subs.approvals = [...(subs.approvals ?? []), '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`];
   }
   if (template.includes('{settingsFile}')) {
+    const hasProjectMcp = options.projectMcp !== undefined && (options.projectMcp.enabled.length > 0 || options.projectMcp.disabled.length > 0);
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
     // список лёг бы и на сессии без lean.
     if (lean && isClaudeCode(entry)) {
@@ -461,7 +467,8 @@ async function plan(
     }
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator || lean || workspace ? { sessionId: session.id } : {}),
+      ...(skillNavigator || lean || workspace || hasProjectMcp ? { sessionId: session.id } : {}),
+      ...(hasProjectMcp ? { projectMcp: options.projectMcp } : {}),
       ...(workspace ? { autonomous: true } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).

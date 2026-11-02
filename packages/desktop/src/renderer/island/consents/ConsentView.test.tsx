@@ -143,3 +143,65 @@ describe('карточка согласия острова', () => {
     expect(p.onDecide).toHaveBeenLastCalledWith('c-07', 'deny');
   });
 });
+
+describe('карточка серверов MCP на острове (спека 2026-11-02, 7)', () => {
+  const MCP: ConsentCard = {
+    id: 'c-09', kind: 'project-mcp', version: 1, repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',
+    servers: [{ name: 'a', fingerprint: 'fa', command: 'node a.js' }, { name: 'b', fingerprint: 'fb', command: 'https://b.example/mcp' }],
+    requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03 Ruslan' },
+    at: '2026-11-02T10:00:00.000Z', state: 'pending',
+  };
+  const sw = (name: string): HTMLElement => screen.getByRole('switch', { name: `Enable ${name}` });
+
+  it('заголовок с именем репозитория, путь, кто просил; все серверы выключены', () => {
+    render(<ConsentView {...props({ card: MCP })} />);
+    expect(screen.getByTestId('island-project-mcp-title').textContent).toBe('Enable MCP servers for my_harnas?');
+    expect(screen.getByText('requested by S03 Ruslan · create_session')).toBeTruthy();
+    expect(sw('a').getAttribute('aria-checked')).toBe('false');
+    expect(sw('b').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('кнопки взводятся через CARD_ARM_MS; «Enable selected» шлёт включённые пары, «Reject all» — deny', () => {
+    const onDecide = vi.fn();
+    render(<ConsentView {...props({ card: MCP, onDecide })} />);
+    const enable = screen.getByTestId('island-project-mcp-enable') as HTMLButtonElement;
+    expect(enable.disabled).toBe(true);
+    arm();
+    fireEvent.click(sw('a'));
+    fireEvent.click(enable);
+    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'allow', [{ name: 'a', fingerprint: 'fa' }]);
+    fireEvent.click(screen.getByTestId('island-project-mcp-reject'));
+    expect(onDecide).toHaveBeenLastCalledWith('c-09', 'deny');
+  });
+
+  it('без выбора «Enable selected» шлёт пустой список', () => {
+    const onDecide = vi.fn();
+    render(<ConsentView {...props({ card: MCP, onDecide })} />);
+    arm();
+    fireEvent.click(screen.getByTestId('island-project-mcp-enable'));
+    expect(onDecide).toHaveBeenCalledWith('c-09', 'allow', []);
+  });
+
+  it('устаревший список (note stale): строка «The server list changed — review again», кнопки остаются', () => {
+    render(<ConsentView {...props({ card: MCP, note: 'stale' })} />);
+    arm();
+    expect(screen.getByTestId('island-project-mcp-stale').textContent).toBe('The server list changed — review again');
+    expect((screen.getByTestId('island-project-mcp-enable') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('карточка обновилась с изменённым сервером: его переключатель выключен снова', () => {
+    const { rerender } = render(<ConsentView {...props({ card: MCP })} />);
+    arm();
+    fireEvent.click(sw('a'));
+    fireEvent.click(sw('b'));
+    rerender(<ConsentView {...props({ card: { ...MCP, servers: [{ name: 'a', fingerprint: 'fa-NEW', command: 'node a2.js' }, MCP.servers[1]!] } as ConsentCard })} />);
+    expect(sw('a').getAttribute('aria-checked')).toBe('false');
+    expect(sw('b').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('«Done ✓» вместо кнопок после решения', () => {
+    render(<ConsentView {...props({ card: MCP, note: 'done' })} />);
+    expect(screen.getByTestId('island-consent-done')).toBeTruthy();
+    expect(screen.queryByTestId('island-project-mcp-enable')).toBeNull();
+  });
+});

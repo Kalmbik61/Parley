@@ -219,6 +219,48 @@ function renderPlain(props: Partial<StatusBarProps> = {}) {
 
 const segments = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-provider-segment]')];
 
+describe('StatusBar — метка «↑» новой версии CLI (спека 2026-11-02, P2)', () => {
+  const update = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
+  const mark = (container: HTMLElement, id: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-provider-segment="${id}"] [data-update-mark]`);
+
+  it('рядом с версией: тихая «↑» с подсказкой «0.166.0 available»', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'codex', label: 'Codex', version: '0.162.0', update })] });
+    const { container } = renderPlain();
+    const el = mark(container, 'codex')!;
+    expect(el.textContent).toBe('↑');
+    expect(el.getAttribute('title')).toBe('0.166.0 available');
+    const segment = container.querySelector('[data-provider-segment="codex"]')!;
+    expect(segment.textContent).toContain('0.162.0');
+  });
+
+  it('без update, с update: null, у GLM и у недоступного провайдера метки нет', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude Code', version: '2.1.0' }),
+        provider({ id: 'codex', label: 'Codex', version: '0.162.0', update: null }),
+        provider({ id: 'glm', label: 'GLM', update }),
+      ],
+    });
+    const { container } = renderPlain();
+    expect(container.querySelectorAll('[data-update-mark]')).toHaveLength(0);
+    cleanup();
+    useProvidersStore.setState({ providers: [provider({ id: 'codex', label: 'Codex', available: false, update })] });
+    expect(mark(renderPlain().container, 'codex')).toBeNull();
+  });
+
+  it('щелчок по метке открывает Settings → Providers этого провайдера, поповер сегмента не открывается', () => {
+    useUiStore.getState().closeSettingsDialog();
+    useProvidersStore.setState({ providers: [provider({ id: 'codex', label: 'Codex', version: '0.162.0', update })] });
+    const { container } = renderPlain();
+    fireEvent.click(mark(container, 'codex')!);
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+    expect(useUiStore.getState().settingsSection).toBe('providers');
+    expect(useUiStore.getState().settingsProvider).toBe('codex');
+    expect(screen.queryByRole('dialog', { name: 'Codex' })).toBeNull();
+  });
+});
+
 describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
   it.each([false, true])('основные кнопки в обеих темах открывают общую карточку; GLM лимитов не имеет (%s)', (dark) => {
     useUiStore.setState({ dark });

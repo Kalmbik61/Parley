@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { envValue } from '@parley/core';
 import { startupWaitFromEnv } from './activity/activity-service.js';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
@@ -24,7 +25,7 @@ async function main(): Promise<number> {
   const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
-    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog } : {}),
+    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog, cliUpdates: { fetchImpl: fetch, userHome: homedir() } } : {}),
     ...(limits === undefined ? {} : { limits }),
     ...(glmCheck === undefined ? {} : { glmCheck }),
     ...(startupWaitMs === undefined ? {} : { startupWaitMs }),
