@@ -216,6 +216,11 @@ export {
   keepNewestWithin,
   listPage,
   mailWorkMap,
+  mailWorkMapCooperative,
+  captureWindowMail,
+  projectWindowMail,
+  CooperativeWork,
+  cloneWindowValue,
   mapTopology,
   messagePage,
   pageBySeq,
@@ -228,7 +233,7 @@ export {
   WINDOW_TEXT_MAX,
   WINDOW_UNREAD_MAX,
 } from './work/context-pages.js';
-export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
+export type { CapturedWindowMail, CooperativeWorkOptions, CooperativeWorkStats, LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
@@ -347,6 +352,7 @@ export {
   workExists,
   workPaths,
   workVersion,
+  workIdentity,
   worksIndexPath,
 } from './work/store.js';
 export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
@@ -429,7 +435,7 @@ export {
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { collectHandover, formatHandover, HANDOVER_BUDGET } from './work/handover.js';
 export type { HandoverInput } from './work/handover.js';
-export { readWorks, watchWorks } from './work/works.js';
+export { captureWorks, readWorks, watchWorks } from './work/works.js';
 export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
   LINK_TOLERANCE_MS,

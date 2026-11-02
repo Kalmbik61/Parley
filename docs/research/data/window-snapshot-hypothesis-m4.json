@@ -1,0 +1,808 @@
+{
+  "kind": "M4 single dominant-hypothesis test; diagnostic, not final performance gate",
+  "generatedAt": "2026-11-01T14:32:44.383Z",
+  "node": "v22.23.3",
+  "samples": 8,
+  "warmup": 2,
+  "hypothesis": "Per-row JSON.stringify dominates; bounded native-array pages (14-row maximum, exact-byte check and recursive retry/split) with retained projected-object cache avoid eager per-row JSON cache. Dense output cache feeds subsequent sparse update. Per-row encodings remain unmaterialized because this delta path needs only changed objects; sparse re-encodes only its changed row. This does not measure full resync, cold snapshot, removals/order, other entities or later consumers needing per-row strings.",
+  "method": "Eight alternating forward/reverse chains across M3/native-array/full-reference, 2warmups, fresh cloned dense+sparse inputs prepared outside timing; dense next-cache is actual sparse baseline. CPU process.cpuUsage and elapsed performance.now measured separately per update, summed without correctness/clone waits. Exact decode/bounds/cache/count checks outside timing for every measured/warmup chain. No ELD; not a replacement for full paired gate. Full reference unbounded frame is hypothetical as in M1/M3.",
+  "summary": {
+    "m3": {
+      "dense": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 61.128,
+          "p95": 75.912,
+          "max": 75.912
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 65.995,
+          "p95": 115.551,
+          "max": 115.551
+        }
+      },
+      "sparse": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 8.687,
+          "p95": 9.514,
+          "max": 9.514
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 9.495,
+          "p95": 9.847,
+          "max": 9.847
+        }
+      },
+      "total": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 69.701,
+          "p95": 84.302,
+          "max": 84.302
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 75.22,
+          "p95": 125.159,
+          "max": 125.159
+        }
+      }
+    },
+    "nativeArray": {
+      "dense": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 44.811,
+          "p95": 49.578,
+          "max": 49.578
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 47.081,
+          "p95": 53.125,
+          "max": 53.125
+        }
+      },
+      "sparse": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 8.29,
+          "p95": 8.877,
+          "max": 8.877
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 8.971,
+          "p95": 10.577,
+          "max": 10.577
+        }
+      },
+      "total": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 52.975,
+          "p95": 58.222,
+          "max": 58.222
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 56.309,
+          "p95": 62.367,
+          "max": 62.367
+        }
+      }
+    },
+    "fullReference": {
+      "dense": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 36.271,
+          "p95": 46.031,
+          "max": 46.031
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 38.347,
+          "p95": 63.087,
+          "max": 63.087
+        }
+      },
+      "sparse": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 34.902,
+          "p95": 38.303,
+          "max": 38.303
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 35.669,
+          "p95": 38.602,
+          "max": 38.602
+        }
+      },
+      "total": {
+        "elapsedMs": {
+          "n": 8,
+          "p50": 71.518,
+          "p95": 81.44,
+          "max": 81.44
+        },
+        "processCpuMs": {
+          "n": 8,
+          "p50": 73.773,
+          "p95": 100.109,
+          "max": 100.109
+        }
+      }
+    }
+  },
+  "raw": {
+    "m3": [
+      {
+        "dense": {
+          "elapsedMs": 75.91212499999983,
+          "processCpuMs": 115.551,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.389458999999988,
+          "processCpuMs": 9.608,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 84.30158399999982,
+          "processCpuMs": 125.159
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 61.28741600000012,
+          "processCpuMs": 65.995,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.746334000000388,
+          "processCpuMs": 9.143,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 70.03375000000051,
+          "processCpuMs": 75.138
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 63.47204099999999,
+          "processCpuMs": 68.728,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.40374999999949,
+          "processCpuMs": 9.495,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 71.87579099999948,
+          "processCpuMs": 78.223
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 59.58654200000001,
+          "processCpuMs": 63.802,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.6865829999997,
+          "processCpuMs": 9.847,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 68.27312499999971,
+          "processCpuMs": 73.649
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 60.18724999999995,
+          "processCpuMs": 65.436,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 9.513750000000073,
+          "processCpuMs": 9.784,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 69.70100000000002,
+          "processCpuMs": 75.22000000000001
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 62.28129100000115,
+          "processCpuMs": 67.507,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.76166700000067,
+          "processCpuMs": 9.808,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 71.04295800000182,
+          "processCpuMs": 77.315
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 61.128333000000566,
+          "processCpuMs": 65.438,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.371166999999332,
+          "processCpuMs": 8.596,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 69.4994999999999,
+          "processCpuMs": 74.034
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 60.672207999999955,
+          "processCpuMs": 66.224,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891,
+          "encodedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "sparse": {
+          "elapsedMs": 8.979832999999417,
+          "processCpuMs": 9.237,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919,
+          "encodedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "retainedPerRowEncodedBytes": 26244170
+        },
+        "total": {
+          "elapsedMs": 69.65204099999937,
+          "processCpuMs": 75.461
+        }
+      }
+    ],
+    "nativeArray": [
+      {
+        "dense": {
+          "elapsedMs": 43.412417000000005,
+          "processCpuMs": 45.699,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.151292000000012,
+          "processCpuMs": 8.721,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 51.56370900000002,
+          "processCpuMs": 54.42
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 45.4799579999999,
+          "processCpuMs": 49.192,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.289707999999337,
+          "processCpuMs": 8.964,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 53.76966599999923,
+          "processCpuMs": 58.156
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 45.36958400000003,
+          "processCpuMs": 48.02,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.87708399999974,
+          "processCpuMs": 9.511,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 54.24666799999977,
+          "processCpuMs": 57.531000000000006
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 49.57833399999981,
+          "processCpuMs": 53.125,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.643417000000227,
+          "processCpuMs": 9.242,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 58.22175100000004,
+          "processCpuMs": 62.367000000000004
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 44.813624999999774,
+          "processCpuMs": 47.025,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.58349999999973,
+          "processCpuMs": 9.284,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 53.397124999999505,
+          "processCpuMs": 56.309
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 44.612709000000905,
+          "processCpuMs": 47.081,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 7.5558750000000146,
+          "processCpuMs": 8.173,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 52.16858400000092,
+          "processCpuMs": 55.254000000000005
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 44.077000000001135,
+          "processCpuMs": 46.356,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.395582999999533,
+          "processCpuMs": 8.971,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 52.47258300000067,
+          "processCpuMs": 55.327
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 44.81050000000141,
+          "processCpuMs": 47.84,
+          "changedRows": 3000,
+          "rowSerializationOccurrences": 3000,
+          "pageEncodeAttempts": 215,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 215,
+          "maxFrameBytes": 122786,
+          "totalFrameBytes": 26284891
+        },
+        "sparse": {
+          "elapsedMs": 8.164834000001065,
+          "processCpuMs": 10.577,
+          "changedRows": 1,
+          "rowSerializationOccurrences": 1,
+          "pageEncodeAttempts": 1,
+          "oversizedAttempts": 0,
+          "retrySerializedRows": 0,
+          "retainedPerRowEncodedBytes": 0,
+          "frames": 1,
+          "maxFrameBytes": 8919,
+          "totalFrameBytes": 8919
+        },
+        "total": {
+          "elapsedMs": 52.975334000002476,
+          "processCpuMs": 58.417
+        }
+      }
+    ],
+    "fullReference": [
+      {
+        "dense": {
+          "elapsedMs": 35.070374999999785,
+          "processCpuMs": 37.192,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 34.22024999999985,
+          "processCpuMs": 34.61,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 69.29062499999964,
+          "processCpuMs": 71.80199999999999
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 36.270666999999776,
+          "processCpuMs": 37.92,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 35.246834000000035,
+          "processCpuMs": 35.669,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 71.51750099999981,
+          "processCpuMs": 73.589
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 39.99958300000071,
+          "processCpuMs": 41.213,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 38.219874999999774,
+          "processCpuMs": 38.602,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 78.21945800000049,
+          "processCpuMs": 79.815
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 46.030917000000045,
+          "processCpuMs": 63.087,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 35.4087499999996,
+          "processCpuMs": 37.022,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 81.43966699999964,
+          "processCpuMs": 100.10900000000001
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 36.06629100000009,
+          "processCpuMs": 38.347,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 34.76337499999954,
+          "processCpuMs": 35.269,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 70.82966599999963,
+          "processCpuMs": 73.616
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 35.917958,
+          "processCpuMs": 37.631,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 38.30279099999916,
+          "processCpuMs": 38.214,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 74.22074899999916,
+          "processCpuMs": 75.845
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 40.00245800000084,
+          "processCpuMs": 54.87,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 34.90166599999975,
+          "processCpuMs": 36.193,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 74.90412400000059,
+          "processCpuMs": 91.06299999999999
+        }
+      },
+      {
+        "dense": {
+          "elapsedMs": 36.83112500000061,
+          "processCpuMs": 38.705,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "sparse": {
+          "elapsedMs": 34.63483399999859,
+          "processCpuMs": 35.068,
+          "frames": 1,
+          "maxFrameBytes": 26247883,
+          "totalFrameBytes": 26247883,
+          "rowSerializationOccurrences": 6000
+        },
+        "total": {
+          "elapsedMs": 71.4659589999992,
+          "processCpuMs": 73.773
+        }
+      }
+    ]
+  },
+  "fixtures": {
+    "retrySplit": {
+      "ok": true,
+      "changedRows": 14,
+      "rowSerializationOccurrences": 42,
+      "pageEncodeAttempts": 7,
+      "oversizedAttempts": 3,
+      "retrySerializedRows": 28,
+      "retainedPerRowEncodedBytes": 0,
+      "frames": 4,
+      "maxFrameBytes": 90510,
+      "totalFrameBytes": 316869
+    },
+    "oversizedRowRejected": {
+      "ok": true
+    }
+  }
+}

@@ -1,0 +1,1494 @@
+{
+  "kind": "One approved budget diagnostic: same native candidate 128vs512KiB, no production gate",
+  "generatedAt": "2026-11-01T14:51:47.945Z",
+  "node": "v22.23.3",
+  "cpu": "Apple M4 Pro",
+  "platform": "darwin-arm64",
+  "pairs": 8,
+  "warmupPairs": 2,
+  "yieldTargetMs": 4,
+  "method": "Eight alternating paired dense→single-task-edit chains for two caps (128KiB/14rows,512KiB/56rows). Same deterministic1w/3000 fixture; fresh cloned identical dense/sparse inputs outside timing. Actual dense next-cache feeds sparse. Same native bounded-array/object-cache transport and4ms scheduler; only cap/batch bound change. CPU process.cpuUsage user+system, completion performance.now includes yields. Fresh1ms ELD monitor per operation,5ms prime/reset, operation+setImmediate+2ms drain then disable; exact decoded-output/bounds validation after timing. Empirical-rank HDR distributions pooled across8operations/kind/cap; raw ranks retained. Small n8 diagnostic (p95=max for operation timings), no fullmatrix/final gate. Different ELD window/result retention from final100sample128 run: compare caps within this paired run only. Projection/object-cache/native batch remain uninterruptible; no forcedGC/IPC/renderer/service measurement.",
+  "assertions": {
+    "everyOutputDecodedExact": true,
+    "evolvingDenseToSparseCache": true,
+    "freshClones": true,
+    "actualFrameBounds": true,
+    "sparseNotPadded": true
+  },
+  "results": {
+    "131072": {
+      "budgetBytes": 131072,
+      "batchRows": 14,
+      "summary": {
+        "dense": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 45.599,
+            "p95": 51.389,
+            "max": 51.389
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 43.591,
+            "p95": 49.319,
+            "max": 49.319
+          },
+          "maxSyncSliceMs": {
+            "n": 8,
+            "p50": 4.253,
+            "p95": 4.935,
+            "max": 4.935
+          },
+          "yields": {
+            "n": 8,
+            "p50": 10,
+            "p95": 11,
+            "max": 11
+          },
+          "activeLoopDelayMs": {
+            "samples": 91,
+            "p50": 4.125,
+            "p95": 4.846,
+            "max": 5.366
+          },
+          "transport": {
+            "frames": 215,
+            "maxFrameBytes": 122786,
+            "totalFrameBytes": 26284891,
+            "changedRows": 3000,
+            "rowSerializationOccurrences": 3000,
+            "pageEncodeAttempts": 215,
+            "oversizedAttempts": 0,
+            "retrySerializedRows": 0,
+            "retainedPerRowEncodedBytes": 0,
+            "projectedRows": 3000,
+            "comparedRows": 3000,
+            "yields": 10
+          }
+        },
+        "sparse": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 7.76,
+            "p95": 8.855,
+            "max": 8.855
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 7.5,
+            "p95": 8.54,
+            "max": 8.54
+          },
+          "maxSyncSliceMs": {
+            "n": 8,
+            "p50": 4.008,
+            "p95": 4.024,
+            "max": 4.024
+          },
+          "yields": {
+            "n": 8,
+            "p50": 1,
+            "p95": 2,
+            "max": 2
+          },
+          "activeLoopDelayMs": {
+            "samples": 12,
+            "p50": 1.324,
+            "p95": 3.77,
+            "max": 4.145
+          },
+          "transport": {
+            "frames": 1,
+            "maxFrameBytes": 8919,
+            "totalFrameBytes": 8919,
+            "changedRows": 1,
+            "rowSerializationOccurrences": 1,
+            "pageEncodeAttempts": 1,
+            "oversizedAttempts": 0,
+            "retrySerializedRows": 0,
+            "retainedPerRowEncodedBytes": 0,
+            "projectedRows": 3000,
+            "comparedRows": 3000,
+            "yields": 2
+          }
+        },
+        "total": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 53.973,
+            "p95": 59.428,
+            "max": 59.428
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 51.738,
+            "p95": 57.096,
+            "max": 57.096
+          }
+        }
+      },
+      "raw": [
+        {
+          "pair": 1,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 49.081,
+            "completionMs": 47.32704199999989,
+            "maxSyncSliceMs": 4.177666000000045,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              1268735,
+              1801215,
+              2775039,
+              4087807,
+              4116479,
+              4126719,
+              4132863,
+              4134911,
+              4147199,
+              5132287,
+              5345279,
+              5365759
+            ],
+            "eldSamples": 12,
+            "activeLoopDelayMs": {
+              "p50": 4.127,
+              "p95": 5.345,
+              "max": 5.366
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.751,
+            "completionMs": 8.540166000000227,
+            "maxSyncSliceMs": 4.024208000000272,
+            "yields": 2,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 2
+            },
+            "eldRankSamplesNs": [
+              1765375
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.765,
+              "p95": 1.765,
+              "max": 1.765
+            }
+          },
+          "total": {
+            "processCpuMs": 57.832,
+            "completionMs": 55.86720800000012
+          }
+        },
+        {
+          "pair": 2,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 45.549,
+            "completionMs": 43.590999999999894,
+            "maxSyncSliceMs": 4.252707999999984,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              1133567,
+              1532927,
+              4077567,
+              4112383,
+              4134911,
+              4151295,
+              4163583,
+              4169727,
+              4171775,
+              4521983,
+              4710399
+            ],
+            "eldSamples": 11,
+            "activeLoopDelayMs": {
+              "p50": 4.151,
+              "p95": 4.522,
+              "max": 4.71
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.424,
+            "completionMs": 8.147208000000319,
+            "maxSyncSliceMs": 4.009625000000142,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1298431,
+              4145151
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.298,
+              "p95": 4.145,
+              "max": 4.145
+            }
+          },
+          "total": {
+            "processCpuMs": 53.973,
+            "completionMs": 51.73820800000021
+          }
+        },
+        {
+          "pair": 3,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 44.204,
+            "completionMs": 43.03062499999987,
+            "maxSyncSliceMs": 4.1704170000002705,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              929279,
+              1782783,
+              4052991,
+              4061183,
+              4069375,
+              4112383,
+              4114431,
+              4177919,
+              4192255,
+              4567039,
+              4599807
+            ],
+            "eldSamples": 11,
+            "activeLoopDelayMs": {
+              "p50": 4.112,
+              "p95": 4.567,
+              "max": 4.6
+            }
+          },
+          "sparse": {
+            "processCpuMs": 6.932,
+            "completionMs": 6.776749999999993,
+            "maxSyncSliceMs": 4.0160829999999805,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1307647,
+              2760703
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.308,
+              "p95": 2.761,
+              "max": 2.761
+            }
+          },
+          "total": {
+            "processCpuMs": 51.136,
+            "completionMs": 49.807374999999865
+          }
+        },
+        {
+          "pair": 4,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 45.599,
+            "completionMs": 43.533791999999266,
+            "maxSyncSliceMs": 4.765792000000147,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              962559,
+              1695743,
+              4038655,
+              4067327,
+              4077567,
+              4087807,
+              4112383,
+              4141055,
+              4143103,
+              4546559,
+              4599807
+            ],
+            "eldSamples": 11,
+            "activeLoopDelayMs": {
+              "p50": 4.088,
+              "p95": 4.547,
+              "max": 4.6
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.76,
+            "completionMs": 7.570208000000093,
+            "maxSyncSliceMs": 4.0046250000004875,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1313791
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.314,
+              "p95": 1.314,
+              "max": 1.314
+            }
+          },
+          "total": {
+            "processCpuMs": 53.358999999999995,
+            "completionMs": 51.10399999999936
+          }
+        },
+        {
+          "pair": 5,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 51.389,
+            "completionMs": 49.31866600000012,
+            "maxSyncSliceMs": 4.662207999999737,
+            "yields": 11,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 11
+            },
+            "eldRankSamplesNs": [
+              1560575,
+              4052991,
+              4087807,
+              4093951,
+              4108287,
+              4325375,
+              4669439,
+              4706303,
+              4722687,
+              5140479,
+              5148671
+            ],
+            "eldSamples": 11,
+            "activeLoopDelayMs": {
+              "p50": 4.325,
+              "p95": 5.14,
+              "max": 5.149
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.039,
+            "completionMs": 7.777665999999954,
+            "maxSyncSliceMs": 4.006542000000081,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1334271,
+              3770367
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.334,
+              "p95": 3.77,
+              "max": 3.77
+            }
+          },
+          "total": {
+            "processCpuMs": 59.428000000000004,
+            "completionMs": 57.096332000000075
+          }
+        },
+        {
+          "pair": 6,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 44.745,
+            "completionMs": 43.01408300000003,
+            "maxSyncSliceMs": 4.7056249999996,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              588799,
+              1707007,
+              4014079,
+              4052991,
+              4075519,
+              4153343,
+              4182015,
+              4186111,
+              4188159,
+              4251647,
+              4624383
+            ],
+            "eldSamples": 11,
+            "activeLoopDelayMs": {
+              "p50": 4.153,
+              "p95": 4.252,
+              "max": 4.624
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.386,
+            "completionMs": 7.252458999999362,
+            "maxSyncSliceMs": 4.020375000000058,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1324031
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.324,
+              "p95": 1.324,
+              "max": 1.324
+            }
+          },
+          "total": {
+            "processCpuMs": 52.131,
+            "completionMs": 50.26654199999939
+          }
+        },
+        {
+          "pair": 7,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 47.468,
+            "completionMs": 45.42166600000019,
+            "maxSyncSliceMs": 4.934750000000349,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              552447,
+              1270783,
+              2437119,
+              4032511,
+              4048895,
+              4087807,
+              4108287,
+              4114431,
+              4128767,
+              4173823,
+              4669439,
+              4702207
+            ],
+            "eldSamples": 12,
+            "activeLoopDelayMs": {
+              "p50": 4.088,
+              "p95": 4.669,
+              "max": 4.702
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.855,
+            "completionMs": 7.40258300000005,
+            "maxSyncSliceMs": 4.007625000000189,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1316863
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.317,
+              "p95": 1.317,
+              "max": 1.317
+            }
+          },
+          "total": {
+            "processCpuMs": 56.32300000000001,
+            "completionMs": 52.824249000000236
+          }
+        },
+        {
+          "pair": 8,
+          "budgetBytes": 131072,
+          "batchRows": 14,
+          "dense": {
+            "processCpuMs": 46.792,
+            "completionMs": 44.509791999999834,
+            "maxSyncSliceMs": 4.164541999999528,
+            "yields": 10,
+            "transport": {
+              "frames": 215,
+              "maxFrameBytes": 122786,
+              "totalFrameBytes": 26284891,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 215,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 10
+            },
+            "eldRankSamplesNs": [
+              462847,
+              1267711,
+              1595391,
+              4028415,
+              4124671,
+              4128767,
+              4134911,
+              4175871,
+              4175871,
+              4636671,
+              4665343,
+              4845567
+            ],
+            "eldSamples": 12,
+            "activeLoopDelayMs": {
+              "p50": 4.129,
+              "p95": 4.665,
+              "max": 4.846
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.731,
+            "completionMs": 7.500208000000384,
+            "maxSyncSliceMs": 4.005207999999584,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1316863,
+              3495935
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.317,
+              "p95": 3.496,
+              "max": 3.496
+            }
+          },
+          "total": {
+            "processCpuMs": 54.523,
+            "completionMs": 52.01000000000022
+          }
+        }
+      ]
+    },
+    "524288": {
+      "budgetBytes": 524288,
+      "batchRows": 56,
+      "summary": {
+        "dense": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 32.634,
+            "p95": 33.863,
+            "max": 33.863
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 31.133,
+            "p95": 32.91,
+            "max": 32.91
+          },
+          "maxSyncSliceMs": {
+            "n": 8,
+            "p50": 5.01,
+            "p95": 5.168,
+            "max": 5.168
+          },
+          "yields": {
+            "n": 8,
+            "p50": 7,
+            "p95": 7,
+            "max": 7
+          },
+          "activeLoopDelayMs": {
+            "samples": 57,
+            "p50": 4.182,
+            "p95": 5.034,
+            "max": 5.19
+          },
+          "transport": {
+            "frames": 54,
+            "maxFrameBytes": 490328,
+            "totalFrameBytes": 26256601,
+            "changedRows": 3000,
+            "rowSerializationOccurrences": 3000,
+            "pageEncodeAttempts": 54,
+            "oversizedAttempts": 0,
+            "retrySerializedRows": 0,
+            "retainedPerRowEncodedBytes": 0,
+            "projectedRows": 3000,
+            "comparedRows": 3000,
+            "yields": 6
+          }
+        },
+        "sparse": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 8.732,
+            "p95": 9.072,
+            "max": 9.072
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 7.582,
+            "p95": 8.501,
+            "max": 8.501
+          },
+          "maxSyncSliceMs": {
+            "n": 8,
+            "p50": 4.014,
+            "p95": 4.032,
+            "max": 4.032
+          },
+          "yields": {
+            "n": 8,
+            "p50": 1,
+            "p95": 1,
+            "max": 1
+          },
+          "activeLoopDelayMs": {
+            "samples": 14,
+            "p50": 1.321,
+            "p95": 3.68,
+            "max": 4.485
+          },
+          "transport": {
+            "frames": 1,
+            "maxFrameBytes": 8919,
+            "totalFrameBytes": 8919,
+            "changedRows": 1,
+            "rowSerializationOccurrences": 1,
+            "pageEncodeAttempts": 1,
+            "oversizedAttempts": 0,
+            "retrySerializedRows": 0,
+            "retainedPerRowEncodedBytes": 0,
+            "projectedRows": 3000,
+            "comparedRows": 3000,
+            "yields": 1
+          }
+        },
+        "total": {
+          "processCpuMs": {
+            "n": 8,
+            "p50": 40.807,
+            "p95": 42.935,
+            "max": 42.935
+          },
+          "completionMs": {
+            "n": 8,
+            "p50": 38.496,
+            "p95": 40.545,
+            "max": 40.545
+          }
+        }
+      },
+      "raw": [
+        {
+          "pair": 1,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 32.634,
+            "completionMs": 30.68837500000018,
+            "maxSyncSliceMs": 5.060959000000366,
+            "yields": 6,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 6
+            },
+            "eldRankSamplesNs": [
+              1338367,
+              3547135,
+              4132863,
+              4255743,
+              4259839,
+              5087231
+            ],
+            "eldSamples": 6,
+            "activeLoopDelayMs": {
+              "p50": 4.133,
+              "p95": 5.087,
+              "max": 5.087
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.992,
+            "completionMs": 7.699750000000222,
+            "maxSyncSliceMs": 4.0225829999999405,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1313791,
+              3680255
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.314,
+              "p95": 3.68,
+              "max": 3.68
+            }
+          },
+          "total": {
+            "processCpuMs": 40.626,
+            "completionMs": 38.3881250000004
+          }
+        },
+        {
+          "pair": 2,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 33.863,
+            "completionMs": 32.444584000000305,
+            "maxSyncSliceMs": 5.133416000000125,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1077247,
+              1538047,
+              4081663,
+              4169727,
+              4179967,
+              4227071,
+              4284415,
+              4841471
+            ],
+            "eldSamples": 8,
+            "activeLoopDelayMs": {
+              "p50": 4.17,
+              "p95": 4.841,
+              "max": 4.841
+            }
+          },
+          "sparse": {
+            "processCpuMs": 9.072,
+            "completionMs": 7.6932919999999285,
+            "maxSyncSliceMs": 4.028290999999626,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1306623
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.307,
+              "p95": 1.307,
+              "max": 1.307
+            }
+          },
+          "total": {
+            "processCpuMs": 42.935,
+            "completionMs": 40.13787600000023
+          }
+        },
+        {
+          "pair": 3,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 32.364,
+            "completionMs": 31.13304100000005,
+            "maxSyncSliceMs": 5.009583999999904,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1342463,
+              4153343,
+              4268031,
+              4284415,
+              4395007,
+              4616191,
+              5033983
+            ],
+            "eldSamples": 7,
+            "activeLoopDelayMs": {
+              "p50": 4.284,
+              "p95": 5.034,
+              "max": 5.034
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.637,
+            "completionMs": 7.362959000000046,
+            "maxSyncSliceMs": 4.014165999999932,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1298431,
+              3348479
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.298,
+              "p95": 3.348,
+              "max": 3.348
+            }
+          },
+          "total": {
+            "processCpuMs": 40.001,
+            "completionMs": 38.496000000000095
+          }
+        },
+        {
+          "pair": 4,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 31.911,
+            "completionMs": 30.635290999999597,
+            "maxSyncSliceMs": 5.165417000000161,
+            "yields": 6,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 6
+            },
+            "eldRankSamplesNs": [
+              1302527,
+              3557375,
+              4122623,
+              4128767,
+              4218879,
+              4800511,
+              5189631
+            ],
+            "eldSamples": 7,
+            "activeLoopDelayMs": {
+              "p50": 4.129,
+              "p95": 5.19,
+              "max": 5.19
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.896,
+            "completionMs": 7.58166700000038,
+            "maxSyncSliceMs": 4.0092500000000655,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1313791,
+              3559423
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.314,
+              "p95": 3.559,
+              "max": 3.559
+            }
+          },
+          "total": {
+            "processCpuMs": 40.807,
+            "completionMs": 38.21695799999998
+          }
+        },
+        {
+          "pair": 5,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 31.876,
+            "completionMs": 30.56658299999981,
+            "maxSyncSliceMs": 4.763541000000259,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1328127,
+              4159487,
+              4222975,
+              4247551,
+              4530175,
+              4788223
+            ],
+            "eldSamples": 6,
+            "activeLoopDelayMs": {
+              "p50": 4.223,
+              "p95": 4.788,
+              "max": 4.788
+            }
+          },
+          "sparse": {
+            "processCpuMs": 7.858,
+            "completionMs": 7.4783330000000205,
+            "maxSyncSliceMs": 4.0318340000003445,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1295359,
+              3446783
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.295,
+              "p95": 3.447,
+              "max": 3.447
+            }
+          },
+          "total": {
+            "processCpuMs": 39.734,
+            "completionMs": 38.04491599999983
+          }
+        },
+        {
+          "pair": 6,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 33.033,
+            "completionMs": 31.64008399999966,
+            "maxSyncSliceMs": 5.167833000000428,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1342463,
+              4028415,
+              4182015,
+              4239359,
+              4956159,
+              5017599,
+              5189631
+            ],
+            "eldSamples": 7,
+            "activeLoopDelayMs": {
+              "p50": 4.239,
+              "p95": 5.19,
+              "max": 5.19
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.822,
+            "completionMs": 7.398083000000042,
+            "maxSyncSliceMs": 4.006833999999799,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1311743
+            ],
+            "eldSamples": 1,
+            "activeLoopDelayMs": {
+              "p50": 1.312,
+              "p95": 1.312,
+              "max": 1.312
+            }
+          },
+          "total": {
+            "processCpuMs": 41.855000000000004,
+            "completionMs": 39.0381669999997
+          }
+        },
+        {
+          "pair": 7,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 32.89,
+            "completionMs": 31.400666999999885,
+            "maxSyncSliceMs": 4.225875000000087,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1299455,
+              1875967,
+              4110335,
+              4134911,
+              4175871,
+              4214783,
+              4251647,
+              4640767
+            ],
+            "eldSamples": 8,
+            "activeLoopDelayMs": {
+              "p50": 4.135,
+              "p95": 4.641,
+              "max": 4.641
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.919,
+            "completionMs": 8.500541999999768,
+            "maxSyncSliceMs": 4.022667000000183,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1338367,
+              4485119
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.338,
+              "p95": 4.485,
+              "max": 4.485
+            }
+          },
+          "total": {
+            "processCpuMs": 41.809,
+            "completionMs": 39.90120899999965
+          }
+        },
+        {
+          "pair": 8,
+          "budgetBytes": 524288,
+          "batchRows": 56,
+          "dense": {
+            "processCpuMs": 33.325,
+            "completionMs": 32.9097499999998,
+            "maxSyncSliceMs": 4.969375000000582,
+            "yields": 7,
+            "transport": {
+              "frames": 54,
+              "maxFrameBytes": 490328,
+              "totalFrameBytes": 26256601,
+              "changedRows": 3000,
+              "rowSerializationOccurrences": 3000,
+              "pageEncodeAttempts": 54,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 7
+            },
+            "eldRankSamplesNs": [
+              1298431,
+              2445311,
+              4073471,
+              4075519,
+              4179967,
+              4296703,
+              4395007,
+              4485119
+            ],
+            "eldSamples": 8,
+            "activeLoopDelayMs": {
+              "p50": 4.076,
+              "p95": 4.485,
+              "max": 4.485
+            }
+          },
+          "sparse": {
+            "processCpuMs": 8.732,
+            "completionMs": 7.635583000000224,
+            "maxSyncSliceMs": 4.007665999999517,
+            "yields": 1,
+            "transport": {
+              "frames": 1,
+              "maxFrameBytes": 8919,
+              "totalFrameBytes": 8919,
+              "changedRows": 1,
+              "rowSerializationOccurrences": 1,
+              "pageEncodeAttempts": 1,
+              "oversizedAttempts": 0,
+              "retrySerializedRows": 0,
+              "retainedPerRowEncodedBytes": 0,
+              "projectedRows": 3000,
+              "comparedRows": 3000,
+              "yields": 1
+            },
+            "eldRankSamplesNs": [
+              1320959,
+              3620863
+            ],
+            "eldSamples": 2,
+            "activeLoopDelayMs": {
+              "p50": 1.321,
+              "p95": 3.621,
+              "max": 3.621
+            }
+          },
+          "total": {
+            "processCpuMs": 42.057,
+            "completionMs": 40.54533300000003
+          }
+        }
+      ]
+    }
+  },
+  "retryFixtures": {
+    "131072": {
+      "ok": true,
+      "frames": 4,
+      "maxFrameBytes": 90541,
+      "totalFrameBytes": 316920,
+      "changedRows": 14,
+      "rowSerializationOccurrences": 42,
+      "pageEncodeAttempts": 7,
+      "oversizedAttempts": 3,
+      "retrySerializedRows": 28,
+      "retainedPerRowEncodedBytes": 0,
+      "projectedRows": 14,
+      "comparedRows": 14,
+      "yields": 0
+    },
+    "524288": {
+      "ok": true,
+      "frames": 4,
+      "maxFrameBytes": 316437,
+      "totalFrameBytes": 1265531,
+      "changedRows": 56,
+      "rowSerializationOccurrences": 168,
+      "pageEncodeAttempts": 7,
+      "oversizedAttempts": 3,
+      "retrySerializedRows": 112,
+      "retainedPerRowEncodedBytes": 0,
+      "projectedRows": 56,
+      "comparedRows": 56,
+      "yields": 1
+    }
+  }
+}

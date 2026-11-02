@@ -13,6 +13,7 @@ import {
   NOTIFICATIONS,
   PROTOCOL_VERSION,
   ROOMS_MAIL_FEATURE,
+  WORKS_SYNC_FEATURE,
   encodeLine,
 } from '@parley/protocol';
 import { REMOTE_EVENTS, REMOTE_METHODS, REMOTE_POLICY_FEATURE } from '@parley/protocol/remote';
@@ -182,7 +183,8 @@ describe('уведомления', () => {
 });
 
 /** Все методы и уведомления протокола — то, что понимает хост этой сборки. */
-const protocolMethods = (): string[] => [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
+// works.sync остаётся opt-in до принятия P7; обычный хост его не регистрирует.
+const protocolMethods = (): string[] => [...Object.keys(METHODS).filter(name => name !== 'works.sync' && name !== 'works.mailState'), ...Object.keys(NOTIFICATIONS)].sort();
 
 describe('список методов в hello', () => {
   it('advertises a registered feed.progress handler and validates its strict params', async () => {
@@ -201,7 +203,7 @@ describe('список методов в hello', () => {
     client.close();
   });
 
-  it('methods — ровно отсортированные ключи METHODS и NOTIFICATIONS, hello среди них', async () => {
+  it('methods — отсортированные обычные METHODS и NOTIFICATIONS, works.sync до P7 выключен', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);
     await waitConnected(client.socket);
@@ -209,6 +211,9 @@ describe('список методов в hello', () => {
     const response = await hello(client, token);
     const methods = (response.result as { methods: string[] }).methods;
     expect(methods).toEqual(protocolMethods());
+    expect(methods).not.toContain('works.sync');
+    expect(methods).not.toContain('works.mailState');
+    expect((response.result as { features: string[] }).features).not.toContain(WORKS_SYNC_FEATURE);
     expect(methods).toContain('hello');
     expect(methods).toContain('works.rename');
     expect(methods).toContain('works.setStatus');

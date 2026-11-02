@@ -354,23 +354,30 @@ function versionOf(db: DatabaseSync, projectPath: string, workId: string): numbe
  * читатель узнаёт, что его копия карты устарела (спека хранилища 6.9). Версию берут до чтения карты: запись между ними
  * даст запоздавший ключ и лишнюю загрузку, а не устаревшую карту под свежим ключом.
  */
+/** Версия и устойчивый номер создания из одной строки/снимка. */
+export function workIdentity(projectPath: string, workId: string): { version: number; incarnation: number } | undefined {
+  const row = sql(storeDb(), 'SELECT version, incarnation FROM works WHERE project_path = ? AND id = ?').get(projectPath, workId);
+  return row === undefined ? undefined : { version: Number(row['version']), incarnation: Number(row['incarnation']) };
+}
+
 export function workVersion(projectPath: string, workId: string): number | undefined {
   return versionOf(storeDb(), projectPath, workId);
 }
 
 /**
- * Личность работы для ожидания (спека хранилища 6.9): версия строки текстом, `null` — работы в базе нет. Файла карты,
+ * Личность работы для ожидания: устойчивый номер создания и версия строки текстом, `null` — работы в базе нет. Файла карты,
  * по `stat` которого ожидание узнавало запись, больше нет; версию растит каждая запись любого процесса, и один запрос по
  * ключу строки дешевле разбора карты, так что ею можно сверяться на каждом тике опроса.
  */
 export function workVersionKey(projectPath: string, workId: string): string | null {
-  const version = workVersion(projectPath, workId);
-  return version === undefined ? null : `${version}`;
+  const identity = workIdentity(projectPath, workId);
+  return identity === undefined ? null : `${identity.incarnation}:${identity.version}`;
 }
 
 /** То, что лежит в базе про одну работу: версия, запись работы, `extra` и строки списков. */
 interface Stored {
   version: number;
+  incarnation: number;
   work: string;
   extra: string;
   rows: StoredRow[];
@@ -381,7 +388,7 @@ function loadStored(db: DatabaseSync, projectPath: string, workId: string): Stor
   return readTransaction(db, () => {
     const head = sql(
       db,
-      'SELECT version, work_json, extra_json FROM works WHERE project_path = ? AND id = ?',
+      'SELECT version, incarnation, work_json, extra_json FROM works WHERE project_path = ? AND id = ?',
     ).get(projectPath, workId);
     if (head === undefined) return undefined;
     const rows = sql(
@@ -390,6 +397,7 @@ function loadStored(db: DatabaseSync, projectPath: string, workId: string): Stor
     ).all(projectPath, workId) as unknown as StoredRow[];
     return {
       version: Number(head['version']),
+      incarnation: Number(head['incarnation']),
       work: String(head['work_json']),
       extra: String(head['extra_json']),
       rows,
@@ -415,6 +423,7 @@ export const MAP_CACHE_LIMIT = 32;
 
 interface CachedMap {
   version: number;
+  incarnation: number;
   map: WorkMap;
   work: string;
   extra: string;
@@ -444,9 +453,9 @@ export function storeDb(): DatabaseSync {
 }
 
 /** Запись кэша, если версия в базе всё та же; иначе `undefined`. Попадания и промахи считаются здесь. */
-function cachedEntry(key: string, version: number): CachedMap | undefined {
+function cachedEntry(key: string, version: number, incarnation: number): CachedMap | undefined {
   const entry = mapCache.get(key);
-  if (entry === undefined || entry.version !== version) {
+  if (entry === undefined || entry.version !== version || entry.incarnation !== incarnation) {
     mapCacheMisses += 1;
     return undefined;
   }
@@ -486,6 +495,8 @@ export function storedMapBytes(projectPath: string, workId: string): number | un
  * письмами такая запись не разбирается, подписчик обязан пересчитать всё.
  */
 export interface MapWrittenEvent {
+  /** Захвачена внутри записавшей транзакции; не перечитывается после коммита. */
+  incarnation?: number;
   projectPath: string;
   workId: string;
   version: number;
@@ -545,13 +556,14 @@ export function workDataVersion(): number {
 }
 
 /** Версии всех работ базы одним запросом: после чужой записи хост сверяет их с прошлым снимком (спека хранилища 6.9). */
-export function listWorkVersions(): Array<{ projectPath: string; id: string; version: number }> {
-  return sql(storeDb(), 'SELECT project_path, id, version FROM works')
+export function listWorkVersions(): Array<{ projectPath: string; id: string; version: number; incarnation: number }> {
+  return sql(storeDb(), 'SELECT project_path, id, version, incarnation FROM works')
     .all()
     .map((row) => ({
       projectPath: String(row['project_path']),
       id: String(row['id']),
       version: Number(row['version']),
+      incarnation: Number(row['incarnation']),
     }));
 }
 
@@ -605,9 +617,9 @@ export function replaceStoredMap(projectPath: string, workId: string, data: unkn
       projectPath,
       workId,
     );
-    return Number(updated?.['version']);
+    return { version: Number(updated?.['version']), incarnation: workIdentity(projectPath, workId)!.incarnation };
   });
-  emitMapWritten({ projectPath, workId, version });
+  emitMapWritten({ projectPath, workId, ...version });
 }
 
 /**
@@ -643,9 +655,9 @@ export function insertMigratedMap(
     }
     replaceLetters(db, projectPath, workId, map);
     check();
-    return at;
+    return { version: at, incarnation: workIdentity(projectPath, workId)!.incarnation };
   });
-  emitMapWritten({ projectPath, workId, version });
+  emitMapWritten({ projectPath, workId, ...version });
 }
 
 /**
@@ -678,12 +690,13 @@ export function viewMap<T>(projectPath: string, workId: string, read: (map: Read
 function loadMap(projectPath: string, workId: string, copy: boolean): WorkMap {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
-  const version = versionOf(db, projectPath, workId);
+  const identity = workIdentity(projectPath, workId);
+  const version = identity?.version;
   if (version === undefined) {
     mapCache.delete(key);
     throw notFound(projectPath, workId);
   }
-  const cached = cachedEntry(key, version);
+  const cached = cachedEntry(key, version, identity!.incarnation);
   if (cached !== undefined) return copy ? structuredClone(cached.map) : cached.map;
   // Версию в запись кэша берём из той же загрузки, что и строки: запись между запросами не перепутает их.
   const stored = loadStored(db, projectPath, workId);
@@ -697,6 +710,7 @@ function loadMap(projectPath: string, workId: string, copy: boolean): WorkMap {
   );
   rememberMap(key, {
     version: stored.version,
+    incarnation: stored.incarnation,
     map,
     work: stored.work,
     extra: stored.extra,
@@ -901,8 +915,8 @@ export async function createWork(
     while (existsSync(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
     const rows = mapToRows(map);
-    // Версия новой работы — часы, а не 0: удалённый и созданный заново id (`nextWorkId` берёт максимум по базе) иначе
-    // совпал бы с версией в кэше другого процесса, и тот отдал бы карту прежней работы (спека хранилища 6.9).
+    // Числовая версия остаётся совместимой с прежними читателями. Личность новой работы
+    // назначает INSERT trigger: часы могут совпасть с удалённой работой или оказаться ниже её версии.
     const version = Date.now();
     try {
       sql(db, INSERT_WORK).run(
@@ -927,7 +941,7 @@ export async function createWork(
     const paths = workPaths(projectPath, id);
     mkdirSync(paths.briefs, { recursive: true });
     mkdirSync(paths.artifacts, { recursive: true });
-    return { workId: id, version };
+    return { workId: id, version, incarnation: workIdentity(projectPath, id)!.incarnation };
   });
   emitMapWritten({ projectPath, ...created });
   return map;
@@ -1015,7 +1029,8 @@ export function applyMapUpdate(
   const source = mapSource(projectPath, workId);
 
   const written = writeTransaction(db, lockTimeoutMs, () => {
-    const stored = versionOf(db, projectPath, workId);
+    const identity = workIdentity(projectPath, workId);
+    const stored = identity?.version;
     if (stored === undefined) {
       mapCache.delete(key);
       throw notFound(projectPath, workId);
@@ -1023,7 +1038,7 @@ export function applyMapUpdate(
     // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, после записи ниже кэш получит новую.
     let current: WorkMap;
     let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
-    const hit = cachedEntry(key, stored);
+    const hit = cachedEntry(key, stored, identity!.incarnation);
     if (hit !== undefined) {
       mapCache.delete(key);
       current = hit.map;
@@ -1082,6 +1097,7 @@ export function applyMapUpdate(
       current,
       next,
       version: Number(updated?.['version']),
+      incarnation: identity!.incarnation,
       prevVersion: stored,
       structural,
       journal: journal(),
@@ -1102,6 +1118,7 @@ export function applyMapUpdate(
       : normalizeMap(rowsToMap(written.next.work, written.next.extra, written.next.rows), source);
     rememberMap(key, {
       version: written.version,
+      incarnation: written.incarnation,
       map,
       work: written.next.work,
       extra: written.next.extra,
@@ -1115,6 +1132,7 @@ export function applyMapUpdate(
     projectPath,
     workId,
     version: written.version,
+    incarnation: written.incarnation,
     prevVersion: written.prevVersion,
     structural: written.structural,
     journal: written.journal,

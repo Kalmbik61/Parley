@@ -1,7 +1,6 @@
 /**
- * Список работ: старт — `works.list`, дальше живые изменения по `works.changed`
- * (кусок 1.10 плана окна). Хранилище держит последний снимок целиком — работ
- * немного, точечных патчей хост не присылает.
+ * Список работ: legacy — `works.list`/`works.changed`; opt-in sync — bounded batches
+ * и атомарный commit общего reducer. Production activation остаётся отдельной задачей P4/P7.
  *
  * Снимок компактный (P35): письма комнаты — хвостом, старше — страницами (`addMessages`). Снимок несёт номер
  * `revision`, и применяется только новее уже применённого: поздно пришедший ответ `works.list` не откатывает
@@ -31,12 +30,12 @@
 
 import { create } from 'zustand';
 import type { Message, WindowWorkEntry } from '@parley/core';
-import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type WorksSnapshot } from '@parley/protocol';
+import { ROOMS_MAIL_FEATURE, WorksSyncReducer, WorksMailStateAssembler, type WorksMailState, type WorksSyncSurfaceStatus, type RoomsMailEvent, type WorksSnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
-import { decodeIpcError } from '../../shared/ipc-error.js';
+import { decodeIpcError, encodeIpcError } from '../../shared/ipc-error.js';
 import { hostFeatures } from '../lib/capabilities.js';
 import { heldRanges, keepHeld, withMail, withMessages } from '../lib/window-merge.js';
-import { followRoom, heldPolicy, openRoom, repairWork, rereadRoom, stopOpenRetries } from './room-pages.js';
+import { invalidateWorkPages, followRoom, heldPolicy, openRoom, repairWork, rereadRoom, retireWorkPages, stopOpenRetries } from './room-pages.js';
 
 export { WINDOW_ROOM_KEEP, keepHeld } from '../lib/window-merge.js';
 
@@ -58,7 +57,12 @@ export interface WorksState {
   ready: boolean;
   error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
-  init: (bridge: Pick<ParleyBridge, 'call' | 'on' | 'onStatus'>) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'call' | 'on' | 'onStatus'> & Partial<Pick<ParleyBridge, 'worksSync'>>, options?: { sync?: boolean }) => () => void;
+  syncStatus: WorksSyncSurfaceStatus | null;
+  retrySync: () => void;
+  /** Потерянное звено очереди требует authoritative mail repair после коммита. */
+  mailRepairPending: number;
+  mailRepairFailed: boolean;
   /** Письма, пришедшие страницей (`context.messages`), встают в карту работы по номеру. */
   addMessages: (projectPath: string, workId: string, messages: readonly Message[]) => void;
   /**
@@ -79,6 +83,7 @@ const WAITING_WORKS_MAX = 16;
 /** Отступ после сбоя починки работы: первый, удвоение за каждый сбой подряд, потолок. Успешная починка счёт обнуляет. */
 const REPAIR_BACKOFF_MS = 1000;
 const REPAIR_BACKOFF_MAX_MS = 30_000;
+const MAIL_REPAIR_CONCURRENCY = 1;
 
 /** Починки одной работы (`init`): одна в пути, остальные разрывы помнятся флагом, после сбоя — отступ. */
 interface RepairState {
@@ -90,6 +95,13 @@ interface RepairState {
   failures: number;
   /** Отступ после сбоя: до его конца новая починка не стартует. */
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+interface MailRepairState {
+  running: boolean;
+  failures: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  captured?: WorksMailState;
 }
 
 const mailKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
@@ -124,7 +136,16 @@ export const useWorksStore = create<WorksState>((set, get) => ({
   loading: true,
   ready: false,
   error: null,
-  init: (bridge) => {
+  syncStatus: null,
+  retrySync: () => {},
+  mailRepairPending: 0,
+  mailRepairFailed: false,
+  init: (bridge, options = {}) => {
+    const sync = options.sync === true;
+    const surface = sync ? bridge.worksSync : undefined;
+    if (sync && surface === undefined) throw new Error('works sync bridge unavailable');
+    const reducer = new WorksSyncReducer();
+    let consumerFailed = false;
     let disposed = false;
     let applied = -1;
     /**
@@ -133,14 +154,186 @@ export const useWorksStore = create<WorksState>((set, get) => ({
      * цена — одна лишняя починка.
      */
     const held = new Map<string, number>();
+    // Покрытие структуры берётся только из committed entry.version, никогда из писем/глобальной revision.
+    const structural = new Map<string, number>();
+    const lives = new Map<string, object>();
+    const appliedMail = new Map<string, number>();
+    const openRepairs = new Map<string, Set<{ failed: boolean; retry(): void }>>();
+    const mailFloors = new Map<string, number>();
+    const sourceEntries = new Map<string, WindowWorkEntry>();
+    const mailRepairs = new Map<string, MailRepairState>();
+    let mailRunning = 0;
+    let mailConnectionFailed = false;
+    const knownMail = (key: string): number | undefined => {
+      const version = Math.max(held.get(key) ?? -1, sync ? appliedMail.get(key) ?? -1 : -1);
+      return version < 0 ? undefined : version;
+    };
+    let acceptingMail = !sync;
+    const repairAfterCommit = new Set<string>();
+    let repairAllAfterCommit = false;
+    const rangePending = (state: RepairState): boolean => state.running || state.again || state.timer !== null;
+    const pendingRepairs = (): number => {
+      const keys = new Set([...repairAfterCommit, ...openRepairs.keys()]);
+      if (sync) for (const [key, state] of repairs) if (lives.has(key) && rangePending(state)) keys.add(key);
+      return keys.size + Number(repairAllAfterCommit);
+    };
+    const publishRepairs = (): void => {
+      if (pendingRepairs() === 0) mailConnectionFailed = false;
+      if (!disposed) set({ mailRepairPending: pendingRepairs(),
+        mailRepairFailed: pendingRepairs() > 0 && (mailConnectionFailed || [...mailRepairs.values()].some(state => state.failures > 0)
+          || [...openRepairs.values()].some(jobs => [...jobs].some(job => job.failed))
+          || (sync && [...repairs.values()].some(state => state.failures > 0 && rangePending(state)))) });
+    };
+    const markRepair = (key: string, minimum?: number): void => {
+      // Неограниченный поток неизвестных work IDs не расширяет память сверх committed карты.
+      if (lives.has(key)) {
+        repairAfterCommit.add(key);
+        if (minimum !== undefined) mailFloors.set(key, Math.max(mailFloors.get(key) ?? 0, minimum));
+      }
+      else repairAllAfterCommit = true;
+      publishRepairs();
+      pumpMail();
+    };
     /** События, что ждут снимка своей работы (или комнаты в нём), в порядке прихода: следующее не обгоняет первое. */
     const waiting = new Map<string, RoomsMailEvent[]>();
     const repairs = new Map<string, RepairState>();
     // Новое подключение — возможно, к только что запущенному хосту: готовность считается заново.
-    set({ ready: false });
+    set({ ready: false, ...(sync ? { loading: true } : {}), syncStatus: null, mailRepairPending: 0, mailRepairFailed: false, retrySync: () => {} });
+
+    const guardedBridge = (entry: WindowWorkEntry): Pick<ParleyBridge, 'call'> => {
+      const key = mailKey(entry.projectPath, entry.map.work.id);
+      const life = lives.get(key);
+      const alive = (): boolean => !disposed && life !== undefined && lives.get(key) === life;
+      const expired = (): Error => encodeIpcError({ code: 'not_found', message: 'work lifetime ended' });
+      return { call: async (method, params) => {
+        if (!alive()) throw expired();
+        try {
+          const result = await bridge.call(method, params);
+          if (!alive()) throw expired();
+          return result;
+        } catch (error) {
+          if (!alive()) throw expired();
+          throw error;
+        }
+      } };
+    };
+    const forget = (key: string): void => {
+      const [projectPath, workId] = key.split('\u0000');
+      if (projectPath !== undefined && workId !== undefined) retireWorkPages(projectPath, workId);
+      held.delete(key);
+      appliedMail.delete(key);
+      mailFloors.delete(key);
+      sourceEntries.delete(key);
+      const mailRepair = mailRepairs.get(key);
+      if (mailRepair?.timer) clearTimeout(mailRepair.timer);
+      mailRepairs.delete(key);
+      structural.delete(key);
+      lives.delete(key);
+      openRepairs.delete(key);
+      waiting.delete(key);
+      repairAfterCommit.delete(key);
+      const repair = repairs.get(key);
+      if (repair?.timer) clearTimeout(repair.timer);
+      repairs.delete(key);
+    };
 
     const find = (key: string): WindowWorkEntry | undefined =>
       get().entries.find((entry) => mailKey(entry.projectPath, entry.map.work.id) === key);
+
+    const cancelMail = (): void => {
+      for (const state of mailRepairs.values()) if (state.timer) clearTimeout(state.timer);
+      mailRepairs.clear();
+    };
+    const abandonReads = (): void => {
+      acceptingMail = false;
+      structural.clear();
+      lives.clear();
+      openRepairs.clear();
+      cancelMail();
+      for (const state of repairs.values()) if (state.timer) clearTimeout(state.timer);
+      repairs.clear();
+      set({ ready: false });
+    };
+    const retryMail = (key: string, state: MailRepairState): void => {
+      if (disposed || mailRepairs.get(key) !== state || state.timer !== null) return;
+      state.failures += 1;
+      publishRepairs();
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        pumpMail();
+      }, Math.min(REPAIR_BACKOFF_MS * 2 ** Math.min(state.failures - 1, 5), REPAIR_BACKOFF_MAX_MS));
+    };
+    const publishMail = (key: string, state: MailRepairState): boolean => {
+      const value = state.captured;
+      if (value === undefined) return false;
+      const coverage = structural.get(key);
+      if (coverage === undefined || coverage < value.requiredStructuralVersion) return false;
+      if (value.sourceVersion < Math.max(knownMail(key) ?? 0, mailFloors.get(key) ?? 0)) {
+        delete state.captured;
+        retryMail(key, state);
+        return false;
+      }
+      if (state.timer) clearTimeout(state.timer);
+      held.set(key, value.sourceVersion);
+      appliedMail.set(key, value.sourceVersion);
+      repairAfterCommit.delete(key);
+      mailFloors.delete(key);
+      mailRepairs.delete(key);
+      set(current => ({ entries: current.entries.map(entry => {
+        if (mailKey(entry.projectPath, entry.map.work.id) !== key) return entry;
+        const prior = entry.map.compact;
+        return { ...entry, map: { ...entry.map, compact: { version: 2,
+          cut: prior?.cut ?? [], omitted: prior?.omitted ?? {}, ...value.mail } } };
+      }) }));
+      publishRepairs();
+      return true;
+    };
+    function pumpMail(): void {
+      if (!sync || disposed || !acceptingMail || consumerFailed) return;
+      for (const key of repairAfterCommit) {
+        const entry = find(key);
+        const life = lives.get(key);
+        const epoch = reducer.view.epoch;
+        if (entry === undefined || life === undefined || epoch === null) continue;
+        let state = mailRepairs.get(key);
+        if (state === undefined) {
+          state = { running: false, failures: 0, timer: null };
+          mailRepairs.set(key, state);
+        }
+        if (state.running) continue;
+        if (state.captured !== undefined) {
+          if (!publishMail(key, state) && state.captured !== undefined) retryMail(key, state);
+          continue;
+        }
+        if (state.timer !== null || mailRunning >= MAIL_REPAIR_CONCURRENCY) continue;
+        const job = state;
+        const alive = (): boolean => !disposed && lives.get(key) === life && mailRepairs.get(key) === job && reducer.view.epoch === epoch;
+        job.running = true;
+        mailRunning += 1;
+        void (async () => {
+          const workKey = { projectPath: entry.projectPath, workId: entry.map.work.id };
+          const assembler = new WorksMailStateAssembler({ epoch, key: workKey });
+          let cursor: string | undefined;
+          while (alive()) {
+            const result = await bridge.call('works.mailState', { ...workKey, ...(cursor === undefined ? {} : { cursor }) });
+            if (!alive()) return;
+            if (result.kind === 'mail-unavailable') throw new Error(`mail state unavailable: ${result.reason}`);
+            const outcome = assembler.applyPage(result);
+            if (outcome.state === 'rejected') throw new Error(outcome.reason);
+            if (outcome.state === 'committed') {
+              job.captured = outcome.value;
+              if (!publishMail(key, job) && job.captured !== undefined) retryMail(key, job);
+              return;
+            }
+            cursor = result.next ?? undefined;
+          }
+        })().catch(() => { if (alive()) retryMail(key, job); }).finally(() => {
+          job.running = false;
+          mailRunning -= 1;
+          pumpMail();
+        });
+      }
+    }
 
     /**
      * Что делать с событием при данной карте работы: комнаты на месте — применить как есть; комнаты нет, а снимок не
@@ -148,11 +341,15 @@ export const useWorksStore = create<WorksState>((set, get) => ({
      * ещё в пути — `null`, ждать снимка (спека rooms.mail 6.5).
      */
     const place = (entry: WindowWorkEntry, event: RoomsMailEvent, key: string): RoomsMailEvent | null => {
+      if (event.requiredStructuralVersion !== undefined) {
+        const covered = structural.get(key);
+        if (covered === undefined || covered < event.requiredStructuralVersion) return null;
+      }
       const known = new Set(entry.map.rooms.map((room) => room.id));
       const present = event.rooms.filter((room) => room.roomId === null || known.has(room.roomId));
       if (present.length === event.rooms.length) return event;
-      const version = held.get(key);
-      return version !== undefined && version >= event.version ? { ...event, rooms: present } : null;
+      const version = structural.get(key);
+      return version !== undefined && version >= (event.requiredStructuralVersion ?? event.version) ? { ...event, rooms: present } : null;
     };
 
     const repairOf = (key: string): RepairState => {
@@ -174,12 +371,15 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       held.delete(key);
       const state = repairOf(key);
       state.failures += 1;
+      if (sync && (find(key)?.map.messages.length ?? 0) > 0) state.again = true;
       if (state.timer !== null) clearTimeout(state.timer);
       const delay = Math.min(REPAIR_BACKOFF_MS * 2 ** (state.failures - 1), REPAIR_BACKOFF_MAX_MS);
       state.timer = setTimeout(() => {
         state.timer = null;
         pump(key);
+        publishRepairs();
       }, delay);
+      publishRepairs();
     };
 
     /**
@@ -194,7 +394,8 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       const entry = from ?? find(key);
       if (entry === undefined) return;
       state.running = true;
-      repairWork(bridge, entry)
+      publishRepairs();
+      repairWork(guardedBridge(entry), entry)
         .then(
           () => {
             state.failures = 0;
@@ -204,6 +405,7 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         .finally(() => {
           state.running = false;
           pump(key);
+          publishRepairs();
         });
     };
 
@@ -217,8 +419,9 @@ export const useWorksStore = create<WorksState>((set, get) => ({
     const deliver = (before: WindowWorkEntry, event: RoomsMailEvent): void => {
       const key = mailKey(event.projectPath, event.workId);
       const version = held.get(key);
+      const latest = knownMail(key);
       // Версия события не больше версии окна: повтор или обогнавший событие снимок — письма и отметки сливаются, числа не трогаются.
-      const stale = version !== undefined && event.version <= version;
+      const stale = latest !== undefined && event.version <= latest;
       // Разрыв — событие начинается после держимой версии или версия неизвестна; `prevVersion <= version < event.version` — пачка
       // смешанной записи, начатая до снимка, пропущенного нет (подробнее — в описании `deliver`).
       const gap = !stale && (version === undefined || event.prevVersion > version);
@@ -250,9 +453,10 @@ export const useWorksStore = create<WorksState>((set, get) => ({
           entry.projectPath === event.projectPath && entry.map.work.id === event.workId ? withMail(entry, event, stale, policy.isOpen, policy.floor) : entry,
         ),
       }));
-      if (!stale) held.set(key, event.version);
+      if (!stale) { held.set(key, event.version); if (sync) appliedMail.set(key, event.version); }
       notifyMail(event);
 
+      if (sync && (gap || event.rooms.some(room => room.reread))) markRepair(key, event.version);
       if (gap) {
         repairOf(key).again = true;
         pump(key, before);
@@ -263,18 +467,23 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       const current = find(key);
       const after = current === undefined ? undefined : heldRanges(current);
       Promise.all([
-        ...lagging.map((roomId) => followRoom(bridge, before, roomId)),
-        ...rereading.map((roomId) => rereadRoom(bridge, before, roomId)),
-        ...opening.map((roomId) => (current !== undefined && after?.has(roomId) === true ? rereadRoom(bridge, current, roomId) : openRoom(bridge, before, roomId))),
+        ...lagging.map((roomId) => followRoom(guardedBridge(before), before, roomId)),
+        ...rereading.map((roomId) => rereadRoom(guardedBridge(before), before, roomId)),
+        ...opening.map((roomId) => (current !== undefined && after?.has(roomId) === true ? rereadRoom(guardedBridge(current), current, roomId) : openRoom(guardedBridge(before), before, roomId))),
       ]).catch((error: unknown) => failed(key, error));
     };
 
     const enqueue = (key: string, event: RoomsMailEvent): void => {
       const queue = waiting.get(key) ?? [];
       queue.push(event);
-      if (queue.length > WAITING_EVENTS_MAX) queue.shift();
+      if (queue.length > WAITING_EVENTS_MAX) { queue.shift(); markRepair(key, event.version); }
       waiting.set(key, queue);
-      if (waiting.size > WAITING_WORKS_MAX) waiting.delete(waiting.keys().next().value!);
+      if (waiting.size > WAITING_WORKS_MAX) {
+        const evicted = waiting.keys().next().value!;
+        const lost = waiting.get(evicted)!;
+        waiting.delete(evicted);
+        markRepair(evicted, Math.max(...lost.map(event => event.version)));
+      }
     };
 
     /** После снимка: ждущие события работ, которые теперь в карте, применяются по порядку; ждать дальше — только тем, что снимок не покрыл. */
@@ -296,7 +505,7 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       if (disposed) return;
       const key = mailKey(event.projectPath, event.workId);
       const entry = find(key);
-      if (entry !== undefined && !waiting.has(key)) {
+      if (acceptingMail && entry !== undefined && !waiting.has(key)) {
         const placed = place(entry, event, key);
         if (placed !== null) {
           deliver(entry, placed);
@@ -314,46 +523,123 @@ export const useWorksStore = create<WorksState>((set, get) => ({
      * через ту же одиночную починку, что и разрыв версии (`again`, `pump`). Работа, которой уже чинит разрыв, из событий,
      * что ждали снимка, лишней починки не получает: та починка читает то же держимое.
      */
+    const repairOpen = (entry: WindowWorkEntry, roomId: string | null): void => {
+      const key = mailKey(entry.projectPath, entry.map.work.id);
+      const life = lives.get(key);
+      if (life === undefined) return;
+      const jobs = openRepairs.get(key) ?? new Set<{ failed: boolean; retry(): void }>();
+      const job = { failed: false, retry: () => { void read(); } };
+      jobs.add(job);
+      openRepairs.set(key, jobs);
+      const alive = (): boolean => !disposed && lives.get(key) === life && openRepairs.get(key) === jobs;
+      const guarded = guardedBridge(entry);
+      let requested = false;
+      const finish = (): void => {
+        if (openRepairs.get(key) === jobs) {
+          jobs.delete(job);
+          if (jobs.size === 0) openRepairs.delete(key);
+        }
+        publishRepairs();
+      };
+      const tracked: Pick<ParleyBridge, 'call'> = { call: async (method, params) => {
+        requested = true;
+        try {
+          const result = await guarded.call(method, params);
+          finish();
+          return result;
+        } catch (error) {
+          if (alive()) {
+            if (decodeIpcError(error).code === 'not_found') finish();
+            else { job.failed = true; publishRepairs(); }
+          }
+          throw error;
+        }
+      } };
+      const read = async (): Promise<void> => {
+        const current = find(key);
+        if (!alive() || current === undefined) return;
+        try {
+          await openRoom(tracked, current, roomId);
+          // openRoom мог вернуть opening старой жизни, не вызвав наш bridge. Его guarded
+          // ответ отброшен; после удаления старого opening нужен собственный свежий read.
+          if (!alive() || requested) { if (!job.failed) finish(); return; }
+          const latest = find(key);
+          if (latest === undefined || (roomId !== null && !latest.map.rooms.some(room => room.id === roomId))
+            || !heldPolicy(entry.projectPath, entry.map.work.id).isOpen(roomId) || heldRanges(latest).has(roomId)) { finish(); return; }
+          await openRoom(tracked, latest, roomId);
+          if (!job.failed) finish();
+        } catch {
+          if (!requested && alive()) { void read(); return; }
+          // openRoom owns bounded backoff. Its subsequent attempts retain this tracked
+          // bridge, so failures stay visible and a successful retry releases the job.
+          if (alive()) { job.failed = true; publishRepairs(); }
+        }
+      };
+      publishRepairs();
+      void read();
+    };
+
     const repairHeld = (snapshot: WorksSnapshot): void => {
       for (const { projectPath, map } of snapshot.entries) {
         const key = mailKey(projectPath, map.work.id);
         const entry = find(key);
-        if (entry === undefined || entry.map.compact?.version !== 2 || entry.map.messages.length === 0) continue;
-        const state = repairOf(key);
-        if (state.running || state.again || state.timer !== null) continue;
-        state.again = true;
-        pump(key);
+        if (entry === undefined || entry.map.compact?.version !== 2) continue;
+        if (sync) {
+          const ranges = heldRanges(entry);
+          const policy = heldPolicy(projectPath, map.work.id);
+          for (const roomId of [null, ...entry.map.rooms.map(room => room.id)]) {
+            if (policy.isOpen(roomId) && !ranges.has(roomId)) {
+              repairOpen(entry, roomId);
+            }
+          }
+        }
+        if (entry.map.messages.length > 0) {
+          const state = repairOf(key);
+          if (state.running || state.again || state.timer !== null) continue;
+          state.again = true;
+          pump(key);
+        }
       }
     };
 
-    const apply = (snapshot: WorksSnapshot): void => {
+    const apply = (snapshot: WorksSnapshot, committed = false, replaceHeld = false): void => {
       if (disposed) return;
       // Хост до P35 номера не шлёт: его снимки применяются в порядке прихода, как прежде.
       if (snapshot.revision !== undefined) {
-        if (snapshot.revision <= applied) return;
+        if (!committed && snapshot.revision <= applied) return;
         applied = snapshot.revision;
       }
       const present = new Set<string>();
       // Работы, чей снимок старее версии, которой окно уже располагает (событие обогнало снимок, собранный до письма).
       const older = new Set<string>();
+      const previousSource = new Map(sourceEntries);
+      structural.clear();
       for (const entry of snapshot.entries) {
         const key = mailKey(entry.projectPath, entry.map.work.id);
         present.add(key);
+        if (!lives.has(key)) lives.set(key, {});
+        if (entry.version !== undefined) structural.set(key, entry.version);
         // Снимок ставит `held = max(held, version)`; без версии окно не знает, чем располагает, и забывает прежнюю.
-        const prior = held.get(key);
-        if (entry.version === undefined) held.delete(key);
-        else {
+        const prior = knownMail(key);
+        sourceEntries.set(key, entry);
+        if (entry.version === undefined) {
+          if (sync && prior !== undefined) older.add(key);
+          else held.delete(key);
+        } else {
           if (prior !== undefined && entry.version < prior) older.add(key);
           held.set(key, Math.max(prior ?? entry.version, entry.version));
+          if (sync) appliedMail.set(key, Math.max(prior ?? entry.version, entry.version));
         }
       }
+      for (const key of [...lives.keys()]) if (!present.has(key)) forget(key);
       for (const key of [...held.keys()]) if (!present.has(key)) held.delete(key);
       set((state) => {
-        const previous = new Map(state.entries.map((entry) => [mailKey(entry.projectPath, entry.map.work.id), entry]));
+        const previous = new Map((replaceHeld ? [] : state.entries).map((entry) => [mailKey(entry.projectPath, entry.map.work.id), entry]));
         return {
           entries: snapshot.entries.map((entry) => {
             const key = mailKey(entry.projectPath, entry.map.work.id);
             const prev = previous.get(key);
+            if (sync && prev !== undefined && previousSource.get(key) === entry) return prev;
             // Снимок старее события, уже применённого окном: структура (комнаты, сессии, план) берётся из него, а числа и
             // кандидаты в упоминания остаются от события — иначе снимок, вышедший позже, откатил бы их, а нового события
             // у работы может не быть (последнее письмо переписки).
@@ -366,6 +652,11 @@ export const useWorksStore = create<WorksState>((set, get) => ({
           error: null,
         };
       });
+      if (repairAllAfterCommit && snapshot.entries.length > 0) {
+        for (const key of present) repairAfterCommit.add(key);
+        repairAllAfterCommit = false;
+      }
+      acceptingMail = true;
       drain();
       if (first) {
         first = false;
@@ -373,7 +664,7 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       }
     };
 
-    bridge
+    if (!sync) bridge
       .call('works.list', {})
       .then((snapshot) => {
         apply(snapshot);
@@ -391,12 +682,86 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         set({ error: { code: info.code, reason: typeof reason === 'string' ? reason : null } });
       });
 
-    const unsubscribe = bridge.on('works.changed', apply);
+    const unsubscribe = sync ? () => {} : bridge.on('works.changed', apply);
+    let retiringEpoch = false;
+    const offSync = surface?.subscribe(batch => {
+      if (disposed || consumerFailed) return;
+      const previous = reducer.view;
+      if (batch.index === 0 && batch.transaction.mode === 'reset') {
+        abandonReads();
+        first = true;
+        retiringEpoch = previous.epoch !== null && previous.epoch !== batch.transaction.epoch;
+        if (retiringEpoch) {
+          for (const entry of get().entries) invalidateWorkPages(entry.projectPath, entry.map.work.id);
+          held.clear(); appliedMail.clear(); mailFloors.clear(); sourceEntries.clear(); waiting.clear(); repairAfterCommit.clear(); repairAllAfterCommit = false;
+        }
+      }
+      const outcome = reducer.applyPage({ ...batch, kind: 'page', cursor: `local:${batch.index}`,
+        next: batch.commit ? null : `local:${batch.index + 1}` });
+      if (outcome.state === 'rejected') {
+        consumerFailed = true;
+        set({ syncStatus: { state: 'error', epoch: previous.epoch, applied: previous.revision, error: 'protocol', retryable: true } });
+        throw new Error('works sync local transaction rejected');
+      }
+      if (outcome.state !== 'committed') return;
+      const present = new Set(reducer.view.snapshot.entries.map(entry => mailKey(entry.projectPath, entry.map.work.id)));
+      for (const old of previous.snapshot.entries) {
+        const key = mailKey(old.projectPath, old.map.work.id);
+        if (!present.has(key)) forget(key);
+      }
+      for (const deleted of outcome.commit.deleted) forget(mailKey(deleted.projectPath, deleted.workId));
+      const reset = batch.transaction.mode === 'reset';
+      const previousKeys = new Set(previous.snapshot.entries.map(entry => mailKey(entry.projectPath, entry.map.work.id)));
+      if (retiringEpoch) for (const entry of get().entries) retireWorkPages(entry.projectPath, entry.map.work.id, true);
+      apply(reducer.view.snapshot, true, retiringEpoch);
+      retiringEpoch = false;
+      for (const entry of reducer.view.snapshot.entries) {
+        const key = mailKey(entry.projectPath, entry.map.work.id);
+        if (reset || !previousKeys.has(key)) repairAfterCommit.add(key);
+      }
+      set({ ready: true, syncStatus: { state: 'current', epoch: outcome.commit.epoch, applied: outcome.commit.revision },
+        mailRepairPending: pendingRepairs() });
+      publishRepairs();
+      pumpMail();
+    }, status => {
+      if (disposed || consumerFailed) return;
+      if (status.state === 'loading' || (status.state === 'error' && status.error === 'connection')) abandonReads();
+      set({ syncStatus: status });
+    });
+    if (surface) set({ retrySync: () => {
+      if (disposed) return;
+      if (mailConnectionFailed) { surface.retry(); return; }
+      for (const state of mailRepairs.values()) {
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = null;
+        state.failures = 0;
+      }
+      if (!consumerFailed && get().syncStatus?.state === 'current' && pendingRepairs() > 0) {
+        for (const jobs of openRepairs.values()) for (const job of jobs) job.retry();
+        for (const [key, state] of repairs) {
+          if (state.timer) clearTimeout(state.timer);
+          state.timer = null;
+          state.failures = 0;
+          pump(key);
+        }
+        publishRepairs();
+        pumpMail();
+      } else {
+        consumerFailed = false;
+        reducer.abandon();
+        surface.retry();
+      }
+    } });
     // На `rooms.mail` окно подписано, только пока хост объявляет признак: хост без него события не шлёт, а пришедшее
     // от чужой сборки не читается — письма тогда приходят снимком, как раньше (спека rooms.mail 6.10). Статус
     // отдаётся при подписке, так что решение принято до первого события; остров статус хоста не хранит — берём из моста.
     let offMail: (() => void) | null = null;
     const offStatus = bridge.onStatus((status) => {
+      if (sync && status.state !== 'connected') {
+        if (pendingRepairs() > 0) mailConnectionFailed = true;
+        abandonReads();
+        publishRepairs();
+      }
       const wants = hostFeatures(status).has(ROOMS_MAIL_FEATURE);
       if (wants && offMail === null) offMail = bridge.on('rooms.mail', handleMail);
       else if (!wants && offMail !== null) {
@@ -407,11 +772,21 @@ export const useWorksStore = create<WorksState>((set, get) => ({
     return () => {
       disposed = true;
       unsubscribe();
+      offSync?.();
       offStatus();
       offMail?.();
       stopOpenRetries();
       waiting.clear();
       held.clear();
+      appliedMail.clear();
+      sourceEntries.clear();
+      mailFloors.clear();
+      cancelMail();
+      structural.clear();
+      lives.clear();
+      openRepairs.clear();
+      repairAfterCommit.clear();
+      repairAllAfterCommit = false;
       for (const state of repairs.values()) {
         if (state.timer !== null) clearTimeout(state.timer);
         state.timer = null;

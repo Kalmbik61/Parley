@@ -56,7 +56,8 @@ import { registerFilesIpc } from './files/ipc.js';
 import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { imageThumbnail } from './image-thumbnail.js';
-import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
+import { bindWorksSyncWindow, forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
+import { bindHostWorksSync } from './works-sync.js';
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createAssistantShortcut } from './assistant/shortcut.js';
@@ -79,7 +80,7 @@ import {
   type LoggedNotification,
   type NotificationLike,
 } from './notifications.js';
-import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roots.js';
+import { createRootsRegistry, createSyncRootsRegistry, worktreeRootPolicy, type RootsRegistry, type RootsSource } from './roots.js';
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
@@ -212,6 +213,7 @@ if (!gotLock) {
     const connection = new HostConnection({
       paths,
       env: shellEnv.env,
+      worksSync: switches.worksSync,
       // Процесс хоста — соединению: пока он жив, второй не запускается (раунд lane-r4).
       spawn: async () => {
         // Собранное окно запускает хост своим встроенным node 22 (`Resources/node`), разработка и сборка
@@ -251,6 +253,9 @@ if (!gotLock) {
         }
       },
     });
+
+    // Isolated integration opt-in; neither default desktop nor host activation changes.
+    const worksBinding = switches.worksSync ? bindHostWorksSync(connection) : null;
 
     // Операции агента над браузером (спека браузера 2026-10-07, 3.7; этап B2). Подписка — до первого подключения: операция,
     // пришедшая, пока окно поднимается, получает внятный отказ, а не тайм-аут хоста.
@@ -315,6 +320,7 @@ if (!gotLock) {
     // экрана терминала, им нужен DOM-рендер xterm вместо WebGL.
     const searchFlags = [
       envValue(process.env, 'TERMINAL_RENDERER') === 'dom' ? 'renderer=dom' : null,
+      switches.worksSync ? 'worksSync=1' : null,
     ].filter((flag): flag is string => flag !== null);
 
     // Нативные вопросы main в E2E — в журнал (`globalThis.__parleyDialogs`), ответ «ждать».
@@ -344,6 +350,7 @@ if (!gotLock) {
       // первое сообщение (обычно «хост подключён») уйдёт в пустоту. Статус хоста —
       // каждой загрузке: после перезагрузки страница иначе осталась бы на «Connecting…».
       forwardHostToPages(connection, window);
+      if (worksBinding !== null) bindWorksSyncWindow(ipcMain, window, worksBinding.sync, false, () => connection.retryMailRecovery());
       // Тишина клавиатуры человека (15b): нажатия в окне Parley; гости подписываются в адаптере стража.
       typing.track(window.webContents);
       window.webContents.once('did-finish-load', () => {
@@ -513,7 +520,7 @@ if (!gotLock) {
       createWindow: () => {
         const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
         guardNavigation(window.webContents, `file://${islandHtmlPath}`);
-        void window.loadFile(islandHtmlPath).catch((error: unknown) => console.warn('[parley] island load failed', error));
+        void window.loadFile(islandHtmlPath, switches.worksSync ? { search: 'worksSync=1' } : {}).catch((error: unknown) => console.warn('[parley] island load failed', error));
         return window;
       },
       displays: () => screen.getAllDisplays(),
@@ -533,6 +540,7 @@ if (!gotLock) {
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
         forwardHostToPages(connection, window, { events: ISLAND_EVENTS, island: true });
+        if (worksBinding !== null) bindWorksSyncWindow(ipcMain, window, worksBinding.sync, true, () => connection.retryMailRecovery());
         // Как у главного окна (`trackLoadedWindow`): «страница загружена» — для `islandActive`; перезагрузка снимает
         // признак до нового конца. С каждым концом загрузки — свежие настройки острова.
         trackLoadedWindow(window, loadedWindows);
@@ -757,24 +765,39 @@ if (!gotLock) {
       list: () => connection.call('works.list', {}) as Promise<WorksSnapshot>,
       onChange: (listener) =>
         connection.onEvent((message) => {
-          if (message.event === 'works.changed') listener(message.data as WorksSnapshot);
+          if (!worksBinding?.supported && message.event === 'works.changed') listener(message.data as WorksSnapshot);
         }),
       onConnected: (listener) =>
         connection.onStatus((status) => {
-          if (status.state === 'connected') listener();
+          if (status.state === 'connected' && !worksBinding?.supported) listener();
         }),
     };
     // git — с PATH login-shell, как хост; один раннер у файлового API и проверки корней.
     const gitRunner = createGitRunner(shellEnv.env);
     // Корень worktree — только в каталоге worktree харнесса (настройки core с окружением хоста) или
     // зарегистрированный worktree проекта: карту переписывает и агент (раунд fix-final-a, M6).
-    const roots = createRootsRegistry(rootsSource, {
+    const rootsOptions = {
       acceptWorktree: worktreeRootPolicy({
         home: os.homedir(),
         worktreeRoot: async () => (await loadConfig(configPath(), shellEnv.env)).config.worktreeRoot,
         isRegistered: (projectPath, dir) => isProjectWorktree(gitRunner, projectPath, dir),
       }),
-    });
+    };
+    const syncRoots = worksBinding === null ? null : createSyncRootsRegistry(worksBinding.sync, rootsOptions);
+    let legacyRoots: RootsRegistry | null = null;
+    const activeRoots = (): RootsRegistry => worksBinding?.supported && syncRoots !== null ? syncRoots
+      : (legacyRoots ??= createRootsRegistry(rootsSource, rootsOptions));
+    const roots: RootsRegistry = {
+      resolve: (...args) => activeRoots().resolve(...args),
+      locate: (...args) => activeRoots().locate(...args),
+      insideAnyRoot: (...args) => activeRoots().insideAnyRoot(...args),
+      roots: (...args) => activeRoots().roots(...args),
+      expandHome: (...args) => activeRoots().expandHome(...args),
+      rootPath: (...args) => activeRoots().rootPath(...args),
+    };
+    // Start the legacy registry eagerly only for the existing legacy path.
+    if (!worksBinding?.supported) activeRoots();
+    app.on('will-quit', () => { syncRoots?.dispose(); worksBinding?.dispose(); connection.close(); });
 
     // E2E (`PARLEY_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
@@ -948,6 +971,7 @@ if (!gotLock) {
     registerIpc({
       ipcMain,
       connection,
+      ...(worksBinding === null ? {} : { worksSync: worksBinding }),
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
       onUiSaved: () => handleUiSaved(),

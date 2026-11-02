@@ -23,7 +23,7 @@ const { DatabaseSync: Database } = createRequire(import.meta.url)(
 ) as typeof import('node:sqlite');
 
 export const WORK_DB_FILE = 'parley.db';
-export const WORK_DB_SCHEMA_VERSION = 2;
+export const WORK_DB_SCHEMA_VERSION = 3;
 /** Сколько соединение ждёт чужую блокировку по умолчанию; запись на время транзакции ставит своё и возвращает это (спека хранилища 6.9). */
 export const BUSY_TIMEOUT_MS = 5000;
 
@@ -93,6 +93,33 @@ const MESSAGES_SENDER_INDEX = 'CREATE INDEX IF NOT EXISTS messages_sender ON mes
 /** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) `upgradeLettersSchema` поднимает до неё. */
 const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
 
+/** Номер создания не зависит от часов/rowid и не освобождается при удалении работы. */
+function upgradeIncarnations(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE work_incarnation_clock (
+      singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+      value INTEGER NOT NULL CHECK(typeof(value) = 'integer' AND value BETWEEN 0 AND 9007199254740991));
+    INSERT INTO work_incarnation_clock VALUES (1, 0);
+    ALTER TABLE works ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
+  `);
+  const assign = db.prepare('UPDATE works SET incarnation = ? WHERE rowid = ?');
+  let next = 0;
+  for (const row of db.prepare('SELECT rowid FROM works ORDER BY rowid').all()) {
+    if (!Number.isSafeInteger(++next)) throw new Error('Work incarnation allocator exhausted');
+    assign.run(next, row['rowid']!);
+  }
+  db.prepare('UPDATE work_incarnation_clock SET value = ? WHERE singleton = 1').run(next);
+  db.exec(`
+    CREATE TRIGGER works_assign_incarnation AFTER INSERT ON works BEGIN
+      SELECT CASE WHEN (SELECT value FROM work_incarnation_clock WHERE singleton = 1) >= 9007199254740991
+        THEN RAISE(ABORT, 'Work incarnation allocator exhausted') END;
+      UPDATE work_incarnation_clock SET value = value + 1 WHERE singleton = 1;
+      UPDATE works SET incarnation = (SELECT value FROM work_incarnation_clock WHERE singleton = 1)
+        WHERE project_path = NEW.project_path AND id = NEW.id;
+    END;
+  `);
+}
+
 interface Opened {
   file: string;
   db: DatabaseSync;
@@ -158,13 +185,15 @@ function prepare(db: DatabaseSync): void {
       // База версии 1 (сборка плана 3, письма — строки `entries`): письменные таблицы создаются рядом, письма переезжают в
       // них и сверяются, и всё это одной транзакцией с подъёмом версии — упало что-то, остаётся схема 1 (спека хранилища 6.6).
       db.exec(SCHEMA_LETTERS);
+      upgradeIncarnations(db);
       upgradeLettersSchema(db);
-      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
-    } else if (version < WORK_DB_SCHEMA_VERSION) {
+    } else if (version === 0) {
       db.exec(SCHEMA_V2);
-      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
-    } else if (version === WORK_DB_SCHEMA_VERSION) {
+    }
+    if (version < 3 && version !== 1) upgradeIncarnations(db);
+    if (version <= WORK_DB_SCHEMA_VERSION) {
       db.exec(MESSAGES_SENDER_INDEX);
+      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
     }
     db.exec('COMMIT');
   } catch (error) {

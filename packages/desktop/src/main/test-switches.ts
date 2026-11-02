@@ -11,6 +11,8 @@ import { envValue } from '@parley/core';
  */
 
 export interface TestSwitches {
+  /** Explicit isolated home only; default/local activation still waits for P7. */
+  readonly worksSync: boolean;
   readonly downloads: boolean;
   readonly dialogs: boolean;
   readonly notifications: boolean;
@@ -50,6 +52,7 @@ function parseNotch(value: string | undefined): { width: number; height: number 
 export function testSwitches(env: Readonly<Record<string, string | undefined>>, isPackaged: boolean): TestSwitches {
   const allowed = !isPackaged || envValue(env, 'E2E') === '1';
   return {
+    worksSync: allowed && envValue(env, 'WORKS_SYNC') === '1' && envValue(env, 'HOME') !== undefined,
     downloads: allowed && envValue(env, 'DOWNLOADS') === 'log',
     dialogs: allowed && envValue(env, 'DIALOGS') === 'log',
     notifications: allowed && envValue(env, 'NOTIFICATIONS') === 'log',

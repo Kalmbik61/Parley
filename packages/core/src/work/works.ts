@@ -3,9 +3,12 @@ import {
   onMapWritten,
   readMap,
   readWorksIndex,
+  readTransaction,
+  storeDb,
   storedMapBytes,
+  viewMap,
   workDataVersion,
-  workVersion,
+  workIdentity,
 } from './store.js';
 import type { WindowWorkMap, WorkMap } from './types.js';
 
@@ -27,6 +30,8 @@ export interface WorkEntry {
    * успела вклиниться между чтением версии и карты, — тогда работу надо считать новой.
    */
   version?: number;
+  /** Устойчивый номер создания; только внутреннее доказательство, не wire version. */
+  incarnation?: number;
 }
 
 /**
@@ -66,7 +71,14 @@ function deepFreeze<T>(value: T): T {
  * через `updateMap`. Объект — своя копия (`readMap` выдаёт `structuredClone`), поэтому заморозка выше кэш хранилища
  * не задевает: тот мутируется `updateMap` на месте.
  */
-const listedMaps = new Map<string, { version: number; map: WorkMap }>();
+const listedMaps = new Map<string, { version: number; incarnation: number; map: WorkMap }>();
+
+let listedOwner: ReturnType<typeof storeDb> | undefined;
+function listOwner() {
+  const db = storeDb();
+  if (db !== listedOwner) { listedMaps.clear(); listedOwner = db; }
+  return db;
+}
 
 const listKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
 
@@ -80,22 +92,25 @@ const listKey = (projectPath: string, workId: string): string => `${projectPath}
  */
 async function readEntry(projectPath: string, workId: string): Promise<WorkEntry | null> {
   const key = listKey(projectPath, workId);
-  const version = workVersion(projectPath, workId);
+  const owner = listOwner();
+  const identity = workIdentity(projectPath, workId), version = identity?.version;
   if (version === undefined) {
     listedMaps.delete(key);
     return null;
   }
   const cached = listedMaps.get(key);
-  if (cached !== undefined && cached.version === version) {
-    return { projectPath, map: cached.map, bytes: 0, version };
+  if (cached !== undefined && cached.version === version && cached.incarnation === identity!.incarnation) {
+    return { projectPath, map: cached.map, bytes: 0, version, incarnation: identity!.incarnation };
   }
   try {
     const copy = await readMap(projectPath, workId);
+    if (listOwner() !== owner) return null;
     const map = freezeMaps ? deepFreeze(copy) : copy;
-    listedMaps.set(key, { version, map });
     // Номер сообщается, только если версия не сдвинулась за время чтения карты: иначе под ним лежит более новая карта.
-    const unchanged = workVersion(projectPath, workId) === version;
-    return { projectPath, map, bytes: storedMapBytes(projectPath, workId) ?? 0, ...(unchanged ? { version } : {}) };
+    const after = workIdentity(projectPath, workId);
+    const unchanged = after?.version === version && after.incarnation === identity!.incarnation;
+    if (unchanged) listedMaps.set(key, { version, incarnation: identity!.incarnation, map });
+    return { projectPath, map, bytes: storedMapBytes(projectPath, workId) ?? 0, ...(unchanged ? { version, incarnation: identity!.incarnation } : {}) };
   } catch {
     listedMaps.delete(key);
     return null;
@@ -128,6 +143,41 @@ export async function readWorks(_projectPath?: string): Promise<WorkEntry[]> {
   return works;
 }
 
+/**
+ * Согласованный каталог и собственные карты с настоящими версиями. Синхронный read
+ * может захватить почту из того же снимка; ни viewMap, ни транзакция не переживают await.
+ * isCurrent проверяет только состав/личность работ, а не обычные последующие записи.
+ */
+export function captureWorks<T>(read: (entry: WorkEntry & { version: number; incarnation: number }) => T): { values: T[]; isCurrent: () => boolean } {
+  const db = listOwner();
+  const heads = () => db.prepare('SELECT project_path, id, version, incarnation FROM works ORDER BY rowid').all();
+  const catalogue = (rows: ReturnType<typeof heads>) => JSON.stringify(rows.map(row => [row['project_path'], row['id'], row['incarnation']]));
+  return readTransaction(db, () => {
+    const rows = heads(), captured = catalogue(rows), values: T[] = [];
+    for (const row of rows) {
+      const projectPath = String(row['project_path']), workId = String(row['id']), version = Number(row['version']), incarnation = Number(row['incarnation']);
+      const key = listKey(projectPath, workId), cached = listedMaps.get(key);
+      let map: WorkMap;
+      try {
+        if (cached?.version === version && cached.incarnation === incarnation) map = cached.map;
+        else {
+          const owned = viewMap(projectPath, workId, map => structuredClone(map));
+          map = freezeMaps ? deepFreeze(owned) : owned;
+          listedMaps.set(key, { version, incarnation, map });
+        }
+      } catch {
+        // Как readWorks: повреждённая карта не прячет остальные работы.
+        listedMaps.delete(key);
+        continue;
+      }
+      values.push(read({ projectPath, map, version, incarnation, bytes: cached?.version === version && cached.incarnation === incarnation ? 0 : storedMapBytes(projectPath, workId) ?? 0 }));
+    }
+    const present = new Set(rows.map(row => listKey(String(row['project_path']), String(row['id']))));
+    for (const key of listedMaps.keys()) if (!present.has(key)) listedMaps.delete(key);
+    return { values, isCurrent: () => listOwner() === db && readTransaction(db, () => catalogue(heads()) === captured) };
+  });
+}
+
 export interface WatchWorksOptions {
   /** Запись карты — несколько событий подряд (запись самой работы, сверка живости) — склеиваем в одно чтение. */
   debounceMs?: number;
@@ -152,10 +202,10 @@ let readSeq = 0;
 
 const versionKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
 
-const versionsNow = (): Map<string, number> =>
-  new Map(listWorkVersions().map((row) => [versionKey(row.projectPath, row.id), row.version]));
+const versionsNow = (): Map<string, string> =>
+  new Map(listWorkVersions().map((row) => [versionKey(row.projectPath, row.id), `${row.incarnation}:${row.version}`]));
 
-const sameVersions = (left: ReadonlyMap<string, number>, right: ReadonlyMap<string, number>): boolean => {
+const sameVersions = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean => {
   if (left.size !== right.size) return false;
   for (const [key, version] of left) if (right.get(key) !== version) return false;
   return true;
@@ -185,6 +235,7 @@ export function watchWorks(
   /** Чтение идёт, и события за это время просят ровно одно повторное после него, а не чтение на каждое. */
   let reading = false;
   let dirty = false;
+  let pendingAt: number | undefined;
 
   const refresh = (): void => {
     timer = undefined;
@@ -194,6 +245,7 @@ export function watchWorks(
       return;
     }
     reading = true;
+    pendingAt = undefined;
     const seq = ++readSeq;
     // Синхронный бросок подменённого `read` не должен оставить `reading` навсегда.
     Promise.resolve()
@@ -217,13 +269,16 @@ export function watchWorks(
   };
 
   const schedule = (): void => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = setTimeout(refresh, debounceMs);
+    if (closed) return;
+    pendingAt ??= Date.now();
+    if (reading) { dirty = true; return; }
+    if (timer !== undefined) return;
+    timer = setTimeout(refresh, Math.max(0, pendingAt + debounceMs - Date.now()));
   };
 
   // Точка отсчёта опроса. Не вышла (база недоступна) — список пуст, и первый удавшийся опрос сам перечитает работы.
   let dataVersion: number | undefined;
-  let versions = new Map<string, number>();
+  let versions = new Map<string, string>();
   try {
     dataVersion = workDataVersion();
     versions = versionsNow();
@@ -240,8 +295,9 @@ export function watchWorks(
     }
     // Версия до записи не та, что известна наблюдателю: между ними легла чужая запись, которую опрос ещё не разобрал.
     // Запомнить новую версию и промолчать значило бы спрятать её от опроса — будим, как для любой записи.
-    const unseen = event.prevVersion !== undefined && versions.get(key) !== event.prevVersion;
-    versions.set(key, event.version);
+    const incarnation = event.incarnation ?? workIdentity(event.projectPath, event.workId)?.incarnation;
+    const unseen = event.prevVersion !== undefined && versions.get(key) !== `${incarnation}:${event.prevVersion}`;
+    versions.set(key, `${incarnation}:${event.version}`);
     // Запись только писем списка работ не меняет (спека rooms.mail 6.7): письма идут окнам событием хоста. Версию
     // запомнили выше — опрос `data_version` такую запись изменением не сочтёт.
     if (event.structural === false && !unseen) return;

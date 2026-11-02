@@ -30,6 +30,8 @@ import { useActivityStore } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
+import { worksSyncLifecycle } from '../test-utils/works-sync-lifecycle.js';
+import { S } from '../../shared/strings.js';
 import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
 import { createSpeaker } from './assistant/speaker.js';
@@ -43,6 +45,8 @@ import { useIslandRequests } from './requests.js';
 import { CUE_COOLDOWN_MS, CUE_GAP_MS } from './sound/cues.js';
 import { islandSound } from './sound/graph.js';
 import * as engineModule from './swarm/engine.js';
+import { createIslandController, HOVER_POLL_MS } from '../../main/island/window.js';
+import type { Rect } from '../../main/island/placement.js';
 
 vi.mock('./sound/graph.js', () => ({
   islandSound: { graph: vi.fn(() => null), play: vi.fn(), setVolume: vi.fn(), setPalette: vi.fn(), duckVoice: vi.fn() },
@@ -274,10 +278,119 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, '', '/');
   clock?.mockRestore();
   clock = null;
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('island opt-in sync recovery lifetime', () => {
+  it.each(['default', 'old-host'])('preserves legacy hide/reconnect behavior for %s', async mode => {
+    window.history.replaceState({}, '', mode === 'old-host' ? '/?worksSync=1' : '/');
+    const { bridge, fake, island, disconnect, reconnect } = setup();
+    const { unmount } = render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    expect(fake.calls.filter(call => call.method === 'works.list')).toHaveLength(1);
+    disconnect();
+    expect(island.setVisible).toHaveBeenLastCalledWith(false);
+    reconnect();
+    await act(async () => {});
+    expect(fake.calls.filter(call => call.method === 'works.list')).toHaveLength(2);
+    unmount();
+    reconnect();
+    expect(fake.calls.filter(call => call.method === 'works.list')).toHaveLength(2);
+  });
+
+  it('keeps the failed-recovery island visible with live Retry until recovery/unmount', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?worksSync=1');
+    const fake = createFakeBridge();
+    const main = worksSyncLifecycle(fake);
+    const island = islandApi();
+    const bridge: IslandBridge = { call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot,
+      worksSync: fake.worksSync, island };
+    const { unmount } = render(<IslandApp bridge={bridge} />);
+    await act(async () => { await main.reset(); });
+    await act(async () => { main.failAutomaticRecovery(); });
+    expect(main.automaticAttempts).toBe(1);
+    expect(useWorksStore.getState().entries).toHaveLength(1);
+    expect(island.setVisible).toHaveBeenLastCalledWith(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(IDLE_RETRACT_MS + 1); });
+    expect(island.setVisible).toHaveBeenLastCalledWith(true);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: S.common.retry })); });
+    expect(main.explicitAttempts).toBe(1);
+    expect(main.subscriptions).toBe(1);
+    expect(main.unsubscribes).toBe(0);
+    expect(useWorksStore.getState().ready).toBe(true);
+    expect(useWorksStore.getState().mailRepairFailed).toBe(false);
+    expect(useWorksStore.getState().entries[0]?.map.compact?.unread.letters).toBe(3);
+    unmount();
+    expect(main.unsubscribes).toBe(1);
+    useWorksStore.getState().retrySync();
+    expect(main.explicitAttempts).toBe(1);
+  });
+  it.each([false, true])('keeps disconnected sync Retry in the measured native mouse region while outside stays click-through (notch=%s)', async notched => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?worksSync=1');
+    const fake = createFakeBridge(); const main = worksSyncLifecycle(fake);
+    const notch = notched ? { width: 185, height: 32, centerX: 240 } : null;
+    const island = islandApi({ notch, topInset: notched ? 32 : 0 });
+    let bounds: Rect = { x: 0, y: 0, width: 480, height: 520 };
+    let visible = false, destroyed = false, ignored = true;
+    let cursor = { x: -100, y: -100 };
+    const mouse = vi.fn((ignore: boolean) => { ignored = ignore; });
+    const hover = vi.fn();
+    const native = { webContents: { on: vi.fn(), send: vi.fn() },
+      setBounds: (value: Rect) => { bounds = value; }, getBounds: () => bounds,
+      setAlwaysOnTop: vi.fn(), showInactive: () => { visible = true; }, hide: () => { visible = false; },
+      setIgnoreMouseEvents: mouse, setFocusable: vi.fn(), focus: vi.fn(), isVisible: () => visible,
+      destroy: () => { destroyed = true; }, isDestroyed: () => destroyed, on: vi.fn(),
+    };
+    const display = { id: 1, bounds: { x: 0, y: 0, width: 1000, height: 800 }, workArea: { x: 0, y: 25, width: 1000, height: 775 }, internal: false };
+    const controller = createIslandController({ createWindow: () => native, displays: () => [display], primaryDisplayId: () => 1,
+      placement: () => ({ displayId: 1, anchor: 'center' }), savePlacement: () => {}, notch: () => notch,
+      cursor: () => cursor, onHover: hover, onKeyboardLost: () => {}, onCreated: () => {}, log: () => {},
+    });
+    controller.open();
+    vi.mocked(island.setVisible).mockImplementation(value => controller.setVisible(value));
+    vi.mocked(island.setHitRect).mockImplementation(rect => controller.setHitRect(rect));
+    const shape = { x: 100, y: 0, width: 280, height: 140 };
+    const retryBox = { x: 120, y: notched ? 42 : 25, width: 90, height: 24 };
+    const measure = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return ((this as HTMLElement).dataset.testid === 'island' ? shape
+        : this.tagName === 'BUTTON' && this.textContent === S.common.retry ? retryBox
+          : { x: 0, y: 0, width: 0, height: 0 }) as DOMRect;
+    });
+    try {
+      const bridge: IslandBridge = { call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot, worksSync: fake.worksSync, island };
+      render(<IslandApp bridge={bridge} />);
+      await act(async () => { await main.reset(); main.failAutomaticRecovery(); });
+      const retry = screen.getByRole('button', { name: S.common.retry });
+      const box = retry.getBoundingClientRect();
+      expect(vi.mocked(island.setHitRect).mock.calls.at(-1)?.[0]).toEqual(shape);
+      expect(box.x >= shape.x && box.y >= shape.y && box.x + box.width <= shape.x + shape.width && box.y + box.height <= shape.y + shape.height).toBe(true);
+      cursor = { x: bounds.x + box.x + box.width / 2, y: bounds.y + box.y + box.height / 2 };
+      await act(async () => { await vi.advanceTimersByTimeAsync(HOVER_POLL_MS); });
+      expect(visible).toBe(true);
+      expect(hover).toHaveBeenLastCalledWith(true);
+      expect(mouse).toHaveBeenLastCalledWith(false, { forward: false });
+      expect(ignored).toBe(false);
+      cursor = { x: bounds.x + 479, y: bounds.y + 519 };
+      await act(async () => { await vi.advanceTimersByTimeAsync(HOVER_POLL_MS); });
+      expect(hover).toHaveBeenLastCalledWith(false);
+      expect(mouse).toHaveBeenLastCalledWith(true, { forward: false });
+      cursor = { x: bounds.x + box.x + 1, y: bounds.y + box.y + 1 };
+      await act(async () => { await vi.advanceTimersByTimeAsync(HOVER_POLL_MS); });
+      // DOM dispatch occurs only after the actual native controller admits this pointer.
+      expect(ignored).toBe(false);
+      await act(async () => { if (!ignored) fireEvent.click(retry); });
+      expect(main.explicitAttempts).toBe(1);
+      expect(useWorksStore.getState().ready).toBe(true);
+      expect(useWorksStore.getState().mailRepairFailed).toBe(false);
+    } finally { measure.mockRestore(); controller.close(); }
+  });
+
 });
 
 describe('проводка острова', () => {
@@ -2835,5 +2948,48 @@ describe('остров в вырезе (#9 §12, план 3b B28)', () => {
     push(island, base);
     expect(morph()).toBeUndefined();
     expect(screen.getByTestId('island-notch')).toBeTruthy();
+  });
+});
+
+
+describe('actual notice presence in compact modes', () => {
+  it.each(['bare', 'capsule', 'non-notch'] as const)('expands %s for loading/stale/error/mail repair and restores compact content', async mode => {
+    const notch = mode === 'non-notch' ? null : { width: 185, height: 32, centerX: 240 };
+    const { bridge, working, fake } = setup({ notch, topInset: notch?.height ?? 0 }, ENTRIES);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    if (mode === 'capsule') working('s-01');
+    const retry = vi.fn();
+    const retained = useWorksStore.getState().entries;
+    const compact = () => {
+      if (mode === 'bare') expect(screen.getByTestId('island-notch')).toBeTruthy();
+      if (mode === 'capsule') expect(screen.getByTestId('island-capsule')).toBeTruthy();
+    };
+    compact(); // WorksErrorBanner element exists, but healthy state renders null.
+    const cases = [
+      { syncStatus: { state: 'loading' as const, epoch: null, applied: 0, wanted: 1, pages: 0, rows: 0 }, pending: 0, failed: false, retry: false },
+      { syncStatus: { state: 'stale' as const, epoch: 'a', applied: 1, wanted: 2, reason: 'no-page-progress' as const }, pending: 0, failed: false, retry: true },
+      { syncStatus: { state: 'error' as const, epoch: 'a', applied: 1, error: 'connection' as const, retryable: true }, pending: 0, failed: false, retry: true },
+      { syncStatus: { state: 'current' as const, epoch: 'a', applied: 1 }, pending: 1, failed: false, retry: false },
+      { syncStatus: { state: 'current' as const, epoch: 'a', applied: 1 }, pending: 1, failed: true, retry: true },
+    ];
+    for (const value of cases) {
+      act(() => { useWorksStore.setState({ syncStatus: value.syncStatus, mailRepairPending: value.pending, mailRepairFailed: value.failed, retrySync: retry }); });
+      const notice = screen.getByRole(value.retry ? 'alert' : 'status');
+      const shape = screen.getByTestId('island');
+      expect(shape.contains(notice)).toBe(true); expect(isRetracted()).toBe(false);
+      expect(screen.queryByTestId('island-notch')).toBeNull(); expect(screen.queryByTestId('island-capsule')).toBeNull();
+      expect(useWorksStore.getState().entries).toBe(retained);
+      if (notch !== null) {
+        expect(screen.getByTestId('island-content').style.paddingTop).toBe('32px');
+        expect(screen.getByTestId('island-content').style.minWidth).toBe('257px');
+      }
+      if (value.retry) fireEvent.click(screen.getByRole('button', { name: S.common.retry }));
+      else expect(screen.queryByRole('button', { name: S.common.retry })).toBeNull();
+    }
+    expect(retry).toHaveBeenCalledTimes(3);
+    act(() => { useWorksStore.setState({ syncStatus: { state: 'current', epoch: 'a', applied: 1 }, mailRepairPending: 0, mailRepairFailed: true }); });
+    expect(screen.queryByRole('alert')).toBeNull(); expect(screen.queryByRole('status')).toBeNull(); compact();
+    expect(fake.calls.filter(call => call.method === 'works.list')).toHaveLength(1);
   });
 });

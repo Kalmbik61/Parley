@@ -2362,6 +2362,12 @@ export const S = {
     unreadable: "Host couldn't read the workspace list (works-index.json may be damaged). Fix the file, then restart the host.",
     /** Причина хоста `snapshot-too-large`: даже компактный снимок не влезает в кадр (P35). */
     tooLarge: 'Workspace data is too large to load. Delete or archive old workspaces, then restart the host.',
+    syncLoading: (items: number): string => items === 0 ? 'Loading workspaces…' : `Loading workspaces… ${items.toLocaleString()} items received`,
+    syncUpdating: 'Updating workspaces…',
+    syncStale: 'Workspace updates have stalled. Showing the last complete data.',
+    syncError: 'Workspace updates are unavailable. Showing the last complete data.',
+    mailRepair: 'Refreshing unread counts and messages…',
+    mailRepairFailed: 'Unread counts and messages could not be refreshed. Showing the last complete data.',
   },
 
   /** Экраны связи с хостом — `App.tsx`, короткие варианты — `shell/StatusBar.tsx`. */
