@@ -1139,27 +1139,67 @@ describe('A34: phone.action for weighty phone actions', () => {
     dispatcher.onOpen(D);
   });
 
+  /** Host stub: `trust.check` reads a flag that `sessions.create` with `trustFolder` sets, as the real host does before the launch. */
+  function trustingHost(opts: { trusted?: boolean; fail?: boolean } = {}) {
+    let trusted = opts.trusted ?? false;
+    host.handler = async (method, params) => {
+      if (method === 'trust.check') return { trusted };
+      if (method === 'sessions.create') {
+        if ((params as { trustFolder?: boolean }).trustFolder === true) trusted = true;
+        if (opts.fail) throw new HostCallError('conflict', 'launch failed');
+        return { ref: ref('s-9') };
+      }
+      return { ok: true };
+    };
+  }
+
   it('sessions.create: session-create with the new ref; with trustFolder also trust-folder with the realpath', async () => {
     vi.useRealTimers();
     const real = mkdtempSync(join(tmpdir(), 'a34-'));
     const link = `${real}-link`;
     symlinkSync(real, link);
     try {
-      host.handler = async () => ({ ref: ref('s-9') });
+      trustingHost();
       call(D, 'a', 'sessions.create', create());
       await vi.waitFor(() => expect(answer('a')).toBeDefined());
       call(D, 'b', 'sessions.create', create({ projectPath: link, trustFolder: true }));
       await vi.waitFor(() => expect(actions).toHaveLength(3));
       expect(actions).toEqual([
         { deviceId: D, kind: 'session-create', target: ref('s-9') },
-        { deviceId: D, kind: 'session-create', target: ref('s-9') },
         { deviceId: D, kind: 'trust-folder', target: realpathSync(link) },
+        { deviceId: D, kind: 'session-create', target: ref('s-9') },
       ]);
       expect(JSON.stringify(actions)).not.toContain('SECRET');
     } finally {
       rmSync(link, { force: true });
       rmSync(real, { recursive: true, force: true });
     }
+  });
+
+  it('N3: trust-folder is sent when the launch fails after the trust was written, and only then', async () => {
+    vi.useRealTimers();
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+    trustingHost({ fail: true });
+    call(D, 'a', 'sessions.create', create({ trustFolder: true }));
+    await vi.waitFor(() => expect(actions).toEqual([{ deviceId: D, kind: 'trust-folder', target: '/p' }]));
+    await settle();
+    expect(actions).toHaveLength(1);
+    actions.length = 0;
+    // Already trusted before the call: nothing was written by the phone.
+    trustingHost({ trusted: true });
+    call(D, 'b', 'sessions.create', create({ trustFolder: true }));
+    await vi.waitFor(() => expect(actions.map((e) => e.kind)).toEqual(['session-create']));
+    await settle();
+    expect(actions).toHaveLength(1);
+    actions.length = 0;
+    // The host refused before writing anything (trust.check stays false).
+    host.handler = async (method) => {
+      if (method === 'trust.check') return { trusted: false };
+      throw new HostCallError('forbidden', 'no');
+    };
+    call(D, 'c', 'sessions.create', create({ trustFolder: true }));
+    await settle();
+    expect(actions).toEqual([]);
   });
 
   it('consents.decide allow: trust-folder for a folder-trust card, provider-switch for an agent-switch card; deny and applied:false emit nothing', async () => {
@@ -1179,7 +1219,7 @@ describe('A34: phone.action for weighty phone actions', () => {
     await flush();
     expect(actions).toEqual([
       { deviceId: D, kind: 'trust-folder', target: '/private/p' },
-      { deviceId: D, kind: 'provider-switch', target: 'c-2' },
+      { deviceId: D, kind: 'provider-switch', target: 'Codex' },
     ]);
     expect(host.calls.map((c) => c.method)).toEqual(['consents.decide', 'consents.decide', 'consents.decide', 'consents.decide']);
   });
@@ -1227,7 +1267,7 @@ describe('A34: phone.action for weighty phone actions', () => {
     call(D, 'e', 'host.info');
     call(D, 'f', 'sessions.create', create({ trustFolder: true }));
     await flush();
-    expect(host.calls).toHaveLength(6);
+    expect(host.calls.filter((c) => c.method !== 'trust.check')).toHaveLength(6);
     expect(actions).toEqual([]);
   });
 });

@@ -941,6 +941,10 @@ if (!gotLock) {
       create: (options) => new Notification(options),
       deviceName: async (deviceId) =>
         (await remoteService.call('devices.list', {})).find((device) => device.deviceId === deviceId)?.name ?? null,
+      workTitle: async (ref) => {
+        const snapshot = await worksBinding.snapshotForLookup();
+        return snapshot.entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)?.map.work.title ?? null;
+      },
       focusWindow: focusMainWindow,
       confirmRevoke,
       revoke: async (deviceId) => {
