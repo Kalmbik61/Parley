@@ -28,6 +28,8 @@ export interface RemoteServiceOptions {
   broadcast: (event: RemoteEvent) => void;
   /** The offer string is turned into an image here, in main (spec 12). */
   qrDataUrl?: (text: string) => Promise<string>;
+  /** Control event `phone.action` (a weighty action taken from a phone). */
+  onPhoneAction?: (data: unknown) => void;
   /** Delays of the reconnect to a dropped control socket, ms; the last one repeats. */
   reconnectDelaysMs?: readonly number[];
 }
@@ -104,6 +106,7 @@ export function createRemoteService(options: RemoteServiceOptions): RemoteServic
     unsubscribe.push(
       launcher.client.onEvent((event, data) => {
         if (PAIR_EVENTS.has(event)) broadcast({ event, data } as RemoteEvent);
+        else if (event === 'phone.action') options.onPhoneAction?.(data);
       }),
       launcher.client.onClose(() => {
         detachListeners();
