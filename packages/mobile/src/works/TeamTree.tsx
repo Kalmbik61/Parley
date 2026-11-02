@@ -11,7 +11,7 @@ import { ProviderAvatar } from '../ui/avatars';
 import { computeGuides, contentLeft, indentFor, STUB, trunkX, type GuideSpec } from './guides';
 import { useNow } from '../hooks/use-remote';
 import { elapsed } from './summary';
-import { teamLine, teamOpenByDefault, type Team } from './teams';
+import { headLook, teamLine, teamOpenByDefault, type Team } from './teams';
 
 export interface TreeActions {
   openSession(sessionId: string): void;
@@ -88,7 +88,8 @@ function SessionLine({ session, depth, env, spec, indent }: { session: RemoteSes
   );
 }
 
-function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'room' }>; depth: number; env: TreeEnv; spec: GuideSpec; indent: number }) {
+/** `spec` and `indent` are absent when the block is a team head (nothing above it to join): no trunk, a plain margin. */
+function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'room' }>; depth: number; env: TreeEnv; spec?: GuideSpec; indent?: number }) {
   const c = useColors();
   const p = row.room.proposal;
   const memberWaits = row.members.some((m) => attentionOf(env, m) === 'needs-you');
@@ -98,8 +99,8 @@ function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { 
   const leadLabel = row.members.find((m) => m.id === row.room.lead)?.label ?? null;
   return (
     <View>
-      <Guides spec={spec} indent={indent} mid={28} />
-      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: waits ? c.warningBg : c.surface2, borderColor: waits ? c.tint : 'transparent' }]}>
+      {spec !== undefined && indent !== undefined && <Guides spec={spec} indent={indent} mid={28} />}
+      <View style={[styles.block, { marginLeft: indent === undefined ? 8 : contentLeft(depth, indent) - 2, backgroundColor: waits ? c.warningBg : c.surface2, borderColor: waits ? c.tint : 'transparent' }]}>
       <View style={styles.blockHead}>
         <Pressable accessibilityRole="button" accessibilityLabel={`Room ${row.room.title}. ${stateWord ?? ''} ${row.room.mode ?? 'free'}, ${row.room.members.length} agents`} accessibilityHint="Opens the room chat" onPress={() => env.actions.openRoom(row.room.id)} style={[styles.flex, { gap: 4 }]}>
           <View style={styles.roomTitle}>
@@ -167,7 +168,7 @@ function SwarmTimer({ swarm }: { swarm: RemoteSwarm }) {
 
 const SWARM_WORD = { queen: 'Queen', drone: 'Drone', verifier: 'Verifier' } as const;
 
-function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'swarm' }>; depth: number; env: TreeEnv; spec: GuideSpec; indent: number }) {
+function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { kind: 'swarm' }>; depth: number; env: TreeEnv; spec?: GuideSpec; indent?: number }) {
   const c = useColors();
   const waits = row.members.some((m) => m.session !== null && attentionOf(env, m.session) === 'needs-you');
   const [open, setOpen] = useState(waits);
@@ -176,8 +177,8 @@ function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, {
   const end = row.swarm.status === 'done' ? '✓' : row.swarm.status === 'failed' ? '⚠' : row.swarm.status === 'cancelled' ? '✕' : '';
   return (
     <View>
-      <Guides spec={spec} indent={indent} mid={28} />
-      <View style={[styles.block, { marginLeft: contentLeft(depth, indent) - 2, backgroundColor: c.surface2, borderColor: 'transparent' }]}>
+      {spec !== undefined && indent !== undefined && <Guides spec={spec} indent={indent} mid={28} />}
+      <View style={[styles.block, { marginLeft: indent === undefined ? 8 : contentLeft(depth, indent) - 2, backgroundColor: c.surface2, borderColor: 'transparent' }]}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => { setOpen((o) => !o); haptic.selection(); }} style={styles.blockHead}>
         <SymbolView name="hexagon.fill" size={20} tintColor={row.swarm.status === 'failed' || row.swarm.status === 'cancelled' ? c.off : c.tint} />
         <View style={styles.flex}>
@@ -243,6 +244,25 @@ export function TreeRows({ rows, env }: { rows: Array<{ row: WorkRow; depth: num
 
 /** One team card: header (the main session) and everything under it. Single sessions are drawn by `SingleGroup`. */
 export function TeamCard({ team, env }: { team: Team; env: TreeEnv }) {
+  const look = headLook(team.head);
+  // A room or a swarm nobody owns heads a team: it is drawn as its own container, not as a session card (A35a).
+  if (look.kind !== 'session') return <ContainerHead team={team} env={env} />;
+  return <SessionTeamCard team={team} env={env} />;
+}
+
+/** The head of a team is a room or a swarm: the same container as inside a tree, with whatever hangs under it below. */
+function ContainerHead({ team, env }: { team: Team; env: TreeEnv }) {
+  const c = useColors();
+  const head = team.head;
+  return (
+    <View style={[styles.card, { backgroundColor: c.surface }]}>
+      {head.kind === 'room' ? <RoomBlock row={head} depth={0} env={env} /> : head.kind === 'swarm' ? <SwarmBlock row={head} depth={0} env={env} /> : null}
+      {team.children.length > 0 && <TreeRows rows={team.children} env={env} />}
+    </View>
+  );
+}
+
+function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
   const c = useColors();
   const headSession = team.head.kind === 'session' ? team.head.session : null;
   const waits = [headSession, ...team.children.flatMap((x) => (x.row.kind === 'session' ? [x.row.session] : x.row.kind === 'room' ? x.row.members : []))].filter((s): s is RemoteSession => s !== null);

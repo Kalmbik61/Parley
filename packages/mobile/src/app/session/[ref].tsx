@@ -28,6 +28,7 @@ import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-re
 import { parseSessionParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { spacing, typography, useColors } from '../../theme';
+import { barBack, BarSymbol, barRight } from '../../ui/bar';
 import { Button } from '../../ui/Button';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
@@ -386,14 +387,10 @@ export default function SessionScreen() {
       <Stack.Screen
         options={{
           headerLargeTitle: false,
-          headerBackButtonDisplayMode: 'minimal',
+          ...barBack(null),
           title: session.label,
           headerTitle: () => <HeaderTitle name={session.label} capsule={capsule} meta={subtitle} />,
-          headerRight: () => (
-            <Pressable accessibilityRole="button" accessibilityLabel="More" onPress={menu} hitSlop={8} style={styles.bar}>
-              <SymbolView name="ellipsis.circle" size={22} tintColor={c.tint} />
-            </Pressable>
-          ),
+          ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={menu} />),
           headerTransparent: Platform.OS === 'ios',
           headerBlurEffect: 'systemChromeMaterial',
         }}

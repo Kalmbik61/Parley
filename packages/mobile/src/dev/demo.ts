@@ -24,10 +24,14 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         sess('drone1', 'Research drone 1', { createdBy: 'greta' }),
         sess('queen', 'Research queen', { createdBy: 'greta' }),
         sess('solo', 'Changelog-writer', { role: 'writer' }),
+        // A35a: the human's case — a room a person made (no owning session), its two members top-level.
+        sess('s-01', 'Аналитик', { role: 'analyst' }),
+        sess('s-02', 'Редактор', { role: 'editor' }),
       ],
       rooms: [
         { id: 'r1', title: 'iOS app: stage A', members: ['greta', 'd1', 'a13'], lead: 'greta', ownerId: 'greta', mode: 'verified', archived: false,
           proposal: { id: 'p-03', kind: 'decision', from: 'Greta', text: 'Ship A1 with the new projection', rev: 2, at: ago(12), planId: null, planRev: null }, messages: null },
+        { id: 'r2', title: 'тест', members: ['s-01', 's-02'], lead: 's-02', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null },
       ],
       swarms: [
         { id: 'sw1', tag: 'Research', creator: { kind: 'session', sessionId: 'greta' }, queen: 'queen', status: 'running', createdAt: ago(20), endedAt: null, seenAt: null,
@@ -118,6 +122,15 @@ export function installDemo(client: RemoteClient): void {
       letter2('m-15', 'greta', 18, '## Lint is green\nAll **12** packages pass.\n- eslint\n- typecheck'),
     ],
   });
+  const rref2 = { projectPath: P, workId: 'w1', roomId: 'r2' };
+  store.dispatch({ t: 'room.open', ref: rref2 });
+  store.dispatch({
+    t: 'room.loaded', ref: rref2, epoch: 'demo', next: null,
+    messages: [
+      { id: 'm-21', roomId: 'r2', from: 'human', to: [], at: ago(40), text: 'Сверьте цифры в отчёте за квартал.', kind: 'note', readBy: { 's-01': ago(39) } } as never,
+      { id: 'm-22', roomId: 'r2', from: 's-02', to: [], at: ago(35), text: 'Принято. Проверяю таблицы **1–3**.', kind: 'note', readBy: {} } as never,
+    ],
+  });
   store.dispatch({
     t: 'consents.loaded', epoch: 'demo',
     items: [
@@ -154,6 +167,10 @@ export function demoRoute(name: unknown): string | null {
       return s('drone1');
     case 'room':
       return `/room?ref=${encodeURIComponent(w)}&room=r1`;
+    case 'settings-diagnostics':
+      return '/settings/diagnostics';
+    case 'room-ownerless':
+      return `/room?ref=${encodeURIComponent(w)}&room=r2`;
     case 'inbox':
       return '/';
     case 'new':
