@@ -1,0 +1,1357 @@
+{
+  "generatedAt": "2026-11-01T14:01:36.874Z",
+  "baseCommit": "33e3761b",
+  "node": "v22.23.3",
+  "platform": "darwin-arm64",
+  "cpu": "Apple M4 Pro",
+  "cpuCount": 12,
+  "quick": false,
+  "warmup": 5,
+  "samples": 30,
+  "changeSamples": 15,
+  "excludes": [
+    "full publish path timing in the shared host (publish() also does releaseMail/published bookkeeping)",
+    "IPC/socket write",
+    "client decode",
+    "window rendering",
+    "multi-process host",
+    "OS disk cache effects",
+    "letters (scenarios have no mail; mailWorkMap is letterless by design)"
+  ],
+  "scenarios": [
+    {
+      "serviceRun": {
+        "scenario": "small-baseline",
+        "note": "small baseline, 4 KiB texts",
+        "works": 2,
+        "sessions": 20,
+        "archived": 0,
+        "textBytesEach": 4096,
+        "gateBytes": 5242880,
+        "maxLineBytes": 8388608,
+        "legacyGateBytes": 6291456,
+        "seedMs": 7.05,
+        "coldStartMs": 9.606,
+        "coldStartEventLoopDelayMs": {
+          "p50": 1.718,
+          "p95": 1.718,
+          "max": 1.718
+        },
+        "variants": {
+          "mailSnapshot": {
+            "fits": true,
+            "bytes": 176661,
+            "encodedFrameBytes": 176695,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 2,
+              "min": 88257,
+              "p50": 88257,
+              "max": 88282,
+              "sum": 176539
+            }
+          },
+          "windowSnapshot": {
+            "fits": true,
+            "bytes": 176593,
+            "encodedFrameBytes": 176627,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 2,
+              "min": 88223,
+              "p50": 88223,
+              "max": 88248,
+              "sum": 176471
+            }
+          },
+          "legacySnapshot": {
+            "fits": true,
+            "bytes": 176307,
+            "encodedFrameBytes": 176341,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 2,
+              "min": 88080,
+              "p50": 88080,
+              "max": 88105,
+              "sum": 176185
+            }
+          }
+        },
+        "hostWarnings": [],
+        "framesSentAfterStart": [
+          {
+            "client": "window-compact",
+            "event": "works.changed",
+            "bytes": 176627
+          },
+          {
+            "client": "window-mail",
+            "event": "works.changed",
+            "bytes": 176695
+          },
+          {
+            "client": "window-legacy",
+            "event": "works.changed",
+            "bytes": 176341
+          }
+        ],
+        "usedFallback": false,
+        "warmSameRevisionCallMs": {
+          "n": 30,
+          "p50": 0,
+          "p95": 0.001,
+          "max": 0.002
+        },
+        "singleSessionChange": {
+          "method": "write->broadcast latency (NOT publish CPU alone): time from updateMap() start to the works.changed frame reaching the fake mail client, frame bytes taken from the pre-encoded line without re-encoding; includes SQLite write, watcher, 5 ms debounce, partial rebuild (one work, others cached), gate sizing, encodeLine. Excludes IPC and rendering.",
+          "warmup": 5,
+          "latencyMs": {
+            "n": 15,
+            "p50": 84.936,
+            "p95": 92.395,
+            "max": 92.395
+          },
+          "samplesWithoutFrame": 0,
+          "eventLoopDelayMs": {
+            "p50": 1.177,
+            "p95": 2.535,
+            "max": 25.018
+          },
+          "rendererLatency": "not measured (window rendering excluded; no replacement implementation exists to measure after-performance)",
+          "lastFrameBytes": 176688
+        },
+        "notices": []
+      },
+      "pipeline": {
+        "scenario": "small-baseline",
+        "regular": {
+          "snapshotBytes": 176413,
+          "gatePass": true,
+          "framePass8MiB": true,
+          "perWorkBytes": {
+            "n": 2,
+            "min": 88177,
+            "p50": 88177,
+            "max": 88194
+          }
+        },
+        "fallback": {
+          "textMax": 4096,
+          "snapshotBytes": 176413,
+          "gatePass": true,
+          "framePass8MiB": true
+        },
+        "publication": "regular snapshot published",
+        "cost": {
+          "method": "in-process, no SQLite/IPC/render; mapLetterReader over an empty letter list (letters are measured separately by the service run); warmup/samples as stated",
+          "warmup": 5,
+          "samples": 30,
+          "projectAllWorksMs": {
+            "n": 30,
+            "p50": 0.085,
+            "p95": 0.213,
+            "max": 2.368
+          },
+          "projectOneWorkMs": {
+            "n": 30,
+            "p50": 0.01,
+            "p95": 0.011,
+            "max": 0.012
+          },
+          "stringifyFullSnapshotMs": {
+            "n": 30,
+            "p50": 0.235,
+            "p95": 0.597,
+            "max": 0.701
+          },
+          "encodeLineFullSnapshotMs": {
+            "n": 30,
+            "p50": 0.236,
+            "p95": 1.186,
+            "max": 1.368
+          },
+          "stringifyOneWorkMs": {
+            "n": 30,
+            "p50": 0.145,
+            "p95": 0.349,
+            "max": 3.59
+          },
+          "singleChangeWarmCacheMs": {
+            "n": 30,
+            "p50": 0.533,
+            "p95": 1.267,
+            "max": 2.146
+          },
+          "singleChangeColdMs": {
+            "n": 30,
+            "p50": 0.263,
+            "p95": 0.316,
+            "max": 1.71
+          }
+        },
+        "eventLoopDelayDuringFullRebuild": {
+          "iterations": 20,
+          "resolutionMs": 1,
+          "p50": 0.982,
+          "p95": 1.469,
+          "max": 1.98,
+          "note": "one synchronous rebuild+encode block per iteration; histogram resolution 1 ms"
+        },
+        "transportExperiment": {
+          "rowDelta": {
+            "label": "EXPERIMENT. One changed session in the last work (10 sessions). Host CPU is NOT O(changed rows): full changed-work projection + all-row encode + diff.",
+            "existingWarmCache_projectOneWork_entryEncode_globalEncodeMs": {
+              "n": 30,
+              "p50": 0.439,
+              "p95": 4.377,
+              "max": 36.593
+            },
+            "rowCandidate_projectOneWork_encodeAllRows_diff_deltaEncodeMs": {
+              "n": 30,
+              "p50": 0.225,
+              "p95": 24.129,
+              "max": 26.825
+            },
+            "deltaFrameBytes": 8833,
+            "existingFullFrameBytes": 176453,
+            "pairedEventLoopDelay": {
+              "method": "same loop (mutate -> run -> setImmediate yield), N iterations each, 1 ms histogram; synchronous CPU block per iteration only, not publish/IPC/render",
+              "existingWarmCache": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 1.508,
+                "p95": 6.279,
+                "max": 28.492
+              },
+              "rowCandidate": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 0.979,
+                "p95": 1.28,
+                "max": 1.406
+              }
+            }
+          },
+          "smallChange": {
+            "label": "hypothetical single-session delta frame (envelope + JSON escaping included, measured with encodeLine)",
+            "singleSessionDeltaFrameBytes": 8828,
+            "vsFullSnapshotFrameRatio": 0.05,
+            "changedWorkPagesAt128KiB": {
+              "frames": 1,
+              "maxFrameBytes": 87613,
+              "sumBytes": 87613
+            },
+            "allWorksPagedAt128KiB": {
+              "frames": 2,
+              "maxFrameBytes": 87630,
+              "sumBytes": 175243,
+              "note": "session-level paging of every work (initial sync cost); work metadata other than sessions not counted"
+            },
+            "frameEnvelopeBytes": 101
+          },
+          "label": "EXPERIMENT ONLY — not a production implementation; sizes are for hypothetical frames, no new after-performance is claimed",
+          "fullSnapshotFrameBytes": 176447,
+          "changedWorkDeltaFrameBytes": 88247,
+          "deltaVsFullRatio": 0.5,
+          "cost": {
+            "encodeFullSnapshotMs": {
+              "n": 30,
+              "p50": 0.236,
+              "p95": 1.186,
+              "max": 1.368
+            },
+            "encodeChangedWorkWithCachedStringsMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0.001,
+              "max": 0.002
+            },
+            "note": "cached = per-work JSON strings kept from the previous build; only the changed work is re-stringified in the real variant: add projectOneWorkMs + stringifyOneWorkMs",
+            "reStringifyChangedWorkMs": {
+              "n": 30,
+              "p50": 0.239,
+              "p95": 0.51,
+              "max": 0.876
+            }
+          },
+          "paging128KiB": {
+            "pageBudgetBytes": 131072,
+            "pages": 2,
+            "maxPageBytes": 88195,
+            "oversizedWorks": 0,
+            "oversizedWorkBytes": [],
+            "partitionMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0.001,
+              "max": 0.003
+            },
+            "note": "greedy packing of the per-work byte sizes already known from the cache; a single work above the budget cannot be split by this scheme (it needs in-work paging of sessions)"
+          }
+        }
+      }
+    },
+    {
+      "serviceRun": {
+        "scenario": "30w-1000s",
+        "note": "30 works, 1,000 sessions, 20 archived/10 active, 4 KiB task + 4 KiB summary",
+        "works": 30,
+        "sessions": 1000,
+        "archived": 20,
+        "textBytesEach": 4096,
+        "gateBytes": 5242880,
+        "maxLineBytes": 8388608,
+        "legacyGateBytes": 6291456,
+        "seedMs": 551.013,
+        "coldStartMs": 456.604,
+        "coldStartEventLoopDelayMs": {
+          "p50": 1.03,
+          "p95": 9.011,
+          "max": 9.527
+        },
+        "variants": {
+          "mailSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "windowSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "legacySnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          }
+        },
+        "hostWarnings": [
+          "карта: snapshot-too-large",
+          "карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление"
+        ],
+        "framesSentAfterStart": [
+          {
+            "client": "window-mail",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          },
+          {
+            "client": "window-compact",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          }
+        ],
+        "usedFallback": "dropped (null)",
+        "warmSameRevisionCallMs": {
+          "n": 30,
+          "p50": 0,
+          "p95": 0.001,
+          "max": 0.003
+        },
+        "singleSessionChange": {
+          "method": "write->broadcast latency (NOT publish CPU alone): time from updateMap() start to the works.changed frame reaching the fake mail client, frame bytes taken from the pre-encoded line without re-encoding; includes SQLite write, watcher, 5 ms debounce, partial rebuild (one work, others cached), gate sizing, encodeLine. Excludes IPC and rendering.",
+          "warmup": 5,
+          "latencyMs": null,
+          "samplesWithoutFrame": 15,
+          "eventLoopDelayMs": {
+            "p50": 1.194,
+            "p95": 2.038,
+            "max": 76.022
+          },
+          "rendererLatency": "not measured (window rendering excluded; no replacement implementation exists to measure after-performance)",
+          "lastFrameBytes": null
+        },
+        "notices": [
+          "snapshot-too-large",
+          "snapshot-too-large"
+        ]
+      },
+      "pipeline": {
+        "scenario": "30w-1000s",
+        "regular": {
+          "snapshotBytes": 8766319,
+          "gatePass": false,
+          "framePass8MiB": false,
+          "perWorkBytes": {
+            "n": 30,
+            "min": 289068,
+            "p50": 289337,
+            "max": 298265
+          }
+        },
+        "fallback": {
+          "textMax": 4096,
+          "snapshotBytes": 8766319,
+          "gatePass": false,
+          "framePass8MiB": false
+        },
+        "publication": "DROPPED: both regular and fallback exceed the 5 MiB gate (works-service.window.test.ts \"snapshot-too-large\": windowSnapshot() === null, no works.changed frame, one host.notice)",
+        "cost": {
+          "method": "in-process, no SQLite/IPC/render; mapLetterReader over an empty letter list (letters are measured separately by the service run); warmup/samples as stated",
+          "warmup": 5,
+          "samples": 30,
+          "projectAllWorksMs": {
+            "n": 30,
+            "p50": 2.596,
+            "p95": 30.245,
+            "max": 60.215
+          },
+          "projectOneWorkMs": {
+            "n": 30,
+            "p50": 0.033,
+            "p95": 0.033,
+            "max": 0.033
+          },
+          "stringifyFullSnapshotMs": {
+            "n": 30,
+            "p50": 9.536,
+            "p95": 116.751,
+            "max": 262.135
+          },
+          "encodeLineFullSnapshotMs": {
+            "n": 30,
+            "p50": 11.831,
+            "p95": 82.186,
+            "max": 94.6
+          },
+          "stringifyOneWorkMs": {
+            "n": 30,
+            "p50": 0.637,
+            "p95": 1.68,
+            "max": 1.905
+          },
+          "singleChangeWarmCacheMs": {
+            "n": 30,
+            "p50": 12.878,
+            "p95": 118.194,
+            "max": 208.003
+          },
+          "singleChangeColdMs": {
+            "n": 30,
+            "p50": 18.77,
+            "p95": 152.283,
+            "max": 172.988
+          }
+        },
+        "eventLoopDelayDuringFullRebuild": {
+          "iterations": 20,
+          "resolutionMs": 1,
+          "p50": 26.984,
+          "p95": 81.265,
+          "max": 140.116,
+          "note": "one synchronous rebuild+encode block per iteration; histogram resolution 1 ms"
+        },
+        "transportExperiment": {
+          "rowDelta": {
+            "label": "EXPERIMENT. One changed session in the last work (33 sessions). Host CPU is NOT O(changed rows): full changed-work projection + all-row encode + diff.",
+            "existingWarmCache_projectOneWork_entryEncode_globalEncodeMs": {
+              "n": 30,
+              "p50": 9.415,
+              "p95": 94.331,
+              "max": 102.951
+            },
+            "rowCandidate_projectOneWork_encodeAllRows_diff_deltaEncodeMs": {
+              "n": 30,
+              "p50": 1.033,
+              "p95": 23.299,
+              "max": 77.228
+            },
+            "deltaFrameBytes": 8824,
+            "existingFullFrameBytes": 8766359,
+            "pairedEventLoopDelay": {
+              "method": "same loop (mutate -> run -> setImmediate yield), N iterations each, 1 ms histogram; synchronous CPU block per iteration only, not publish/IPC/render",
+              "existingWarmCache": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 10.928,
+                "p95": 46.596,
+                "max": 118.292
+              },
+              "rowCandidate": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 1.112,
+                "p95": 1.38,
+                "max": 1.843
+              }
+            }
+          },
+          "smallChange": {
+            "label": "hypothetical single-session delta frame (envelope + JSON escaping included, measured with encodeLine)",
+            "singleSessionDeltaFrameBytes": 8819,
+            "vsFullSnapshotFrameRatio": 0.001,
+            "changedWorkPagesAt128KiB": {
+              "frames": 3,
+              "maxFrameBytes": 122689,
+              "sumBytes": 297901
+            },
+            "allWorksPagedAt128KiB": {
+              "frames": 90,
+              "maxFrameBytes": 122689,
+              "sumBytes": 8755323,
+              "note": "session-level paging of every work (initial sync cost); work metadata other than sessions not counted"
+            },
+            "frameEnvelopeBytes": 101
+          },
+          "label": "EXPERIMENT ONLY — not a production implementation; sizes are for hypothetical frames, no new after-performance is claimed",
+          "fullSnapshotFrameBytes": 8766353,
+          "changedWorkDeltaFrameBytes": 298335,
+          "deltaVsFullRatio": 0.034,
+          "cost": {
+            "encodeFullSnapshotMs": {
+              "n": 30,
+              "p50": 11.831,
+              "p95": 82.186,
+              "max": 94.6
+            },
+            "encodeChangedWorkWithCachedStringsMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0,
+              "max": 0.002
+            },
+            "note": "cached = per-work JSON strings kept from the previous build; only the changed work is re-stringified in the real variant: add projectOneWorkMs + stringifyOneWorkMs",
+            "reStringifyChangedWorkMs": {
+              "n": 30,
+              "p50": 0.467,
+              "p95": 1.575,
+              "max": 8.261
+            }
+          },
+          "paging128KiB": {
+            "pageBudgetBytes": 131072,
+            "pages": 30,
+            "maxPageBytes": 298265,
+            "oversizedWorks": 30,
+            "oversizedWorkBytes": [
+              {
+                "index": 0,
+                "bytes": 298265
+              },
+              {
+                "index": 1,
+                "bytes": 298121
+              },
+              {
+                "index": 2,
+                "bytes": 298236
+              },
+              {
+                "index": 3,
+                "bytes": 298079
+              },
+              {
+                "index": 4,
+                "bytes": 297960
+              }
+            ],
+            "partitionMs": {
+              "n": 30,
+              "p50": 0.001,
+              "p95": 0.002,
+              "max": 0.005
+            },
+            "note": "greedy packing of the per-work byte sizes already known from the cache; a single work above the budget cannot be split by this scheme (it needs in-work paging of sessions)"
+          }
+        }
+      }
+    },
+    {
+      "serviceRun": {
+        "scenario": "30w-3000s",
+        "note": "30 works, 3,000 sessions, 20 archived/10 active, 4 KiB task + 4 KiB summary",
+        "works": 30,
+        "sessions": 3000,
+        "archived": 20,
+        "textBytesEach": 4096,
+        "gateBytes": 5242880,
+        "maxLineBytes": 8388608,
+        "legacyGateBytes": 6291456,
+        "seedMs": 1144.956,
+        "coldStartMs": 610.976,
+        "coldStartEventLoopDelayMs": {
+          "p50": 1.006,
+          "p95": 6.038,
+          "max": 80.675
+        },
+        "variants": {
+          "mailSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "windowSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "legacySnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          }
+        },
+        "hostWarnings": [
+          "карта: snapshot-too-large",
+          "карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление"
+        ],
+        "framesSentAfterStart": [
+          {
+            "client": "window-mail",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          },
+          {
+            "client": "window-compact",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          }
+        ],
+        "usedFallback": "dropped (null)",
+        "warmSameRevisionCallMs": {
+          "n": 30,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "singleSessionChange": {
+          "method": "write->broadcast latency (NOT publish CPU alone): time from updateMap() start to the works.changed frame reaching the fake mail client, frame bytes taken from the pre-encoded line without re-encoding; includes SQLite write, watcher, 5 ms debounce, partial rebuild (one work, others cached), gate sizing, encodeLine. Excludes IPC and rendering.",
+          "warmup": 5,
+          "latencyMs": null,
+          "samplesWithoutFrame": 15,
+          "eventLoopDelayMs": {
+            "p50": 1.181,
+            "p95": 1.895,
+            "max": 203.686
+          },
+          "rendererLatency": "not measured (window rendering excluded; no replacement implementation exists to measure after-performance)",
+          "lastFrameBytes": null
+        },
+        "notices": [
+          "snapshot-too-large",
+          "snapshot-too-large"
+        ]
+      },
+      "pipeline": {
+        "scenario": "30w-3000s",
+        "regular": {
+          "snapshotBytes": 26260933,
+          "gatePass": false,
+          "framePass8MiB": false,
+          "perWorkBytes": {
+            "n": 30,
+            "min": 875113,
+            "p50": 875369,
+            "max": 876022
+          }
+        },
+        "fallback": {
+          "textMax": 4096,
+          "snapshotBytes": 26260933,
+          "gatePass": false,
+          "framePass8MiB": false
+        },
+        "publication": "DROPPED: both regular and fallback exceed the 5 MiB gate (works-service.window.test.ts \"snapshot-too-large\": windowSnapshot() === null, no works.changed frame, one host.notice)",
+        "cost": {
+          "method": "in-process, no SQLite/IPC/render; mapLetterReader over an empty letter list (letters are measured separately by the service run); warmup/samples as stated",
+          "warmup": 5,
+          "samples": 30,
+          "projectAllWorksMs": {
+            "n": 30,
+            "p50": 3.567,
+            "p95": 5.044,
+            "max": 9.341
+          },
+          "projectOneWorkMs": {
+            "n": 30,
+            "p50": 0.084,
+            "p95": 0.218,
+            "max": 0.258
+          },
+          "stringifyFullSnapshotMs": {
+            "n": 30,
+            "p50": 15.224,
+            "p95": 15.644,
+            "max": 15.669
+          },
+          "encodeLineFullSnapshotMs": {
+            "n": 30,
+            "p50": 15.464,
+            "p95": 17.149,
+            "max": 24.844
+          },
+          "stringifyOneWorkMs": {
+            "n": 30,
+            "p50": 0.84,
+            "p95": 1.124,
+            "max": 1.292
+          },
+          "singleChangeWarmCacheMs": {
+            "n": 30,
+            "p50": 16.868,
+            "p95": 18.36,
+            "max": 19.906
+          },
+          "singleChangeColdMs": {
+            "n": 30,
+            "p50": 25.019,
+            "p95": 38.319,
+            "max": 39.924
+          }
+        },
+        "eventLoopDelayDuringFullRebuild": {
+          "iterations": 20,
+          "resolutionMs": 1,
+          "p50": 24.51,
+          "p95": 40.141,
+          "max": 43.254,
+          "note": "one synchronous rebuild+encode block per iteration; histogram resolution 1 ms"
+        },
+        "transportExperiment": {
+          "rowDelta": {
+            "label": "EXPERIMENT. One changed session in the last work (100 sessions). Host CPU is NOT O(changed rows): full changed-work projection + all-row encode + diff.",
+            "existingWarmCache_projectOneWork_entryEncode_globalEncodeMs": {
+              "n": 30,
+              "p50": 24.179,
+              "p95": 53.06,
+              "max": 58.696
+            },
+            "rowCandidate_projectOneWork_encodeAllRows_diff_deltaEncodeMs": {
+              "n": 30,
+              "p50": 1.821,
+              "p95": 3.143,
+              "max": 5.105
+            },
+            "deltaFrameBytes": 8824,
+            "existingFullFrameBytes": 26260973,
+            "pairedEventLoopDelay": {
+              "method": "same loop (mutate -> run -> setImmediate yield), N iterations each, 1 ms histogram; synchronous CPU block per iteration only, not publish/IPC/render",
+              "existingWarmCache": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 18.711,
+                "p95": 30.523,
+                "max": 37.65
+              },
+              "rowCandidate": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 1.84,
+                "p95": 2.124,
+                "max": 2.322
+              }
+            }
+          },
+          "smallChange": {
+            "label": "hypothetical single-session delta frame (envelope + JSON escaping included, measured with encodeLine)",
+            "singleSessionDeltaFrameBytes": 8819,
+            "vsFullSnapshotFrameRatio": 0,
+            "changedWorkPagesAt128KiB": {
+              "frames": 8,
+              "maxFrameBytes": 122689,
+              "sumBytes": 875700
+            },
+            "allWorksPagedAt128KiB": {
+              "frames": 240,
+              "maxFrameBytes": 122751,
+              "sumBytes": 26265057,
+              "note": "session-level paging of every work (initial sync cost); work metadata other than sessions not counted"
+            },
+            "frameEnvelopeBytes": 101
+          },
+          "label": "EXPERIMENT ONLY — not a production implementation; sizes are for hypothetical frames, no new after-performance is claimed",
+          "fullSnapshotFrameBytes": 26260967,
+          "changedWorkDeltaFrameBytes": 875630,
+          "deltaVsFullRatio": 0.033,
+          "cost": {
+            "encodeFullSnapshotMs": {
+              "n": 30,
+              "p50": 15.464,
+              "p95": 17.149,
+              "max": 24.844
+            },
+            "encodeChangedWorkWithCachedStringsMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0,
+              "max": 0
+            },
+            "note": "cached = per-work JSON strings kept from the previous build; only the changed work is re-stringified in the real variant: add projectOneWorkMs + stringifyOneWorkMs",
+            "reStringifyChangedWorkMs": {
+              "n": 30,
+              "p50": 0.746,
+              "p95": 0.86,
+              "max": 1.312
+            }
+          },
+          "paging128KiB": {
+            "pageBudgetBytes": 131072,
+            "pages": 30,
+            "maxPageBytes": 876022,
+            "oversizedWorks": 30,
+            "oversizedWorkBytes": [
+              {
+                "index": 0,
+                "bytes": 875560
+              },
+              {
+                "index": 1,
+                "bytes": 875369
+              },
+              {
+                "index": 2,
+                "bytes": 875412
+              },
+              {
+                "index": 3,
+                "bytes": 875366
+              },
+              {
+                "index": 4,
+                "bytes": 875376
+              }
+            ],
+            "partitionMs": {
+              "n": 30,
+              "p50": 0.001,
+              "p95": 0.001,
+              "max": 0.001
+            },
+            "note": "greedy packing of the per-work byte sizes already known from the cache; a single work above the budget cannot be split by this scheme (it needs in-work paging of sessions)"
+          }
+        }
+      }
+    },
+    {
+      "serviceRun": {
+        "scenario": "1w-3000s",
+        "note": "one work, 3,000 sessions, 4 KiB task + 4 KiB summary",
+        "works": 1,
+        "sessions": 3000,
+        "archived": 0,
+        "textBytesEach": 4096,
+        "gateBytes": 5242880,
+        "maxLineBytes": 8388608,
+        "legacyGateBytes": 6291456,
+        "seedMs": 456.715,
+        "coldStartMs": 119.723,
+        "coldStartEventLoopDelayMs": {
+          "p50": 1.027,
+          "p95": 15.106,
+          "max": 15.106
+        },
+        "variants": {
+          "mailSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "windowSnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          },
+          "legacySnapshot": {
+            "fits": false,
+            "bytes": null,
+            "perWork": null
+          }
+        },
+        "hostWarnings": [
+          "карта: snapshot-too-large",
+          "карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление"
+        ],
+        "framesSentAfterStart": [
+          {
+            "client": "window-mail",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          },
+          {
+            "client": "window-compact",
+            "event": "host.notice",
+            "kind": "snapshot-too-large",
+            "bytes": 0
+          }
+        ],
+        "usedFallback": "dropped (null)",
+        "warmSameRevisionCallMs": {
+          "n": 30,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "singleSessionChange": {
+          "method": "write->broadcast latency (NOT publish CPU alone): time from updateMap() start to the works.changed frame reaching the fake mail client, frame bytes taken from the pre-encoded line without re-encoding; includes SQLite write, watcher, 5 ms debounce, partial rebuild (one work, others cached), gate sizing, encodeLine. Excludes IPC and rendering.",
+          "warmup": 5,
+          "latencyMs": null,
+          "samplesWithoutFrame": 15,
+          "eventLoopDelayMs": {
+            "p50": 1.153,
+            "p95": 1.183,
+            "max": 116.064
+          },
+          "rendererLatency": "not measured (window rendering excluded; no replacement implementation exists to measure after-performance)",
+          "lastFrameBytes": null
+        },
+        "notices": [
+          "snapshot-too-large",
+          "snapshot-too-large"
+        ]
+      },
+      "pipeline": {
+        "scenario": "1w-3000s",
+        "regular": {
+          "snapshotBytes": 26251105,
+          "gatePass": false,
+          "framePass8MiB": false,
+          "perWorkBytes": {
+            "n": 1,
+            "min": 26251064,
+            "p50": 26251064,
+            "max": 26251064
+          }
+        },
+        "fallback": {
+          "textMax": 4096,
+          "snapshotBytes": 26251105,
+          "gatePass": false,
+          "framePass8MiB": false
+        },
+        "publication": "DROPPED: both regular and fallback exceed the 5 MiB gate (works-service.window.test.ts \"snapshot-too-large\": windowSnapshot() === null, no works.changed frame, one host.notice)",
+        "cost": {
+          "method": "in-process, no SQLite/IPC/render; mapLetterReader over an empty letter list (letters are measured separately by the service run); warmup/samples as stated",
+          "warmup": 5,
+          "samples": 30,
+          "projectAllWorksMs": {
+            "n": 30,
+            "p50": 2.797,
+            "p95": 3.217,
+            "max": 3.243
+          },
+          "projectOneWorkMs": {
+            "n": 30,
+            "p50": 2.854,
+            "p95": 3.478,
+            "max": 8.308
+          },
+          "stringifyFullSnapshotMs": {
+            "n": 30,
+            "p50": 14.719,
+            "p95": 15.125,
+            "max": 15.154
+          },
+          "encodeLineFullSnapshotMs": {
+            "n": 30,
+            "p50": 15.082,
+            "p95": 16.425,
+            "max": 17.273
+          },
+          "stringifyOneWorkMs": {
+            "n": 30,
+            "p50": 14.79,
+            "p95": 15.456,
+            "max": 15.684
+          },
+          "singleChangeWarmCacheMs": {
+            "n": 30,
+            "p50": 33.3,
+            "p95": 35.852,
+            "max": 38.385
+          },
+          "singleChangeColdMs": {
+            "n": 30,
+            "p50": 18.288,
+            "p95": 18.709,
+            "max": 18.739
+          }
+        },
+        "eventLoopDelayDuringFullRebuild": {
+          "iterations": 20,
+          "resolutionMs": 1,
+          "p50": 18.383,
+          "p95": 18.989,
+          "max": 19.251,
+          "note": "one synchronous rebuild+encode block per iteration; histogram resolution 1 ms"
+        },
+        "transportExperiment": {
+          "rowDelta": {
+            "label": "EXPERIMENT. One changed session in the last work (3000 sessions). Host CPU is NOT O(changed rows): full changed-work projection + all-row encode + diff.",
+            "existingWarmCache_projectOneWork_entryEncode_globalEncodeMs": {
+              "n": 30,
+              "p50": 33.263,
+              "p95": 34.67,
+              "max": 34.796
+            },
+            "rowCandidate_projectOneWork_encodeAllRows_diff_deltaEncodeMs": {
+              "n": 30,
+              "p50": 53.174,
+              "p95": 54.524,
+              "max": 54.562
+            },
+            "deltaFrameBytes": 8830,
+            "existingFullFrameBytes": 26251145,
+            "pairedEventLoopDelay": {
+              "method": "same loop (mutate -> run -> setImmediate yield), N iterations each, 1 ms histogram; synchronous CPU block per iteration only, not publish/IPC/render",
+              "existingWarmCache": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 33.44,
+                "p95": 34.079,
+                "max": 34.537
+              },
+              "rowCandidate": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 53.576,
+                "p95": 55.28,
+                "max": 58.884
+              }
+            }
+          },
+          "smallChange": {
+            "label": "hypothetical single-session delta frame (envelope + JSON escaping included, measured with encodeLine)",
+            "singleSessionDeltaFrameBytes": 8825,
+            "vsFullSnapshotFrameRatio": 0,
+            "changedWorkPagesAt128KiB": {
+              "frames": 215,
+              "maxFrameBytes": 122747,
+              "sumBytes": 26272112
+            },
+            "allWorksPagedAt128KiB": {
+              "frames": 215,
+              "maxFrameBytes": 122747,
+              "sumBytes": 26272112,
+              "note": "session-level paging of every work (initial sync cost); work metadata other than sessions not counted"
+            },
+            "frameEnvelopeBytes": 101
+          },
+          "label": "EXPERIMENT ONLY — not a production implementation; sizes are for hypothetical frames, no new after-performance is claimed",
+          "fullSnapshotFrameBytes": 26251139,
+          "changedWorkDeltaFrameBytes": 26251134,
+          "deltaVsFullRatio": 1,
+          "cost": {
+            "encodeFullSnapshotMs": {
+              "n": 30,
+              "p50": 15.082,
+              "p95": 16.425,
+              "max": 17.273
+            },
+            "encodeChangedWorkWithCachedStringsMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0,
+              "max": 0
+            },
+            "note": "cached = per-work JSON strings kept from the previous build; only the changed work is re-stringified in the real variant: add projectOneWorkMs + stringifyOneWorkMs",
+            "reStringifyChangedWorkMs": {
+              "n": 30,
+              "p50": 18.59,
+              "p95": 19.289,
+              "max": 19.371
+            }
+          },
+          "paging128KiB": {
+            "pageBudgetBytes": 131072,
+            "pages": 1,
+            "maxPageBytes": 26251064,
+            "oversizedWorks": 1,
+            "oversizedWorkBytes": [
+              {
+                "index": 0,
+                "bytes": 26251064
+              }
+            ],
+            "partitionMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0,
+              "max": 0
+            },
+            "note": "greedy packing of the per-work byte sizes already known from the cache; a single work above the budget cannot be split by this scheme (it needs in-work paging of sessions)"
+          }
+        }
+      }
+    },
+    {
+      "serviceRun": {
+        "scenario": "30w-3000s-short",
+        "note": "control: same shape as 30w-3000s with 80-byte task/summary",
+        "works": 30,
+        "sessions": 3000,
+        "archived": 20,
+        "textBytesEach": 80,
+        "gateBytes": 5242880,
+        "maxLineBytes": 8388608,
+        "legacyGateBytes": 6291456,
+        "seedMs": 49.507,
+        "coldStartMs": 36.22,
+        "coldStartEventLoopDelayMs": {
+          "p50": 1.041,
+          "p95": 5.943,
+          "max": 5.943
+        },
+        "variants": {
+          "mailSnapshot": {
+            "fits": true,
+            "bytes": 1787584,
+            "encodedFrameBytes": 1787618,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 30,
+              "min": 59560,
+              "p50": 59582,
+              "max": 59598,
+              "sum": 1787434
+            }
+          },
+          "windowSnapshot": {
+            "fits": true,
+            "bytes": 1786564,
+            "encodedFrameBytes": 1786598,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 30,
+              "min": 59526,
+              "p50": 59548,
+              "max": 59564,
+              "sum": 1786414
+            }
+          },
+          "legacySnapshot": {
+            "fits": true,
+            "bytes": 1782274,
+            "encodedFrameBytes": 1782308,
+            "gatePass": true,
+            "perWorkBytes": {
+              "n": 30,
+              "min": 59383,
+              "p50": 59405,
+              "max": 59421,
+              "sum": 1782124
+            }
+          }
+        },
+        "hostWarnings": [],
+        "framesSentAfterStart": [
+          {
+            "client": "window-compact",
+            "event": "works.changed",
+            "bytes": 1786598
+          },
+          {
+            "client": "window-mail",
+            "event": "works.changed",
+            "bytes": 1787618
+          },
+          {
+            "client": "window-legacy",
+            "event": "works.changed",
+            "bytes": 1782308
+          }
+        ],
+        "usedFallback": false,
+        "warmSameRevisionCallMs": {
+          "n": 30,
+          "p50": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "singleSessionChange": {
+          "method": "write->broadcast latency (NOT publish CPU alone): time from updateMap() start to the works.changed frame reaching the fake mail client, frame bytes taken from the pre-encoded line without re-encoding; includes SQLite write, watcher, 5 ms debounce, partial rebuild (one work, others cached), gate sizing, encodeLine. Excludes IPC and rendering.",
+          "warmup": 5,
+          "latencyMs": {
+            "n": 15,
+            "p50": 87.81,
+            "p95": 90.497,
+            "max": 90.497
+          },
+          "samplesWithoutFrame": 0,
+          "eventLoopDelayMs": {
+            "p50": 1.152,
+            "p95": 1.191,
+            "max": 14.074
+          },
+          "rendererLatency": "not measured (window rendering excluded; no replacement implementation exists to measure after-performance)",
+          "lastFrameBytes": 1787619
+        },
+        "notices": []
+      },
+      "pipeline": {
+        "scenario": "30w-3000s-short",
+        "regular": {
+          "snapshotBytes": 1785104,
+          "gatePass": true,
+          "framePass8MiB": true,
+          "perWorkBytes": {
+            "n": 30,
+            "min": 59480,
+            "p50": 59502,
+            "max": 59518
+          }
+        },
+        "fallback": {
+          "textMax": 4096,
+          "snapshotBytes": 1785104,
+          "gatePass": true,
+          "framePass8MiB": true
+        },
+        "publication": "regular snapshot published",
+        "cost": {
+          "method": "in-process, no SQLite/IPC/render; mapLetterReader over an empty letter list (letters are measured separately by the service run); warmup/samples as stated",
+          "warmup": 5,
+          "samples": 30,
+          "projectAllWorksMs": {
+            "n": 30,
+            "p50": 3.077,
+            "p95": 3.603,
+            "max": 4.622
+          },
+          "projectOneWorkMs": {
+            "n": 30,
+            "p50": 0.083,
+            "p95": 0.096,
+            "max": 0.395
+          },
+          "stringifyFullSnapshotMs": {
+            "n": 30,
+            "p50": 1.524,
+            "p95": 2.365,
+            "max": 2.423
+          },
+          "encodeLineFullSnapshotMs": {
+            "n": 30,
+            "p50": 1.481,
+            "p95": 2.318,
+            "max": 2.375
+          },
+          "stringifyOneWorkMs": {
+            "n": 30,
+            "p50": 0.046,
+            "p95": 0.047,
+            "max": 0.048
+          },
+          "singleChangeWarmCacheMs": {
+            "n": 30,
+            "p50": 1.609,
+            "p95": 2.403,
+            "max": 2.624
+          },
+          "singleChangeColdMs": {
+            "n": 30,
+            "p50": 4.303,
+            "p95": 4.61,
+            "max": 4.768
+          }
+        },
+        "eventLoopDelayDuringFullRebuild": {
+          "iterations": 20,
+          "resolutionMs": 1,
+          "p50": 4.678,
+          "p95": 5.034,
+          "max": 5.108,
+          "note": "one synchronous rebuild+encode block per iteration; histogram resolution 1 ms"
+        },
+        "transportExperiment": {
+          "rowDelta": {
+            "label": "EXPERIMENT. One changed session in the last work (100 sessions). Host CPU is NOT O(changed rows): full changed-work projection + all-row encode + diff.",
+            "existingWarmCache_projectOneWork_entryEncode_globalEncodeMs": {
+              "n": 30,
+              "p50": 1.619,
+              "p95": 2.461,
+              "max": 3.109
+            },
+            "rowCandidate_projectOneWork_encodeAllRows_diff_deltaEncodeMs": {
+              "n": 30,
+              "p50": 0.14,
+              "p95": 0.149,
+              "max": 0.814
+            },
+            "deltaFrameBytes": 672,
+            "existingFullFrameBytes": 1785140,
+            "pairedEventLoopDelay": {
+              "method": "same loop (mutate -> run -> setImmediate yield), N iterations each, 1 ms histogram; synchronous CPU block per iteration only, not publish/IPC/render",
+              "existingWarmCache": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 1.671,
+                "p95": 1.768,
+                "max": 2.605
+              },
+              "rowCandidate": {
+                "iterations": 40,
+                "resolutionMs": 1,
+                "p50": 1.01,
+                "p95": 1.779,
+                "max": 1.779
+              }
+            }
+          },
+          "smallChange": {
+            "label": "hypothetical single-session delta frame (envelope + JSON escaping included, measured with encodeLine)",
+            "singleSessionDeltaFrameBytes": 671,
+            "vsFullSnapshotFrameRatio": 0,
+            "changedWorkPagesAt128KiB": {
+              "frames": 1,
+              "maxFrameBytes": 58928,
+              "sumBytes": 58928
+            },
+            "allWorksPagedAt128KiB": {
+              "frames": 30,
+              "maxFrameBytes": 58949,
+              "sumBytes": 1768018,
+              "note": "session-level paging of every work (initial sync cost); work metadata other than sessions not counted"
+            },
+            "frameEnvelopeBytes": 101
+          },
+          "label": "EXPERIMENT ONLY — not a production implementation; sizes are for hypothetical frames, no new after-performance is claimed",
+          "fullSnapshotFrameBytes": 1785138,
+          "changedWorkDeltaFrameBytes": 59565,
+          "deltaVsFullRatio": 0.033,
+          "cost": {
+            "encodeFullSnapshotMs": {
+              "n": 30,
+              "p50": 1.481,
+              "p95": 2.318,
+              "max": 2.375
+            },
+            "encodeChangedWorkWithCachedStringsMs": {
+              "n": 30,
+              "p50": 0,
+              "p95": 0,
+              "max": 0
+            },
+            "note": "cached = per-work JSON strings kept from the previous build; only the changed work is re-stringified in the real variant: add projectOneWorkMs + stringifyOneWorkMs",
+            "reStringifyChangedWorkMs": {
+              "n": 30,
+              "p50": 0.128,
+              "p95": 0.226,
+              "max": 0.495
+            }
+          },
+          "paging128KiB": {
+            "pageBudgetBytes": 131072,
+            "pages": 15,
+            "maxPageBytes": 119037,
+            "oversizedWorks": 0,
+            "oversizedWorkBytes": [],
+            "partitionMs": {
+              "n": 30,
+              "p50": 0.001,
+              "p95": 0.001,
+              "max": 0.001
+            },
+            "note": "greedy packing of the per-work byte sizes already known from the cache; a single work above the budget cannot be split by this scheme (it needs in-work paging of sessions)"
+          }
+        }
+      }
+    }
+  ]
+}

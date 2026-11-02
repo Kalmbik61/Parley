@@ -1354,11 +1354,12 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
 
     const created = events[0]!.version;
     expect(events).toEqual([
-      { projectPath: project, workId: 'w-0001', version: created },
+      { projectPath: project, workId: 'w-0001', version: created, incarnation: expect.any(Number) },
       {
         projectPath: project,
         workId: 'w-0001',
         version: created + 1,
+        incarnation: expect.any(Number),
         prevVersion: created,
         structural: true,
         journal: { added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] },
@@ -1413,10 +1414,10 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
     await createWork(project, { title: 'Авторизация' });
     const created = workVersionKey(project, 'w-0001');
 
-    expect(created).toBe(String(versionOf('w-0001')));
+    expect(created).toMatch(new RegExp(`^[1-9][0-9]*:${versionOf('w-0001')}$`));
     await updateMap(project, 'w-0001', addPlanSession);
     const written = workVersionKey(project, 'w-0001');
-    expect(written).toBe(String(versionOf('w-0001')));
+    expect(written).toMatch(new RegExp(`^[1-9][0-9]*:${versionOf('w-0001')}$`));
     expect(written).not.toBe(created);
     // Чтение ключ не двигает: по нему ожидание узнаёт запись, а не обращение.
     await readMap(project, 'w-0001');
@@ -1490,7 +1491,7 @@ describe('workDataVersion, listWorkVersions и снятие работы (спе
     const listed = listWorkVersions();
 
     expect(listed).toHaveLength(2);
-    expect(listed).toContainEqual({ projectPath: project, id: 'w-0001', version: versionOf('w-0001') });
+    expect(listed).toContainEqual(expect.objectContaining({ projectPath: project, id: 'w-0001', version: versionOf('w-0001') }));
     expect(listed.map((row) => row.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(listed.every((row) => Number.isFinite(row.version))).toBe(true);
   });
@@ -1582,7 +1583,7 @@ describe('insertMigratedMap — вставка карты прежнего фа�
 
     expect(checked).toBe(true);
     expect(versionOf('w-0004')).toBeGreaterThanOrEqual(before);
-    expect(seen).toEqual([{ projectPath: project, workId: 'w-0004', version: versionOf('w-0004') }]);
+    expect(seen).toEqual([{ projectPath: project, workId: 'w-0004', version: versionOf('w-0004'), incarnation: expect.any(Number) }]);
     expect(await readMap(project, 'w-0004')).toMatchObject({ work: { title: 'Из файла' } });
     expect(readLetters(project, 'w-0004', { limit: 10 })).toMatchObject([{ text: 'привет' }]);
     expect(unreadCount(project, 'w-0004', 'human')).toEqual({ total: 1, byRoom: { '': 1 } });

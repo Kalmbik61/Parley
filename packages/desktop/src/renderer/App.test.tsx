@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { App } from './App.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
+import { worksSyncLifecycle } from './test-utils/works-sync-lifecycle.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
 import { useFilesStore } from './files/store.js';
 import { EMPTY_HISTORY } from './layout/history.js';
@@ -24,7 +25,7 @@ import { useNoticesStore } from './store/notices.js';
 import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
-import { refKey, type SessionRef } from '@parley/protocol';
+import { refKey, WORKS_SYNC_FEATURE, type SessionRef } from '@parley/protocol';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import type { Activity } from '@parley/core';
 import { REQUIRED_METHODS } from './lib/capabilities.js';
@@ -91,7 +92,52 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, '', '/');
   vi.unstubAllGlobals();
+});
+
+describe('App opt-in sync recovery lifetime', () => {
+  it.each(['default', 'old-host'])('preserves the legacy works lifetime for %s', async mode => {
+    window.history.replaceState({}, '', mode === 'old-host' ? '/?worksSync=1' : '/');
+    const main = worksSyncLifecycle(bridge);
+    const connected = mode === 'old-host'
+      ? { state: 'connected' as const, hostVersion: 'old', methods: [], features: [] }
+      : { state: 'connected' as const, hostVersion: 'new', methods: ['works.sync', 'works.mailState'], features: [WORKS_SYNC_FEATURE] };
+    if (mode === 'old-host') bridge.emitStatus(connected);
+    const { unmount } = render(<App />);
+    await act(async () => {});
+    expect(main.subscriptions).toBe(0);
+    expect(bridge.calls.filter(call => call.method === 'works.list')).toHaveLength(1);
+    await act(async () => { bridge.emitStatus({ state: 'disconnected', reason: 'closed' }); });
+    await act(async () => { bridge.emitStatus(connected); });
+    expect(bridge.calls.filter(call => call.method === 'works.list')).toHaveLength(2);
+    unmount();
+    bridge.emitStatus(connected);
+    expect(bridge.calls.filter(call => call.method === 'works.list')).toHaveLength(2);
+  });
+
+  it('keeps committed data and Retry alive after failed automatic recovery, then disposes on unmount', async () => {
+    window.history.replaceState({}, '', '/?worksSync=1');
+    const main = worksSyncLifecycle(bridge);
+    const { unmount } = render(<App />);
+    await act(async () => { await main.reset(); });
+    expect(useWorksStore.getState().entries).toHaveLength(1);
+    await act(async () => { main.failAutomaticRecovery(); });
+    expect(main.automaticAttempts).toBe(1);
+    expect(useWorksStore.getState().mailRepairFailed).toBe(true);
+    expect(useWorksStore.getState().entries).toHaveLength(1);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: S.common.retry })); });
+    expect(main.explicitAttempts).toBe(1);
+    expect(main.subscriptions).toBe(1);
+    expect(main.unsubscribes).toBe(0);
+    expect(useWorksStore.getState().ready).toBe(true);
+    expect(useWorksStore.getState().mailRepairFailed).toBe(false);
+    expect(useWorksStore.getState().entries[0]?.map.compact?.unread.letters).toBe(3);
+    unmount();
+    expect(main.unsubscribes).toBe(1);
+    useWorksStore.getState().retrySync();
+    expect(main.explicitAttempts).toBe(1);
+  });
 });
 
 describe('App — корневая обёртка окна (раунд исправлений 1, находка B№3)', () => {

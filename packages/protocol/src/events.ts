@@ -15,12 +15,19 @@ import type {
   SessionRef,
   WorksSnapshot,
 } from './types.js';
+import type { WorksSyncInvalidated } from './works-sync.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
   'backlog.changed': BacklogChanged;
   'capabilities.changed': { projectPath: string; snapshot: CapabilitySnapshot };
   'works.changed': WorksSnapshot;
+  /**
+   * Более новая структурная версия работ (спека 2026-11-01): только клиентам с признаком `works-sync`,
+   * вместо подталкивания снимком. Почтовые изменения (mail-only) событие не порождают — им остаётся
+   * `rooms.mail`. Клиент замечает wanted-ревизию и вытягивает `works.sync`.
+   */
+  'works.invalidated': WorksSyncInvalidated;
   /** Письма одной работы за пачку, только окнам с признаком `rooms-mail` (спека rooms.mail 6.3). */
   'rooms.mail': RoomsMailEvent;
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };

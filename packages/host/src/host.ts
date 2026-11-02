@@ -275,6 +275,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const windowCounters = createWindowCounters();
   const worksService = createWorksService(handle.context, {
     windowCounters,
+    // The paged/versioned sync path is now the normal desktop protocol. Older clients
+    // continue to negotiate the legacy works.list flow.
+    sync: { enabled: true },
     // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
     ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
   });

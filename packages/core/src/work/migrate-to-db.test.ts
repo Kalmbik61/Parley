@@ -1103,7 +1103,7 @@ describe('апгрейд базы со схемы 1 — письма из entrie
     expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
     expect(workVersion(project, 'w-0001')).toBe(7);
     const state = dump();
-    expect(state.version).toBe(2);
+    expect(state.version).toBe(3);
     expect(state.tables).toEqual(expect.arrayContaining(['messages', 'message_reads', 'message_unread']));
     expect((state.entries as Array<{ kind: string }>).filter((row) => row.kind === 'message')).toEqual([]);
     // Тексты записанных экспортов и отправленных эффектов, что плана 3 лежали в строках, теперь только отпечатки.
@@ -1119,7 +1119,7 @@ describe('апгрейд базы со схемы 1 — письма из entrie
 
     expect(readStoredMap(project, 'w-0002')).toEqual(parseMap(JSON.stringify(second), 'fixture'));
     expect(readStoredMap(project, 'w-0001').messages.length).toBeGreaterThan(3);
-    expect(dump().version).toBe(2);
+    expect(dump().version).toBe(3);
 
     closeWorkDb();
     await rm(dbFile());
@@ -1127,7 +1127,7 @@ describe('апгрейд базы со схемы 1 — письма из entrie
     await rm(`${dbFile()}-shm`, { force: true });
     writeV1Database([]);
     expect(storeDb().prepare('SELECT COUNT(*) AS n FROM works').get()).toEqual({ n: 0 });
-    expect(dump().version).toBe(2);
+    expect(dump().version).toBe(3);
   });
 
   it('письма с одним номером в строках: апгрейд откатывается целиком, база остаётся v1, ошибка называет работу; починили — поднимается', () => {
@@ -1155,7 +1155,7 @@ describe('апгрейд базы со схемы 1 — письма из entrie
     fix.prepare(`UPDATE entries SET json = replace(json, '"m-01"', '"m-02"') WHERE work_id = 'w-0002' AND kind = 'message' AND key = 'm-02'`).run();
     fix.close();
     expect(readStoredMap(project, 'w-0002').messages.map((message) => message.id)).toEqual(['m-01', 'm-02']);
-    expect(dump().version).toBe(2);
+    expect(dump().version).toBe(3);
   });
 
   it('письмо с неверным полем в строке (readBy не объект): откат, v1, причина называет письмо', () => {

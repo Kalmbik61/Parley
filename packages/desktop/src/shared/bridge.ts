@@ -7,6 +7,8 @@ import type {
   Params,
   Result,
   SessionRef,
+  WorksSyncSurfaceBatch,
+  WorksSyncSurfaceStatus,
 } from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
 import type { AssistantShortcutStatus, SessionVisibilityReport, TtsEngineState } from './island.js';
@@ -92,7 +94,14 @@ export type CloseAnswer = 'close' | 'cancel';
  * Единственный мост между рендерером и хостом. Рендерер не видит ни Node, ни
  * Electron напрямую — только это, отданное прелоадом через `contextBridge`.
  */
+/** Локальные bounded-пачки P1; подписка запрашивает coherent replay, не works.list. */
+export interface WorksSyncBridge {
+  subscribe(batch: (batch: WorksSyncSurfaceBatch) => void | Promise<void>, status: (status: WorksSyncSurfaceStatus) => void): () => void;
+  retry(): void;
+}
+
 export interface ParleyBridge {
+  worksSync: WorksSyncBridge;
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
   notify<N extends NotificationName>(method: N, params: Params<N>): void;
   on<E extends EventName>(event: E, listener: (data: EventData<E>) => void): () => void;

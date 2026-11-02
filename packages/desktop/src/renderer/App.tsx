@@ -10,7 +10,7 @@ import { applyFocusTarget, buildFocusTargetDeps } from './attention/focus-target
 import { openSessionCard } from './chat/open-agent.js';
 import { isTargetVisible, wireAttentionNotifications } from './attention/notify.js';
 import { WindowNotes } from './attention/WindowNotes.js';
-import { hostMethods } from './lib/capabilities.js';
+import { hostMethods, worksSyncEnabled } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
 import { openParleyEditor } from './sidebar/SectionMenu.js';
 import { S } from '../shared/strings.js';
@@ -190,13 +190,29 @@ export function App(): JSX.Element {
   // Диктовка (спека 2026-10-06-voice-input-design.md): от связи с хостом не зависит — мост, запись и тосты свои.
   useEffect(() => wireDictation(bridge), []);
 
+  // The opted-in works consumer owns retained state and Retry while disconnected.
+  // Legacy works keeps its existing per-connection lifetime.
+  useEffect(() => {
+    let consumer: { sync: boolean; dispose(): void } | null = null;
+    const offStatus = bridge.onStatus(next => {
+      if (next.state !== 'connected') {
+        if (consumer?.sync === false) { consumer.dispose(); consumer = null; }
+        return;
+      }
+      const sync = worksSyncEnabled(next, window.location.search);
+      if (consumer?.sync === sync) return;
+      consumer?.dispose();
+      consumer = { sync, dispose: useWorksStore.getState().init(bridge, { sync }) };
+    });
+    return () => { offStatus(); consumer?.dispose(); };
+  }, [bridge]);
+
   // Хранилища и уведомления живут только пока связь с хостом есть: без неё
   // `works.list`/`settings.get` всё равно отвечать некому.
   useEffect(() => {
     if (status.state !== 'connected') return;
 
     const disposers = [
-      useWorksStore.getState().init(bridge),
       // Карточки согласия на папку (спека 2026-10-21, 4.4): диалог по ним — `ConsentPrompt` ниже, строка в Chat — `ChatView`.
       useConsentsStore.getState().init(bridge),
       // Ёмкость машины для сегмента «Agents» строки статуса: хост шлёт первое событие не сразу — начало из `capacity.get`.

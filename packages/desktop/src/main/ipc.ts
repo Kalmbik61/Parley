@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createParleyMd, sharedProjectPaths } from '@parley/core';
-import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressResult, FEED_PROGRESS_RETRY_AFTER_MAX_MS } from '@parley/protocol';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressResult, FEED_PROGRESS_RETRY_AFTER_MAX_MS, WORKS_SYNC_PAGE_BYTES } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -36,6 +36,7 @@ import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
 import type { Inspector } from './browser/inspector.js';
 import { ControlCallError } from './remote-control.js';
+import type { DesktopWorksSync } from './works-sync.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -86,7 +87,10 @@ const ISLAND_PROGRESS_PARAMS = METHODS['feed.progress'].extend({
  * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
  * окна — иначе она ответила бы агенту сама.
  */
-const MAIN_ONLY_METHODS: ReadonlySet<string> = new Set(['browser.agentResult']);
+const MAIN_ONLY_METHODS: ReadonlySet<string> = new Set(['browser.agentResult', 'works.sync']);
+// Only bindWorksSyncWindow can register a main/island surface. A pending mail
+// request keeps its admission slot through reload/destruction until RPC settlement.
+const worksSyncSenders = new WeakMap<object, (event: { sender: unknown; senderFrame: unknown }) => boolean>();
 
 export function isMethodName(value: string): value is MethodName {
   return METHOD_NAMES.has(value);
@@ -218,6 +222,8 @@ export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
+  /** P4a opt-in; production main/index.ts не связывает его до P4b. */
+  worksSync?: Pick<DesktopWorksSync, 'snapshotForLookup'>;
   openExternal: (url: string) => Promise<void>;
   chooseFolder: () => Promise<string | null>;
   chooseFiles: () => Promise<string[]>;
@@ -384,6 +390,9 @@ function findInGuest(
  * процесса, а этот список — на уровне протокола.
  */
 export function registerIpc(options: RegisterIpcOptions): void {
+  const worksSnapshot = (): Promise<Result<'works.list'>> => options.worksSync !== undefined
+    ? options.worksSync.snapshotForLookup()
+    : options.connection.call('works.list', {}) as Promise<Result<'works.list'>>;
   const {
     ipcMain,
     connection,
@@ -417,6 +426,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   } = options;
 
   const progressSent = new WeakMap<object, number>();
+  const mailPending = new Set<object>();
   ipcMain.handle(
     'host:call',
     withIpcError(async (event, method: unknown, params: unknown) => {
@@ -427,6 +437,20 @@ export function registerIpc(options: RegisterIpcOptions): void {
       const fromIsland = isIslandSender?.((event as { sender?: unknown }).sender) === true;
       if (fromIsland && !ISLAND_METHODS.has(method)) {
         throw new Error(`method not allowed for the island: ${method}`);
+      }
+      if (method === 'works.mailState') {
+        const request = event as { sender: object; senderFrame: unknown };
+        const trusted = worksSyncSenders.get(request.sender);
+        if (trusted === undefined || !trusted(request)) throw new HostError('bad_request', 'unregistered mail surface');
+        if (mailPending.has(request.sender) || mailPending.size >= 2) return { kind: 'mail-unavailable', reason: 'busy' };
+        mailPending.add(request.sender);
+        try {
+          const result = await connection.call(method, params);
+          if (worksSyncSenders.get(request.sender) !== trusted || !trusted(request)) throw new HostError('not_found', 'mail surface ended');
+          return result;
+        } finally {
+          mailPending.delete(request.sender);
+        }
       }
       if (fromIsland && method === 'feed.progress') {
         const parsed = ISLAND_PROGRESS_PARAMS.safeParse(params);
@@ -721,7 +745,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768)
       throw new HostError('bad_request', 'Invalid backlog request.');
     try {
-      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const snapshot = await worksSnapshot() as Result<'works.list'>;
       const entry = snapshot.entries.find(item => item.projectPath === projectPath);
       if (!entry) throw new HostError('not_found', 'Project not found.');
       await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
@@ -743,7 +767,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
       typeof file !== 'string' || file.length > 255 || !DECISION_FILE_NAME.test(file))
       throw new HostError('bad_request', 'Invalid decision request.');
     try {
-      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const snapshot = await worksSnapshot() as Result<'works.list'>;
       const entry = snapshot.entries.find(item => item.projectPath === projectPath);
       if (!entry) throw new HostError('not_found', 'Project not found.');
       await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
@@ -768,7 +792,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
       typeof file !== 'string' || file.length > 255 || !SHARED_FILE_PATH.test(file))
       throw new HostError('bad_request', 'Invalid shared file request.');
     try {
-      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const snapshot = await worksSnapshot() as Result<'works.list'>;
       const entry = snapshot.entries.find(item => item.projectPath === projectPath);
       if (!entry) throw new HostError('not_found', 'Project not found.');
       await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
@@ -788,7 +812,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:save-recipe', withIpcError(async (_event, request: unknown) => {
     const input = parseRecipeSaveRequest(request);
     if (input === null) throw new HostError('bad_request', 'Invalid recipe request.');
-    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const snapshot = await worksSnapshot() as Result<'works.list'>;
     const entry = snapshot.entries.find(item => item.projectPath === input.projectPath);
     if (!entry) throw new HostError('not_found', 'Project not found.');
     await roots.rootPath({ workKey: projectWorkKey(input.projectPath, entry.map.work.id), spec: { kind: 'project' } });
@@ -825,7 +849,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
       throw new HostError('bad_request', 'invalid PARLEY.md request');
     }
-    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const snapshot = await worksSnapshot() as Result<'works.list'>;
     const entry = snapshot.entries.find((item) => item.projectPath === projectPath);
     if (entry === undefined) throw new HostError('not_found', 'project not found');
     // Use the same canonical project boundary as the file editor, never a worktree or arbitrary path.
@@ -846,7 +870,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
       const known =
         typeof projectPath === 'string' &&
         typeof workId === 'string' &&
-        ((await connection.call('works.list', {})) as Result<'works.list'>).entries.some(
+        ((await worksSnapshot()) as Result<'works.list'>).entries.some(
           (entry) => entry.projectPath === projectPath && entry.map.work.id === workId,
         );
       if (!known) throw new HostError('not_found', `work not found: ${String(projectPath)} ${String(workId)}`);
@@ -1088,7 +1112,7 @@ export function forwardHostToWindow(
   const unsubEvent = connection.onEvent((message) => {
     if (window.isDestroyed()) return;
     // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
-    if (message.event === 'browser.agentOp') return;
+    if (message.event === 'browser.agentOp' || message.event === 'works.invalidated') return;
     if (events !== undefined && !events.has(message.event)) return;
     if (options.island && message.event === 'activity.changed') {
       window.webContents.send('host:event', { ...message, data: projectIslandActivity(message.data as IslandActivityEntry) });
@@ -1126,6 +1150,97 @@ export function forwardHostToPages(
     current?.dispose();
     current = null;
   });
+}
+
+/**
+ * P4a opt-in: одна пачка до ACK текущего main frame. Дочерний/чужой frame
+ * не может подписаться, подтвердить чужую доставку или запустить ремонт.
+ * Production main/index.ts подключит этот путь только в принятой P4b.
+ */
+export function bindWorksSyncWindow(
+  ipcMain: Pick<IpcMain, 'on' | 'removeListener'>,
+  window: BrowserWindow,
+  sync: DesktopWorksSync,
+  island = false,
+  recoverMail?: () => Promise<void> | null,
+): () => void {
+  let stream: number | null = null;
+  let requestedStream: number | null = null;
+  let delivery = 0;
+  let detach: (() => void) | null = null;
+  let pending: { id: number; resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | null = null;
+  const trusted = (event: { sender: unknown; senderFrame: unknown }): boolean =>
+    !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+  worksSyncSenders.set(window.webContents, trusted);
+  const cancel = (forget = true): void => {
+    stream = null;
+    if (forget) requestedStream = null;
+    detach?.();
+    detach = null;
+    if (pending !== null) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('works sync surface detached'));
+      pending = null;
+    }
+  };
+  const subscribe = (event: Electron.IpcMainEvent, id: unknown): void => {
+    if (!trusted(event) || typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) return;
+    cancel();
+    stream = id;
+    requestedStream = id;
+    detach = sync.attach({
+      batch: (batch) => new Promise<void>((resolve, reject) => {
+        if (stream !== id || window.isDestroyed()) { reject(new Error('works sync surface detached')); return; }
+        const sequence = ++delivery;
+        if (Buffer.byteLength(JSON.stringify(['works-sync:batch', id, sequence, batch])) > WORKS_SYNC_PAGE_BYTES) {
+          reject(new Error('works sync IPC envelope exceeds page budget'));
+          return;
+        }
+        const timer = setTimeout(() => {
+          cancel(false);
+          if (!window.isDestroyed()) window.webContents.send('works-sync:status', id, {
+            state: 'error', epoch: sync.view.epoch, applied: sync.view.revision, error: 'protocol', retryable: true,
+          });
+        }, 2_000);
+        timer.unref();
+        pending = { id: sequence, resolve, reject, timer };
+        // P1 batch stays unchanged; stream/delivery are transport-only ACK addresses.
+        window.webContents.send('works-sync:batch', id, sequence, batch);
+      }),
+      status: (status) => {
+        if (stream === id && !window.isDestroyed()) window.webContents.send('works-sync:status', id, status);
+      },
+    }, island, 128);
+  };
+  const ack = (event: Electron.IpcMainEvent, id: unknown, sequence: unknown): void => {
+    if (!trusted(event) || id !== stream || pending === null || sequence !== pending.id) return;
+    clearTimeout(pending.timer);
+    pending.resolve();
+    pending = null;
+  };
+  const unsubscribe = (event: Electron.IpcMainEvent, id: unknown): void => { if (trusted(event) && id === stream) cancel(); };
+  const retry = (event: Electron.IpcMainEvent): void => {
+    if (!trusted(event)) return;
+    if (stream === null && requestedStream !== null) subscribe(event, requestedStream);
+    const recovery = recoverMail?.();
+    if (recovery != null) { void recovery.catch(() => {}); return; }
+    sync.retry();
+  };
+  const navigation = (_event: unknown, _url: string, inPlace: boolean, mainFrame: boolean): void => { if (mainFrame && !inPlace) cancel(); };
+  const handlers = { 'works-sync:subscribe': subscribe, 'works-sync:ack': ack, 'works-sync:unsubscribe': unsubscribe, 'works-sync:retry': retry };
+  for (const [channel, handler] of Object.entries(handlers)) ipcMain.on(channel, handler);
+  window.webContents.on('did-start-navigation', navigation);
+  const dispose = (): void => {
+    cancel();
+    if (worksSyncSenders.get(window.webContents) === trusted) worksSyncSenders.delete(window.webContents);
+    for (const [channel, handler] of Object.entries(handlers)) ipcMain.removeListener(channel, handler);
+    window.webContents.removeListener('did-start-navigation', navigation);
+    window.removeListener('closed', dispose);
+    window.webContents.removeListener('destroyed', dispose);
+  };
+  window.on('closed', dispose);
+  window.webContents.on('destroyed', dispose);
+  return dispose;
 }
 
 /**

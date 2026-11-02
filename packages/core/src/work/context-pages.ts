@@ -673,21 +673,81 @@ function lastHumanDecision(letters: LetterReader, roomId: string): MapCompactMai
   return null;
 }
 
-/**
- * Карта для окна с признаком `rooms-mail` (спека rooms.mail 6.8): та же форма `WorkMap` и те же ужатые сессии, комнаты и
- * планы, что у `compactWorkMap`, но писем нет совсем (`messages: []`), а в `compact` (версия 2, `MapCompactMail`) на каждую
- * комнату и на прямые письма — `total`, `top`, `lastAt`, непрочитанное человеком и итог его последнего ответа на решение.
- * Размер не зависит от числа писем: всё берётся запросами по индексам — `count`, одно новейшее письмо канала, `unreadCount`
- * и хвост непрочитанного, а не `channelStats` с группировкой по всей истории. `top` и `lastAt` даёт одно новейшее письмо
- * канала (`page` с `newestFirst`): так читаются и прямые письма, которых `roomLetterTops` не умеет. Кандидаты в упоминания —
- * `humanMentionCandidates` над хвостом непрочитанного человека.
- *
- * `options.textMax` — предел текстов, как у `compactWorkMap`: сокращает длинные поля карты и письма кандидатов.
- */
-export function mailWorkMap(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): WindowWorkMap {
+/** Метрики чистого обхода; maxSliceMs — наблюдение, а не гарантия максимума. */
+export interface CooperativeWorkStats { yields: number; maxSliceMs: number }
+export interface CooperativeWorkOptions {
+  sliceMs?: number;
+  batchSize?: number;
+  stats?: CooperativeWorkStats;
+  now?: () => number;
+  yield?: () => Promise<void>;
+}
+
+/** Один ограниченный обход без await на каждом свойстве. Используется также сравнением строк хоста. */
+export class CooperativeWork {
+  readonly stats: CooperativeWorkStats;
+  private readonly now: () => number;
+  private readonly pause: () => Promise<void>;
+  private readonly sliceMs: number;
+  private readonly batchSize: number;
+  constructor(options: CooperativeWorkOptions = {}) {
+    this.stats = options.stats ?? { yields: 0, maxSliceMs: 0 };
+    this.now = options.now ?? (() => performance.now());
+    this.pause = options.yield ?? (() => new Promise(resolve => setImmediate(resolve)));
+    this.sliceMs = Math.max(0, options.sliceMs ?? 4);
+    this.batchSize = Math.max(1, options.batchSize ?? 128);
+  }
+  async run<T>(steps: Generator<void, T>): Promise<T> {
+    let start = this.now();
+    let count = 0;
+    for (;;) {
+      const next = steps.next();
+      const elapsed = this.now() - start;
+      this.stats.maxSliceMs = Math.max(this.stats.maxSliceMs, elapsed);
+      if (next.done) return next.value;
+      count += 1;
+      if (count >= this.batchSize || elapsed >= this.sliceMs) {
+        this.stats.yields += 1;
+        await this.pause();
+        start = this.now();
+        count = 0;
+      }
+    }
+  }
+}
+
+function* copyWindowSteps<T>(value: T, maxBytes: number, path: string, cuts: CutRecord[]): Generator<void, T> {
+  yield;
+  if (typeof value === 'string') return capStrings(value, maxBytes, path, cuts);
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    for (let i = 0; i < value.length; i += 1) copy.push(yield* copyWindowSteps(value[i], maxBytes, `${path}[${i}]`, cuts));
+    return Object.freeze(copy) as T;
+  }
+  if (isPlain(value)) {
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      // defineProperty сохраняет собственный __proto__ как данные, без изменения прототипа.
+      Object.defineProperty(copy, key, { value: yield* copyWindowSteps(value[key], maxBytes, path === '' ? key : `${path}.${key}`, cuts), enumerable: true });
+    }
+    return Object.freeze(copy) as T;
+  }
+  return value;
+}
+
+/** Отсоединённая неизменяемая копия JSON-подобного значения, без кодирования. */
+export function cloneWindowValue<T>(value: T, work = new CooperativeWork()): Promise<T> {
+  return work.run(copyWindowSteps(value, Infinity, '', []));
+}
+
+export interface CapturedWindowMail {
+  textMax: number;
+  mail: Pick<MapCompactMail, 'rooms' | 'unread' | 'mentionCandidates'>;
+}
+
+/** Общие синхронные чтения для обычной и кооперативной проекции. */
+function readWindowMail(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): CapturedWindowMail {
   const textMax = options.textMax ?? WINDOW_TEXT_MAX;
-  const cuts: CutRecord[] = [];
-  const omitted: Record<string, number> = {};
 
   const unread = letters.unreadCount(HUMAN);
   const channels: Array<{ key: string; roomId: string | null }> = [{ key: '', roomId: null }];
@@ -706,18 +766,95 @@ export function mailWorkMap(map: WorkMap, letters: LetterReader, options: { text
   }
   const mentionCandidates = humanMentionCandidates(letters.humanUnread(WINDOW_UNREAD_MAX), textMax);
 
+  return { textMax, mail: { rooms, unread: { letters: unread.total, rooms: unread.byRoom }, mentionCandidates } };
+}
+
+/** Вызывать внутри withLetterSnapshot: обычное отсоединённое значение, ни одного await/Promise в снимке БД. */
+export function captureWindowMail(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): CapturedWindowMail {
+  return structuredClone(readWindowMail(map, letters, options));
+}
+
+/**
+ * Карта для окна с признаком `rooms-mail` (спека rooms.mail 6.8): та же форма `WorkMap` и те же ужатые сессии, комнаты и
+ * планы, что у `compactWorkMap`, но писем нет совсем (`messages: []`), а в `compact` (версия 2, `MapCompactMail`) на каждую
+ * комнату и на прямые письма — `total`, `top`, `lastAt`, непрочитанное человеком и итог его последнего ответа на решение.
+ * Размер не зависит от числа писем: всё берётся запросами по индексам — `count`, одно новейшее письмо канала, `unreadCount`
+ * и хвост непрочитанного, а не `channelStats` с группировкой по всей истории. `top` и `lastAt` даёт одно новейшее письмо
+ * канала (`page` с `newestFirst`): так читаются и прямые письма, которых `roomLetterTops` не умеет. Кандидаты в упоминания —
+ * `humanMentionCandidates` над хвостом непрочитанного человека.
+ *
+ * `options.textMax` — предел текстов, как у `compactWorkMap`: сокращает длинные поля карты и письма кандидатов.
+ */
+export function mailWorkMap(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): WindowWorkMap {
+  const { textMax, mail } = readWindowMail(map, letters, options);
+  const cuts: CutRecord[] = [];
+  const omitted: Record<string, number> = {};
   return {
     ...windowMapBase(map, textMax, cuts, omitted),
     messages: [],
-    compact: {
-      version: 2,
-      rooms,
-      unread: { letters: unread.total, rooms: unread.byRoom },
-      mentionCandidates,
-      cut: cuts.slice(0, MAX_CUT_RECORDS),
-      omitted,
-    },
+    compact: { version: 2, ...mail, cut: cuts.slice(0, MAX_CUT_RECORDS), omitted },
   };
+}
+
+/**
+ * Чистая проекция после закрытия снимка БД. Source — принадлежащая вызывающему версия карты:
+ * до завершения обхода её не меняют. Результат полностью отсоединён и заморожен.
+ */
+export function projectWindowMail(map: WorkMap, captured: CapturedWindowMail, options: CooperativeWorkOptions = {}): Promise<WindowWorkMap> {
+  const work = new CooperativeWork(options);
+  function* project(): Generator<void, WindowWorkMap> {
+    const { textMax, mail } = captured;
+    const cuts: CutRecord[] = [];
+    const omitted: Record<string, number> = {};
+    const copy = <T>(value: T, max: number, path: string) => copyWindowSteps(value, max, path, cuts);
+    const sessions: WorkSession[] = [];
+    for (const session of map.sessions) {
+      const next = { ...session };
+      delete next.codexThreadBinding;
+      if (session.history.length > WINDOW_LIST_MAX) {
+        omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
+        next.history = session.history.slice(-WINDOW_LIST_MAX);
+      }
+      if (session.artifacts.length > WINDOW_LIST_MAX) {
+        omitted[`sessions.${session.id}.artifacts`] = session.artifacts.length - WINDOW_LIST_MAX;
+        next.artifacts = session.artifacts.slice(0, WINDOW_LIST_MAX);
+      }
+      sessions.push(yield* copy(next, textMax, `sessions.${session.id}`));
+    }
+    if (map.decisionExports !== undefined && map.decisionExports.length > 0) omitted.decisionExports = map.decisionExports.length;
+    const projectedWork = yield* copy(map.work, textMax, 'work');
+    const rooms = yield* copy(map.rooms, textMax, 'rooms');
+    const plans = map.plans === undefined ? undefined : yield* copy(map.plans, textMax, 'plans');
+    const effects = map.planEffects === undefined ? undefined : yield* copy(map.planEffects, 1024, 'planEffects');
+    if (map.swarms !== undefined && map.swarms.length > WINDOW_LIST_MAX) omitted.swarms = map.swarms.length - WINDOW_LIST_MAX;
+    const swarms = map.swarms === undefined ? undefined : yield* copy(map.swarms.slice(-WINDOW_LIST_MAX), textMax, 'swarms');
+    const base: Record<string, unknown> = {};
+    const replaced = new Set(['work', 'sessions', 'rooms', 'plans', 'planEffects', 'swarms', 'planExports', 'decisionExports', 'messages', 'compact']);
+    for (const field of Object.keys(map)) {
+      if (!replaced.has(field)) Object.defineProperty(base, field, { value: yield* copy((map as unknown as Record<string, unknown>)[field], Infinity, field), enumerable: true });
+    }
+    const planExports = [];
+    for (const intent of map.planExports ?? []) planExports.push(yield* copy({ ...intent, content: '' }, Infinity, ''));
+    // Явное undefined также сохраняется как у windowMapBase (обычные карты его не содержат).
+    for (const field of ['plans', 'planEffects', 'swarms', 'planExports'] as const) {
+      if (Object.hasOwn(map, field) && map[field] === undefined) Object.defineProperty(base, field, { value: undefined, enumerable: true });
+    }
+    const compact = yield* copy({ version: 2, ...mail, cut: cuts.slice(0, MAX_CUT_RECORDS), omitted }, Infinity, 'compact');
+    return Object.freeze({
+      ...base, work: projectedWork, sessions: Object.freeze(sessions), rooms,
+      ...(plans === undefined ? {} : { plans }),
+      ...(swarms === undefined ? {} : { swarms }),
+      ...(map.planExports === undefined ? {} : { planExports: Object.freeze(planExports) }),
+      ...(effects === undefined ? {} : { planEffects: effects }),
+      messages: Object.freeze([]), compact,
+    }) as unknown as WindowWorkMap;
+  }
+  return work.run(project());
+}
+
+/** Удобный путь без БД; хост использует отдельные capture/project по разные стороны snapshot. */
+export function mailWorkMapCooperative(map: WorkMap, letters: LetterReader, options: CooperativeWorkOptions & { textMax?: number } = {}): Promise<WindowWorkMap> {
+  return projectWindowMail(map, captureWindowMail(map, letters, options), options);
 }
 
 /** Пределы текстов в топологии для агента: длинное читается по полю, а не лежит в каждом ответе `get_map`. */

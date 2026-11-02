@@ -9,6 +9,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import { createWorksSyncBridge } from './works-sync.js';
 import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import { ISLAND_TTS_PORT } from '../shared/island-port.js';
@@ -68,6 +69,7 @@ ipcRenderer.on('island:tts-port', (event) => {
 });
 
 const bridge = {
+  worksSync: createWorksSyncBridge(ipcRenderer),
   call: (method: MethodName, params: unknown) => ipcRenderer.invoke('host:call', method, params),
   on: (event: EventName, listener: (data: unknown) => void) => {
     let set = eventListeners.get(event);

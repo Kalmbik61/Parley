@@ -23,6 +23,9 @@
 
 import {
   compactWorkMap,
+  captureWindowMail,
+  captureWorks,
+  projectWindowMail,
   gitBranch,
   isDatabaseBusy,
   letterCount,
@@ -44,14 +47,18 @@ import {
   withLetterSnapshot,
   WorkNotFoundError,
   workVersion,
+  workIdentity,
   writeHostLease,
 } from '@parley/core';
 import type { HostLease, LetterReader, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
-import type { RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, WORKS_SYNC_FEATURE, encodeLine } from '@parley/protocol';
+import type { RoomsMailEvent, WorksSnapshot, WorksSyncWorkKey } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
+import { HostError } from '../errors.js';
+import { WorksSyncHost } from './works-sync.js';
+import type { WorksMailCaptureResult, WorksSyncOptions } from './works-sync.js';
 import {
   MAIL_BATCH_MS,
   MAIL_HOLD_MAX_MS,
@@ -72,6 +79,8 @@ import type { MailBatch, MailKnown, MailNotice } from './mail.js';
 export type { MailNotice } from './mail.js';
 
 export interface WorksServiceOptions {
+  /** Только изолированный opt-in до независимого P7; обычный host.ts его не задаёт. */
+  sync?: WorksSyncOptions & { enabled: true };
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
   debounceMs?: number;
   /** Сколько запись сервиса (живость, аренда) ждёт занятую базу работ, мс. */
@@ -102,6 +111,7 @@ export interface WorksView {
 }
 
 export interface WorksService {
+  readonly sync?: WorksSyncHost;
   start(): Promise<void>;
   /** Снимок для сервисов хоста: карты как в базе, без писем. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
   snapshot(): WorksView;
@@ -184,6 +194,13 @@ export function createWorksService(
   const lockOptions =
     options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs };
 
+  const sync = options.sync?.enabled === true ? new WorksSyncHost({ ...options.sync, clients: () => host.clients(), captureMail: captureMailState, mailAlive }) : undefined;
+  const isSyncClient = (client: Client): boolean => sync !== undefined && client.role !== 'remote' && client.features.has(WORKS_SYNC_FEATURE);
+  const requiredStructures = new Map<string, number>();
+  const mailRepairs = new Map<string, Promise<void>>();
+  const mailLifetimes = new Map<string, { incarnation: number }>();
+  const syncMailSent = new WeakMap<MailBatch, number>();
+  const legacyMailSent = new WeakMap<MailBatch, number>();
   const entries = new Map<string, WorkEntry>();
   const branches = new Map<string, string | null>();
   let watcher: WorksWatcher | undefined;
@@ -202,6 +219,7 @@ export function createWorksService(
   /** Идущее обновление снимка (`requestRefresh`) и просьба повторить его, когда закончится. */
   let refreshing: Promise<void> | undefined;
   let refreshAgain = false;
+  let pendingAt: number | undefined;
   let ownLease: HostLease | null = null;
   /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
   let revision = 0;
@@ -211,7 +229,7 @@ export function createWorksService(
    * архивный, запасной); после каждой сборки в слоте остаются только запрошенные ею варианты (`buildWindow`): простаивающая
    * работа не копит по варианту на каждое число живых работ, которое когда-то было.
    */
-  const windowParts = new Map<string, { version: number; parts: Map<string, WindowPart> }>();
+  const windowParts = new Map<string, { version: number; incarnation: number | undefined; parts: Map<string, WindowPart> }>();
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
   let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   /**
@@ -252,7 +270,7 @@ export function createWorksService(
     wanted.add(variant);
     const slot = windowParts.get(key);
     const version = work.version;
-    if (version !== undefined && slot?.version === version) {
+    if (version !== undefined && slot?.version === version && slot.incarnation === work.incarnation) {
       const cached = slot.parts.get(variant);
       if (cached !== undefined) return cached;
     }
@@ -274,8 +292,8 @@ export function createWorksService(
     const entry = { projectPath: work.projectPath, map, ...(version === undefined ? {} : { version }) };
     const part = { entry, bytes: jsonBytes(entry) };
     if (version !== undefined) {
-      if (slot?.version === version) slot.parts.set(variant, part);
-      else windowParts.set(key, { version, parts: new Map([[variant, part]]) });
+      if (slot?.version === version && slot.incarnation === work.incarnation) slot.parts.set(variant, part);
+      else windowParts.set(key, { version, incarnation: work.incarnation, parts: new Map([[variant, part]]) });
     }
     return part;
   }
@@ -400,9 +418,9 @@ export function createWorksService(
   function publish(only?: (client: Client) => boolean): void {
     if (only !== undefined && !host.clients().some(only)) return;
     const wanted = only ?? ((): boolean => true);
-    const toMail = (client: Client): boolean => isMailClient(client) && wanted(client);
-    const toCompact = (client: Client): boolean => isCompactClient(client) && !isMailClient(client) && wanted(client);
-    const toLegacy = (client: Client): boolean => !isCompactClient(client) && !isMailClient(client) && wanted(client);
+    const toMail = (client: Client): boolean => !isSyncClient(client) && isMailClient(client) && wanted(client);
+    const toCompact = (client: Client): boolean => !isSyncClient(client) && isCompactClient(client) && !isMailClient(client) && wanted(client);
+    const toLegacy = (client: Client): boolean => !isSyncClient(client) && !isCompactClient(client) && !isMailClient(client) && wanted(client);
 
     const connected = host.clients();
     const mailWindows = connected.some(toMail);
@@ -410,7 +428,7 @@ export function createWorksService(
     // Снимок с хвостами писем читает письма из базы: его собирают, если ему есть кому уйти, а когда окон с признаком нет вовсе,
     // рассылка идёт как прежде, даже без клиентов. Подключены одни окна с признаком — он не нужен. Идёт первым: письмо, легшее
     // между сборками, окно с признаком получит событием, а окну без признака хвост нужен как был прочитан проходом.
-    if (connected.some(toCompact) || !mailWindows) {
+    if (connected.some(toCompact) || (!mailWindows && (sync === undefined || connected.some(client => !isSyncClient(client))))) {
       const compact = windowSnapshot();
       if (compact === null) fits = false;
       else broadcastWorks(compact, toCompact);
@@ -427,34 +445,35 @@ export function createWorksService(
       }
     } else oversizeNotified = false;
 
-    publishLegacy(toLegacy);
-    if (only === undefined) {
+    const legacyFits = publishLegacy(toLegacy);
+    if (only === undefined && (fits && legacyFits || !connected.some(client => !isSyncClient(client)))) {
       published.clear();
       for (const [key, work] of entries) if (work.version !== undefined) published.set(key, work.version);
       releaseMail();
     }
   }
 
-  function publishLegacy(to: (client: Client) => boolean): void {
+  function publishLegacy(to: (client: Client) => boolean): boolean {
     const legacyClients = host.clients().filter(to);
     const stillConnected = new Set(legacyClients.map((client) => client.id));
     for (const id of upgradeNotified) if (!stillConnected.has(id)) upgradeNotified.delete(id);
-    if (legacyClients.length === 0) return;
+    if (legacyClients.length === 0) return true;
     const legacy = legacySnapshot();
     if (legacy !== null) {
       broadcastWorks(legacy, to);
-      return;
+      return true;
     }
     for (const client of legacyClients) {
       if (upgradeNotified.has(client.id)) continue;
       upgradeNotified.add(client.id);
       host.log.warn('карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление', { client: client.name });
     }
+    return false;
   }
 
   const notice = (kind: 'map-lock' | 'map-corrupt' | 'snapshot-too-large', text: string): void => {
     // Вид, добавленный в P35, знает только окно с `compact-works`: прежнее его строка статуса не разберёт.
-    host.broadcast('host.notice', { kind, ref: null, text, at: new Date().toISOString() }, kind === 'snapshot-too-large' ? isCompactClient : undefined);
+    host.broadcast('host.notice', { kind, ref: null, text, at: new Date().toISOString() }, kind === 'snapshot-too-large' ? client => isCompactClient(client) && !isSyncClient(client) : undefined);
     host.log.warn(`карта: ${kind}`, { text });
   };
 
@@ -532,13 +551,14 @@ export function createWorksService(
         // сессии навсегда (fix-tests2, host-disconnect:127).
         // Версия — до карты и после неё: совпали, значит запись между ними не вклинилась и номер точен
         // (по нему снимок окна узнаёт, что работа не менялась; спека хранилища 6.9); не совпали — работа считается новой.
-        const before = workVersion(work.projectPath, work.map.work.id);
+        const identity = workIdentity(work.projectPath, work.map.work.id), before = identity?.version;
         const fresh = await readMap(work.projectPath, work.map.work.id);
-        const exact = before !== undefined && workVersion(work.projectPath, work.map.work.id) === before;
+        const after = workIdentity(work.projectPath, work.map.work.id);
+        const exact = before !== undefined && after?.version === before && after.incarnation === identity!.incarnation;
         entries.set(workKey(work.projectPath, work.map.work.id), {
           projectPath: work.projectPath,
           map: fresh,
-          ...(exact ? { version: before } : {}),
+          ...(exact ? { version: before, incarnation: identity!.incarnation } : {}),
         });
       } catch (error) {
         if (error instanceof MapLockTimeoutError) {
@@ -641,17 +661,19 @@ export function createWorksService(
     if (current.version < batch.prevVersion || current.version < batch.structuralVersion) return false;
     let fresh: WorkEntry;
     try {
-      const before = workVersion(projectPath, workId);
-      if (before !== batch.version) return false;
+      const identity = workIdentity(projectPath, workId), before = identity?.version;
+      if (before !== batch.version || identity?.incarnation !== current.incarnation) return false;
       const map = viewMap(projectPath, workId, (view) => structuredClone(view) as WorkMap);
       // Версия — до карты и после неё, как в `reconcileLiveness`: совпали — номер точен.
-      if (workVersion(projectPath, workId) !== before) return false;
-      fresh = { projectPath, map, version: before };
+      const after = workIdentity(projectPath, workId);
+      if (after?.version !== before || after.incarnation !== identity!.incarnation) return false;
+      fresh = { projectPath, map, version: before, incarnation: identity!.incarnation };
     } catch (error) {
       if (!(error instanceof WorkNotFoundError)) host.log.warn('письма: запись работы не перечиталась', { workId, error: String(error) });
       return false;
     }
     entries.set(key, fresh);
+    sync?.noteMailVersion({ projectPath, workId }, fresh.version!, fresh.incarnation);
     // Следующий полный проход берёт список `latest`: без этого он вернул бы запись к версии, прочитанной до письма.
     const at = latest.findIndex((work) => work.projectPath === projectPath && work.map.work.id === workId);
     if (at >= 0) latest = latest.with(at, fresh);
@@ -662,19 +684,33 @@ export function createWorksService(
   }
 
   /** Одно событие окнам с признаком: кадр кодируется один раз, медленным клиентам уходит склеенный вариант (спека 6.6). */
-  function sendMail(batch: MailBatch): void {
-    const targets = host.clients().filter(isMailClient);
-    if (targets.length === 0) return;
-    const event = fitMailEvent(buildMailEvent(batch));
-    const slow = new Set(targets.filter((client) => client.writableLength() > MAIL_SLOW_CLIENT_BYTES).map((client) => client.id));
-    const fast = new Set(targets.filter((client) => !slow.has(client.id)).map((client) => client.id));
+  function sendMail(batch: MailBatch, syncOnly = false): void {
+    const targets = host.clients().filter(client => isMailClient(client) && (syncOnly ? isSyncClient(client) : !isSyncClient(client)));
+    if (targets.length === 0) { (syncOnly ? syncMailSent : legacyMailSent).set(batch, batch.version); return; }
+    const built = buildMailEvent(batch);
+    const requirement = Math.max(batch.structuralVersion, requiredStructures.get(workKey(batch.projectPath, batch.workId)) ?? 0);
+    const event = fitMailEvent(syncOnly ? { ...built, requiredStructuralVersion: requirement } : built);
+    const slow = new Set(targets.filter(client => client.writableLength() > MAIL_SLOW_CLIENT_BYTES).map(client => client.id));
+    const fast = new Set(targets.filter(client => !slow.has(client.id)).map(client => client.id));
     const send = (data: RoomsMailEvent, to: ReadonlySet<string>): void => {
       const line = encodeLine({ event: 'rooms.mail', data });
-      host.broadcast('rooms.mail', data, (client) => to.has(client.id), line);
+      host.broadcast('rooms.mail', data, client => to.has(client.id), line);
       options.windowCounters?.mail(Buffer.byteLength(line));
     };
     if (fast.size > 0) send(event, fast);
     if (slow.size > 0) send(gluedMailEvent(event), slow);
+    (syncOnly ? syncMailSent : legacyMailSent).set(batch, batch.version);
+  }
+
+  /** Новая структура уже доступна для pull; sync-путь не ждёт старых окон или ACK. */
+  function releaseSyncMail(): void {
+    if (sync === undefined) return;
+    for (const [key, batch] of batches) {
+      const required = Math.max(batch.structuralVersion, requiredStructures.get(workKey(batch.projectPath, batch.workId)) ?? 0);
+      const version = sync.snapshot({ projectPath: batch.projectPath, workId: batch.workId })?.structuralSourceVersion;
+      if (version === undefined || version < required || (syncMailSent.get(batch) ?? -1) >= batch.version) continue;
+      try { sendMail(batch, true); retireMail(key, batch); } catch (error) { if (!(error instanceof WorkNotFoundError)) throw error; }
+    }
   }
 
   /**
@@ -682,24 +718,33 @@ export function createWorksService(
    * `works.changed` идёт окнам без признака (спека 6.10) — `onChange` и полный проход при этом не нужны. У смешанной записи
    * карта и снимок ушли полным проходом: подписчики узнают о ней здесь, вслед за снимком.
    */
-  function flushMail(key: string): void {
+  function retireMail(key: string, batch: MailBatch): void {
+    if ((legacyMailSent.get(batch) ?? -1) < batch.version || (syncMailSent.get(batch) ?? -1) < batch.version) return;
+    if (batch.timer !== undefined) clearTimeout(batch.timer);
+    batches.delete(key);
+  }
+
+  function flushMail(key: string, force = true): void {
     const batch = batches.get(key);
     if (batch === undefined) return;
-    batches.delete(key);
-    if (batch.timer !== undefined) clearTimeout(batch.timer);
     try {
-      for (const mail of batch.notices) notify(mail);
+      for (const mail of batch.notices.splice(0)) notify(mail);
       const refreshed = refreshEntry(batch);
       try {
-        sendMail(batch);
+        if ((legacyMailSent.get(batch) ?? -1) < batch.version) sendMail(batch);
+        const required = Math.max(batch.structuralVersion, requiredStructures.get(key) ?? 0);
+        const available = sync?.snapshot({ projectPath: batch.projectPath, workId: batch.workId })?.structuralSourceVersion;
+        if ((syncMailSent.get(batch) ?? -1) < batch.version && (force || sync === undefined || available !== undefined && available >= required)) sendMail(batch, true);
       } catch (error) {
-        // Работу сняли, пока пачка ждала: письма слать некому.
         if (!(error instanceof WorkNotFoundError)) throw error;
+        legacyMailSent.set(batch, batch.version); syncMailSent.set(batch, batch.version);
       }
       if (refreshed) publish(lacksMail);
+      retireMail(key, batch);
     } catch (error) {
-      // Событие не ушло: следующее покажет окну разрыв по версии (`prevVersion`), и оно дочитает письма (спека 6.5).
       host.log.warn('письма: событие не ушло', { workId: batch.workId, error: String(error) });
+      // Таймер уже выпустил пачку: следующее событие покажет разрыв и вызовет repair.
+      if (force) { if (batch.timer !== undefined) clearTimeout(batch.timer); batches.delete(key); }
     }
   }
 
@@ -713,7 +758,7 @@ export function createWorksService(
       // `MAIL_HOLD_MAX_MS`.
       const entry = entries.get(key);
       if (entry?.version === undefined || entry.version < batch.structuralVersion) continue;
-      flushMail(key);
+      flushMail(key, false);
     }
   }
 
@@ -726,13 +771,24 @@ export function createWorksService(
       if (gone?.timer !== undefined) clearTimeout(gone.timer);
       batches.delete(key);
       mapAhead.delete(key);
+      requiredStructures.delete(key);
+      mailLifetimes.delete(key);
       published.delete(key);
       mailKnown.delete(key);
       return;
     }
+    const identity = workIdentity(event.projectPath, event.workId);
+    if (event.incarnation !== undefined && identity?.incarnation !== event.incarnation) { scheduleRefresh(); return; }
+    if (identity !== undefined) mailLifetime(event.projectPath, event.workId, identity.version, identity.incarnation);
     // Запись без признака `structural` (создание работы, замена карты) считается структурной, как у `watchWorks`.
     const structural = event.structural !== false;
-    if (structural) mapAhead.set(key, event.version);
+    if (structural) { mapAhead.set(key, event.version); requiredStructures.set(key, Math.max(requiredStructures.get(key) ?? 0, event.version)); }
+    else {
+      const known = sync?.snapshot({ projectPath: event.projectPath, workId: event.workId })?.sourceVersion ?? entries.get(key)?.version;
+      // Неизвестный промежуток мог менять структуру в другом процессе; mail progress её не доказывает.
+      if (sync !== undefined && event.prevVersion !== undefined && (known === undefined || event.prevVersion > known)) requiredStructures.set(key, Math.max(requiredStructures.get(key) ?? 0, event.prevVersion));
+      sync?.noteMailVersion({ projectPath: event.projectPath, workId: event.workId }, event.version, workIdentity(event.projectPath, event.workId)?.incarnation);
+    }
     // Чужая запись перед этой: её письма ждут снимка с ней, а этой записи писем без журнала нет — пачка заводится раньше неё.
     const foreign = guardKnown(key, event.workId, () => trackKnown(key, event));
     if (foreign !== undefined) holdForeign(key, event.projectPath, event.workId, foreign);
@@ -831,6 +887,7 @@ export function createWorksService(
     workId: string,
     write: { prevVersion: number; version: number; letters: Message[]; structuralVersion?: number },
   ): void {
+    requiredStructures.set(key, Math.max(requiredStructures.get(key) ?? 0, write.structuralVersion ?? write.version));
     const journal = foreignJournal(write.letters);
     let batch = batches.get(key);
     if (batch === undefined) batches.set(key, (batch = startBatch(projectPath, workId, write.prevVersion)));
@@ -877,6 +934,7 @@ export function createWorksService(
    * сервис ещё не знает. Версия работы только растёт: новая работа под прежним id получает версию по часам (`createWork`).
    */
   function newerOf(work: WorkEntry, current: WorkEntry | undefined): WorkEntry {
+    if (work.incarnation !== current?.incarnation) return work;
     return work.version !== undefined && current?.version !== undefined && work.version < current.version ? current : work;
   }
 
@@ -904,30 +962,30 @@ export function createWorksService(
   }
 
   function scheduleRefresh(): void {
-    if (timer !== undefined) clearTimeout(timer);
+    if (stopped) return;
+    pendingAt ??= Date.now();
+    if (refreshing !== undefined) { refreshAgain = true; return; }
+    if (timer !== undefined) return;
     timer = setTimeout(() => {
       timer = undefined;
-      void requestRefresh();
-    }, debounceMs);
+      void requestRefresh().catch(error => host.log.error('обновление списка работ не удалось', { error: String(error) }));
+    }, Math.max(0, pendingAt + debounceMs - Date.now()));
   }
 
-  /**
-   * Обновления идут по одному (разбор 2026-10-14): записи самой сверки живости будят наблюдатель, и новое обновление
-   * внахлёст повторяло ту же работу — разбор логов провайдеров, запись карт, — а старт хоста на копии настоящих карт
-   * растягивался до 15–30 с. Просьбы, пришедшие во время обновления, склеиваются в одно следующее — со свежим списком.
-   */
+  /** Один проход и не более одного последующего: первая просьба задаёт непереносимый срок. */
   function requestRefresh(): Promise<void> {
     if (refreshing !== undefined) {
+      pendingAt ??= Date.now();
       refreshAgain = true;
       return refreshing;
     }
-    refreshing = (async () => {
-      do {
-        refreshAgain = false;
-        await refresh(latest);
-      } while (refreshAgain && !stopped);
-    })().finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    pendingAt = undefined;
+    refreshAgain = false;
+    refreshing = refresh(latest).finally(() => {
       refreshing = undefined;
+      if (refreshAgain && !stopped) scheduleRefresh();
     });
     return refreshing;
   }
@@ -943,6 +1001,104 @@ export function createWorksService(
     }
   }
 
+  /** Личность почты меняется и при пересоздании чужим процессом без локального onWritten. */
+  function mailLifetime(projectPath: string, workId: string, sourceVersion: number, incarnation: number) {
+    const id = workKey(projectPath, workId), previous = mailLifetimes.get(id);
+    if (previous?.incarnation === incarnation) return previous;
+    const lifetime = Object.freeze({ incarnation });
+    mailLifetimes.set(id, lifetime);
+    if (previous !== undefined) {
+      requiredStructures.set(id, sourceVersion);
+      mapAhead.delete(id); published.delete(id); mailKnown.delete(id); windowParts.delete(id); leased.delete(id); readAlready.delete(id);
+      const old = batches.get(id); if (old?.timer !== undefined) clearTimeout(old.timer);
+      batches.delete(id);
+    }
+    return lifetime;
+  }
+
+  function mailAlive(key: WorksSyncWorkKey, sourceVersion: number, lifetime?: object): boolean {
+    const current = mailLifetimes.get(workKey(key.projectPath, key.workId));
+    if (stopped || current === undefined || current !== lifetime) return false;
+    try {
+      return withLetterSnapshot(key.projectPath, key.workId, () => { const identity = workIdentity(key.projectPath, key.workId); return identity !== undefined && identity.incarnation === current.incarnation && identity.version >= sourceVersion; });
+    } catch { return false; }
+  }
+
+  /** Один согласованный read: ни raw viewMap, ни SQLite transaction не переживают await. */
+  async function captureMailState(key: WorksSyncWorkKey): Promise<WorksMailCaptureResult> {
+    const unavailable = (reason: 'retry' | 'busy' | 'not-found'): WorksMailCaptureResult => ({ kind: 'mail-unavailable', reason });
+    if (sync === undefined || stopped) return unavailable('retry');
+    const id = workKey(key.projectPath, key.workId);
+    try {
+      // Доказательство берётся после полной публикации, не из частично обновлённого rows cache.
+      const committed = await sync.committedSnapshot(key);
+      const captured = withLetterSnapshot(key.projectPath, key.workId, () => viewMap(key.projectPath, key.workId, map => {
+        const identity = workIdentity(key.projectPath, key.workId), sourceVersion = identity?.version;
+        if (sourceVersion === undefined) return null;
+        const lifetime = mailLifetime(key.projectPath, key.workId, sourceVersion, identity!.incarnation);
+        const cached = sync.snapshot(key), required = requiredStructures.get(id);
+        const mail = captureWindowMail(map, storeLetterReader(key.projectPath, key.workId, { map }));
+        const covered = required !== undefined && committed?.structuralSourceVersion !== undefined && committed.structuralSourceVersion >= required && cached?.sourceVersion === sourceVersion && sync.incarnation(key) === identity!.incarnation;
+        // Только неизвестное покрытие требует собственного readMap для кооперативной проекции одной работы.
+        return { sourceVersion, required, mail, covered, lifetime, map: covered ? undefined : structuredClone(map) };
+      }));
+      if (captured === null) return unavailable('not-found');
+      if (captured.covered && captured.required !== undefined) return { kind: 'captured', key: { ...key }, sourceVersion: captured.sourceVersion, requiredStructuralVersion: captured.required, lifetime: captured.lifetime, mail: captured.mail.mail };
+      if (sync.snapshot(key) === undefined) { scheduleRefresh(); return unavailable('retry'); }
+      if (mailRepairs.has(id)) return unavailable('retry');
+      const repair = (async () => {
+        const map = await projectWindowMail(captured.map!, captured.mail);
+        // Повторно проверяется внутри очереди публикаций: новая запись не подменяет закреплённую структуру.
+        await sync.publish([{ projectPath: key.projectPath, map, version: captured.sourceVersion }], undefined, undefined, () => mailAlive(key, captured.sourceVersion, captured.lifetime), [{ key, incarnation: captured.lifetime.incarnation }]);
+        if (mailAlive(key, captured.sourceVersion, captured.lifetime)) requiredStructures.set(id, Math.max(requiredStructures.get(id) ?? 0, captured.sourceVersion));
+      })();
+      mailRepairs.set(id, repair);
+      try { await repair; } finally { if (mailRepairs.get(id) === repair) mailRepairs.delete(id); }
+      return unavailable('retry');
+    } catch (error) {
+      if (error instanceof WorkNotFoundError) return unavailable('not-found');
+      if (isDatabaseBusy(error) || error instanceof MapLockTimeoutError) return unavailable('busy');
+      try { if (workVersion(key.projectPath, key.workId) === undefined) return unavailable('not-found'); } catch { return unavailable('busy'); }
+      host.log.warn('почтовый снимок работы: повторное чтение', { projectPath: key.projectPath, workId: key.workId, error: String(error) });
+      return unavailable('retry');
+    }
+  }
+
+  function captureSync() {
+    return captureWorks(work => {
+      const key = { projectPath: work.projectPath, workId: work.map.work.id }, id = workKey(key.projectPath, key.workId);
+      const lifetime = mailLifetime(work.projectPath, work.map.work.id, work.version, work.incarnation);
+      const previous = sync!.snapshot(key);
+      const unchanged = previous !== undefined && sync!.incarnation(key) === work.incarnation && previous.sourceVersion === work.version && previous.structuralSourceVersion !== undefined && previous.structuralSourceVersion >= (requiredStructures.get(id) ?? 0);
+      return { work, lifetime, mail: unchanged ? undefined : captureWindowMail(work.map, storeLetterReader(work.projectPath, work.map.work.id, { map: work.map })) };
+    });
+  }
+
+  async function refreshSync(captured: ReturnType<typeof captureSync>): Promise<void> {
+    if (sync === undefined || stopped) return;
+    const projected: WindowWorkEntry[] = [];
+    for (const { work, mail } of captured.values) {
+      if (mail === undefined) continue;
+      const map = await projectWindowMail(work.map, mail);
+      projected.push({ projectPath: work.projectPath, map, version: work.version });
+    }
+    const current = () => !stopped && captured.isCurrent() && captured.values.every(({ work, lifetime }) => mailLifetimes.get(workKey(work.projectPath, work.map.work.id)) === lifetime);
+    try {
+      await sync.publish(projected, captured.values.map(({ work }) => ({ projectPath: work.projectPath, workId: work.map.work.id })), Object.fromEntries(branches), current, captured.values.map(({ work }) => ({ key: { projectPath: work.projectPath, workId: work.map.work.id }, incarnation: work.incarnation })));
+    } catch (error) {
+      if (!(error instanceof HostError) || error.code !== 'conflict') throw error;
+      // Superseded lifecycle/catalogue/queued repair: bounded coherent reacquisition, never a hot loop.
+      scheduleRefresh();
+      return;
+    }
+    if (!current()) { scheduleRefresh(); return; }
+    for (const { work, mail } of captured.values) if (mail !== undefined && work.version !== undefined) {
+      const id = workKey(work.projectPath, work.map.work.id);
+      requiredStructures.set(id, Math.max(requiredStructures.get(id) ?? 0, work.version));
+    }
+    releaseSyncMail();
+  }
+
   async function refreshPass(listed: readonly WorkEntry[]): Promise<void> {
     if (stopped) return;
     const previous = buildSnapshot();
@@ -950,7 +1106,10 @@ export function createWorksService(
     // `listed` — уже полный список: `readWorks` каждый раз берёт всю таблицу `works`
     // (неизменённая работа — из кэша по версии), поэтому карту сервиса можно просто
     // заменить целиком, слитую по ключу `projectPath+workId`. Запись, что новее списка по версии, остаётся (`newerOf`).
-    const works = listed.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id))));
+    // Захват до git/живости/аренды: последующие обычные записи не отменяют согласованную V.
+    const captured = sync === undefined ? undefined : captureSync();
+    const works = captured === undefined ? listed.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id)))) : captured.values.map(({ work }) => work);
+    if (captured !== undefined) countParsed(works);
     const seenKeys = new Set<string>();
     entries.clear();
     for (const work of works) {
@@ -958,6 +1117,7 @@ export function createWorksService(
       entries.set(key, work);
       seenKeys.add(key);
     }
+    for (const key of mailLifetimes.keys()) if (!seenKeys.has(key)) mailLifetimes.delete(key);
 
     const projects = new Set(works.map((work) => work.projectPath));
     await Promise.all(
@@ -975,16 +1135,23 @@ export function createWorksService(
 
     // Без `await` до `publish`: пачка чужих писем выходит вслед за этим снимком (`releaseMail`).
     announceForeign();
+    if (captured !== undefined) await refreshSync(captured);
     const snapshot = buildSnapshot();
     revision += 1;
     windowCache = null;
     legacyCache = null;
     publish();
+    // Native-виду структура уже доступна независимо от размеров старого wire-снимка.
+    for (const [key, batch] of batches) {
+      const version = entries.get(key)?.version;
+      if (version !== undefined && version >= batch.structuralVersion) for (const mail of batch.notices.splice(0)) notify(mail);
+    }
     for (const listener of listeners) listener(snapshot, previous);
     for (const key of seenKeys) readAlready.add(key);
   }
 
   return {
+    ...(sync === undefined ? {} : { sync }),
     async start() {
       ownLease = {
         pid: process.pid,
@@ -1020,6 +1187,7 @@ export function createWorksService(
     async stop() {
       if (stopped) return;
       stopped = true;
+      sync?.stop();
       if (timer !== undefined) clearTimeout(timer);
       watcher?.close();
       watcher = undefined;
@@ -1028,6 +1196,7 @@ export function createWorksService(
       for (const batch of batches.values()) if (batch.timer !== undefined) clearTimeout(batch.timer);
       batches.clear();
       mailKnown.clear();
+      mailLifetimes.clear();
 
       const pid = process.pid;
       await Promise.all(

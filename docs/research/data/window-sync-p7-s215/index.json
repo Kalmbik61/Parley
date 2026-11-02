@@ -1,0 +1,1774 @@
+{
+  "verdict": "FAIL: sustained progress/lag gate; other missing/confounded checks never imply PASS",
+  "format": "gzip copies; hashes cover both original raw and gzip file; absolute original paths remain available",
+  "files": [
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/00-small-base-minimal-probe1.json",
+      "path": "paired-v1/00-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10199,
+      "rawSha256": "56db1cb3baa0702f60f0c4e4b7a28eebe7051c43bdfccfddd1947bfa5364aa94",
+      "gzipBytes": 2607,
+      "gzipSha256": "9ff49f482745b753d2e1ff5ec4892a23ea22391b981aecaad52a9bce5cef7be9"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/00-small-base-minimal-probe1.json.log",
+      "path": "paired-v1/00-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "ce107e3b947a3db003b6a1ada950657e814135ea98a44189aa8817dfae191f3c",
+      "gzipBytes": 158,
+      "gzipSha256": "53ab28752d5a09904b8b46ffa8556761a05b61b0401af173701ef5d38550ba4a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/01-small-head-minimal-probe1.json",
+      "path": "paired-v1/01-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10193,
+      "rawSha256": "1bec9e34d6da348a98eaab2f0d72a788cce79574748a857548e07d58188c2ca2",
+      "gzipBytes": 2602,
+      "gzipSha256": "b74aee6b50666f6080cc9cd320741e82247e9e194928aeb8d5f113a6233c3347"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/01-small-head-minimal-probe1.json.log",
+      "path": "paired-v1/01-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "4483a01d366aa2210eba4719b850a659da4ddf5c5824f931ed795d7d4677ed00",
+      "gzipBytes": 156,
+      "gzipSha256": "7d7535ef6aba2f1cc32dd9958fe41cb1e269752ee850f7e4b1c5bd95f6be3fc1"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/02-small-head-minimal-probe1.json",
+      "path": "paired-v1/02-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10186,
+      "rawSha256": "88bcf4cbe7c53953cd85b67ba6d948dee8e13f00927a514f921ba4a43455fb34",
+      "gzipBytes": 2591,
+      "gzipSha256": "0e7e902c7f2fdb4d9bcc2bf8bbea80d724d3a66afdeb3f16707fe559b4882528"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/02-small-head-minimal-probe1.json.log",
+      "path": "paired-v1/02-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "7ac35c4103523ec47506b1cc0135a850bbf702b650cc6bde63d4b6ef36c9c0aa",
+      "gzipBytes": 155,
+      "gzipSha256": "59a10699ef50e9ff3954e8846d9d8ff744f11618e45b48dd607b1364680a2bd6"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/03-small-base-minimal-probe1.json",
+      "path": "paired-v1/03-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10189,
+      "rawSha256": "c0f4577c61d2826a711f2b440671079b81d305cc91253f487bff649633d3915f",
+      "gzipBytes": 2601,
+      "gzipSha256": "a9e6f20a708da638123951bf05326e2eb9401297b5a9e9e19006d98b652b4159"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/03-small-base-minimal-probe1.json.log",
+      "path": "paired-v1/03-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "01ac8fe39f40abbb464be7f55d1140bf021d92be21c8e212309a60261178f666",
+      "gzipBytes": 156,
+      "gzipSha256": "c4b213ca921c8632c28d602bc2f934710bcabdce010724df300be88ee963a8f5"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/04-small-base-minimal-probe1.json",
+      "path": "paired-v1/04-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10160,
+      "rawSha256": "1b321ea1c6c025d6535d5c553fa277692e0a99b4066ef625bd99a33240aa7927",
+      "gzipBytes": 2576,
+      "gzipSha256": "61570ea783332fc9fca8e9f612f6e8816bdc01600aa8b1b3f7656e1efffdb523"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/04-small-base-minimal-probe1.json.log",
+      "path": "paired-v1/04-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "7bab9b9fbbf88abd3ae3b0333dce34fcda3680f0916c768f594856666d4a1dd5",
+      "gzipBytes": 158,
+      "gzipSha256": "331823cb18fd1a12c5feb5d87a89d95169c9aa0f7841f229ae7eecd66b8d1972"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/05-small-head-minimal-probe1.json",
+      "path": "paired-v1/05-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10194,
+      "rawSha256": "26aad18702870f3a27349ae21a52d2c5357efe6cbcdddbeebad43bcceb62b4be",
+      "gzipBytes": 2594,
+      "gzipSha256": "ab03055d60de250977e90fc496d7ebd39a49c927751209ad1a7283c3acfbf1ab"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/05-small-head-minimal-probe1.json.log",
+      "path": "paired-v1/05-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "16e2f14a3d0f0676fca54add7cdd9790a30d499815a7f516346b6fb8d8a537e7",
+      "gzipBytes": 159,
+      "gzipSha256": "b928e85e6f8637a919d2e345e9b75ed0071556df7a0b55c05dcd6e3f1e94362e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/06-small-head-minimal-probe1.json",
+      "path": "paired-v1/06-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10190,
+      "rawSha256": "9009779f5c919c22d6545ea328dcd611e8bbfd3663574025f90dfd7299ae91e2",
+      "gzipBytes": 2605,
+      "gzipSha256": "602a27927bfc452d07cb3d82d71107be556b440f49e70045d367dab86ccc06e9"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/06-small-head-minimal-probe1.json.log",
+      "path": "paired-v1/06-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "29593ffea355623a082f40c4aa4f89b84220f95a6a1b83e69b6f033189ad2802",
+      "gzipBytes": 159,
+      "gzipSha256": "95a89e0eabe80c2707544105398f6adfce318871af00587fa144196d66251891"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/07-small-base-minimal-probe1.json",
+      "path": "paired-v1/07-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10181,
+      "rawSha256": "021200d6114613c5412c873db6804ec94e9b73422110bfe4c5377225d1eb1751",
+      "gzipBytes": 2594,
+      "gzipSha256": "ff6e5e3de8918bbde761614c9efadfed7d911d30f761c3387de5d6799bde077a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/07-small-base-minimal-probe1.json.log",
+      "path": "paired-v1/07-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "e51dda5ceb872fbb4fbca24fd00476fd5f469f1435d1ca3f3bb72104cd7394a4",
+      "gzipBytes": 158,
+      "gzipSha256": "3cbcc43c1ca5232d5e2caa59cafe15beedb9d6961a51ea6505b0b8ce38e8051a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/08-small-base-minimal-probe1.json",
+      "path": "paired-v1/08-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10170,
+      "rawSha256": "4eb530f3012bdf70b0d07063e00595d2275b5d7c46c43782ff417d13171db11d",
+      "gzipBytes": 2588,
+      "gzipSha256": "6849b5cc0f8cf897e3800cc785f9f5f99078fa12b56dbf06be5b07dafeb91535"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/08-small-base-minimal-probe1.json.log",
+      "path": "paired-v1/08-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "fa9c8b3a188706b966ad69349213e209397bc5f037b39e71c543b41ba51b54df",
+      "gzipBytes": 158,
+      "gzipSha256": "c392bf74b4c58c51c50adf025d325d02fad381ade4b6f0815da953763c7421eb"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/09-small-head-minimal-probe1.json",
+      "path": "paired-v1/09-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10180,
+      "rawSha256": "140a8abadbf85cd02f856f248e0cad2345ae23816ab128842af811d4be81ad3b",
+      "gzipBytes": 2591,
+      "gzipSha256": "8d7f8d89adc834aa825e8e4ca297520d00c1cbd26a99f4d8b34d3ecd844c28c9"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/09-small-head-minimal-probe1.json.log",
+      "path": "paired-v1/09-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 199,
+      "rawSha256": "6dfabc68e483eacdf48344a94b6f315dd6b760f105f97de09bb021add596b35f",
+      "gzipBytes": 155,
+      "gzipSha256": "12fce1a4a4af5f565d17841cd4b0dfc56658a9b72cd3f4c66ac627c0ecc26077"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/10-short3k-base-minimal-probe1.json",
+      "path": "paired-v1/10-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18103,
+      "rawSha256": "26718d465d49234303a985f7f83016d19f63008dcaab6d2c7ac2e4e720a9803d",
+      "gzipBytes": 2973,
+      "gzipSha256": "c033dcda50eb28a09a4a56741a38adfe2ab0c79bf98406eb22d0b74ca53c389e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/10-short3k-base-minimal-probe1.json.log",
+      "path": "paired-v1/10-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "7d19ff68b9560e1fec4c22294311e1f61fe21b6fa27867a1c89a854084efa868",
+      "gzipBytes": 161,
+      "gzipSha256": "f614412eb0d67f202de16f0c5ebd10de6673058391e6475e59663be187f9e9c2"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/11-short3k-head-minimal-probe1.json",
+      "path": "paired-v1/11-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18112,
+      "rawSha256": "38fbd590b6d7952f481701084009a9b5dec28993775be73f4bad6ad2f42746aa",
+      "gzipBytes": 2962,
+      "gzipSha256": "aff8ca7d99339a1464a6c7b594279e05c96820710a44549f38828c3c07d58522"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/11-short3k-head-minimal-probe1.json.log",
+      "path": "paired-v1/11-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "2d39b1704454efdb6d7c153dee8644b8669f2f9d66d4c4c86ccc9b80d21a6b0f",
+      "gzipBytes": 160,
+      "gzipSha256": "4e6ac155226d1201b54b37bc319555d94c00522148db031719db6726c9cf22e2"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/12-short3k-head-minimal-probe1.json",
+      "path": "paired-v1/12-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18120,
+      "rawSha256": "063af28ec23143b96f1913996fa95131e1bb683a60327630af3bda41e494db54",
+      "gzipBytes": 2956,
+      "gzipSha256": "5d5d660e1b933f313aa4153fa7b9b9af8918562981a8b206e88a83e40df5c1ea"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/12-short3k-head-minimal-probe1.json.log",
+      "path": "paired-v1/12-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "74568e68ceed9f16c444e2f508e16221dda817e950e276efa269e4d24fc617d8",
+      "gzipBytes": 156,
+      "gzipSha256": "e5a24ff5f25df51c98aa839fd7d04b626661acc4e9216d4bacdd88a8d788d7dc"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/13-short3k-base-minimal-probe1.json",
+      "path": "paired-v1/13-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18141,
+      "rawSha256": "f45ad072c72a10858e18100fbe864e1bc8801f5d81a978ed74c20fdefaa05599",
+      "gzipBytes": 2998,
+      "gzipSha256": "966c44d2e9c54b9afd3e78b8b4c40c1a3d2dc280bd2fd7fb63992937596df286"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/13-short3k-base-minimal-probe1.json.log",
+      "path": "paired-v1/13-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "93f43360c93f91621dd0e9f9e2c65522a0d63287f38f174f4116de94c53a22df",
+      "gzipBytes": 160,
+      "gzipSha256": "b3459600a0401f3b6ac5d30e1b3fc7d1845fb5f914def9f16c83884009e8d05a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/14-short3k-base-minimal-probe1.json",
+      "path": "paired-v1/14-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18127,
+      "rawSha256": "45e4297acd2c3cf45fef9d8083d621bdcc9a8c871e25b1decc65030ebab0a9a9",
+      "gzipBytes": 2978,
+      "gzipSha256": "40bcbe81a95c2a40328e3889d65d4d93278f5dc3987ce5b268ff358ea9f22890"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/14-short3k-base-minimal-probe1.json.log",
+      "path": "paired-v1/14-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "61d6fb418e553e47313b1365686aa870c30b7cfbb65afc82d12e87ef0c57df39",
+      "gzipBytes": 160,
+      "gzipSha256": "90e7b5a6b5edb0872a2e91f2026589f62cab5d3eabd083df65d57c99011ed833"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/15-short3k-head-minimal-probe1.json",
+      "path": "paired-v1/15-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18114,
+      "rawSha256": "6ce98e602fe36c324192950d62acc401ca96b1311ebe0198551ad96c3dc56ca4",
+      "gzipBytes": 2953,
+      "gzipSha256": "bf206a02a8963e494eef7cd8810b58d06a856247d7e7c54f4c649ddee0f320cf"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/15-short3k-head-minimal-probe1.json.log",
+      "path": "paired-v1/15-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "ea7ce547aac51c1b3985a251d75ee0b7a5e1f7c2764adb85841d81ca0b80bb8c",
+      "gzipBytes": 159,
+      "gzipSha256": "42a1e21cc8d55c6e200fa3d2d081bf78aa53ff3b60e85ec6795b586a19a95a10"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/16-short3k-head-minimal-probe1.json",
+      "path": "paired-v1/16-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18108,
+      "rawSha256": "4a0b786af7906af3890e799aa50e477440be8ab98e20d55645d312637d50a567",
+      "gzipBytes": 2954,
+      "gzipSha256": "970f6d3959a3fe1e1b2ae59a9d8f5880c9c617a180a6585fb104bde98a9509fe"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/16-short3k-head-minimal-probe1.json.log",
+      "path": "paired-v1/16-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "b8f23823609eea61a4baf69538a10c7915056641891b841e1c148daf58d180f8",
+      "gzipBytes": 160,
+      "gzipSha256": "1f5a4a3f0847f7552288249a1f3a17eaf24eea15a66377dac9f5dac97ba1e9a3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/17-short3k-base-minimal-probe1.json",
+      "path": "paired-v1/17-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18111,
+      "rawSha256": "387198fab4000a8331d529ab6cc229616b41f12b7d9be0a614fbf6419690b306",
+      "gzipBytes": 2952,
+      "gzipSha256": "516a722ad3da954daca527beae5a55d01fd4ec7160b955398b40f6ba29e9621d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/17-short3k-base-minimal-probe1.json.log",
+      "path": "paired-v1/17-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "543f125564ab8cf448ae68e35df3418b9a239632bc42ae2e07fca02eaba43c21",
+      "gzipBytes": 159,
+      "gzipSha256": "68b061d4f5aaf00e31dbde8492da40bdd2f1eea8abfc9b66c059bcc8473bb6c4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/18-short3k-base-minimal-probe1.json",
+      "path": "paired-v1/18-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18118,
+      "rawSha256": "f06bcc6550057ad406786eb872b5ec59e5c776c5769f2137fd5ba04c8f5ddd8e",
+      "gzipBytes": 2973,
+      "gzipSha256": "948752098a0177a59642850ab5877bd826cbf58f3dca6691d16beb3578fe3126"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/18-short3k-base-minimal-probe1.json.log",
+      "path": "paired-v1/18-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "5294c5000e111f5cdaca2db5799340f55d6a6bcb300784f33e96e2546bea2622",
+      "gzipBytes": 156,
+      "gzipSha256": "912d45efc79956b28b7eb42864d406fa5b54d907b0242b67d73b84980caba8d3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/19-short3k-head-minimal-probe1.json",
+      "path": "paired-v1/19-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18115,
+      "rawSha256": "6ca27fae275ab214572106a146293340821e2781591bbc4bad592602ae3f7a46",
+      "gzipBytes": 2958,
+      "gzipSha256": "3e0be99bb835368c1f0bd9137c7a76372a66d875bf46eb52f203dd77fa014523"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/19-short3k-head-minimal-probe1.json.log",
+      "path": "paired-v1/19-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 203,
+      "rawSha256": "4738a09a70a188999164ed2d2fc2565ffc6db6deaca805816957152f4c522991",
+      "gzipBytes": 160,
+      "gzipSha256": "b3d9ba5b800f666e7e7fd33b945c6e0dc2574381a4c5a94f74233ff1f79305ac"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1/declaration.json",
+      "path": "paired-v1/declaration.json.gz",
+      "rawBytes": 3137,
+      "rawSha256": "e1fcb5b8b18d4711b453602f2a5c727246c465279af4bf43d2e83a856d3f0dde",
+      "gzipBytes": 604,
+      "gzipSha256": "9966dc60602160ec0218a81fc3c02875ad8b33a98a4809905a8e2312116f899d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-summary.json",
+      "path": "paired-v1/summary.json.gz",
+      "rawBytes": 105431,
+      "rawSha256": "2f0bdec2e9874ed613070add543bc849f58cc63c33ca755647bd6177b6e3a7e6",
+      "gzipBytes": 9757,
+      "gzipSha256": "d27c5f61f20061a0407267cc26b118c1f2aa23a423a305253c33b38c31b9c334"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/00-small-base-minimal-probe0.json",
+      "path": "calibration-v3/00-small-base-minimal-probe0.json.gz",
+      "rawBytes": 9342,
+      "rawSha256": "ee6406883ca75478c3262881c9c959a1aeb477743337d79bf664080a1a136d04",
+      "gzipBytes": 2508,
+      "gzipSha256": "3c078a441de8bcf209bf716ff6f9a65480feb552502189849c041b510ef16351"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/00-small-base-minimal-probe0.json.log",
+      "path": "calibration-v3/00-small-base-minimal-probe0.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "da3249f0db72b0dffa959b149ea174ae195ded2f96d2c9ca8988e610f3823cc1",
+      "gzipBytes": 158,
+      "gzipSha256": "0c6db170eedc8210ddc79dc32edcdbf42a2a87d8260e04f2ebdabddd81393a5f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/01-small-base-minimal-probe1.json",
+      "path": "calibration-v3/01-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10171,
+      "rawSha256": "bb2db831cfcac98f355b9d022e72222f1e62747bab710618100e3ef7acb6a5f7",
+      "gzipBytes": 2584,
+      "gzipSha256": "11aedb6fcdb540c81b68516f8f2707b3f35262e137031548ae6a33ea3af9350d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/01-small-base-minimal-probe1.json.log",
+      "path": "calibration-v3/01-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "c82627182cd910bd8560e585c941f2633f081b9bed093083528e61538a6385a0",
+      "gzipBytes": 162,
+      "gzipSha256": "e6aea2833a78e05d9ece2bfa90bfb777600947ae410d7a9512ba6cd3194d6777"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/02-small-head-minimal-probe0.json",
+      "path": "calibration-v3/02-small-head-minimal-probe0.json.gz",
+      "rawBytes": 9341,
+      "rawSha256": "e591cb67a9ed7ca49becfd7c24c6714b33cb11bca92295a3dc3bb9a9d08ba0c1",
+      "gzipBytes": 2512,
+      "gzipSha256": "fcd9680868ed7ed0363dc9e24c5e6ffdeab581a6960a99e3bdd3d89052934b16"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/02-small-head-minimal-probe0.json.log",
+      "path": "calibration-v3/02-small-head-minimal-probe0.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "76ff8b520c72646e8cb7dda9f85c15e4a5b863a1ae5e5ab20b953b41850e3b28",
+      "gzipBytes": 162,
+      "gzipSha256": "b2d68b7d261357b29c2c6bded5d2f31564298b5189d42fc8e593c9ab4e18b1dc"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/03-small-head-minimal-probe1.json",
+      "path": "calibration-v3/03-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10181,
+      "rawSha256": "87c8f498e594d4aa1289741dd5c1b85231c6b30577dd7b49e874d111f51ba467",
+      "gzipBytes": 2590,
+      "gzipSha256": "f3a1a5d775cb017c07b3c3f7774b2c0456cd82974e8c8eda977fae245411f82d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/03-small-head-minimal-probe1.json.log",
+      "path": "calibration-v3/03-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "377ac84ded2f1053ec48807048c16d60983e10f9e2311c0523ceb75181b63789",
+      "gzipBytes": 161,
+      "gzipSha256": "5132f1621be18a6ced9886ef19a4ced1710e1c58a99a3b71db005bdfda54f1a8"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/04-small-head-minimal-probe1.json",
+      "path": "calibration-v3/04-small-head-minimal-probe1.json.gz",
+      "rawBytes": 10184,
+      "rawSha256": "e9db718678f8388b2544b7049ffc61b111f53071eb47c461e2920fa9c3d89368",
+      "gzipBytes": 2606,
+      "gzipSha256": "f9593327e3ad82d779298c4e46a17cc5383dbb3c6ad600ef8d3e5928ec4fd7fa"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/04-small-head-minimal-probe1.json.log",
+      "path": "calibration-v3/04-small-head-minimal-probe1.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "4db3044a2d6fb842fa11e90246d4d9aff965dcf187275b49a1ae9fc7185c9f92",
+      "gzipBytes": 160,
+      "gzipSha256": "6ca7fc9471b872aabd303d695f0417a7602390b7cce0cb6cf9ea6be1743944bb"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/05-small-head-minimal-probe0.json",
+      "path": "calibration-v3/05-small-head-minimal-probe0.json.gz",
+      "rawBytes": 9352,
+      "rawSha256": "ee3e9eadac432e3b42f01a9c7714a76f9d4d8934703620313e09a5208c78530d",
+      "gzipBytes": 2496,
+      "gzipSha256": "53dd6dceb37e608f27424ff88a458338fbc8f08a873df84ff82699d5dab1e69b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/05-small-head-minimal-probe0.json.log",
+      "path": "calibration-v3/05-small-head-minimal-probe0.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "5ce75ccd8e07b88f9c23dc84bd16ae4e8ef7f61664030d0af76e341c9519f549",
+      "gzipBytes": 161,
+      "gzipSha256": "a3c292c9fe00454019d17269051d0f187cfa5e2844c4e962d494ef9a88b33364"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/06-small-base-minimal-probe1.json",
+      "path": "calibration-v3/06-small-base-minimal-probe1.json.gz",
+      "rawBytes": 10192,
+      "rawSha256": "2976f0a78b0dfffe0379cdcf01461ddfdb2e8de659f97757d4410487536feea6",
+      "gzipBytes": 2604,
+      "gzipSha256": "ec5e90cd910eebc4894198c31afc1507ac1801ab5e50c2e9a46b1e7b9bb3e41e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/06-small-base-minimal-probe1.json.log",
+      "path": "calibration-v3/06-small-base-minimal-probe1.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "f713b72651e68bb0a3854b6b7b39563e0cf81cad3d5b4aba7d44a752b5506758",
+      "gzipBytes": 162,
+      "gzipSha256": "8adb9160c6797afc3354c7bcddaea6b5f8440d35bcc999c6d2ce7c6a2b5d7f51"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/07-small-base-minimal-probe0.json",
+      "path": "calibration-v3/07-small-base-minimal-probe0.json.gz",
+      "rawBytes": 9340,
+      "rawSha256": "c424b20ac0a72645a2ee4b98a6b0849c6008a463efe095fe8cda88e675d5131e",
+      "gzipBytes": 2498,
+      "gzipSha256": "5385de3bd44866db5e07a1a709a9fe4eb9879eb3469a4960c5ae66b1e7ed388e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/07-small-base-minimal-probe0.json.log",
+      "path": "calibration-v3/07-small-base-minimal-probe0.json.log.gz",
+      "rawBytes": 204,
+      "rawSha256": "578834606ff5470b23ce189ebd84e6ddafbc32635af9ea062f56f3ddc8e3c173",
+      "gzipBytes": 161,
+      "gzipSha256": "efd0383e2af61e7131674d038cbbf55bbc472cd849a912e0e95f62c3aeb6bac7"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/08-small-base-heavy-probe1.json",
+      "path": "calibration-v3/08-small-base-heavy-probe1.json.gz",
+      "rawBytes": 125122,
+      "rawSha256": "7f688f6a706b9d1a6905ca8e67f6c79f7b0e2cf042ab67f38de37c150cc93b38",
+      "gzipBytes": 12359,
+      "gzipSha256": "3eab7fb34a601b4a248fe1cba87a21552bad850b1b968611391c0b86756a232f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-1LQARF/electron-trace.json",
+      "path": "calibration-v3/08-small-base-heavy-probe1-electron-trace.json.gz",
+      "rawBytes": 4247244,
+      "rawSha256": "3d70816c95e4f9870c69065f236f51c9884172626da6f4fc7195afcbb8f9e0b7",
+      "gzipBytes": 331157,
+      "gzipSha256": "d1b9c1cf76349ace2fdd8f939fc3eeae101163e3ab4e76922db098830a94c205"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/08-small-base-heavy-probe1.json.log",
+      "path": "calibration-v3/08-small-base-heavy-probe1.json.log.gz",
+      "rawBytes": 257,
+      "rawSha256": "3f691a43cbb41c90ee474a96ab638c6f32ed8c5b756b559f4213e306ec307c7e",
+      "gzipBytes": 172,
+      "gzipSha256": "729e5bced5da8ff598f7986224965bd741d9d0b3542a23ce27ce7a5edc945d24"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/09-small-head-heavy-probe1.json",
+      "path": "calibration-v3/09-small-head-heavy-probe1.json.gz",
+      "rawBytes": 154882,
+      "rawSha256": "b965fdc173ede1c9d90bae8aef06f16c4f86f3f88411e53fd7566a0f6011f130",
+      "gzipBytes": 15463,
+      "gzipSha256": "0da65c7331e16524dad4d6dac6b760789ffde6e7832e865e26c5bbe3a81f1fea"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-gc1RWA/electron-trace.json",
+      "path": "calibration-v3/09-small-head-heavy-probe1-electron-trace.json.gz",
+      "rawBytes": 4500094,
+      "rawSha256": "55a879e0030db94a36cec1812558457edf66da490c0be9a1c2a2a50fd6783aa0",
+      "gzipBytes": 352723,
+      "gzipSha256": "3fc5dd73cd8be849cf38703822dabaeb4633d6ea99a59cc3eb0d9fecab55303e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/09-small-head-heavy-probe1.json.log",
+      "path": "calibration-v3/09-small-head-heavy-probe1.json.log.gz",
+      "rawBytes": 257,
+      "rawSha256": "a66b4067a1f7fdab0c4f10b6a29694586074fc6209c35dfe265999ad84f1ec00",
+      "gzipBytes": 172,
+      "gzipSha256": "4b29e00fb0a648b7f8950caa7e392158e4311517e4713dd3c453b750707279c8"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/10-short3k-base-minimal-probe0.json",
+      "path": "calibration-v3/10-short3k-base-minimal-probe0.json.gz",
+      "rawBytes": 9793,
+      "rawSha256": "fea2d66839f9adcc4c5d3c5d5225f258fea2330e00f07bed8adc45c7b1dac2cd",
+      "gzipBytes": 2608,
+      "gzipSha256": "f797011dc150edc4642e672a2379863656ab10d89588cb2a14822b231d0dde58"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/10-short3k-base-minimal-probe0.json.log",
+      "path": "calibration-v3/10-short3k-base-minimal-probe0.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "f1c93f90d62c3f1f60fd39d63041e8d9b02b32eebf585b4e995ece0a5d708043",
+      "gzipBytes": 163,
+      "gzipSha256": "9de443b3c063023c54cc7d267eb22c94ebe3b064150b22a726368ee0010d3e32"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/11-short3k-base-minimal-probe1.json",
+      "path": "calibration-v3/11-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18103,
+      "rawSha256": "e9f8d2116cc7e298735dcc6317eb36d47a3b3687f5040223d1c3d97176bee5d8",
+      "gzipBytes": 2971,
+      "gzipSha256": "7f20952efe535aa9b67c90e34830ab4fb224bdbb02c299801fe1ebf5434b8373"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/11-short3k-base-minimal-probe1.json.log",
+      "path": "calibration-v3/11-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "9df9e47df81850d7758dd4926d059dc1cd94c5f5643306210717f40302124406",
+      "gzipBytes": 162,
+      "gzipSha256": "ccbd7ff714f8fbd0efa6b22219166d0759874f2ce4f1a9fd88e636859dade064"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/12-short3k-head-minimal-probe0.json",
+      "path": "calibration-v3/12-short3k-head-minimal-probe0.json.gz",
+      "rawBytes": 9808,
+      "rawSha256": "5d26f620baa8fa18d0575ff8aee52821062316fef0765fde2a75049bec368a6e",
+      "gzipBytes": 2593,
+      "gzipSha256": "7be877e7149cc7d72053fcd07d87052b13f40f23412b3f19c7cb9fabe858ee25"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/12-short3k-head-minimal-probe0.json.log",
+      "path": "calibration-v3/12-short3k-head-minimal-probe0.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "49029cc0dc0686fb16e2d66b28c7f00f9a4ad553bcc0b88b413b076e525373de",
+      "gzipBytes": 163,
+      "gzipSha256": "a9c7482ef54693ba6fe13536e67c72a8eaee485862ff49ecda9c49e7da590073"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/13-short3k-head-minimal-probe1.json",
+      "path": "calibration-v3/13-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18120,
+      "rawSha256": "afe0b98a5d20c47a8f169a25d5b083b8cf9a876be459daf18b6bd5cfab8fd92c",
+      "gzipBytes": 2958,
+      "gzipSha256": "0cdde1e437d6098f46a7f5f797da228da77dbe929d9fead6987cf68ffbb0cab1"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/13-short3k-head-minimal-probe1.json.log",
+      "path": "calibration-v3/13-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "80a0dd50448a730ad84ae89162a8716f0e78b8d1dee74fb3174767c4a397926e",
+      "gzipBytes": 163,
+      "gzipSha256": "b05d2cf322ef0777aa7c886969bccac4e37c04af93f9beb5350f21208691feaf"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/14-short3k-head-minimal-probe1.json",
+      "path": "calibration-v3/14-short3k-head-minimal-probe1.json.gz",
+      "rawBytes": 18110,
+      "rawSha256": "53545169d53fb3ede5a43e3c411c9514a48beef6544c8528326f2e73958a011c",
+      "gzipBytes": 2966,
+      "gzipSha256": "280b0d6e5dd2b4a80e74eb771bc2daebc586bde2651333ae8d52328a090084e9"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/14-short3k-head-minimal-probe1.json.log",
+      "path": "calibration-v3/14-short3k-head-minimal-probe1.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "d852007b57a35fa378bb60cd5444c4a6ddaecf3485e226be5bb8cebf6a972058",
+      "gzipBytes": 164,
+      "gzipSha256": "6872707bf9828aaf80c42f0711bd1a5544562c61bab3c4ab1ce602c999cbe862"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/15-short3k-head-minimal-probe0.json",
+      "path": "calibration-v3/15-short3k-head-minimal-probe0.json.gz",
+      "rawBytes": 9794,
+      "rawSha256": "96612e4f73f314659397f5cbcb6ce4c5b8fd4e1ab76bb9f77eeceb1f8d05f2df",
+      "gzipBytes": 2578,
+      "gzipSha256": "0be8a6b36020a03ab034b5a3b510a3279748f7b83ae61741d254361ea5f6b675"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/15-short3k-head-minimal-probe0.json.log",
+      "path": "calibration-v3/15-short3k-head-minimal-probe0.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "8efeb28247f17f131413c401142ba4c8f636915737ad62e08974605f5c4d1cac",
+      "gzipBytes": 161,
+      "gzipSha256": "a30ab9c93f05964b7c04ac830b51f119693448bd5a6d513a5097ab5ac1773f74"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/16-short3k-base-minimal-probe1.json",
+      "path": "calibration-v3/16-short3k-base-minimal-probe1.json.gz",
+      "rawBytes": 18138,
+      "rawSha256": "280ea9b292b270aba0e8374de5bb2e61df9f647b367fe3f7b9520ee3ba7e4fe9",
+      "gzipBytes": 3010,
+      "gzipSha256": "d1d094cf0f36938a87950b1222dfb2631f5f6677bf3f310c7fe608a235756a84"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/16-short3k-base-minimal-probe1.json.log",
+      "path": "calibration-v3/16-short3k-base-minimal-probe1.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "913a519e19054f855aabc201a220f3529c916bad748531d056c90c430d9bae3a",
+      "gzipBytes": 161,
+      "gzipSha256": "7f1d34d34933075fa0fab0f92b2b004d80a208a2195338cfd9188a5423667eb3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/17-short3k-base-minimal-probe0.json",
+      "path": "calibration-v3/17-short3k-base-minimal-probe0.json.gz",
+      "rawBytes": 9792,
+      "rawSha256": "0b73d91e060ed427884a4af8754e662bd26d8f6b3745198563b3f8bfb0225712",
+      "gzipBytes": 2612,
+      "gzipSha256": "cf7233bffe18c8d5e5bad2458312875ff0348d5f274c6e2709c03e7420f8a6c4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/17-short3k-base-minimal-probe0.json.log",
+      "path": "calibration-v3/17-short3k-base-minimal-probe0.json.log.gz",
+      "rawBytes": 208,
+      "rawSha256": "85fd8320ecd4446fb0435e3c2cc7d4f28b5793b26c594e75690619db5c27f74c",
+      "gzipBytes": 163,
+      "gzipSha256": "578dee7733164d2e0b684b9e47cfdfdc82c7a05d7b4749d62b82a3f8eeb1792f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/18-short3k-base-heavy-probe1.json",
+      "path": "calibration-v3/18-short3k-base-heavy-probe1.json.gz",
+      "rawBytes": 12255786,
+      "rawSha256": "78ed6b3f10b2b31ba809abdc842813920bfb6b3d1929a3f16704315b5e2b50aa",
+      "gzipBytes": 604165,
+      "gzipSha256": "7017bd948db79ee2491b90828fa86364ab5128c84d608531c7da340fc031bf07"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-CVuNRn/electron-trace.json",
+      "path": "calibration-v3/18-short3k-base-heavy-probe1-electron-trace.json.gz",
+      "rawBytes": 8859094,
+      "rawSha256": "c604f417f198a7ab97e18490b61c649e6aae57b7817e2c32a251558518e61e4a",
+      "gzipBytes": 624166,
+      "gzipSha256": "f80f7169bef5704f3750f683e2780905f70f48a756aaac8af85a52e448d6c685"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/18-short3k-base-heavy-probe1.json.log",
+      "path": "calibration-v3/18-short3k-base-heavy-probe1.json.log.gz",
+      "rawBytes": 261,
+      "rawSha256": "b8d62e4890605d9075d0a9afde58fd290d17c8a9f6c46a57d6f6522254199020",
+      "gzipBytes": 170,
+      "gzipSha256": "66742c45bec7cc8304411aed7f4c7407eb14c8bcc026880a85202de0923b80bb"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/19-short3k-head-heavy-probe1.json",
+      "path": "calibration-v3/19-short3k-head-heavy-probe1.json.gz",
+      "rawBytes": 12246485,
+      "rawSha256": "354ce938e495196bd4633cbc36da08b141e7430002d4e4f5831751a9505df365",
+      "gzipBytes": 599087,
+      "gzipSha256": "9976feca6a5630ffe1a5a139e147351fbfe276cf3b4dd4bf5658e9bd029314ac"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-mygoTy/electron-trace.json",
+      "path": "calibration-v3/19-short3k-head-heavy-probe1-electron-trace.json.gz",
+      "rawBytes": 8695228,
+      "rawSha256": "eed1e3dcb81eb9379e1fd4dfe53f40ad7fde0b008bf223f9a7952bc06a65f9e3",
+      "gzipBytes": 646074,
+      "gzipSha256": "dbd0290a841a4a9bf6e324474bd488f2ffb798e81ea8f029c5daa01f5da00c25"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/19-short3k-head-heavy-probe1.json.log",
+      "path": "calibration-v3/19-short3k-head-heavy-probe1.json.log.gz",
+      "rawBytes": 261,
+      "rawSha256": "e146c017b6b5c7f7804df8dff00db601fffdf6069cfb9bb17a18b44ca6b8339a",
+      "gzipBytes": 169,
+      "gzipSha256": "834c922414bf2a36877e14511887ba4efd4813b5e00a8a89a1de4df1a26c05b5"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3/declaration.json",
+      "path": "calibration-v3/declaration.json.gz",
+      "rawBytes": 2960,
+      "rawSha256": "aae86048fdead0a7d92d89ad94dc9c4a7ba6d8e641e5a80c7f861469c82b7c80",
+      "gzipBytes": 517,
+      "gzipSha256": "8b7160078f3cbc313e00bad08ecdb35bb27c69d90f94693a0819df1c7a71cbf4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-calibration-v3-summary.json",
+      "path": "calibration-v3/summary.json.gz",
+      "rawBytes": 131633,
+      "rawSha256": "ca5ff26c583fb9b1dad5a5eb8e86a79008543e96ab8e2813f9e82a661413030f",
+      "gzipBytes": 14209,
+      "gzipSha256": "2fe04eebe67ba95fe2344fc1c8c0312c82b7bfea3015bbb9393215879a5d6def"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v1.json",
+      "path": "huge-v1/raw.json.gz",
+      "rawBytes": 1871079,
+      "rawSha256": "95a173fba6a8b8cc8e7c98505af2c218d114f859931392a3a6efc28b856f6ddb",
+      "gzipBytes": 65670,
+      "gzipSha256": "5dbc24ed7afe30caa9e650342bc4a63b582afad15155e2071bfe334c4af5dc87"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-9VfI7Z/electron-trace.json",
+      "path": "huge-v1/raw-electron-trace.json.gz",
+      "rawBytes": 2516958,
+      "rawSha256": "8d289b84245089838599e6b0ed5e2b4e0d0501590814991923235ae1829afef1",
+      "gzipBytes": 214107,
+      "gzipSha256": "a2a424ea9dfc7f2427d75b8af088b77d612f32dae2bcb9b64ccf879ac6cfa36f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v1.json.declaration.json",
+      "path": "huge-v1/declaration.json.gz",
+      "rawBytes": 423,
+      "rawSha256": "f2dc10de2b087e9ea15ca45dc5741ab9afa43fbab359cbf5b9059a78d2bc1e9b",
+      "gzipBytes": 295,
+      "gzipSha256": "f7ddaf75e4e1d91ea086463926cce5c7f37a59496ac663d2a08773f723abc978"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v1-summary.json",
+      "path": "huge-v1/summary.json.gz",
+      "rawBytes": 12661,
+      "rawSha256": "08141ea262cbe962695a79fa4c35b3664efd49ad1346b581bb9444b339db02b5",
+      "gzipBytes": 2950,
+      "gzipSha256": "55c9b24e01275c9a68fb86f419f68d5e8366e995328386a418ffb32892a56e0b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-9VfI7Z/host-stderr.log",
+      "path": "huge-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2.json",
+      "path": "huge-v2/raw.json.gz",
+      "rawBytes": 688061,
+      "rawSha256": "b2147e4261a568ed0c4cca9c8b3a90faec7157a44a9ee196e33a458c8e36f252",
+      "gzipBytes": 56898,
+      "gzipSha256": "3a22dc9065fa14c6e863c351fe326a158c4310a87e0342a2f7c13cfd0445c1d0"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-HyodTE/electron-trace.json",
+      "path": "huge-v2/raw-electron-trace.json.gz",
+      "rawBytes": 4804878,
+      "rawSha256": "a875a159cf7d84de92302762e720c6061e3bc25f5631ea87718dcf45778c073f",
+      "gzipBytes": 395713,
+      "gzipSha256": "e46932910e6a0bd67e95420ad185fb58ad8d1c2263f292efcf7cbca056452361"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2.json.declaration.json",
+      "path": "huge-v2/declaration.json.gz",
+      "rawBytes": 423,
+      "rawSha256": "f2dc10de2b087e9ea15ca45dc5741ab9afa43fbab359cbf5b9059a78d2bc1e9b",
+      "gzipBytes": 295,
+      "gzipSha256": "f7ddaf75e4e1d91ea086463926cce5c7f37a59496ac663d2a08773f723abc978"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-summary.json",
+      "path": "huge-v2/summary.json.gz",
+      "rawBytes": 17365,
+      "rawSha256": "c228b3ca222b13af1c9a2c3abf78fa53acce9162996eac4607e45b0812b47e39",
+      "gzipBytes": 3542,
+      "gzipSha256": "7f806d2684f537a5c0365ebe59659f71e90e081994b75392bcf619fc9f1556df"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-HyodTE/host-stderr.log",
+      "path": "huge-v2/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-cold30-v1.json",
+      "path": "cold30-v1/raw.json.gz",
+      "rawBytes": 14735187,
+      "rawSha256": "3a0c2d0920b4fa4bc9d9b273e394e6cf585e813e602305486d8e2a7f36517052",
+      "gzipBytes": 772316,
+      "gzipSha256": "ee5856768406496346a6c0caadadec30f4a9a123ddb0c027093586107009cc10"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-8V5je0/electron-trace.json",
+      "path": "cold30-v1/raw-electron-trace.json.gz",
+      "rawBytes": 7982270,
+      "rawSha256": "eeccaf6c24ddd5cbfbc9e0900fcec94497c74d70aa555840f3faa925783f2de8",
+      "gzipBytes": 627325,
+      "gzipSha256": "114131b414cbc2731fbc97ac3d4006763c852105784b84a1c8e0e2673d78afc5"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-cold30-v1.json.declaration.json",
+      "path": "cold30-v1/declaration.json.gz",
+      "rawBytes": 427,
+      "rawSha256": "55b89be986ee765a9b3ce10304c0a1e102f78e26dfe22f5512c57b0e2a322bd2",
+      "gzipBytes": 297,
+      "gzipSha256": "13b47033708ba681120bc094bc5a16ea8994e56bfed72197a1a4f480decfe125"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-cold30-v1-summary.json",
+      "path": "cold30-v1/summary.json.gz",
+      "rawBytes": 29487,
+      "rawSha256": "beabd8740c2cf93154ec80e296e6bc5ba6c87d2a51312bb22aa32fa3b35731ad",
+      "gzipBytes": 4548,
+      "gzipSha256": "4cddc54319ec9c523540ae45bf0152da64da217be98d89480e4d1e17848cc56e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-8V5je0/host-stderr.log",
+      "path": "cold30-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-nearcap-v1.json",
+      "path": "nearcap-v1/raw.json.gz",
+      "rawBytes": 396895,
+      "rawSha256": "70078a7a4270ee9a37a6af08d319cfb63150076245d57be8c8d795912e0f89aa",
+      "gzipBytes": 30374,
+      "gzipSha256": "67b06c6dedb13d34131830b51bc132f8553c6fe610754d1779a493b311c6073c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-PnmXrQ/electron-trace.json",
+      "path": "nearcap-v1/raw-electron-trace.json.gz",
+      "rawBytes": 2833966,
+      "rawSha256": "fe56b9afa931f72317a6221f01645e2cfe70323a7321afcf039e118011cec93a",
+      "gzipBytes": 240227,
+      "gzipSha256": "7d6ef84993b301fd120e05ef6ab5efa2398300caae2a27c0e7f330eb5ef90ab4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-nearcap-v1.json.declaration.json",
+      "path": "nearcap-v1/declaration.json.gz",
+      "rawBytes": 429,
+      "rawSha256": "76a4fb37436092712cfb577fb851a932330323fe47ecc361bb4a14b5653ab540",
+      "gzipBytes": 297,
+      "gzipSha256": "e2d73c6f8ff8d6286dde30b91f05cda5eeca448c22b523d16679d843a9b4376e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-nearcap-v1-summary.json",
+      "path": "nearcap-v1/summary.json.gz",
+      "rawBytes": 13632,
+      "rawSha256": "62722b9e1a6514b20c81e42a98aa04886a7c7b9c3efc4ec7a788f21be00f3b5e",
+      "gzipBytes": 3094,
+      "gzipSha256": "38b26975b3e25a80935f0cf1906f33dc5a8a28dbb34d5d1c72892b3d3689cb87"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-PnmXrQ/host-stderr.log",
+      "path": "nearcap-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-v1.json",
+      "path": "sustained-v1/raw.json.gz",
+      "rawBytes": 162286864,
+      "rawSha256": "06d0cea553a072946b69635d3785e7cd2ae076e2a46cedd315c96b1a9e1a0dbe",
+      "gzipBytes": 7871306,
+      "gzipSha256": "058ee5e614c274b69a524a40aa9272d1382b9691d938570bc01680583e01c5c6"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-o12g00/electron-trace.json",
+      "path": "sustained-v1/raw-electron-trace.json.gz",
+      "rawBytes": 21368161,
+      "rawSha256": "7868517d40fa835265bd4e0755c10040cb2a63350b81edcaf8bea36e39b98700",
+      "gzipBytes": 1322979,
+      "gzipSha256": "981bc83a3719dbf7c012639c5c06311ceaee7071c3e5e8b90b76ed5ff4905cc2"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-v1.json.declaration.json",
+      "path": "sustained-v1/declaration.json.gz",
+      "rawBytes": 429,
+      "rawSha256": "5c7d78f3ffa8b1f4a2347599818ea0c2e18081e5be7659f74ca08f54cd9fc169",
+      "gzipBytes": 298,
+      "gzipSha256": "d77b31cd20e3a34feeca3ad9ebe214ae36ff548a73795db4ba6e43fe199c87df"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-v1-summary.json",
+      "path": "sustained-v1/summary.json.gz",
+      "rawBytes": 66605,
+      "rawSha256": "6102593096c7051f5a6c1e6a61bffa7709331a06562368d8b2e872d99cccd855",
+      "gzipBytes": 8135,
+      "gzipSha256": "f3b8e058f6d377dc9dd41bcd8ac470ddaf28e00dad52a150a920f2211bb6db01"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-o12g00/host-stderr.log",
+      "path": "sustained-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-minimal-v1.json",
+      "path": "sustained-minimal-v1/raw.json.gz",
+      "rawBytes": 39841,
+      "rawSha256": "5ad395308e7dd6de0c0177ef365caf9a86ba4fe03c4713a5d32d894d3fa60aa3",
+      "gzipBytes": 5496,
+      "gzipSha256": "0e35ab7046cb3d146fbc3a0f4ee697835921d0f5b006e3762085d4f00116fdbe"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-minimal-v1.json.declaration.json",
+      "path": "sustained-minimal-v1/declaration.json.gz",
+      "rawBytes": 430,
+      "rawSha256": "4fdcaf1a1e31bb0f1890afcd5697a63a017515d5c45050c411ee95457b585cfb",
+      "gzipBytes": 297,
+      "gzipSha256": "871ac0dafc250645d41bd23c1ca01ae862d71cc3e696f256fb70fcd8c00a369d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-sustained-minimal-v1-summary.json",
+      "path": "sustained-minimal-v1/summary.json.gz",
+      "rawBytes": 60111,
+      "rawSha256": "eba1356cb84b48fd4c1940fa1f0691e22e56dbee87c899910bd88374c26d1389",
+      "gzipBytes": 7085,
+      "gzipSha256": "683bd83374d7353ce203138c8c4a80b6faa3b53df8b5b748ade37301ef3c5180"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-1G2Dud/host-stderr.log",
+      "path": "sustained-minimal-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-mail-v1.json",
+      "path": "mail-v1/raw.json.gz",
+      "rawBytes": 2575153,
+      "rawSha256": "6847ec503323838036d2cde2f31100b4af5ddb36eb408a1af8b4c96a5b7d3314",
+      "gzipBytes": 133788,
+      "gzipSha256": "a5cd9a8958e53288066942c728a3debda3fbf351c3e88ea5f4bcaf594e6ad9b5"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-gfNdNB/electron-trace.json",
+      "path": "mail-v1/raw-electron-trace.json.gz",
+      "rawBytes": 7149498,
+      "rawSha256": "d94b91281ae39e4f04ac8f2b44afb4b7e5c8623f956e17d0135b99ebd657c3e1",
+      "gzipBytes": 577213,
+      "gzipSha256": "8b19f9b5b50bef1745c24867406a3460ff86d30d4186292d8a30d8c060cfac9d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-mail-v1.json.declaration.json",
+      "path": "mail-v1/declaration.json.gz",
+      "rawBytes": 426,
+      "rawSha256": "ae770c17c635d071a0eb3c37455d54f82ee0908bb4ab2a2aa31ea938162b74f6",
+      "gzipBytes": 299,
+      "gzipSha256": "b1ada56f12272baf17e9812369815dbb87c12e91b0b0b04976264f90a0697a81"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-mail-v1-summary.json",
+      "path": "mail-v1/summary.json.gz",
+      "rawBytes": 8886,
+      "rawSha256": "c8d1a8d35e6607e5dad06a6ce66957b236d6fd7c69eb0a61bbe9023f1167d568",
+      "gzipBytes": 2394,
+      "gzipSha256": "7ca2babf8719267cb9a45e27d9265c94fee149c0d40d1273e6eefa799c9f477d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-gfNdNB/correctness-actual.json",
+      "path": "mail-v1/correctness-actual.json.gz",
+      "rawBytes": 2082591,
+      "rawSha256": "7755cbcf8bfb09ff6b497231c0f6e679501ef076712a0fd15584953f50166788",
+      "gzipBytes": 44775,
+      "gzipSha256": "4c040c515c90a4b419e0dbb746881bc32b83a4c68084d2dbe77868bc91de0e32"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-gfNdNB/correctness-expected.json",
+      "path": "mail-v1/correctness-expected.json.gz",
+      "rawBytes": 2084030,
+      "rawSha256": "518711a1583390c9f712c1e6cb5cca5e4de967707b11b7b01479bbaf99ef8cbc",
+      "gzipBytes": 44913,
+      "gzipSha256": "417e89e608a9546569194ff14514368e1595d69d5b828e23dc6b814ad29fc8cc"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-gfNdNB/host-stderr.log",
+      "path": "mail-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-recovery-v1.json",
+      "path": "recovery-v1/raw.json.gz",
+      "rawBytes": 1545394,
+      "rawSha256": "5793cc19be8da649fc7417d59455ad0e54124d7dc96b1620630fb8178b06b3f3",
+      "gzipBytes": 111252,
+      "gzipSha256": "4e4630873f82a1e5a959ab990b51c5e2e5337d7c15555472d2e5f18f211cddb0"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/electron-trace.json",
+      "path": "recovery-v1/raw-electron-trace.json.gz",
+      "rawBytes": 54521298,
+      "rawSha256": "993258424891912ba5b5b5197c7b204934940bf4ea425a1a6c5ccd16bb0cb6d6",
+      "gzipBytes": 3511953,
+      "gzipSha256": "40c2e3cde5768e67d8cfd0960e9130daa0177d06214899a3d2a9bfbcb6fbbfe6"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/after-native-input-0.png",
+      "path": "recovery-v1/after-native-input-0.png.gz",
+      "rawBytes": 139420,
+      "rawSha256": "7716ccde51c349361c8742524c6302d7b1f190c1461bf690250302600e17145d",
+      "gzipBytes": 124386,
+      "gzipSha256": "5d7c43ea57d6ce2433ee588ce7073392ee808eab25e5bd883e4788bdb342280b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/after-native-input-1.png",
+      "path": "recovery-v1/after-native-input-1.png.gz",
+      "rawBytes": 6963,
+      "rawSha256": "8ccfea5a9a9aab837714d607a7f2e690a46f83b7eda005b2b01b815f91331600",
+      "gzipBytes": 1176,
+      "gzipSha256": "e4315abecb800041b5743b97f67c17dcb02d89dd4c80fa34436621afcd1bfc40"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/failed-0.png",
+      "path": "recovery-v1/failed-0.png.gz",
+      "rawBytes": 132444,
+      "rawSha256": "022d30d970e9d35e146e5e02cfe7626c85ef6fb4cfe96f062ab8780561207cb4",
+      "gzipBytes": 117561,
+      "gzipSha256": "643e2569c31f18be894b271c4f259add67fefd0e5c4a1fb7564a27853ba6a08a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/failed-1.png",
+      "path": "recovery-v1/failed-1.png.gz",
+      "rawBytes": 6963,
+      "rawSha256": "8ccfea5a9a9aab837714d607a7f2e690a46f83b7eda005b2b01b815f91331600",
+      "gzipBytes": 1176,
+      "gzipSha256": "e4315abecb800041b5743b97f67c17dcb02d89dd4c80fa34436621afcd1bfc40"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/final-0.png",
+      "path": "recovery-v1/final-0.png.gz",
+      "rawBytes": 139420,
+      "rawSha256": "7716ccde51c349361c8742524c6302d7b1f190c1461bf690250302600e17145d",
+      "gzipBytes": 124386,
+      "gzipSha256": "5d7c43ea57d6ce2433ee588ce7073392ee808eab25e5bd883e4788bdb342280b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/final-1.png",
+      "path": "recovery-v1/final-1.png.gz",
+      "rawBytes": 6963,
+      "rawSha256": "8ccfea5a9a9aab837714d607a7f2e690a46f83b7eda005b2b01b815f91331600",
+      "gzipBytes": 1176,
+      "gzipSha256": "e4315abecb800041b5743b97f67c17dcb02d89dd4c80fa34436621afcd1bfc40"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-ILwuWE/host-stderr.log",
+      "path": "recovery-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-head-v9/manifest.json",
+      "path": "head-v9/manifest.json.gz",
+      "rawBytes": 2208902,
+      "rawSha256": "8055a163416a4ef32d14c4849af0ec6cff61dd5d2e59033491515c158d4dae80",
+      "gzipBytes": 597108,
+      "gzipSha256": "28fff557a5f5cea89b11c41f6b61d89bdc83ea0fecb3128a9aef595c9c25b3b3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-head-v9/provenance.json",
+      "path": "head-v9/provenance.json.gz",
+      "rawBytes": 2439,
+      "rawSha256": "0cde215eea709297fdb432b28dac4887665fb0c038ea75b1eb635efffa5ccb6f",
+      "gzipBytes": 996,
+      "gzipSha256": "d71bbdfd11d74df925516da0ac90ecdcbda8c59f8651b69e51e64a88ddcb139e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-head-v9/source.diff",
+      "path": "head-v9/source.diff.gz",
+      "rawBytes": 223422,
+      "rawSha256": "c2b057c3d72f700d7352fefcbadc1521d6eef16018536f4e02967ae97b2b18f0",
+      "gzipBytes": 57619,
+      "gzipSha256": "c5bc837ef9ff3993564d03bf9e93673fe67e625277d93e697f631eec02568ce3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-base-v6/manifest.json",
+      "path": "base-v6/manifest.json.gz",
+      "rawBytes": 2194390,
+      "rawSha256": "c427e7da5df7d1ddd5792299211906e7d6587e67c8a0b5afce68b717ad2acdba",
+      "gzipBytes": 593510,
+      "gzipSha256": "b43985a2057500d34cab161c5838ae0ae865d7b3c3583a37e1413710aa5b765f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-base-v6/provenance.json",
+      "path": "base-v6/provenance.json.gz",
+      "rawBytes": 2081,
+      "rawSha256": "517a10624f626935162c9d1efbcaf02f1dd176ebd5bc674651f04fb29b6279e2",
+      "gzipBytes": 855,
+      "gzipSha256": "c28f8caba03bb860c5c4cb05faa9ecb1de4708e7936e8c16c17d99587f6f3e97"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-base-v6/source.diff",
+      "path": "base-v6/source.diff.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 20,
+      "gzipSha256": "abfbb86f9f5ddfbd9fc1a72c43ab384702ce8bae86b60f3324748485e235e61e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/analyze.mjs",
+      "path": "paired-v1-observers/analyze.mjs.gz",
+      "rawBytes": 6569,
+      "rawSha256": "122f9208dd8bb77ee9b269649f9bcd53c9c51be5af19d3066a18bddf930a5fd1",
+      "gzipBytes": 2420,
+      "gzipSha256": "8f47a5bb253cdaeaad95da685a15602c3a8be04bcada2e1c95f415e3c2870dce"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/build.mjs",
+      "path": "paired-v1-observers/build.mjs.gz",
+      "rawBytes": 7389,
+      "rawSha256": "29f7b22464e8a05943d1e51ea78eee7e0a8f959b30362a5842b994bd59a2f951",
+      "gzipBytes": 2247,
+      "gzipSha256": "9c6bb3c5e5e9027389027359f3d16b29ba2e1f26f6070f53bb9c3d9e6978e426"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/calibration-pilot.mjs",
+      "path": "paired-v1-observers/calibration-pilot.mjs.gz",
+      "rawBytes": 1469,
+      "rawSha256": "106c8df2d8fbb7ca5c117b15eaedad49300064bf38b5e3eaae04417481940fe0",
+      "gzipBytes": 663,
+      "gzipSha256": "f41bf76fb9dbe8450c4b04d0c8da3451b4d6cb8848b9b47297b2ce89dcefa754"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/cooperative-profiler.mjs",
+      "path": "paired-v1-observers/cooperative-profiler.mjs.gz",
+      "rawBytes": 1363,
+      "rawSha256": "8e39dcf106adfd790fdab8b05e6446956b662e86d083d20625d4984a6e086bf6",
+      "gzipBytes": 684,
+      "gzipSha256": "e4259a4b3ea595bfa2b201eec70ea7253610604892d742e5b58cdbf52d18ce3b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/driver.mjs",
+      "path": "paired-v1-observers/driver.mjs.gz",
+      "rawBytes": 11164,
+      "rawSha256": "cd6c4f82da7e98dfa9dec183c467fc30a80f79584175c0e67febf9a77759f965",
+      "gzipBytes": 3896,
+      "gzipSha256": "f289eb13c38e9124d35527be349c0f7fad3bada080065595e5980ac6a06cd570"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/host-fixture.mjs",
+      "path": "paired-v1-observers/host-fixture.mjs.gz",
+      "rawBytes": 3638,
+      "rawSha256": "877537cc31aefcdf8749a94b7104eddd30e73e5c189de484e0a6d7d58df79596",
+      "gzipBytes": 1309,
+      "gzipSha256": "f55e57f6a17219db07c33b53ceb058118e250b8bb391dceb4536941b1ac02767"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/main-profiler.mjs",
+      "path": "paired-v1-observers/main-profiler.mjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "273a1e19bdaca6f0e61d57c7c13916131ba20f091a6bea52d0b9dfa1f86a4182",
+      "gzipBytes": 1149,
+      "gzipSha256": "02bfab6ddd05b1e2c1f62e7a93f4537477e7932317124a06b25612402ffd8428"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/manifest.mjs",
+      "path": "paired-v1-observers/manifest.mjs.gz",
+      "rawBytes": 4445,
+      "rawSha256": "83f7b1132e17a1375c0fccc7a8ba14775d97d5959ebc96a4b4e72160b9f7a29f",
+      "gzipBytes": 1606,
+      "gzipSha256": "2e5079953d2f89f9da110305276962e8ffd403bd0779fcfe763c7efbdcb7b0ae"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/node-profiler.mjs",
+      "path": "paired-v1-observers/node-profiler.mjs.gz",
+      "rawBytes": 4821,
+      "rawSha256": "031e4a047d2e4a0848009422420453e84c30ce7bc1373de05898f5f41b000698",
+      "gzipBytes": 1777,
+      "gzipSha256": "8e9434ea7a3ee27bb0b1e5d225edd75b7c4f433992899b8365d511e6e2ee8623"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/observer.test.mjs",
+      "path": "paired-v1-observers/observer.test.mjs.gz",
+      "rawBytes": 2986,
+      "rawSha256": "374d62ef4122166880200486fabfdbcb284f0d0694e7d8a71bdfda49cc3f4c1b",
+      "gzipBytes": 1230,
+      "gzipSha256": "b567a601f68660719e19ef22e677cd6fb00de94118ff93954952421f45ff7810"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/paired.mjs",
+      "path": "paired-v1-observers/paired.mjs.gz",
+      "rawBytes": 2893,
+      "rawSha256": "ea960deb1cbcab1198ece172eaff617f6c4315cc39b26d6dd32941bde1839e6e",
+      "gzipBytes": 1320,
+      "gzipSha256": "a1289178282570f8750c19eece55fb0ac281a811f3fcaf103709ad3297b88931"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/phase-transform.mjs",
+      "path": "paired-v1-observers/phase-transform.mjs.gz",
+      "rawBytes": 2076,
+      "rawSha256": "f0061941a4c6d82f641f96b3387a83dc91f7183928891bc806f06fedc69b91df",
+      "gzipBytes": 941,
+      "gzipSha256": "a744330d43331f584d630c0df7f7d7ca5c6f82c67b2f815067929e9c954e91b4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/preload-profiler.cjs",
+      "path": "paired-v1-observers/preload-profiler.cjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "82220ba6ad5db8b47c987cfb08f81032e15466eaaf4bd6b8966fbee3cb24ace6",
+      "gzipBytes": 981,
+      "gzipSha256": "bddbfc7481e3440a8c87cd551e77ea66ba57b57145c7f9c04d89678b3c2f0593"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/prepare-base.mjs",
+      "path": "paired-v1-observers/prepare-base.mjs.gz",
+      "rawBytes": 1195,
+      "rawSha256": "8c15e74262415daaa4df1923e8733d2c3727968f08dc27b520416e81f41f7ec8",
+      "gzipBytes": 610,
+      "gzipSha256": "054d4e772ea9e78d7f3b63a1a7623eda3ed69f33cc117b009d98860a0a3c63d1"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/preview.mjs",
+      "path": "paired-v1-observers/preview.mjs.gz",
+      "rawBytes": 1833,
+      "rawSha256": "ca434c514f2ab3c544e20c7d4f36d1fdc3b2197caeb8928cd49a744616a089c5",
+      "gzipBytes": 995,
+      "gzipSha256": "432eaf011cb02c5ec2e0be5cf3a6903d81bf3d23f6755aa7426eefcc5403559b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/renderer-profiler.ts",
+      "path": "paired-v1-observers/renderer-profiler.ts.gz",
+      "rawBytes": 3181,
+      "rawSha256": "a456d47b0c143acc27e5e71800ff6ea0cb5ba8c853eb01b170f0c52a7dcb1a4a",
+      "gzipBytes": 1285,
+      "gzipSha256": "0c72e791b5f74afbea7b8aa5526df507df6919e9368a2b9c5a6c5b28fa8e7642"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/scenarios.mjs",
+      "path": "paired-v1-observers/scenarios.mjs.gz",
+      "rawBytes": 3062,
+      "rawSha256": "def523b58c8a9174a9a5bdad81ae323084233d3bbe1902f66f3e2625f1617c87",
+      "gzipBytes": 1319,
+      "gzipSha256": "b78bb74bc4c534f527cb0ad3c821739ca832c11b59a090e3729ff7895bc20015"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/seed.mjs",
+      "path": "paired-v1-observers/seed.mjs.gz",
+      "rawBytes": 2190,
+      "rawSha256": "95d71c75438dc0914735249371964400f728b0d038ce2403c0d111e554d8abcc",
+      "gzipBytes": 1045,
+      "gzipSha256": "3f5e5d8895f4ce5e6b9c9550c3c63273f5ea21862264a41d0eae67e61a001577"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-paired-v1-observers/wire-meter.mjs",
+      "path": "paired-v1-observers/wire-meter.mjs.gz",
+      "rawBytes": 1506,
+      "rawSha256": "09900a6068058dbf79167173d257340e0edc3b393f66d6eed0a7824b9d239737",
+      "gzipBytes": 633,
+      "gzipSha256": "6239d9a8223663c14d6ba7131493ef203d88a0b4cb41bca74ada699d34caab79"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/analyze.mjs",
+      "path": "huge-v2-observers/analyze.mjs.gz",
+      "rawBytes": 6569,
+      "rawSha256": "122f9208dd8bb77ee9b269649f9bcd53c9c51be5af19d3066a18bddf930a5fd1",
+      "gzipBytes": 2420,
+      "gzipSha256": "8f47a5bb253cdaeaad95da685a15602c3a8be04bcada2e1c95f415e3c2870dce"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/build.mjs",
+      "path": "huge-v2-observers/build.mjs.gz",
+      "rawBytes": 7389,
+      "rawSha256": "29f7b22464e8a05943d1e51ea78eee7e0a8f959b30362a5842b994bd59a2f951",
+      "gzipBytes": 2247,
+      "gzipSha256": "9c6bb3c5e5e9027389027359f3d16b29ba2e1f26f6070f53bb9c3d9e6978e426"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/calibration-pilot.mjs",
+      "path": "huge-v2-observers/calibration-pilot.mjs.gz",
+      "rawBytes": 1469,
+      "rawSha256": "106c8df2d8fbb7ca5c117b15eaedad49300064bf38b5e3eaae04417481940fe0",
+      "gzipBytes": 663,
+      "gzipSha256": "f41bf76fb9dbe8450c4b04d0c8da3451b4d6cb8848b9b47297b2ce89dcefa754"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/cooperative-profiler.mjs",
+      "path": "huge-v2-observers/cooperative-profiler.mjs.gz",
+      "rawBytes": 1363,
+      "rawSha256": "8e39dcf106adfd790fdab8b05e6446956b662e86d083d20625d4984a6e086bf6",
+      "gzipBytes": 684,
+      "gzipSha256": "e4259a4b3ea595bfa2b201eec70ea7253610604892d742e5b58cdbf52d18ce3b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/driver.mjs",
+      "path": "huge-v2-observers/driver.mjs.gz",
+      "rawBytes": 11164,
+      "rawSha256": "cd6c4f82da7e98dfa9dec183c467fc30a80f79584175c0e67febf9a77759f965",
+      "gzipBytes": 3896,
+      "gzipSha256": "f289eb13c38e9124d35527be349c0f7fad3bada080065595e5980ac6a06cd570"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/host-fixture.mjs",
+      "path": "huge-v2-observers/host-fixture.mjs.gz",
+      "rawBytes": 3638,
+      "rawSha256": "877537cc31aefcdf8749a94b7104eddd30e73e5c189de484e0a6d7d58df79596",
+      "gzipBytes": 1309,
+      "gzipSha256": "f55e57f6a17219db07c33b53ceb058118e250b8bb391dceb4536941b1ac02767"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/main-profiler.mjs",
+      "path": "huge-v2-observers/main-profiler.mjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "273a1e19bdaca6f0e61d57c7c13916131ba20f091a6bea52d0b9dfa1f86a4182",
+      "gzipBytes": 1149,
+      "gzipSha256": "02bfab6ddd05b1e2c1f62e7a93f4537477e7932317124a06b25612402ffd8428"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/manifest.mjs",
+      "path": "huge-v2-observers/manifest.mjs.gz",
+      "rawBytes": 4445,
+      "rawSha256": "83f7b1132e17a1375c0fccc7a8ba14775d97d5959ebc96a4b4e72160b9f7a29f",
+      "gzipBytes": 1606,
+      "gzipSha256": "2e5079953d2f89f9da110305276962e8ffd403bd0779fcfe763c7efbdcb7b0ae"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/node-profiler.mjs",
+      "path": "huge-v2-observers/node-profiler.mjs.gz",
+      "rawBytes": 4821,
+      "rawSha256": "031e4a047d2e4a0848009422420453e84c30ce7bc1373de05898f5f41b000698",
+      "gzipBytes": 1777,
+      "gzipSha256": "8e9434ea7a3ee27bb0b1e5d225edd75b7c4f433992899b8365d511e6e2ee8623"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/observer.test.mjs",
+      "path": "huge-v2-observers/observer.test.mjs.gz",
+      "rawBytes": 2986,
+      "rawSha256": "374d62ef4122166880200486fabfdbcb284f0d0694e7d8a71bdfda49cc3f4c1b",
+      "gzipBytes": 1230,
+      "gzipSha256": "b567a601f68660719e19ef22e677cd6fb00de94118ff93954952421f45ff7810"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/paired.mjs",
+      "path": "huge-v2-observers/paired.mjs.gz",
+      "rawBytes": 2893,
+      "rawSha256": "ea960deb1cbcab1198ece172eaff617f6c4315cc39b26d6dd32941bde1839e6e",
+      "gzipBytes": 1320,
+      "gzipSha256": "a1289178282570f8750c19eece55fb0ac281a811f3fcaf103709ad3297b88931"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/phase-transform.mjs",
+      "path": "huge-v2-observers/phase-transform.mjs.gz",
+      "rawBytes": 2076,
+      "rawSha256": "f0061941a4c6d82f641f96b3387a83dc91f7183928891bc806f06fedc69b91df",
+      "gzipBytes": 941,
+      "gzipSha256": "a744330d43331f584d630c0df7f7d7ca5c6f82c67b2f815067929e9c954e91b4"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/preload-profiler.cjs",
+      "path": "huge-v2-observers/preload-profiler.cjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "82220ba6ad5db8b47c987cfb08f81032e15466eaaf4bd6b8966fbee3cb24ace6",
+      "gzipBytes": 981,
+      "gzipSha256": "bddbfc7481e3440a8c87cd551e77ea66ba57b57145c7f9c04d89678b3c2f0593"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/prepare-base.mjs",
+      "path": "huge-v2-observers/prepare-base.mjs.gz",
+      "rawBytes": 1195,
+      "rawSha256": "8c15e74262415daaa4df1923e8733d2c3727968f08dc27b520416e81f41f7ec8",
+      "gzipBytes": 610,
+      "gzipSha256": "054d4e772ea9e78d7f3b63a1a7623eda3ed69f33cc117b009d98860a0a3c63d1"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/preview.mjs",
+      "path": "huge-v2-observers/preview.mjs.gz",
+      "rawBytes": 1833,
+      "rawSha256": "ca434c514f2ab3c544e20c7d4f36d1fdc3b2197caeb8928cd49a744616a089c5",
+      "gzipBytes": 995,
+      "gzipSha256": "432eaf011cb02c5ec2e0be5cf3a6903d81bf3d23f6755aa7426eefcc5403559b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/renderer-profiler.ts",
+      "path": "huge-v2-observers/renderer-profiler.ts.gz",
+      "rawBytes": 3181,
+      "rawSha256": "a456d47b0c143acc27e5e71800ff6ea0cb5ba8c853eb01b170f0c52a7dcb1a4a",
+      "gzipBytes": 1285,
+      "gzipSha256": "0c72e791b5f74afbea7b8aa5526df507df6919e9368a2b9c5a6c5b28fa8e7642"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/scenarios.mjs",
+      "path": "huge-v2-observers/scenarios.mjs.gz",
+      "rawBytes": 3062,
+      "rawSha256": "def523b58c8a9174a9a5bdad81ae323084233d3bbe1902f66f3e2625f1617c87",
+      "gzipBytes": 1319,
+      "gzipSha256": "b78bb74bc4c534f527cb0ad3c821739ca832c11b59a090e3729ff7895bc20015"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/seed.mjs",
+      "path": "huge-v2-observers/seed.mjs.gz",
+      "rawBytes": 2637,
+      "rawSha256": "0e8861a7e850eb1852b2567893b51e39ae482559e9d94059981da1085c288fff",
+      "gzipBytes": 1276,
+      "gzipSha256": "053cbfaec297d0816996e20320fc33b90207456456fad3da90a29e63f7cb8c32"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-huge-v2-observers/wire-meter.mjs",
+      "path": "huge-v2-observers/wire-meter.mjs.gz",
+      "rawBytes": 1506,
+      "rawSha256": "09900a6068058dbf79167173d257340e0edc3b393f66d6eed0a7824b9d239737",
+      "gzipBytes": 633,
+      "gzipSha256": "6239d9a8223663c14d6ba7131493ef203d88a0b4cb41bca74ada699d34caab79"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/0-base.json",
+      "path": "small-diagnostic-v1/0-base.json.gz",
+      "rawBytes": 31823,
+      "rawSha256": "a49b090c01e074ab820aefcf56f0b24a62d3a25a24c1ce7dd6999ad94f43a0bc",
+      "gzipBytes": 4754,
+      "gzipSha256": "dc0f76d397fcae8e6566446edc2f6074b8a87ecbce173e902dc91fd548e4069b"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/0-base.json.log",
+      "path": "small-diagnostic-v1/0-base.json.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 36,
+      "gzipSha256": "88774c53d62f6f6378ab1d650350b103fcf007665827a66c17e13fd1bafd1f7c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/1-head.json",
+      "path": "small-diagnostic-v1/1-head.json.gz",
+      "rawBytes": 31804,
+      "rawSha256": "bc781533415516ab0f40d738066e6f2a8e05f66590c89f4a478e1e015ac103f9",
+      "gzipBytes": 4790,
+      "gzipSha256": "cdf4fc6eba49888342e2d865d23deeee3730a5b7bb82b36be8c939ac2623f2d8"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/1-head.json.log",
+      "path": "small-diagnostic-v1/1-head.json.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 36,
+      "gzipSha256": "81c0822a1e5c446395efb39283b7a0d50a599752a2fb4231643111e36d744e09"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/2-head.json",
+      "path": "small-diagnostic-v1/2-head.json.gz",
+      "rawBytes": 31819,
+      "rawSha256": "996cc5fbd9f6543dfdfc4012ef4c0b121d67afc4ad873317ed48025b46701829",
+      "gzipBytes": 4825,
+      "gzipSha256": "ec33e5988441ae26de135a8d74cedb5f4fa851534625bccc9136ecc4c4e496a7"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/2-head.json.log",
+      "path": "small-diagnostic-v1/2-head.json.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 36,
+      "gzipSha256": "8603a0b30cce2b1e0cb3ce5c416e3d4d4f062595d2b5e378f8a39fda1eacd5ac"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/3-base.json",
+      "path": "small-diagnostic-v1/3-base.json.gz",
+      "rawBytes": 31787,
+      "rawSha256": "4c4acf53928faae61ba19b949adba2da675d9e5b8483e350bfe963a75f8e6c7e",
+      "gzipBytes": 4771,
+      "gzipSha256": "993753def20504343e8c227487f84fcea9fa9cd58bcb8ffcfd6b7e97b70cb263"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/3-base.json.log",
+      "path": "small-diagnostic-v1/3-base.json.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 36,
+      "gzipSha256": "50a14cc8e83ffd3066ed158151235411bf673b7e5b0ec886f29ad2f89883205d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/declaration.json",
+      "path": "small-diagnostic-v1/declaration.json.gz",
+      "rawBytes": 2404,
+      "rawSha256": "39f381bda41f1eeaa282b87a0737a922153d33114f1002383ade288f66433471",
+      "gzipBytes": 1366,
+      "gzipSha256": "f6d0a80ab84a9341e717aea00fd73c812fdcb1b4ad829d114a00151b1002613c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/analyze.mjs",
+      "path": "small-diagnostic-v1/observers/analyze.mjs.gz",
+      "rawBytes": 6569,
+      "rawSha256": "122f9208dd8bb77ee9b269649f9bcd53c9c51be5af19d3066a18bddf930a5fd1",
+      "gzipBytes": 2432,
+      "gzipSha256": "9b9e0a0f69ed919f9843997937be5913d7218fde955c5996e3262d0a20e9e3ca"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/build.mjs",
+      "path": "small-diagnostic-v1/observers/build.mjs.gz",
+      "rawBytes": 7389,
+      "rawSha256": "29f7b22464e8a05943d1e51ea78eee7e0a8f959b30362a5842b994bd59a2f951",
+      "gzipBytes": 2257,
+      "gzipSha256": "a490a793778042218f35fb6b5250364e8e52e1a905a92da97e13a742ca855ac8"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/calibration-pilot.mjs",
+      "path": "small-diagnostic-v1/observers/calibration-pilot.mjs.gz",
+      "rawBytes": 1469,
+      "rawSha256": "106c8df2d8fbb7ca5c117b15eaedad49300064bf38b5e3eaae04417481940fe0",
+      "gzipBytes": 685,
+      "gzipSha256": "76e70d6aa1934d1feaa3eed703fe79294c21ab1d3843922d2ccad5d48af08db8"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/collect-evidence.mjs",
+      "path": "small-diagnostic-v1/observers/collect-evidence.mjs.gz",
+      "rawBytes": 3762,
+      "rawSha256": "4c6a1dd05a28195c89ca8e7bab2223b9dbc35bc05ac08bfab81a2a1c54c4ae33",
+      "gzipBytes": 1427,
+      "gzipSha256": "317edf6134227fe699d8f38b096fb9c31b28e21d7902a8e4cccecaff1f25f665"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/cooperative-profiler.mjs",
+      "path": "small-diagnostic-v1/observers/cooperative-profiler.mjs.gz",
+      "rawBytes": 1363,
+      "rawSha256": "8e39dcf106adfd790fdab8b05e6446956b662e86d083d20625d4984a6e086bf6",
+      "gzipBytes": 709,
+      "gzipSha256": "fc80e8ddf9c4f58eba4e12acda610490949ebb14938b480e3d0aad6abd6c8a5d"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/driver.mjs",
+      "path": "small-diagnostic-v1/observers/driver.mjs.gz",
+      "rawBytes": 11164,
+      "rawSha256": "cd6c4f82da7e98dfa9dec183c467fc30a80f79584175c0e67febf9a77759f965",
+      "gzipBytes": 3907,
+      "gzipSha256": "5e5d8399ae23188ef4d296db62eff51e90eba800cd4ee58addebbbdb3416bb99"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/host-fixture.mjs",
+      "path": "small-diagnostic-v1/observers/host-fixture.mjs.gz",
+      "rawBytes": 4294,
+      "rawSha256": "d3dc9c6bce774b6a2f76cf0417840cf073d6485f2f5b4d47d5ea41935c1d8cd6",
+      "gzipBytes": 1463,
+      "gzipSha256": "d70085951cececf278f6cc136de2be7e58940bf3b95b8caa7bf16cde4bddeb8c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/main-profiler.mjs",
+      "path": "small-diagnostic-v1/observers/main-profiler.mjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "273a1e19bdaca6f0e61d57c7c13916131ba20f091a6bea52d0b9dfa1f86a4182",
+      "gzipBytes": 1167,
+      "gzipSha256": "797707eccdf42e7316ec3e11e74cc4963c3cd33be8a04f72601f2586dad8ec98"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/manifest.mjs",
+      "path": "small-diagnostic-v1/observers/manifest.mjs.gz",
+      "rawBytes": 4445,
+      "rawSha256": "83f7b1132e17a1375c0fccc7a8ba14775d97d5959ebc96a4b4e72160b9f7a29f",
+      "gzipBytes": 1619,
+      "gzipSha256": "f91439157455e2a6b0f49f310ae1265df00734308c7309ca64b01f1206d05452"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/node-profiler.mjs",
+      "path": "small-diagnostic-v1/observers/node-profiler.mjs.gz",
+      "rawBytes": 4821,
+      "rawSha256": "031e4a047d2e4a0848009422420453e84c30ce7bc1373de05898f5f41b000698",
+      "gzipBytes": 1795,
+      "gzipSha256": "2c74342c863714ae42c26d1c9a93485a2f2a5b7a30b175f6313d2c802d705aed"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/observer.test.mjs",
+      "path": "small-diagnostic-v1/observers/observer.test.mjs.gz",
+      "rawBytes": 2986,
+      "rawSha256": "374d62ef4122166880200486fabfdbcb284f0d0694e7d8a71bdfda49cc3f4c1b",
+      "gzipBytes": 1248,
+      "gzipSha256": "de51b0e448b3067ea6f03cfe0ba6095d1b39732cce0d278e2569ba5865244e8f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/paired.mjs",
+      "path": "small-diagnostic-v1/observers/paired.mjs.gz",
+      "rawBytes": 2893,
+      "rawSha256": "ea960deb1cbcab1198ece172eaff617f6c4315cc39b26d6dd32941bde1839e6e",
+      "gzipBytes": 1331,
+      "gzipSha256": "88fb9fef2d24d3f52544762ab949a5bf3798897e9c868b14881bcec3b610834e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/phase-transform.mjs",
+      "path": "small-diagnostic-v1/observers/phase-transform.mjs.gz",
+      "rawBytes": 2076,
+      "rawSha256": "f0061941a4c6d82f641f96b3387a83dc91f7183928891bc806f06fedc69b91df",
+      "gzipBytes": 961,
+      "gzipSha256": "ff00a2e3778d4be4830b9acbcaea94b3107b9abe4d7480768517ebb5694d866c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/preload-profiler.cjs",
+      "path": "small-diagnostic-v1/observers/preload-profiler.cjs.gz",
+      "rawBytes": 2575,
+      "rawSha256": "82220ba6ad5db8b47c987cfb08f81032e15466eaaf4bd6b8966fbee3cb24ace6",
+      "gzipBytes": 1002,
+      "gzipSha256": "8aad4d8523f5cd795f13669b507876f7fce34b8ba1ac34694b59da6cda884682"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/prepare-base.mjs",
+      "path": "small-diagnostic-v1/observers/prepare-base.mjs.gz",
+      "rawBytes": 1195,
+      "rawSha256": "8c15e74262415daaa4df1923e8733d2c3727968f08dc27b520416e81f41f7ec8",
+      "gzipBytes": 627,
+      "gzipSha256": "3a602a3e36a6e8fd88479b9bbd2757eaf9ed4359c9bd75381770b6a489db8701"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/preview.mjs",
+      "path": "small-diagnostic-v1/observers/preview.mjs.gz",
+      "rawBytes": 1833,
+      "rawSha256": "ca434c514f2ab3c544e20c7d4f36d1fdc3b2197caeb8928cd49a744616a089c5",
+      "gzipBytes": 1007,
+      "gzipSha256": "97007962bda0170ee03ab0e37dea8bd22173f600a65e233ea4b3d13ecc0bec2e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/recovery.mjs",
+      "path": "small-diagnostic-v1/observers/recovery.mjs.gz",
+      "rawBytes": 3035,
+      "rawSha256": "d004978cd5522c8a9f5d550bc20540171b1e42d7f57a52f96b756e6501b4b080",
+      "gzipBytes": 1418,
+      "gzipSha256": "0a175ba4b3dcc207a26d92fb4b8bde3fc30ffeb6ca9b864cfa0d8a536628267f"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/renderer-profiler.ts",
+      "path": "small-diagnostic-v1/observers/renderer-profiler.ts.gz",
+      "rawBytes": 3181,
+      "rawSha256": "a456d47b0c143acc27e5e71800ff6ea0cb5ba8c853eb01b170f0c52a7dcb1a4a",
+      "gzipBytes": 1306,
+      "gzipSha256": "b0421cf849677c16c31fde3dd47b1e8e42ec031e74e34e9c9832913a95a66a3a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/scenarios.mjs",
+      "path": "small-diagnostic-v1/observers/scenarios.mjs.gz",
+      "rawBytes": 3109,
+      "rawSha256": "264a4a69b94bb470c8d6bf968fed1ad4e179bab69252f2824f08a7014d1157b1",
+      "gzipBytes": 1348,
+      "gzipSha256": "ad63119095cbdda41079abfcf2b8a9a925e4181ac5ceaf36802d0066ba7209f7"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/seed.mjs",
+      "path": "small-diagnostic-v1/observers/seed.mjs.gz",
+      "rawBytes": 2637,
+      "rawSha256": "0e8861a7e850eb1852b2567893b51e39ae482559e9d94059981da1085c288fff",
+      "gzipBytes": 1285,
+      "gzipSha256": "794398a5bcee347394ee466f61b1e673174081b050fa68e26aade92d0463ca88"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/small-diagnostic.mjs",
+      "path": "small-diagnostic-v1/observers/small-diagnostic.mjs.gz",
+      "rawBytes": 3523,
+      "rawSha256": "afd16cde520191925c0150b6a5168fedbac511ac059cd5344e318d706601d869",
+      "gzipBytes": 1471,
+      "gzipSha256": "456af78caf08b6322540e0c8c4e54f3ce1baa03ac6eac5e52cabe8b07616bf0a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1/observers/wire-meter.mjs",
+      "path": "small-diagnostic-v1/observers/wire-meter.mjs.gz",
+      "rawBytes": 1506,
+      "rawSha256": "09900a6068058dbf79167173d257340e0edc3b393f66d6eed0a7824b9d239737",
+      "gzipBytes": 648,
+      "gzipSha256": "d1c5274624d65c25d0c5656474ab2581cd95cb90c3ef022f3cefcf64344b1b05"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-small-diagnostic-v1-summary.json",
+      "path": "small-diagnostic-v1/summary.json.gz",
+      "rawBytes": 32225,
+      "rawSha256": "e10f336dc2413312cc0c3d49bb6368585098f3d3a409cadcbf0a778714e60899",
+      "gzipBytes": 4009,
+      "gzipSha256": "7476153fff7e2ccc7c5b04096373814ab71cb76a2d93f9599bee51ee79ae6a46"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-pilot-Axlz23/pilot.json",
+      "path": "final-smoke/pilot.json.gz",
+      "rawBytes": 261979,
+      "rawSha256": "dd1305141d3a687946103e4616794dd34ebc7f8c5b278843e0918c39be2a9d66",
+      "gzipBytes": 22398,
+      "gzipSha256": "4b00c7e4284723ae1df15e30fea848b6ef32940c5da84acde19730714b7508e3"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-pilot-Axlz23/main.png",
+      "path": "final-smoke/main.png.gz",
+      "rawBytes": 118027,
+      "rawSha256": "decf3bae6ffd18a6cba7c515e78cccf629654f458df47e809c79449eadef09c9",
+      "gzipBytes": 102956,
+      "gzipSha256": "40fa0ba9970378984f7e0a44416b57248ad289add6522ec0c8c6d4b013aaa521"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-pilot-Axlz23/electron-trace.json",
+      "path": "final-smoke/electron-trace.json.gz",
+      "rawBytes": 4315114,
+      "rawSha256": "4f711d6424bbb80f3728185ecf28cf5f4cb4c19109ecf6b523d1c6a9440896cc",
+      "gzipBytes": 351415,
+      "gzipSha256": "92347ca7fc6cb219663edd72e83b3a649494adadefaf37842b4c06b103489a9a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-recovery-diagnosis-v1.json",
+      "path": "recovery-diagnosis-v1/raw.json.gz",
+      "rawBytes": 62561,
+      "rawSha256": "d2acdeaa9f4f8895f582e88dd72699ca0197c537a062109cdc97564e16b99525",
+      "gzipBytes": 6512,
+      "gzipSha256": "494372bb83d61c859794daa0b081d8a681fe916bd43386733d30e94c5411a617"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-recovery-diagnosis-v1.json.before.json",
+      "path": "recovery-diagnosis-v1/before.json.gz",
+      "rawBytes": 35252,
+      "rawSha256": "f557ce7b8c3936c7794344b0901ae2aa438c7a1e94f63b9b14b4dddc0718076f",
+      "gzipBytes": 5757,
+      "gzipSha256": "181d5d6d1b771364e8ba0a61fcf3fcc81e79944364d5ac38622d9aae28f28779"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-recovery-diagnosis-v1.json.after.json",
+      "path": "recovery-diagnosis-v1/after.json.gz",
+      "rawBytes": 25749,
+      "rawSha256": "910b07beb57348404fec68e1a9ba6abdbea9910aa4202f7e1bf862bdc1eb9012",
+      "gzipBytes": 4750,
+      "gzipSha256": "5af2b4a33757ac21bdeb3648380d219a026d2fcb15334865290f83d3925817cb"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-yFp2wg/after-0.png",
+      "path": "recovery-diagnosis-v1/after-0.png.gz",
+      "rawBytes": 132428,
+      "rawSha256": "ea3d5482bc7f5d7b83c81cd5de915c5bb6d92b9e572463b33db949cdecf28161",
+      "gzipBytes": 117492,
+      "gzipSha256": "1627a4cd51c65efeabcce290b9ce7c153c18c90a3dc0f3ba42adf8a4c7b5f4a7"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-yFp2wg/after-1.png",
+      "path": "recovery-diagnosis-v1/after-1.png.gz",
+      "rawBytes": 6963,
+      "rawSha256": "8ccfea5a9a9aab837714d607a7f2e690a46f83b7eda005b2b01b815f91331600",
+      "gzipBytes": 1188,
+      "gzipSha256": "940d36797346e02c261033722ebdd4713474dd3407c80927fd5edc1a6ab5812e"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-yFp2wg/before-0.png",
+      "path": "recovery-diagnosis-v1/before-0.png.gz",
+      "rawBytes": 117363,
+      "rawSha256": "c7fe934efba71cc3dc136c336576af006a588535d7b8028bf59e7d22abfc8374",
+      "gzipBytes": 102391,
+      "gzipSha256": "6cd3f336a6e6f57762ddebd0aa6be0a7add82fe9fe4ec9cd0d61466d2330630c"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-yFp2wg/before-1.png",
+      "path": "recovery-diagnosis-v1/before-1.png.gz",
+      "rawBytes": 6963,
+      "rawSha256": "8ccfea5a9a9aab837714d607a7f2e690a46f83b7eda005b2b01b815f91331600",
+      "gzipBytes": 1189,
+      "gzipSha256": "c18489be694a393370a3ffd7b4caac7bcfbd3d513239c15559dad2338d5ac91a"
+    },
+    {
+      "source": "/private/tmp/parley-s215-p7-run-yFp2wg/host-stderr.log",
+      "path": "recovery-diagnosis-v1/host-stderr.log.gz",
+      "rawBytes": 0,
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzipBytes": 36,
+      "gzipSha256": "6bf3201ce42d8309f93c7c350f6e6f5e523036eda45684e542f983f0ef6e125b"
+    },
+    {
+      "source": "tools/bench/window-sync/recovery-diagnosis.mjs",
+      "path": "recovery-diagnosis-v1/recovery-diagnosis.mjs.gz",
+      "rawBytes": 4391,
+      "rawSha256": "ce668405036dce02265b0cb4735df00d928452f2ea72971a6b0be8fdaf4a2c47",
+      "gzipBytes": 1924,
+      "gzipSha256": "cfe6f5f076aeb1d0e006bd8d8b39fb7f9ad72ff7a261f14c2414a9a116559113"
+    }
+  ]
+}

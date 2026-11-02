@@ -1,19 +1,23 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { STATE_DIRS } from '@parley/core';
-import type { WorksSnapshot } from '@parley/protocol';
+import type { WorksSnapshot, WorksSyncPage, WorksSyncRootsChange, WorksSyncSurfaceStatus, WorksSyncView } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileRoot } from '../shared/files-types.js';
 import { workKey } from '../shared/work-keys.js';
 import { HostError } from './host-connection.js';
+import { createFsApi } from './files/fs-api.js';
+import { DesktopWorksSync } from './works-sync.js';
 import {
   createRootsRegistry,
+  createSyncRootsRegistry,
   FilesDeniedError,
   relativeInside,
   worktreeRootPolicy,
   type RootsRegistry,
   type RootsSource,
+  type SyncRootsSource,
 } from './roots.js';
 
 /** Сессия фикстуры: `worktree` — путь созданного worktree, `planned` — запланированного (`createdAt: null`). */
@@ -87,6 +91,47 @@ const WORK = 'w-1';
 const KEY = (): string => workKey(project, WORK);
 const PROJECT_ROOT = (): FileRoot => ({ workKey: KEY(), spec: { kind: 'project' } });
 
+function syncSource(initial?: WorksSnapshot): SyncRootsSource & {
+  commit(snapshot: WorksSnapshot): void;
+  pending(): void;
+  fail(): void;
+  emit(change: WorksSyncRootsChange): void;
+} {
+  let view: WorksSyncView = { epoch: initial ? 'a' : null, revision: initial ? 1 : 0, snapshot: initial ?? snapshot([]) };
+  let status: WorksSyncSurfaceStatus = initial ? { state: 'current', epoch: 'a', applied: 1 }
+    : { state: 'loading', epoch: null, wanted: 1, applied: 0, pages: 0, rows: 0 };
+  const listeners = new Set<(change: WorksSyncRootsChange) => void>();
+  const waiters = new Set<{ resolve(value: WorksSnapshot): void; reject(error: Error): void }>();
+  return {
+    get view() { return view; }, get status() { return status; },
+    snapshotForLookup: () => status.state === 'current' ? Promise.resolve(view.snapshot)
+      : status.state === 'error' || status.state === 'stale' ? Promise.reject(new Error('not current'))
+      : new Promise((resolve, reject) => { waiters.add({ resolve, reject }); }),
+    onCommit: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    pending: () => { status = { state: 'catching-up', epoch: view.epoch ?? 'a', wanted: view.revision + 1, applied: view.revision }; },
+    fail: () => {
+      status = { state: 'error', epoch: view.epoch, applied: view.revision, error: 'connection', retryable: true };
+      for (const waiter of waiters) waiter.reject(new Error('failed reset'));
+      waiters.clear();
+    },
+    emit: (change) => { for (const listener of listeners) listener(change); },
+    commit: (complete) => {
+      const previous = view.snapshot;
+      const keyOf = (entry: WorksSnapshot['entries'][number]) => workKey(entry.projectPath, entry.map.work.id);
+      const keys = new Set(complete.entries.map(keyOf));
+      const changed = complete.entries.filter(e => previous.entries.find(p => keyOf(p) === keyOf(e)) !== e);
+      view = { epoch: 'a', revision: view.revision + 1, snapshot: complete };
+      status = { state: 'current', epoch: 'a', applied: view.revision };
+      for (const waiter of waiters) waiter.resolve(complete);
+      waiters.clear();
+      const change: WorksSyncRootsChange = { epoch: 'a', revision: view.revision, complete,
+        changed: changed.map(e => ({ projectPath: e.projectPath, workId: e.map.work.id })),
+        deleted: previous.entries.filter(e => !keys.has(keyOf(e))).map(e => ({ projectPath: e.projectPath, workId: e.map.work.id })) };
+      for (const listener of listeners) listener(change);
+    },
+  };
+}
+
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'parley-roots-'));
   project = path.join(dir, 'proj');
@@ -96,6 +141,211 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('committed sync roots adapter', () => {
+  it('ignores partial input and lets a pending lookup proceed only after a verified commit', async () => {
+    const source = syncSource();
+    const registry = createSyncRootsRegistry(source);
+    source.emit({ epoch: 'a', revision: 1, changed: [{ projectPath: project, workId: WORK }], deleted: [], complete: snapshot([{ projectPath: project, workId: WORK }]) });
+    expect(registry.roots(KEY())).toEqual([]);
+    const lookup = registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read');
+    source.commit(snapshot([{ projectPath: project, workId: WORK }]));
+    expect(await lookup).toBe(path.join(await realpath(project), 'src/a.ts'));
+    registry.dispose();
+  });
+
+  it('grants no roots when verification is overtaken by a stale/failed reset', async () => {
+    const wt = path.join(dir, 'wt');
+    await mkdir(wt);
+    let release!: (value: boolean) => void;
+    const accept = vi.fn().mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; })).mockResolvedValue(true);
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: wt }] }]));
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: accept });
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledTimes(1));
+    source.pending();
+    source.fail();
+    release(true);
+    await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(registry.roots(KEY())).toEqual([]);
+    source.commit(source.view.snapshot);
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(2));
+    registry.dispose();
+  });
+
+  it('recomputes changed works only and revokes deleted active authority synchronously', async () => {
+    const other = path.join(dir, 'other');
+    const wt = path.join(dir, 'wt');
+    const otherWt = path.join(dir, 'other-wt');
+    await Promise.all([mkdir(other), mkdir(wt), mkdir(otherWt)]);
+    const initial = snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: wt }] },
+      { projectPath: other, workId: 'w-2', sessions: [{ id: 's-2', worktree: otherWt }] }]);
+    const source = syncSource(initial);
+    const accept = vi.fn().mockResolvedValue(true);
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: accept });
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(2));
+    expect(accept).toHaveBeenCalledTimes(2);
+    const updated = snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: wt }] }]).entries[0]!;
+    source.commit({ entries: [updated, initial.entries[1]!], branches: {} });
+    await registry.rootPath(PROJECT_ROOT());
+    expect(accept).toHaveBeenCalledTimes(3);
+    source.commit({ entries: [initial.entries[1]!], branches: {} });
+    expect(registry.roots(KEY())).toEqual([]);
+    await expect(registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read')).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(await registry.locate(KEY(), path.join(project, 'src/a.ts'))).toBeNull();
+    expect(await registry.insideAnyRoot(path.join(project, 'src/a.ts'))).toBeNull();
+    registry.dispose();
+  });
+
+  it('deletion while a lookup waits denies reads, preserves only previously verified retired Save', async () => {
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK }]));
+    const registry = createSyncRootsRegistry(source);
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(1));
+    source.pending();
+    const lookup = registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read');
+    source.commit(snapshot([]));
+    await expect(lookup).rejects.toBeInstanceOf(FilesDeniedError);
+    expect(registry.roots(KEY())).toEqual([]);
+    expect(await registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'write')).toBe(path.join(await realpath(project), 'src/a.ts'));
+    await expect(registry.resolve({ workKey: KEY(), spec: { kind: 'worktree', sessionId: 'never' } }, 'x', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(PROJECT_ROOT(), '../outside', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    await expect(registry.resolve(PROJECT_ROOT(), '.git/config', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    registry.dispose();
+  });
+
+  it('does not retire any root from a work deleted before filesystem verification completes', async () => {
+    const wt = path.join(dir, 'unverified');
+    await mkdir(wt);
+    let release!: (value: boolean) => void;
+    const accept = vi.fn(() => new Promise<boolean>(resolve => { release = resolve; }));
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: wt }] }]));
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: accept });
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledTimes(1));
+    source.commit(snapshot([]));
+    await expect(registry.resolve(PROJECT_ROOT(), 'unsaved.ts', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    release(true);
+    await Promise.resolve();
+    expect(registry.roots(KEY())).toEqual([]);
+    registry.dispose();
+  });
+
+  it('revokes a deleted work while another work is still being verified', async () => {
+    const wt = path.join(dir, 'wt');
+    await mkdir(wt);
+    const initial = snapshot([{ projectPath: project, workId: WORK }]);
+    const source = syncSource(initial);
+    let release!: (value: boolean) => void;
+    const accept = vi.fn(() => new Promise<boolean>(resolve => { release = resolve; }));
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: accept });
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(1));
+    const other = snapshot([{ projectPath: project, workId: 'w-2', sessions: [{ id: 's-2', worktree: wt }] }]);
+    source.commit({ entries: [initial.entries[0]!, other.entries[0]!], branches: {} });
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledTimes(1));
+    source.commit(other);
+    expect(registry.roots(KEY())).toEqual([]);
+    expect(await registry.resolve(PROJECT_ROOT(), 'saved.ts', 'write')).toBe(path.join(await realpath(project), 'saved.ts'));
+    const read = registry.resolve(PROJECT_ROOT(), 'src/a.ts', 'read');
+    await expect(read).rejects.toBeInstanceOf(FilesDeniedError);
+    release(true);
+    registry.dispose();
+  });
+
+  it('waits through reconnect, admits a new committed worktree and removes replaced worktree authority immediately', async () => {
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK }]));
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: async () => true });
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(1));
+    source.pending();
+    source.fail();
+    expect(await registry.locate(KEY(), path.join(project, 'src/a.ts'))).toBeNull();
+    await expect(registry.rootPath(PROJECT_ROOT())).rejects.toBeInstanceOf(FilesDeniedError);
+    source.pending();
+    const wt = path.join(dir, 'new-wt');
+    await mkdir(wt);
+    await writeFile(path.join(wt, 'file'), 'new');
+    const root: FileRoot = { workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-new' } };
+    const lookup = registry.resolve(root, 'file', 'read');
+    source.commit(snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-new', worktree: wt }] }]));
+    expect(await lookup).toBe(path.join(await realpath(wt), 'file'));
+    source.commit(snapshot([{ projectPath: project, workId: WORK }]));
+    expect(registry.roots(KEY()).some(item => item.spec.kind === 'worktree')).toBe(false);
+    await expect(registry.resolve(root, 'file', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    registry.dispose();
+  });
+
+  it('retries an addressed miss when a committed worktree was not yet present on disk', async () => {
+    const wt = path.join(dir, 'late-wt');
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: wt }] }]));
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: async () => true });
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(1));
+    await mkdir(wt);
+    await writeFile(path.join(wt, 'file'), 'late');
+    const root: FileRoot = { workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-1' } };
+    expect(await registry.resolve(root, 'file', 'read')).toBe(path.join(await realpath(wt), 'file'));
+    registry.dispose();
+  });
+
+  it('uses real P4 committed pages with file APIs, keeping partial bootstrap private and retired Save write-only', async () => {
+    const key = { projectPath: project, workId: WORK };
+    let release!: (page: WorksSyncPage) => void;
+    const first: WorksSyncPage = { kind: 'page', transaction: { mode: 'reset', epoch: 'a', base: 0, target: 1 }, index: 0,
+      cursor: 'p0', next: 'p1', records: [{ kind: 'work', key, version: 1,
+        work: { id: WORK, title: 'work', goal: '', status: 'active', createdAt: '', updatedAt: '' } }, { kind: 'row', key, field: 'sessions', row: [] }, { kind: 'row', key, field: 'rooms', row: [] }], commit: false };
+    const last: WorksSyncPage = { ...first, index: 1, cursor: 'p1', next: null, records: [], commit: true };
+    const reconnected: WorksSyncPage = { ...first, transaction: { mode: 'reset', epoch: 'b', base: 0, target: 1 }, next: null, commit: true };
+    const removed: WorksSyncPage = { ...first, transaction: { mode: 'delta', epoch: 'b', base: 1, target: 2 },
+      next: null, records: [{ kind: 'work-remove', key }], commit: true };
+    const pull = vi.fn().mockResolvedValueOnce(first).mockImplementationOnce(() => new Promise<WorksSyncPage>(resolve => { release = resolve; }))
+      .mockResolvedValueOnce(reconnected).mockResolvedValueOnce(removed);
+    const sync = new DesktopWorksSync({ pull });
+    const registry = createSyncRootsRegistry(sync);
+    const api = createFsApi(registry);
+    try {
+      sync.connect();
+      await vi.waitFor(() => expect(pull).toHaveBeenCalledTimes(2));
+      expect(registry.roots(KEY())).toEqual([]);
+      const read = api.readText(PROJECT_ROOT(), 'src/a.ts');
+      release(last);
+      expect(await read).toMatchObject({ text: 'a' });
+      sync.disconnect();
+      await expect(api.readText(PROJECT_ROOT(), 'src/a.ts')).rejects.toBeInstanceOf(FilesDeniedError);
+      sync.connect();
+      expect(await api.readText(PROJECT_ROOT(), 'src/a.ts')).toMatchObject({ text: 'a' });
+      sync.invalidate({ epoch: 'b', revision: 2 });
+      await vi.waitFor(() => expect(sync.view.revision).toBe(2));
+      expect(await api.stat(PROJECT_ROOT(), ['src/a.ts'])).toEqual([null]);
+      await expect(api.readText(PROJECT_ROOT(), 'src/a.ts')).rejects.toBeInstanceOf(FilesDeniedError);
+      expect(await api.write(PROJECT_ROOT(), 'unsaved.ts', 'saved', null)).toMatchObject({ ok: true });
+      expect(await readFile(path.join(project, 'unsaved.ts'), 'utf8')).toBe('saved');
+      expect(registry.roots(KEY())).toEqual([]);
+      expect(await api.locate(KEY(), [path.join(project, 'unsaved.ts')])).toEqual([null]);
+      expect(await api.locate(KEY(), [path.join(project, 'unsaved.ts')], { external: true })).toEqual([null]);
+    } finally { registry.dispose(); sync.dispose(); }
+  });
+
+  it('denies retired writes through a repointed or missing worktree and repeats the foreign-root policy', async () => {
+    const target = path.join(dir, 'target');
+    const other = path.join(dir, 'foreign');
+    const link = path.join(dir, 'wt-link');
+    await Promise.all([mkdir(target), mkdir(other)]);
+    await writeFile(path.join(target, 'file'), 'a');
+    await symlink(target, link);
+    const source = syncSource(snapshot([{ projectPath: project, workId: WORK, sessions: [{ id: 's-1', worktree: link }] }]));
+    const accept = vi.fn().mockResolvedValue(true);
+    const registry = createSyncRootsRegistry(source, { acceptWorktree: accept });
+    const root: FileRoot = { workKey: KEY(), spec: { kind: 'worktree', sessionId: 's-1' } };
+    await vi.waitFor(() => expect(registry.roots(KEY())).toHaveLength(2));
+    source.commit(snapshot([]));
+    expect(await registry.resolve(root, 'file', 'write')).toBe(path.join(await realpath(target), 'file'));
+    accept.mockResolvedValue(false);
+    await expect(registry.resolve(root, 'file', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    accept.mockResolvedValue(true);
+    await rm(link);
+    await symlink(other, link);
+    await expect(registry.resolve(root, 'file', 'write')).rejects.toBeInstanceOf(FilesDeniedError);
+    await rm(link);
+    await expect(registry.resolve(root, 'file', 'write')).rejects.toMatchObject({ code: 'not_found' });
+    registry.dispose();
+  });
 });
 
 /** Реестр с одной работой в `project` (и её сессиями), уже прочитанный. */

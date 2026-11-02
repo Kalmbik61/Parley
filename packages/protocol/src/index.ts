@@ -1,4 +1,6 @@
 export { PROTOCOL_VERSION } from './version.js';
+export { WorksMailStateAssembler, worksMailStateRequest } from './works-mail-state.js';
+export type { WorksMailState, WorksMailStateApplied, WorksMailStateIdentity, WorksMailStateField, WorksMailStateRecord, WorksMailStatePage, WorksMailStateResult, WorksMailStateFailureReason } from './works-mail-state.js';
 export { HOST_ERROR_REASONS, PROVIDER_CHECK_REASONS, refKey } from './types.js';
 export type {
   EffortOption,
@@ -101,6 +103,39 @@ export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMc
 
 export { COMPACT_MAX_INSTRUCTIONS, COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, contextPageMethodSchemas } from './context-pages.js';
 export type { ContextPageMethodName, ContextPageMethodParams, ContextPageMethodResults } from './context-pages.js';
+
+export {
+  WORKS_SYNC_FEATURE,
+  WORKS_SYNC_PAGE_BYTES,
+  WORKS_SYNC_PAGE_BYTES_FALLBACK,
+  WORKS_SYNC_INFLIGHT,
+  WORKS_SYNC_SLICE_MS,
+  WORKS_SYNC_PIN_IDLE_MS,
+  WORKS_SYNC_STALE_MS,
+  WORKS_SYNC_ENCODED_CACHE_BYTES,
+  WORKS_SYNC_JOURNAL_COMMITS,
+  WORKS_SYNC_JOURNAL_BYTES,
+  WorksSyncReducer,
+  worksSyncRequest,
+  worksSyncNamedRows,
+} from './works-sync.js';
+export type {
+  WorksSyncApplyOutcome,
+  WorksSyncCommitInfo,
+  WorksSyncInvalidated,
+  WorksSyncPage,
+  WorksSyncRecord,
+  WorksSyncRejectReason,
+  WorksSyncResetReason,
+  WorksSyncResetRequired,
+  WorksSyncResult,
+  WorksSyncRootsChange,
+  WorksSyncSurfaceBatch,
+  WorksSyncSurfaceStatus,
+  WorksSyncTransaction,
+  WorksSyncView,
+  WorksSyncWorkKey,
+} from './works-sync.js';
 
 export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogFileChoice, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';
 export type { BacklogAuthor, BacklogChanged, BacklogDiagnostic, BacklogErrorCode, BacklogFileChoice, BacklogMethodName, BacklogMethodParams, BacklogMethodResults, BacklogRule, BacklogSnapshot } from './backlog.js';

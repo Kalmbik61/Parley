@@ -438,6 +438,8 @@ export function createFakeBridge(): FakeBridge {
   const setupListeners = new Set<(event: RelaySetupEvent) => void>();
   const relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }> = [];
   const bridge: FakeBridge = {
+    // P4a: типизированный мост доступен, но fake не запускает renderer sync до P6.
+    worksSync: { subscribe: () => () => {}, retry: () => {} },
     setRelaySetupHandler: (name, handler) => {
       setupHandlers.set(name, handler as (params: never) => unknown);
     },
