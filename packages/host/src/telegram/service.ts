@@ -872,6 +872,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   function sendConsentCard(card: ConsentCard): void {
     const sendKey = `consent:${card.id}`;
+    // Карточка серверов MCP (спека 2026-11-02, 7) в Telegram не уходит: выбор серверов делает окно или остров, а кнопка
+    // «Trust» без выбора включила бы не то, что человек ожидает.
+    if (card.kind === 'project-mcp') return;
     if (cfg?.telegramCards !== true || sending.has(sendKey)) return;
     if (state.cardsFor((record) => record.kind === 'consent' && record.consentId === card.id).length > 0) return;
     const shortId = state.newShortId();

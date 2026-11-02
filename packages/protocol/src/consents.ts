@@ -49,12 +49,39 @@ export interface AgentSwitchCard extends ConsentCardBase {
   requestedBy: { sessionId: string; label: string };
 }
 
+/** Сервер MCP из `.mcp.json` проекта, о котором у человека ещё нет решения. */
+export interface ProjectMcpServer {
+  name: string;
+  /** sha256 канонического JSON `{type, command, args, url}`; без `env` и `headers`. Меняется — человека спрашивают снова. */
+  fingerprint: string;
+  /** Команда с аргументами или адрес, не длиннее 200 знаков; секретов (`env`, заголовков) здесь нет. */
+  summary: string;
+}
+
+/**
+ * Новые серверы MCP из `.mcp.json` перед запуском Claude (спека 2026-11-02, 7): запуск удерживается, пока человек не
+ * выберет, какие серверы включить. По умолчанию всё выключено; `consents.decide` принимает `enabled` — имена из `servers`.
+ * Отказ или ответ без `enabled` — все выключены. Запуск после решения идёт в любом случае.
+ */
+export interface ProjectMcpCard extends ConsentCardBase {
+  kind: 'project-mcp';
+  /** realpath корня основного репозитория: worktree одного проекта делят решение. */
+  repo: string;
+  servers: ProjectMcpServer[];
+  requestedBy: { source: 'agent' | 'resume' | 'launch'; sessionId?: string; workId?: string; label?: string };
+}
+
 /** Карточка согласия. Хранит хост (`consents.json`), в `consents.list` отдаются только ждущие. */
-export type ConsentCard = FolderTrustCard | AgentSwitchCard;
+export type ConsentCard = FolderTrustCard | AgentSwitchCard | ProjectMcpCard;
 
 export const consentMethodSchemas = {
   'consents.list': z.object({}),
-  'consents.decide': z.object({ id: z.string().min(1), decision: z.enum(['allow', 'deny']) }),
+  /** `enabled` — только для карточки `project-mcp`: имена серверов, которые человек включил; нет поля — все выключены. */
+  'consents.decide': z.object({
+    id: z.string().min(1),
+    decision: z.enum(['allow', 'deny']),
+    enabled: z.array(z.string().min(1).max(200)).max(200).optional(),
+  }),
   'trust.list': z.object({}),
   /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */
   'trust.check': z.object({ folder: z.string().min(1) }),

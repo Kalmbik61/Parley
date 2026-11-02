@@ -324,3 +324,89 @@ describe('ConsentsService: карточка agent-switch', () => {
     expect(second.continueLaunch).not.toHaveBeenCalled();
   });
 });
+
+describe('ConsentsService: серверы MCP проекта (спека 2026-11-02, 7)', () => {
+  const servers = [
+    { name: 'a', fingerprint: 'fa', summary: 'node a.js' },
+    { name: 'b', fingerprint: 'fb', summary: 'node b.js' },
+  ];
+  const mcpInput = { projectPath: '/p', repo: '/real/p', servers, requestedBy };
+  const mcpBuild = () => {
+    const projectMcp = { record: vi.fn() };
+    return { ...build({ projectMcp }), projectMcp };
+  };
+
+  it('requestProjectMcp: карточка project-mcp со списком, запуск удержан; повтор по тому же репозиторию — то же удержание', () => {
+    const { service, continueLaunch } = mcpBuild();
+    const first = service.requestProjectMcp(mcpInput, hold('s-02'));
+    expect(first).toMatchObject({ id: 'c-01', kind: 'project-mcp', repo: '/real/p', servers, state: 'pending', requestedBy });
+    expect(service.requestProjectMcp(mcpInput, hold('s-03')).id).toBe(first.id);
+    expect(service.list()).toHaveLength(1);
+    expect(continueLaunch).not.toHaveBeenCalled();
+    expect(broadcasts.filter((item) => item.event === 'consents.changed')).toHaveLength(1);
+    // Другой репозиторий — другая карточка.
+    expect(service.requestProjectMcp({ ...mcpInput, repo: '/real/q' }, hold('s-04')).id).not.toBe(first.id);
+  });
+
+  it('requestProjectMcp: новый сервер от второго запуска добавляется в карточку, изменённый отпечаток заменяет строку', () => {
+    const { service } = mcpBuild();
+    const first = service.requestProjectMcp(mcpInput, hold('s-02'));
+    const second = service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'c', fingerprint: 'fc', summary: 'c' }, { name: 'a', fingerprint: 'fa2', summary: 'node a2.js' }] }, hold('s-03'));
+    expect(second.id).toBe(first.id);
+    expect((second as { servers: Array<{ name: string; fingerprint: string }> }).servers.map((server) => `${server.name}:${server.fingerprint}`).sort()).toEqual(['a:fa2', 'b:fb', 'c:fc']);
+  });
+
+  it('decide allow с enabled: записаны все серверы карточки (a включён, b выключен), все удержанные запуски продолжены', async () => {
+    const { service, continueLaunch, refuseLaunch, projectMcp, trust } = mcpBuild();
+    const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+    service.requestProjectMcp(mcpInput, hold('s-03', 'resume'));
+    expect(await service.decide(card.id, 'allow', 'island', ['a'])).toEqual({ applied: true, state: 'allowed' });
+    expect(projectMcp.record).toHaveBeenCalledWith(
+      '/real/p',
+      [{ name: 'a', fingerprint: 'fa', enabled: true }, { name: 'b', fingerprint: 'fb', enabled: false }],
+      'island',
+    );
+    expect(continueLaunch).toHaveBeenCalledTimes(2);
+    expect(refuseLaunch).not.toHaveBeenCalled();
+    expect(trust.grant).not.toHaveBeenCalled();
+    expect(service.list()).toEqual([]);
+    // Второе решение по той же карточке — уже решено.
+    expect(await service.decide(card.id, 'allow', 'window', ['b'])).toEqual({ applied: false, state: 'allowed' });
+    expect(projectMcp.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny и allow без списка — все выключены, запуск при этом идёт', async () => {
+    for (const answer of [() => ['deny', undefined], () => ['allow', undefined], () => ['deny', ['a']]] as const) {
+      const { service, continueLaunch, refuseLaunch, projectMcp } = mcpBuild();
+      const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+      const [decision, enabled] = answer() as ['allow' | 'deny', string[] | undefined];
+      await service.decide(card.id, decision, 'window', enabled);
+      expect(projectMcp.record.mock.calls[0]![1]).toEqual([
+        { name: 'a', fingerprint: 'fa', enabled: false },
+        { name: 'b', fingerprint: 'fb', enabled: false },
+      ]);
+      expect(continueLaunch).toHaveBeenCalledTimes(1);
+      expect(refuseLaunch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('имя, которого нет в карточке, — bad_request до любого изменения: карточка ждёт, ничего не записано и не запущено', async () => {
+    const { service, continueLaunch, projectMcp } = mcpBuild();
+    const card = service.requestProjectMcp(mcpInput, hold('s-02'));
+    await expect(service.decide(card.id, 'allow', 'window', ['a', 'evil'])).rejects.toMatchObject({ code: 'bad_request' });
+    expect(projectMcp.record).not.toHaveBeenCalled();
+    expect(continueLaunch).not.toHaveBeenCalled();
+    expect(service.list()).toHaveLength(1);
+    expect(service.list()[0]!.state).toBe('pending');
+  });
+
+  it('карточка и удержание переживают перезапуск хоста', async () => {
+    const first = mcpBuild();
+    const card = first.service.requestProjectMcp(mcpInput, hold('s-02'));
+    first.service.stop();
+    const second = mcpBuild();
+    expect(second.service.list()).toEqual([expect.objectContaining({ id: card.id, kind: 'project-mcp', repo: '/real/p', servers })]);
+    await second.service.decide(card.id, 'allow', 'window', ['a']);
+    expect(second.continueLaunch).toHaveBeenCalledTimes(1);
+  });
+});

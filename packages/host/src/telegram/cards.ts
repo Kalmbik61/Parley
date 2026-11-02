@@ -94,7 +94,7 @@ export function roomCardMessage(input: { roomTitle: string; where: string; propo
  * Карточка согласия (спека 2026-10-21, 4.4): на папку — Trust и Deny, просьба агента продолжить сессию на другом
  * провайдере — Allow и Deny; коды те же `a` и `d`, что у разрешения в ленте.
  */
-export function consentCardMessage(input: { card: ConsentCard; projectName: string; requestedByLabel: string; shortId: string }): { text: string; keyboard: InlineKeyboard } {
+export function consentCardMessage(input: { card: Exclude<ConsentCard, { kind: 'project-mcp' }>; projectName: string; requestedByLabel: string; shortId: string }): { text: string; keyboard: InlineKeyboard } {
   const { card } = input;
   const lines =
     card.kind === 'agent-switch'

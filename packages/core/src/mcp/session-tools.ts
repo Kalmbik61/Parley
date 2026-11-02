@@ -28,6 +28,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const error = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
 const FOLDER_TRUST_HELD = 'The session waits for the human to trust the folder; it starts by itself after that.';
+const PROJECT_MCP_HELD = 'The session waits for the human to decide which MCP servers of the project may run (.mcp.json); it starts by itself after that.';
 const SESSION_QUEUED = 'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.';
 
 /**
@@ -60,6 +61,9 @@ export async function createSession(agent: AgentChannel, args: Record<string, un
     // Запуск Codex удержан до согласия человека на папку (спека 2026-10-21, 4.2): ответ пришёл сразу, сессия стартует сама.
     if (body.result.held === 'folder-trust') {
       return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: FOLDER_TRUST_HELD }] };
+    }
+    if (body.result.held === 'project-mcp') {
+      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: PROJECT_MCP_HELD }] };
     }
     return { content: [{ type: 'text', text: JSON.stringify(body.result) }, ...queuedNotes(body.result)] };
   }

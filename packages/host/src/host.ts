@@ -27,6 +27,8 @@ import {
   PARLEY,
   providerLabel,
   updateMap,
+  userClaudeConfigDir,
+  userClaudeJsonPath,
   migrateMapsToDb,
   migrateProjects,
   parleyHome,
@@ -72,6 +74,7 @@ import { createPressureSensor } from './capacity/memory-pressure.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createConsentsService } from './consents/consents-service.js';
 import { createHeldLaunchActions } from './consents/held-launches.js';
+import { createProjectMcp } from './consents/project-mcp.js';
 import { createContextService } from './context/context-service.js';
 import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
@@ -536,10 +539,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let sessionsService!: ReturnType<typeof createSessionsService>;
   let wakeService!: ReturnType<typeof createWakeService>;
   /* eslint-enable prefer-const */
+  // Серверы MCP из `.mcp.json` проекта (спека 2026-11-02, 7): решения Parley лежат в `<parleyHome>/mcp-consent.json`,
+  // собственные решения Claude только читаются.
+  const projectMcp = createProjectMcp({
+    home: parleyHome(),
+    userHome: os.homedir(),
+    claudeConfigDir: userClaudeConfigDir(),
+    claudeJson: userClaudeJsonPath(),
+    log: handle.context.log,
+  });
   const consentsService = createConsentsService({
     home: parleyHome(),
     host: handle.context,
     trust: { grant: (folder, by) => grantTrust(folder, by) },
+    projectMcp: projectMcp.store,
     ...createHeldLaunchActions({
       launch: (ref, mode, launchOptions) => sessionsService.launch(ref, mode, launchOptions),
       close: (ref) => sessionsService.close(ref),
@@ -604,6 +617,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     {
       capacity: capacityService,
       consents: consentsService,
+      projectMcp,
       hooks: hookServer,
       providerVersions,
       signedIn: accountSignedIn,

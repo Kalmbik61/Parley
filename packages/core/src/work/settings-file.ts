@@ -102,6 +102,9 @@ export interface SettingsFile {
   enabledPlugins?: Record<string, false>;
   /** Правила разрешений сессии; сейчас — только заранее разрешённые инструменты браузера (спека браузера, 5.1). */
   permissions?: { allow: string[] };
+  /** Решения человека о серверах MCP из `.mcp.json` (`WorkSettingsOptions.projectMcp`). */
+  enabledMcpjsonServers?: string[];
+  disabledMcpjsonServers?: string[];
 }
 
 /**
@@ -183,6 +186,13 @@ export interface WorkSettingsOptions {
    * Так же ведёт себя Codex, которому читающие инструменты разрешает `readOnlyHint`. Тем же условием разрешён и `close_session` (`CLOSE_SESSION_PERMISSION`).
    */
   allowBrowser?: boolean;
+  /**
+   * Решения человека о серверах MCP из `.mcp.json` (спека 2026-11-02, 7): ключи `enabledMcpjsonServers` и
+   * `disabledMcpjsonServers` этого файла. Другие ключи не затрагиваются; пусто в обоих списках — ключей нет.
+   * Файл с такими ключами всегда свой у сессии (`writeWorkSettings` ставит `sessionId` по вызову хоста): общий файл
+   * работы мог бы отдать включённый список сессии из другого репозитория.
+   */
+  projectMcp?: { enabled: readonly string[]; disabled: readonly string[] };
 }
 
 function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
@@ -218,6 +228,7 @@ export function workSettings({
   disablePlugins = [],
   allowBrowser = false,
   autonomous = false,
+  projectMcp,
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -251,6 +262,9 @@ export function workSettings({
     ...(model === undefined ? {} : { model }),
     ...(allow.length > 0 ? { permissions: { allow } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
+    ...(projectMcp === undefined || (projectMcp.enabled.length === 0 && projectMcp.disabled.length === 0)
+      ? {}
+      : { enabledMcpjsonServers: [...new Set(projectMcp.enabled)], disabledMcpjsonServers: [...new Set(projectMcp.disabled)] }),
   };
 }
 

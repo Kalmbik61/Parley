@@ -979,3 +979,15 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
     expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['limits']>().toEqualTypeOf<ProviderLimits | null>();
   });
 });
+
+describe('consents.decide: enabled для карточки project-mcp (спека 2026-11-02, 7)', () => {
+  it('enabled необязателен и должен быть списком непустых строк', () => {
+    const decide = METHODS['consents.decide'];
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow' }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: ['a', 'b'] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: 'a' }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [1] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [''] }).success).toBe(false);
+  });
+});

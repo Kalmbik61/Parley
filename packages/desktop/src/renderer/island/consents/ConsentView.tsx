@@ -34,6 +34,8 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
     };
   }, [card.id]);
   const disabled = deciding || !armed;
+  // Карточка серверов MCP (спека 2026-11-02, 7): её вид — задача T7; на остров как доверие к папке она не идёт.
+  if (card.kind === 'project-mcp') return <></>;
   const isSwitch = card.kind === 'agent-switch';
   const who = isSwitch ? card.requestedBy.label : (card.requestedBy.label ?? card.requestedBy.sessionId ?? '—');
   return (

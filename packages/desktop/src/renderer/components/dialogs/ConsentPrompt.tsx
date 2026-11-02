@@ -75,6 +75,9 @@ export function ConsentPrompt(): JSX.Element | null {
     );
   }
 
+  // Карточка серверов MCP (спека 2026-11-02, 7): её вид — задача T7; здесь она не рисуется как доверие к папке.
+  if (card.kind === 'project-mcp') return null;
+
   return (
     <TrustFolderDialog
       open

@@ -84,7 +84,7 @@ export interface AssistantServiceDeps {
   resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string>;
   /** Шаги плана карточки `actions` (спека 2026-10-28, 6.1): функции хоста, что и у окна; возвращают id созданного. */
   createWork(input: Params<'works.create'>): Promise<string>;
-  createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust'; queued?: QueueReason }>;
+  createSession(input: Params<'sessions.create'>): Promise<SessionRef & { held?: 'folder-trust' | 'project-mcp'; queued?: QueueReason }>;
   resume(ref: SessionRef, prompt: string | null): Promise<'started' | 'held' | 'queued'>;
   interrupt(ref: SessionRef): void;
   stopSession(ref: SessionRef): Promise<void>;
