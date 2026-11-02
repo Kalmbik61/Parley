@@ -23,9 +23,9 @@ export function createConsentHandlers(deps: { consents: ConsentsService; home: s
     // Telegram зовёт сервис напрямую с `telegram`.
     'consents.decide': async (params, request) => {
       const by = request.client.role === 'remote' ? 'phone' : 'window';
-      return params.enabled === undefined
+      return params.enabled === undefined && params.revision === undefined
         ? deps.consents.decide(params.id, params.decision, by)
-        : deps.consents.decide(params.id, params.decision, by, params.enabled);
+        : deps.consents.decide(params.id, params.decision, by, params.enabled, params.revision);
     },
     'trust.list': async () => ({ folders: await listTrust(deps.home) }),
     // Realpath папки берёт сам `isTrusted`: путь через символическую ссылку — та же папка, что в `trust.json`.

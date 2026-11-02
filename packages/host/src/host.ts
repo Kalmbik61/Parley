@@ -883,6 +883,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
             return ptyManager.list().filter((pty) => pty.provider !== null && registry[pty.provider]?.runner.command === command).length;
           },
         });
+  handle.context.onShutdown(async () => cliUpdateRunner?.stop());
   handle.context.onShutdown(async () => cliUpdates?.stop());
 
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);

@@ -101,7 +101,7 @@ describe('readProjectMcpServers', () => {
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(userHome, '.mcp.json'), mcpJson({ home: stdio('h'), shared: stdio('far') }));
     await writeFile(path.join(userHome, 'a', '.mcp.json'), mcpJson({ mid: stdio('m'), shared: stdio('near') }));
-    const servers = await readProjectMcpServers(dir, userHome, log);
+    const { servers } = await readProjectMcpServers(dir, userHome, log);
     expect(servers.map((server) => server.name).sort()).toEqual(['home', 'mid', 'shared']);
     expect(servers.find((server) => server.name === 'shared')?.command).toBe('near');
   });
@@ -110,14 +110,14 @@ describe('readProjectMcpServers', () => {
     await writeFile(path.join(root, '.mcp.json'), mcpJson({ outside: stdio('o') }));
     const dir = path.join(userHome, 'p');
     await mkdir(dir, { recursive: true });
-    expect(await readProjectMcpServers(dir, userHome, log)).toEqual([]);
+    expect((await readProjectMcpServers(dir, userHome, log)).servers).toEqual([]);
   });
 
   it('битый .mcp.json — серверов нет, предупреждение в журнал', async () => {
     const dir = path.join(userHome, 'p');
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, '.mcp.json'), '{не json');
-    expect(await readProjectMcpServers(dir, userHome, log)).toEqual([]);
+    expect((await readProjectMcpServers(dir, userHome, log)).servers).toEqual([]);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('malformed'), expect.anything());
   });
 
@@ -125,10 +125,12 @@ describe('readProjectMcpServers', () => {
     const dir = path.join(userHome, 'p');
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, '.mcp.json'), mcpJson({ good: stdio('g'), bad: 'oops' }));
-    expect((await readProjectMcpServers(dir, userHome, log)).map((server) => server.name)).toEqual(['good']);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('unknown shape'), expect.objectContaining({ name: 'bad' }));
+    const read = await readProjectMcpServers(dir, userHome, log);
+    expect(read.servers.map((server) => server.name)).toEqual(['good']);
+    expect(read.unmanaged).toEqual(['bad']);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('cannot fingerprint'), expect.objectContaining({ names: ['bad'] }));
     await writeFile(path.join(dir, '.mcp.json'), JSON.stringify({ servers: {} }));
-    expect(await readProjectMcpServers(dir, userHome, log)).toEqual([]);
+    expect((await readProjectMcpServers(dir, userHome, log)).servers).toEqual([]);
   });
 });
 
@@ -145,6 +147,25 @@ describe('repoKeyOf', () => {
     const plain = path.join(userHome, 'plain');
     await mkdir(plain);
     expect(await repoKeyOf(plain)).toBe(plain);
+  });
+});
+
+describe('repoKeyOf: корень основного репозитория', () => {
+  it('--separate-git-dir: основной каталог и все worktree дают один ключ (git называет основным worktree папку .git — ключ тот же для всех)', async () => {
+    const work = path.join(userHome, 'sep-work');
+    const gitDir = path.join(userHome, 'sep.git');
+    await mkdir(work, { recursive: true });
+    await git('git', ['init', '-q', '-b', 'main', `--separate-git-dir=${gitDir}`, work]);
+    await git('git', ['-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init']);
+    const linked = path.join(userHome, 'sep-linked');
+    await git('git', ['-C', work, 'worktree', 'add', '-q', '-b', 'feature', linked]);
+    await mkdir(path.join(work, 'deep'));
+    const key = await repoKeyOf(work);
+    expect(await repoKeyOf(linked)).toBe(key);
+    expect(await repoKeyOf(path.join(work, 'deep'))).toBe(key);
+    expect(key).not.toBe(linked);
+    // Раньше ключом выходил родитель `.git`: для такого репозитория это был бы каталог выше папки с гитом.
+    expect(key).not.toBe(userHome);
   });
 });
 
@@ -227,6 +248,74 @@ describe('createMcpConsentStore', () => {
     store.record('/r', [{ name: 'a', fingerprint: 'f1', enabled: true }], 'window');
     expect(store.lookup('/r', 'a', 'f1')).toEqual({ enabled: true });
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('not written'), expect.anything());
+  });
+});
+
+describe('inspect: папка настроек Claude запускаемого провайдера (F3)', () => {
+  it('у провайдера своя папка: решения из ~/.claude/settings.json её не касаются, решения из своей — касаются', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a') }));
+    await mkdir(configDir, { recursive: true });
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['a'] }));
+    const mcp = service();
+    // Хост по умолчанию читает ~/.claude: решение есть.
+    expect(await mcp.inspect(dir)).toMatchObject({ undecided: [] });
+    // Провайдер со своей папкой: решений в ней нет — вопрос остаётся.
+    const own = path.join(root, 'provider-config');
+    await mkdir(own, { recursive: true });
+    expect((await mcp.inspect(dir, { configDir: own })).undecided.map((server) => server.name)).toEqual(['a']);
+    await writeFile(path.join(own, 'settings.json'), JSON.stringify({ disabledMcpjsonServers: ['a'] }));
+    expect(await mcp.inspect(dir, { configDir: own })).toMatchObject({ undecided: [] });
+  });
+
+  it('у провайдера нет своей папки (GLM): читается ~/.claude домашней папки, а не папка хоста', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a') }));
+    await mkdir(path.join(userHome, '.claude'), { recursive: true });
+    await writeFile(path.join(userHome, '.claude', 'settings.json'), JSON.stringify({ disabledMcpjsonServers: ['a'] }));
+    const hostDir = path.join(root, 'host-config');
+    await mkdir(hostDir, { recursive: true });
+    const mcp = createProjectMcp({ home: parley, userHome, claudeConfigDir: hostDir, log });
+    expect((await mcp.inspect(dir)).undecided.map((server) => server.name)).toEqual(['a']);
+    expect(await mcp.inspect(dir, { configDir: undefined })).toMatchObject({ undecided: [] });
+  });
+});
+
+describe('inspect: серверы, которые не отпечатать (F4)', () => {
+  it('плохая запись, пустое и слишком длинное имя — не на карточке, а в unmanaged; хорошие серверы как обычно', async () => {
+    const dir = await repo();
+    const longName = 'n'.repeat(201);
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ good: stdio('g'), bad: 'oops', '': stdio('x'), [longName]: stdio('y'), nocmd: {} }));
+    const found = await service().inspect(dir);
+    expect(found.undecided.map((server) => server.name)).toEqual(['good']);
+    expect(found.unmanaged.sort()).toEqual(['', 'bad', longName, 'nocmd'].sort());
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('если у самого Claude о таком сервере уже есть решение — он не в unmanaged', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ bad: 'oops', bad2: 5 }));
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ disabledMcpjsonServers: ['bad'] }));
+    expect((await service().inspect(dir)).unmanaged).toEqual(['bad2']);
+  });
+
+  it('только не отпечатанные серверы: карточки нет, но unmanaged заполнен (запуск их выключит)', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ bad: 'oops' }));
+    const found = await service().inspect(dir);
+    expect(found).toMatchObject({ undecided: [], enabled: [], disabled: [], unmanaged: ['bad'] });
+  });
+
+  it('плохая запись ближайшего файла перекрывает хорошую дальнего: имя остаётся в unmanaged', async () => {
+    const outer = path.join(root, 'outer');
+    const inner = path.join(outer, 'inner');
+    await mkdir(inner, { recursive: true });
+    await writeFile(path.join(outer, '.mcp.json'), mcpJson({ a: stdio('far') }));
+    await writeFile(path.join(inner, '.mcp.json'), mcpJson({ a: 'broken' }));
+    const found = await service().inspect(inner);
+    expect(found.undecided).toEqual([]);
+    expect(found.unmanaged).toEqual(['a']);
   });
 });
 
@@ -338,11 +427,11 @@ describe('inspect', () => {
   it('битый .mcp.json — ни вопроса, ни включённых серверов, предупреждение', async () => {
     const dir = await repo();
     await writeFile(path.join(dir, '.mcp.json'), '{{');
-    expect(await service().inspect(dir)).toEqual({ repo: '', undecided: [], enabled: [], disabled: [] });
+    expect(await service().inspect(dir)).toEqual({ repo: '', undecided: [], enabled: [], disabled: [], unmanaged: [] });
     expect(log.warn).toHaveBeenCalled();
   });
 
   it('любая ошибка разбора (папки нет) — пусто, ничего не включено', async () => {
-    expect(await service().inspect(path.join(root, 'нет-такой'))).toEqual({ repo: '', undecided: [], enabled: [], disabled: [] });
+    expect(await service().inspect(path.join(root, 'нет-такой'))).toEqual({ repo: '', undecided: [], enabled: [], disabled: [], unmanaged: [] });
   });
 });

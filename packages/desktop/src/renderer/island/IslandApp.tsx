@@ -845,7 +845,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         consent={
           (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined)) === undefined
             ? null
-            : { card: (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!, deciding: consentDeciding === (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!.id, note: consentNote, onDecide: (id, decision, enabled) => void useConsentsStore.getState().decide(id, decision, enabled) }
+            : { card: (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!, deciding: consentDeciding === (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!.id, note: consentNote, onDecide: (id, decision, enabled, revision) => void useConsentsStore.getState().decide(id, decision, enabled, revision) }
         }
       />
       {retracted ? (

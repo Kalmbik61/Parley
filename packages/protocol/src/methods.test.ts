@@ -986,6 +986,10 @@ describe('consents.decide: enabled для карточки project-mcp (спек
     expect(decide.safeParse({ id: 'c-01', decision: 'allow' }).success).toBe(true);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a', fingerprint: 'f1' }] }).success).toBe(true);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 2 }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 0 }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 1.5 }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: '2' }).success).toBe(false);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: 'a' }).success).toBe(false);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: ['a'] }).success).toBe(false);
     expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a' }] }).success).toBe(false);

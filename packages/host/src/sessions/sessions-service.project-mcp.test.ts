@@ -151,6 +151,20 @@ describe('launch(): серверы MCP проекта у Claude', () => {
     expect(pty.get(ref)).toBeUndefined();
   });
 
+  it('requestProjectMcp вернул null (решение уже записано): запуск не удерживается и идёт сразу', async () => {
+    await writeMcp({ a: server('node') });
+    const { ref } = await pendingPeer();
+    const consents = fakeConsents();
+    consents.requestProjectMcp.mockReturnValue(null);
+    const { service } = build({ consents });
+
+    expect(await service.launch(ref, 'launch', { by: 'auto' })).toBe('started');
+
+    expect(consents.requestProjectMcp).toHaveBeenCalledTimes(1);
+    // Решения в хранилище нет, поэтому финальная проверка не включает сервер: он уходит в disabled.
+    expect(lastOptions()).toMatchObject({ projectMcp: { enabled: [], disabled: ['a'] } });
+  });
+
   it('create() агента: ответ с held "project-mcp"', async () => {
     await writeMcp({ a: server('node') });
     const { workId } = await pendingPeer();
@@ -245,6 +259,30 @@ describe('launch(): серверы MCP проекта у Claude', () => {
     expect(consents.requestProjectMcp).not.toHaveBeenCalled();
     expect(lastOptions()).not.toHaveProperty('projectMcp');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('malformed'), expect.anything());
+  });
+
+  it('сервер, который не отпечатать (плохая запись), на карточку не попадает и уходит в disabled; хорошие — как обычно', async () => {
+    await writeMcp({ good: server('node'), weird: 'oops' });
+    const { ref } = await pendingPeer();
+    const { service, consents } = build();
+
+    expect(await service.launch(ref, 'launch', { by: 'auto' })).toBe('held');
+    const [input] = consents.requestProjectMcp.mock.calls[0]!;
+    expect(input.servers.map((entry) => entry.name)).toEqual(['good']);
+    const found = input.servers[0]!;
+    mcp.store.record(input.repo, [{ name: found.name, fingerprint: found.fingerprint, enabled: true }], 'window');
+
+    expect(await service.launch(ref, 'launch', { by: 'auto' })).toBe('started');
+    expect(await sessionSettings(ref)).toMatchObject({ enabledMcpjsonServers: ['good'], disabledMcpjsonServers: ['weird'] });
+  });
+
+  it('только не отпечатанные серверы: карточки нет, запуск идёт, они выключены', async () => {
+    await writeMcp({ weird: 'oops' });
+    const { ref } = await pendingPeer();
+    const { service, consents } = build();
+    expect(await service.launch(ref, 'launch')).toBe('started');
+    expect(consents.requestProjectMcp).not.toHaveBeenCalled();
+    expect(await sessionSettings(ref)).toMatchObject({ enabledMcpjsonServers: [], disabledMcpjsonServers: ['weird'] });
   });
 
   it('нет .mcp.json: ничего не меняется — ни карточки, ни ключей', async () => {

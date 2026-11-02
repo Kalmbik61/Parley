@@ -20,6 +20,7 @@ import { useWorksStore } from '../../store/works.js';
 import { AgentSwitchDialog } from './AgentSwitchDialog.js';
 import { ProjectMcpDialog } from './ProjectMcpDialog.js';
 import { isStaleDecision } from './ProjectMcpServers.js';
+import { isKnownConsent } from '../../lib/known-consent.js';
 import { TrustFolderDialog } from './TrustFolderDialog.js';
 
 export function ConsentPrompt(): JSX.Element | null {
@@ -79,6 +80,7 @@ export function ConsentPrompt(): JSX.Element | null {
 
   // Карточка серверов MCP (спека 2026-11-02, 7): свой диалог с выбором серверов, не доверие к папке.
   if (card.kind === 'project-mcp') {
+    if (!isKnownConsent(card)) return null;
     return (
       <ProjectMcpDialog
         card={card}
@@ -86,7 +88,7 @@ export function ConsentPrompt(): JSX.Element | null {
         onCancel={() => useConsentsStore.getState().stopAsking()}
         onDecide={async (decision, enabled) => {
           try {
-            await useConsentsStore.getState().decide(card.id, decision, decision === 'allow' ? enabled : undefined);
+            await useConsentsStore.getState().decide(card.id, decision, decision === 'allow' ? enabled : undefined, card.revision);
             useConsentsStore.getState().stopAsking();
             return 'done';
           } catch (err: unknown) {

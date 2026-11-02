@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
+import { isKnownConsent } from '../../lib/known-consent.js';
 import { shortenMiddle } from '../../lib/shorten-middle.js';
 import { switchRequestText } from '../../store/consents.js';
 import { ProjectMcpServerList, repoName, useServerSelection } from '../../components/dialogs/ProjectMcpServers.js';
@@ -20,7 +21,7 @@ export interface ConsentViewProps {
   /** Решение по этой карточке в пути. */
   deciding: boolean;
   note: 'done' | 'elsewhere' | 'failed' | 'stale' | null;
-  onDecide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>): void;
+  onDecide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number): void;
 }
 
 export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps): JSX.Element {
@@ -38,6 +39,7 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
   const selection = useServerSelection(card.kind === 'project-mcp' ? card.servers : []);
   // Карточка серверов MCP (спека 2026-11-02, 7): выбор серверов, а не доверие к папке.
   if (card.kind === 'project-mcp') {
+    if (!isKnownConsent(card)) return <></>;
     const text = S.dialogs.projectMcp;
     const who = card.requestedBy.label ?? card.requestedBy.sessionId ?? '—';
     return (
@@ -53,10 +55,10 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
           <div data-testid="island-consent-done" className="text-[var(--color-accent)]">{S.island.consentDone}</div>
         ) : note === 'elsewhere' ? null : (
           <div className="flex flex-wrap gap-2">
-            <Button data-testid="island-project-mcp-enable" size="default" className="cursor-pointer text-sm" disabled={deciding || !armed} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow', selection.enabled)}>
+            <Button data-testid="island-project-mcp-enable" size="default" className="cursor-pointer text-sm" disabled={deciding || !armed} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow', selection.enabled, card.revision)}>
               {text.enable}
             </Button>
-            <Button data-testid="island-project-mcp-reject" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding || !armed} onClick={() => onDecide(card.id, 'deny')}>
+            <Button data-testid="island-project-mcp-reject" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding || !armed} onClick={() => onDecide(card.id, 'deny', undefined, card.revision)}>
               {text.rejectAll}
             </Button>
           </div>
