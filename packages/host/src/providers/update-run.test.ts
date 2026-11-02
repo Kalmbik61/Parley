@@ -151,6 +151,47 @@ describe('обновление CLI из Parley', () => {
     });
   });
 
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('таймаут убивает всю группу: фоновый потомок установщика не остаётся, вызов возвращается быстро', async () => {
+    bin = await script(`    sleep 30 &\n    echo $! > "${dir}/bg-pid"\n    wait`);
+    const started = Date.now();
+    const result = await runner({ versions: { now: '0.162.0', after: '0.162.0' }, latest: '0.166.0', timeoutMs: 1000 }).run('codex', 'w');
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(result).toMatchObject({ state: 'done', ok: false });
+    expect((result as { output: string }).output).toContain('timed out');
+    const pid = Number((await readFile(path.join(dir, 'bg-pid'), 'utf8')).trim());
+    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+  });
+
+  it('обычный выход добивает оставшихся в группе потомков установщика', async () => {
+    bin = await script(`    sleep 30 &\n    echo $! > "${dir}/bg-pid"\n    exit 0`);
+    const started = Date.now();
+    await runner({ versions: { now: '0.162.0', after: '0.166.0' }, latest: '0.166.0' }).run('codex', 'w');
+    expect(Date.now() - started).toBeLessThan(5000);
+    const pid = Number((await readFile(path.join(dir, 'bg-pid'), 'utf8')).trim());
+    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+  });
+
+  it('stop() (остановка хоста) убивает идущий установщик со всей группой, вызов завершается', async () => {
+    bin = await script(`    sleep 30 &\n    echo $! > "${dir}/bg-pid"\n    wait`);
+    const update = runner({ versions: { now: '0.162.0', after: '0.162.0' }, latest: '0.166.0' });
+    const pending = update.run('codex', 'w');
+    await vi.waitFor(async () => expect(existsSync(path.join(dir, 'bg-pid'))).toBe(true));
+    update.stop();
+    const result = await pending;
+    expect(result).toMatchObject({ state: 'done', ok: false });
+    const pid = Number((await readFile(path.join(dir, 'bg-pid'), 'utf8')).trim());
+    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+  });
+
   it('занятость: пока идёт одно обновление, второе получает busy; потом снова можно', async () => {
     bin = await script('    sleep 1; exit 0');
     const update = runner({ versions: { now: '0.162.0', after: '0.166.0' }, latest: '0.166.0' });
