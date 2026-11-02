@@ -7,7 +7,9 @@
 #   create-release  → черновик релиза с заметками из CHANGELOG.md;
 #   build-mac       → сборка без токена, проверка собранного, затем файлы и SHA256SUMS.txt — в черновик;
 #   publish-release → проверка, что черновик цел и файлы на месте, и публикация.
-# Что-то упало — «Re-run failed jobs»: черновик и файлы в нём перезаписываются, повтор безопасен.
+# Что-то упало — «Re-run failed jobs»: черновик и файлы в нём перезаписываются, повтор безопасен. Если
+# runner снова упёрся в системный лимит, после слияния исправления запустить workflow вручную с release_tag=vX.Y.Z
+# и dry_run=false: сборка возьмёт исходники именно из указанного тега.
 #
 # Пробный прогон: Actions → Release → Run workflow на любой ветке, `dry_run` по умолчанию включён. Релиз и
 # тег не создаются, собранные файлы лежат в артефактах прогона. Кнопка Run workflow появляется, когда этот
@@ -38,6 +40,11 @@ on:
         description: Build only and keep the files as run artifacts; no release is created or published
         type: boolean
         default: true
+      release_tag:
+        description: Existing release tag to rebuild or publish manually (for example v0.27.0)
+        type: string
+        required: false
+        default: ''
 
 # По умолчанию — только чтение. Запись (черновик релиза, файлы в нём, публикация) нужна трём задачам ниже, и
 # каждая просит её у себя: задача, которой права не просили, записать в репозиторий не может.
@@ -45,7 +52,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -83,17 +90,19 @@ jobs:
       - name: Check the tag and read the release notes
         id: meta
         env:
-          TAG: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+          REF_TYPE: ${{ github.event_name == 'push' && github.ref_type || (inputs.release_tag != '' && 'tag' || github.ref_type) }}
           NOTES_FILE: ${{ runner.temp }}/release-notes.md
         run: node scripts/release/prepare-release.mjs
 
-      # Тег на любом коммите дал бы публичный релиз: поставили его с ветки до слияния — релиз ушёл бы из
-      # непринятого коммита, а после squash-слияния тег остался бы вне истории master. `HEAD` — коммит тега.
+      # Проверяем именно commit переданного тега (включая ручное восстановление с master), а не ветку workflow.
       - name: Check the tagged commit is in master
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! git merge-base --is-ancestor HEAD origin/master; then
+          tagged_commit="$(git rev-parse --verify "${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$tagged_commit" origin/master; then
             echo "::error::The tagged commit is not in the history of master: merge the release into master first, then tag the commit on master"
             exit 1
           fi
@@ -146,6 +155,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.release_tag || github.ref }}
           persist-credentials: false
 
       # Версию pnpm action-setup берёт из `packageManager` корневого package.json: своей строки у него нет.
@@ -200,7 +210,13 @@ jobs:
       # цепочки нет, и `--publish never` — всегда: electron-builder ничего не выкладывает, а в релиз файлы кладёт
       # шаг ниже, после проверки. Без пользователя Apple: подпись ad-hoc, нотаризации нет (electron-builder.yml).
       - name: Package for macOS
-        run: pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never
+        run: |
+          set -euo pipefail
+          # macOS runner ограничивает nofile; electron-builder открывает много файлов,
+          # копируя зависимости хоста и remote в bundle.
+          ulimit -n 8192
+          echo "Packaging with open-file limit: $(ulimit -n)"
+          pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never
 
       - name: Verify the packaged apps
         run: bash scripts/release/verify-packaged-apps.sh
