@@ -8,6 +8,14 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from './store.js';
+import {
+  claudeStateFile,
+  markClaudeFolderTrust,
+  serialClaudeTrust,
+  withdrawClaudeTrustMarks,
+  type ClaudeTrustOptions,
+  type ClaudeTrustOutcome,
+} from './claude-trust.js';
 
 export interface TrustRecord {
   /** Ключ: realpath папки проекта. */
@@ -93,14 +101,58 @@ export async function grantTrust(folder: string, by: TrustRecord['by'], home: st
   return { folder: key, ...entry };
 }
 
-/** Отзывает согласие: `true`, если запись была. Живые сессии не трогаются — отзыв действует на следующий запуск. */
+/**
+ * Отзывает согласие: `true`, если запись была. Живые сессии не трогаются — отзыв действует на следующий запуск.
+ * Отметку принятия, которую Parley поставил этой папке в файлах Claude Code (`syncClaudeTrust`), отзыв снимает; занятый
+ * файл не роняет отзыв — отметка снимется при следующем запуске Claude. Отметку человека из самого CLI не трогаем.
+ */
 export async function revokeTrust(folder: string, home: string = parleyHome()): Promise<boolean> {
   const key = await trustKey(folder);
-  const file = await readTrust(home);
-  if (!Object.prototype.hasOwnProperty.call(file.folders, key)) return false;
-  delete file.folders[key];
-  await writeTrust(home, file);
-  return true;
+  return serialClaudeTrust(async () => {
+    const file = await readTrust(home);
+    const had = Object.prototype.hasOwnProperty.call(file.folders, key);
+    if (had) {
+      delete file.folders[key];
+      await writeTrust(home, file);
+    }
+    await withdrawClaudeTrustMarks(home, (mark) => mark.folder === key).catch(() => undefined);
+    return had;
+  });
+}
+
+/**
+ * Перед запуском провайдера семейства Claude Code (спека мобильного приложения, 4.2; план A29): папка проекта с записью
+ * в `trust.json` отмечается принятой в файле состояния профиля (`profile.configDir` — его `CLAUDE_CONFIG_DIR`,
+ * `profile.home` — домашняя папка процесса), и отметка записывается как своя. Свои отметки уже отозванных папок, не
+ * снятые при отзыве, снимаются здесь же. Без записи доверия и без своих отметок файл Claude не читается. Ошибка не
+ * бросается: строки для лога — без содержимого файлов.
+ */
+export async function syncClaudeTrust(
+  projectPath: string,
+  profile: { configDir: string | undefined; home: string },
+  home: string = parleyHome(),
+  options: ClaudeTrustOptions = {},
+): Promise<{ outcome: ClaudeTrustOutcome | 'not-trusted' | 'failed'; warnings: string[] }> {
+  return serialClaudeTrust(async () => {
+    const warnings: string[] = [];
+    try {
+      const { folders } = await readTrust(home);
+      const trusted = (folder: string): boolean => Object.prototype.hasOwnProperty.call(folders, folder);
+      warnings.push(...(await withdrawClaudeTrustMarks(home, (mark) => !trusted(mark.folder), options)));
+      const folder = await trustKey(projectPath);
+      if (!trusted(folder)) return { outcome: 'not-trusted', warnings };
+      const file = await claudeStateFile(profile.configDir, profile.home);
+      const outcome = await markClaudeFolderTrust(home, file, folder, options);
+      if (outcome !== 'written' && outcome !== 'present') {
+        warnings.push(`Parley could not mark ${folder} as trusted in ${file} (${outcome}); Claude Code may ask to trust the folder in the terminal.`);
+      }
+      return { outcome, warnings };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? 'error';
+      warnings.push(`Parley could not mark the project folder as trusted for Claude Code (${code}); Claude Code may ask to trust the folder in the terminal.`);
+      return { outcome: 'failed', warnings };
+    }
+  });
 }
 
 export async function listTrust(home: string = parleyHome()): Promise<TrustRecord[]> {

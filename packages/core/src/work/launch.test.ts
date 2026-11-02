@@ -39,7 +39,7 @@ import { addRoom } from './rooms.js';
 import { CLOSE_SESSION_PERMISSION, workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 import { createWorktree } from './worktree.js';
-import { grantTrust } from './trust.js';
+import { grantTrust, revokeTrust } from './trust.js';
 import { BRANCH_PREFIX } from '../names.js';
 
 const runGit = promisify(execFile);
@@ -3439,6 +3439,26 @@ describe('доверие к папке у Claude Code (спека мобильн
       ...CLI_STATE,
       projects: { ...CLI_STATE.projects, [await realpath(project)]: { hasTrustDialogAccepted: true } },
     });
+  });
+
+  it('grant → запуск → revoke: отметка Parley снята; отметка, поставленная в самом CLI, отзыв переживает (M3)', async () => {
+    const dir = path.join(home, 'claude-profile');
+    const file = await seed(dir);
+    setEnv('CLAUDE_CONFIG_DIR', dir);
+    const real = await realpath(project);
+    await grantTrust(project, 'phone');
+    const { workId, sessionId } = await pending('claude');
+    await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    expect(await projects(file)).toHaveProperty([real], { hasTrustDialogAccepted: true });
+    await revokeTrust(project);
+    expect(await projects(file)).toEqual({ ...CLI_STATE.projects, [real]: { hasTrustDialogAccepted: false } });
+
+    // Человек сам принял доверие в CLI: Parley видит готовую отметку, своей её не считает и при отзыве не снимает.
+    await writeFile(file, JSON.stringify({ ...CLI_STATE, projects: { [real]: { hasTrustDialogAccepted: true } } }, null, 2));
+    await grantTrust(project, 'window');
+    await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    await revokeTrust(project);
+    expect(await projects(file)).toEqual({ [real]: { hasTrustDialogAccepted: true } });
   });
 
   it('GLM — профиль ~/.claude.json, его CLAUDE_CONFIG_DIR хост срезает', async () => {

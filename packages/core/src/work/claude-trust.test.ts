@@ -3,8 +3,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { acceptClaudeFolderTrust, claudeStateFile, preacceptClaudeTrust } from './claude-trust.js';
-import { grantTrust } from './trust.js';
+import {
+  acceptClaudeFolderTrust,
+  claudeStateFile,
+  claudeTrustMarksFile,
+  readClaudeTrustMarks,
+  withdrawClaudeFolderTrust,
+  withdrawClaudeTrustMarks,
+} from './claude-trust.js';
+import { grantTrust, revokeTrust, syncClaudeTrust } from './trust.js';
 
 /** Всё во временных каталогах: настоящий `~/.claude.json` тест не читает и не пишет. */
 let root = '';
@@ -160,14 +167,119 @@ describe('claudeStateFile', () => {
   });
 });
 
-describe('preacceptClaudeTrust', () => {
-  it('папка с записью в trust.json — отметка под её realpath', async () => {
+describe('замок файла-ссылки (m8)', () => {
+  it('файл — ссылка: Parley ждёт и замок CLI (<путь как есть>.lock), и замок цели (<realpath>.lock)', async () => {
+    const real = path.join(root, 'dotfiles-claude.json');
+    await writeState(CLI_STATE, real);
+    await symlink(real, file);
+    for (const lock of [`${file}.lock`, `${real}.lock`]) {
+      await mkdir(lock);
+      expect(await acceptClaudeFolderTrust(file, project, { lockWaitMs: 100 }), lock).toBe('busy');
+      expect(await readState(real)).toEqual(CLI_STATE);
+      await rmdir(lock);
+    }
+    expect(await acceptClaudeFolderTrust(file, project)).toBe('written');
+    await expect(lstat(`${file}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(`${real}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('замок при ссылке выше файла', () => {
+  it('ссылка на каталоге (/var → /private/var), не на файле: один замок, запись не ждёт сама себя', async () => {
+    await writeState(CLI_STATE);
+    const spelled = path.join(root, 'config-link');
+    await symlink(config, spelled);
+    expect(await acceptClaudeFolderTrust(path.join(spelled, '.claude.json'), project, { lockWaitMs: 100 })).toBe('written');
+    await expect(lstat(`${file}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('withdrawClaudeFolderTrust', () => {
+  it('снимает только флаг этой папки (false — умолчание CLI); прочие поля и проекты как были', async () => {
+    await writeState({ ...CLI_STATE, projects: { ...CLI_STATE.projects, [project]: { hasTrustDialogAccepted: true, lastCost: 2 } } });
+    expect(await withdrawClaudeFolderTrust(file, project)).toBe('written');
+    expect(await readState()).toEqual({ ...CLI_STATE, projects: { ...CLI_STATE.projects, [project]: { hasTrustDialogAccepted: false, lastCost: 2 } } });
+  });
+
+  it('отметки нет — absent, файл не переписывается', async () => {
+    await writeState(CLI_STATE);
+    const before = await stat(file);
+    await delay(20);
+    expect(await withdrawClaudeFolderTrust(file, project)).toBe('absent');
+    expect((await stat(file)).mtimeMs).toBe(before.mtimeMs);
+  });
+});
+
+describe('syncClaudeTrust и revokeTrust (A29, M3)', () => {
+  const profile = () => ({ configDir: config, home: '/unused' });
+  const flag = async () => ((await readState())['projects'] as Record<string, Record<string, unknown>>)[project]?.['hasTrustDialogAccepted'];
+
+  it('папка с записью в trust.json — отметка под её realpath и строка в файле отметок Parley', async () => {
     await writeState(CLI_STATE);
     const link = path.join(root, 'project-link');
     await symlink(project, link);
     await grantTrust(link, 'window');
-    expect(await preacceptClaudeTrust(link, { configDir: config, home: '/unused' })).toEqual({ outcome: 'written' });
+    expect(await syncClaudeTrust(link, profile())).toEqual({ outcome: 'written', warnings: [] });
     expect(Object.keys((await readState())['projects'] as object).sort()).toEqual(['/elsewhere/other-project', project].sort());
+    expect((await readClaudeTrustMarks(parley)).map(({ folder, file: marked }) => ({ folder, file: marked }))).toEqual([{ folder: project, file }]);
+  });
+
+  it('grant → запуск → revoke: отметка Parley снята, её строки нет, прочее содержимое файла как было', async () => {
+    await writeState(CLI_STATE);
+    await grantTrust(project, 'phone');
+    expect((await syncClaudeTrust(project, profile())).outcome).toBe('written');
+    expect(await revokeTrust(project)).toBe(true);
+    expect(await readState()).toEqual({ ...CLI_STATE, projects: { ...CLI_STATE.projects, [project]: { hasTrustDialogAccepted: false } } });
+    expect(await readClaudeTrustMarks(parley)).toEqual([]);
+    // Следующий запуск Claude без согласия файл не трогает.
+    expect(await syncClaudeTrust(project, profile())).toEqual({ outcome: 'not-trusted', warnings: [] });
+    expect(await flag()).toBe(false);
+  });
+
+  it('отметку человека из самого CLI отзыв в Parley не трогает', async () => {
+    await writeState({ ...CLI_STATE, projects: { ...CLI_STATE.projects, [project]: { hasTrustDialogAccepted: true } } });
+    await grantTrust(project, 'window');
+    expect((await syncClaudeTrust(project, profile())).outcome).toBe('present');
+    expect(await readClaudeTrustMarks(parley)).toEqual([]);
+    await revokeTrust(project);
+    expect(await flag()).toBe(true);
+  });
+
+  it('при отзыве файл занят — отзыв проходит, строка остаётся, отметка снимается при следующем запуске Claude', async () => {
+    await writeState(CLI_STATE);
+    await grantTrust(project, 'window');
+    await syncClaudeTrust(project, profile());
+    await mkdir(`${file}.lock`);
+    expect(await revokeTrust(project)).toBe(true);
+    expect(await flag()).toBe(true);
+    expect(await readClaudeTrustMarks(parley)).toHaveLength(1);
+    await rmdir(`${file}.lock`);
+    // Запуск Claude в другой папке снимает отложенную отметку отозванной.
+    const other = path.join(root, 'other');
+    await mkdir(other);
+    expect(await syncClaudeTrust(other, profile())).toEqual({ outcome: 'not-trusted', warnings: [] });
+    expect(await flag()).toBe(false);
+    expect(await readClaudeTrustMarks(parley)).toEqual([]);
+  });
+
+  it('снятие при занятом файле — строка для лога без содержимого', async () => {
+    await writeState(CLI_STATE);
+    await grantTrust(project, 'window');
+    await syncClaudeTrust(project, profile());
+    await mkdir(`${file}.lock`);
+    expect(await withdrawClaudeTrustMarks(parley, (mark) => mark.folder === project, { lockWaitMs: 100 })).toEqual([
+      `Parley could not remove its trust mark for ${project} from ${file} (busy); it retries on the next Claude Code launch.`,
+    ]);
+    await rmdir(`${file}.lock`);
+  });
+
+  it('файл отметок не читается — новых отметок нет (снять их было бы нельзя), строка для лога', async () => {
+    await writeState(CLI_STATE);
+    await grantTrust(project, 'window');
+    await writeFile(claudeTrustMarksFile(parley), 'not json');
+    const result = await syncClaudeTrust(project, profile());
+    expect(result.outcome).toBe('failed');
+    expect(await readState()).toEqual(CLI_STATE);
   });
 
   it('папка без записи доверия — файл Claude не меняется (ни байт, ни время)', async () => {
@@ -175,30 +287,31 @@ describe('preacceptClaudeTrust', () => {
     await grantTrust(path.join(root, 'another-project'), 'window');
     const before = await stat(file);
     await delay(20);
-    expect(await preacceptClaudeTrust(project, { configDir: config, home: '/unused' })).toEqual({ outcome: 'not-trusted' });
+    expect(await syncClaudeTrust(project, profile())).toEqual({ outcome: 'not-trusted', warnings: [] });
     expect(await readState()).toEqual(CLI_STATE);
     expect((await stat(file)).mtimeMs).toBe(before.mtimeMs);
   });
 
-  it('сбой записи не бросает: строка для лога без содержимого файла', async () => {
+  it('сбой записи не бросает: строка для лога без содержимого файла, своей строки отметки не остаётся', async () => {
     await writeState(CLI_STATE);
     await grantTrust(project, 'window');
     await chmod(config, 0o500);
-    const result = await preacceptClaudeTrust(project, { configDir: config, home: '/unused' });
+    const result = await syncClaudeTrust(project, profile());
     expect(result.outcome).toBe('failed');
-    expect(result.warning).toMatch(/could not mark the project folder as trusted for Claude Code \(EACCES\)/);
-    expect(result.warning).not.toContain('secret-marker');
+    expect(result.warnings).toEqual(['Parley could not mark the project folder as trusted for Claude Code (EACCES); Claude Code may ask to trust the folder in the terminal.']);
+    expect(result.warnings.join('\n')).not.toContain('secret-marker');
     await chmod(config, 0o700);
     expect(await readState()).toEqual(CLI_STATE);
+    expect(await readClaudeTrustMarks(parley)).toEqual([]);
   });
 
-  it('файл не разбирается — строка с путём файла и причиной, без содержимого', async () => {
+  it('файл не разбирается — строка с путём файла и причиной, без содержимого; строки отметки нет', async () => {
     await writeState('{"oauthAccount": "secret-marker", ');
     await grantTrust(project, 'window');
-    const result = await preacceptClaudeTrust(project, { configDir: config, home: '/unused' });
-    expect(result).toEqual({
+    expect(await syncClaudeTrust(project, profile())).toEqual({
       outcome: 'unreadable',
-      warning: `Parley could not mark ${project} as trusted in ${file} (unreadable); Claude Code may ask to trust the folder in the terminal.`,
+      warnings: [`Parley could not mark ${project} as trusted in ${file} (unreadable); Claude Code may ask to trust the folder in the terminal.`],
     });
+    expect(await readClaudeTrustMarks(parley)).toEqual([]);
   });
 });

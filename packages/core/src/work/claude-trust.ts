@@ -4,34 +4,38 @@
  * Ни один запуск, в том числе с телефона, не должен ждать нажатия в терминале. Codex получает доверие флагом
  * `projects=…` (`trustArgs`), у Claude Code флага нет: он читает `projects[<папка>].hasTrustDialogAccepted` из файла
  * состояния профиля. Поэтому перед запуском Claude (и GLM, и своих провайдеров на его базе) в папке, у которой есть
- * запись в `trust.json`, Parley отмечает эту же папку (её realpath — ключ `trust.json`) принятой в файле профиля.
+ * запись в `trust.json`, Parley отмечает эту же папку (её realpath — ключ `trust.json`) принятой в файле профиля, а при
+ * отзыве согласия снимает отметку — только ту, что поставил сам (`trust.ts`: `syncClaudeTrust`, `revokeTrust`).
  *
  * Как устроено у самого CLI (проверено на Claude Code 2.1.316):
  * - файл состояния лежит в `CLAUDE_CONFIG_DIR`, без неё — в HOME; прежний `<папка конфигурации>/.config.json` главнее,
  *   если он есть (`getGlobalClaudeFile`; имена — в `claudeStateFile`);
  * - ключ доверия — канонический корень git-репозитория (worktree сводится к главному), затем папки вверх от cwd до
- *   корня: отметка папки проекта снимает экран и в её подпапках, и в worktree этого репозитория;
- * - CLI пишет файл часто и под блокировкой `<файл>.lock` (proper-lockfile: каталог, созданный `mkdir`), а под ней
- *   перечитывает файл и сливает `projects` с диском. Parley берёт ту же блокировку: запись CLI после нашей нашу
- *   отметку не потеряет, наша — его поля тоже.
+ *   корня: отметка папки проекта снимает экран и в её подпапках, и в worktree этого репозитория. Не покрыто: проект —
+ *   подпапка git-репозитория, а сессия идёт в worktree; CLI спросит корень репозитория, отметки на нём нет, и экран
+ *   доверия будет (корень — уже другая папка, доверия к нему человек не давал);
+ * - CLI пишет файл часто и под блокировкой proper-lockfile (каталог, созданный `mkdir`) с явным `lockfilePath` —
+ *   `<путь файла как есть>.lock`, без раскрытия ссылки; под ней перечитывает файл и сливает `projects` с диском.
+ *   Parley берёт эту же блокировку и, если файл — ссылка, ещё и `<realpath>.lock` (замок proper-lockfile по
+ *   умолчанию): запись CLI после нашей нашу отметку не потеряет, наша — его поля тоже.
  *
  * Граница записи: меняется только `projects[<эта папка>].hasTrustDialogAccepted`, остальное содержимое файла идёт как
  * было; нет файла, он не разбирается или занят дольше срока — ничего не пишется, запуск идёт дальше, а CLI покажет
- * свой экран, как раньше.
+ * свой экран, как раньше. Каждая отметка Parley записана в `<дом Parley>/claude-trust-marks.json` до записи в файл
+ * Claude: снять можно только записанное, а отметку, поставленную человеком в самом CLI, Parley не трогает.
  */
 
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { isTrusted, trustKey } from './trust.js';
 
-/** Чем кончилась попытка отметить папку: `written` и `present` — папка принята, остальное — экран CLI, как раньше. */
+/** Чем кончилась правка файла Claude. */
 export type ClaudeTrustOutcome =
-  /** Записи в `trust.json` нет: файл Claude не читался и не менялся. */
-  | 'not-trusted'
-  /** Отметка уже стояла: файл не переписывался. */
+  /** Отметка уже стояла (принятие): файл не переписывался. */
   | 'present'
+  /** Отметки нет (снятие): файл не переписывался. */
+  | 'absent'
   | 'written'
   /** Файла состояния профиля нет (CLI ещё не запускался с этим профилем): Parley его не создаёт. */
   | 'no-config'
@@ -71,9 +75,8 @@ export async function claudeStateFile(configDir: string | undefined, home: strin
   return current;
 }
 
-/** Блокировка CLI: каталог `<файл>.lock`. `false` — не дождались; чужую блокировку не снимаем никогда. */
-async function acquireLock(lock: string, waitMs: number): Promise<boolean> {
-  const deadline = Date.now() + waitMs;
+/** Блокировка: каталог `lock`. `false` — не дождались до `deadline`; чужую блокировку не снимаем никогда. */
+async function acquireLock(lock: string, deadline: number): Promise<boolean> {
   for (;;) {
     try {
       await mkdir(lock);
@@ -86,25 +89,36 @@ async function acquireLock(lock: string, waitMs: number): Promise<boolean> {
   }
 }
 
+/** Правка содержимого: новое содержимое, `unchanged` — менять нечего, `unreadable` — форма чужая, не трогаем. */
+type Mutation = (data: Record<string, unknown>) => Record<string, unknown> | 'unchanged' | 'unreadable';
+
 /**
- * Отмечает `folder` принятой в файле состояния `file` (см. `claudeStateFile`). `folder` — уже ключ: realpath.
- * Ошибки ввода-вывода пробрасываются; содержимое файла в них не попадает.
+ * Правка файла состояния под блокировками CLI: перечитать, применить `mutate`, временный файл с прежними правами,
+ * сверка перед заменой, повтор при чужой записи. Ссылку (менеджер дотфайлов) не заменяем файлом: пишем в её цель.
  */
-export async function acceptClaudeFolderTrust(file: string, folder: string, options: ClaudeTrustOptions = {}): Promise<ClaudeTrustOutcome> {
+async function editClaudeState(file: string, mutate: Mutation, options: ClaudeTrustOptions): Promise<'changed' | 'unchanged' | 'no-config' | 'unreadable' | 'busy'> {
   // Нет файла — не создаём его и блокировку рядом с ним не заводим.
-  if (!(await exists(file))) return 'no-config';
-  const lock = `${file}.lock`;
-  if (!(await acquireLock(lock, options.lockWaitMs ?? LOCK_WAIT_MS))) return 'busy';
+  let target: string;
   try {
+    target = await realpath(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'no-config';
+    throw error;
+  }
+  const deadline = Date.now() + (options.lockWaitMs ?? LOCK_WAIT_MS);
+  // Второй замок — только если ссылка сам файл: ссылки в каталогах над ним (`/var` → `/private/var`) дают тот же
+  // каталог замка под другим написанием, и второй `mkdir` ждал бы сам себя.
+  const ownLink = path.join(await realpath(path.dirname(file)), path.basename(file)) !== target;
+  const locks = ownLink ? [`${file}.lock`, `${target}.lock`] : [`${file}.lock`];
+  const held: string[] = [];
+  try {
+    for (const lock of locks) {
+      if (!(await acquireLock(lock, deadline))) return 'busy';
+      held.push(lock);
+    }
     for (let attempt = 0; attempt < (options.attempts ?? ATTEMPTS); attempt++) {
-      // Ссылку (менеджер дотфайлов) не заменяем файлом: пишем туда, куда она ведёт.
-      let target: string;
-      try {
-        target = await realpath(file);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'no-config';
-        throw error;
-      }
+      // Ссылку перенаправили, пока ждали замок: замок цели уже не тот.
+      if ((await realpath(file).catch(() => null)) !== target) return 'busy';
       const raw = await readFile(target, 'utf8');
       const mode = (await stat(target)).mode & 0o777;
       let data: unknown;
@@ -114,13 +128,9 @@ export async function acceptClaudeFolderTrust(file: string, folder: string, opti
         return 'unreadable';
       }
       if (!isRecord(data)) return 'unreadable';
-      const projects = data['projects'] ?? {};
-      if (!isRecord(projects)) return 'unreadable';
-      const entry = projects[folder] ?? {};
-      if (!isRecord(entry)) return 'unreadable';
-      if (entry['hasTrustDialogAccepted'] === true) return 'present';
+      const next = mutate(data);
+      if (next === 'unchanged' || next === 'unreadable') return next;
 
-      const next = { ...data, projects: { ...projects, [folder]: { ...entry, hasTrustDialogAccepted: true } } };
       const tmp = `${target}.parley-${randomUUID()}.tmp`;
       try {
         // Форма файла — как у CLI: два пробела отступа, права прежние.
@@ -130,36 +140,150 @@ export async function acceptClaudeFolderTrust(file: string, folder: string, opti
         // Писатель без блокировки (другая сборка CLI) успел между чтением и заменой — перечитываем и сливаем заново.
         if ((await readFile(target, 'utf8')) !== raw) continue;
         await rename(tmp, target);
-        return 'written';
+        return 'changed';
       } finally {
         await rm(tmp, { force: true });
       }
     }
     return 'busy';
   } finally {
-    await rmdir(lock).catch(() => undefined);
+    for (const lock of held.reverse()) await rmdir(lock).catch(() => undefined);
   }
 }
 
-/**
- * Перед запуском провайдера семейства Claude Code: папка проекта с записью в `trust.json` отмечается принятой в
- * файле профиля (`configDir` — его `CLAUDE_CONFIG_DIR`, `home` — домашняя папка процесса). Без записи доверия файл
- * Claude не читается. Ошибка не бросается: возвращается строка для лога без содержимого файла.
- */
-export async function preacceptClaudeTrust(
-  projectPath: string,
-  profile: { configDir: string | undefined; home: string },
-  options: ClaudeTrustOptions = {},
-): Promise<{ outcome: ClaudeTrustOutcome | 'failed'; warning?: string }> {
+/** Ставит `projects[folder].hasTrustDialogAccepted = true`, ничего больше. `folder` — уже ключ: realpath. */
+export async function acceptClaudeFolderTrust(file: string, folder: string, options: ClaudeTrustOptions = {}): Promise<ClaudeTrustOutcome> {
+  const result = await editClaudeState(file, (data) => {
+    const projects = data['projects'] ?? {};
+    if (!isRecord(projects)) return 'unreadable';
+    const entry = projects[folder] ?? {};
+    if (!isRecord(entry)) return 'unreadable';
+    if (entry['hasTrustDialogAccepted'] === true) return 'unchanged';
+    return { ...data, projects: { ...projects, [folder]: { ...entry, hasTrustDialogAccepted: true } } };
+  }, options);
+  return result === 'changed' ? 'written' : result === 'unchanged' ? 'present' : result;
+}
+
+/** Снимает отметку: `hasTrustDialogAccepted = false` (умолчание самого CLI); прочие поля записи остаются. */
+export async function withdrawClaudeFolderTrust(file: string, folder: string, options: ClaudeTrustOptions = {}): Promise<ClaudeTrustOutcome> {
+  const result = await editClaudeState(file, (data) => {
+    const projects = data['projects'];
+    if (projects === undefined) return 'unchanged';
+    if (!isRecord(projects)) return 'unreadable';
+    const entry = projects[folder];
+    if (entry === undefined) return 'unchanged';
+    if (!isRecord(entry)) return 'unreadable';
+    if (entry['hasTrustDialogAccepted'] !== true) return 'unchanged';
+    return { ...data, projects: { ...projects, [folder]: { ...entry, hasTrustDialogAccepted: false } } };
+  }, options);
+  return result === 'changed' ? 'written' : result === 'unchanged' ? 'absent' : result;
+}
+
+/** Отметка, которую поставил Parley: папка (realpath) в файле состояния профиля (путь, как его выбрал `claudeStateFile`). */
+export interface ClaudeTrustMark {
+  folder: string;
+  file: string;
+  at: string;
+}
+
+interface MarksFile {
+  version: 1;
+  marks: ClaudeTrustMark[];
+}
+
+export function claudeTrustMarksFile(home: string): string {
+  return path.join(home, 'claude-trust-marks.json');
+}
+
+/** Нет файла — отметок нет. Битый — ошибка: отметки, которые нельзя прочитать, нельзя и снять, новых не ставим. */
+export async function readClaudeTrustMarks(home: string): Promise<ClaudeTrustMark[]> {
+  let raw: string;
   try {
-    if (!(await isTrusted(projectPath))) return { outcome: 'not-trusted' };
-    const folder = await trustKey(projectPath);
-    const file = await claudeStateFile(profile.configDir, profile.home);
-    const outcome = await acceptClaudeFolderTrust(file, folder, options);
-    if (outcome === 'written' || outcome === 'present') return { outcome };
-    return { outcome, warning: `Parley could not mark ${folder} as trusted in ${file} (${outcome}); Claude Code may ask to trust the folder in the terminal.` };
+    raw = await readFile(claudeTrustMarksFile(home), 'utf8');
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? 'error';
-    return { outcome: 'failed', warning: `Parley could not mark the project folder as trusted for Claude Code (${code}); Claude Code may ask to trust the folder in the terminal.` };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
   }
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || parsed['version'] !== 1 || !Array.isArray(parsed['marks'])) throw new Error('claude-trust-marks: unknown format');
+  return parsed['marks'].filter((mark): mark is ClaudeTrustMark =>
+    isRecord(mark) && typeof mark['folder'] === 'string' && typeof mark['file'] === 'string' && typeof mark['at'] === 'string');
+}
+
+async function writeMarks(home: string, marks: ClaudeTrustMark[]): Promise<void> {
+  const target = claudeTrustMarksFile(home);
+  await mkdir(home, { recursive: true });
+  const tmp = `${target}.${randomUUID()}.tmp`;
+  const file: MarksFile = { version: 1, marks };
+  try {
+    await writeFile(tmp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+    await chmod(tmp, 0o600);
+    await rename(tmp, target);
+  } catch (error) {
+    await rm(tmp, { force: true });
+    throw error;
+  }
+}
+
+let queue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Одна очередь процесса на отметки: проверка `trust.json` с записью отметки при запуске и снятие при отзыве не
+ * перемежаются, и файл отметок не теряет строк от одновременных запусков.
+ */
+export function serialClaudeTrust<T>(job: () => Promise<T>): Promise<T> {
+  const run = queue.then(job, job);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * Отмечает папку принятой и записывает отметку как свою. Намерение пишется до правки файла Claude: сбой между ними
+ * оставит лишнюю строку, а не отметку, которую нельзя снять. Строка остаётся, только если отметку поставили мы сейчас
+ * (`written`) или раньше (строка уже была); чужую `present` — отметку человека — своей не считаем. Звать в очереди.
+ */
+export async function markClaudeFolderTrust(home: string, file: string, folder: string, options: ClaudeTrustOptions = {}): Promise<ClaudeTrustOutcome> {
+  const marks = await readClaudeTrustMarks(home);
+  const known = marks.some((mark) => mark.folder === folder && mark.file === file);
+  if (!known) await writeMarks(home, [...marks, { folder, file, at: new Date().toISOString() }]);
+  let outcome: ClaudeTrustOutcome;
+  try {
+    outcome = await acceptClaudeFolderTrust(file, folder, options);
+  } catch (error) {
+    if (!known) await dropMarks(home, (mark) => mark.folder === folder && mark.file === file);
+    throw error;
+  }
+  if (!known && outcome !== 'written') await dropMarks(home, (mark) => mark.folder === folder && mark.file === file);
+  return outcome;
+}
+
+async function dropMarks(home: string, match: (mark: ClaudeTrustMark) => boolean): Promise<void> {
+  const marks = await readClaudeTrustMarks(home);
+  const left = marks.filter((mark) => !match(mark));
+  if (left.length !== marks.length) await writeMarks(home, left);
+}
+
+/**
+ * Снимает свои отметки, которые выбирает `match` (папка отозвана). Строка уходит, когда отметки в файле больше нет
+ * (`written`, `absent`, `no-config`); занятый или нечитаемый файл оставляет её до следующей попытки — при следующем
+ * запуске Claude (`syncClaudeTrust`). Возвращает строки для лога, без содержимого файлов. Звать в очереди.
+ */
+export async function withdrawClaudeTrustMarks(home: string, match: (mark: ClaudeTrustMark) => boolean, options: ClaudeTrustOptions = {}): Promise<string[]> {
+  const warnings: string[] = [];
+  const done = new Set<ClaudeTrustMark>();
+  const marks = (await readClaudeTrustMarks(home)).filter(match);
+  for (const mark of marks) {
+    let outcome: ClaudeTrustOutcome | string;
+    try {
+      outcome = await withdrawClaudeFolderTrust(mark.file, mark.folder, options);
+    } catch (error) {
+      outcome = (error as NodeJS.ErrnoException).code ?? 'error';
+    }
+    if (outcome === 'written' || outcome === 'absent' || outcome === 'no-config') done.add(mark);
+    else warnings.push(`Parley could not remove its trust mark for ${mark.folder} from ${mark.file} (${outcome}); it retries on the next Claude Code launch.`);
+  }
+  if (done.size > 0) {
+    await dropMarks(home, (mark) => [...done].some((item) => item.folder === mark.folder && item.file === mark.file));
+  }
+  return warnings;
 }

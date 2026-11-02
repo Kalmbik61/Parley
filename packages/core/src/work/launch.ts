@@ -16,7 +16,7 @@ import { realpath } from 'node:fs/promises';
 import { loadConfig, type CodexWriteApprovals } from '../config.js';
 import { codexHookFlags } from './codex-hooks.js';
 import { codexPolicyArgs, trustArgs } from './codex-policy.js';
-import { preacceptClaudeTrust } from './claude-trust.js';
+import { syncClaudeTrust } from './trust.js';
 import { prepareWorktreeGitWrites } from './worktree.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
@@ -351,11 +351,11 @@ async function plan(
   // Доверие к папке у Claude Code — отметкой в файле состояния профиля, флага у него нет (спека мобильного приложения,
   // 4.2; у Codex — `{trust}` выше). Только папка проекта с записью в `trust.json`; сбой записи — строка в лог, не отказ.
   if (isClaudeCode(entry)) {
-    const accepted = await preacceptClaudeTrust(projectPath, {
+    const accepted = await syncClaudeTrust(projectPath, {
       configDir: claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : undefined,
       home: process.env.HOME ?? homedir(),
     });
-    if (accepted.warning !== undefined) warnings.push(accepted.warning);
+    warnings.push(...accepted.warnings);
   }
   if (skillNavigator && isClaudeCode(entry)) {
     const claude = await claudeSkillReduction({
