@@ -212,9 +212,12 @@ jobs:
       - name: Package for macOS
         run: |
           set -euo pipefail
-          # macOS runner ограничивает nofile; electron-builder открывает много файлов,
-          # копируя зависимости хоста и remote в bundle.
-          ulimit -n 8192
+          # Ad-hoc подпись (@electron/osx-sign) обходит бандл без ограничения параллельности: открывает каждый
+          # файл хоста и remote разом, а по симлинкам pnpm проходит повторно. Это десятки тысяч открытых файлов,
+          # 8192 не хватило (v0.27.0). Поднимаем потолки ядра (sudo на runner без пароля), потом лимит процесса.
+          echo "Before: kern.maxfiles=$(sysctl -n kern.maxfiles) kern.maxfilesperproc=$(sysctl -n kern.maxfilesperproc) nofile=$(ulimit -Sn)/$(ulimit -Hn)"
+          sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=262144
+          ulimit -n 262144
           echo "Packaging with open-file limit: $(ulimit -n)"
           pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never
 

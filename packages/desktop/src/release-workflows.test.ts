@@ -237,7 +237,8 @@ describe('release.yml (V5)', () => {
     );
 
     expect(buildCheckout).toMatch(/^ {10}ref: \$\{\{ inputs\.release_tag \|\| github\.ref \}\}$/m);
-    expect(packaging).toContain('ulimit -n 8192');
+    expect(packaging).toContain('sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=262144');
+    expect(packaging).toContain('ulimit -n 262144');
     expect(packaging).toContain('pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never');
   });
 
