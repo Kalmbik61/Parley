@@ -699,6 +699,22 @@ export const S = {
     ago: (relative: string): string => `${relative} ago`,
   },
 
+  /** Строка обновления CLI в Settings → Providers (`components/providers/ProviderUpdateRow.tsx`). */
+  providerUpdate: {
+    arrow: '→',
+    update: 'Update',
+    updating: 'Updating…',
+    skip: 'Skip this version',
+    busy: 'An update of this CLI is already running.',
+    updated: (to: string): string => `Updated to ${to}`,
+    failed: 'Update failed',
+    manual: 'Run it yourself:',
+    /** «2 Codex sessions will stay on 0.162.0 until restarted». */
+    sessions: (count: number, name: string, from: string | null): string =>
+      `${count} ${name} ${count === 1 ? 'session' : 'sessions'} will stay on ${from ?? 'the old version'} until restarted`,
+    smokeFailed: "The new version rejected Parley's launch flags. New sessions may fail to start.",
+  },
+
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
     addProvider: 'Add provider',
@@ -709,6 +725,8 @@ export const S = {
       timeout: 'The Z.ai quota request timed out. Try again.',
       unavailable: 'Z.ai quota is temporarily unavailable. Try again.',
     },
+    /** Тихая метка «↑» рядом с версией в сегменте провайдера: новая версия CLI (`shell/StatusBar.tsx`). */
+    updateMark: (latest: string): string => `${latest} available`,
     providerTitle: (name: string, available: boolean): string =>
       `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',
@@ -2618,6 +2636,8 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      updateProvider: 'update the provider CLI',
+      skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',

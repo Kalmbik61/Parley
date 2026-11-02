@@ -63,6 +63,29 @@ describe('ProvidersSettings: пилюли', () => {
   });
 });
 
+describe('ProvidersSettings: строка обновления CLI (спека 2026-11-02)', () => {
+  const update = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
+
+  it('у Codex с update — строка над карточкой; у GLM с update — нет (делит CLI Claude)', () => {
+    useProvidersStore.setState({
+      providers: [base('claude', 'Claude Code', true), { ...base('codex', 'Codex', true), version: '0.162.0', update }, { ...base('glm', 'GLM', true), update }],
+    } as never);
+    useUiStore.setState({ settingsProvider: 'codex' });
+    const { unmount } = render(<ProvidersSettings />);
+    expect(document.querySelector('[data-provider-update="codex"]')).not.toBeNull();
+    unmount();
+    useUiStore.setState({ settingsProvider: 'glm' });
+    render(<ProvidersSettings />);
+    expect(document.querySelector('[data-provider-update]')).toBeNull();
+  });
+
+  it('без update строки нет', () => {
+    useUiStore.setState({ settingsProvider: 'codex' });
+    render(<ProvidersSettings />);
+    expect(document.querySelector('[data-provider-update]')).toBeNull();
+  });
+});
+
 describe('ProvidersSettings: аккаунты подписки (спека подписок 4.1, 10)', () => {
   const account = (signingIn = false): ProviderInfo =>
     ({
