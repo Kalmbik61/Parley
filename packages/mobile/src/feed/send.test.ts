@@ -1,38 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { RemoteClient, SendMessageOutcome } from '@parley/remote-client';
-import { createApprove, type LocalAuth } from '../auth/approve';
-import { composerMode, messageProblem, sendToAgent, sizeCounter, uiOfSend, type ComposerFacts } from './send';
+import { describe, expect, it } from 'vitest';
+import type { SendMessageOutcome } from '@parley/remote-client';
+import { composerMode, messageProblem, sizeCounter, uiOfSend, type ComposerFacts } from './send';
 
-const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
-const auth = (ok: boolean) => ({ authenticateAsync: vi.fn<LocalAuth['authenticateAsync']>(async () => (ok ? { success: true } : { success: false, error: 'user_cancel' })) });
 const sendOk = (over: Partial<Extract<SendMessageOutcome, { outcome: 'sent' }>> = {}): SendMessageOutcome => ({ outcome: 'sent', clientMsgId: 'k-12345678', inserted: true, submitted: true, reason: null, ...over });
-const client = (o: SendMessageOutcome = sendOk()) => ({ sendMessage: vi.fn(async () => o) });
-const as = (c: ReturnType<typeof client>) => c as unknown as RemoteClient;
-
-describe('Face ID on every send', () => {
-  it('asks even when "Require Face ID to allow" is off, then sends', async () => {
-    const a = auth(true);
-    const c = client();
-    const r = await sendToAgent(as(c), createApprove({ auth: a, isRequired: () => false }), ref, 'go');
-    expect(a.authenticateAsync).toHaveBeenCalledTimes(1);
-    expect(a.authenticateAsync.mock.calls[0]![0].promptMessage).toBe('Confirm to message the agent');
-    expect(r).toMatchObject({ cancelled: false, outcome: { outcome: 'sent' } });
-    expect(c.sendMessage).toHaveBeenCalledWith({ ref, text: 'go' });
-  });
-
-  it('cancelled → nothing is sent', async () => {
-    const c = client();
-    const r = await sendToAgent(as(c), createApprove({ auth: auth(false), isRequired: () => true }), ref, 'go');
-    expect(r).toEqual({ cancelled: true, reason: 'cancelled' });
-    expect(c.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it('a retry after lost carries the same clientMsgId', async () => {
-    const c = client();
-    await sendToAgent(as(c), createApprove({ auth: auth(true), isRequired: () => true }), ref, 'go', 'key-abcdefgh');
-    expect(c.sendMessage).toHaveBeenCalledWith({ ref, text: 'go', clientMsgId: 'key-abcdefgh' });
-  });
-});
 
 describe('outcomes', () => {
   it('sent / queued / typed / unconfirmed', () => {

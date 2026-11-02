@@ -8,7 +8,7 @@ export interface ButtonProps {
   variant?: 'bordered' | 'prominent' | 'plain';
   loading?: boolean;
   disabled?: boolean;
-  /** Leading symbol, e.g. `faceid` on approvals that need Face ID. */
+  /** Leading symbol. */
   icon?: SFSymbol;
   hint?: string;
   flex?: boolean;

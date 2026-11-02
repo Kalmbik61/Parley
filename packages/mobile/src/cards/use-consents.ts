@@ -2,8 +2,6 @@
 // or "Answered at your Mac" when `consents.changed` removed it without us.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
-import { approve } from '../auth/instance';
-import { FACE_ID_CANCELLED, NO_PASSCODE } from '../components/Toast';
 import { haptic } from '../haptics';
 import { useClient, useRemoteState } from '../hooks/use-remote';
 import { CONSENT_TEXT, pendingConsents, runConsent, type ConsentUi } from './consent-model';
@@ -19,7 +17,7 @@ export interface ConsentRow {
 
 const LINGER_MS = 2000;
 
-export function useConsents(notify: (text: string) => void): { rows: ConsentRow[]; decide(card: ConsentCard, decision: 'allow' | 'deny'): Promise<void> } {
+export function useConsents(): { rows: ConsentRow[]; decide(card: ConsentCard, decision: 'allow' | 'deny'): Promise<void> } {
   const client = useClient();
   const state = useRemoteState();
   const items = state?.consents.items;
@@ -50,11 +48,8 @@ export function useConsents(notify: (text: string) => void): { rows: ConsentRow[
       setBusyId(card.id);
       setNotes((n) => Object.fromEntries(Object.entries(n).filter(([k]) => k !== card.id)));
       try {
-        const ui: ConsentUi = await runConsent(client, approve, card, decision);
+        const ui: ConsentUi = await runConsent(client, card, decision);
         switch (ui.kind) {
-          case 'cancelled':
-            notify(ui.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
-            return;
           case 'allowed':
             haptic.success();
             ours.current.set(card.id, ui.text);
@@ -81,7 +76,7 @@ export function useConsents(notify: (text: string) => void): { rows: ConsentRow[
         setBusyId(null);
       }
     },
-    [client, busyId, notify],
+    [client, busyId],
   );
 
   const rows: ConsentRow[] = [

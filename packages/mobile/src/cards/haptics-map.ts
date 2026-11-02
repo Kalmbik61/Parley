@@ -4,13 +4,11 @@ import type { DecisionUi } from './model';
 
 export type HapticKind = 'success' | 'warning' | 'error' | 'none';
 
-/** Allow/Approve/Send answer applied → success; Deny applied → warning; not applied, conflict, lost → warning; Face ID cancelled → nothing. */
+/** Allow/Approve/Send answer applied → success; Deny applied → warning; not applied, conflict, lost → warning. */
 export function hapticFor(ui: DecisionUi, decision: FeedDecision): HapticKind {
   switch (ui.kind) {
     case 'done':
       return decision.kind === 'permission' && decision.behavior === 'deny' ? 'warning' : 'success';
-    case 'cancelled':
-      return 'none';
     case 'error':
       return 'error';
     default:

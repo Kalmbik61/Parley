@@ -1,19 +1,17 @@
-// The session's message flow (D1 §9.5): draft, Face ID, `pty.send`, the bubble's states. The text is cleared only once
-// the gate has said yes; a cancelled gate leaves it in the field.
+// The session's message flow (D1 §9.5): draft, `pty.send`, the bubble's states. The text is cleared once the call has
+// an answer.
 import { useCallback, useRef, useState } from 'react';
 import { newClientMsgId, sessionKey, type SessionRef } from '@parley/remote-client';
-import { approve } from '../auth/instance';
-import { FACE_ID_CANCELLED, NO_PASSCODE } from '../components/Toast';
 import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
 import { draftOf, outboxOf, setDraft as saveDraft, setOutbox, type OutMessage } from './outbox';
-import { messageProblem, sendToAgent, uiOfSend } from './send';
+import { messageProblem, uiOfSend } from './send';
 
 export interface Chat {
   out: OutMessage[];
   draft: string;
   setDraft(text: string): void;
-  /** Face ID or the call is in flight: the field and the button are off. */
+  /** The call is in flight: the field and the button are off. */
   busy: boolean;
   /** `pty.send` answered `unknown_method`: the Mac switch is off, the composer is replaced by a line. */
   switchedOff: boolean;
@@ -55,14 +53,9 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
       const entry: OutMessage = { id: clientMsgId, text, at: Date.now(), state: { kind: 'sending' } };
       update((l) => [...l.filter((m) => m.id !== replaces && m.id !== clientMsgId), entry]);
       try {
-        const res = await sendToAgent(client, approve, ref, text, clientMsgId);
-        if (res.cancelled) {
-          update((l) => l.filter((m) => m.id !== clientMsgId));
-          notify(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
-          return;
-        }
+        const outcome = await client.sendMessage({ ref, text, clientMsgId });
         if (fromDraft) setDraft('');
-        const ui = uiOfSend(res.outcome, turnRunning);
+        const ui = uiOfSend(outcome, turnRunning);
         if (ui.kind === 'failed') {
           haptic.error();
           if (ui.hideComposer) setSwitchedOff(true);
@@ -92,8 +85,8 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
       if (messageProblem(draft) !== null) return;
       await run(draft, newClientMsgId(Date.now()), null, true);
     },
-    // After `lost` the same key goes again (the bridge answers from its cache, the agent reads the message once). After a
-    // refusal nothing reached the agent: a new key, and Face ID asks again.
+      // After `lost` the same key goes again (the bridge answers from its cache, the agent reads the message once). After a
+    // refusal nothing reached the agent: a new key.
     retry: async (message) => {
       const reuse = message.state.kind === 'unconfirmed';
       await run(message.text, reuse ? message.id : newClientMsgId(Date.now()), message.id, false);

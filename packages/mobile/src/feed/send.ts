@@ -1,7 +1,6 @@
-// Messaging an agent from the phone (D1 §9.5): the Face ID gate, `pty.send`, and what each outcome means for the bubble
+// Messaging an agent from the phone (D1 §9.5): `pty.send`, and what each outcome means for the bubble
 // and the composer. No React. Nothing is retried by itself: a retry is a tap, and after `lost` it carries the same key.
-import type { RemoteClient, SendMessageOutcome, SessionRef } from '@parley/remote-client';
-import type { Approve, NotSent } from '../auth/approve';
+import type { SendMessageOutcome } from '@parley/remote-client';
 import { TEXT_MAX_BYTES, utf8Length } from '../launch/launch-model';
 
 export const COUNTER_FROM_BYTES = 15 * 1024;
@@ -59,25 +58,6 @@ export function uiOfSend(outcome: SendMessageOutcome, turnRunning: boolean): Sen
     default:
       return { kind: 'failed', message: 'Not sent', retry: true, edit: false, textBack: false, hideComposer: false };
   }
-}
-
-export type GatedSend = { cancelled: true; reason: NotSent } | { cancelled: false; outcome: SendMessageOutcome };
-
-/**
- * Face ID first — nothing is sent if it fails. `clientMsgId` is given only for a retry after `lost` (the bridge returns the
- * earlier answer, the agent gets the message once); a new message, or a retry of one that never reached the agent
- * (`busy`, host error), has no key and gets a fresh one.
- */
-export async function sendToAgent(
-  client: Pick<RemoteClient, 'sendMessage'>,
-  approve: Approve,
-  ref: SessionRef,
-  text: string,
-  clientMsgId?: string,
-): Promise<GatedSend> {
-  const asked = await approve('send');
-  if (asked !== 'ok') return { cancelled: true, reason: asked };
-  return { cancelled: false, outcome: await client.sendMessage({ ref, text, ...(clientMsgId !== undefined ? { clientMsgId } : {}) }) };
 }
 
 export type ComposerMode =

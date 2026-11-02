@@ -36,6 +36,7 @@ export default function WorkScreen() {
       actions: {
         openSession: (id) => router.push(`/session/${sessionParam({ projectPath: ref.projectPath, workId: ref.workId, sessionId: id })}` as never),
         openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),
+        openRoom: (roomId) => router.push({ pathname: '/room', params: { ref: workParam(ref), room: roomId } } as never),
       },
     };
     const teams = buildTeams(view.rows, {

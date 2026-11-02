@@ -3,7 +3,6 @@ import { haptic } from '../haptics';
 import type { FeedDecision } from '@parley/core';
 import type { SessionRef } from '@parley/remote-client';
 import { useClient } from '../hooks/use-remote';
-import { useApprove } from './approve-context';
 import { hapticFor } from './haptics-map';
 import { DECISION_TEXT, runDecision, type DecisionUi } from './model';
 
@@ -20,7 +19,6 @@ export interface DecisionState {
  */
 export function useDecision(ref: SessionRef, cardId: string): DecisionState {
   const client = useClient();
-  const approve = useApprove();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -31,7 +29,7 @@ export function useDecision(ref: SessionRef, cardId: string): DecisionState {
       if (client === null || busy) return null;
       setBusy(true);
       setMessage(null);
-      const ui = await runDecision(decision, approve, (d) => client.decide(ref, cardId, d));
+      const ui = await runDecision(decision, (d) => client.decide(ref, cardId, d));
       setBusy(false);
       const kind = hapticFor(ui, decision);
       if (kind === 'success') haptic.success();
@@ -44,7 +42,7 @@ export function useDecision(ref: SessionRef, cardId: string): DecisionState {
       }
       return ui;
     },
-    [client, busy, approve, ref, cardId],
+    [client, busy, ref, cardId],
   );
   return { busy, message, submit };
 }

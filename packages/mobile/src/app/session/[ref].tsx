@@ -2,13 +2,14 @@
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, RefreshControl, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
-import { ActiveCard, InfoCard } from '../../cards/CardViews';
+import { ActiveCard } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
 import { capsuleOf, needReason, type Capsule } from '../../cards/status';
@@ -37,10 +38,12 @@ type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
 const NEAR_BOTTOM = 80;
 
-function HeaderTitle({ name, capsule }: { name: string; capsule: Capsule | null }) {
+function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule | null; meta: string }) {
   const c = useColors();
   const tone = capsule === null ? c.idle : capsule.tone === 'needsYou' ? c.needsYou : capsule.tone === 'working' ? c.working : capsule.tone === 'danger' ? c.danger : capsule.tone === 'success' ? c.success : capsule.tone === 'idle' ? c.idle : c.off;
-  const status = capsule === null ? '' : capsule.detail === null ? capsule.label : `${capsule.label} · ${capsule.detail}`;
+  // State first and never squeezed, then `role · model · time` (D1 §9.1).
+  const word = capsule === null ? '' : capsule.label;
+  const status = [word, meta].filter((x) => x !== '').join(' · ');
   return (
     <View accessible accessibilityRole="header" accessibilityLabel={`${name}. ${status}`} style={styles.headerTitle}>
       <Text numberOfLines={1} allowFontScaling style={[typography.headline, { color: c.label }]}>
@@ -49,7 +52,7 @@ function HeaderTitle({ name, capsule }: { name: string; capsule: Capsule | null 
       {status !== '' && (
         <View style={styles.statusLine}>
           <View style={[styles.dot, { backgroundColor: tone }]} />
-          <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
+          <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: capsule?.tone === 'needsYou' ? c.needsYou : c.label2 }]}>
             {status}
           </Text>
         </View>
@@ -213,13 +216,14 @@ export default function SessionScreen() {
   const rest = cards.slice(1);
   const origin = originOf(work, session.id);
   const started = timeAgo(session.startedAt, now);
-  const subtitle = [session.role, session.model, started === null ? null : `started ${started} ago`].filter((x) => x !== null && x !== '').join(' · ');
+  const subtitle = [session.role, session.model, started === null ? null : `${started}`].filter((x) => x !== null && x !== '').join(' · ');
   const env: TreeEnv = {
     state,
     view,
     actions: {
       openSession: (id) => router.push(`/session/${sessionParam({ ...ref, sessionId: id })}` as never),
       openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),
+      openRoom: (roomId) => router.push({ pathname: '/room', params: { ref: workParam(ref), room: roomId } } as never),
     },
   };
   const team = subtreeOf(view.rows, session.id);
@@ -237,14 +241,10 @@ export default function SessionScreen() {
     feedReady: feed?.status === 'ready',
   });
   const hidden = chat.switchedOff ? ({ kind: 'hidden', text: 'Messaging agents from the phone is turned off on your Mac' } as const) : mode;
+  // The origin is the first line of the history (it scrolls away); the team and the actions are behind "•••".
   const header = (
     <View style={styles.passport}>
       <ConnectionBanner />
-      {subtitle !== '' && (
-        <Text allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-          {subtitle}
-        </Text>
-      )}
       {origin.length > 0 && (
         <View style={styles.origin}>
           <SymbolView name="arrow.turn.left.up" size={14} tintColor={c.label2} />
@@ -253,23 +253,45 @@ export default function SessionScreen() {
           </Text>
         </View>
       )}
-      {team.length > 0 && (
-        <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: teamOpen }} onPress={() => setTeamOpen((o) => !o)} style={styles.teamRow}>
-            <SymbolView name="person.2" size={16} tintColor={c.label2} />
-            <Text allowFontScaling style={[typography.footnote, styles.flex, { color: c.label2 }]}>
-              {teamLine(counts)}
-            </Text>
-            <SymbolView name={teamOpen ? 'chevron.down' : 'chevron.right'} size={12} tintColor={c.label2} />
-          </Pressable>
-          {teamOpen && <TreeRows rows={team} env={env} />}
-        </View>
-      )}
     </View>
   );
+  const memberOf = view.rows.find((r) => r.kind === 'room' && r.room.members.includes(session.id));
+  const menu = (): void => {
+    const entries: Array<{ title: string; run(): void }> = [];
+    if (team.length > 0) entries.push({ title: `Team (${counts.agents})`, run: () => setTeamOpen(true) });
+    if (memberOf !== undefined && memberOf.kind === 'room') {
+      const roomId = memberOf.room.id;
+      entries.push({ title: 'Open room', run: () => env.actions.openRoom(roomId) });
+    }
+    entries.push({ title: 'Open work', run: () => router.push(`/work/${workParam(ref)}` as never) });
+    entries.push({ title: 'Copy session ID', run: () => void Clipboard.setStringAsync(session.id) });
+    ActionSheetIOS.showActionSheetWithOptions({ options: [...entries.map((e) => e.title), 'Cancel'], cancelButtonIndex: entries.length }, (i) => entries[i]?.run());
+  };
+  // "Needs you" without a card on screen is one pinned line under the bar (D1 §9.1); with a card the card says it.
+  const strip =
+    attention === 'needs-you' && first === undefined && !loading
+      ? need?.kind === 'limit'
+        ? { icon: 'hourglass' as const, text: needReason(need) }
+        : need?.kind === 'sign-in'
+          ? { icon: 'person.badge.key' as const, text: `${needReason(need)} — sign in at your Mac` }
+          : { icon: 'desktopcomputer' as const, text: 'Answer at your Mac — in its terminal' }
+      : null;
 
   const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
+      {strip !== null && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={strip.text}
+          onPress={() => list.current?.scrollToEnd({ animated: true })}
+          style={[styles.strip, { top: insets.top + 44, backgroundColor: c.warningBg }]}
+        >
+          <SymbolView name={strip.icon} size={16} tintColor={c.needsYou} />
+          <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
+            {strip.text}
+          </Text>
+        </Pressable>
+      )}
       <FlatList
         ref={list}
         data={rows}
@@ -280,7 +302,7 @@ export default function SessionScreen() {
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, strip !== null && { paddingTop: 44 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
@@ -323,9 +345,6 @@ export default function SessionScreen() {
                 )}
               </>
             )}
-            {blockedNoCard && <InfoCard icon="desktopcomputer" title="Answer at your Mac" detail={needReason(need)} text="This request can only be answered in the terminal on your Mac." />}
-            {first === undefined && need?.kind === 'limit' && <InfoCard icon="hourglass" title="Usage limit" detail={needReason(need)} text="Answer at your Mac" />}
-            {first === undefined && need?.kind === 'sign-in' && <InfoCard icon="person.badge.key" title="Signed out" detail={needReason(need)} text="Answer at your Mac" />}
             {turnRunning && first === undefined && (
               <Text allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
                 Working…
@@ -351,7 +370,7 @@ export default function SessionScreen() {
         </Pressable>
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
-        <SwitchCards sessionRef={ref} notify={toast.show} />
+        <SwitchCards sessionRef={ref} />
         {first !== undefined && parts !== null ? (
           parts.actions
         ) : (
@@ -367,13 +386,35 @@ export default function SessionScreen() {
       <Stack.Screen
         options={{
           headerLargeTitle: false,
-          headerBackTitle: work.title,
+          headerBackButtonDisplayMode: 'minimal',
           title: session.label,
-          headerTitle: () => <HeaderTitle name={session.label} capsule={capsule} />,
+          headerTitle: () => <HeaderTitle name={session.label} capsule={capsule} meta={subtitle} />,
+          headerRight: () => (
+            <Pressable accessibilityRole="button" accessibilityLabel="More" onPress={menu} hitSlop={8} style={styles.bar}>
+              <SymbolView name="ellipsis.circle" size={22} tintColor={c.tint} />
+            </Pressable>
+          ),
           headerTransparent: Platform.OS === 'ios',
           headerBlurEffect: 'systemChromeMaterial',
         }}
       />
+      <Modal visible={teamOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTeamOpen(false)}>
+        <View style={[styles.page, { backgroundColor: c.bg }]}>
+          <View style={styles.sheetHead}>
+            <Text accessibilityRole="header" allowFontScaling style={[typography.headline, styles.flex, { color: c.label }]}>
+              {teamLine(counts)}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={() => setTeamOpen(false)} style={styles.bar}>
+              <Text allowFontScaling style={[typography.body, { color: c.tint }]}>Done</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
+              <TreeRows rows={team} env={{ ...env, actions: { openSession: (id) => { setTeamOpen(false); env.actions.openSession(id); }, openDecision: (r, p) => { setTeamOpen(false); env.actions.openDecision(r, p); }, openRoom: (r) => { setTeamOpen(false); env.actions.openRoom(r); } } }} />
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
       {first !== undefined ? (
         <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
           {(parts) => content(parts)}
@@ -386,8 +427,8 @@ export default function SessionScreen() {
 }
 
 /** A provider-switch request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
-function SwitchCards({ sessionRef, notify }: { sessionRef: SessionRef; notify: (text: string) => void }) {
-  const consents = useConsents(notify);
+function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
+  const consents = useConsents();
   const canAct = useCanAct();
   const now = useNow(30_000);
   const mine = consents.rows.filter((r) => r.card.kind === 'agent-switch' && r.card.ref.sessionId === sessionRef.sessionId && r.card.ref.workId === sessionRef.workId);
@@ -417,6 +458,9 @@ const styles = StyleSheet.create({
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   jump: { position: 'absolute', alignSelf: 'center', bottom: 90, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  strip: { position: 'absolute', left: 0, right: 0, zIndex: 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 36 },
+  bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12 },
   teamRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 28 },
   switchWrap: { gap: 8, marginBottom: 8 },
 });

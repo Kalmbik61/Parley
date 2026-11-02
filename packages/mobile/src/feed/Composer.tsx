@@ -1,4 +1,4 @@
-// The message field of the session screen (D1 §9.5): multiline, Return is a newline, ⬆ asks Face ID through `useChat`.
+// The message field of the session screen (D1 §9.5): multiline, Return is a newline, ⬆ sends through `useChat`.
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { typography, useColors } from '../theme';
@@ -51,7 +51,6 @@ export function Composer({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Send"
-          accessibilityHint="Requires Face ID"
           accessibilityState={{ disabled: !canSend, busy }}
           disabled={!canSend}
           onPress={onSend}

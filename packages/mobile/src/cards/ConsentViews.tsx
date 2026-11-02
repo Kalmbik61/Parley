@@ -1,4 +1,4 @@
-// Consent cards (D1 §7.3): folder trust and provider switch. Allow asks Face ID, Deny does not.
+// Consent cards (D1 §7.3): folder trust and provider switch. The app lock covers Face ID.
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
@@ -96,7 +96,7 @@ export function ConsentCardView({
         <>
           <View style={styles.pair}>
             <Button title="Deny" flex disabled={off} onPress={() => onDecide(card, 'deny')} />
-            <Button title="Allow" variant="prominent" icon="faceid" hint="Requires Face ID" flex loading={row.busy} disabled={!canAct || row.busy} onPress={() => onDecide(card, 'allow')} />
+            <Button title="Allow" variant="prominent" flex loading={row.busy} disabled={!canAct || row.busy} onPress={() => onDecide(card, 'allow')} />
           </View>
           {(!canAct || row.message !== null) && (
             <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>

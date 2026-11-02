@@ -1,4 +1,4 @@
-// New session / New room (D1 §8.4, plan A26): the form rules and the calls behind the Face ID gate. No React here, so
+// New session / New room (D1 §8.4, plan A26): the form rules and the calls behind it. No React here, so
 // every rule is tested; the screen only draws it. The data layer is `remote-client` (A12b): it never retries a
 // changing call and finds out after a lost answer by re-reading the snapshot.
 import type {
@@ -11,7 +11,6 @@ import type {
 } from '@parley/remote-client';
 import { selectLaunchCapabilities } from '@parley/remote-client';
 import type { RemoteSession, RemoteWork } from '@parley/protocol/remote';
-import type { Approve, NotSent } from '../auth/approve';
 
 export const LABEL_MAX = 64;
 export const TITLE_MAX = 128;
@@ -213,17 +212,12 @@ function failure(outcome: Exclude<CreateSessionOutcome | CreateRoomOutcome, { ou
   return { kind: 'unconfirmed', message: NOT_CONFIRMED };
 }
 
-/** `reason`: Face ID cancelled, or the phone has no passcode (the toast says how to fix it). */
-export type Cancelled = { kind: 'cancelled'; reason: NotSent };
-
-export type SessionLaunch = Cancelled | { kind: 'created'; ref: SessionRef } | LaunchFailure;
+export type SessionLaunch = { kind: 'created'; ref: SessionRef } | LaunchFailure;
 
 type Launcher = Pick<RemoteClient, 'createSession' | 'createRoom' | 'sendRoomMessage'>;
 
-/** Face ID first (nothing is sent if it fails), then `sessions.create`. */
-export async function launchSession(client: Launcher, approve: Approve, form: SessionForm): Promise<SessionLaunch> {
-  const asked = await approve('launch');
-  if (asked !== 'ok') return { kind: 'cancelled', reason: asked };
+/** `sessions.create` with the form's fields. */
+export async function launchSession(client: Launcher, form: SessionForm): Promise<SessionLaunch> {
   const outcome = await client.createSession({
     projectPath: form.projectPath,
     workId: form.workId,
@@ -245,7 +239,6 @@ export interface StartedAgent {
 }
 
 export type RoomLaunch =
-  | Cancelled
   | { kind: 'created'; ref: RoomRef; agents: number }
   /** Failed on the way: `startedAgents` are already running and show in the work; `afterPartial` keeps them for a retry. */
   | { kind: 'partial'; started: number; startedAgents: StartedAgent[]; message: string; failure: LaunchFailure };
@@ -271,12 +264,10 @@ export function partialMessage(started: number, reason: string): string {
 }
 
 /**
- * One Face ID for the whole "Create room": new agents start quietly (no task), then the room is created quietly with
- * the chosen mode. The first message is a second step with its own Face ID (`sendFirstLetter`).
+ * "Create room": new agents start quietly (no task), then the room is created quietly with the chosen mode. The first
+ * message is a second step (`sendFirstLetter`).
  */
-export async function launchRoom(client: Launcher, approve: Approve, form: RoomForm): Promise<RoomLaunch> {
-  const asked = await approve('launch');
-  if (asked !== 'ok') return { kind: 'cancelled', reason: asked };
+export async function launchRoom(client: Launcher, form: RoomForm): Promise<RoomLaunch> {
   const started = new Map<string, string>();
   const startedAgents = (): StartedAgent[] => [...started].map(([key, sessionId]) => ({ key, sessionId }));
   for (const agent of form.agents) {
@@ -311,12 +302,10 @@ export async function launchRoom(client: Launcher, approve: Approve, form: RoomF
   return { kind: 'partial', started: started.size, startedAgents: startedAgents(), message: partialMessage(started.size, f.message), failure: f };
 }
 
-export type LetterLaunch = Cancelled | { kind: 'sent' } | LaunchFailure;
+export type LetterLaunch = { kind: 'sent' } | LaunchFailure;
 
-/** The task of a quiet room: Face ID again (every send asks), then `rooms.send`. The draft stays in the store until sent. */
-export async function sendFirstLetter(client: Launcher, approve: Approve, room: RoomRef, text: string): Promise<LetterLaunch> {
-  const asked = await approve('letter');
-  if (asked !== 'ok') return { kind: 'cancelled', reason: asked };
+/** The task of a quiet room: `rooms.send`. The draft stays in the store until sent. */
+export async function sendFirstLetter(client: Launcher, room: RoomRef, text: string): Promise<LetterLaunch> {
   const outcome = await client.sendRoomMessage({ ...room, text, kind: 'note' });
   if (outcome.outcome === 'sent') return { kind: 'sent' };
   if (outcome.outcome === 'rejected') return { kind: 'refused', code: outcome.code, message: refusalMessage(outcome.code, outcome.message) };
@@ -327,7 +316,7 @@ export type LaunchStep = 'session' | 'room' | 'letter';
 
 /**
  * Why the action cannot go at all: a method it needs is not in the bridge hello any more (the Mac switch was turned off
- * while the sheet was open, or the versions drifted). Face ID is not asked for a call that will not go.
+ * while the sheet was open, or the versions drifted). 
  */
 export function methodMissing(state: Pick<RemoteState, 'methods'>, step: LaunchStep, newAgents = 0): string | null {
   const c = selectLaunchCapabilities(state);

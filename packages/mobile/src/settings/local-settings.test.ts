@@ -3,11 +3,11 @@ import { memoryStore } from './memory-store';
 import { LocalSettings, displayName } from './local-settings';
 
 describe('LocalSettings', () => {
-  it('requires Face ID by default and keeps the switch', async () => {
+  it('locks the app by default and keeps the switch', async () => {
     const s = new LocalSettings(memoryStore());
-    expect(await s.requireBiometric()).toBe(true);
-    await s.setRequireBiometric(false);
-    expect(await s.requireBiometric()).toBe(false);
+    expect(await s.lockEnabled()).toBe(true);
+    await s.setLockEnabled(false);
+    expect(await s.lockEnabled()).toBe(false);
   });
 
   it('renames a Mac only for this phone and forgets it on removal', async () => {
@@ -28,7 +28,7 @@ describe('LocalSettings', () => {
     const store = memoryStore();
     store.data.set('parley.settings', '{nope');
     const s = new LocalSettings(store);
-    expect(await s.requireBiometric()).toBe(true);
+    expect(await s.lockEnabled()).toBe(true);
     await Promise.all([s.setHostName('a', 'A'), s.setHostName('b', 'B'), s.setNotificationsEnabled(false)]);
     expect(await s.hostNames()).toEqual({ a: 'A', b: 'B' });
     expect(await s.notificationsEnabled()).toBe(false);

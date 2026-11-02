@@ -93,7 +93,7 @@ export function installDemo(client: RemoteClient): void {
     { kind: 'prompt', id: 'f1', at: at(40), text: 'Update the D1 doc for the human decisions', images: 0 },
     { kind: 'tool', id: 'f2', at: at(39), toolUseId: 't2', name: 'Read', input: { file_path: 'docs/design/mobile.md' }, status: 'done' },
     { kind: 'tool', id: 'f3', at: at(38), toolUseId: 't3', name: 'Bash', input: { command: 'pnpm lint' }, status: 'done' },
-    { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer with Face ID\n\n```\npnpm lint\n```' },
+    { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer\n\n```\npnpm lint\n```' },
     { kind: 'turn', id: 'f5', at: at(36), durationMs: 372_000 },
     { kind: 'prompt', id: 'f6', at: at(5), text: 'Run the linter once more', images: 0 },
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
@@ -103,6 +103,21 @@ export function installDemo(client: RemoteClient): void {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
   }
+  // A32/A33: a room chat for the room screen.
+  const rref = { projectPath: P, workId: 'w1', roomId: 'r1' };
+  const letter2 = (id: string, from: string, min: number, text: string, extra: Record<string, unknown> = {}) =>
+    ({ id, roomId: 'r1', from, to: [], at: ago(min), text, kind: 'note', readBy: {}, ...extra }) as never;
+  store.dispatch({ t: 'room.open', ref: rref });
+  store.dispatch({
+    t: 'room.loaded', ref: rref, epoch: 'demo', next: 'before:1',
+    messages: [
+      letter2('m-11', 'greta', 30, 'Wave 3 is merged; next A27 and A28 go in parallel.'),
+      letter2('m-12', 'd1', 28, 'Agreed — A28 starts after A27.', { to: ['greta'], replyTo: 'm-11' }),
+      letter2('m-13', 'system', 25, 'Mobile-D1-designer proposed a decision'),
+      letter2('m-14', 'human', 20, '@Greta please re-run the lint', { to: ['greta'], readBy: { greta: ago(19) } }),
+      letter2('m-15', 'greta', 18, '## Lint is green\nAll **12** packages pass.\n- eslint\n- typecheck'),
+    ],
+  });
   store.dispatch({
     t: 'consents.loaded', epoch: 'demo',
     items: [
@@ -137,6 +152,8 @@ export function demoRoute(name: unknown): string | null {
       return s('greta');
     case 'chat':
       return s('drone1');
+    case 'room':
+      return `/room?ref=${encodeURIComponent(w)}&room=r1`;
     case 'inbox':
       return '/';
     case 'new':
