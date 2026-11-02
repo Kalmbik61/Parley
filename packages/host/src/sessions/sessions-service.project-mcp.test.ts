@@ -90,7 +90,6 @@ beforeEach(async () => {
     home: path.join(sandbox, 'parley-home'),
     userHome,
     claudeConfigDir: path.join(userHome, '.claude'),
-    claudeJson: path.join(userHome, '.claude.json'),
     log: { warn },
   });
   vi.mocked(planLaunch).mockClear();
@@ -212,9 +211,10 @@ describe('launch(): серверы MCP проекта у Claude', () => {
     expect(vi.mocked(planLaunch)).not.toHaveBeenCalled();
   });
 
-  it('решение Claude (.claude.json проекта): карточки нет, ключей в файле нет', async () => {
+  it('решение Claude (настройки пользователя): карточки нет, ключей в файле нет', async () => {
     await writeMcp({ a: server('node'), b: server('node') });
-    await writeFile(path.join(userHome, '.claude.json'), JSON.stringify({ projects: { [project]: { enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] } } }));
+    await mkdir(path.join(userHome, '.claude'), { recursive: true });
+    await writeFile(path.join(userHome, '.claude', 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] }));
     const { ref } = await pendingPeer();
     const { service, consents } = build();
 
@@ -222,6 +222,17 @@ describe('launch(): серверы MCP проекта у Claude', () => {
 
     expect(consents.requestProjectMcp).not.toHaveBeenCalled();
     expect(lastOptions()).not.toHaveProperty('projectMcp');
+  });
+
+  it('включение в .claude/settings.local.json проекта решением не считается: карточка есть (случай телефона)', async () => {
+    await writeMcp({ a: server('node'), b: server('node') });
+    await mkdir(path.join(project, '.claude'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['a', 'b'] }));
+    const { ref } = await pendingPeer();
+    const { service, consents } = build();
+
+    expect(await service.launch(ref, 'launch', { by: 'auto' })).toBe('held');
+    expect(consents.requestProjectMcp).toHaveBeenCalledTimes(1);
   });
 
   it('битый .mcp.json: карточки нет, ни один сервер не включён, запись в журнал', async () => {

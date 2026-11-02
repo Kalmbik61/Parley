@@ -157,13 +157,18 @@ interface ClaudeDecisions {
   enableAll: boolean;
 }
 
-function collectDecisions(into: ClaudeDecisions, source: unknown): void {
+function collectDecisions(into: ClaudeDecisions, source: unknown, scope: 'user' | 'project'): void {
   if (!isRecord(source)) return;
-  for (const key of ['enabledMcpjsonServers', 'disabledMcpjsonServers']) {
+  // Файлы проекта Claude слушает только в отказе: включение из них — только в доверенной папке (спайк T5b: у папки без
+  // собственного доверия `enabledMcpjsonServers` проекта вопрос не гасит, а отказ — гасит). Доверие папки Parley не
+  // проверяет, поэтому из проекта берётся один `disabledMcpjsonServers`; сомнение — спросить человека, а не пропустить
+  // карточку: пропущенная карточка оставляет вопрос Claude, и запуск с телефона на нём встаёт.
+  const keys = scope === 'user' ? ['enabledMcpjsonServers', 'disabledMcpjsonServers'] : ['disabledMcpjsonServers'];
+  for (const key of keys) {
     const list = source[key];
     if (Array.isArray(list)) for (const name of list) if (typeof name === 'string') into.decided.add(name);
   }
-  if (source['enableAllProjectMcpServers'] === true) into.enableAll = true;
+  if (scope === 'user' && source['enableAllProjectMcpServers'] === true) into.enableAll = true;
 }
 
 function readJson(file: string): unknown {
@@ -175,20 +180,20 @@ function readJson(file: string): unknown {
 }
 
 /**
- * Собственные решения Claude о серверах проекта (только чтение): три ключа в настройках пользователя, проекта и
- * локальных настроек проекта и запись проекта в файле состояния Claude. Решение Claude сильнее флага `--settings` (спайк T5, 7.1),
- * поэтому о таком сервере Parley не спрашивает и ключами не перебивает.
+ * Решения Claude, которые гасят его вопрос о серверах (только чтение): три ключа настроек пользователя и отказы
+ * (`disabledMcpjsonServers`) из настроек проекта и локальных настроек проекта — туда Claude сам пишет «Esc — отклонить
+ * все» (спайк T5b). Включение из файлов проекта, `enableAllProjectMcpServers` проекта и списки в файле состояния
+ * Claude не считаются: проверено, что в папке без собственного доверия включение из проекта вопрос не гасит, а список
+ * в файле состояния современный Claude не пишет. Решение Claude сильнее флага `--settings` (7.1), поэтому о
+ * засчитанном сервере Parley не спрашивает и ключами не перебивает.
  */
-export function readClaudeDecisions(input: { repo: string; cwd: string; configDir: string; claudeJson: string }): ClaudeDecisions {
+export function readClaudeDecisions(input: { repo: string; cwd: string; configDir: string }): ClaudeDecisions {
   const out: ClaudeDecisions = { decided: new Set(), enableAll: false };
-  collectDecisions(out, readJson(path.join(input.configDir, 'settings.json')));
+  collectDecisions(out, readJson(path.join(input.configDir, 'settings.json')), 'user');
   for (const root of new Set([input.repo, input.cwd])) {
-    collectDecisions(out, readJson(path.join(root, '.claude', 'settings.json')));
-    collectDecisions(out, readJson(path.join(root, '.claude', 'settings.local.json')));
+    collectDecisions(out, readJson(path.join(root, '.claude', 'settings.json')), 'project');
+    collectDecisions(out, readJson(path.join(root, '.claude', 'settings.local.json')), 'project');
   }
-  const state = readJson(input.claudeJson);
-  const projects = isRecord(state) ? state['projects'] : undefined;
-  if (isRecord(projects)) for (const key of new Set([input.repo, input.cwd])) collectDecisions(out, projects[key]);
   return out;
 }
 
@@ -262,9 +267,8 @@ export interface ProjectMcpOptions {
   home: string;
   /** Домашняя папка человека: верхняя граница поиска `.mcp.json`. */
   userHome: string;
-  /** Папка настроек Claude и файл его состояния (пути считает вызывающий): только чтение. */
+  /** Папка настроек Claude (путь считает вызывающий): только чтение. */
   claudeConfigDir: string;
-  claudeJson: string;
   log: Pick<Log, 'warn'>;
 }
 
@@ -278,7 +282,7 @@ export function createProjectMcp(options: ProjectMcpOptions): ProjectMcp {
         const servers = await readProjectMcpServers(real, options.userHome, options.log);
         if (servers.length === 0) return { ...EMPTY };
         const repo = await repoKeyOf(real);
-        const claude = readClaudeDecisions({ repo, cwd: real, configDir: options.claudeConfigDir, claudeJson: options.claudeJson });
+        const claude = readClaudeDecisions({ repo, cwd: real, configDir: options.claudeConfigDir });
         const result: ProjectMcpInspection = { repo, undecided: [], enabled: [], disabled: [] };
         for (const server of servers) {
           // Решение Claude сильнее флага: о таком сервере не спрашиваем и ключами не перебиваем.

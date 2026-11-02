@@ -28,7 +28,6 @@ import {
   providerLabel,
   updateMap,
   userClaudeConfigDir,
-  userClaudeJsonPath,
   migrateMapsToDb,
   migrateProjects,
   parleyHome,
@@ -545,7 +544,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     home: parleyHome(),
     userHome: os.homedir(),
     claudeConfigDir: userClaudeConfigDir(),
-    claudeJson: userClaudeJsonPath(),
     log: handle.context.log,
   });
   const consentsService = createConsentsService({

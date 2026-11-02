@@ -19,7 +19,6 @@ let root = '';
 let userHome = '';
 let parley = '';
 let configDir = '';
-let claudeJson = '';
 const log = { warn: vi.fn() };
 
 beforeEach(async () => {
@@ -27,7 +26,6 @@ beforeEach(async () => {
   userHome = path.join(root, 'user');
   parley = path.join(root, 'parley');
   configDir = path.join(userHome, '.claude');
-  claudeJson = path.join(userHome, '.claude.json');
   await mkdir(userHome, { recursive: true });
   log.warn.mockClear();
 });
@@ -47,7 +45,7 @@ async function repo(name = 'repo'): Promise<string> {
 }
 
 function service() {
-  return createProjectMcp({ home: parley, userHome, claudeConfigDir: configDir, claudeJson, log });
+  return createProjectMcp({ home: parley, userHome, claudeConfigDir: configDir, log });
 }
 
 describe('mcpFingerprint', () => {
@@ -151,41 +149,49 @@ describe('repoKeyOf', () => {
 });
 
 describe('readClaudeDecisions', () => {
-  it('читает три ключа из настроек пользователя, проекта и local, а также записи проекта в .claude.json', async () => {
+  it('настройки пользователя — все три ключа; проект и local проекта — только отказы (спайк T5b)', async () => {
     const dir = await repo();
     await mkdir(configDir, { recursive: true });
     await mkdir(path.join(dir, '.claude'), { recursive: true });
-    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['u'] }));
-    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ disabledMcpjsonServers: ['p'] }));
-    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['l'] }));
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { disabledMcpjsonServers: ['j'] }, '/other': { enabledMcpjsonServers: ['x'] } } }));
-    const decisions = readClaudeDecisions({ repo: dir, cwd: dir, configDir, claudeJson });
-    expect([...decisions.decided].sort()).toEqual(['j', 'l', 'p', 'u']);
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['u1'], disabledMcpjsonServers: ['u2'] }));
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ disabledMcpjsonServers: ['p'], enabledMcpjsonServers: ['p-on'] }));
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ disabledMcpjsonServers: ['l'], enabledMcpjsonServers: ['l-on'] }));
+    const decisions = readClaudeDecisions({ repo: dir, cwd: dir, configDir });
+    expect([...decisions.decided].sort()).toEqual(['l', 'p', 'u1', 'u2']);
     expect(decisions.enableAll).toBe(false);
   });
 
-  it('enableAllProjectMcpServers: true — все решены; битые файлы и чужие формы читаются как «решений нет»', async () => {
+  it('enableAllProjectMcpServers гасит вопрос только из настроек пользователя; из проекта — нет', async () => {
     const dir = await repo();
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { enableAllProjectMcpServers: true } } }));
-    expect(readClaudeDecisions({ repo: dir, cwd: dir, configDir, claudeJson }).enableAll).toBe(true);
-    await writeFile(claudeJson, '{битый');
-    const none = readClaudeDecisions({ repo: dir, cwd: dir, configDir, claudeJson });
-    expect(none.decided.size).toBe(0);
-    expect(none.enableAll).toBe(false);
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { enabledMcpjsonServers: 'a', enableAllProjectMcpServers: 'yes' } } }));
-    const odd = readClaudeDecisions({ repo: dir, cwd: dir, configDir, claudeJson });
+    await mkdir(configDir, { recursive: true });
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ enableAllProjectMcpServers: true }));
+    expect(readClaudeDecisions({ repo: dir, cwd: dir, configDir }).enableAll).toBe(false);
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enableAllProjectMcpServers: true }));
+    expect(readClaudeDecisions({ repo: dir, cwd: dir, configDir }).enableAll).toBe(true);
+  });
+
+  it('битые файлы и чужие формы читаются как «решений нет»', async () => {
+    const dir = await repo();
+    await mkdir(configDir, { recursive: true });
+    await writeFile(path.join(configDir, 'settings.json'), '{битый');
+    expect(readClaudeDecisions({ repo: dir, cwd: dir, configDir }).decided.size).toBe(0);
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: 'a', enableAllProjectMcpServers: 'yes' }));
+    const odd = readClaudeDecisions({ repo: dir, cwd: dir, configDir });
     expect(odd.decided.size).toBe(0);
     expect(odd.enableAll).toBe(false);
   });
 
-  it('файлы Claude только читаются: после чтения содержимое и время не меняются', async () => {
+  it('файлы Claude только читаются: содержимое и время не меняются', async () => {
     const dir = await repo();
-    await writeFile(claudeJson, JSON.stringify({ projects: {} }));
-    const before = await stat(claudeJson);
-    readClaudeDecisions({ repo: dir, cwd: dir, configDir, claudeJson });
-    const after = await stat(claudeJson);
+    await mkdir(configDir, { recursive: true });
+    const file = path.join(configDir, 'settings.json');
+    await writeFile(file, JSON.stringify({ enabledMcpjsonServers: ['u'] }));
+    const before = await stat(file);
+    readClaudeDecisions({ repo: dir, cwd: dir, configDir });
+    const after = await stat(file);
     expect(after.mtimeMs).toBe(before.mtimeMs);
-    expect(await readFile(claudeJson, 'utf8')).toBe(JSON.stringify({ projects: {} }));
+    expect(await readFile(file, 'utf8')).toBe(JSON.stringify({ enabledMcpjsonServers: ['u'] }));
   });
 });
 
@@ -273,15 +279,60 @@ describe('inspect', () => {
     expect(second.enabled).toEqual(['a']);
   });
 
-  it('решение Claude (.claude.json, enableAll, настройки) — вопроса нет и ключей нет', async () => {
+  it('решение Claude в настройках пользователя — вопроса нет и ключей нет', async () => {
     const dir = await repo();
     await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a'), b: stdio('b') }));
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] } } }));
+    await mkdir(configDir, { recursive: true });
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] }));
     expect(await service().inspect(dir)).toMatchObject({ undecided: [], enabled: [], disabled: [] });
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { enableAllProjectMcpServers: true } } }));
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enableAllProjectMcpServers: true }));
     expect(await service().inspect(dir)).toMatchObject({ undecided: [], enabled: [], disabled: [] });
-    await writeFile(claudeJson, JSON.stringify({ projects: { [dir]: { enabledMcpjsonServers: ['a'] } } }));
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['a'] }));
     expect((await service().inspect(dir)).undecided.map((server) => server.name)).toEqual(['b']);
+  });
+
+  it('отказ Claude в local-настройках папки (так пишет Esc) — вопроса нет', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a'), b: stdio('b') }));
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ disabledMcpjsonServers: ['a', 'b'] }));
+    expect(await service().inspect(dir)).toMatchObject({ undecided: [], enabled: [], disabled: [] });
+  });
+
+  it('включение в settings.local.json проекта НЕ считается решением: карточка остаётся (Claude всё равно спросит)', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a'), b: stdio('b') }));
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['a', 'b'], enableAllProjectMcpServers: true }));
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ enabledMcpjsonServers: ['a'] }));
+    expect((await service().inspect(dir)).undecided.map((server) => server.name).sort()).toEqual(['a', 'b']);
+  });
+
+  it('списки в файле состояния Claude решением не считаются', async () => {
+    const dir = await repo();
+    await writeFile(path.join(dir, '.mcp.json'), mcpJson({ a: stdio('a') }));
+    await writeFile(path.join(userHome, '.claude.json'), JSON.stringify({ projects: { [dir]: { enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['a'], enableAllProjectMcpServers: true } } }));
+    expect((await service().inspect(dir)).undecided.map((server) => server.name)).toEqual(['a']);
+  });
+
+  it('не git-папка внутри родителя с .mcp.json: серверы найдены выше, ключ репозитория — realpath самой папки', async () => {
+    const outer = path.join(root, 'outer');
+    const inner = path.join(outer, 'inner');
+    await mkdir(inner, { recursive: true });
+    await writeFile(path.join(outer, '.mcp.json'), mcpJson({ a: stdio('a'), b: stdio('b') }));
+    const found = await service().inspect(inner);
+    expect(found.repo).toBe(inner);
+    expect(found.undecided.map((server) => server.name).sort()).toEqual(['a', 'b']);
+    expect(found.enabled).toEqual([]);
+  });
+
+  it('то же внутри домашней папки: серверы из ~/.mcp.json (как у человека) — все без решения', async () => {
+    const inner = path.join(userHome, 'docs', 'reports');
+    await mkdir(inner, { recursive: true });
+    await writeFile(path.join(userHome, '.mcp.json'), mcpJson({ nx: stdio('npx', ['nx']), figma: { type: 'http', url: 'https://mcp.figma.com/mcp' } }));
+    const found = await service().inspect(inner);
+    expect(found.repo).toBe(inner);
+    expect(found.undecided.map((server) => server.name).sort()).toEqual(['figma', 'nx']);
   });
 
   it('битый .mcp.json — ни вопроса, ни включённых серверов, предупреждение', async () => {
