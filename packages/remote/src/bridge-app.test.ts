@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- кадры в тестах разбираются как JSON */
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorksSnapshot } from '@parley/protocol';
 import { MIN_CLIENT_VERSION, REMOTE_METHODS, bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
@@ -8,6 +11,7 @@ import { HostCallError, refKey } from './host-link.js';
 import type { ActivityEntry, HostLink, HostLinkEvent, HostLinkStatus } from './host-link.js';
 import type { SessionHandler, PhoneSessions, DevicePush, SessionClosingReason } from './session-contract.js';
 import type { BridgeLog } from './log.js';
+import type { PhoneActionEvent } from '@parley/protocol/remote';
 
 type Frame = Record<string, any>;
 const enc = new TextEncoder();
@@ -131,6 +135,7 @@ class FakeSessions implements PhoneSessions {
 let host: FakeHost;
 let sessions: FakeSessions;
 let audits: AuditInput[];
+let actions: PhoneActionEvent[];
 let dispatcher: SessionHandler & { stop(): void };
 
 const log: BridgeLog = { info() {}, warn() {}, error() {}, addSecret() {} };
@@ -140,6 +145,7 @@ beforeEach(() => {
   host = new FakeHost();
   sessions = new FakeSessions();
   audits = [];
+  actions = [];
   dispatcher = createSessionHandler({
     host,
     sessions,
@@ -147,6 +153,7 @@ beforeEach(() => {
     log,
     info: { hostId: 'h1', hostName: 'Mac', bridgeVersion: '0.1.0', minClient: MIN_CLIENT_VERSION, relays: [] },
     deviceName: () => 'Phone 1',
+    onPhoneAction: (event) => void actions.push(event),
   });
 });
 afterEach(() => {
@@ -1118,5 +1125,109 @@ describe('A30: pty.send without duplicates', () => {
     await flush();
     expect(host.calls.filter((c) => c.method === 'consents.decide')).toHaveLength(30);
     expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+});
+
+describe('A34: phone.action for weighty phone actions', () => {
+  // `phone.action` carries a real device id (16 bytes b64url).
+  const D = 'AAAAAAAAAAAAAAAAAAAAAA';
+  const create = (extra: Record<string, unknown> = {}) => ({ projectPath: '/p', workId: 'w-1', provider: 'claude', label: 'L', task: 'SECRET TASK', parent: null, ...extra });
+  const answer = (id: string) => sessions.of(D).find((f) => f.id === id);
+
+  beforeEach(() => {
+    online();
+    dispatcher.onOpen(D);
+  });
+
+  it('sessions.create: session-create with the new ref; with trustFolder also trust-folder with the realpath', async () => {
+    vi.useRealTimers();
+    const real = mkdtempSync(join(tmpdir(), 'a34-'));
+    const link = `${real}-link`;
+    symlinkSync(real, link);
+    try {
+      host.handler = async () => ({ ref: ref('s-9') });
+      call(D, 'a', 'sessions.create', create());
+      await vi.waitFor(() => expect(answer('a')).toBeDefined());
+      call(D, 'b', 'sessions.create', create({ projectPath: link, trustFolder: true }));
+      await vi.waitFor(() => expect(actions).toHaveLength(3));
+      expect(actions).toEqual([
+        { deviceId: D, kind: 'session-create', target: ref('s-9') },
+        { deviceId: D, kind: 'session-create', target: ref('s-9') },
+        { deviceId: D, kind: 'trust-folder', target: realpathSync(link) },
+      ]);
+      expect(JSON.stringify(actions)).not.toContain('SECRET');
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it('consents.decide allow: trust-folder for a folder-trust card, provider-switch for an agent-switch card; deny and applied:false emit nothing', async () => {
+    host.event('consents.changed', {
+      upsert: [
+        { id: 'c-1', kind: 'folder-trust', projectPath: '/p', folder: '/private/p', at: 'a', state: 'pending', requestedBy: { source: 'launch' } },
+        { id: 'c-2', kind: 'agent-switch', projectPath: '/p', ref: ref('s-1'), provider: 'codex', providerLabel: 'Codex', model: null, reason: 'SECRET REASON', at: 'a', state: 'pending', requestedBy: { sessionId: 's-1', label: 'l' } },
+        { id: 'c-3', kind: 'folder-trust', projectPath: '/p', folder: '/private/q', at: 'a', state: 'pending', requestedBy: { source: 'launch' } },
+      ],
+      removed: [],
+    });
+    host.handler = async (method, params) => ({ applied: (params as { id: string }).id !== 'c-3', state: 'allowed' });
+    call(D, 'a', 'consents.decide', { id: 'c-1', decision: 'allow' });
+    call(D, 'b', 'consents.decide', { id: 'c-2', decision: 'allow' });
+    call(D, 'c', 'consents.decide', { id: 'c-1', decision: 'deny' });
+    call(D, 'd', 'consents.decide', { id: 'c-3', decision: 'allow' });
+    await flush();
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'trust-folder', target: '/private/p' },
+      { deviceId: D, kind: 'provider-switch', target: 'c-2' },
+    ]);
+    expect(host.calls.map((c) => c.method)).toEqual(['consents.decide', 'consents.decide', 'consents.decide', 'consents.decide']);
+  });
+
+  it('consents.decide allow on a card the bridge has not seen: one consents.list before the decision tells its kind', async () => {
+    host.handler = async (method) =>
+      method === 'consents.list'
+        ? { items: [{ id: 'c-5', kind: 'folder-trust', projectPath: '/p', folder: '/private/r', at: 'a', state: 'pending', requestedBy: { source: 'agent' } }] }
+        : { applied: true, state: 'allowed' };
+    call(D, 'a', 'consents.decide', { id: 'c-5', decision: 'allow' });
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['consents.list', 'consents.decide']);
+    expect(actions).toEqual([{ deviceId: D, kind: 'trust-folder', target: '/private/r' }]);
+  });
+
+  it('feed.decide: allow-always and plan auto-accept are weighty; plain Allow, deny, manual plan and answers are not', async () => {
+    host.handler = async () => ({ applied: true, state: 'allowed' });
+    const decide = (id: string, decision: unknown) => call(D, id, 'feed.decide', { ref: ref('s-1'), cardId: 'k', decision });
+    decide('a', { kind: 'permission', behavior: 'allow', always: true });
+    decide('b', { kind: 'permission', behavior: 'allow' });
+    decide('c', { kind: 'permission', behavior: 'deny', message: 'SECRET' });
+    decide('d', { kind: 'plan', choice: 'auto-accept' });
+    decide('e', { kind: 'plan', choice: 'manual' });
+    decide('f', { kind: 'question', answers: { q: 'SECRET' } });
+    await flush();
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'allow-always', target: ref('s-1') },
+      { deviceId: D, kind: 'plan-auto-accept', target: ref('s-1') },
+    ]);
+    host.handler = async () => ({ applied: false, state: 'allowed' });
+    decide('g', { kind: 'permission', behavior: 'allow', always: true });
+    await flush();
+    expect(actions).toHaveLength(2);
+  });
+
+  it('messages, room letters, rooms.create, reads and failed calls emit nothing', async () => {
+    host.handler = async (method) => {
+      if (method === 'sessions.create') throw new HostCallError('bad_request', 'no');
+      return { ok: true };
+    };
+    call(D, 'a', 'pty.send', { ref: ref('s-1'), text: 'SECRET', submit: true, clientMsgId: 'msg-00000099' });
+    call(D, 'b', 'rooms.send', { roomId: 'r-1', kind: 'note', text: 'SECRET' });
+    call(D, 'c', 'rooms.create', { projectPath: '/p', workId: 'w-1', title: 'T', members: ['s-1'] });
+    call(D, 'd', 'rooms.resolveProposal', { id: 'p', rev: 1 });
+    call(D, 'e', 'host.info');
+    call(D, 'f', 'sessions.create', create({ trustFolder: true }));
+    await flush();
+    expect(host.calls).toHaveLength(6);
+    expect(actions).toEqual([]);
   });
 });

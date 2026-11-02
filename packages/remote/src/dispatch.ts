@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
 import {
@@ -8,9 +9,10 @@ import {
   appRequestFrame,
   bridgeEventSchemas,
   checkRemoteParams,
+  phoneActionEvent,
   projectWorksSnapshot,
 } from '@parley/protocol/remote';
-import type { BridgeHello } from '@parley/protocol/remote';
+import type { BridgeHello, PhoneActionEvent } from '@parley/protocol/remote';
 import type { SessionRef } from '@parley/protocol';
 import type { AuditLog } from './audit.js';
 import { createFanout } from './fanout.js';
@@ -56,6 +58,8 @@ export interface BridgeOptions {
   deviceName?: (deviceId: string) => string;
   now?: () => number;
   coalesceMs?: number;
+  /** Весомое действие телефона удалось (A34): событие `phone.action` окну по сокету управления. */
+  onPhoneAction?: (event: PhoneActionEvent) => void;
 }
 
 interface DeviceState {
@@ -150,6 +154,23 @@ function sendKeyOf(params: unknown): { clientMsgId: string; fingerprint: string 
   return { clientMsgId: p.clientMsgId, fingerprint };
 }
 
+/** Сколько карточек согласий мост помнит: ждущих у хоста единицы, предел — от разрастания. */
+const MAX_CONSENT_CARDS = 500;
+
+/** Вид карточки согласия и её папка: по ним `consents.decide allow` становится `phone.action` (A34). */
+interface ConsentCardInfo {
+  kind: string;
+  folder: string | null;
+}
+
+/** `ref` из трёх строк без лишних ключей — цель `phone.action`. */
+function cleanRef(value: unknown): SessionRef | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { projectPath, workId, sessionId } = value as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof sessionId !== 'string') return null;
+  return { projectPath, workId, sessionId };
+}
+
 /** `ref` подписки на ленту: три строки, иначе `bad_request` — по нему считается подписка. */
 function sessionRefOf(params: unknown): SessionRef | null {
   if (typeof params !== 'object' || params === null) return null;
@@ -219,9 +240,84 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (seen === undefined || host.status !== 'online' || seen === methodsKey()) return;
     sessions.close(deviceId, 'rekey');
   }
+  /** Карточки согласий из `consents.list` и `consents.changed`; `id` у хоста сквозной, эпоха их не обесценивает. */
+  const consentCards = new Map<string, ConsentCardInfo>();
+  function learnCards(items: unknown): void {
+    if (!Array.isArray(items)) return;
+    for (const item of items as unknown[]) {
+      const card = item as { id?: unknown; kind?: unknown; folder?: unknown } | null;
+      if (typeof card?.id !== 'string' || typeof card.kind !== 'string') continue;
+      consentCards.delete(card.id);
+      consentCards.set(card.id, { kind: card.kind, folder: typeof card.folder === 'string' ? card.folder : null });
+      if (consentCards.size > MAX_CONSENT_CARDS) consentCards.delete(consentCards.keys().next().value as string);
+    }
+  }
+
   const unsubscribe = host.subscribe((event) => {
     if (event.type === 'status' && event.status === 'online') for (const deviceId of [...devices.keys()]) rekeyIfStale(deviceId);
+    if (event.type === 'host' && event.event === 'consents.changed') {
+      const data = event.data as { upsert?: unknown; removed?: unknown } | null;
+      learnCards(data?.upsert);
+      if (Array.isArray(data?.removed)) for (const id of data.removed) if (typeof id === 'string') consentCards.delete(id);
+    }
   });
+
+  /** Карточка, которую телефон одобряет: из памяти, иначе одним `consents.list` до решения (после него её в списке нет). */
+  async function consentCardOf(params: unknown): Promise<ConsentCardInfo | null> {
+    const p = params as { id?: unknown; decision?: unknown };
+    if (p.decision !== 'allow' || typeof p.id !== 'string') return null;
+    if (!consentCards.has(p.id)) {
+      try {
+        learnCards(((await host.call('consents.list', {})) as { items?: unknown } | null)?.items);
+      } catch (error) {
+        log.warn('dispatch.consents_list_failed', { error });
+      }
+    }
+    return consentCards.get(p.id) ?? null;
+  }
+
+  /**
+   * Весомые действия удавшегося вызова (спека 12, A34): запуск сессии, доверие к папке, смена провайдера, Allow «Always»,
+   * план с `auto-accept`. Обычный Allow, сообщения агентам и письма в комнаты — не весомые.
+   */
+  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
+    const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    const r = (typeof result === 'object' && result !== null ? result : {}) as Record<string, unknown>;
+    // `applied: false` — карточка уже не ждала, ничего не произошло.
+    if (r.applied === false) return [];
+    const actions: Omit<PhoneActionEvent, 'deviceId'>[] = [];
+    if (method === 'sessions.create') {
+      const ref = cleanRef(r.ref);
+      if (ref) actions.push({ kind: 'session-create', target: ref });
+      if (p.trustFolder === true && typeof p.projectPath === 'string') {
+        // Хост пишет в `trust.json` realpath проекта; мост на том же Маке берёт его так же.
+        actions.push({ kind: 'trust-folder', target: await realpath(p.projectPath).catch(() => p.projectPath as string) });
+      }
+    } else if (method === 'consents.decide' && card !== null && typeof p.id === 'string') {
+      if (card.kind === 'folder-trust' && card.folder) actions.push({ kind: 'trust-folder', target: card.folder });
+      else if (card.kind === 'agent-switch') actions.push({ kind: 'provider-switch', target: p.id });
+    } else if (method === 'feed.decide') {
+      const ref = cleanRef(p.ref);
+      const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
+      if (ref && d.kind === 'permission' && d.behavior === 'allow' && d.always === true) actions.push({ kind: 'allow-always', target: ref });
+      else if (ref && d.kind === 'plan' && d.choice === 'auto-accept') actions.push({ kind: 'plan-auto-accept', target: ref });
+    }
+    return actions;
+  }
+
+  /** `phone.action` окну; событие проверяется схемой — лишнее (тексты) не уходит. Сбой не трогает ответ телефону. */
+  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<void> {
+    if (!options.onPhoneAction) return;
+    try {
+      for (const action of await phoneActions(method, params, result, card)) {
+        const event = phoneActionEvent.safeParse({ deviceId, ...action });
+        if (event.success) options.onPhoneAction(event.data);
+        else log.warn('dispatch.phone_action_invalid', { method, kind: action.kind });
+      }
+    } catch (error) {
+      log.error('dispatch.phone_action_failed', { method, error });
+    }
+  }
 
   /** Нарушение протокола: `session.closing protocol` — телефон переподключится с отступом, а не примет это за остановку моста. */
   function close(deviceId: string): void {
@@ -366,7 +462,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         // `feed.subscribe`: хост видит одного подписчика — мост; счётчик по `ref` на все телефоны (A30).
         raw = await feedSubs.subscribe(deviceId, feedRef);
       } else {
+        const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         raw = await host.call(method, params ?? {});
+        if (method === 'consents.list') learnCards((raw as { items?: unknown } | null)?.items);
+        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card);
       }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;

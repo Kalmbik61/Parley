@@ -55,6 +55,25 @@ export const pairFailedEvent = z.strictObject({ requestId: requestIdSchema, reas
 export const PAIR_OFFER_CLOSED_REASONS = ['bad-psk', 'used'] as const;
 export const pairOfferClosedEvent = z.strictObject({ reason: z.enum(PAIR_OFFER_CLOSED_REASONS) });
 
+/**
+ * Весомое действие телефона (спека 12, правки 18): окно показывает уведомление macOS с «Revoke this phone». Без текстов
+ * агентов: цель — `ref` сессии (`session-create`, `allow-always`, `plan-auto-accept`), realpath папки (`trust-folder`)
+ * или `id` карточки согласия (`provider-switch`).
+ */
+export const PHONE_ACTION_KINDS = ['session-create', 'trust-folder', 'provider-switch', 'allow-always', 'plan-auto-accept'] as const;
+export type PhoneActionKind = (typeof PHONE_ACTION_KINDS)[number];
+const phoneActionRef = z.strictObject({
+  projectPath: z.string().min(1).max(4096),
+  workId: z.string().min(1).max(256),
+  sessionId: z.string().min(1).max(256),
+});
+export const phoneActionEvent = z.strictObject({
+  deviceId: deviceIdSchema,
+  kind: z.enum(PHONE_ACTION_KINDS),
+  target: z.union([phoneActionRef, z.string().min(1).max(4096)]),
+});
+export type PhoneActionEvent = z.infer<typeof phoneActionEvent>;
+
 export const pairStartResult = z.strictObject({ qr: z.string().max(256), expiresAt: z.number().int().positive() });
 export const controlStatusResult = z.strictObject({
   running: z.boolean(),

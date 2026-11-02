@@ -35,6 +35,7 @@ import {
   controlStatusResult,
   pairFailedEvent,
   pairOfferClosedEvent,
+  phoneActionEvent,
   pairRequestEvent,
   routeIdSchema,
 } from './index.js';
@@ -427,6 +428,13 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(pairOfferClosedEvent.safeParse({ reason: 'used' }).success).toBe(true);
     expect(pairOfferClosedEvent.safeParse({ reason: 'expired' }).success).toBe(false);
     expect(pairOfferClosedEvent.safeParse({ reason: 'used', requestId: id16 }).success).toBe(false);
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: ref }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'trust-folder', target: '/private/tmp/p' }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: 'c-7' }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow-always', target: { ...ref, text: 'agent text' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'plan-auto-accept', target: ref, text: 'x' }).success).toBe(false);
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);
