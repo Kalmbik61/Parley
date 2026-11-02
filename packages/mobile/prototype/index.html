@@ -16,7 +16,9 @@
   --sep: rgba(60,60,67,.29);
   --tint: #A8531E; --onTint: #FFFFFF; --tintSoft: rgba(168,83,30,.12);
   --needs: #C93400; --needsDot: #FF9500; --needsSoft: rgba(255,149,0,.14);
-  --idle: #8E8E93; --off: #C7C7CC; --ok: #248A3D; --danger: #D70015;
+  --idle: #7C7C80; --off: #C7C7CC; --ok: #248A3D; --danger: #D70015;
+  /* Header palette, D1 §17.5 (A35d): bar material by theme, subtitle one neutral colour, colour only on the dot. */
+  --barBg: rgba(249,249,249,.94); --barSubtitle: #636366;
   --warnBg: #FFF4E5; --neutralBg: #E5E5EA;
   --glass: rgba(255,255,255,.72); --glassBorder: rgba(0,0,0,.08);
   --skel: #E3E3E8;
@@ -30,6 +32,7 @@
   --tint: #E08A52; --onTint: #000000; --tintSoft: rgba(224,138,82,.18);
   --needs: #FF9F0A; --needsDot: #FF9F0A; --needsSoft: rgba(255,159,10,.18);
   --idle: #98989D; --off: #48484A; --ok: #30D158; --danger: #FF453A;
+  --barBg: rgba(29,29,31,.94); --barSubtitle: rgba(235,235,245,.6);
   --warnBg: #3A2A12; --neutralBg: #2C2C2E;
   --glass: rgba(30,30,32,.72); --glassBorder: rgba(255,255,255,.1);
   --skel: #2C2C2E;
@@ -92,7 +95,7 @@ body { margin: 0; background: var(--page); color: var(--panelText);
 .navbtn { color: var(--tint); background: none; border: 0; font: inherit; font-size: calc(17px * var(--fs));
   display: flex; align-items: center; gap: 2px; cursor: pointer; padding: 0; min-height: 44px; }
 .navbtn.glass { background: none; border: 0; border-radius: 0; padding: 0 2px; /* plain bar button: no circle, no outline (D1 §17.4) */
-  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); min-width: 44px; justify-content: center; }
+  min-width: 44px; justify-content: center; }
 .navtitle { padding: 2px 0 8px; }
 .navsub { margin-top: -6px; padding-bottom: 8px; }
 
@@ -179,7 +182,7 @@ body { margin: 0; background: var(--page); color: var(--panelText);
 
 /* status dots */
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.dot.needs { background: var(--needsDot); }
+.dot.needs { background: var(--needs); }
 .dot.working { background: var(--tint); animation: pulse 1.6s ease-in-out infinite; }
 .dot.unseen { border: 2px solid var(--tint); }
 .dot.idle { background: var(--idle); }
@@ -376,16 +379,20 @@ textarea.field { min-height: 160px; resize: none; }
 
 /* ---------- session chat (D1 §9, revision 2026-11-01) ---------- */
 /* Pinned header: material under the text, label colours only — never a fixed black (the dark-theme merge bug). */
-.chead { position: sticky; top: 0; z-index: 6; background: var(--glass); border-bottom: .5px solid transparent;
+.chead { position: sticky; top: 0; z-index: 6; background: var(--barBg); border-bottom: .5px solid transparent;
   backdrop-filter: blur(22px) saturate(1.7); -webkit-backdrop-filter: blur(22px) saturate(1.7); transition: border-color .15s; }
 .chead.edge { border-bottom-color: var(--sep); }
 .chead .navrow { padding: 0 12px; position: relative; }
 .ctitle { position: absolute; left: 44px; right: 60px; top: 2px; text-align: left; color: var(--label); }
 .ctitle .t-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cstate { display: flex; align-items: center; justify-content: flex-start; gap: 5px; color: var(--label2); white-space: nowrap; overflow: hidden; }
-.cstate .cword { flex: none; font-weight: 600; color: var(--label); }
+.cstate { display: flex; align-items: center; justify-content: flex-start; gap: 5px; color: var(--barSubtitle); white-space: nowrap; overflow: hidden; }
+.cstate .cword { flex: none; font-weight: 600; color: var(--barSubtitle); }
+.cstate .dot.idle { background: var(--idle); }
 .nstrip .grow { flex: 1; min-width: 0; }
-.nstrip { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--needsSoft); color: var(--needs); cursor: pointer; font-weight: 600; }
+.nstrip { display: flex; align-items: center; gap: 8px; padding: 9px 16px; background: transparent; color: var(--label); cursor: pointer; font-weight: 600; position: relative; }
+.nstrip::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
+.nstrip .sic { display: flex; color: var(--needs); } .nstrip .sic.tint { color: var(--tint); }
+.nstrip .sact { color: var(--tint); flex: none; } .nstrip .schev { color: var(--barSubtitle); flex: none; display: flex; }
 .cstate .dot { width: 8px; height: 8px; }
 .chead .banner { margin-top: 2px; }
 /* Accessibility sizes: the name moves under the back/menu row, two lines at most, the state line never squeezed. */
@@ -2108,9 +2115,9 @@ function sessionScreen(r) {
   // Chat screens show only the chevron; the name sits on its row, the subtitle under it, all pinned (pins 1–2).
   const head = '<div class="chead" id="chead"><div class="navrow"><button class="navbtn" data-act="back" aria-label="Back to ' + h(back) + '" title="' + h(back) + '">' + ic('chevL', 24) + '</button>' +
     '<div class="ctitle" role="heading" aria-label="' + h(s.label + '. ' + word + '. ' + meta) + '"><div class="t-head" data-act="toTop">' + h(s.label) + '</div>' +
-    '<div class="cstate t-cap">' + stateIcon + '<span class="cword"' + (hs.att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
+    '<div class="cstate t-cap">' + stateIcon + '<span class="cword">' + h(word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
     '<button class="navbtn glass" data-act="sessMenu" data-id="' + s.id + '" aria-label="More">' + ic('ellipsisCircle', 20) + '</button></div>' +
-    (hs.strip ? '<div class="nstrip t-sub" data-act="jump" role="status">' + ic(hs.strip[0], 18) + '<span class="ellips">' + h(hs.strip[1]) + '</span></div>' : '') + banner() + '</div>';
+    (hs.strip ? '<div class="nstrip t-sub" data-act="jump" role="status"><span class="sic">' + ic(hs.strip[0], 18) + '</span><span class="ellips grow">' + h(hs.strip[1]) + '</span><span class="schev">' + ic('chevR', 14) + '</span></div>' : '') + banner() + '</div>';
   // Origin is the first line of the history; Team lives in the ••• menu (pins 5–6).
   let body = head + (ancestry(s.id).length ? '<div class="passport">' + crumbs(ancestry(s.id), true) + '</div>' : '<div style="height:8px"></div>');
   if (s.starting && S.notListed && S.notListed[s.id]) body += '<div class="t-foot l2" style="margin:0 16px 6px">Session started — it will appear on your Mac shortly</div>';
@@ -2289,13 +2296,13 @@ function roomScreen(r) {
   const room = x.room, w = x.w, rs = roomState(room, w);
   const lead = rs.members.find(function (m) { return m.id === room.lead; });
   const meta = rs.members.length + ' agents' + (lead ? ' · lead ' + lead.label : '') + ' · ' + (room.mode || 'free');
-  const dot = rs.att === 'needs' ? (rs.d ? '<span style="color:var(--needs);display:flex">' + ic('seal', 12) + '</span>' : '<span class="dot needs"></span>') : '<span class="dot ' + rs.att + '"></span>';
+  const dot = '<span class="dot ' + rs.att + '" aria-hidden="true"></span>';   // colour only on the dot (D1 §17.5)
   let strip = '';
-  if (rs.d) strip += '<div class="nstrip t-sub" data-act="openDecision" data-id="' + room.decision + '" role="link">' + ic('seal', 18) + '<span class="ellips grow">Decision ' + rs.d.pid + ' · rev ' + (S.dec[room.decision] && S.dec[room.decision].rev || rs.d.rev) + '</span><span>Review ›</span></div>';
-  if (rs.needy) strip += '<div class="nstrip t-sub" data-act="openSession" data-id="' + rs.needy.id + '" role="link">' + ic('hand', 18) + '<span class="ellips grow">' + h(rs.needy.label) + ' needs you</span><span>›</span></div>';
+  if (rs.d) strip += '<div class="nstrip t-sub" data-act="openDecision" data-id="' + room.decision + '" role="link"><span class="sic tint">' + ic('seal', 18) + '</span><span class="ellips grow">Decision ' + rs.d.pid + ' · rev ' + (S.dec[room.decision] && S.dec[room.decision].rev || rs.d.rev) + '</span><span class="sact">Review ›</span></div>';
+  if (rs.needy) strip += '<div class="nstrip t-sub" data-act="openSession" data-id="' + rs.needy.id + '" role="link"><span class="sic">' + ic('hand', 18) + '</span><span class="ellips grow">' + h(rs.needy.label) + ' needs you</span><span class="schev">' + ic('chevR', 14) + '</span></div>';
   const head = '<div class="chead" id="chead"><div class="navrow"><button class="navbtn" data-act="back" aria-label="Back">' + ic('chevL', 24) + '</button>' +
     '<div class="ctitle" role="heading" aria-label="' + h('Room ' + room.title + '. ' + rs.word + '. ' + meta) + '"><div class="t-head" data-act="toTop"><span class="l2">#</span> ' + h(room.title) + '</div>' +
-    '<div class="cstate t-cap">' + dot + '<span class="cword"' + (rs.att === 'needs' ? ' style="color:var(--needs)"' : '') + '>' + h(rs.word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
+    '<div class="cstate t-cap">' + dot + '<span class="cword">' + h(rs.word) + '</span><span class="ellips">· ' + h(meta) + '</span></div></div>' +
     '<button class="navbtn glass" data-act="roomMenu" data-id="' + room.id + '" aria-label="More">' + ic('ellipsisCircle', 20) + '</button></div>' + strip + banner() + '</div>';
   const bottom = roomComposer(room.id, room, w);
   if (S.conn === 'cold' || S.scenario === 'loading') return { body: head + '<div class="feed">' + skeleton(4).replace(/card static/g, 'card static" style="margin:0') + '</div>', bottom: bottom, notabs: true, chat: true };
