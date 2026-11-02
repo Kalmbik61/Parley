@@ -6,7 +6,7 @@ import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
+import type { Capabilities, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 import * as protocolExports from './index.js';
 import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
@@ -356,6 +356,27 @@ describe('комнаты: ведущий и решение (дизайн ком�
   });
 });
 
+describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)', () => {
+  it('skipUpdate принимает {provider: строка} и отвечает {ok: true}', () => {
+    expect(METHODS['providers.skipUpdate'].safeParse({ provider: 'codex' }).success).toBe(true);
+    expect(METHODS['providers.skipUpdate'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.skipUpdate'].safeParse({ provider: 42 }).success).toBe(false);
+    expectTypeOf<Result<'providers.skipUpdate'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('update в providers.list необязателен (старый хост молчит) и может быть null', () => {
+    const update: CliUpdate = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
+    const list: Result<'providers.list'> = {
+      providers: [
+        { id: 'codex', label: 'Codex', available: true, update },
+        { id: 'claude', label: 'Claude', available: true, update: null },
+        { id: 'glm', label: 'GLM', available: true },
+      ],
+    };
+    expect(list.providers[2]).not.toHaveProperty('update');
+  });
+});
+
 describe('модель, усилие и поля providers.list (дизайн комнат, 3.2)', () => {
   const create = { projectPath: '/p', workId: 'w-0001', provider: 'claude', label: '', task: '', parent: null };
   const parse = (extra: Record<string, unknown>) => METHODS['sessions.create'].safeParse({ ...create, ...extra });
@@ -436,6 +457,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       limits?: ProviderLimits | null;
       check?: ProviderCheck | null;
       custom?: CustomProviderInfo | null;
+      update?: CliUpdate | null;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };

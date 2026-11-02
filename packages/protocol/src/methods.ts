@@ -44,7 +44,7 @@ import type { WorksMailStateResult } from './works-mail-state.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CapacitySnapshot, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -117,6 +117,8 @@ export const METHODS = {
   'host.profile.status': z.object({}),
   'providers.list': z.object({}),
   'providers.refreshLimits': z.object({}),
+  // Пропустить найденную версию CLI провайдера (спека 2026-11-02): строка вернётся, когда выйдет следующая.
+  'providers.skipUpdate': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -387,6 +389,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'host.profile.status': ProfileStatus;
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
   'providers.refreshLimits': { ok: true };
+  /** Версия `update.latest` провайдера помечена пропущенной; пропускать нечего — `bad_request`. */
+  'providers.skipUpdate': { ok: true };
   /**
    * Явная проверка сохранённого ключа тестовым сообщением (только у провайдера с ключом — GLM).
    * `null` — провайдер не готов локально (нет CLI нужной версии или ключа: см. `providers.list.needs`),
@@ -445,6 +449,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
       check?: ProviderCheck | null;
       /** Описание своего провайдера (спека 5.1); у встроенных нет. Необязательно по той же причине, что `limits`. */
       custom?: CustomProviderInfo | null;
+      /** Новая версия CLI провайдера; `null` — версия не новее, её пропустили или проверки не было. Хост до T2 поля не знает. */
+      update?: CliUpdate | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

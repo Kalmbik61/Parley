@@ -86,6 +86,7 @@ import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
+import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSender } from './pty/send.js';
@@ -132,6 +133,11 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  /**
+   * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
+   * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
+   */
+  cliUpdates?: Pick<CliUpdatesOptions, 'fetchImpl' | 'home' | 'userHome' | 'env' | 'now'>;
   /**
    * Лимиты подписок (спека комнат Organic, 3.5): корень логов Codex, часы и период опроса. Боевой хост
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
@@ -839,6 +845,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   worksReady.catch(() => undefined);
 
   // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
+  // Проверка версий CLI: фон со своим таймером, старт хоста, `providers.list` и запуск сессий её не ждут.
+  const cliUpdates =
+    options.cliUpdates === undefined
+      ? undefined
+      : createCliUpdates({
+          ...options.cliUpdates,
+          log,
+          onChange: (command) => handle.context.broadcast('providers.changed', { provider: command }),
+        });
+  cliUpdates?.start();
+  handle.context.onShutdown(async () => cliUpdates?.stop());
+
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
   const customCheck = createCustomCheckService(handle.context, options.customCheck);
 
@@ -857,6 +875,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     history,
     worksReady,
     providerVersions,
+    ...(cliUpdates === undefined ? {} : { cliUpdates }),
     codexCatalog,
     limits: limitsService,
     glmCheck,

@@ -22,6 +22,7 @@ import type { CustomCheckService } from '../providers/custom-check.js';
 import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
+import type { CliUpdates } from '../providers/updates.js';
 
 /**
  * Состояние входа аккаунтов подписки для `providers.list` (спека подписок 5.5): его даёт служба входа, пока её нет —
@@ -92,6 +93,7 @@ export function createProvidersList(
   catalog?: Pick<CodexCatalog, 'refreshIfStale'>,
   customCheck?: CustomCheckService,
   auth?: AccountAuth,
+  updates?: Pick<CliUpdates, 'current'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -153,13 +155,38 @@ export function createProvidersList(
     // пришедшее пока список собирался, окно получило раньше ответа, и ответ не должен вернуть ему
     // старое значение.
     return {
-      providers: providers.map((item) => ({
-        ...item,
-        // GLM's fresh probe refreshes the shared command before either family's row reads it.
-        version: versions?.get(registry[item.id]!.runner.command) ?? null,
-        limits: limits?.get(item.id) ?? null,
-      })),
+      providers: await Promise.all(
+        providers.map(async (item) => {
+          const command = registry[item.id]!.runner.command;
+          // GLM's fresh probe refreshes the shared command before either family's row reads it.
+          const version = versions?.get(command) ?? null;
+          // `update` читает только кэш на диске: сеть спрашивает фоновая проверка, а не этот ответ.
+          const update = updates === undefined ? undefined : await updates.current(command, version);
+          return {
+            ...item,
+            version,
+            limits: limits?.get(item.id) ?? null,
+            ...(update === undefined ? {} : { update }),
+          };
+        }),
+      ),
     };
+  };
+}
+
+/**
+ * «Пропустить» найденную версию CLI (спека 2026-11-02). Провайдер выбирает команду реестра: GLM и свои провайдеры
+ * делят строку `claude`. Окно узнаёт об изменении событием `providers.changed`.
+ */
+export function createProvidersSkipUpdate(updates?: Pick<CliUpdates, 'skip'>): Handler<'providers.skipUpdate'> {
+  return async ({ provider }, request) => {
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    if (entry === undefined || updates === undefined || !(await updates.skip(entry.runner.command))) {
+      throw new HostError('bad_request', 'Provider has no update to skip');
+    }
+    request.host.broadcast('providers.changed', { provider });
+    return { ok: true };
   };
 }
 
