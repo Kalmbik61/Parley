@@ -156,11 +156,11 @@ describe('allowlist', () => {
     }
   });
 
-  it('A36a: consents.decide takes revision, a non-negative integer, with allow and with deny', () => {
+  it('A36a: consents.decide takes revision, an integer from 1, with allow and with deny', () => {
     const fp = 'a'.repeat(64);
-    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'allow', revision: 0, enabled: [{ name: 'a', fingerprint: fp }] })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'allow', revision: 1, enabled: [{ name: 'a', fingerprint: fp }] })).toBe(true);
     expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision: 7 })).toBe(true);
-    for (const revision of [-1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+    for (const revision of [0, -1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
       expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision }), String(revision)).toBe(false);
     }
   });

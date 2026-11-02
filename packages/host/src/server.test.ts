@@ -1274,7 +1274,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect(s.spies['consents.decide']).toHaveBeenCalledTimes(3);
       // Ревизия карточки — с `allow` и с `deny`; дробная или отрицательная — bad_request.
       expect((await answer(remote.client, 695, 'consents.decide', { id: 'c-07', decision: 'deny', revision: 3 })).error).toBeUndefined();
-      expect((await answer(remote.client, 696, 'consents.decide', { id: 'c-07', decision: 'deny', revision: -1 })).error).toMatchObject({ code: 'bad_request' });
+      expect((await answer(remote.client, 696, 'consents.decide', { id: 'c-07', decision: 'deny', revision: 0 })).error).toMatchObject({ code: 'bad_request' });
       expect(s.spies['consents.decide']).toHaveBeenCalledTimes(4);
       // Лента субагента с телефона не читается (критик m5): правило отказывает до обработчика.
       expect((await answer(remote.client, 689, 'feed.snapshot', { ref, agentId: 'a1' })).error).toMatchObject({ code: 'bad_request' });

@@ -1260,7 +1260,7 @@ describe('A34: phone.action for weighty phone actions', () => {
     call(D, 'a', 'consents.decide', { id: 'c-1', decision: 'allow', revision: 2, enabled: [{ name: 'github', fingerprint: fp('a') }, { name: 'files', fingerprint: fp('b') }] });
     call(D, 'b', 'consents.decide', { id: 'c-2', decision: 'allow', enabled: [] });
     call(D, 'c', 'consents.decide', { id: 'c-3', decision: 'allow' });
-    call(D, 'd', 'consents.decide', { id: 'c-4', decision: 'deny', revision: 0 });
+    call(D, 'd', 'consents.decide', { id: 'c-4', decision: 'deny', revision: 1 });
     call(D, 'e', 'consents.decide', { id: 'c-5', decision: 'allow', enabled: [{ name: 'github', fingerprint: fp('c') }] });
     await flush();
     expect(actions).toEqual([{ deviceId: D, kind: 'mcp-enable', target: { repo: '/private/repo', servers: ['github', 'files'] } }]);

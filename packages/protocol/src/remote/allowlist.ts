@@ -323,8 +323,8 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       CONSENT_ID.test(p.id) &&
       (p.decision === 'allow' || p.decision === 'deny') &&
       (p.enabled === undefined || (p.decision === 'allow' && mcpPairs(p.enabled))) &&
-      // Ревизия карточки `project-mcp` (ревью s-209): с `allow` и с `deny`; нужна ли она, решает хост.
-      (p.revision === undefined || (Number.isSafeInteger(p.revision) && (p.revision as number) >= 0))
+      // Ревизия карточки `project-mcp` (ревью s-209): целое от 1, с `allow` и с `deny`; нужна ли она, решает хост.
+      (p.revision === undefined || (Number.isSafeInteger(p.revision) && (p.revision as number) >= 1))
     );
   },
   // Лента сессии — да, лента субагента (`agentId`) — нет: для телефона она не решена (спека 4.2, критик s-199 m5).

@@ -161,7 +161,7 @@ it('A36a: consents.decide project-mcp с телефона: пары доходя
     home,
     host: { broadcast: () => {}, log: { info: () => {}, warn: () => {}, error: () => {} } },
     trust: { grant: async () => undefined },
-    projectMcp: { record },
+    projectMcp: { record, lookup: () => undefined },
     continueLaunch,
     refuseLaunch: async () => {},
     isLive: async () => false,
@@ -184,9 +184,10 @@ it('A36a: consents.decide project-mcp с телефона: пары доходя
       },
       hold,
     );
-    await expect(handlers['consents.decide']?.({ id: card.id, decision: 'allow', enabled: [{ name: 'github', fingerprint: fpB }] }, remote)).rejects.toMatchObject({ code: 'bad_request' });
+    if (card === null) throw new Error('expected a project-mcp card');
+    await expect(handlers['consents.decide']?.({ id: card.id, decision: 'allow', revision: 1, enabled: [{ name: 'github', fingerprint: fpB }] }, remote)).rejects.toMatchObject({ code: 'bad_request' });
     expect(record).not.toHaveBeenCalled();
-    expect(await handlers['consents.decide']?.({ id: card.id, decision: 'allow', enabled: [{ name: 'github', fingerprint: fpA }] }, remote)).toEqual({ applied: true, state: 'allowed' });
+    expect(await handlers['consents.decide']?.({ id: card.id, decision: 'allow', revision: 1, enabled: [{ name: 'github', fingerprint: fpA }] }, remote)).toEqual({ applied: true, state: 'allowed' });
     expect(record).toHaveBeenCalledWith('/repo', [
       { name: 'github', fingerprint: fpA, enabled: true },
       { name: 'files', fingerprint: fpB, enabled: false },
