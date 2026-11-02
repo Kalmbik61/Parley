@@ -138,6 +138,18 @@ function targetOf(params: unknown): string | undefined {
   return typeof ref.sessionId === 'string' && ref.sessionId.length <= 128 ? ref.sessionId : undefined;
 }
 
+/**
+ * Ключ повтора `pty.send` и отпечаток сообщения: `ref`, текст и `submit` (без `requestedAt` — он у повтора свой).
+ * Правило A27 уже проверило типы.
+ */
+function sendKeyOf(params: unknown): { clientMsgId: string; fingerprint: string } {
+  const p = params as { ref: Record<string, unknown>; text: string; submit: boolean; clientMsgId: string };
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([p.ref.projectPath, p.ref.workId, p.ref.sessionId, p.text, p.submit]))
+    .digest('hex');
+  return { clientMsgId: p.clientMsgId, fingerprint };
+}
+
 /** `ref` подписки на ленту: три строки, иначе `bad_request` — по нему считается подписка. */
 function sessionRefOf(params: unknown): SessionRef | null {
   if (typeof params !== 'object' || params === null) return null;
@@ -173,16 +185,20 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   }
   const devices = new Map<string, DeviceState>();
 
-  function reply(deviceId: string, id: string, body: { result: unknown } | { error: { code: string; message: string; data?: unknown } }): void {
-    if (!devices.has(deviceId)) return;
-    if (!fanout.send(deviceId, { id, ...body }) && devices.has(deviceId) && 'result' in body) {
+  /**
+   * Ответ уходит только той сессии телефона, что прислала запрос (критик A30, M1): `id` у клиента — счётчик на
+   * соединение, и поздний ответ прежней сессии под тем же `id` достался бы другому запросу новой.
+   */
+  function reply(deviceId: string, state: DeviceState, id: string, body: SendOutcome): void {
+    if (devices.get(deviceId) !== state) return;
+    if (!fanout.send(deviceId, { id, ...body }) && devices.get(deviceId) === state && 'result' in body) {
       // Результат больше 8 МиБ (или сессия уже закрыта): телефон узнаёт об этом, а не ждёт.
       fanout.send(deviceId, { id, error: { code: 'too_large', message: 'response is too large' } });
     }
   }
 
-  const fail = (deviceId: string, id: string, code: string, message: string = code, extra: { data?: unknown } = {}): void =>
-    reply(deviceId, id, { error: { code, message, ...extra } });
+  const fail = (deviceId: string, state: DeviceState, id: string, code: string, message: string = code, extra: { data?: unknown } = {}): void =>
+    reply(deviceId, state, id, { error: { code, message, ...extra } });
 
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
     audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail });
@@ -219,12 +235,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (LOCAL_METHODS.has(method)) {
       // Методы моста тоже считаются в работе; `push.register` пишет файл — не чаще 10 раз в минуту.
       if (state.inFlight >= MAX_IN_FLIGHT || (method === 'push.register' && !pushLimiter.take(deviceId))) {
-        fail(deviceId, id, 'rate_limited', 'too many requests');
+        fail(deviceId, state, id, 'rate_limited', 'too many requests');
         return;
       }
       state.inFlight++;
       try {
-        reply(deviceId, id, {
+        reply(deviceId, state, id, {
           result: await callLocalMethod(method, params, {
             deviceId,
             push,
@@ -240,10 +256,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
           }),
         });
       } catch (error) {
-        if (error instanceof LocalMethodError) fail(deviceId, id, error.code);
+        if (error instanceof LocalMethodError) fail(deviceId, state, id, error.code);
         else {
           log.error('dispatch.local_failed', { method, error });
-          fail(deviceId, id, 'internal', 'internal error');
+          fail(deviceId, state, id, 'internal', 'internal error');
         }
       } finally {
         state.inFlight--;
@@ -255,60 +271,76 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     // но мост отсекает первым. Пока методов эпохи нет (хост не `online`), решает `host_offline` ниже.
     if (!STAGE_METHODS.has(method) || (host.methods !== null && !host.methods.includes(method))) {
       refuse(deviceId, state, method, params, 'unknown_method');
-      fail(deviceId, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
+      fail(deviceId, state, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
       return;
     }
     const feedRef = method === 'feed.subscribe' || method === 'feed.unsubscribe' ? sessionRefOf(params) : undefined;
     if (!checkRemoteParams(method, params) || feedRef === null) {
       refuse(deviceId, state, method, params, 'bad_request', 'params');
-      fail(deviceId, id, 'bad_request');
+      fail(deviceId, state, id, 'bad_request');
       return;
     }
     // Отписка — состояние самого моста: проходит и без хоста, и мимо лимитов, иначе намерение телефона потерялось бы,
     // а новая эпоха подписала бы его снова. Вызов хоста (последний подписчик) делает сама очередь, если хост `online`.
     if (method === 'feed.unsubscribe' && feedRef) {
-      reply(deviceId, id, { result: await feedSubs.unsubscribe(deviceId, feedRef) });
+      reply(deviceId, state, id, { result: await feedSubs.unsubscribe(deviceId, feedRef) });
       return;
     }
-    // Повтор `pty.send` с тем же `clientMsgId` — прежний ответ (или ждущий вызов), без хоста и без лимитов: он не
-    // новое действие. Между поиском и записью ключа ниже нет `await` — второй кадр того же ключа найдёт первый вызов.
-    const clientMsgId = method === 'pty.send' ? (params as { clientMsgId: string }).clientMsgId : null;
-    if (clientMsgId !== null) {
-      const prior = sendDedupe.lookup(deviceId, clientMsgId);
+    // Повтор `pty.send` с тем же `clientMsgId` — прежний ответ (или ждущий вызов), без хоста и без лимита изменений:
+    // он не новое действие. Между поиском и записью ключа ниже нет `await` — второй кадр того же ключа найдёт первый вызов.
+    const send = method === 'pty.send' ? sendKeyOf(params) : null;
+    if (send !== null) {
+      const prior = sendDedupe.lookup(deviceId, send.clientMsgId);
       if (prior) {
-        reply(deviceId, id, await prior);
+        // Тот же ключ с другим сообщением — ошибка клиента, а не повтор (критик m1).
+        if (prior.fingerprint !== send.fingerprint) {
+          refuse(deviceId, state, method, params, 'bad_request', 'clientMsgId');
+          fail(deviceId, state, id, 'bad_request', 'clientMsgId was used for another message');
+          return;
+        }
+        // Повтор, ждущий вызов в полёте, тоже занимает место в `MAX_IN_FLIGHT` (критик m3).
+        if (state.inFlight >= MAX_IN_FLIGHT) {
+          fail(deviceId, state, id, 'rate_limited', 'too many requests in flight');
+          return;
+        }
+        state.inFlight++;
+        try {
+          reply(deviceId, state, id, await prior.outcome);
+        } finally {
+          state.inFlight--;
+        }
         return;
       }
     }
     // Хост не online (starting, offline, incompatible): ничего не уходит и лимиты не тратятся.
     if (host.status !== 'online') {
-      fail(deviceId, id, 'host_offline');
+      fail(deviceId, state, id, 'host_offline');
       return;
     }
     const mutating = MUTATING_METHODS.has(method);
     if (state.inFlight >= MAX_IN_FLIGHT) {
       if (mutating) refuse(deviceId, state, method, params, 'rate_limited', 'in-flight');
-      fail(deviceId, id, 'rate_limited', 'too many requests in flight');
+      fail(deviceId, state, id, 'rate_limited', 'too many requests in flight');
       return;
     }
     if (mutating && !limiter.take(deviceId)) {
       refuse(deviceId, state, method, params, 'rate_limited', 'rate');
-      fail(deviceId, id, 'rate_limited', 'too many changes per minute');
+      fail(deviceId, state, id, 'rate_limited', 'too many changes per minute');
       return;
     }
     if (!mutating && !readLimiter.take(deviceId)) {
-      fail(deviceId, id, 'rate_limited', 'too many reads per minute');
+      fail(deviceId, state, id, 'rate_limited', 'too many reads per minute');
       return;
     }
     // `works.list` телефону — проекция снимка эпохи, хост не зовётся: иначе каждый вызов собирал бы полный снимок (мегабайты).
     if (method === 'works.list') {
       try {
         const snapshot = projectedSnapshot();
-        if (snapshot === null) fail(deviceId, id, 'host_offline');
-        else reply(deviceId, id, { result: snapshot });
+        if (snapshot === null) fail(deviceId, state, id, 'host_offline');
+        else reply(deviceId, state, id, { result: snapshot });
       } catch (error) {
         log.error('dispatch.projection_failed', { method, error });
-        fail(deviceId, id, 'internal', 'internal error');
+        fail(deviceId, state, id, 'internal', 'internal error');
       }
       return;
     }
@@ -318,8 +350,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       const outcome = callHost(deviceId, state, method, params, feedRef);
       // Параметры `pty.send` уходят хосту как есть, с `clientMsgId` (решение ведущего m-2202): правило A27 хост
       // проверяет то же, его схема лишний ключ отбрасывает.
-      if (clientMsgId !== null) sendDedupe.remember(deviceId, clientMsgId, outcome);
-      reply(deviceId, id, await outcome);
+      if (send !== null) sendDedupe.remember(deviceId, send.clientMsgId, send.fingerprint, outcome);
+      reply(deviceId, state, id, await outcome);
     } finally {
       state.inFlight--;
     }
@@ -375,9 +407,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     },
     onClose(deviceId) {
       devices.delete(deviceId);
-      limiter.forget(deviceId);
-      readLimiter.forget(deviceId);
-      pushLimiter.forget(deviceId);
+      // Окна лимитов переживают переподключение: иначе новое соединение обнуляло бы 30 изменений в минуту (критик m4).
       helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);
       // Подписки на ленту телефона сняты; кэш `pty.send` остаётся: повтор после `lost` придёт с новой сессии.

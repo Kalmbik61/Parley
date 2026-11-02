@@ -943,6 +943,8 @@ describe('A30: pty.send without duplicates', () => {
     resolve({ ok: true });
     await flush();
     expect(sends()).toHaveLength(1);
+    // The old session's answer never reaches the new session (critic M1).
+    expect(answer('d1', 'a')).toBeUndefined();
     expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
     // After the call finished, a later repeat on yet another session still gets the cached answer.
     dispatcher.onClose('d1');
@@ -1016,6 +1018,85 @@ describe('A30: pty.send without duplicates', () => {
     send('d1', 'retry', 'msg-limit-999', 'one too many');
     await flush();
     expect(sends()).toHaveLength(31);
+  });
+
+  it('critic M1: a late host answer of the previous session never reaches the new session under the same id', async () => {
+    const pending: ((v: unknown) => void)[] = [];
+    host.handler = (method) => (method === 'pty.send' ? new Promise((r) => pending.push(r)) : Promise.resolve({ from: 'new session' }));
+    send('d1', '1', 'msg-00000010');
+    send('d1', '2', 'msg-00000010');
+    await flush();
+    dispatcher.onClose('d1');
+    sessions.frames.delete('d1');
+    dispatcher.onOpen('d1');
+    // The new connection restarts its id counter: its "1" and "2" are different requests.
+    call('d1', '1', 'host.info');
+    await flush();
+    pending[0]!({ from: 'old session' });
+    await flush();
+    call('d1', '2', 'host.info');
+    await flush();
+    expect(sessions.of('d1').filter((f) => f.id === '1')).toEqual([{ id: '1', result: { from: 'new session' } }]);
+    expect(sessions.of('d1').filter((f) => f.id === '2')).toEqual([{ id: '2', result: { from: 'new session' } }]);
+    expect(JSON.stringify(sessions.of('d1'))).not.toContain('old session');
+  });
+
+  it('critic m1: the same clientMsgId with another message is bad_request, not a repeat', async () => {
+    send('d1', 'a', 'msg-00000011', 'first text');
+    await flush();
+    send('d1', 'b', 'msg-00000011', 'other text');
+    call('d1', 'c', 'pty.send', { ref: ref('s-2'), text: 'first text', submit: true, clientMsgId: 'msg-00000011' });
+    call('d1', 'd', 'pty.send', { ref: ref('s-1'), text: 'first text', submit: false, clientMsgId: 'msg-00000011' });
+    // A different requestedAt is still a repeat.
+    call('d1', 'e', 'pty.send', { ref: ref('s-1'), text: 'first text', submit: true, clientMsgId: 'msg-00000011', requestedAt: 5 });
+    await flush();
+    expect(sends()).toHaveLength(1);
+    for (const id of ['b', 'c', 'd']) expect(answer('d1', id)).toMatchObject({ error: { code: 'bad_request' } });
+    expect(answer('d1', 'e')).toEqual({ id: 'e', result: { ok: true } });
+  });
+
+  it('critic m2: a precise host refusal is not cached (in-flight repeats share it, a later repeat reaches the host)', async () => {
+    let reject!: (e: Error) => void;
+    host.handler = () => new Promise((_, r) => (reject = r));
+    send('d1', 'a', 'msg-00000012');
+    send('d1', 'b', 'msg-00000012');
+    await flush();
+    reject(new HostCallError('not_found', 'session is not running'));
+    await flush();
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'not_found' } });
+    expect(answer('d1', 'b')).toMatchObject({ error: { code: 'not_found' } });
+    host.handler = async () => ({ ok: true });
+    send('d1', 'c', 'msg-00000012');
+    await flush();
+    expect(sends()).toHaveLength(2);
+    expect(answer('d1', 'c')).toEqual({ id: 'c', result: { ok: true } });
+  });
+
+  it('critic m3: repeats waiting on an in-flight call count in MAX_IN_FLIGHT', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = () => new Promise((r) => (resolve = r));
+    send('d1', 'first', 'msg-00000013');
+    for (let i = 0; i < 15; i++) send('d1', `r${i}`, 'msg-00000013');
+    send('d1', 'over', 'msg-00000013');
+    await flush();
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+    resolve({ ok: true });
+    await flush();
+    expect(sends()).toHaveLength(1);
+    for (let i = 0; i < 15; i++) expect(answer('d1', `r${i}`)).toEqual({ id: `r${i}`, result: { ok: true } });
+  });
+
+  it('critic m4: the mutating limit window survives a reconnect', async () => {
+    for (let i = 0; i < 30; i++) {
+      send('d1', `m${i}`, `msg-recon-${String(i).padStart(3, '0')}`);
+      await flush();
+    }
+    dispatcher.onClose('d1');
+    dispatcher.onOpen('d1');
+    send('d1', 'over', 'msg-recon-999');
+    await flush();
+    expect(sends()).toHaveLength(30);
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
   });
 
   it('pty.send without clientMsgId is bad_request before the host', async () => {

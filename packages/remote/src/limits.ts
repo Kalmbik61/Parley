@@ -42,9 +42,6 @@ export function createRateLimiter(max: number, windowMs: number, now: () => numb
       hits.set(key, recent);
       return true;
     },
-    forget(key: string): void {
-      hits.delete(key);
-    },
   };
 }
 export type RateLimiter = ReturnType<typeof createRateLimiter>;
