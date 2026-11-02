@@ -25,7 +25,7 @@ export interface ConsentsState {
   /** Подписывается на мост и один раз запрашивает `consents.list`; возвращает отписку. */
   init: (bridge: ConsentBridge) => () => void;
   /** `consents.decide`; ошибку хоста бросает вызывающему (тост — у него). */
-  decide: (id: string, decision: 'allow' | 'deny') => Promise<{ applied: boolean }>;
+  decide: (id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>) => Promise<{ applied: boolean }>;
   ask: (id: string) => void;
   stopAsking: () => void;
 }
@@ -76,9 +76,9 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
       unsubscribe();
     };
   },
-  decide: async (id, decision) => {
+  decide: async (id, decision, enabled) => {
     if (current === null) throw new Error('consents: not connected');
-    const { applied } = await current.call('consents.decide', { id, decision });
+    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }) });
     return { applied };
   },
   ask: (id) => set({ asking: id }),
@@ -104,7 +104,7 @@ export function trustCardFor(
  * Кто просил, для диалога: «S03 Ruslan · create_session». Просившая сессия берётся из карты работы карточки, нет её
  * (человек, автозапуск, сессия уже ушла) — ярлык карточки, нет и его — один источник.
  */
-export function consentRequester(card: FolderTrustCard, entries: readonly WindowWorkEntry[]): string {
+export function consentRequester(card: Pick<FolderTrustCard, 'requestedBy' | 'projectPath'>, entries: readonly WindowWorkEntry[]): string {
   const { requestedBy } = card;
   const via = S.dialogs.trustFolder.via[requestedBy.source];
   const session =

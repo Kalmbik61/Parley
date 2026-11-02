@@ -1145,6 +1145,15 @@ export const S = {
       /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
       via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
     },
+    /** Серверы MCP из `.mcp.json` проекта перед запуском Claude (спека 2026-11-02, 7; карточка `project-mcp`). */
+    projectMcp: {
+      title: (repo: string): string => `Enable MCP servers for ${repo}?`,
+      body: 'These servers come from the .mcp.json of the project and run code on your machine. Nothing is enabled unless you switch it on; the session starts either way.',
+      switchLabel: (name: string): string => `Enable ${name}`,
+      enable: 'Enable selected',
+      rejectAll: 'Reject all',
+      stale: 'The server list changed — review again',
+    },
     /** Просьба агента продолжить сессию на другом провайдере (`request_agent_switch`, карточка `agent-switch`). */
     agentSwitch: {
       title: 'Continue on another provider?',
@@ -2637,6 +2646,7 @@ export const S = {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
       updateProvider: 'update the provider CLI',
+      decideProjectMcp: 'save the MCP server choice',
       skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',

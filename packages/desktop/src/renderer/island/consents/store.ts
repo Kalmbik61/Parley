@@ -13,6 +13,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { ConsentCard, EventData } from '@parley/protocol';
 import type { IslandBridge } from '../../../shared/island.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { ELSEWHERE_MS } from '../requests.js';
 
 /** Сколько «Done ✓» держится на карточке после решения. */
@@ -28,11 +29,12 @@ export interface ConsentsState {
   /** Id карточки, решение по которой в пути. */
   deciding: string | null;
   /** Пометка показанной (первой) карточки. */
-  note: 'done' | 'elsewhere' | 'failed' | null;
+  note: 'done' | 'elsewhere' | 'failed' | 'stale' | null;
   configure(deps: ConsentsDeps): void;
   apply(change: EventData<'consents.changed'>): void;
   replace(items: readonly ConsentCard[]): void;
-  decide(id: string, decision: 'allow' | 'deny'): Promise<void>;
+  /** `enabled` — только для карточки `project-mcp`: включённые пары `{name, fingerprint}`. */
+  decide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>): Promise<void>;
 }
 
 const pending = (cards: readonly ConsentCard[]): ConsentCard[] => cards.filter((card) => card.state === 'pending');
@@ -85,17 +87,19 @@ export function createConsentsStore(): UseBoundStore<StoreApi<ConsentsState>> {
         held.clear();
         set({ items: pending(items), deciding: null, note: null });
       },
-      decide: async (id, decision) => {
+      decide: async (id, decision, enabled) => {
         const current = deps;
         if (current === null || get().deciding !== null || held.has(id) || !get().items.some((card) => card.id === id)) return;
         held.add(id);
         set({ deciding: id, note: null });
         try {
-          const result = await current.call('consents.decide', { id, decision });
+          const result = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }) });
           settle(id, result.applied ? 'done' : 'elsewhere', result.applied ? ANSWER_HOLD_MS : ELSEWHERE_MS);
-        } catch {
+        } catch (error) {
           held.delete(id);
-          set({ deciding: null, ...(get().items.some((card) => card.id === id) ? { note: 'failed' as const } : {}) });
+          // `bad_request` — список серверов карточки сменился (`project-mcp`): карточка остаётся, человек смотрит её заново.
+          const note = decodeIpcError(error).code === 'bad_request' ? ('stale' as const) : ('failed' as const);
+          set({ deciding: null, ...(get().items.some((card) => card.id === id) ? { note } : {}) });
         }
       },
     };
