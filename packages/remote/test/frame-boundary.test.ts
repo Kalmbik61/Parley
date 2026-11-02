@@ -55,6 +55,8 @@ describe('белый список против запретного списка
     'sessions.switchOptions', 'swarms.cancel', 'swarms.create', 'swarms.seen',
     // Из master после слияния 2026-11-01 (лимиты агентов, сон, закрытие готовых сессий): телефону не открыты.
     'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
+    // Из master 0.27.0 (ограниченная синхронизация окна, #164): мост остаётся на works.list / works.changed.
+    'works.sync', 'works.mailState',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);
