@@ -16,6 +16,7 @@ import {
   pairRequestEvent,
   pairStartResult,
 } from '@parley/protocol/remote';
+import type { PhoneActionEvent } from '@parley/protocol/remote';
 import type { AuditLog, AuditRecord } from './audit.js';
 import { ensureDir, writeFileAtomic } from './files.js';
 import type { BridgeLog } from './log.js';
@@ -65,6 +66,7 @@ export interface ControlEvents {
   'pair.done': z.infer<typeof pairDoneEvent>;
   'pair.failed': z.infer<typeof pairFailedEvent>;
   'pair.offerClosed': z.infer<typeof pairOfferClosedEvent>;
+  'phone.action': PhoneActionEvent;
 }
 
 export interface ControlServerOptions {

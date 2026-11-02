@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
 import {
@@ -8,9 +9,10 @@ import {
   appRequestFrame,
   bridgeEventSchemas,
   checkRemoteParams,
+  phoneActionEvent,
   projectWorksSnapshot,
 } from '@parley/protocol/remote';
-import type { BridgeHello } from '@parley/protocol/remote';
+import type { BridgeHello, PhoneActionEvent } from '@parley/protocol/remote';
 import type { SessionRef } from '@parley/protocol';
 import type { AuditLog } from './audit.js';
 import { createFanout } from './fanout.js';
@@ -56,6 +58,8 @@ export interface BridgeOptions {
   deviceName?: (deviceId: string) => string;
   now?: () => number;
   coalesceMs?: number;
+  /** Весомое действие телефона удалось (A34): событие `phone.action` окну по сокету управления. */
+  onPhoneAction?: (event: PhoneActionEvent) => void;
 }
 
 interface DeviceState {
@@ -138,6 +142,35 @@ function targetOf(params: unknown): string | undefined {
   return typeof ref.sessionId === 'string' && ref.sessionId.length <= 128 ? ref.sessionId : undefined;
 }
 
+/**
+ * Ключ повтора `pty.send` и отпечаток сообщения: `ref`, текст и `submit` (без `requestedAt` — он у повтора свой).
+ * Правило A27 уже проверило типы.
+ */
+function sendKeyOf(params: unknown): { clientMsgId: string; fingerprint: string } {
+  const p = params as { ref: Record<string, unknown>; text: string; submit: boolean; clientMsgId: string };
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([p.ref.projectPath, p.ref.workId, p.ref.sessionId, p.text, p.submit]))
+    .digest('hex');
+  return { clientMsgId: p.clientMsgId, fingerprint };
+}
+
+/** Сколько карточек согласий мост помнит: ждущих у хоста единицы, предел — от разрастания. */
+const MAX_CONSENT_CARDS = 500;
+
+/** Вид карточки согласия и её папка: по ним `consents.decide allow` становится `phone.action` (A34). */
+interface ConsentCardInfo {
+  kind: string;
+  folder: string | null;
+}
+
+/** `ref` из трёх строк без лишних ключей — цель `phone.action`. */
+function cleanRef(value: unknown): SessionRef | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { projectPath, workId, sessionId } = value as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof sessionId !== 'string') return null;
+  return { projectPath, workId, sessionId };
+}
+
 /** `ref` подписки на ленту: три строки, иначе `bad_request` — по нему считается подписка. */
 function sessionRefOf(params: unknown): SessionRef | null {
   if (typeof params !== 'object' || params === null) return null;
@@ -173,16 +206,20 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   }
   const devices = new Map<string, DeviceState>();
 
-  function reply(deviceId: string, id: string, body: { result: unknown } | { error: { code: string; message: string; data?: unknown } }): void {
-    if (!devices.has(deviceId)) return;
-    if (!fanout.send(deviceId, { id, ...body }) && devices.has(deviceId) && 'result' in body) {
+  /**
+   * Ответ уходит только той сессии телефона, что прислала запрос (критик A30, M1): `id` у клиента — счётчик на
+   * соединение, и поздний ответ прежней сессии под тем же `id` достался бы другому запросу новой.
+   */
+  function reply(deviceId: string, state: DeviceState, id: string, body: SendOutcome): void {
+    if (devices.get(deviceId) !== state) return;
+    if (!fanout.send(deviceId, { id, ...body }) && devices.get(deviceId) === state && 'result' in body) {
       // Результат больше 8 МиБ (или сессия уже закрыта): телефон узнаёт об этом, а не ждёт.
       fanout.send(deviceId, { id, error: { code: 'too_large', message: 'response is too large' } });
     }
   }
 
-  const fail = (deviceId: string, id: string, code: string, message: string = code, extra: { data?: unknown } = {}): void =>
-    reply(deviceId, id, { error: { code, message, ...extra } });
+  const fail = (deviceId: string, state: DeviceState, id: string, code: string, message: string = code, extra: { data?: unknown } = {}): void =>
+    reply(deviceId, state, id, { error: { code, message, ...extra } });
 
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
     audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail });
@@ -203,9 +240,84 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (seen === undefined || host.status !== 'online' || seen === methodsKey()) return;
     sessions.close(deviceId, 'rekey');
   }
+  /** Карточки согласий из `consents.list` и `consents.changed`; `id` у хоста сквозной, эпоха их не обесценивает. */
+  const consentCards = new Map<string, ConsentCardInfo>();
+  function learnCards(items: unknown): void {
+    if (!Array.isArray(items)) return;
+    for (const item of items as unknown[]) {
+      const card = item as { id?: unknown; kind?: unknown; folder?: unknown } | null;
+      if (typeof card?.id !== 'string' || typeof card.kind !== 'string') continue;
+      consentCards.delete(card.id);
+      consentCards.set(card.id, { kind: card.kind, folder: typeof card.folder === 'string' ? card.folder : null });
+      if (consentCards.size > MAX_CONSENT_CARDS) consentCards.delete(consentCards.keys().next().value as string);
+    }
+  }
+
   const unsubscribe = host.subscribe((event) => {
     if (event.type === 'status' && event.status === 'online') for (const deviceId of [...devices.keys()]) rekeyIfStale(deviceId);
+    if (event.type === 'host' && event.event === 'consents.changed') {
+      const data = event.data as { upsert?: unknown; removed?: unknown } | null;
+      learnCards(data?.upsert);
+      if (Array.isArray(data?.removed)) for (const id of data.removed) if (typeof id === 'string') consentCards.delete(id);
+    }
   });
+
+  /** Карточка, которую телефон одобряет: из памяти, иначе одним `consents.list` до решения (после него её в списке нет). */
+  async function consentCardOf(params: unknown): Promise<ConsentCardInfo | null> {
+    const p = params as { id?: unknown; decision?: unknown };
+    if (p.decision !== 'allow' || typeof p.id !== 'string') return null;
+    if (!consentCards.has(p.id)) {
+      try {
+        learnCards(((await host.call('consents.list', {})) as { items?: unknown } | null)?.items);
+      } catch (error) {
+        log.warn('dispatch.consents_list_failed', { error });
+      }
+    }
+    return consentCards.get(p.id) ?? null;
+  }
+
+  /**
+   * Весомые действия удавшегося вызова (спека 12, A34): запуск сессии, доверие к папке, смена провайдера, Allow «Always»,
+   * план с `auto-accept`. Обычный Allow, сообщения агентам и письма в комнаты — не весомые.
+   */
+  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
+    const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    const r = (typeof result === 'object' && result !== null ? result : {}) as Record<string, unknown>;
+    // `applied: false` — карточка уже не ждала, ничего не произошло.
+    if (r.applied === false) return [];
+    const actions: Omit<PhoneActionEvent, 'deviceId'>[] = [];
+    if (method === 'sessions.create') {
+      const ref = cleanRef(r.ref);
+      if (ref) actions.push({ kind: 'session-create', target: ref });
+      if (p.trustFolder === true && typeof p.projectPath === 'string') {
+        // Хост пишет в `trust.json` realpath проекта; мост на том же Маке берёт его так же.
+        actions.push({ kind: 'trust-folder', target: await realpath(p.projectPath).catch(() => p.projectPath as string) });
+      }
+    } else if (method === 'consents.decide' && card !== null && typeof p.id === 'string') {
+      if (card.kind === 'folder-trust' && card.folder) actions.push({ kind: 'trust-folder', target: card.folder });
+      else if (card.kind === 'agent-switch') actions.push({ kind: 'provider-switch', target: p.id });
+    } else if (method === 'feed.decide') {
+      const ref = cleanRef(p.ref);
+      const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
+      if (ref && d.kind === 'permission' && d.behavior === 'allow' && d.always === true) actions.push({ kind: 'allow-always', target: ref });
+      else if (ref && d.kind === 'plan' && d.choice === 'auto-accept') actions.push({ kind: 'plan-auto-accept', target: ref });
+    }
+    return actions;
+  }
+
+  /** `phone.action` окну; событие проверяется схемой — лишнее (тексты) не уходит. Сбой не трогает ответ телефону. */
+  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<void> {
+    if (!options.onPhoneAction) return;
+    try {
+      for (const action of await phoneActions(method, params, result, card)) {
+        const event = phoneActionEvent.safeParse({ deviceId, ...action });
+        if (event.success) options.onPhoneAction(event.data);
+        else log.warn('dispatch.phone_action_invalid', { method, kind: action.kind });
+      }
+    } catch (error) {
+      log.error('dispatch.phone_action_failed', { method, error });
+    }
+  }
 
   /** Нарушение протокола: `session.closing protocol` — телефон переподключится с отступом, а не примет это за остановку моста. */
   function close(deviceId: string): void {
@@ -219,12 +331,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (LOCAL_METHODS.has(method)) {
       // Методы моста тоже считаются в работе; `push.register` пишет файл — не чаще 10 раз в минуту.
       if (state.inFlight >= MAX_IN_FLIGHT || (method === 'push.register' && !pushLimiter.take(deviceId))) {
-        fail(deviceId, id, 'rate_limited', 'too many requests');
+        fail(deviceId, state, id, 'rate_limited', 'too many requests');
         return;
       }
       state.inFlight++;
       try {
-        reply(deviceId, id, {
+        reply(deviceId, state, id, {
           result: await callLocalMethod(method, params, {
             deviceId,
             push,
@@ -240,10 +352,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
           }),
         });
       } catch (error) {
-        if (error instanceof LocalMethodError) fail(deviceId, id, error.code);
+        if (error instanceof LocalMethodError) fail(deviceId, state, id, error.code);
         else {
           log.error('dispatch.local_failed', { method, error });
-          fail(deviceId, id, 'internal', 'internal error');
+          fail(deviceId, state, id, 'internal', 'internal error');
         }
       } finally {
         state.inFlight--;
@@ -255,60 +367,76 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     // но мост отсекает первым. Пока методов эпохи нет (хост не `online`), решает `host_offline` ниже.
     if (!STAGE_METHODS.has(method) || (host.methods !== null && !host.methods.includes(method))) {
       refuse(deviceId, state, method, params, 'unknown_method');
-      fail(deviceId, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
+      fail(deviceId, state, id, 'unknown_method', `unknown method: ${method.slice(0, 64)}`);
       return;
     }
     const feedRef = method === 'feed.subscribe' || method === 'feed.unsubscribe' ? sessionRefOf(params) : undefined;
     if (!checkRemoteParams(method, params) || feedRef === null) {
       refuse(deviceId, state, method, params, 'bad_request', 'params');
-      fail(deviceId, id, 'bad_request');
+      fail(deviceId, state, id, 'bad_request');
       return;
     }
     // Отписка — состояние самого моста: проходит и без хоста, и мимо лимитов, иначе намерение телефона потерялось бы,
     // а новая эпоха подписала бы его снова. Вызов хоста (последний подписчик) делает сама очередь, если хост `online`.
     if (method === 'feed.unsubscribe' && feedRef) {
-      reply(deviceId, id, { result: await feedSubs.unsubscribe(deviceId, feedRef) });
+      reply(deviceId, state, id, { result: await feedSubs.unsubscribe(deviceId, feedRef) });
       return;
     }
-    // Повтор `pty.send` с тем же `clientMsgId` — прежний ответ (или ждущий вызов), без хоста и без лимитов: он не
-    // новое действие. Между поиском и записью ключа ниже нет `await` — второй кадр того же ключа найдёт первый вызов.
-    const clientMsgId = method === 'pty.send' ? (params as { clientMsgId: string }).clientMsgId : null;
-    if (clientMsgId !== null) {
-      const prior = sendDedupe.lookup(deviceId, clientMsgId);
+    // Повтор `pty.send` с тем же `clientMsgId` — прежний ответ (или ждущий вызов), без хоста и без лимита изменений:
+    // он не новое действие. Между поиском и записью ключа ниже нет `await` — второй кадр того же ключа найдёт первый вызов.
+    const send = method === 'pty.send' ? sendKeyOf(params) : null;
+    if (send !== null) {
+      const prior = sendDedupe.lookup(deviceId, send.clientMsgId);
       if (prior) {
-        reply(deviceId, id, await prior);
+        // Тот же ключ с другим сообщением — ошибка клиента, а не повтор (критик m1).
+        if (prior.fingerprint !== send.fingerprint) {
+          refuse(deviceId, state, method, params, 'bad_request', 'clientMsgId');
+          fail(deviceId, state, id, 'bad_request', 'clientMsgId was used for another message');
+          return;
+        }
+        // Повтор, ждущий вызов в полёте, тоже занимает место в `MAX_IN_FLIGHT` (критик m3).
+        if (state.inFlight >= MAX_IN_FLIGHT) {
+          fail(deviceId, state, id, 'rate_limited', 'too many requests in flight');
+          return;
+        }
+        state.inFlight++;
+        try {
+          reply(deviceId, state, id, await prior.outcome);
+        } finally {
+          state.inFlight--;
+        }
         return;
       }
     }
     // Хост не online (starting, offline, incompatible): ничего не уходит и лимиты не тратятся.
     if (host.status !== 'online') {
-      fail(deviceId, id, 'host_offline');
+      fail(deviceId, state, id, 'host_offline');
       return;
     }
     const mutating = MUTATING_METHODS.has(method);
     if (state.inFlight >= MAX_IN_FLIGHT) {
       if (mutating) refuse(deviceId, state, method, params, 'rate_limited', 'in-flight');
-      fail(deviceId, id, 'rate_limited', 'too many requests in flight');
+      fail(deviceId, state, id, 'rate_limited', 'too many requests in flight');
       return;
     }
     if (mutating && !limiter.take(deviceId)) {
       refuse(deviceId, state, method, params, 'rate_limited', 'rate');
-      fail(deviceId, id, 'rate_limited', 'too many changes per minute');
+      fail(deviceId, state, id, 'rate_limited', 'too many changes per minute');
       return;
     }
     if (!mutating && !readLimiter.take(deviceId)) {
-      fail(deviceId, id, 'rate_limited', 'too many reads per minute');
+      fail(deviceId, state, id, 'rate_limited', 'too many reads per minute');
       return;
     }
     // `works.list` телефону — проекция снимка эпохи, хост не зовётся: иначе каждый вызов собирал бы полный снимок (мегабайты).
     if (method === 'works.list') {
       try {
         const snapshot = projectedSnapshot();
-        if (snapshot === null) fail(deviceId, id, 'host_offline');
-        else reply(deviceId, id, { result: snapshot });
+        if (snapshot === null) fail(deviceId, state, id, 'host_offline');
+        else reply(deviceId, state, id, { result: snapshot });
       } catch (error) {
         log.error('dispatch.projection_failed', { method, error });
-        fail(deviceId, id, 'internal', 'internal error');
+        fail(deviceId, state, id, 'internal', 'internal error');
       }
       return;
     }
@@ -318,8 +446,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       const outcome = callHost(deviceId, state, method, params, feedRef);
       // Параметры `pty.send` уходят хосту как есть, с `clientMsgId` (решение ведущего m-2202): правило A27 хост
       // проверяет то же, его схема лишний ключ отбрасывает.
-      if (clientMsgId !== null) sendDedupe.remember(deviceId, clientMsgId, outcome);
-      reply(deviceId, id, await outcome);
+      if (send !== null) sendDedupe.remember(deviceId, send.clientMsgId, send.fingerprint, outcome);
+      reply(deviceId, state, id, await outcome);
     } finally {
       state.inFlight--;
     }
@@ -334,7 +462,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         // `feed.subscribe`: хост видит одного подписчика — мост; счётчик по `ref` на все телефоны (A30).
         raw = await feedSubs.subscribe(deviceId, feedRef);
       } else {
+        const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         raw = await host.call(method, params ?? {});
+        if (method === 'consents.list') learnCards((raw as { items?: unknown } | null)?.items);
+        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card);
       }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;
@@ -375,9 +506,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     },
     onClose(deviceId) {
       devices.delete(deviceId);
-      limiter.forget(deviceId);
-      readLimiter.forget(deviceId);
-      pushLimiter.forget(deviceId);
+      // Окна лимитов переживают переподключение: иначе новое соединение обнуляло бы 30 изменений в минуту (критик m4).
       helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);
       // Подписки на ленту телефона сняты; кэш `pty.send` остаётся: повтор после `lost` придёт с новой сессии.

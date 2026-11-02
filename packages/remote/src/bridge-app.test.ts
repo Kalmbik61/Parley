@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- кадры в тестах разбираются как JSON */
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorksSnapshot } from '@parley/protocol';
 import { MIN_CLIENT_VERSION, REMOTE_METHODS, bridgeHelloSchema, remoteWorksSnapshotSchema } from '@parley/protocol/remote';
@@ -8,6 +11,7 @@ import { HostCallError, refKey } from './host-link.js';
 import type { ActivityEntry, HostLink, HostLinkEvent, HostLinkStatus } from './host-link.js';
 import type { SessionHandler, PhoneSessions, DevicePush, SessionClosingReason } from './session-contract.js';
 import type { BridgeLog } from './log.js';
+import type { PhoneActionEvent } from '@parley/protocol/remote';
 
 type Frame = Record<string, any>;
 const enc = new TextEncoder();
@@ -131,6 +135,7 @@ class FakeSessions implements PhoneSessions {
 let host: FakeHost;
 let sessions: FakeSessions;
 let audits: AuditInput[];
+let actions: PhoneActionEvent[];
 let dispatcher: SessionHandler & { stop(): void };
 
 const log: BridgeLog = { info() {}, warn() {}, error() {}, addSecret() {} };
@@ -140,6 +145,7 @@ beforeEach(() => {
   host = new FakeHost();
   sessions = new FakeSessions();
   audits = [];
+  actions = [];
   dispatcher = createSessionHandler({
     host,
     sessions,
@@ -147,6 +153,7 @@ beforeEach(() => {
     log,
     info: { hostId: 'h1', hostName: 'Mac', bridgeVersion: '0.1.0', minClient: MIN_CLIENT_VERSION, relays: [] },
     deviceName: () => 'Phone 1',
+    onPhoneAction: (event) => void actions.push(event),
   });
 });
 afterEach(() => {
@@ -943,6 +950,8 @@ describe('A30: pty.send without duplicates', () => {
     resolve({ ok: true });
     await flush();
     expect(sends()).toHaveLength(1);
+    // The old session's answer never reaches the new session (critic M1).
+    expect(answer('d1', 'a')).toBeUndefined();
     expect(answer('d1', 'b')).toEqual({ id: 'b', result: { ok: true } });
     // After the call finished, a later repeat on yet another session still gets the cached answer.
     dispatcher.onClose('d1');
@@ -1018,6 +1027,85 @@ describe('A30: pty.send without duplicates', () => {
     expect(sends()).toHaveLength(31);
   });
 
+  it('critic M1: a late host answer of the previous session never reaches the new session under the same id', async () => {
+    const pending: ((v: unknown) => void)[] = [];
+    host.handler = (method) => (method === 'pty.send' ? new Promise((r) => pending.push(r)) : Promise.resolve({ from: 'new session' }));
+    send('d1', '1', 'msg-00000010');
+    send('d1', '2', 'msg-00000010');
+    await flush();
+    dispatcher.onClose('d1');
+    sessions.frames.delete('d1');
+    dispatcher.onOpen('d1');
+    // The new connection restarts its id counter: its "1" and "2" are different requests.
+    call('d1', '1', 'host.info');
+    await flush();
+    pending[0]!({ from: 'old session' });
+    await flush();
+    call('d1', '2', 'host.info');
+    await flush();
+    expect(sessions.of('d1').filter((f) => f.id === '1')).toEqual([{ id: '1', result: { from: 'new session' } }]);
+    expect(sessions.of('d1').filter((f) => f.id === '2')).toEqual([{ id: '2', result: { from: 'new session' } }]);
+    expect(JSON.stringify(sessions.of('d1'))).not.toContain('old session');
+  });
+
+  it('critic m1: the same clientMsgId with another message is bad_request, not a repeat', async () => {
+    send('d1', 'a', 'msg-00000011', 'first text');
+    await flush();
+    send('d1', 'b', 'msg-00000011', 'other text');
+    call('d1', 'c', 'pty.send', { ref: ref('s-2'), text: 'first text', submit: true, clientMsgId: 'msg-00000011' });
+    call('d1', 'd', 'pty.send', { ref: ref('s-1'), text: 'first text', submit: false, clientMsgId: 'msg-00000011' });
+    // A different requestedAt is still a repeat.
+    call('d1', 'e', 'pty.send', { ref: ref('s-1'), text: 'first text', submit: true, clientMsgId: 'msg-00000011', requestedAt: 5 });
+    await flush();
+    expect(sends()).toHaveLength(1);
+    for (const id of ['b', 'c', 'd']) expect(answer('d1', id)).toMatchObject({ error: { code: 'bad_request' } });
+    expect(answer('d1', 'e')).toEqual({ id: 'e', result: { ok: true } });
+  });
+
+  it('critic m2: a precise host refusal is not cached (in-flight repeats share it, a later repeat reaches the host)', async () => {
+    let reject!: (e: Error) => void;
+    host.handler = () => new Promise((_, r) => (reject = r));
+    send('d1', 'a', 'msg-00000012');
+    send('d1', 'b', 'msg-00000012');
+    await flush();
+    reject(new HostCallError('not_found', 'session is not running'));
+    await flush();
+    expect(answer('d1', 'a')).toMatchObject({ error: { code: 'not_found' } });
+    expect(answer('d1', 'b')).toMatchObject({ error: { code: 'not_found' } });
+    host.handler = async () => ({ ok: true });
+    send('d1', 'c', 'msg-00000012');
+    await flush();
+    expect(sends()).toHaveLength(2);
+    expect(answer('d1', 'c')).toEqual({ id: 'c', result: { ok: true } });
+  });
+
+  it('critic m3: repeats waiting on an in-flight call count in MAX_IN_FLIGHT', async () => {
+    let resolve!: (v: unknown) => void;
+    host.handler = () => new Promise((r) => (resolve = r));
+    send('d1', 'first', 'msg-00000013');
+    for (let i = 0; i < 15; i++) send('d1', `r${i}`, 'msg-00000013');
+    send('d1', 'over', 'msg-00000013');
+    await flush();
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+    resolve({ ok: true });
+    await flush();
+    expect(sends()).toHaveLength(1);
+    for (let i = 0; i < 15; i++) expect(answer('d1', `r${i}`)).toEqual({ id: `r${i}`, result: { ok: true } });
+  });
+
+  it('critic m4: the mutating limit window survives a reconnect', async () => {
+    for (let i = 0; i < 30; i++) {
+      send('d1', `m${i}`, `msg-recon-${String(i).padStart(3, '0')}`);
+      await flush();
+    }
+    dispatcher.onClose('d1');
+    dispatcher.onOpen('d1');
+    send('d1', 'over', 'msg-recon-999');
+    await flush();
+    expect(sends()).toHaveLength(30);
+    expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+
   it('pty.send without clientMsgId is bad_request before the host', async () => {
     call('d1', 'a', 'pty.send', { ref: ref('s-1'), text: 'x', submit: true });
     await flush();
@@ -1037,5 +1125,109 @@ describe('A30: pty.send without duplicates', () => {
     await flush();
     expect(host.calls.filter((c) => c.method === 'consents.decide')).toHaveLength(30);
     expect(answer('d1', 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+});
+
+describe('A34: phone.action for weighty phone actions', () => {
+  // `phone.action` carries a real device id (16 bytes b64url).
+  const D = 'AAAAAAAAAAAAAAAAAAAAAA';
+  const create = (extra: Record<string, unknown> = {}) => ({ projectPath: '/p', workId: 'w-1', provider: 'claude', label: 'L', task: 'SECRET TASK', parent: null, ...extra });
+  const answer = (id: string) => sessions.of(D).find((f) => f.id === id);
+
+  beforeEach(() => {
+    online();
+    dispatcher.onOpen(D);
+  });
+
+  it('sessions.create: session-create with the new ref; with trustFolder also trust-folder with the realpath', async () => {
+    vi.useRealTimers();
+    const real = mkdtempSync(join(tmpdir(), 'a34-'));
+    const link = `${real}-link`;
+    symlinkSync(real, link);
+    try {
+      host.handler = async () => ({ ref: ref('s-9') });
+      call(D, 'a', 'sessions.create', create());
+      await vi.waitFor(() => expect(answer('a')).toBeDefined());
+      call(D, 'b', 'sessions.create', create({ projectPath: link, trustFolder: true }));
+      await vi.waitFor(() => expect(actions).toHaveLength(3));
+      expect(actions).toEqual([
+        { deviceId: D, kind: 'session-create', target: ref('s-9') },
+        { deviceId: D, kind: 'session-create', target: ref('s-9') },
+        { deviceId: D, kind: 'trust-folder', target: realpathSync(link) },
+      ]);
+      expect(JSON.stringify(actions)).not.toContain('SECRET');
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it('consents.decide allow: trust-folder for a folder-trust card, provider-switch for an agent-switch card; deny and applied:false emit nothing', async () => {
+    host.event('consents.changed', {
+      upsert: [
+        { id: 'c-1', kind: 'folder-trust', projectPath: '/p', folder: '/private/p', at: 'a', state: 'pending', requestedBy: { source: 'launch' } },
+        { id: 'c-2', kind: 'agent-switch', projectPath: '/p', ref: ref('s-1'), provider: 'codex', providerLabel: 'Codex', model: null, reason: 'SECRET REASON', at: 'a', state: 'pending', requestedBy: { sessionId: 's-1', label: 'l' } },
+        { id: 'c-3', kind: 'folder-trust', projectPath: '/p', folder: '/private/q', at: 'a', state: 'pending', requestedBy: { source: 'launch' } },
+      ],
+      removed: [],
+    });
+    host.handler = async (method, params) => ({ applied: (params as { id: string }).id !== 'c-3', state: 'allowed' });
+    call(D, 'a', 'consents.decide', { id: 'c-1', decision: 'allow' });
+    call(D, 'b', 'consents.decide', { id: 'c-2', decision: 'allow' });
+    call(D, 'c', 'consents.decide', { id: 'c-1', decision: 'deny' });
+    call(D, 'd', 'consents.decide', { id: 'c-3', decision: 'allow' });
+    await flush();
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'trust-folder', target: '/private/p' },
+      { deviceId: D, kind: 'provider-switch', target: 'c-2' },
+    ]);
+    expect(host.calls.map((c) => c.method)).toEqual(['consents.decide', 'consents.decide', 'consents.decide', 'consents.decide']);
+  });
+
+  it('consents.decide allow on a card the bridge has not seen: one consents.list before the decision tells its kind', async () => {
+    host.handler = async (method) =>
+      method === 'consents.list'
+        ? { items: [{ id: 'c-5', kind: 'folder-trust', projectPath: '/p', folder: '/private/r', at: 'a', state: 'pending', requestedBy: { source: 'agent' } }] }
+        : { applied: true, state: 'allowed' };
+    call(D, 'a', 'consents.decide', { id: 'c-5', decision: 'allow' });
+    await flush();
+    expect(host.calls.map((c) => c.method)).toEqual(['consents.list', 'consents.decide']);
+    expect(actions).toEqual([{ deviceId: D, kind: 'trust-folder', target: '/private/r' }]);
+  });
+
+  it('feed.decide: allow-always and plan auto-accept are weighty; plain Allow, deny, manual plan and answers are not', async () => {
+    host.handler = async () => ({ applied: true, state: 'allowed' });
+    const decide = (id: string, decision: unknown) => call(D, id, 'feed.decide', { ref: ref('s-1'), cardId: 'k', decision });
+    decide('a', { kind: 'permission', behavior: 'allow', always: true });
+    decide('b', { kind: 'permission', behavior: 'allow' });
+    decide('c', { kind: 'permission', behavior: 'deny', message: 'SECRET' });
+    decide('d', { kind: 'plan', choice: 'auto-accept' });
+    decide('e', { kind: 'plan', choice: 'manual' });
+    decide('f', { kind: 'question', answers: { q: 'SECRET' } });
+    await flush();
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'allow-always', target: ref('s-1') },
+      { deviceId: D, kind: 'plan-auto-accept', target: ref('s-1') },
+    ]);
+    host.handler = async () => ({ applied: false, state: 'allowed' });
+    decide('g', { kind: 'permission', behavior: 'allow', always: true });
+    await flush();
+    expect(actions).toHaveLength(2);
+  });
+
+  it('messages, room letters, rooms.create, reads and failed calls emit nothing', async () => {
+    host.handler = async (method) => {
+      if (method === 'sessions.create') throw new HostCallError('bad_request', 'no');
+      return { ok: true };
+    };
+    call(D, 'a', 'pty.send', { ref: ref('s-1'), text: 'SECRET', submit: true, clientMsgId: 'msg-00000099' });
+    call(D, 'b', 'rooms.send', { roomId: 'r-1', kind: 'note', text: 'SECRET' });
+    call(D, 'c', 'rooms.create', { projectPath: '/p', workId: 'w-1', title: 'T', members: ['s-1'] });
+    call(D, 'd', 'rooms.resolveProposal', { id: 'p', rev: 1 });
+    call(D, 'e', 'host.info');
+    call(D, 'f', 'sessions.create', create({ trustFolder: true }));
+    await flush();
+    expect(host.calls).toHaveLength(6);
+    expect(actions).toEqual([]);
   });
 });

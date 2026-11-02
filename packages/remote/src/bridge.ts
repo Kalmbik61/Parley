@@ -184,6 +184,7 @@ async function assemble(options: BridgeProcessOptions, paths: RemotePaths, log: 
         relays: () => (access.relay === null ? [] : [access.relay]),
       },
       deviceName: (deviceId) => access.devices.get(deviceId)?.name ?? '',
+      onPhoneAction: (event) => control.emit('phone.action', event),
     }),
   );
   undo.push(() => hostLink.stop());
