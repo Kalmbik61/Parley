@@ -137,10 +137,11 @@ function validCard(value: unknown): value is ConsentCard {
         typeof value['reason'] === 'string' &&
         typeof value['requestedBy']['sessionId'] === 'string'
       : value['kind'] === 'project-mcp'
-        ? typeof value['repo'] === 'string' &&
+        ? value['version'] === 1 &&
+          typeof value['repo'] === 'string' &&
           Array.isArray(value['servers']) &&
           value['servers'].every(
-            (server) => isRecord(server) && typeof server['name'] === 'string' && typeof server['fingerprint'] === 'string' && typeof server['summary'] === 'string',
+            (server) => isRecord(server) && typeof server['name'] === 'string' && typeof server['fingerprint'] === 'string' && typeof server['command'] === 'string',
           )
         : value['kind'] === 'folder-trust' && typeof value['folder'] === 'string')
   );
@@ -380,6 +381,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       const card: ProjectMcpCard = {
         id: `c-${String(state.seq).padStart(2, '0')}`,
         kind: 'project-mcp',
+        version: 1,
         repo: input.repo,
         servers: input.servers.map((server) => ({ ...server })),
         projectPath: input.projectPath,

@@ -143,7 +143,7 @@ describe('launch(): серверы MCP проекта у Claude', () => {
     const [input, held] = consents.requestProjectMcp.mock.calls[0]!;
     expect(input).toMatchObject({ projectPath: project, repo: project, requestedBy: { source: 'agent', workId, label: 'Peer' } });
     expect(input.servers.map((entry) => entry.name).sort()).toEqual(['a', 'b']);
-    expect(input.servers.find((entry) => entry.name === 'a')).toMatchObject({ summary: 'node a.js', fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(input.servers.find((entry) => entry.name === 'a')).toMatchObject({ command: 'node a.js', fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) });
     expect(held).toEqual({ ref, mode: 'launch', by: 'auto' });
     const map = await readMap(project, workId);
     expect(map.sessions.find((session) => session.id === ref.sessionId)?.lifecycle).toBe('pending');

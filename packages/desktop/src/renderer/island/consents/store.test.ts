@@ -141,7 +141,7 @@ describe('стор карточек согласия острова', () => {
 
 describe('стор: карточка серверов MCP (спека 2026-11-02, 7)', () => {
   const mcp = (id: string): ConsentCard => ({
-    id, kind: 'project-mcp', repo: '/r', projectPath: '/r', servers: [{ name: 'a', fingerprint: 'fa', summary: 'node a.js' }],
+    id, kind: 'project-mcp', version: 1, repo: '/r', projectPath: '/r', servers: [{ name: 'a', fingerprint: 'fa', command: 'node a.js' }],
     requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03' }, at: '2026-11-02T10:00:00.000Z', state: 'pending',
   });
 

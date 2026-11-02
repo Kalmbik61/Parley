@@ -146,8 +146,8 @@ describe('карточка согласия острова', () => {
 
 describe('карточка серверов MCP на острове (спека 2026-11-02, 7)', () => {
   const MCP: ConsentCard = {
-    id: 'c-09', kind: 'project-mcp', repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',
-    servers: [{ name: 'a', fingerprint: 'fa', summary: 'node a.js' }, { name: 'b', fingerprint: 'fb', summary: 'https://b.example/mcp' }],
+    id: 'c-09', kind: 'project-mcp', version: 1, repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',
+    servers: [{ name: 'a', fingerprint: 'fa', command: 'node a.js' }, { name: 'b', fingerprint: 'fb', command: 'https://b.example/mcp' }],
     requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03 Ruslan' },
     at: '2026-11-02T10:00:00.000Z', state: 'pending',
   };
@@ -194,7 +194,7 @@ describe('карточка серверов MCP на острове (спека 
     arm();
     fireEvent.click(sw('a'));
     fireEvent.click(sw('b'));
-    rerender(<ConsentView {...props({ card: { ...MCP, servers: [{ name: 'a', fingerprint: 'fa-NEW', summary: 'node a2.js' }, MCP.servers[1]!] } as ConsentCard })} />);
+    rerender(<ConsentView {...props({ card: { ...MCP, servers: [{ name: 'a', fingerprint: 'fa-NEW', command: 'node a2.js' }, MCP.servers[1]!] } as ConsentCard })} />);
     expect(sw('a').getAttribute('aria-checked')).toBe('false');
     expect(sw('b').getAttribute('aria-checked')).toBe('true');
   });

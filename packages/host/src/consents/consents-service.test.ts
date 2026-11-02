@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -327,8 +327,8 @@ describe('ConsentsService: карточка agent-switch', () => {
 
 describe('ConsentsService: серверы MCP проекта (спека 2026-11-02, 7)', () => {
   const servers = [
-    { name: 'a', fingerprint: 'fa', summary: 'node a.js' },
-    { name: 'b', fingerprint: 'fb', summary: 'node b.js' },
+    { name: 'a', fingerprint: 'fa', command: 'node a.js' },
+    { name: 'b', fingerprint: 'fb', command: 'node b.js' },
   ];
   const mcpInput = { projectPath: '/p', repo: '/real/p', servers, requestedBy };
   const mcpBuild = () => {
@@ -339,7 +339,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
   it('requestProjectMcp: карточка project-mcp со списком, запуск удержан; повтор по тому же репозиторию — то же удержание', () => {
     const { service, continueLaunch } = mcpBuild();
     const first = service.requestProjectMcp(mcpInput, hold('s-02'));
-    expect(first).toMatchObject({ id: 'c-01', kind: 'project-mcp', repo: '/real/p', servers, state: 'pending', requestedBy });
+    expect(first).toMatchObject({ id: 'c-01', kind: 'project-mcp', version: 1, repo: '/real/p', servers, state: 'pending', requestedBy });
     expect(service.requestProjectMcp(mcpInput, hold('s-03')).id).toBe(first.id);
     expect(service.list()).toHaveLength(1);
     expect(continueLaunch).not.toHaveBeenCalled();
@@ -351,7 +351,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
   it('requestProjectMcp: новый сервер от второго запуска добавляется в карточку, изменённый отпечаток заменяет строку', () => {
     const { service } = mcpBuild();
     const first = service.requestProjectMcp(mcpInput, hold('s-02'));
-    const second = service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'c', fingerprint: 'fc', summary: 'c' }, { name: 'a', fingerprint: 'fa2', summary: 'node a2.js' }] }, hold('s-03'));
+    const second = service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'c', fingerprint: 'fc', command: 'c' }, { name: 'a', fingerprint: 'fa2', command: 'node a2.js' }] }, hold('s-03'));
     expect(second.id).toBe(first.id);
     expect((second as { servers: Array<{ name: string; fingerprint: string }> }).servers.map((server) => `${server.name}:${server.fingerprint}`).sort()).toEqual(['a:fa2', 'b:fb', 'c:fc']);
   });
@@ -404,7 +404,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
     const { service, continueLaunch, projectMcp } = mcpBuild();
     const card = service.requestProjectMcp(mcpInput, hold('s-02'));
     // Второй запуск принёс другой отпечаток для `a`: карточка теперь про него.
-    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', summary: 'node a2.js' }] }, hold('s-03'));
+    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', command: 'node a2.js' }] }, hold('s-03'));
     await expect(service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa' }])).rejects.toMatchObject({ code: 'bad_request' });
     expect(projectMcp.record).not.toHaveBeenCalled();
     expect(continueLaunch).not.toHaveBeenCalled();
@@ -415,7 +415,7 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
   it('подходящая пара включает сервер, всё остальное в карточке записывается выключенным', async () => {
     const { service, projectMcp } = mcpBuild();
     const card = service.requestProjectMcp(mcpInput, hold('s-02'));
-    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', summary: 'node a2.js' }] }, hold('s-03'));
+    service.requestProjectMcp({ ...mcpInput, servers: [{ name: 'a', fingerprint: 'fa-new', command: 'node a2.js' }] }, hold('s-03'));
     await service.decide(card.id, 'allow', 'window', [{ name: 'a', fingerprint: 'fa-new' }]);
     expect(projectMcp.record.mock.calls[0]![1]).toEqual([
       { name: 'b', fingerprint: 'fb', enabled: false },
@@ -428,6 +428,25 @@ describe('ConsentsService: серверы MCP проекта (спека 2026-11
     const card = service.requestProjectMcp(mcpInput, hold('s-02'));
     await expect(service.decide(card.id, 'allow', 'window', [{ name: 'b', fingerprint: 'fa' }])).rejects.toMatchObject({ code: 'bad_request' });
     expect(projectMcp.record).not.toHaveBeenCalled();
+  });
+
+  it('сохранённая карточка без version 1 при загрузке отбрасывается как недействительная, вместе с удержанием', async () => {
+    const first = mcpBuild();
+    const card = first.service.requestProjectMcp(mcpInput, hold('s-02'));
+    first.service.stop();
+    const file = path.join(home, 'consents.json');
+    const saved = JSON.parse(await readFile(file, 'utf8')) as { cards: Array<Record<string, unknown>> };
+    expect(saved.cards[0]!['version']).toBe(1);
+    for (const version of [undefined, 2, '1']) {
+      const copy = { ...saved, cards: [{ ...saved.cards[0], ...(version === undefined ? { version: undefined } : { version }) }] };
+      await writeFile(file, JSON.stringify(copy));
+      expect(mcpBuild().service.list()).toEqual([]);
+    }
+    // Старая форма: поле summary вместо command — тоже недействительна.
+    const old = { ...saved, cards: [{ ...saved.cards[0], servers: [{ name: 'a', fingerprint: 'fa', summary: 'node a.js' }] }] };
+    await writeFile(file, JSON.stringify(old));
+    expect(mcpBuild().service.list()).toEqual([]);
+    expect(card.id).toBe('c-01');
   });
 
   it('карточка и удержание переживают перезапуск хоста', async () => {

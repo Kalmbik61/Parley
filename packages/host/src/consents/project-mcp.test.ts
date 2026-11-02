@@ -51,13 +51,13 @@ function service() {
 }
 
 describe('mcpFingerprint', () => {
-  it('sha256 всей записи: summary — только команда с аргументами или адрес, значения env и headers нигде не видны', () => {
+  it('sha256 всей записи: command — только команда с аргументами или адрес, значения env и headers нигде не видны', () => {
     const a = mcpFingerprint(stdio('node', ['server.js'], { env: { TOKEN: 'one' } }))!;
     expect(a.fingerprint).toMatch(/^[0-9a-f]{64}$/);
-    expect(a.summary).toBe('node server.js');
+    expect(a.command).toBe('node server.js');
     expect(mcpFingerprint(stdio('node', ['other.js']))!.fingerprint).not.toBe(a.fingerprint);
     const http = mcpFingerprint({ type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer secret' } })!;
-    expect(http.summary).toBe('https://x.example/mcp');
+    expect(http.command).toBe('https://x.example/mcp');
     expect(JSON.stringify(http)).not.toContain('secret');
   });
 
@@ -67,7 +67,7 @@ describe('mcpFingerprint', () => {
     const otherEnv = mcpFingerprint(stdio('node', ['server.js'], { env: { NODE_OPTIONS: '--require ./other.js' } }))!;
     expect(withEnv.fingerprint).not.toBe(plain.fingerprint);
     expect(otherEnv.fingerprint).not.toBe(withEnv.fingerprint);
-    expect(withEnv.summary).toBe(plain.summary);
+    expect(withEnv.command).toBe(plain.command);
   });
 
   it('headers меняются — отпечаток другой', () => {
@@ -86,8 +86,8 @@ describe('mcpFingerprint', () => {
     expect(mcpFingerprint(stdio('node', ['a', 'b']))!.fingerprint).not.toBe(mcpFingerprint(stdio('node', ['b', 'a']))!.fingerprint);
   });
 
-  it('summary не длиннее 200 знаков', () => {
-    expect(mcpFingerprint(stdio('x'.repeat(500)))!.summary).toHaveLength(200);
+  it('command не длиннее 200 знаков', () => {
+    expect(mcpFingerprint(stdio('x'.repeat(500)))!.command).toHaveLength(200);
   });
 
   it('запись не той формы — null', () => {
@@ -105,7 +105,7 @@ describe('readProjectMcpServers', () => {
     await writeFile(path.join(userHome, 'a', '.mcp.json'), mcpJson({ mid: stdio('m'), shared: stdio('near') }));
     const servers = await readProjectMcpServers(dir, userHome, log);
     expect(servers.map((server) => server.name).sort()).toEqual(['home', 'mid', 'shared']);
-    expect(servers.find((server) => server.name === 'shared')?.summary).toBe('near');
+    expect(servers.find((server) => server.name === 'shared')?.command).toBe('near');
   });
 
   it('выше домашней папки не поднимается', async () => {

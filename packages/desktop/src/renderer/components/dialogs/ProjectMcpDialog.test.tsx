@@ -15,10 +15,11 @@ vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }))
 const card = (patch: Partial<ProjectMcpCard> = {}): ProjectMcpCard => ({
   id: 'c-07',
   kind: 'project-mcp',
+  version: 1,
   repo: '/Users/me/work/my_harnas',
   servers: [
-    { name: 'a', fingerprint: 'fa', summary: 'node a.js --flag' },
-    { name: 'b', fingerprint: 'fb', summary: 'https://b.example/mcp' },
+    { name: 'a', fingerprint: 'fa', command: 'node a.js --flag' },
+    { name: 'b', fingerprint: 'fb', command: 'https://b.example/mcp' },
   ],
   projectPath: '/Users/me/work/my_harnas',
   requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-01', label: 'Ruslan' },
@@ -117,7 +118,7 @@ describe('ProjectMcpDialog', () => {
     fireEvent.click(toggle('a'));
     fireEvent.click(toggle('b'));
     act(() => bridge.emit('consents.changed', {
-      upsert: [card({ servers: [{ name: 'a', fingerprint: 'fa-NEW', summary: 'node a2.js' }, { name: 'b', fingerprint: 'fb', summary: 'https://b.example/mcp' }] })],
+      upsert: [card({ servers: [{ name: 'a', fingerprint: 'fa-NEW', command: 'node a2.js' }, { name: 'b', fingerprint: 'fb', command: 'https://b.example/mcp' }] })],
       removed: [],
     }));
     await waitFor(() => expect(screen.getByText('node a2.js')).toBeTruthy());

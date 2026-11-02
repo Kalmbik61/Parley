@@ -52,10 +52,13 @@ export interface AgentSwitchCard extends ConsentCardBase {
 /** Сервер MCP из `.mcp.json` проекта, о котором у человека ещё нет решения. */
 export interface ProjectMcpServer {
   name: string;
-  /** sha256 канонического JSON `{type, command, args, url}`; без `env` и `headers`. Меняется — человека спрашивают снова. */
+  /**
+   * sha256 канонического JSON ВСЕЙ записи сервера (ключи отсортированы рекурсивно). `env` и `headers` входят в хеш, но
+   * нигде не показываются. Меняется — человека спрашивают снова, а решение привязано к паре `name` + `fingerprint`.
+   */
   fingerprint: string;
-  /** Команда с аргументами или адрес, не длиннее 200 знаков; секретов (`env`, заголовков) здесь нет. */
-  summary: string;
+  /** Что запустится: `command` и `args` через пробел, у сетевого сервера — URL; не длиннее 200 знаков. */
+  command: string;
 }
 
 /**
@@ -65,6 +68,8 @@ export interface ProjectMcpServer {
  */
 export interface ProjectMcpCard extends ConsentCardBase {
   kind: 'project-mcp';
+  /** Форма карточки (спека 2026-11-02, 7.2): новая форма — новый номер; клиент не рисует карточку без `version` или с неизвестной. */
+  version: 1;
   /** realpath корня основного репозитория: worktree одного проекта делят решение. */
   repo: string;
   servers: ProjectMcpServer[];

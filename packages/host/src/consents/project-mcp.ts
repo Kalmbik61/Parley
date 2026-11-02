@@ -20,7 +20,8 @@ import type { Log } from '../log.js';
 export interface McpServerInfo {
   name: string;
   fingerprint: string;
-  summary: string;
+  /** Команда с аргументами или адрес, ≤200 знаков (поле `command` карточки). */
+  command: string;
 }
 
 /** Итог разбора: что включить, что выключить и о чём спросить человека. */
@@ -70,11 +71,11 @@ function canonicalJson(value: unknown): string {
 /**
  * Отпечаток сервера: sha256 канонического JSON ВСЕЙ записи (ключи отсортированы рекурсивно): всё, что меняет запуск,
  * в том числе `env` (`NODE_OPTIONS`) и `headers`, меняет отпечаток, и включённый сервер снова требует решения. Это только
- * хеш: значения секретов нигде не хранятся и не показываются, а `summary` — по-прежнему только команда с аргументами
+ * хеш: значения секретов нигде не хранятся и не показываются, а `command` — по-прежнему только команда с аргументами
  * или адрес. `null` — запись не той формы (не объект, нет ни `command`, ни `url`, `type`/`command`/`args`/`url` не тех
  * типов): такой сервер Parley не включает и не спрашивает о нём, Claude спросит сам.
  */
-export function mcpFingerprint(entry: unknown): { fingerprint: string; summary: string } | null {
+export function mcpFingerprint(entry: unknown): { fingerprint: string; command: string } | null {
   if (!isRecord(entry)) return null;
   const { type, command, args, url } = entry;
   if (type !== undefined && typeof type !== 'string') return null;
@@ -83,8 +84,8 @@ export function mcpFingerprint(entry: unknown): { fingerprint: string; summary: 
   if (args !== undefined && !(Array.isArray(args) && args.every((arg) => typeof arg === 'string'))) return null;
   if (command === undefined && url === undefined) return null;
   const canonical = canonicalJson(entry);
-  const summary = (command !== undefined ? [command, ...((args as string[] | undefined) ?? [])].join(' ') : (url as string)).slice(0, SUMMARY_MAX);
-  return { fingerprint: createHash('sha256').update(canonical).digest('hex'), summary };
+  const shown = (command !== undefined ? [command, ...((args as string[] | undefined) ?? [])].join(' ') : (url as string)).slice(0, SUMMARY_MAX);
+  return { fingerprint: createHash('sha256').update(canonical).digest('hex'), command: shown };
 }
 
 /**

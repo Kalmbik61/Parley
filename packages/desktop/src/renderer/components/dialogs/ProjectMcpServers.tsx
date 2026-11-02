@@ -65,7 +65,7 @@ export function ProjectMcpServerList({
           />
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium" title={server.name}>{server.name}</div>
-            <div className="truncate font-mono text-[12px] text-muted-foreground" title={server.summary}>{server.summary}</div>
+            <div className="truncate font-mono text-[12px] text-muted-foreground" title={server.command}>{server.command}</div>
           </div>
         </li>
       ))}
