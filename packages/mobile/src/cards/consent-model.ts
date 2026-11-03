@@ -109,7 +109,7 @@ export async function runConsent(
 /** Whether a pending card belongs on this session's screen: a provider switch of this session, or a project-MCP request of the same
  *  work in the same project (a phone "New session" has no requester sessionId; ids repeat across projects, so the project is always checked). */
 export function cardBelongsToSession(card: ConsentCard, ref: { projectPath: string; workId: string; sessionId: string }): boolean {
-  if (card.kind === 'agent-switch') return card.ref.sessionId === ref.sessionId && card.ref.workId === ref.workId;
+  if (card.kind === 'agent-switch') return card.ref.projectPath === ref.projectPath && card.ref.sessionId === ref.sessionId && card.ref.workId === ref.workId;
   if (card.kind !== 'project-mcp') return false;
   return card.projectPath === ref.projectPath && card.requestedBy.workId === ref.workId;
 }
