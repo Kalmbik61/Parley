@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { selectWork } from '@parley/remote-client';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
-import { useRemoteState } from '../../hooks/use-remote';
+import { useNow, useRemoteState } from '../../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { NewButton } from '../../launch/NewButton';
@@ -22,6 +22,7 @@ export default function WorkScreen() {
   const { ref: param, preview } = useLocalSearchParams<{ ref: string; preview?: string }>();
   const ref = parseWorkParam(param);
   const state = useRemoteState();
+  const now = useNow(30_000);
   const { key: storeKey, expansion } = useExpansion(ref);
   // Developer build, screenshots: `preview=closed-open` / `archived-open` expands the links by itself.
   useEffect(() => {
@@ -38,6 +39,7 @@ export default function WorkScreen() {
     const env: TreeEnv = {
       state,
       view,
+      now,
       actions: {
         openSession: (id) => router.push(`/session/${sessionParam({ projectPath: ref.projectPath, workId: ref.workId, sessionId: id })}` as never),
         openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),

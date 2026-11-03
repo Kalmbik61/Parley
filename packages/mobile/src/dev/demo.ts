@@ -58,7 +58,7 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     // A43: a work with closed sessions (one owns an open room), a cancelled and a seen done swarm, an archived room with an
     // active and a sleeping member.
     {
-      projectPath: P, id: 'w3', title: 'Release audit', status: 'active', messages: { direct: null, inline: 0 },
+      projectPath: P, id: 'w4', title: 'Release audit', status: 'active', messages: { direct: null, inline: 0 },
       sessions: [
         sess('au-lead', 'Audit-lead', { role: 'feature-lead' }),
         sess('au-a', 'Audit-worker 1', { role: 'executor', createdBy: 'au-lead' }),
@@ -80,6 +80,18 @@ export const demoSnapshot: RemoteWorksSnapshot = {
           members: [{ sessionId: 'au-q1', role: 'queen', n: 0, handedAt: null }, { sessionId: 'au-q2', role: 'drone', n: 1, handedAt: null }] },
         { id: 'sw-d', tag: 'Done sweep', creator: { kind: 'session', sessionId: 'au-lead' }, queen: 'au-q1', status: 'done', createdAt: ago(200), endedAt: ago(150), seenAt: ago(100), members: [] },
       ],
+    },
+    {
+      // A46: one work with a team head in each state word — a sleeping lead with a working and a finished member, a not-started lead.
+      projectPath: P, id: 'w3', title: 'Status words', status: 'active', messages: { direct: null, inline: 0 },
+      sessions: [
+        sess('rl', 'Release-lead', { role: 'feature-lead', lifecycle: 'sleeping' as never, lastEvent: { event: 'Stop', at: ago(95) } }),
+        sess('rk1', 'Release-worker', { role: 'executor', model: 'sonnet', createdBy: 'rl' }),
+        sess('rk2', 'Release-checker', { role: 'verifier', model: 'sonnet', createdBy: 'rl' }),
+        sess('fresh', 'Docs-starter', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null }),
+        sess('fk', 'Docs-helper', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null, createdBy: 'fresh' }),
+      ],
+      rooms: [], swarms: [],
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
@@ -104,7 +116,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'bridge.status', host: 'online', epoch: 'demo' });
   store.dispatch({ t: 'snapshot', snapshot: demoSnapshot, epoch: 'demo' });
   const act = (ref: SessionRef, activity: string, need: unknown = null): void =>
-    store.dispatch({ t: 'activity.changed', ref, metrics: null, activity: { activity, subagents: 0, tasks: [], waitingFor: null, heldByBackground: false, turnEndedAt: null, turnBoundaryAt: null, lastEventAt: ago(1), source: 'hooks', hooksMissing: false, need } as never });
+    store.dispatch({ t: 'activity.changed', ref, metrics: null, activity: { activity, subagents: 0, tasks: [], waitingFor: null, heldByBackground: false, turnEndedAt: activity === 'unseen' ? ago(3) : null, turnBoundaryAt: null, lastEventAt: ago(1), source: 'hooks', hooksMissing: false, need } as never });
   const ref = (sessionId: string): SessionRef => ({ projectPath: P, workId: 'w1', sessionId });
   act(ref('d1'), 'blocked', { kind: 'approval', since: ago(2), detail: null, resetsAt: null, window: null, account: null });
   act(ref('a13'), 'blocked', { kind: 'question', since: ago(5), detail: null, resetsAt: null, window: null, account: null });
@@ -112,8 +124,10 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   // A35d: needs you with no card on screen — the "Answer at your Mac" strip under the bar.
   act(ref('solo'), 'blocked', { kind: 'approval', since: ago(3), detail: null, resetsAt: null, window: null, account: null });
   act(ref('drone1'), 'working');
-  // A43: the Release audit team opens by default (somebody works), so the screenshots show its rows.
-  act({ projectPath: P, workId: 'w3', sessionId: 'au-a' }, 'working');
+  act({ projectPath: P, workId: 'w3', sessionId: 'rk1' }, 'working');
+  act({ projectPath: P, workId: 'w3', sessionId: 'rk2' }, 'unseen');
+  // A43: the Release audit work (w4 below) opens its team by default: somebody works.
+  act({ projectPath: P, workId: 'w4', sessionId: 'au-a' }, 'working');
   const letter = (id: string, from: string, text: string, min: number, read: boolean) =>
     ({ id, roomId: null, from, to: ['human'], at: ago(min), text, kind: 'note', readBy: read ? { human: ago(min - 1) } : {} }) as never;
   store.dispatch({
@@ -177,6 +191,13 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
     ] as never[],
   });
+  // A46: a finished chat (the turn ended) for the sessions that read "Finished a turn", "Sleeping" and "Starting".
+  const finishedItems = feedItems.slice(0, 6);
+  for (const [wid, id] of [['w3', 'rk2'], ['w3', 'rl'], ['w3', 'fresh']] as const) {
+    const fr = { projectPath: P, workId: wid, sessionId: id };
+    store.dispatch({ t: 'feed.open', ref: fr });
+    store.dispatch({ t: 'feed.loaded', ref: fr, epoch: 'demo', items: finishedItems, revision: 8, mode: null, decisions: null });
+  }
   for (const id of ['greta', 'drone1', 'solo', 'zzz']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
@@ -246,7 +267,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|work-closed|work-closed-open|work-archived-open|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|work-closed|work-closed-open|work-archived-open|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -258,7 +279,7 @@ export function demoRoute(name: unknown): string | null {
     case 'work-closed':
     case 'work-closed-open':
     case 'work-archived-open':
-      return `/work/${workParam({ projectPath: P, workId: 'w3' })}?preview=${name.slice('work-'.length)}`;
+      return `/work/${workParam({ projectPath: P, workId: 'w4' })}?preview=${name.slice('work-'.length)}`;
     case 'session':
       return s('d1');
     case 'question':
@@ -277,6 +298,14 @@ export function demoRoute(name: unknown): string | null {
       return s('greta');
     case 'sleeping':
       return s('zzz');
+    case 'starting':
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'fresh' })}`;
+    case 'finished':
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'rk2' })}`;
+    case 'work-words':
+      return `/work/${workParam({ projectPath: P, workId: 'w3' })}`;
+    case 'sleeping-lead':
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'rl' })}`;
     // A37b screenshots: the state comes from the `preview` param (waking, failed, pending, alert), not from taps.
     case 'sleeping-waking':
     case 'sleeping-failed':
