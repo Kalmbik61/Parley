@@ -104,6 +104,7 @@ function boot(over: Partial<WorktreeSweeperDeps> = {}) {
       return removeImpl(info, options?.force === true);
     },
     size: async () => 4096,
+    isRepo: async () => true,
     now: () => new Date('2026-11-03T12:00:00.000Z'),
     ...over,
   });
@@ -159,6 +160,34 @@ describe('служба уборки копий', () => {
     expect(removed).toEqual([]);
     expect(sweeper.leftovers().map((item) => item.reason)).toEqual(['unsaved']);
     expect(infoOf(ref).removedAt ?? null).toBeNull();
+  });
+
+  it('удержание, пришедшее посреди прохода, спасает копию', async () => {
+    const ref = await seed('closed');
+    let calls = 0;
+    const sweeper = boot({
+      holds: {
+        held: () => {
+          calls += 1;
+          // Первый вызов — начало прохода, второй — перед самой уборкой под замком.
+          return calls >= 2 ? new Set([refKey(ref)]) : new Set<string>();
+        },
+        windowPresent: () => true,
+      },
+    });
+    await sweeper.pass();
+    expect(removed).toEqual([]);
+    expect(sweeper.leftovers().map((item) => item.reason)).toEqual(['unsaved']);
+  });
+
+  it('проект без git пропускается', async () => {
+    await seed('closed');
+    const sweeper = boot({ isRepo: async () => false });
+    await sweeper.pass();
+    await sweeper.pass();
+    expect(removed).toEqual([]);
+    expect(sweeper.leftovers()).toEqual([]);
+    expect(logs.filter((entry) => entry.level === 'warn')).toHaveLength(1);
   });
 
   it('sweepGuard дал null: без удаления, остаток in-use', async () => {

@@ -94,9 +94,10 @@ async function sessionWithWorktree(label = 'бэкенд'): Promise<{ ref: Sessi
 let stopped: SessionRef[] = [];
 
 /** Сервису для `discard` нужен только `stop` — реального PTY в этих тестах нет. */
-function stubSessions(): Pick<SessionsService, 'stop' | 'checkWorktreeGit'> {
+function stubSessions(): Pick<SessionsService, 'stop' | 'checkWorktreeGit' | 'afterSweep'> {
   return {
     checkWorktreeGit: async () => {},
+    afterSweep: async () => {},
     stop: async (ref) => {
       stopped.push(ref);
     },

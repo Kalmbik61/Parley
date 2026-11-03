@@ -146,7 +146,7 @@ async function requireNoWorktree(ref: SessionRef): Promise<void> {
 }
 
 export function createWorktreesService(
-  sessions: Pick<SessionsService, 'stop' | 'checkWorktreeGit'>,
+  sessions: Pick<SessionsService, 'stop' | 'checkWorktreeGit' | 'afterSweep'>,
 ): WorktreesService {
   return {
     available: (projectPath) => isGitRepo(projectPath),
@@ -188,6 +188,8 @@ export function createWorktreesService(
 
     async discard(ref, force) {
       const { worktree } = await requireWorktree(ref);
+      // Идущая уборка копии кончается раньше: сброс не должен убирать папку вместе с ней.
+      await sessions.afterSweep(ref);
       // Сначала процесс: работающий агент с открытой рабочей копией под ногами
       // пережил бы удаление своего же каталога (спека 8.3).
       await sessions.stop(ref);

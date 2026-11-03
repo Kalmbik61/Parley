@@ -292,6 +292,8 @@ export interface SessionsService {
    * `launch` этой сессии ждёт окончания `run` (ошибку он не видит).
    */
   sweepGuard<T>(ref: SessionRef, run: () => Promise<T>): Promise<T | null>;
+  /** Разрешается, когда уборка копии этой сессии не идёт: сброс и замена ждут её, как запуск. */
+  afterSweep(ref: SessionRef): Promise<void>;
   stopAll(): Promise<void>;
   /** Собирает прерванных посреди хода — на старте хоста, после сверки живости. */
   collectInterrupted(): Promise<void>;
@@ -779,6 +781,12 @@ export function createSessionsService(
     }
   }
 
+  /** Ждёт окончания идущей уборки копии этой сессии (ошибку уборки не видит). */
+  async function afterSweep(ref: SessionRef): Promise<void> {
+    const sweep = sweeping.get(refKey(ref));
+    if (sweep !== undefined) await sweep.catch(() => {});
+  }
+
   /** Исход запуска и, для `held`, причина удержания; запись причины живёт ровно один вызов — подъёмы и продолжения её не копят. */
   async function launchDetailed(
     ref: SessionRef,
@@ -786,8 +794,7 @@ export function createSessionsService(
     options: LaunchChoice = {},
   ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
-    const sweep = sweeping.get(key);
-    if (sweep !== undefined) await sweep.catch(() => {});
+    await afterSweep(ref);
     if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
@@ -1908,6 +1915,8 @@ export function createSessionsService(
   /** Шаги 1–9 спеки 5.3 под замком `exclusive` и ключом `launching` на весь срок (6.3). */
   async function runSwitch(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
     const key = refKey(ref);
+    // Идущая уборка копии держит замок сессии: замена, что запустила бы агента посреди неё, нашла бы копию без папки.
+    await afterSweep(ref);
     const carry = request.carry ?? 'handover';
     const map = await readMap(ref.projectPath, ref.workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1947,7 +1956,7 @@ export function createSessionsService(
     if (current.switching !== null && current.switching !== undefined) {
       throw busyError('The session is already continuing on another provider');
     }
-    if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
+    if (launching.has(key) || closing.has(key) || sweeping.has(key)) throw busyError('The session is starting; try again in a moment');
     // Причина — по снимку до остановки: выход процесса и `endBySwitch` снимают `stuck`.
     const reason = switchReason(current, registry);
 
@@ -2266,6 +2275,7 @@ export function createSessionsService(
   }
 
   async function del(ref: SessionRef, force = false): Promise<void> {
+    await afterSweep(ref);
     await stop(ref);
     // Worktree — рабочая копия на диске, а не только запись в карте: грязную
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
@@ -2343,6 +2353,7 @@ export function createSessionsService(
     switchAgent,
     clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
+    afterSweep,
     async sweepGuard(ref, run) {
       const key = refKey(ref);
       if (pty.get(ref) !== undefined || launching.has(key) || closing.has(key) || sweeping.has(key)) return null;

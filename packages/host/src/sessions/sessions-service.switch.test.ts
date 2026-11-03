@@ -267,6 +267,30 @@ describe('switchAgent: замена агента на месте (спека 5.3
     expect(map.rooms.find((room) => room.id === roomId)).toMatchObject({ members: [leadId, ref.sessionId], lead: leadId });
   });
 
+  it('замена агента ждёт идущую уборку', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    await r.sessions.stop(ref);
+    events.length = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const sweep = r.sessions.sweepGuard(ref, async () => {
+      await gate;
+      events.push('sweep-done');
+    });
+    const switched = r.sessions.switchAgent(ref, request('custom-claude-2'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events).toEqual([]);
+
+    release();
+    await Promise.all([sweep, switched]);
+    expect(events[0]).toBe('sweep-done');
+    expect(events).toContain('start:custom-claude-2');
+  });
+
   it('цель не готова — отказ до любых изменений: прежний агент жив, карта та же', async () => {
     const r = rig({}, (id) => id !== 'custom-claude-2');
     const { ref } = await liveClaude(r);

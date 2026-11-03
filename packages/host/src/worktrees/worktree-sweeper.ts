@@ -10,6 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import {
+  isGitRepo,
   readMap,
   removeWorktreeCopy,
   sessionWorktreeFinished,
@@ -37,6 +38,8 @@ export interface WorktreeSweeperDeps {
   /** Размер каталога в байтах; сбой — `null`. По умолчанию `du -sk`. */
   size?: (dir: string) => Promise<number | null>;
   now?: () => Date;
+  /** Проект — репозиторий git; по умолчанию `isGitRepo` core, тесты подменяют. */
+  isRepo?: (projectPath: string) => Promise<boolean>;
   /** Не чаще одного прохода за столько мс по `nudge()`; по умолчанию 10 с. */
   throttleMs?: number;
   /** Сколько мс помнить, что копию убрать не вышло (`dirty`/`refused`), прежде чем пробовать снова; по умолчанию 5 мин. */
@@ -69,6 +72,7 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
   const remove = deps.remove ?? removeWorktreeCopy;
   const measure = deps.size ?? duSize;
   const now = deps.now ?? ((): Date => new Date());
+  const isRepo = deps.isRepo ?? isGitRepo;
   const throttleMs = deps.throttleMs ?? 10_000;
   const recheckMs = deps.recheckMs ?? 300_000;
 
@@ -76,6 +80,10 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
   /** Размеры по пути копии: считаются один раз, в фоне. */
   const sizes = new Map<string, number | null>();
   const measuring = new Set<string>();
+  /** Очередь замеров: `du` по одному, а не по одному на каждый новый остаток разом. */
+  let sizeQueue: Promise<void> = Promise.resolve();
+  /** Проекты не под git, о которых хост уже написал в журнал (один раз за запуск). */
+  const notRepoLogged = new Set<string>();
   let loop: Promise<void> | null = null;
   let again = false;
   let unsubscribe: (() => void) | null = null;
@@ -87,18 +95,22 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
   const checkKey = (ref: SessionRef, dir: string): string => `${refKey(ref)}\0${dir}`;
   /** Результат замка, когда хозяин или запись изменились с решения прохода: копию не трогали. */
   const SKIPPED = Symbol('skipped');
+  /** Результат замка, когда перед самой уборкой пришло удержание окна: копия остаётся остатком `unsaved`. */
+  const HELD = Symbol('held');
 
   function sizeOf(dir: string): number | null {
     if (sizes.has(dir)) return sizes.get(dir) ?? null;
     if (!measuring.has(dir)) {
       measuring.add(dir);
-      void measure(dir)
-        .catch(() => null)
-        .then((bytes) => {
-          sizes.set(dir, bytes);
-          measuring.delete(dir);
-          for (const item of list) if (item.path === dir) item.sizeBytes = bytes;
-        });
+      sizeQueue = sizeQueue.then(() =>
+        measure(dir)
+          .catch(() => null)
+          .then((bytes) => {
+            sizes.set(dir, bytes);
+            measuring.delete(dir);
+            for (const item of list) if (item.path === dir) item.sizeBytes = bytes;
+          }),
+      );
     }
     return null;
   }
@@ -153,6 +165,7 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
     const next: WorktreeLeftover[] = [];
     const seen = new Set<string>();
     for (const entry of deps.works.snapshot().entries) {
+      let repo: boolean | null = null;
       for (const session of entry.map.sessions) {
         if (stopped) return;
         const info = session.worktree;
@@ -161,6 +174,14 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
         const key = checkKey(ref, info.path);
         try {
+          repo ??= await isRepo(entry.projectPath);
+          if (!repo) {
+            if (!notRepoLogged.has(entry.projectPath)) {
+              notRepoLogged.add(entry.projectPath);
+              host.log.warn('проект не под git: копии его сессий не убираются', { projectPath: entry.projectPath });
+            }
+            continue;
+          }
           if (held.has(refKey(ref))) {
             next.push(leftover(ref, session, info, 'unsaved'));
             continue;
@@ -173,11 +194,18 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
           }
           const result = await deps.sessions.sweepGuard(ref, async () => {
             if (!(await stillDue(ref, info.path))) return SKIPPED;
+            // Окно могло закрыться или принести несохранённую вкладку, пока проход ждал замок.
+            if (!deps.holds.windowPresent()) return SKIPPED;
+            if (deps.holds.held().has(refKey(ref))) return HELD;
             const outcome = await remove(entry.projectPath, info);
             if (outcome.removed) await markRemoved(ref, info.path);
             return outcome;
           });
           if (result === SKIPPED) continue;
+          if (result === HELD) {
+            next.push(leftover(ref, session, info, 'unsaved'));
+            continue;
+          }
           if (result === null) {
             next.push(leftover(ref, session, info, 'in-use'));
             continue;
