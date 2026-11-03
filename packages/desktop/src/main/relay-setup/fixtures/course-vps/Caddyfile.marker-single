@@ -1,0 +1,7 @@
+example.com {
+	respond "ok"
+}
+# BEGIN parley-relay
+relay.example.com {
+	reverse_proxy parley-relay:8787
+}

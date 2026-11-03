@@ -231,6 +231,9 @@ export function buildPlan(ctx: PlanContext): Plan {
   const empty = (blocked: string): Plan => ({ intent: ctx.intent, steps: [], notes: [], blocked, mode: null, address: null, proxy: null });
   if (!probe.os.supported) return empty(`Unsupported system: ${probe.os.pretty}. Follow the manual instructions instead.`);
   if (probe.arch === null) return empty('Unsupported processor architecture (amd64 and arm64 only)');
+  if (probe.activeCommand !== null) {
+    return empty(`A command of the previous run is still running on the server: ${probe.activeCommand.id}. Wait a minute and run the wizard again.`);
+  }
   if (ctx.intent === 'rollback') {
     if (probe.install === null || probe.previous === null) return empty('There is no previous version to roll back to');
     return { intent: 'rollback', steps: rollbackSteps(), notes: [], blocked: null, mode: null, address: null, proxy: null };

@@ -4,6 +4,7 @@ import { ControlCallError } from '../remote-control.js';
 import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
 import { isValidDomain, validateInput, type SetupInput } from './input.js';
 import type { KnownHosts, HostKeyInfo } from './known-hosts.js';
+import { probeActive, probeWeb } from './web.js';
 import { buildPlan, decidePorts, sslipName, type Plan } from './plan.js';
 import { probeBase, probeFull, type ProbeBase, type ProbeResult } from './probe.js';
 import { redactSecrets, type RunLog } from './log.js';
@@ -206,7 +207,10 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   }
 
   async function finishProbe(s: Session, base: ProbeBase): Promise<RelaySetupPhase> {
-    const probe = await probeFull(base, shellOf(s));
+    const shell = shellOf(s);
+    const probe = await probeFull(base, shell);
+    probe.web = await probeWeb(probe, shell);
+    probe.activeCommand = await probeActive(shell);
     s.probe = probe;
     return makePlan(s, false);
   }

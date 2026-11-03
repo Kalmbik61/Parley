@@ -17,6 +17,8 @@ function probe(over: Partial<ProbeResult> = {}, listeners: Listener[] = []): Pro
     compose: false,
     listeners,
     containers: [],
+    web: null,
+    activeCommand: null,
     ufwActive: false,
     install: null,
     previous: null,
@@ -35,6 +37,7 @@ function container(name: string, project: string, ports: number[]): ContainerInf
     mounts: [],
     published: ports.map((hostPort) => ({ hostPort, hostIp: '0.0.0.0' })),
     networks: [],
+    networkAliases: {},
     networkMode: 'default',
   };
 }
@@ -96,6 +99,17 @@ describe('course VPS (run 2 of 2026-11-03)', () => {
     expect(holderOf(p, 22)).toEqual({ kind: 'process', names: ['sshd'] });
     expect(decidePorts(p).mode).not.toBe('caddy');
     expect(decidePorts(course({ install: null, previous: null })).mode).not.toBe('caddy');
+  });
+});
+
+describe('a command of the previous run is still alive (spec 7.3)', () => {
+  it('blocks every intent with the command named', () => {
+    const alive = probe({ activeCommand: { pid: 4242, id: 'files' } });
+    for (const intent of ['install', 'rollback', 'remove'] as const) {
+      const plan = buildPlan({ intent, probe: alive, decision: decidePorts(alive), name: 'x.example.com', image: IMAGE });
+      expect(plan.blocked).toMatch(/still running on the server: files\. Wait a minute/);
+      expect(plan.steps).toEqual([]);
+    }
   });
 });
 
