@@ -192,6 +192,23 @@ const SCHEMA_NOTIFICATIONS = `
   CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(state, next_attempt_at);
 `;
 
+/**
+ * Учёт голосовых сессий GPT-Live (спека 2026-11-03, B2): строка на сессию. `seconds_estimate` растёт по usage-событиям,
+ * `seconds_final` и `cost_final` ставит `session.closed`; `state = 'closed'` — терминал. `cost_final` пока NULL:
+ * тариф за секунду не зашит в код. День — локальный (`YYYY-MM-DD`), по нему B4 считает дневной лимит.
+ */
+const SCHEMA_VOICE_USAGE = `
+  CREATE TABLE IF NOT EXISTS voice_usage (
+    voice_session_id TEXT PRIMARY KEY,
+    day TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('open','closed')),
+    seconds_estimate INTEGER NOT NULL DEFAULT 0,
+    seconds_final INTEGER,
+    cost_final REAL,
+    close_reason TEXT);
+  CREATE INDEX IF NOT EXISTS voice_usage_day ON voice_usage(day);
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -232,6 +249,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN delivered_inline INTEGER NOT NULL DEFAULT 0');
     },
   },
+  // 7: учёт голосовых сессий GPT-Live (спека 2026-11-03, B2).
+  { version: 7, up: (db) => db.exec(SCHEMA_VOICE_USAGE) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

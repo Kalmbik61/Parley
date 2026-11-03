@@ -69,16 +69,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 6', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 7', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(6);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(7);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(6);
+    expect(pragma('user_version')).toBe(7);
   });
 
   it('шаг 4 создаёт таблицы Assistant Core: idempotency_key уникален, состояния ограничены', () => {
@@ -91,6 +91,15 @@ describe('workDb', () => {
     insert.run('j1', 'k', 'queued');
     expect(() => insert.run('j2', 'k', 'queued')).toThrow(/UNIQUE/);
     expect(() => insert.run('j3', 'k2', 'bogus')).toThrow(/CHECK/);
+  });
+
+  it('шаг 7 создаёт voice_usage: одна строка на сессию, состояния ограничены', () => {
+    const db = workDb();
+    const insert = db.prepare(`INSERT INTO voice_usage (voice_session_id, day, state) VALUES (?, '2026-11-04', ?)`);
+    insert.run('live_1', 'open');
+    expect(() => insert.run('live_1', 'open')).toThrow(/UNIQUE/);
+    expect(() => insert.run('live_2', 'bogus')).toThrow(/CHECK/);
+    expect(db.prepare('SELECT seconds_estimate, seconds_final FROM voice_usage').get()).toEqual({ seconds_estimate: 0, seconds_final: null });
   });
 
   it('ставит synchronous=NORMAL, busy_timeout=5000 и включает внешние ключи', () => {
@@ -147,7 +156,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(6);
+    expect(pragma('user_version')).toBe(7);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -181,7 +190,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(6);
+    expect(pragma('user_version')).toBe(7);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -208,7 +217,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(6);
+    expect(pragma('user_version')).toBe(7);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -220,7 +229,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(6);
+    expect(pragma('user_version')).toBe(7);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);
@@ -411,6 +420,21 @@ describe('реестр миграций', () => {
       expect(tables(db)).toEqual(expect.arrayContaining(['notifications', 'notification_outbox']));
       const columns = db.prepare('PRAGMA table_info(assistant_jobs)').all().map((row) => String(row['name']));
       expect(columns).toContain('delivered_inline');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('база версии 6 поднимается до последней: появляется voice_usage', () => {
+    mkdirSync(home, { recursive: true });
+    const db = open(path.join(home, 'v6.db'));
+    try {
+      runMigrations(db, MIGRATIONS.slice(0, 6));
+      expect(version(db)).toBe(6);
+      expect(tables(db)).not.toContain('voice_usage');
+      runMigrations(db);
+      expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
+      expect(tables(db)).toContain('voice_usage');
     } finally {
       db.close();
     }
