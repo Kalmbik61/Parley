@@ -54,6 +54,8 @@ function pdfjsAssets(): Plugin {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    // Дайджест образа relay: release.yml кладёт его в env сборки; без него в бандле остаётся заглушка (image.ts).
+    define: { __PARLEY_RELAY_IMAGE_DIGEST__: JSON.stringify(process.env.PARLEY_RELAY_IMAGE_DIGEST ?? '') },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
