@@ -1,23 +1,25 @@
 // Session = the chat of a session (D1 §9, plan A32): a pinned two-line header, the feed with folded finished turns,
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { FeedItem } from '@parley/core';
+import type { FeedCard, FeedItem } from '@parley/core';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
-import { ActiveCard } from '../../cards/CardViews';
+import { ActiveCard, type CardParts } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
 import { capsuleOf, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
+import { devLateCard, devMoreSession } from '../../dev/demo';
+import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
@@ -81,8 +83,9 @@ export default function SessionScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { ref: param, fresh, preview, jump: devJump, draft: devDraft } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; jump?: string; draft?: string }>();
+  const { ref: param, fresh, preview, dev: devSpec } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; dev?: string }>();
   const ref = parseSessionParam(param);
+  const stableRef = useMemo(() => ref, [param]) as SessionRef;
   const client = useClient();
   const state = useRemoteState();
   const canAct = useCanAct();
@@ -92,6 +95,7 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
+  const [cardParts, setCardParts] = useState<CardParts | null>(null);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -185,15 +189,18 @@ export default function SessionScreen() {
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
-  const follow = useFollowEnd(list, rows.length);
-  // Developer preview (A44 screenshots): `?jump=1` shows the capsule, `?draft=long` a several-line draft.
+  const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
+  const follow = useFollowEnd(list, rowKeys);
+  // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
   useEffect(() => {
-    if (!DEMO || found === null) return;
-    const t = setTimeout(() => {
-      if (devDraft === 'long') chat.setDraft('First line of a long draft\nSecond line of the draft\nThird line of the draft\nFourth line of the draft');
-      if (devJump === '1') follow.devAway(3);
-    }, 3600);
-    return () => clearTimeout(t);
+    if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
+    return runDevScript(devSpec, {
+      focus: devFocus.fire,
+      draft: () => chat.setDraft(LONG_DRAFT),
+      up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      more: () => devMoreSession(client, ref),
+      card: () => devLateCard(client, ref),
+    });
   }, [found !== null]);
   // Developer preview of the message pieces (A42): set during render once the session is found.
   // The message actions, read through a ref so the feed rows keep a stable prop and `memo` works (critic A42 m8).
@@ -234,10 +241,11 @@ export default function SessionScreen() {
   }, [preview]);
 
 
-  const toggleGroup = useCallback((key: string) => setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key]))), []);
+  const toggleGroup = useCallback((key: string) => (follow.leave(), setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])))), [follow.leave]);
   // The status line of a turn opens or closes every work group of that turn.
   const toggleTurn = useCallback(
     (controlKey: string) => {
+      follow.leave();
       const at = folded.findIndex((r) => r.key === controlKey);
       const keys: string[] = [];
       for (let i = at - 1; i >= 0 && folded[i]!.kind !== 'control'; i--) {
@@ -247,7 +255,7 @@ export default function SessionScreen() {
       }
       setOpenGroups((s) => (keys.every((k) => s.has(k)) ? new Set([...s].filter((k) => !keys.includes(k))) : new Set([...s, ...keys])));
     },
-    [folded],
+    [folded, follow.leave],
   );
 
   const shell = (title: string, body: React.ReactNode) => (
@@ -439,7 +447,7 @@ export default function SessionScreen() {
           : { icon: 'desktopcomputer' as const, text: 'Answer at your Mac — in its terminal' }
       : null;
 
-  const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
+  const content = (parts: CardParts | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
       {strip !== null && (
         <BarStripStack onChange={follow.keepEnd}>
@@ -522,8 +530,8 @@ export default function SessionScreen() {
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
-        {first !== undefined && parts !== null ? (
-          parts.actions
+        {first !== undefined ? (
+          parts?.actions ?? null
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
@@ -602,16 +610,30 @@ export default function SessionScreen() {
           />
         )}
       </Modal>
-      {first !== undefined ? (
-        <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
-          {(parts) => content(parts)}
-        </ActiveCard>
-      ) : (
-        content(null)
-      )}
+      {content(cardParts)}
+      {/* The card's views live in a probe beside the list, so a card coming, changing or going never remounts the feed (A44, M5). */}
+      {first !== undefined && <CardProbe key={first.cardId} card={first} sessionRef={stableRef} projectPath={work.projectPath} canAct={canAct} onParts={setCardParts} />}
     </View>
   );
 }
+
+/** Hands the card's body and actions to the screen and takes them back when the card goes. */
+function PartsPublisher({ parts, onParts }: { parts: CardParts; onParts: (parts: CardParts | null) => void }) {
+  useEffect(() => {
+    onParts(parts);
+  });
+  useEffect(() => () => onParts(null), [onParts]);
+  return null;
+}
+
+/** Renders the card's own views (they hold their state) and publishes what they draw; memoized, so it re-renders only for its own state. */
+const CardProbe = memo(function CardProbe({ card, sessionRef, projectPath, canAct, onParts }: { card: FeedCard; sessionRef: SessionRef; projectPath: string; canAct: boolean; onParts: (parts: CardParts | null) => void }) {
+  return (
+    <ActiveCard card={card} sessionRef={sessionRef} projectPath={projectPath} canAct={canAct}>
+      {(parts) => <PartsPublisher parts={parts} onParts={onParts} />}
+    </ActiveCard>
+  );
+});
 
 /** A provider-switch or project-MCP request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
 function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {

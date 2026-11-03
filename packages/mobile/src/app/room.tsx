@@ -12,7 +12,9 @@ import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome }
 import { confirmByOwner } from '../auth/lock-instance';
 import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { useCovered } from '../auth/use-covered';
+import { devMoreRoom } from '../dev/demo';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
+import { devFocus, LONG_DRAFT, runDevScript } from '../dev/dev-script';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
@@ -45,7 +47,7 @@ export default function RoomScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string; jump?: string; draft?: string }>();
+  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string; dev?: string }>();
   const work = parseWorkParam(str(params.ref));
   const roomId = str(params.room);
   const target: RoomRef | null = work !== null && roomId !== undefined && roomId !== '' ? { ...work, roomId } : null;
@@ -54,6 +56,8 @@ export default function RoomScreen() {
   const canAct = useCanAct();
   const toast = useToast();
   const list = useRef<FlatList<RoomRow>>(null);
+  const roomInput = useRef<React.ComponentRef<typeof TextInput>>(null);
+  useEffect(() => devFocus.listen(() => roomInput.current?.focus()), []);
   const chat = useRoomChat(target, toast.show);
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
   const hostId = useRuntimeState().host?.hostId ?? null;
@@ -102,24 +106,19 @@ export default function RoomScreen() {
   const out = useMemo(() => visibleOutLetters(chat.out, messages), [chat.out, messages]);
   const data = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
   const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
-  // Earlier pages land at the top: they are not "new" for Jump to latest, so count them out.
-  const older = useRef({ first: null as string | null, added: 0 });
-  const firstKey = data.length === 0 ? null : rowKey(data[0]!);
-  if (older.current.first !== firstKey) {
-    const at = older.current.first === null ? -1 : data.findIndex((r) => rowKey(r) === older.current.first);
-    if (at > 0) older.current.added += at;
-    older.current.first = firstKey;
-  }
-  const total = data.length - older.current.added;
-  const follow = useFollowEnd(list, total);
-  // Developer preview (A44 screenshots): `?jump=1` shows the capsule, `?draft=long` a several-line draft.
+  // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
+  const keys = useMemo(() => data.map(rowKey), [data]);
+  const follow = useFollowEnd(list, keys);
+  // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
   useEffect(() => {
-    if (!DEMO || found === null) return;
-    const t = setTimeout(() => {
-      if (params.draft === 'long') chat.setDraft('First line of a long draft\nSecond line of the draft\nThird line of the draft\nFourth line of the draft');
-      if (params.jump === '1') follow.devAway(3);
-    }, 3600);
-    return () => clearTimeout(t);
+    if (!DEMO || found === null || params.dev === undefined || client === null || target === null) return;
+    return runDevScript(params.dev, {
+      focus: devFocus.fire,
+      draft: () => chat.setDraft(LONG_DRAFT),
+      up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      more: () => devMoreRoom(client, target),
+      card: () => undefined,
+    });
   }, [found !== null]);
   const lastHuman = useMemo(() => [...messages].reverse().find((m) => m.from === 'human')?.id ?? null, [messages]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
@@ -403,6 +402,7 @@ export default function RoomScreen() {
                 onLongPress={onLongPress}
                 onOpenQuote={(id) => {
                   const at = rows.findIndex((r) => r.message.id === id);
+                  if (at >= 0) follow.leave();
                   if (at >= 0) list.current?.scrollToIndex({ index: at, animated: true, viewPosition: 0.3 });
                 }}
               />
@@ -457,6 +457,7 @@ export default function RoomScreen() {
                   <SymbolView name="at" size={22} tintColor={c.tint} />
                 </Pressable>
                 <TextInput
+                  ref={roomInput}
                   autoFocus={DEV_FOCUS}
                   accessibilityLabel="Message the room"
                   multiline

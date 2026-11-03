@@ -151,7 +151,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
     ] as never[],
   });
-  // A44: a long mixed feed and a long room history (routes a44-session, a44-room).
+  // A44: a long mixed feed and a long room history (routes a44-session, a44-room; add `dev=focus,draft,up,more,card` to the path, see dev-script.ts).
   const longRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' };
   store.dispatch({ t: 'feed.open', ref: longRef });
   store.dispatch({ t: 'feed.loaded', ref: longRef, epoch: 'demo', items: longFeedItems(14), revision: 3, mode: null, decisions: null });
@@ -223,6 +223,17 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
 
+/** A44 evidence (developer build): items arrive, a card arrives — real state changes of an open feed. */
+export function devMoreSession(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch: 'demo', items: longFeedItems(14, 2), revision: 4, mode: null, decisions: null });
+}
+export function devMoreRoom(client: RemoteClient, ref: { projectPath: string; workId: string; roomId: string }): void {
+  client.store.dispatch({ t: 'room.loaded', ref, epoch: 'demo', next: null, messages: longRoomLetters(ref.roomId, 62) });
+}
+export function devLateCard(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'cards.loaded', ref, epoch: 'demo', items: [permission], at: Date.now() });
+}
+
 /** Screenshots only (developer build): a partly switched-on project-mcp card and the "list changed" line under another. */
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
@@ -286,20 +297,9 @@ export function demoRoute(name: unknown): string | null {
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' })}`;
     // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
     case 'a44-session':
-    case 'a44-session-jump':
-    case 'a44-session-jump-draft':
-    case 'a44-session-jump-plate': {
-      const base = `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}`;
-      const q = name === 'a44-session' ? '' : name === 'a44-session-jump' ? '?jump=1' : name === 'a44-session-jump-draft' ? '?jump=1&draft=long' : '?jump=1&preview=plate';
-      return base + q;
-    }
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}`;
     case 'a44-room':
-    case 'a44-room-jump':
-    case 'a44-room-jump-draft':
-    case 'a44-room-jump-plate': {
-      const base = `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong`;
-      return base + (name === 'a44-room' ? '' : name === 'a44-room-jump' ? '&jump=1' : name === 'a44-room-jump-draft' ? '&jump=1&draft=long' : '&jump=1&preview=plate');
-    }
+      return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong`;
     case 'chat':
       return s('drone1');
     case 'room':

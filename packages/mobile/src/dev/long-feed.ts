@@ -10,7 +10,7 @@ const LONG_TEXT = Array.from({ length: 6 }, (_, i) => `Paragraph ${i + 1}: the p
 export const LAST_TEXT = 'LAST MESSAGE: the long feed ends here.';
 
 /** Feed items for a session: `turns` mixed turns, then the marked last message. */
-export function longFeedItems(turns: number): never[] {
+export function longFeedItems(turns: number, extra = 0): never[] {
   const items: unknown[] = [];
   let n = 0;
   const id = (p: string): string => `${p}${++n}`;
@@ -26,6 +26,7 @@ export function longFeedItems(turns: number): never[] {
   }
   items.push({ kind: 'prompt', id: id('p'), at: ago(1), text: 'And one more thing: ', images: 0 });
   items.push({ kind: 'text', id: id('x'), at: ago(0), messageId: `mx${n}`, streaming: false, text: `${LONG_TEXT}\n\n${LAST_TEXT}` });
+  for (let i = 1; i <= extra; i++) items.push({ kind: 'text', id: `new${i}`, at: ago(0), messageId: `mnew${i}`, streaming: false, text: `NEW ${i}: an item that arrived while the feed was scrolled up.` });
   return items as never[];
 }
 
