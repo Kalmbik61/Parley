@@ -219,6 +219,7 @@ export default function SessionScreen() {
       focus: devFocus.fire,
       draft: () => chat.setDraft(LONG_DRAFT),
       up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreSession(client, ref),
       card: () => devLateCard(client, ref),
     });

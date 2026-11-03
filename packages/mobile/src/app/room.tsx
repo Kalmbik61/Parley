@@ -137,6 +137,7 @@ export default function RoomScreen() {
       focus: devFocus.fire,
       draft: () => chat.setDraft(LONG_DRAFT),
       up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreRoom(client, target),
       card: () => undefined,
     });
