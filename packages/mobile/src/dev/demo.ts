@@ -31,6 +31,9 @@ export const demoSnapshot: RemoteWorksSnapshot = {
       rooms: [
         { id: 'r1', title: 'iOS app: stage A', members: ['greta', 'd1', 'a13'], lead: 'greta', ownerId: 'greta', mode: 'verified', archived: false,
           proposal: { id: 'p-03', kind: 'decision', from: 'Greta', text: 'Ship A1 with the new projection', rev: 2, at: ago(12), planId: null, planRev: null }, messages: null },
+        // A35d: a long room with a decision — the list scrolls under the strip.
+        { id: 'r3', title: 'long room', members: ['s-01', 's-02'], lead: 's-01', ownerId: null, mode: 'free', archived: false,
+          proposal: { id: 'p-07', kind: 'decision', from: 'Аналитик', text: 'Publish the report', rev: 1, at: ago(12), planId: null, planRev: null }, messages: null },
         { id: 'r2', title: 'тест', members: ['s-01', 's-02'], lead: 's-02', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null },
       ],
       swarms: [
@@ -134,6 +137,12 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { id: 'm-22', roomId: 'r2', from: 's-02', to: [], at: ago(35), text: 'Принято. Проверяю таблицы **1–3**.', kind: 'note', readBy: {} } as never,
     ],
   });
+  const rref3 = { projectPath: P, workId: 'w1', roomId: 'r3' };
+  store.dispatch({ t: 'room.open', ref: rref3 });
+  store.dispatch({
+    t: 'room.loaded', ref: rref3, epoch: 'demo', next: 'before:1',
+    messages: Array.from({ length: 16 }, (_, i) => ({ id: `m-3${i}`, roomId: 'r3', from: i % 2 === 0 ? 's-01' : 's-02', to: [], at: ago(90 - i * 5), text: `Line ${i + 1}: checking the quarterly numbers, table ${(i % 3) + 1}.`, kind: 'note', readBy: {} }) as never),
+  });
   store.dispatch({
     t: 'consents.loaded', epoch: 'demo',
     items: [
@@ -194,6 +203,8 @@ export function demoRoute(name: unknown): string | null {
       return `/room?ref=${encodeURIComponent(w)}&room=r1`;
     case 'settings-diagnostics':
       return '/settings/diagnostics';
+    case 'room-long':
+      return `/room?ref=${encodeURIComponent(w)}&room=r3`;
     case 'room-ownerless':
       return `/room?ref=${encodeURIComponent(w)}&room=r2`;
     case 'inbox':
