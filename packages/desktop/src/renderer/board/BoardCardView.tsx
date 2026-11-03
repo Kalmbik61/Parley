@@ -1,23 +1,56 @@
 /** Карточка доски: заголовок, чип проекта, цель для «в работе» и «на проверке». */
+import { useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { Badge } from '../ui/badge.js';
+import { Button } from '../ui/button.js';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
+import { Textarea } from '../ui/textarea.js';
+import { useWorksStore } from '../store/works.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { relativeTimeAgo } from '../lib/relative-time.js';
+import { moveCard, returnCard } from './board-actions.js';
+import { resolveTaken } from './board-model.js';
 import type { BoardCard } from './board-model.js';
 import type { BoardBridge } from './board-store.js';
 import type { TargetInfo } from './target-info.js';
 
 export interface BoardCardViewProps { bridge: BoardBridge; card: BoardCard; target: TargetInfo | null; onOpen(card: BoardCard): void }
 
-export function BoardCardView({ card, target, onOpen }: BoardCardViewProps): JSX.Element {
+export function BoardCardView({ bridge, card, target, onOpen }: BoardCardViewProps): JSX.Element {
   const { item, project, state } = card;
   const now = new Date();
   const showTarget = state === 'in-progress' || state === 'review';
+  const entries = useWorksStore(s => s.entries);
+  const [returning, setReturning] = useState(false);
+  const [note, setNote] = useState('');
+  const taken = resolveTaken(item.taken, project, entries);
+  // Цель пропала посреди Return…: поле уходит вместе с ней, Accept и Return… возвращаются на карточку.
+  if (returning && taken === null) { setReturning(false); setNote(''); }
+  const gone = target === null || target.gone;
+  const targetLost = showTarget && (target !== null || item.taken !== undefined) && gone;
+  const returnDisabled = taken === null || gone;
+  const toBacklog = (): void => { void moveCard(bridge, card, 'backlog'); };
   return (
     <li className="flex min-w-0 flex-col gap-1.5 rounded-lg bg-card p-2.5 text-sm" data-board-card={item.id ?? undefined}>
-      <button type="button" className="line-clamp-2 min-w-0 text-left font-medium [overflow-wrap:anywhere]" onClick={() => onOpen(card)}>
-        {item.title}
-      </button>
+      <div className="flex min-w-0 items-start gap-1">
+        <button type="button" className="line-clamp-2 min-w-0 flex-1 text-left font-medium [overflow-wrap:anywhere]" onClick={() => onOpen(card)}>
+          {item.title}
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label={S.board.cardMenu} title={S.board.cardMenu}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10">
+              <MoreHorizontal className="size-3.5" aria-hidden="true" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {state === 'backlog' && <DropdownMenuItem data-card-action="done" onSelect={() => { void moveCard(bridge, card, 'done'); }}>{S.board.markDone}</DropdownMenuItem>}
+            {state === 'in-progress' && <DropdownMenuItem data-card-action="review" onSelect={() => { void moveCard(bridge, card, 'review'); }}>{S.board.moveToReview}</DropdownMenuItem>}
+            {state !== 'backlog' && <DropdownMenuItem data-card-action="backlog" onSelect={toBacklog}>{S.board.backToBacklog}</DropdownMenuItem>}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1">
         <Badge className="max-w-full truncate">{project.title}</Badge>
         {item.by !== undefined && <span className="text-[11px] text-muted-foreground">{S.board.agent}</span>}
@@ -36,6 +69,26 @@ export function BoardCardView({ card, target, onOpen }: BoardCardViewProps): JSX
               {target.word !== '' && <span className="shrink-0">{target.word}</span>}
             </>
           )}
+        </div>
+      )}
+      {state === 'in-progress' && targetLost && (
+        <div><Button type="button" size="sm" variant="outline" data-card-action="back-visible" onClick={toBacklog}>{S.board.backToBacklog}</Button></div>
+      )}
+      {state === 'review' && !returning && (
+        <div className="flex flex-wrap gap-1.5">
+          <Button type="button" size="sm" data-card-action="accept" onClick={() => { void moveCard(bridge, card, 'done'); }}>{S.board.accept}</Button>
+          <Button type="button" size="sm" variant="outline" data-card-action="return" disabled={returnDisabled}
+            {...(returnDisabled ? { title: S.board.targetGone } : null)} onClick={() => setReturning(true)}>{S.board.return}</Button>
+        </div>
+      )}
+      {state === 'review' && returning && taken !== null && (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Textarea value={note} rows={3} placeholder={S.board.returnNote} aria-label={S.board.returnNote} onChange={event => setNote(event.target.value)} />
+          <div className="flex gap-1.5">
+            <Button type="button" size="sm" data-card-action="return-send" disabled={note.trim() === ''}
+              onClick={() => { void returnCard(bridge, card, taken, note); }}>{S.board.returnSend}</Button>
+            <Button type="button" size="sm" variant="outline" data-card-action="return-cancel" onClick={() => { setReturning(false); setNote(''); }}>{S.board.cancel}</Button>
+          </div>
         </div>
       )}
       {state === 'review' && item.review !== undefined && <div className="text-xs text-muted-foreground">{S.board.reported(relativeTimeAgo(item.review, now))}</div>}
