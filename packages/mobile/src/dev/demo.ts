@@ -196,8 +196,12 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     store.dispatch({ t: 'feed.open', ref: r });
     store.dispatch({ t: 'feed.loaded', ref: r, epoch: 'demo', items, revision: 3, mode: null, decisions: null });
   }
-  store.dispatch({ t: 'room.loaded', ref: { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rbig' }, epoch: 'demo', next: null, messages: longRoomLetters('rbig', 300) });
-  store.dispatch({ t: 'room.loaded', ref: { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rshort' }, epoch: 'demo', next: null, messages: shortRoomLetters('rshort', 320) });
+  const bigRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rbig' };
+  const shortRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rshort' };
+  store.dispatch({ t: 'room.open', ref: bigRoom });
+  store.dispatch({ t: 'room.loaded', ref: bigRoom, epoch: 'demo', next: null, messages: longRoomLetters('rbig', 300) });
+  store.dispatch({ t: 'room.open', ref: shortRoom });
+  store.dispatch({ t: 'room.loaded', ref: shortRoom, epoch: 'demo', next: null, messages: shortRoomLetters('rshort', 320) });
   // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
   const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
   store.dispatch({ t: 'feed.open', ref: tinyRef });
