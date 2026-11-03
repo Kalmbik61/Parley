@@ -139,7 +139,7 @@ describe('follow the end: a finger on the feed (M2)', () => {
   });
 
   it('on release, one scroll to the end if the human is still at the bottom', () => {
-    let s = fe.contentChanged(fe.dragBegan(settled()), 3100, more(1)).state;
+    const s = fe.contentChanged(fe.dragBegan(settled()), 3100, more(1)).state;
     const step = fe.dragEnded(s, atEnd(1100), 3200, more(1), false);
     expect(step.scroll).toBe('instant');
     expect(step.state.pendingGrowth).toBe(false);
@@ -161,7 +161,7 @@ describe('follow the end: a finger on the feed (M2)', () => {
   });
 
   it('with momentum the human\'s scroll goes on until the momentum ends; then one scroll if still at the bottom', () => {
-    let s = fe.contentChanged(fe.dragBegan(settled()), 3100, more(1)).state;
+    const s = fe.contentChanged(fe.dragBegan(settled()), 3100, more(1)).state;
     const released = fe.dragEnded(s, atEnd(1100), 3200, more(1), true);
     expect(released.scroll).toBe('none');
     expect(released.state.momentum).toBe(true);

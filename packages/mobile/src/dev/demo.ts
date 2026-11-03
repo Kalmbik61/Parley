@@ -239,7 +239,10 @@ export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesys
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
 /** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
-export function demoRoute(name: unknown): string | null {
+export function demoRoute(raw: unknown): string | null {
+  // `a44-session:focus,draft` — the part after the colon is the dev script of dev-script.ts.
+  const [name, script] = typeof raw === 'string' ? raw.split(':') : [raw, undefined];
+  const dev = script === undefined ? '' : `dev=${script}`;
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
   switch (name) {
@@ -297,9 +300,9 @@ export function demoRoute(name: unknown): string | null {
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' })}`;
     // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
     case 'a44-session':
-      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}`;
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}?${dev}`;
     case 'a44-room':
-      return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong`;
+      return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong&${dev}`;
     case 'chat':
       return s('drone1');
     case 'room':
