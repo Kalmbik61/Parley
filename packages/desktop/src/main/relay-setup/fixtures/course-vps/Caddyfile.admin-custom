@@ -1,0 +1,8 @@
+# global options
+{
+	admin 127.0.0.1:2020
+}
+example.com {
+	respond "ok" # a } in a comment {
+}
+import /etc/caddy/sites/*.caddy

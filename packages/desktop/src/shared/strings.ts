@@ -1468,7 +1468,7 @@ export const S = {
       relayLabel: 'Relay',
       relayPlaceholder: 'relay.example.com',
       relayInvalid: 'Enter a host, optionally with a port: relay.example.com or 192.168.1.10:8787. An https:// address works too.',
-      relayInsecure: 'http:// has no encryption. Use an https:// address or a plain host.',
+      relayInsecure: 'The relay needs HTTPS: use https://… or just the host name.',
       relayCheck: 'Check',
       relayDevNote: 'Local dev relay, no TLS',
       relaySave: 'Save',

@@ -4,7 +4,8 @@ import { ControlCallError } from '../remote-control.js';
 import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
 import { isValidDomain, validateInput, type SetupInput } from './input.js';
 import type { KnownHosts, HostKeyInfo } from './known-hosts.js';
-import { buildPlan, decidePorts, sslipName, type Plan } from './plan.js';
+import { probeActive, probeInstalledEdit, probeProxyOnServer, probeWeb } from './web.js';
+import { addressFromEnv, buildPlan, decideLayout, sslipName, type Plan } from './plan.js';
 import { probeBase, probeFull, type ProbeBase, type ProbeResult } from './probe.js';
 import { redactSecrets, type RunLog } from './log.js';
 import type { ConnectFn, SshConnection, SudoMode } from './ssh.js';
@@ -104,18 +105,8 @@ function view(plan: Plan): RelayPlanView {
     blocked: plan.blocked,
     address: plan.address,
     proxy: plan.proxy,
+    web: plan.web,
   };
-}
-
-/** Address a restored (rolled-back) install answers on; the `.env` came from the server, so it is checked again. */
-function addressFromEnv(env: Record<string, string>): { address: string; proxyPort: number | null } | null {
-  const domain = env.RELAY_DOMAIN ?? '';
-  const httpsPort = Number(env.RELAY_HTTPS_PORT ?? '443');
-  const proxyPort = Number(env.RELAY_PROXY_PORT ?? '8787');
-  if (!isValidDomain(domain) || !Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) return null;
-  if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) return null;
-  if (env.RELAY_MODE === 'proxy') return { address: domain, proxyPort };
-  return { address: httpsPort === 443 ? domain : `${domain}:${httpsPort}`, proxyPort: null };
 }
 
 export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
@@ -252,8 +243,35 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     return finishProbe(s, base);
   }
 
+  async function answers(address: string): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), 5000);
+      });
+      return (await Promise.race([deps.health(`https://${address}/v1/health`), timeout])).status === 200;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function finishProbe(s: Session, base: ProbeBase): Promise<RelaySetupPhase> {
-    const probe = await probeFull(base, shellOf(s));
+    const shell = shellOf(s);
+    const probe = await probeFull(base, shell);
+    probe.web = await probeWeb(probe, shell);
+    probe.installEdit = await probeInstalledEdit(probe.install, shell);
+    // A working `proxy` install keeps its layout (spec 6.2): one attempt from this machine, five seconds.
+    const env = probe.install;
+    if (s.input.intent === 'install' && env?.RELAY_MODE === 'proxy' && isValidDomain(env.RELAY_DOMAIN ?? '')) {
+      // Either answer keeps the layout: this machine's network (VPN, portal, DNS cache) can give a false refusal.
+      const [mac, onServer] = await Promise.all([answers(env.RELAY_DOMAIN ?? ''), probeProxyOnServer(env.RELAY_DOMAIN ?? '', shell)]);
+      probe.proxyHealthy = mac || onServer;
+    }
+    const previous = await probeActive(shell);
+    probe.activeCommand = previous.active;
+    probe.previousTail = previous.tail === null ? null : { id: previous.tail.id, text: mask(previous.tail.text) };
     s.probe = probe;
     return makePlan(s, false);
   }
@@ -261,7 +279,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   async function makePlan(s: Session, removeData: boolean): Promise<RelaySetupPhase> {
     const probe = s.probe;
     if (probe === null) return failed(null, 'No probe result');
-    const decision = decidePorts(probe);
+    const decision = decideLayout(probe);
     let blocked: string | null = null;
 
     if (s.input.intent === 'install') {
@@ -282,7 +300,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     }
 
     const built = buildPlan({ intent: s.input.intent, probe, decision, name: s.name ?? 'unknown.invalid', image: deps.image.ref, removeData });
-    const plan: Plan = blocked !== null ? { ...built, steps: [], blocked, address: null, proxy: null } : built;
+    const plan: Plan = blocked !== null ? { ...built, steps: [], blocked, address: null, proxy: null, web: null } : built;
     s.plan = plan;
     s.waiting = 'plan';
     touch();
@@ -342,7 +360,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     if (s.plan === null || s.probe === null) return failed(null, 'No plan');
     if (s.plan.blocked !== null) throw bad('This plan cannot be run');
     if (s.input.intent === 'remove') {
-      const rebuilt = buildPlan({ intent: 'remove', probe: s.probe, decision: decidePorts(s.probe), name: '', image: deps.image.ref, removeData });
+      const rebuilt = buildPlan({ intent: 'remove', probe: s.probe, decision: decideLayout(s.probe), name: '', image: deps.image.ref, removeData });
       s.plan = rebuilt;
     }
     const plan = s.plan;

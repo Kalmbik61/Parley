@@ -53,7 +53,16 @@ async function start(server: Server, intent: 'install' | 'rollback' | 'remove', 
   if (phase.phase === 'hostkey') phase = await wizard.call('trust', {});
   expect(phase.phase).toBe('plan');
   if (removeData) phase = await wizard.call('plan', { removeData: true });
-  return { phase: await wizard.call('run', { removeData }), events, configured };
+  // `run` answers `{ phase: 'running' }` at once; the outcome is the `phase` event (spec 8.1).
+  const first = await wizard.call('run', { removeData });
+  if (first.phase !== 'running') return { phase: first, events, configured };
+  const deadline = Date.now() + 900_000;
+  for (;;) {
+    const ended = events.find((e) => e.event === 'phase' && e.phase.phase !== 'running');
+    if (ended?.event === 'phase') return { phase: ended.phase, events, configured };
+    if (Date.now() > deadline) throw new Error('the run did not finish');
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 
 const done = (events: RelaySetupEvent[]) => events.filter((e) => e.event === 'step' && e.status === 'done').map((e) => (e as { id: string }).id);

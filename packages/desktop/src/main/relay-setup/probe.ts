@@ -1,4 +1,5 @@
 import type { RemoteShell } from './shell.js';
+import type { ActiveCommand, WebSurvey } from './web.js';
 
 /**
  * The read-only look at the server (spec 6.7 step 3). Every command here is a fixed string and changes nothing.
@@ -16,8 +17,8 @@ export const PROBE = {
   ufw: 'ufw status',
   docker: 'docker --version',
   compose: 'docker compose version',
-  // One JSON line per running container; no containers or no Docker → empty output (`xargs -r` runs nothing).
-  containers: `docker ps -q | xargs -r docker inspect --format '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"path":{{json .Path}},"args":{{json .Args}},"workdir":{{json .Config.WorkingDir}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}},"networkMode":{{json .HostConfig.NetworkMode}}}'`,
+  // One JSON line per container, stopped ones included (a stopped web server with a restart policy comes back and wants 80); no containers or no Docker → empty output (`xargs -r` runs nothing).
+  containers: `docker ps -aq | xargs -r docker inspect --format '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"path":{{json .Path}},"args":{{json .Args}},"workdir":{{json .Config.WorkingDir}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}},"networkMode":{{json .HostConfig.NetworkMode}},"running":{{json .State.Running}},"restart":{{json .HostConfig.RestartPolicy.Name}},"bindings":{{json .HostConfig.PortBindings}}}'`,
   env: `cat ${INSTALL_DIR}/.env`,
   previousEnv: `cat ${INSTALL_DIR}/previous/.env`,
 } as const;
@@ -59,7 +60,15 @@ export interface ContainerInfo {
   /** Published TCP ports (`HostPort` on the host side), one entry per host address. */
   published: Array<{ hostPort: number; hostIp: string }>;
   networks: string[];
+  /** Per network: its aliases and DNS names (the container's own short id included by Docker). */
+  networkAliases: Record<string, string[]>;
   networkMode: string;
+  /** `State.Running`; containers are listed with the stopped ones. */
+  running: boolean;
+  /** `HostConfig.RestartPolicy.Name`: `no`, `always`, `unless-stopped`, `on-failure`; empty when unknown. */
+  restartPolicy: string;
+  /** Host TCP ports the container is configured to publish (`HostConfig.PortBindings`), running or not. */
+  boundPorts: number[];
 }
 
 export interface ProbeResult {
@@ -70,9 +79,19 @@ export interface ProbeResult {
   docker: boolean;
   compose: boolean;
   listeners: Listener[];
-  /** Running containers; empty without Docker or when the command failed. */
+  /** All containers, stopped ones included; empty without Docker or when nothing was printed. */
   containers: ContainerInfo[];
   ufwActive: boolean;
+  /** The web server on 80/443 and what can be added to it (stage 3, `probeWeb`); `null` — not surveyed or nothing there. */
+  web: WebSurvey | null;
+  /** A command of the previous run still alive on the server (spec 7.3). */
+  activeCommand: ActiveCommand | null;
+  /** The end of the log of the previous run's last command, when that command is dead (shown in the plan notes). */
+  previousTail: { id: string; text: string } | null;
+  /** The file the earlier install says it changed (`RELAY_WEB_FILE`), when it still exists and is ours (spec 6.2). */
+  installEdit: { file: string; kind: 'file' | 'block'; sha256: string } | null;
+  /** An earlier `proxy` install answers `https://<address>/v1/health` right now; `null` — not asked. */
+  proxyHealthy: boolean | null;
   /** `.env` of the earlier install (the wizard writes it), `null` — none. */
   install: Record<string, string> | null;
   previous: Record<string, string> | null;
@@ -139,6 +158,28 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
+function aliasesOf(networks: unknown): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  if (!isRecord(networks)) return result;
+  for (const [name, net] of Object.entries(networks)) {
+    result[name] = isRecord(net) ? [...strings(net.Aliases), ...strings(net.DNSNames)] : [];
+  }
+  return result;
+}
+
+function boundPortsOf(bindings: unknown): number[] {
+  const ports: number[] = [];
+  if (!isRecord(bindings)) return ports;
+  for (const [key, list] of Object.entries(bindings)) {
+    if (!key.endsWith('/tcp') || !Array.isArray(list)) continue;
+    for (const b of list) {
+      const port = isRecord(b) ? Number(b.HostPort) : NaN;
+      if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.push(port);
+    }
+  }
+  return ports;
+}
+
 function parseContainer(value: unknown): ContainerInfo | null {
   if (!isRecord(value) || str(value.id) === '') return null;
   const labels: Record<string, string> = {};
@@ -170,7 +211,11 @@ function parseContainer(value: unknown): ContainerInfo | null {
     mounts,
     published,
     networks: isRecord(value.networks) ? Object.keys(value.networks) : [],
+    networkAliases: aliasesOf(value.networks),
     networkMode: str(value.networkMode),
+    running: value.running !== false,
+    restartPolicy: str(value.restart),
+    boundPorts: boundPortsOf(value.bindings),
   };
 }
 
@@ -227,7 +272,13 @@ export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<Pr
     docker: docker.code === 0,
     compose: compose.code === 0,
     listeners: listen.code === 0 ? parseListeners(listen.stdout) : [],
-    containers: containers.code === 0 ? parseContainers(containers.stdout) : [],
+    // Whatever the exit code: a container that vanished between `ps` and `inspect` makes inspect exit 1 but it still prints the rest.
+    containers: parseContainers(containers.stdout),
+    web: null,
+    activeCommand: null,
+    previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: ufw.code === 0 && parseUfwActive(ufw.stdout),
     install: env.code === 0 ? parseEnv(env.stdout) : null,
     previous: previous.code === 0 ? parseEnv(previous.stdout) : null,

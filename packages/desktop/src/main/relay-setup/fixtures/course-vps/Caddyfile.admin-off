@@ -1,0 +1,8 @@
+{
+	admin off
+	email ops@example.com
+}
+example.com {
+	respond "ok"
+}
+import /etc/caddy/sites/*.caddy

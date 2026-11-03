@@ -1,0 +1,4 @@
+# Parley relay (/opt/parley-relay). The relay container joins course-platform-prod_default as "parley-relay".
+82-146-37-224.sslip.io {
+	reverse_proxy parley-relay:8787
+}

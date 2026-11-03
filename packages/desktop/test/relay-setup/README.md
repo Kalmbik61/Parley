@@ -23,6 +23,21 @@ docker pull caddy:2.11.7
 RELAY_SETUP_STAND=1 RELAY_SETUP_FULL=1 pnpm --filter @parley/desktop exec vitest run test/relay-setup
 ```
 
+The person's own web server (S1–S3 of the spec, servers with Docker already installed; the same two commands and images):
+
+```
+RELAY_SETUP_STAND=1 RELAY_SETUP_FULL=1 pnpm --filter @parley/desktop exec vitest run test/relay-setup/stand-web.test.ts
+```
+
+| Case | What it does |
+|---|---|
+| S1 | A Caddy of the person on 80/443 (project `course-platform-prod`, mounts `:ro`, import directory), a `relay` service of their own in its network, an old `.env` of a `proxy` install → `caddy-site`; Caddyfile sha256 unchanged, Caddy admin config holds both sites, `http://parley-relay:8787/v1/health` from the Caddy container, `relay` still the person's, repeat does nothing, `compose down`/`up` of their project (exit code printed), removal takes only our file |
+| S2 | The manual layout of the course VPS (`docker/course-vps/`, bytes of the layout file, image ref `parley-relay:stand`): repeat, second repeat (nothing), rollback blocked, removal with data |
+| S2b | The same layout: removal at once, without a repeat |
+| S3 | nginx on the host (`systemctl` is a stand shim, `docker/systemctl-shim.sh`) → `nginx-acme`: `nginx -t`, the default site still answers, our name reaches our Caddy; removal restores `/etc/nginx` byte for byte |
+
+S1 and S2 servers run with `--dns 127.0.0.1`: nothing inside them can reach an ACME server (the course names are real). S3 needs internet (Docker Hub for the pinned Caddy).
+
 The tests remove their containers (`parley-stand-*`) when they finish.
 
 ## What runs where

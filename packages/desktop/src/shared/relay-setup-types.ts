@@ -26,6 +26,21 @@ export interface RelayPlanStepView {
   commands: string[];
 }
 
+/** What the wizard changes on the person's web server (spec 8.3); `null` when it changes none. */
+export interface RelayPlanWeb {
+  summary: string;
+  network: string | null;
+  edits: Array<{
+    server: string;
+    file: string;
+    action: 'add' | 'replace' | 'append' | 'remove' | 'remove-block';
+    content: string | null;
+    backup: string;
+    check: string;
+    reload: string;
+  }>;
+}
+
 export interface RelayPlanView {
   intent: SetupIntent;
   steps: RelayPlanStepView[];
@@ -34,6 +49,7 @@ export interface RelayPlanView {
   blocked: string | null;
   address: string | null;
   proxy: { snippet: string; certificateHint: string } | null;
+  web: RelayPlanWeb | null;
 }
 
 export type RelaySetupPhase =
