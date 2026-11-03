@@ -220,7 +220,7 @@ Parley на Маке из любой сети. Подключение «как �
 
 | Этап | Методы → хост | События ← хост | Правила |
 |---|---|---|---|
-| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list`; пробуждение спящей сессии (правки 19): `sessions.resume`; действия меню сессии (правки 20): `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
+| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list`; пробуждение спящей сессии (правки 19): `sessions.resume`; действия меню сессии (правки 20): `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent`; меню комнаты (правки 21): `rooms.archive`, `rooms.delete` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
 | **B** | + `mail.markRead`, `pty.send`, `feed.subscribe`, `feed.unsubscribe`, `pty.attach`, `pty.detach`, `consents.list`, `consents.decide`, `rooms.usage`; уведомление `activity.seen` | + `feed.changed`, `pty.output`, `pty.resync`, `pty.exit`, `consents.changed`, `providers.limitsChanged` | `pty.send`: текст ≤ 16 КБ |
 | **C** | — (`sessions.create` переехал в A, решение 5) | — | — |
 
@@ -357,6 +357,54 @@ Parley на Маке из любой сети. Подключение «как �
   Stop и Put to sleep не весомые, уведомления нет.
 - **Телефон.** Face ID на действие нет. Close и Put to sleep — с системным подтверждением.
 
+**Действия меню комнаты с телефона** (решение человека 2026-11-03, правки 21). Меню `⋯` экрана комнаты (D1 §9.7):
+Put all to sleep, Wake all, Copy room ID, Archive room, Delete room. Прежние пункты Members и Open work уходят из меню.
+- **Put all to sleep и Wake all — без нового метода.** Телефон по очереди, по одному вызову за раз, зовёт `sessions.stop
+  {ref}` для каждого участника комнаты с `lifecycle: 'active'` и `sessions.resume {ref}` для каждого спящего. Каждый вызов
+  проходит прежнюю границу (правки 19, 20): переключатель, правило параметров, состояние сессии по свежей карте, отказ
+  сессиям автономного движка, лимит изменяющих вызовов и `call` в журнале. Итог — по каждой сессии: удалось или текст
+  отказа хоста; частичный итог телефон показывает списком, ничего не прячет. Почему не метод комнаты на хосте: он менял
+  бы протокол хоста (4.4), а граница по одной сессии уже проверена критиками A37a и A38a. Цена: каждая сессия — один
+  изменяющий вызов из 30 в минуту (5.7); в комнате больше 30 живых участников хвост получит `rate_limited`, и это видно
+  в списке. Уведомления на Маке нет: Put to sleep и Resume не весомые (правки 19, 20).
+- **Комната автономного движка** (`mode: 'autonomous'`; правило подтверждено человеком 2026-11-03): Put all to sleep и
+  Wake all телефон не шлёт, пункты в меню неактивны, причина — в заголовке листа «Run by the autonomous engine — manage
+  it on your Mac». Хост отвергает `sessions.stop` и `sessions.resume` у каждой сессии движка (`conflict`, правки 20.3).
+- **Archive room — `rooms.archive {projectPath, workId, roomId, stopSessions}`**, обработчик окна (`archiveHumanRoom`).
+  Лента остаётся и читается, писать в комнату нельзя до Reopen на Маке. Живой план отменяется, слот решения
+  очищается, в ленту ложится строка об архиве. С `stopSessions: true` хост усыпляет живых участников, которым после
+  архивации не остаётся открытой комнаты; без флажка он пишет им письмо. Телефон повторяет окно (`RoomRowMenu`):
+  - лист с выбором «Archive and stop N agents» (первый пункт, как флажок окна, включённый по умолчанию), «Archive, keep
+    agents running», Cancel;
+  - N — участники с `lifecycle: 'active'`, которых нет в другой неархивной комнате (правило core `archiveRoom`, как
+    `archiveStops` окна); при N = 0 один пункт «Archive»;
+  - описание предупреждает о живом решении и плане, как окно.
+- **Delete room — `rooms.delete {projectPath, workId, roomId}`**, обработчик окна (`deleteHumanRoom`). Уходят комната,
+  лента, решение и планы комнаты. Сессии остаются обычными сессиями работы, и живым участникам хост пишет, что комнаты
+  больше нет. Флажка окна «Also delete its N sessions» на телефоне нет: `sessions.delete` закрыт телефону (4.3), а вопрос
+  о несохранённых правках в файлах worktree умеет задать только окно. Телефон повторяет окно со снятым флажком, это
+  поведение окна по умолчанию.
+- **Правила параметров** (`REMOTE_PARAM_RULES`, лишний ключ → `bad_request`): `rooms.archive` — ровно `projectPath`,
+  `workId`, `roomId` (непустые строки с пределами `rooms.send`) и обязательный `stopSessions` (boolean);
+  `rooms.delete` — ровно `projectPath`, `workId`, `roomId`.
+- **Хост — власть.** Оба метода в `REMOTE_SWITCHED_METHODS`: выключен переключатель → `unknown_method`, методов нет в
+  `hello.methods`, пунктов в меню нет. Комнату хост читает по свежей карте до обработчика, как сессию (критик A37a):
+  - неизвестные проект, работа или комната → `bad_request`;
+  - архивная работа → `conflict`;
+  - комната с `mode: 'autonomous'` → `conflict` «the phone does not change rooms of an autonomous run». Это то же
+    правило 20.3 (телефон не вмешивается в идущий прогон), окно не затронуто;
+  - архивную комнату телефон может удалить, как окно; повторная архивация ничего не меняет (core).
+- **Мост.** Оба изменяющие: лимит и `call` в журнале. Оба весомые (12): после удачного вызова `rooms.archive` →
+  `phone.action` вида `room-archive`, `rooms.delete` → вида `room-delete`. Target — `{projectPath, workId, roomId,
+  label}`, где `label` — название комнаты из снимка моста до вызова; сырой параметр не идёт. Окно пишет «Archived room
+  <label> in <work>» и «Deleted room <label> in <work>» с кнопкой «Revoke this phone».
+- **Телефон — Face ID на действие** (исключение из решения 6; явное решение человека 2026-11-03). После системного
+  подтверждения Archive room и Delete room спрашивают Face ID тем же `expo-local-authentication`, что блокировка
+  приложения, с запасным путём — кодом устройства. Отмена или неудача — вызова нет. Без Face ID и без кода на устройстве
+  действие не выполняется: «Set up Face ID or a passcode on this iPhone to archive or delete rooms». Настройка «Lock
+  Parley with Face ID» этот запрос не выключает: он защищает необратимое удаление и архив, а не вход.
+- **Copy room ID** — `room.id` в буфер, без вызова.
+
 Почему `feed.decide` и `rooms.resolveProposal` переехали в A. Ради решений человек и берёт телефон. Защиты от
 гонки уже есть: `feed.decide → {applied, state}` (`methods.ts:317`, результат `:495`) и `rev` у
 `rooms.resolveProposal` (`methods.ts:250-260`). В С1 они ждали плана «Chat» — он выполнен.
@@ -379,8 +427,8 @@ Parley на Маке из любой сети. Подключение «как �
 - `works.create`, `works.delete`, `works.rename`, `works.setStatus`;
 - `sessions.delete`, `sessions.setMode`, `sessions.setEffort`, `sessions.setModel`,
   `sessions.compact`, `sessions.cancelCompact`, `sessions.resumeInterrupted`, `sessions.rename`;
-- `rooms.addMember`, `rooms.setLead`, `rooms.setOwner`, `rooms.delete`, `rooms.archive`,
-  `rooms.reopen`, `rooms.rename`, `rooms.setMode`;
+- `rooms.addMember`, `rooms.setLead`, `rooms.setOwner`, `rooms.reopen`, `rooms.rename`, `rooms.setMode`
+  (`rooms.archive` и `rooms.delete` открыты правками 21);
 - `worktrees.*` (кроме чтения — вне объёма, С1 §14), `changes.*`;
 - `providers.setKey`, `providers.clearKey`, `providers.check`, `providers.refreshLimits`, вход и выход
   подписок, свои провайдеры;
@@ -1419,6 +1467,8 @@ Heartbeat (из RN нельзя слать WS ping, поэтому прикла�
     заслонка не показываются и Face ID не спрашивается (паринг доступен и на телефоне без кода; критик s-220, m1).
 
   Проверка — на телефоне: мост и хост о ней не знают, это защита от чужих рук, а не граница доступа.
+- **Face ID на действие — только Archive room и Delete room** (правки 21, явное решение человека 2026-11-03): исключение
+  из правила «без запросов на каждое действие». Остальные действия по-прежнему идут под блокировкой приложения.
 - **Запуск сессии, комнаты и письмо** (решение 5). Изменяющие вызовы: после `connection_lost` не повторяются;
   приложение перечитывает снимок работ и показывает «Check your Mac — it may have started», если новой сессии или
   комнаты не видно; неотправленное письмо остаётся в поле.
@@ -1449,7 +1499,7 @@ Heartbeat (из RN нельзя слать WS ping, поэтому прикла�
 - присутствие — окно шлёт `presence` по сокету управления (9.3, 9.6);
 - **уведомление о весомых действиях телефона** (решение человека 2026-11-02, критик R5): окно показывает системное
   уведомление macOS, когда телефон доверяет папку (`trustFolder`, Allow на карточке доверия), разрешает «Always»,
-  одобряет план с `auto-accept`, одобряет смену провайдера или запускает сессию (New session), включает серверы MCP (A36), закрывает сессию или переводит её на другого провайдера (правки 20). Текст — имя устройства
+  одобряет план с `auto-accept`, одобряет смену провайдера или запускает сессию (New session), включает серверы MCP (A36), закрывает сессию или переводит её на другого провайдера (правки 20), архивирует или удаляет комнату (правки 21). Текст — имя устройства
   и действие («iPhone trusted folder …», «iPhone started a session in …»), без текстов агентов; кнопка «Revoke this
   phone» в уведомлении вызывает `devices.revoke` после подтверждения. Источник — новое событие сокета управления
   `phone.action {deviceId, kind, target}`, которое мост шлёт по тем же вызовам, что пишут `call` в журнал;
@@ -1840,3 +1890,15 @@ ID на действия» остаётся.
 | 20.1 | В этап A: `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent` за переключателем; `sessions.close` уходит из запретного перечня | 4.2, 4.3 |
 | 20.2 | Весомые: закрытие сессии (`session-close`) и замена провайдера (`provider-switch`); Stop и Put to sleep — нет | 4.2, 12 |
 | 20.3 | Сессии идущего автономного движка телефон не закрывает, не останавливает, не будит и не переводит (`conflict`); окно не затронуто. Решено человеком 2026-11-03 | 4.2 |
+
+**Правки 21 — решение человека 2026-11-03: меню комнаты.**
+
+| № | Решение | Что изменено |
+|---|---|---|
+| 21.1 | Меню `⋯` комнаты: Put all to sleep, Wake all, Copy room ID, Archive room, Delete room; Members и Open work уходят | 4.2; D1 §9.7 |
+| 21.2 | Put all to sleep и Wake all — по одной сессии прежними `sessions.stop` и `sessions.resume`, итог по каждой сессии; нового метода хоста нет | 4.2 |
+| 21.3 | В этап A: `rooms.archive`, `rooms.delete` за переключателем, со строгими правилами параметров и проверкой комнаты на хосте; оба уходят из запретного перечня | 4.2, 4.3 |
+| 21.4 | Весомые: `room-archive` и `room-delete` с «Revoke this phone» | 4.2, 12 |
+| 21.5 | Face ID на Archive room и Delete room — исключение из решения 6, явное решение человека | 4.2, 11.4 |
+| 21.6 | Комната автономного движка: sleep-all и wake-all неактивны с причиной, хост отвергает сессии движка; `rooms.archive` и `rooms.delete` такой комнаты → `conflict` (правило 20.3) | 4.2 |
+| 21.7 | Delete room без удаления сессий: `sessions.delete` закрыт телефону, вопрос о несохранённых правках есть только в окне | 4.2 |
