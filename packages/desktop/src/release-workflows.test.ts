@@ -434,6 +434,13 @@ describe('release.yml (V5)', () => {
       expect(dry).toContain('echo "digest=" >> "$GITHUB_OUTPUT"');
     });
 
+    it('образы QEMU и BuildKit закреплены по digest, а не по подвижному тегу', () => {
+      expect(step('Set up QEMU')).toMatch(/^ {10}image: tonistiigi\/binfmt@sha256:[0-9a-f]{64}$/m);
+      expect(step('Set up Buildx')).toMatch(
+        /^ {10}driver-opts: image=moby\/buildkit@sha256:[0-9a-f]{64}$/m,
+      );
+    });
+
     it('токен — только у шага входа; сборка и push его не получают', () => {
       expect(step('Log in to GHCR')).toContain('GH_TOKEN');
       expect(step('Build and push the image')).not.toContain('GH_TOKEN');
