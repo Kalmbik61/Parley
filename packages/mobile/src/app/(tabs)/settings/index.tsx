@@ -1,6 +1,6 @@
 // Settings (D1 §11): Macs, Security, Notifications, About.
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Linking, ScrollView, StyleSheet } from 'react-native';
+import { AppState, Linking, ScrollView, StyleSheet, View } from 'react-native';
 import { appLock } from '../../../auth/lock-instance';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
@@ -14,6 +14,7 @@ import { useRuntimeState } from '../../../runtime/use-runtime';
 import { displayName } from '../../../settings/local-settings';
 import { biometryKind, biometryLabel, type BiometryKind } from '../../../settings/biometric';
 import { useColors } from '../../../theme';
+import { LargeTitle } from '../../../ui/bar';
 import { hostStatusLine } from '../../../hosts/status-line';
 
 export default function SettingsScreen() {
@@ -68,7 +69,10 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView contentInsetAdjustmentBehavior="automatic" style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
-      <ConnectionBanner />
+      <View>
+        <LargeTitle>Settings</LargeTitle>
+        <ConnectionBanner />
+      </View>
       <Section header="Macs">
         {state.hosts.map((h) => {
           const current = h.hostId === state.host?.hostId;

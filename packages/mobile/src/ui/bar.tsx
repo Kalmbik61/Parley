@@ -65,6 +65,20 @@ function TextButton({ label, onPress }: { label: string; onPress: () => void }) 
   );
 }
 
+/**
+ * The large title drawn inside the scroll content (as Inbox and Works do) instead of the native `headerLargeTitle`
+ * (plan A39): the native one is laid out by the bar and adjusted into the scroll view's inset separately, so on a back
+ * navigation it showed at once and overlapped the content. Pair it with `headerTitle: ''` on the screen.
+ */
+export function LargeTitle({ children, padded = true }: { children: string; padded?: boolean }) {
+  const c = useColors();
+  return (
+    <Text accessibilityRole="header" allowFontScaling numberOfLines={2} style={[typography.largeTitle, styles.large, !padded && { paddingHorizontal: 0 }, { color: c.label }]}>
+      {children}
+    </Text>
+  );
+}
+
 /** A round symbol button (the "•••", the "+"): 44 pt target, accent, no capsule. */
 export function BarSymbol({ name, label, onPress, disabled = false }: { name: ComponentProps<typeof SymbolView>['name']; label: string; onPress: () => void; disabled?: boolean }) {
   const c = useColors();
@@ -81,6 +95,7 @@ const styles = StyleSheet.create({
   strip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, minHeight: 44 },
   stripText: { flex: 1, fontWeight: '600' },
   stripLine: { position: 'absolute', left: 16, right: 16, bottom: 0, height: StyleSheet.hairlineWidth },
+  large: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
   symbol: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
 });
 
