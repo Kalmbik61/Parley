@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { hostOf, isOpenableUrl, markdownTooDeep, MD_NEST_MAX, parseMarkdown, type MdNode } from './parse';
+import { hostOf, isOpenableUrl, markdownTooDeep, MD_LIST_ITEMS_MAX, MD_NEST_MAX, parseMarkdown, type MdNode } from './parse';
 import { addressOf, codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, noHyphenBreak, plainText } from './helpers';
 import { definitionsOf } from './parse';
 
@@ -440,9 +440,11 @@ describe('guards: fence recognition, headings, short inline code (A40 critic M6,
     expect(types(parseMarkdown(doc))[0]).toBe('heading');
   });
 
-  it('a fence inside a quote is recognised: code with many [ in a quote stays Markdown', () => {
+  it('a fence inside a quote or a list item is not skipped: counted like text (the safe side)', () => {
     const doc = `> \`\`\`\n${'> line [x\n'.repeat(600)}> \`\`\`\n\ntext`;
-    expect(types(parseMarkdown(doc))).toEqual(['blockquote', 'paragraph']);
+    expect(plainText(parseMarkdown(doc))).toBe(doc);
+    // the same code at column 0 with balanced brackets stays Markdown
+    expect(types(parseMarkdown(`\`\`\`\n${'line [x]\n'.repeat(600)}\`\`\`\n\ntext`))).toEqual(['code', 'paragraph']);
   });
 
   it('a real fence still skips, a fake one (backtick in the info string) does not', () => {
@@ -455,5 +457,77 @@ describe('guards: fence recognition, headings, short inline code (A40 critic M6,
     expect(codeText('~/.claude/settings.json', true)).toBe('~/\u2060.claude/\u2060settings.json');
     expect(codeText('docker mcp run', true)).toBe('docker\u00A0mcp\u00A0run');
     expect(codeText('a b/c', false)).toBe('a b/c');
+  });
+});
+
+describe('the code skip cannot be fooled (A40 critic M6, round 5)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+  const isRaw = (root: MdNode, md: string): boolean => types(root).length === 1 && plainText(root) === md;
+
+  // What micromark does not read as a code fence at column 0 (quotes, tabs, list items, HTML in containers, early close).
+  const prefixes: Record<string, string> = {
+    quoteFence: '> ```\n',
+    tabFence: '\t```\n',
+    spaceTabFence: '  \t```\n',
+    indentedQuoteFence: '    > ```\n',
+    bulletFence: '- a\n  ```\n',
+    orderedFence: '1. a\n   ```\n',
+    looseBulletFence: '* x\n\n  ```\n',
+    quoteHtmlFence: '> <div>\n> ```\n>\n',
+    listHtmlFence: '- <div>\n  ```\n\n',
+    nestedQuoteFence: '> > ```\n> ',
+    earlyClose: '```\n\t```\n```\n',
+    quoteEarlyClose: '```\n> ```\n```\n',
+    badInfo: '```a`\n',
+    html: '<div>\n```\n\n',
+    comment: '<!--\n```\n-->\n\n',
+  };
+  // Bombs between 1x and the backstop: over a limit, under twice it.
+  const band: Record<string, string> = {
+    emphasis: '**_'.repeat(1000),
+    nestedBrackets: `${'['.repeat(1500)}a${']'.repeat(1500)}`,
+    markers60: `${'> - '.repeat(30)}x\n`.repeat(200),
+    lazy1500: `- a\n${'b\n'.repeat(1500)}`,
+    lazySeries: `${'> a\n' + 'b\n'.repeat(1500)}`.repeat(3),
+  };
+
+  it('every band bomb behind every prefix is raw or parses fast', () => {
+    const bad: string[] = [];
+    for (const [bname, bomb] of Object.entries(band)) {
+      for (const [pname, prefix] of Object.entries(prefixes)) {
+        const input = prefix + bomb;
+        const first = timed(input);
+        const ms = Math.min(first.ms, timed(input).ms);
+        if (ms > 500) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
+        // The fence is not column 0 / not a fence, so the bomb counts: it must come back raw.
+        if (!isRaw(first.root, input)) bad.push(`${pname}+${bname}: not raw`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('a real fence at column 0 still hides code from the counts', () => {
+    const code = `\`\`\`\n${'**_'.repeat(1000)}\n\`\`\`\n\nok`;
+    expect(types(parseMarkdown(code))).toEqual(['code', 'paragraph']);
+  });
+
+  it('a fence line resets the lazy count', () => {
+    const doc = `- a\n\`\`\`\n${'b\n'.repeat(2500)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(doc))).toEqual(['list', 'code', 'paragraph']);
+  });
+});
+
+describe('a long list is shown as its source (A40 critic m19)', () => {
+  it('over 300 items becomes a code block, 300 stays a list', () => {
+    const src = (n: number) => Array.from({ length: n }, (_, i) => `- item ${i}`).join('\n');
+    expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX)))[0]!.type).toBe('list');
+    expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX + 1)))[0]).toMatchObject({ type: 'code', value: src(MD_LIST_ITEMS_MAX + 1) });
+    const t = performance.now();
+    parseMarkdown(src(4999));
+    expect(performance.now() - t).toBeLessThan(500);
   });
 });

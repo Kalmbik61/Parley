@@ -70,21 +70,30 @@ export const MD_BRACKET_DEPTH_MAX = 32;
 export const MD_LAZY_RUN_MAX = 500;
 export const MD_LINES_MAX = 5000;
 /** The counts over the whole text (code not skipped) may reach this many times a limit. */
-const BACKSTOP = 4;
+const BACKSTOP = 2;
+/** `[` nesting over the whole text (the backstop); ESC-prefixed `[` of ANSI colours do not count. */
+const BACKSTOP_DEPTH_MAX = 64;
+/** A list with more items than this is shown as its source, like a table over its limit (`MD_TABLE_*`): ~5 native views per item. */
+export const MD_LIST_ITEMS_MAX = 300;
 
 /** A quote or list marker; `>` needs no space after it (CommonMark), a list marker does. */
 const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
 /** Quote and list markers on one line, counted together (`- - - …`, `>- >- …`): they hang the parse itself. */
 const markersRe = (n: number): RegExp => new RegExp(`^(?:[ \\t]*${MARKER}){${n}}`);
 const MARKERS_TOO_DEEP = markersRe(MD_NEST_MAX + 1);
-/** The same count over every line, thematic breaks and code included: the backstop (4× the limit). */
+/** The same count over every line, thematic breaks and code included: the backstop (2× the limit, lines 4×). */
 const MARKERS_TOO_DEEP_RAW = markersRe(MD_NEST_MAX * BACKSTOP + 1);
 const BLOCK_MARKER = new RegExp(`^[ \\t]*${MARKER}`);
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
-/** A fence as CommonMark has it, also inside quotes: a backtick fence has no backtick in its info string. */
-const FENCE_OPEN = /^(?:[ \t]*>)*[ \t]{0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
-const FENCE_CLOSE = /^(?:[ \t]*>)*[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/;
+/**
+ * Only a fence at column 0 is skipped: nothing in front (no spaces, tabs or `>`), so it cannot sit in a quote, a list
+ * item or indented code, and a lazy line never is one. A backtick fence has no backtick in its info string. Fences in
+ * quotes and list items are counted like the rest (a rare false positive, the safe side).
+ */
+const FENCE_OPEN = /^(?:(`{3,})[^`]*|(~{3,}).*)$/;
+/** Closed strictly as CommonMark: up to 3 spaces, the same character, spaces only (no tab, no `>`). */
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,}) *$/;
 /** A line that may open an HTML block (up to 3 spaces, then `<`): no fence counts in it up to the next blank line. */
 const HTML_START = /^ {0,3}</;
 /** HTML blocks of types 1–5 run to a closing marker, not to a blank line: no code is skipped from here on. */
@@ -94,7 +103,7 @@ const HTML_LONG = /^ {0,3}<(?:(?:script|pre|style|textarea)(?:[ \t>]|$)|!--|\?|!
  * Pre-parse guards (A40 critic M2, M3, M5, M6): text that would hang the parser is shown raw. One pass over the lines;
  * fenced code is skipped (code is not parsed, so its `[`, `*` and markers cost nothing and must not count), but the
  * skip is only a convenience: every count is ALSO kept over the whole text with nothing skipped, and any of them over
- * 4× its limit shows raw text, so a fence the parser does not agree with can never hide a bomb.
+ * 2× its limit shows raw text, so a fence the parser does not agree with can never hide a bomb.
  *  - more than 64 KB; more than 2000 `*`, `_`, `~`; more than 2000 `[` or `[` nested deeper than 32 (an ESC `[` of an
  *    ANSI colour does not count);
  *  - 25 quote/list markers on one line (not a thematic break such as `- - - …`);
@@ -116,17 +125,17 @@ export const tooHeavy = (text: string): boolean => {
       all.inBlock = false;
       all.lazy = 0;
     } else {
-      if (++all.lines > MD_LINES_MAX * BACKSTOP) return true;
+      // A long code block of short lines is legal, so lines have more room than the other counts.
+      if (++all.lines > MD_LINES_MAX * BACKSTOP * 2) return true;
       if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
-      if (HEADING.test(line)) {
+      if (HEADING.test(line) || FENCE_OPEN.test(line)) {
         all.inBlock = false;
         all.lazy = 0;
       } else if (BLOCK_MARKER.test(line)) {
         all.inBlock = true;
         all.lazy = 0;
       } else if (all.inBlock && ++all.lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
-      // Over everything only the totals count: unclosed `[` in code (600 log lines) are legal, so no depth limit here.
-      if (count(line, all, BACKSTOP, Infinity)) return true;
+      if (count(line, all, BACKSTOP, BACKSTOP_DEPTH_MAX)) return true;
     }
     // The fence / HTML state, as far as the guard can tell.
     if (fence !== null) {
@@ -144,6 +153,8 @@ export const tooHeavy = (text: string): boolean => {
       const open = FENCE_OPEN.exec(line);
       if (open !== null) {
         fence = open[1] ?? open[2]!;
+        skip.inBlock = false;
+        skip.lazy = 0;
         continue;
       }
     }
@@ -218,6 +229,11 @@ function revealHidden(parent: MdNode, source: string): void {
       continue;
     }
     if (child.type === 'table' && raw !== '' && showTableAsSource(child)) {
+      next.push({ type: 'code', value: raw });
+      continue;
+    }
+    // A long list: ~5 native views per item, so over the limit it is shown as its source (like a table).
+    if (child.type === 'list' && raw !== '' && (child.children?.length ?? 0) > MD_LIST_ITEMS_MAX) {
       next.push({ type: 'code', value: raw });
       continue;
     }
