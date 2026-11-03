@@ -9,7 +9,7 @@ import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
 import { attentionOfSession, roomKey, type RoomRef } from '@parley/remote-client';
-import { DEMO } from '../dev/flags';
+import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
@@ -286,6 +286,7 @@ export default function RoomScreen() {
                   <SymbolView name="at" size={22} tintColor={c.tint} />
                 </Pressable>
                 <TextInput
+                  autoFocus={DEV_FOCUS}
                   accessibilityLabel="Message the room"
                   multiline
                   editable={!chat.busy && hidden.sendEnabled}

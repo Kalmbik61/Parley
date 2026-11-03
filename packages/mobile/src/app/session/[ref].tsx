@@ -17,6 +17,8 @@ import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
 import { DEMO } from '../../dev/flags';
+import { touchAppLock } from '../../auth/lock-instance';
+import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
 import { FoldRowView, OutBubble } from '../../feed/FeedViews';
 import { foldFeed, type FoldRow } from '../../feed/fold';
@@ -80,6 +82,7 @@ export default function SessionScreen() {
   const atBottom = useRef(true);
   const [away, setAway] = useState(0);
   const [teamOpen, setTeamOpen] = useState(false);
+  useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const seen = useRef(0);
 
   const load = (r: SessionRef): void => {
@@ -396,7 +399,8 @@ export default function SessionScreen() {
         }}
       />
       <Modal visible={teamOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTeamOpen(false)}>
-        <View style={[styles.page, { backgroundColor: c.bg }]}>
+        {/* A touch in the sheet restarts the idle term; the lock closes the sheet (plan A35b). */}
+        <View onTouchStart={touchAppLock} style={[styles.page, { backgroundColor: c.bg }]}>
           <View style={styles.sheetHead}>
             <Text accessibilityRole="header" allowFontScaling style={[typography.headline, styles.flex, { color: c.label }]}>
               {teamLine(counts)}

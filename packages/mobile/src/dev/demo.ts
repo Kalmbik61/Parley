@@ -159,7 +159,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|decision-sheet|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -174,6 +174,8 @@ export function demoRoute(name: unknown): string | null {
       return s('a13');
     case 'decision':
       return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
+    case 'decision-sheet':
+      return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03&devSheet=1`;
     case 'letters':
       return '/?segment=letters';
     case 'letter':
