@@ -110,7 +110,7 @@ function describeParams(params: unknown): string | undefined {
  * `decision`): цель — сессия, в подробностях карточка, вид и выбор; ответы на вопрос и текст отказа — длиной и хэшем.
  */
 function auditOf(method: string, params: unknown): { target: string | undefined; detail: string | undefined } {
-  const where = refDetail(params);
+  const where = refDetail(params, isRoomMenu(method));
   if (method !== 'feed.decide' || typeof params !== 'object' || params === null) {
     return { target: targetOf(params), detail: joinDetail([...where, describeParams(params)]) };
   }
@@ -136,9 +136,13 @@ const joinDetail = (parts: Array<string | undefined>): string | undefined => {
  * Где сессия из `ref` (критик A37a m3): номера сессий повторяются между работами, поэтому в журнал — `workId` и хэш
  * `projectPath` (путь сам не пишется).
  */
-function refDetail(params: unknown): string[] {
+const isRoomMenu = (method: string): boolean => method === 'rooms.archive' || method === 'rooms.delete';
+
+function refDetail(params: unknown, roomMenu = false): string[] {
   if (typeof params !== 'object' || params === null) return [];
-  const ref = (params as { ref?: unknown }).ref;
+  const p = params as { ref?: unknown };
+  // Меню комнаты (A41a): проект и работа на верхнем уровне, рядом с `roomId`; у прочих методов журнал прежний.
+  const ref = p.ref ?? (roomMenu ? params : undefined);
   if (typeof ref !== 'object' || ref === null) return [];
   const { projectPath, workId } = ref as Record<string, unknown>;
   const parts: string[] = [];
@@ -247,7 +251,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     reply(deviceId, state, id, { error: { code, message, ...extra } });
 
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
-    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail: joinDetail([...refDetail(params), detail]) });
+    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail: joinDetail([...refDetail(params, isRoomMenu(method)), detail]) });
   }
 
   /** Методы, которые телефон может звать в эту эпоху: белый список этапа ∩ `hello.methods` хоста. */
@@ -271,6 +275,13 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     const entry = ref === null ? undefined : host.snapshot?.entries.find((e) => e.projectPath === ref.projectPath && e.map.work.id === ref.workId);
     const label = entry?.map.sessions.find((session) => session.id === ref?.sessionId)?.label;
     return typeof label === 'string' && label !== '' ? label.slice(0, 256) : null;
+  }
+  /** Имя комнаты из снимка эпохи — цель `room-archive` и `room-delete` (правки 21); снимок берётся до вызова. */
+  function roomLabelOf(params: unknown): string | null {
+    const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    const entry = host.snapshot?.entries.find((e) => e.projectPath === p.projectPath && e.map.work.id === p.workId);
+    const title = entry?.map.rooms.find((room) => room.id === p.roomId)?.title;
+    return typeof title === 'string' && title !== '' ? title.slice(0, 256) : null;
   }
   /**
    * Имена провайдеров для людей из ответов `sessions.switchOptions` (`targets`) и `providers.list` (`providers`): цель
@@ -367,6 +378,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       // Цель — `ref` и имя сессии; без имени (сессии нет в снимке) — её номер.
       const ref = cleanRef(p.ref);
       if (ref) actions.push({ kind: 'session-close', target: { ...ref, label: label ?? ref.sessionId } });
+    } else if (method === 'rooms.archive' || method === 'rooms.delete') {
+      // Цель — проект, работа, комната и имя из снимка до вызова; сырые параметры в событие не идут. Без имени — номер.
+      const { projectPath, workId, roomId } = p;
+      if (typeof projectPath === 'string' && typeof workId === 'string' && typeof roomId === 'string') {
+        actions.push({ kind: method === 'rooms.archive' ? 'room-archive' : 'room-delete', target: { projectPath, workId, roomId, label: label ?? roomId } });
+      }
     } else if (method === 'sessions.switchAgent' && provider !== null) {
       // Прямая замена (критик A38a m1): какая сессия и куда; `held` и `queued` — тоже, карта уже переключена.
       const ref = cleanRef(p.ref);
@@ -564,7 +581,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       } else {
         const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         const trustAfter = method === 'sessions.create' ? await trustWrittenBy(params) : null;
-        const label = method === 'sessions.close' || method === 'sessions.switchAgent' ? sessionLabelOf(params) : null;
+        const label =
+          method === 'sessions.close' || method === 'sessions.switchAgent'
+            ? sessionLabelOf(params)
+            : method === 'rooms.archive' || method === 'rooms.delete'
+            ? roomLabelOf(params)
+            : null;
         const provider = method === 'sessions.switchAgent' && options.onPhoneAction ? await providerLabelOf(params) : null;
         try {
           raw = await host.call(method, params ?? {});

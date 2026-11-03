@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workPaths } from '@parley/core';
+import { addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workPaths } from '@parley/core';
 import {
   ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
@@ -1061,6 +1061,8 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         'sessions.close': vi.fn(async () => ({ ok: true })),
         'sessions.switchOptions': vi.fn(async () => ({ current: { provider: 'claude', available: true, reason: null }, targets: [], suggested: null, keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] })),
         'sessions.switchAgent': vi.fn(async () => ({ outcome: 'started', carried: 'handover' })),
+        'rooms.archive': vi.fn(async () => ({ ok: true })),
+        'rooms.delete': vi.fn(async () => ({ ok: true })),
         'trust.check': vi.fn(async () => ({ trusted: false })),
         'consents.list': vi.fn(async () => ({ items: [] })),
         'consents.decide': vi.fn(async () => ({ applied: true, state: 'allowed' })),
@@ -1077,6 +1079,10 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       // Свежая карта для проверки сессии (критик A37a M1): по умолчанию s-01 спит.
       const sessionStates = new Map<string, { workArchived: boolean; lifecycle: string; live: boolean; engine: boolean }>([
         ['/p#w-01#s-01', { workArchived: false, lifecycle: 'sleeping', live: false, engine: false }],
+      ]);
+      // Свежая карта для проверки комнаты (A41a): по умолчанию r-01 обычная.
+      const roomStates = new Map<string, { workArchived: boolean; autonomous: boolean }>([
+        ['/p#w-01#r-01', { workArchived: false, autonomous: false }],
       ]);
       const server = createHostServer({
         context,
@@ -1095,6 +1101,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
           sessionKnown: (projectPath, workId, sessionId) => projectPath === '/p' && workId === 'w-01' && sessionId === 's-01',
           trustFolder,
           sessionState: async (projectPath, workId, sessionId) => sessionStates.get(`${projectPath}#${workId}#${sessionId}`) ?? null,
+          roomState: async (projectPath, workId, roomId) => roomStates.get(`${projectPath}#${workId}#${roomId}`) ?? null,
         },
       });
       const socketPath = path.join(home, 'a28.sock');
@@ -1107,7 +1114,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         const reply = await hello(client, 't', { client: name });
         return { client, methods: (reply.result as { methods: string[] }).methods };
       };
-      return { spies, trustFolder, unregistered, order, state, sessionStates, connect, close: () => { for (const c of clients) c.close(); server.close(); } };
+      return { spies, trustFolder, unregistered, order, state, sessionStates, roomStates, connect, close: () => { for (const c of clients) c.close(); server.close(); } };
     }
 
     it('переключатель выключен: pty.send, запуск с trustFolder и consents.decide — unknown_method и не в hello.methods; чтения открыты', async () => {
@@ -1229,6 +1236,61 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       const desktop = await s.connect('desktop');
       expect((await answer(desktop.client, ++id, 'sessions.stop', { ref })).error).toBeUndefined();
       expect((await answer(desktop.client, ++id, 'sessions.switchAgent', { ...sw, force: true })).error).toBeUndefined();
+      s.close();
+    });
+
+    it('A41a: меню комнаты — за переключателем, правила параметров, ворота по свежей карте комнаты', async () => {
+      const room = { projectPath: '/p', workId: 'w-01', roomId: 'r-01' };
+      const archive = { ...room, stopSessions: false };
+      const s = await a28Server({ enabled: false });
+      const off = await s.connect('remote');
+      let id = 1100;
+      for (const [m, params] of [['rooms.archive', archive], ['rooms.delete', room]] as const) {
+        expect(off.methods, m).not.toContain(m);
+        expect((await answer(off.client, ++id, m, params)).error, m).toMatchObject({ code: 'unknown_method' });
+      }
+      s.state.enabled = true;
+      const remote = await s.connect('remote');
+      expect(remote.methods).toEqual(expect.arrayContaining(['rooms.archive', 'rooms.delete']));
+      // Правила параметров: лишний ключ, пустая строка, нет или не boolean `stopSessions`.
+      for (const bad of [{ ...archive, extra: 1 }, { ...archive, roomId: '' }, room, { ...room, stopSessions: 'no' }]) {
+        expect((await answer(remote.client, ++id, 'rooms.archive', bad)).error, JSON.stringify(bad)).toMatchObject({ code: 'bad_request' });
+      }
+      for (const bad of [{ ...room, extra: 1 }, { ...room, roomId: '' }, archive]) {
+        expect((await answer(remote.client, ++id, 'rooms.delete', bad)).error, JSON.stringify(bad)).toMatchObject({ code: 'bad_request' });
+      }
+      expect(s.spies['rooms.archive']).not.toHaveBeenCalled();
+      expect(s.spies['rooms.delete']).not.toHaveBeenCalled();
+      // Известная работа, но неизвестная комната / чужие проект и работа.
+      expect((await answer(remote.client, ++id, 'rooms.archive', { ...archive, roomId: 'r-77' })).error).toMatchObject({ code: 'bad_request', message: 'unknown room' });
+      expect((await answer(remote.client, ++id, 'rooms.delete', { ...room, roomId: 'r-77' })).error).toMatchObject({ code: 'bad_request', message: 'unknown room' });
+      for (const target of [{ projectPath: '/other' }, { workId: 'w-99' }]) {
+        expect((await answer(remote.client, ++id, 'rooms.delete', { ...room, ...target })).error).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
+      }
+      // w-00 известна, но в её карте комнаты нет.
+      expect((await answer(remote.client, ++id, 'rooms.delete', { ...room, workId: 'w-00' })).error).toMatchObject({ code: 'bad_request', message: 'unknown room' });
+      // Обычная комната: обработчик зовётся с теми же параметрами, с `stopSessions` и без.
+      expect((await answer(remote.client, ++id, 'rooms.archive', archive)).error).toBeUndefined();
+      expect((await answer(remote.client, ++id, 'rooms.archive', { ...archive, stopSessions: true })).error).toBeUndefined();
+      expect((await answer(remote.client, ++id, 'rooms.delete', room)).error).toBeUndefined();
+      expect(s.spies['rooms.archive'].mock.calls.map(([p]) => p)).toEqual([archive, { ...archive, stopSessions: true }]);
+      expect(s.spies['rooms.delete'].mock.calls.map(([p]) => p)).toEqual([room]);
+      // Свежая карта: комната ушла в автономный прогон после снимка — conflict до обработчика; архивная работа — conflict.
+      s.roomStates.set('/p#w-01#r-01', { workArchived: false, autonomous: true });
+      for (const [m, params] of [['rooms.archive', archive], ['rooms.delete', room]] as const) {
+        expect((await answer(remote.client, ++id, m, params)).error, m)
+          .toMatchObject({ code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
+      }
+      s.roomStates.set('/p#w-01#r-01', { workArchived: true, autonomous: false });
+      for (const [m, params] of [['rooms.archive', archive], ['rooms.delete', room]] as const) {
+        expect((await answer(remote.client, ++id, m, params)).error, m).toMatchObject({ code: 'conflict', message: 'the work is archived' });
+      }
+      expect(s.spies['rooms.archive']).toHaveBeenCalledTimes(2);
+      expect(s.spies['rooms.delete']).toHaveBeenCalledTimes(1);
+      // Окно этими воротами не ограничено.
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, ++id, 'rooms.delete', room)).error).toBeUndefined();
+      expect(s.spies['rooms.delete']).toHaveBeenCalledTimes(2);
       s.close();
     });
 
@@ -1705,6 +1767,124 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         if (saved.home === undefined) delete process.env['HOME'];
         else process.env['HOME'] = saved.home;
         if (saved.config !== undefined) process.env['CLAUDE_CONFIG_DIR'] = saved.config;
+      }
+    }, 40_000);
+
+    it('A41a: меню комнаты на живом хосте — настоящий roomState читает свежую карту; автономный прогон, сессия движка и живой план — conflict', async () => {
+      process.env['PARLEY_CLAUDE_BIN'] = STUB;
+      try {
+        const { home, token } = await boot();
+        const p = await project();
+        const [s1, s2] = p.sessions as [string, string];
+        const rooms: Record<string, string> = {};
+        await updateMap(p.dir, p.workId, (current) => {
+          for (const name of ['plain', 'late', 'engine', 'plan', 'gone', 'del']) {
+            rooms[name] = addRoom(current, { title: name, creator: 'human', members: [s1, s2], lead: s1 }).id;
+          }
+        });
+        const remote = await connectAs(home, token, 'remote');
+        await waitWork(remote.client, p.workId);
+        const target = (name: string) => ({ projectPath: p.dir, workId: p.workId, roomId: rooms[name]! });
+        const room = async (name: string) => (await readMap(p.dir, p.workId)).rooms.find((entry) => entry.id === rooms[name]);
+
+        // Неизвестная комната и чужая работа.
+        expect((await answer(remote.client, 900, 'rooms.archive', { ...target('plain'), roomId: 'r-99', stopSessions: false })).error)
+          .toMatchObject({ code: 'bad_request', message: 'unknown room' });
+        expect((await answer(remote.client, 901, 'rooms.delete', { ...target('plain'), roomId: 'r-99' })).error)
+          .toMatchObject({ code: 'bad_request', message: 'unknown room' });
+
+        // Комната стала автономной после снимка хоста: ворота читают файл, не снимок.
+        await updateMap(p.dir, p.workId, (current) => {
+          current.rooms.find((entry) => entry.id === rooms['late'])!.mode = 'autonomous';
+        });
+        for (const [id, method, params] of [
+          [902, 'rooms.archive', { ...target('late'), stopSessions: true }],
+          [903, 'rooms.delete', target('late')],
+        ] as const) {
+          expect((await answer(remote.client, id, method, params)).error, method)
+            .toMatchObject({ code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
+        }
+        expect(await room('late')).toBeDefined();
+
+        // M1 критика: сессия движка (`workspace`) в свободной комнате — архив со `stopSessions` её не усыпляет.
+        await updateMap(p.dir, p.workId, (current) => {
+          const member = current.sessions.find((entry) => entry.id === s1)!;
+          member.lifecycle = 'active';
+          member.workspace = { kind: 'artifacts', path: path.join(p.dir, 'review') } as never;
+          const only = addRoom(current, { title: 'engine-only', creator: 'human', members: [s1], lead: s1 });
+          rooms['engine'] = only.id;
+        });
+        for (const [id, method, params] of [
+          [904, 'rooms.archive', { ...target('engine'), stopSessions: true }],
+          [905, 'rooms.archive', { ...target('engine'), stopSessions: false }],
+          [906, 'rooms.delete', target('engine')],
+          // Комната с обычной и движковой сессией — тоже: усыпить пришлось бы и вторую вместе с первой.
+          [907, 'rooms.archive', { ...target('plain'), stopSessions: true }],
+        ] as const) {
+          expect((await answer(remote.client, id, method, params)).error, `${id} ${method}`)
+            .toMatchObject({ code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
+        }
+        const afterEngine = await readMap(p.dir, p.workId);
+        expect(afterEngine.sessions.find((entry) => entry.id === s1)?.lifecycle).toBe('active');
+        expect(afterEngine.rooms.find((entry) => entry.id === rooms['engine'])?.archivedAt ?? null).toBeNull();
+        // Сессия движка закрыта — она прогоном не считается.
+        await updateMap(p.dir, p.workId, (current) => {
+          current.sessions.find((entry) => entry.id === s1)!.lifecycle = 'closed';
+        });
+
+        // Живой автономный план в комнате с обычным режимом (режим понизили после Go).
+        await updateMap(p.dir, p.workId, (current) => {
+          const sha = 'a'.repeat(40);
+          current.plans.push({
+            id: 'pl-01', roomId: rooms['plan']!, rev: 1, mode: 'autonomous', status: 'active', goal: 'Implement', backlog: [],
+            acceptedAt: '2026-11-03T00:00:00.000Z', completedAt: null, cancelledAt: null, completionSummary: null,
+            items: [{ id: 1, title: 'Implement', owner: 'engine', verifier: 'engine', scope: 'src', after: [], criteria: ['Works'], status: 'ready', evidence: null, note: null, log: [] }],
+            autonomous: {
+              criteriaVersion: { 1: 1 }, checks: [], coverage: { 1: { 0: ['verifier'] } },
+              budget: { limits: { attemptsPerItem: 3, repairWaves: 3, minutesPerAttempt: 30, sessions: 10, concurrent: 4 }, spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] },
+              integration: { branch: 'integration/pl-01', baseSha: sha, verifiedHead: sha, candidateHead: null, queue: [], suspended: null },
+              attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
+            },
+          } as never);
+        });
+        expect((await answer(remote.client, 908, 'rooms.delete', target('plan'))).error)
+          .toMatchObject({ code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
+        await updateMap(p.dir, p.workId, (current) => {
+          const plan = current.plans.find((entry) => entry.id === 'pl-01')!;
+          plan.status = 'cancelled';
+          plan.autonomous!.ops = [{ key: 'op-0001', kind: 'cleanup', attemptId: null, payload: { purpose: 'cancellation' }, state: 'intended', at: '2026-11-03T00:00:00.000Z', settledAt: null, result: null }];
+        });
+        expect((await answer(remote.client, 909, 'rooms.delete', target('plan'))).error).toMatchObject({ code: 'conflict' });
+        await updateMap(p.dir, p.workId, (current) => {
+          current.plans.find((entry) => entry.id === 'pl-01')!.autonomous!.ops = [];
+        });
+        expect((await answer(remote.client, 910, 'rooms.delete', target('plan'))).error).toBeUndefined();
+        expect(await room('plan')).toBeUndefined();
+
+        // Обычная комната: архив и удаление меняют карту; архивную комнату удалить можно.
+        expect((await answer(remote.client, 911, 'rooms.archive', { ...target('gone'), stopSessions: false })).error).toBeUndefined();
+        expect((await room('gone'))?.archivedAt).toEqual(expect.any(String));
+        expect((await answer(remote.client, 912, 'rooms.delete', target('gone'))).error).toBeUndefined();
+        expect(await room('gone')).toBeUndefined();
+        expect((await answer(remote.client, 913, 'rooms.delete', target('del'))).error).toBeUndefined();
+        expect(await room('del')).toBeUndefined();
+
+        // Архивная работа: conflict сразу, без host.notice.
+        await updateMap(p.dir, p.workId, (current) => {
+          current.work.status = 'archived';
+        });
+        for (const [id, method, params] of [
+          [914, 'rooms.archive', { ...target('plain'), stopSessions: false }],
+          [915, 'rooms.delete', target('plain')],
+        ] as const) {
+          const seen = await collectUntil((remote.client.send({ id, method, params }), remote.client), id);
+          expect(seen.at(-1)?.error, method).toMatchObject({ code: 'conflict', message: 'the work is archived' });
+          expect(seen.some((message) => message.event === 'host.notice'), method).toBe(false);
+        }
+        expect(await room('plain')).toBeDefined();
+        remote.client.close();
+      } finally {
+        delete process.env['PARLEY_CLAUDE_BIN'];
       }
     }, 40_000);
 

@@ -981,6 +981,30 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         const engine = session.workspace !== undefined && session.workspace !== null;
         return { workArchived: map.work.status === 'archived', lifecycle: session.lifecycle, live, engine };
       },
+      // Свежая карта, не снимок (правки 21): комната могла уйти в автономный прогон или работа — в архив после снимка.
+      roomState: async (projectPath, workId, roomId) => {
+        if (worksService.entry(projectPath, workId) === undefined) return null;
+        const map = await readMap(projectPath, workId).catch(() => null);
+        const room = map?.rooms.find((entry) => entry.id === roomId);
+        if (!map || !room) return null;
+        // «Автономный прогон» (правило 20.3, критик A41a M1) — любое из трёх: режим комнаты; незакрытый участник — сессия
+        // движка (`workspace`), которую `archiveHumanRoom` с `stopSessions` усыпил бы мимо `remoteSessionGate`; живой
+        // автономный план комнаты — `active` или `completing`, либо с неисполненной операцией (`intended`): `deleteRoom`
+        // унёс бы его вместе с комнатой. Предложенный, завершённый и отменённый план без операций прогоном не считается.
+        const engineMember = room.members.some((id) => {
+          const member = map.sessions.find((entry) => entry.id === id);
+          return member !== undefined && member.lifecycle !== 'closed' && member.workspace != null;
+        });
+        const livePlan = (map.plans ?? []).some(
+          (plan) =>
+            plan.roomId === roomId &&
+            plan.mode === 'autonomous' &&
+            (plan.status === 'active' ||
+              plan.status === 'completing' ||
+              (plan.autonomous?.ops ?? []).some((op) => op.state === 'intended')),
+        );
+        return { workArchived: map.work.status === 'archived', autonomous: room.mode === 'autonomous' || engineMember || livePlan };
+      },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
       trustFolder: async (projectPath) => {

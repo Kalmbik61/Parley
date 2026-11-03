@@ -152,4 +152,27 @@ describe('phone action notifications', () => {
     ]);
     expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
   });
+
+  it('A41a: room-archive and room-delete name the room and its work, with the Revoke button; coalesced per room and kind', async () => {
+    const t = setup();
+    const room = (roomId: string, label: string) => ({ projectPath: '/Users/a/proj', workId: 'w-1', roomId, label });
+    t.notifier.handle({ deviceId: ID, kind: 'room-archive', target: room('r-1', 'Design') });
+    t.notifier.handle({ deviceId: ID, kind: 'room-archive', target: room('r-1', 'Design') });
+    t.notifier.handle({ deviceId: ID, kind: 'room-archive', target: room('r-2', 'Review') });
+    t.notifier.handle({ deviceId: ID, kind: 'room-delete', target: room('r-1', 'Design') });
+    // Not a room target for these kinds, and a room target for another kind: nothing is shown.
+    t.notifier.handle({ deviceId: ID, kind: 'room-delete', target: { projectPath: '/Users/a/proj', workId: 'w-1', sessionId: 's-1' } });
+    t.notifier.handle({ deviceId: ID, kind: 'session-close', target: room('r-3', 'x') });
+    await flush();
+    expect(t.shown.map((n) => n.body).sort()).toEqual([
+      'Archived room Design in Auth rework',
+      'Archived room Review in Auth rework',
+      'Deleted room Design in Auth rework',
+    ]);
+    expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
+    t.advance(10_000);
+    t.notifier.handle({ deviceId: ID, kind: 'room-archive', target: room('r-1', 'Design') });
+    await flush();
+    expect(t.shown).toHaveLength(4);
+  });
 });
