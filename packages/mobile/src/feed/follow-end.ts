@@ -12,8 +12,9 @@
 
 export const PIN_QUIET_MS = 500;
 export const PIN_MAX_MS = 3000;
-/** A44b: the feed stays invisible while the pin works; it shows after one frame without growth, at the latest after this. */
-export const REVEAL_FRAME_MS = 32;
+/** A44b: the feed stays invisible while the pin works; it shows once the last scroll has landed at the end and REVEAL_FRAME_MS passed without growth, at the latest after this. */
+/** Longer than the controller's repeat scroll (80 ms): the virtualized list grows in steps ~66 ms apart, one frame of quiet showed it between the steps. */
+export const REVEAL_FRAME_MS = 130;
 export const REVEAL_CAP_MS = 600;
 export const NEAR_BOTTOM = 80;
 /** A scroll event this soon after a size change is the echo of that change. */

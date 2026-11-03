@@ -138,7 +138,7 @@ describe('follow controller (A44)', () => {
   it('A44b: the list shows one frame after the last growth, once the scroll has landed at the end', () => {
     const { c, reveals } = setup();
     c.contentSizeChanged(3000);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(140);
     expect(reveals).toEqual([]); // quiet, but no scroll event has seen the end yet
     c.scroll(landed(3000));
     expect(reveals.length).toBe(1);
