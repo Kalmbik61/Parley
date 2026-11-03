@@ -174,6 +174,14 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
   }
+  // A45: a short chat above the demo question card, so the card shows in full without the loading placeholder.
+  store.dispatch({ t: 'feed.open', ref: ref('a13') });
+  store.dispatch({
+    t: 'feed.loaded', ref: ref('a13'), epoch: 'demo', revision: 2, mode: null, decisions: null,
+    items: [
+      { kind: 'text', id: 'q2', at: ago(6), messageId: 'mq2', streaming: false, text: 'I have a few questions before I touch the branch.' },
+    ] as never[],
+  });
   // A32/A33: a room chat for the room screen.
   const rref = { projectPath: P, workId: 'w1', roomId: 'r1' };
   const letter2 = (id: string, from: string, min: number, text: string, extra: Record<string, unknown> = {}) =>

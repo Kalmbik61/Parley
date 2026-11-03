@@ -14,6 +14,7 @@ import { cardBelongsToSession } from '../../cards/consent-model';
 import { ActiveCard } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
+import { pruneQuestionDrafts } from '../../cards/question-drafts';
 import { capsuleOf, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -128,6 +129,12 @@ export default function SessionScreen() {
   useGoneDismiss(client, goneHere);
 
   const cardCount = state !== null && ref !== null ? (state.cards[sessionKey(ref)]?.cards.length ?? 0) : 0;
+  // A45: a question card that settled elsewhere (answered at the Mac, stale, gone) takes its draft with it, as in the window.
+  const pendingCards = state !== null && ref !== null ? state.cards[sessionKey(ref)] : undefined;
+  useEffect(() => {
+    if (ref === null || pendingCards === undefined || pendingCards.error) return;
+    pruneQuestionDrafts(sessionKey(ref), pendingCards.cards.map((card) => card.cardId));
+  }, [pendingCards]);
   const seenCount = useRef<number | null>(null);
   useEffect(() => {
     if (loading) return;

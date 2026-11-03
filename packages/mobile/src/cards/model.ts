@@ -116,12 +116,42 @@ export const stepLabel = (draft: QuestionDraft, count: number): string | null =>
 export const hasBack = (draft: QuestionDraft, count: number): boolean => stepOf(draft, count) > 0;
 export const isLastStep = (draft: QuestionDraft, count: number): boolean => stepOf(draft, count) >= count - 1;
 
-/** Next is enabled when the current question has an answer (and there is a next one). */
+/** Why the card cannot be answered here at all (truncated, or two questions with one text); `null` when it can. */
+export const UNANSWERABLE_TEXT = "This question can't be answered here — answer at your Mac";
+export const TOO_LONG_TEXT = 'Answer is too long — 16 KB max';
+export function unanswerableReason(card: FeedQuestionCard): string | null {
+  if (card.truncated === true || card.questions.length === 0) return UNANSWERABLE_TEXT;
+  return new Set(card.questions.map((q) => q.question)).size !== card.questions.length ? UNANSWERABLE_TEXT : null;
+}
+
+/** The caption under the card for the current step: why Next / Send answer is off, when it is not just "no answer yet". */
+export function stepNote(card: FeedQuestionCard, draft: QuestionDraft): string | null {
+  const unanswerable = unanswerableReason(card);
+  if (unanswerable !== null) return unanswerable;
+  const at = stepOf(draft, card.questions.length);
+  const q = card.questions[at];
+  return q !== undefined && answerOf(q, at, draft).length > ANSWER_LIMIT ? TOO_LONG_TEXT : null;
+}
+
+/** Next is enabled when the current question has a valid answer (non-empty, within the limit — as the island's `valid(step)`) and there is a next one. */
 export function canNext(card: FeedQuestionCard, draft: QuestionDraft): boolean {
   const at = stepOf(draft, card.questions.length);
   const q = card.questions[at];
-  return q !== undefined && !isLastStep(draft, card.questions.length) && answerOf(q, at, draft) !== '';
+  if (q === undefined || isLastStep(draft, card.questions.length) || unanswerableReason(card) !== null) return false;
+  const a = answerOf(q, at, draft);
+  return a !== '' && a.length <= ANSWER_LIMIT;
 }
+
+/** What VoiceOver hears when the question changes: "Question 2 of 3. <text>"; just the text for a single question. */
+export function stepAnnouncement(card: FeedQuestionCard, draft: QuestionDraft): string {
+  const count = card.questions.length;
+  const text = card.questions[stepOf(draft, count)]?.question ?? '';
+  const label = stepLabel(draft, count);
+  return label === null ? text : `${label}. ${text}`;
+}
+
+/** Taps on Next / Send answer this soon after a step change are ignored (a double tap must not reach "Send answer"). */
+export const STEP_TAP_GUARD_MS = 400;
 
 export const nextStep = (card: FeedQuestionCard, draft: QuestionDraft): QuestionDraft =>
   canNext(card, draft) ? { ...draft, step: stepOf(draft, card.questions.length) + 1 } : draft;

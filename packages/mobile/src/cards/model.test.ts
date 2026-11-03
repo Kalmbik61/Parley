@@ -9,8 +9,13 @@ import {
   canSend,
   hasBack,
   nextStep,
+  stepAnnouncement,
   stepLabel,
+  stepNote,
   stepOf,
+  TOO_LONG_TEXT,
+  UNANSWERABLE_TEXT,
+  unanswerableReason,
   canAlways,
   EMPTY_QUESTION_DRAFT,
   fullCommand,
@@ -173,5 +178,33 @@ describe('question steps', () => {
     expect(expected).toEqual({ 'One?': 'a', 'Two?': 'a, b, mine', 'Three?': 'typed' });
     expect(questionDecision(three, d)).toEqual({ kind: 'question', answers: expected });
     three.questions.forEach((x, at) => expect(answerOf(x, at, d)).toBe(windowAnswerOf(x, at, d)));
+  });
+});
+
+describe('question steps — validity and announcement (A45 review)', () => {
+  const q = (question: string) => ({ question, header: null, options: [{ label: 'a', description: null }], multiSelect: false });
+  const card = (over: object, questions = [q('One?'), q('Two?')]) => ({ kind: 'question', cardId: 'c', state: 'pending', questions, ...over }) as unknown as FeedQuestionCard;
+  const typed = (text: string) => ({ ...toggleOther(EMPTY_QUESTION_DRAFT, 0, q('One?')), otherText: { 0: text } });
+
+  it('Next refuses an answer over the 16 KB limit and says why', () => {
+    const c = card({});
+    expect(canNext(c, typed('x'.repeat(16 * 1024)))).toBe(true);
+    expect(canNext(c, typed('x'.repeat(16 * 1024 + 1)))).toBe(false);
+    expect(stepNote(c, typed('x'.repeat(16 * 1024 + 1)))).toBe(TOO_LONG_TEXT);
+    expect(stepNote(c, typed('fine'))).toBeNull();
+  });
+  it('a truncated card or duplicate question texts say so from the first question and block Next', () => {
+    for (const c of [card({ truncated: true }), card({}, [q('Same?'), q('Same?')])]) {
+      expect(unanswerableReason(c)).toBe(UNANSWERABLE_TEXT);
+      expect(stepNote(c, EMPTY_QUESTION_DRAFT)).toBe(UNANSWERABLE_TEXT);
+      expect(canNext(c, togglePick(EMPTY_QUESTION_DRAFT, 0, c.questions[0]!, 'a'))).toBe(false);
+    }
+    expect(unanswerableReason(card({}))).toBeNull();
+  });
+  it('announces "Question i of N. text", and just the text for a single question', () => {
+    const c = card({});
+    expect(stepAnnouncement(c, EMPTY_QUESTION_DRAFT)).toBe('Question 1 of 2. One?');
+    expect(stepAnnouncement(c, { ...EMPTY_QUESTION_DRAFT, step: 1 })).toBe('Question 2 of 2. Two?');
+    expect(stepAnnouncement(card({}, [q('Only?')]), EMPTY_QUESTION_DRAFT)).toBe('Only?');
   });
 });
