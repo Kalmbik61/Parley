@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Notifications from 'expo-notifications';
 import { registerPush } from '../push/register';
+import { DEV_BUILD } from '../dev/build';
 import { seedHostFromEnv } from '../dev/seed-host';
 import { createPlatform } from '../platform';
 import { LocalSettings } from '../settings/local-settings';
@@ -14,7 +15,7 @@ const devRelay = Constants.expoConfig?.extra?.devRelay;
 
 let relayHost: () => string | null = () => null;
 
-const platform = createPlatform({ allowLocalRelay: __DEV__, relayHost: () => relayHost() });
+const platform = createPlatform({ allowLocalRelay: DEV_BUILD, relayHost: () => relayHost() });
 
 // The marker lives in the app's own storage, which iOS deletes with the app; the Keychain survives (spec §7.8).
 const markerDir = new Directory(Paths.document);

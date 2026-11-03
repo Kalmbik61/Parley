@@ -1,7 +1,7 @@
 // Settings (D1 §11): Macs, Security, Notifications, About.
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Linking, ScrollView, StyleSheet } from 'react-native';
-import { approve } from '../../../auth/instance';
+import { AppState, Linking, ScrollView, StyleSheet, View } from 'react-native';
+import { appLock } from '../../../auth/lock-instance';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { ConnectionBanner } from '../../../components/ConnectionBanner';
@@ -14,6 +14,8 @@ import { useRuntimeState } from '../../../runtime/use-runtime';
 import { displayName } from '../../../settings/local-settings';
 import { biometryKind, biometryLabel, type BiometryKind } from '../../../settings/biometric';
 import { useColors } from '../../../theme';
+import { Stack } from 'expo-router';
+import { LargeTitle, useBarTitleOnScroll } from '../../../ui/bar';
 import { hostStatusLine } from '../../../hosts/status-line';
 
 export default function SettingsScreen() {
@@ -27,7 +29,7 @@ export default function SettingsScreen() {
   const [rtt, setRtt] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
-    setBiometric(await runtime.requireBiometric());
+    setBiometric(await runtime.lockEnabled());
     setKind(await biometryKind());
     setNotifOn(await runtime.notificationsEnabled());
     setPermission(await getPermission());
@@ -49,9 +51,12 @@ export default function SettingsScreen() {
   const version = Constants.expoConfig?.version ?? '0.0.0';
 
   const toggleBiometric = async (on: boolean): Promise<void> => {
-    if (!on && (await approve('disable')) !== 'ok') return; // turning protection off is itself protected
+    // Turning the protection off is itself behind Face ID; a failed prompt keeps it on.
+    const lock = appLock();
+    if (!on && lock !== null && lock.enabled() && (await lock.unlock()) !== 'ok') return;
     setBiometric(on);
-    await runtime.setRequireBiometric(on);
+    lock?.setEnabled(on);
+    await runtime.setLockEnabled(on);
   };
   const toggleNotifications = async (on: boolean): Promise<void> => {
     if (on && permission === 'undetermined') {
@@ -63,9 +68,14 @@ export default function SettingsScreen() {
     await runtime.setNotificationsEnabled(on);
   };
 
+  const scroll = useBarTitleOnScroll('Settings');
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
-      <ConnectionBanner />
+    <ScrollView onScroll={scroll.onScroll} scrollEventThrottle={scroll.scrollEventThrottle} contentInsetAdjustmentBehavior="automatic" style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
+      <Stack.Screen options={{ headerTitle: scroll.headerTitle }} />
+      <View>
+        <LargeTitle>Settings</LargeTitle>
+        <ConnectionBanner />
+      </View>
       <Section header="Macs">
         {state.hosts.map((h) => {
           const current = h.hostId === state.host?.hostId;
@@ -92,14 +102,14 @@ export default function SettingsScreen() {
         header="Security"
         footer={
           biometric
-            ? `Parley asks for ${label} before Allow and Accept. Deny, Return for rework, answers and viewing never ask.`
-            : `Allow and Accept are sent without ${label}. Anyone holding this unlocked iPhone can approve.`
+            ? `Parley asks for ${label} when it opens and after 5 minutes in the background. Inside that window nothing asks again.`
+            : `Parley opens without ${label}. Anyone holding this unlocked iPhone can use it and approve.`
         }
       >
         <Row
           last
           icon={kind === 'passcode' ? 'lock.fill' : kind}
-          title={`Require ${label} to allow`}
+          title={`Lock Parley with ${label}`}
           subtitle={kind === 'passcode' ? `${label} isn't set up — your passcode is used` : undefined}
           toggle={{ value: biometric, onChange: (v) => void toggleBiometric(v) }}
         />

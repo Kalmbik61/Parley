@@ -32,6 +32,7 @@ function mount(state: RemoteState = RUNNING, extra: (bridge: FakeBridge) => void
   bridge.setRemoteHandler('pair.answer', () => null);
   bridge.setRemoteHandler('devices.list', () => [DEVICE]);
   bridge.setRemoteHandler('devices.revoke', () => null);
+  bridge.setRemoteHandler('devices.revokeConfirm', () => true);
   bridge.setRemoteHandler('reset', () => null);
   bridge.setRemoteHandler('audit.tail', () => []);
   bridge.setRemoteHandler('setEnabled', ({ enabled }) => ({ ...state, enabled, process: enabled ? 'running' : 'off' }));
@@ -161,14 +162,14 @@ describe('RemoteSettings', () => {
   it('revokes a device and resets only after a confirmation', async () => {
     const { bridge } = mount();
     fireEvent.click(await screen.findByTestId('remote-revoke'));
-    await waitFor(() => expect(bridge.remoteCalls.some((c) => c.name === 'devices.revoke' && (c.params as { deviceId: string }).deviceId === 'd1')).toBe(true));
+    await waitFor(() => expect(bridge.remoteCalls.some((c) => c.name === 'devices.revokeConfirm' && (c.params as { deviceId: string }).deviceId === 'd1')).toBe(true));
     fireEvent.click(screen.getByTestId('remote-reset'));
     expect(bridge.remoteCalls.some((c) => c.name === 'reset')).toBe(false);
     fireEvent.click(screen.getByTestId('remote-reset-yes'));
     await waitFor(() => expect(bridge.remoteCalls.some((c) => c.name === 'reset')).toBe(true));
   });
 
-  it('the «Allow creating sessions and rooms» switch is on by default and writes remoteCreate', async () => {
+  it('the «Allow starting and messaging agents» switch is on by default and writes remoteCreate', async () => {
     const { save } = mount();
     const toggle = await screen.findByTestId('remote-allow-create');
     expect(toggle.getAttribute('aria-checked')).toBe('true');

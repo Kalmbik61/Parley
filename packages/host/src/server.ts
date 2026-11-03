@@ -11,7 +11,7 @@ import {
   WORKS_SYNC_FEATURE,
   parseIncoming,
 } from '@parley/protocol';
-import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
+import type { MethodName, NotificationName, ResponseMessage, SessionRef } from '@parley/protocol';
 import {
   REMOTE_METHODS,
   REMOTE_NOTIFICATIONS,
@@ -53,6 +53,41 @@ export interface RemoteLaunchPolicy {
   projectKnown(projectPath: string): boolean;
   /** Работа этого проекта существует, архивная тоже: чтения и решения по ней. */
   workKnown(projectPath: string, workId: string): boolean;
+  /**
+   * Сессия есть в карте неархивной работы известного проекта: сообщение агенту `pty.send` (спека 4.2, правки 15).
+   * Архивная работа закрыта для сообщений явно, как для запуска (критик s-199, нит).
+   */
+  sessionKnown(projectPath: string, workId: string, sessionId: string): boolean;
+  /**
+   * `sessions.create` с `trustFolder: true`: доверить папку проекта до запуска тем же путём, что окно (`trust.check`,
+   * затем `trust.grant` с `by: 'phone'`). Зовётся только после всех проверок роли `remote`.
+   */
+  trustFolder(projectPath: string): Promise<void>;
+  /**
+   * Состояние сессии по свежей карте работы (критик A37a M1): `null` — нет такой работы или сессии. Читается до
+   * обработчика вызовов роли `remote` по одной сессии (`REMOTE_SESSION_RULES`).
+   */
+  sessionState(projectPath: string, workId: string, sessionId: string): Promise<RemoteSessionState | null>;
+  /**
+   * Состояние комнаты по свежей карте работы (меню комнаты, правки 21): `null` — нет такого проекта, работы или
+   * комнаты. Читается до обработчика `rooms.archive` и `rooms.delete` роли `remote`.
+   */
+  roomState(projectPath: string, workId: string, roomId: string): Promise<RemoteRoomState | null>;
+}
+
+export interface RemoteRoomState {
+  workArchived: boolean;
+  /** Комната идущего автономного прогона: телефон её не меняет. */
+  autonomous: boolean;
+}
+
+export interface RemoteSessionState {
+  workArchived: boolean;
+  lifecycle: string;
+  /** Процесс агента идёт в этом хосте (его PTY). */
+  live: boolean;
+  /** Сессия автономного движка (`workspace`): телефон в идущий прогон не вмешивается (правки 14, критик A38a m6). */
+  engine: boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -73,13 +108,97 @@ const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEA
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
-/** Методы запуска с телефона за одним переключателем `remoteCreate` (спека 4.2); `providers.list` и `roles.list` — чтение. */
+/** Методы запуска с телефона: только в существующую неархивную работу (`sessions.create` — ещё и в новую). */
 const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
+/**
+ * За одним переключателем `remoteCreate` (спека 4.2, правки 17): запуск, сообщение агенту и согласия — `trustFolder`
+ * ключом `sessions.create`, `consents.decide` (Allow — доверие к папке или агент на другом провайдере; критик M2),
+ * `sessions.resume` (пробуждение спящей сессии, правки 19) и меню сессии (правки 20: Stop, Put to sleep, Close, замена
+ * провайдера); у них цель — известный проект и работа по `ref`.
+ * `providers.list`, `roles.list`, `consents.list` и `trust.check` — чтение.
+ */
+const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
+  ...REMOTE_LAUNCH_METHODS,
+  'pty.send',
+  'consents.decide',
+  'sessions.resume',
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchOptions',
+  'sessions.switchAgent',
+  // Меню комнаты (правки 21): Archive и Delete; цель — известный проект, работа и комната (`remoteRoomGate`).
+  'rooms.archive',
+  'rooms.delete',
+]);
 
-/** Метод белого списка, открытый клиенту `remote` сейчас: методы запуска — только при включённом `remoteCreate`. */
+/**
+ * Состояние сессии, в котором её метод с телефона имеет смысл (критик A37a): будить — только спящую, Stop и Put to
+ * sleep — только идущую в этом хосте (A38a). Закрытая сессия, архивная работа и неизвестная сессия отсекаются до
+ * правила для всех методов из этого списка.
+ */
+const anyOpen = (): null => null;
+const onlyLive = (state: RemoteSessionState): string | null => (state.live ? null : 'session is not running');
+const REMOTE_SESSION_RULES: Readonly<Record<string, (state: RemoteSessionState) => string | null>> = {
+  // `active` без PTY этого хоста — второй `claude --resume`; `pending` — запуск раньше движка или терминала.
+  'sessions.resume': (state) => (state.lifecycle === 'sleeping' ? null : 'session is not asleep'),
+  'feed.interrupt': onlyLive,
+  'sessions.stop': onlyLive,
+  'sessions.close': anyOpen,
+  'sessions.switchOptions': anyOpen,
+  // `pending` с процессом вне Parley — второй агент в том же worktree (критик A38a m2): как окно, спящая или идущая.
+  'sessions.switchAgent': (state) =>
+    state.lifecycle === 'sleeping' || state.live ? null : 'session is neither asleep nor running in this host',
+};
+/** Чтение: сессию движка можно смотреть, менять — нет. */
+const REMOTE_ENGINE_READS: ReadonlySet<string> = new Set(['sessions.switchOptions']);
+
+/** Проверка сессии до обработчика (критик A37a M1, m1, m2): ошибка с кодом протокола, без рассылки `host.notice`. */
+async function remoteSessionGate(method: string, params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
+  if (!Object.hasOwn(REMOTE_SESSION_RULES, method)) return;
+  const rule = REMOTE_SESSION_RULES[method]!;
+  // Правило параметров уже проверило `ref`: три непустые строки.
+  const { projectPath, workId, sessionId } = (params as { ref: SessionRef }).ref;
+  const state = await policy.sessionState(projectPath, workId, sessionId);
+  if (state === null) throw new HostError('bad_request', 'unknown session');
+  if (state.workArchived) throw new HostError('conflict', 'the work is archived');
+  if (state.lifecycle === 'closed') throw new HostError('conflict', 'session is closed');
+  if (state.engine && !REMOTE_ENGINE_READS.has(method)) {
+    throw new HostError('conflict', 'the phone does not change sessions of an autonomous run');
+  }
+  const refused = rule(state);
+  if (refused !== null) throw new HostError('conflict', refused);
+}
+
+/** Методы меню комнаты: проверка комнаты на свежей карте до обработчика. */
+const REMOTE_ROOM_METHODS: ReadonlySet<string> = new Set(['rooms.archive', 'rooms.delete']);
+
+/**
+ * Проверка комнаты до обработчика (правки 21): неизвестная — `bad_request`, архивная работа и автономный прогон —
+ * `conflict`. Архивную комнату удалить можно, повторная архивация — no-op ядра.
+ * Принятая гонка (критик A41a m3): карта читается без замка, обработчик берёт свой `updateMap` позже. Состояние комнаты
+ * может смениться в этом промежутке (миллисекунды); обработчики окна проверяют только работу, и строгая проверка внутри
+ * транзакции потребовала бы менять их. Как у `remoteSessionGate`, остаток принят.
+ */
+async function remoteRoomGate(params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
+  // Правило параметров уже проверило три непустые строки.
+  const { projectPath, workId, roomId } = params as { projectPath: string; workId: string; roomId: string };
+  const state = await policy.roomState(projectPath, workId, roomId);
+  if (state === null) throw new HostError('bad_request', 'unknown room');
+  if (state.workArchived) throw new HostError('conflict', 'the work is archived');
+  if (state.autonomous) throw new HostError('conflict', 'the phone does not change rooms of an autonomous run');
+}
+
+/**
+ * Клиенты, чей сокет уже закрыт: после `await` записи доверия запуск для ушедшего телефона не идёт (критик m9).
+ * WeakSet — запись живёт, пока жив сам `Client`.
+ */
+const closedClients = new WeakSet<Client>();
+
+/** Метод белого списка, открытый клиенту `remote` сейчас: запуск, сообщения и согласия — только при включённом `remoteCreate`. */
 function remoteMethodOpen(name: string, options: ServerOptions): boolean {
   if (!REMOTE_METHOD_SET.has(name)) return false;
-  return !REMOTE_LAUNCH_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
+  return !REMOTE_SWITCHED_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
 }
 /**
  * Что хост принимает из `hello.features` клиента `remote` (спека мобильного приложения 4.4: мост заявляет ровно их).
@@ -134,7 +253,10 @@ function handleConnection(socket: Socket, options: ServerOptions): void {
 
   socket.on('close', () => {
     clearTimeout(helloTimer);
-    if (client) options.unregisterClient(client);
+    if (client) {
+      closedClients.add(client);
+      options.unregisterClient(client);
+    }
   });
 
   // 'error' без обработчика роняет процесс; 'close' придёт следом сам по себе
@@ -238,12 +360,26 @@ function rejectedForRemote(raw: unknown, client: Client, options: ServerOptions)
   return true;
 }
 
-/** Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2). */
-function remoteWorkOpen(params: unknown, options: ServerOptions): boolean {
+/**
+ * Запуск с телефона — только в существующую неархивную работу известного хосту проекта (спека 4.2); `sessions.create`
+ * с `workId: null` — новая работа, но тоже только в известном проекте: произвольную папку с телефона не задать.
+ */
+function remoteWorkOpen(method: string, params: unknown, options: ServerOptions): boolean {
   if (typeof params !== 'object' || params === null) return false;
   const { projectPath, workId } = params as Record<string, unknown>;
-  if (typeof projectPath !== 'string' || typeof workId !== 'string') return false;
+  if (typeof projectPath !== 'string') return false;
+  if (method === 'sessions.create' && workId === null) return options.remoteLaunch?.projectKnown(projectPath) === true;
+  if (typeof workId !== 'string') return false;
   return options.remoteLaunch?.workOpen(projectPath, workId) === true;
+}
+
+/** Сообщение агенту с телефона — только в сессию из карты известного проекта (спека 4.2, правки 15). */
+function remoteSessionKnown(params: unknown, options: ServerOptions): boolean {
+  const ref = (params as Record<string, unknown>).ref;
+  if (typeof ref !== 'object' || ref === null) return false;
+  const { projectPath, workId, sessionId } = ref as Record<string, unknown>;
+  if (typeof projectPath !== 'string' || typeof workId !== 'string' || typeof sessionId !== 'string') return false;
+  return options.remoteLaunch?.sessionKnown(projectPath, workId, sessionId) === true;
 }
 
 /** Проект и работа, которые называет вызов: верхний уровень и `ref` сессии (у `roles.list` — оба). */
@@ -265,8 +401,15 @@ function remoteTargets(params: unknown): { projectPath: string; workId: string |
  * проектом — в известный проект и существующую работу. Вызовы без проекта (`works.list`, `host.info`) не затронуты.
  */
 function remoteTargetsKnown(method: string, params: unknown, options: ServerOptions): boolean {
-  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(params, options);
+  if (REMOTE_LAUNCH_METHODS.has(method)) return remoteWorkOpen(method, params, options);
+  if (method === 'pty.send') return remoteSessionKnown(params, options);
   const policy = options.remoteLaunch;
+  // `trust.check {folder}` — ответ только для известного проекта: телефон не узнаёт, доверена ли чужая папка. Без
+  // политики известных проектов нет — отказ, а не пропуск.
+  if (method === 'trust.check') {
+    const { folder } = params as Record<string, unknown>;
+    return typeof folder === 'string' && policy?.projectKnown(folder) === true;
+  }
   if (policy === undefined) return true;
   return remoteTargets(params).every(({ projectPath, workId }) =>
     workId === null ? policy.projectKnown(projectPath) : policy.workKnown(projectPath, workId),
@@ -309,7 +452,10 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   }
 
   const { id, method } = parsed.message;
-  if (client.role === 'remote' && !checkRemoteParams(method, parsed.params)) {
+  // Правила роли `remote` смотрят на параметры кадра, а не на разобранные схемой: схема отбрасывает незнакомые ключи, и
+  // правило не увидело бы ни обязательного `clientMsgId` у `pty.send`, ни `trustFolder` у `sessions.create`, ни лишнего
+  // ключа (спека 4.2: лишний ключ → `bad_request`). Так же проверяет мост.
+  if (client.role === 'remote' && !checkRemoteParams(method, parsed.message.params)) {
     client.send({ id, error: { code: 'bad_request', message: `params are not allowed for remote clients: ${method}` } });
     return;
   }
@@ -351,7 +497,33 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     }
   };
 
-  Promise.resolve(handler(parsed.params as never, request))
+  // `trustFolder: true` с телефона (спека 4.2): запись доверия — после всех проверок роли и до запуска. Схема хоста ключ
+  // не знает и отбрасывает, поэтому он читается из кадра; правило параметров уже проверило, что это boolean.
+  const trustFirst =
+    client.role === 'remote' && method === 'sessions.create' && (parsed.message.params as Record<string, unknown>).trustFolder === true
+      ? (parsed.params as { projectPath: string }).projectPath
+      : null;
+  const policy = options.remoteLaunch;
+  const roomGated = client.role === 'remote' && policy !== undefined && REMOTE_ROOM_METHODS.has(method);
+  const gated = client.role === 'remote' && policy !== undefined && (roomGated || Object.hasOwn(REMOTE_SESSION_RULES, method));
+  // Без доверия и проверки сессии обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не
+  // меняется.
+  const pending = gated
+    ? (roomGated ? remoteRoomGate(parsed.params, policy) : remoteSessionGate(method, parsed.params, policy)).then(() => {
+        if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
+        if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected');
+        return handler(parsed.params as never, request);
+      })
+    : trustFirst === null || policy === undefined
+    ? Promise.resolve(handler(parsed.params as never, request))
+    : policy.trustFolder(trustFirst).then(() => {
+        // Пока писалось доверие, переключатель могли выключить, а телефон — уйти (критик m9): тогда запуска нет.
+        // Доверие уже записано, как у окна при отказе запуска после согласия (критик m7, спека 4.2).
+        if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
+        if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected before the launch');
+        return handler(parsed.params as never, request);
+      });
+  pending
     .then(async (result) => {
       const prepared = await resolvePreparedWorksSyncReply(result, id);
       if (prepared !== undefined) {

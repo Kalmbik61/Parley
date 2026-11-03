@@ -65,6 +65,8 @@ export interface RemoteCalls {
   'pair.answer': { params: { requestId: string; allow: boolean }; result: null };
   'devices.list': { params: Record<string, never>; result: RemoteDevice[] };
   'devices.revoke': { params: { deviceId: string }; result: null };
+  /** Asks in a native dialog in main, then revokes; true = revoked. */
+  'devices.revokeConfirm': { params: { deviceId: string }; result: boolean };
   reset: { params: Record<string, never>; result: null };
   'audit.tail': { params: { limit: number }; result: RemoteAuditRecord[] };
 }
@@ -78,6 +80,7 @@ export const REMOTE_CALL_NAMES: readonly RemoteCallName[] = [
   'pair.answer',
   'devices.list',
   'devices.revoke',
+  'devices.revokeConfirm',
   'reset',
   'audit.tail',
 ];

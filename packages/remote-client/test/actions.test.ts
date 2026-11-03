@@ -186,3 +186,27 @@ describe('wave 3: timeout and stale reads', () => {
     }
   });
 });
+
+describe('decideConsent: project-mcp', () => {
+  const pair = [{ name: 'fs', fingerprint: 'f1' }];
+  it('allow carries the enabled pairs, deny carries none', async () => {
+    const { client, rpc } = setup(async () => ({ applied: true, state: 'allowed' }));
+    expect(await client.decideConsent('c-9', 'allow', { enabled: pair, revision: 4 })).toEqual({ outcome: 'applied' });
+    expect(rpc.call).toHaveBeenCalledWith('consents.decide', { id: 'c-9', decision: 'allow', enabled: pair, revision: 4 });
+    await client.decideConsent('c-9', 'deny', { enabled: pair, revision: 4 });
+    expect(rpc.call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-9', decision: 'deny', revision: 4 });
+    await client.decideConsent('c-8', 'allow');
+    expect(rpc.call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-8', decision: 'allow' });
+  });
+
+  it('bad_request is returned as rejected and the cards are re-read', async () => {
+    const fresh = { id: 'c-9', kind: 'project-mcp', version: 1, projectPath: '/p', repo: '/p', at: 'a', state: 'pending', servers: [{ name: 'fs', fingerprint: 'f2', command: 'x' }], requestedBy: { source: 'launch' } };
+    const { client, rpc } = setup(async (method) => {
+      if (method === 'consents.decide') throw Object.assign(new Error('changed'), { code: 'bad_request' });
+      return { items: [fresh] };
+    });
+    expect(await client.decideConsent('c-9', 'allow', { enabled: pair, revision: 4 })).toEqual({ outcome: 'rejected', code: 'bad_request', message: 'changed' });
+    expect(rpc.call).toHaveBeenCalledWith('consents.list', {});
+    expect(client.store.getState().consents.items).toEqual([fresh]);
+  });
+});

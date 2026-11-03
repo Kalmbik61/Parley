@@ -19,7 +19,7 @@ function fakeSocket(): { socket: Socket; written: string[] } {
 }
 
 describe('граница отправки клиента remote (спека мобильного приложения 4.1)', () => {
-  it('send: ответы и события из REMOTE_EVENTS проходят, feed.changed и telegram.changed — нет', () => {
+  it('send: ответы и события из REMOTE_EVENTS проходят, pty.exit и telegram.changed — нет', () => {
     const { socket, written } = fakeSocket();
     const client = createClient(socket, 'remote', [], 'remote');
     expect(client.role).toBe('remote');
@@ -28,7 +28,8 @@ describe('граница отправки клиента remote (спека мо
     expect(client.send({ id: 2, error: { code: 'not_found', message: 'нет' } })).toBe(true);
     expect(client.send({ event: 'works.changed', data: {} } as never)).toBe(true);
     // Отброшенный кадр — не переполнение: `true`, клиента не считают медленным.
-    expect(client.send({ event: 'feed.changed', data: {} } as never)).toBe(true);
+    // `feed.changed` с A27 — событие этапа A; запретное здесь — событие этапа B.
+    expect(client.send({ event: 'pty.exit', data: {} } as never)).toBe(true);
     expect(client.send({ event: 'telegram.changed', data: {} } as never)).toBe(true);
     expect(client.send({ event: 'pty.output', data: {} } as never)).toBe(true);
 
@@ -44,7 +45,7 @@ describe('граница отправки клиента remote (спека мо
     const client = createClient(socket, 'remote', [], 'remote');
     const allowed = encodeLine({ event: 'works.changed', data: { n: 1 } } as never);
     const smuggled = encodeLine({ event: 'telegram.changed', data: { note: '"event":"works.changed"' } } as never);
-    const feed = encodeLine({ event: 'feed.changed', data: { event: 'works.changed' } } as never);
+    const feed = encodeLine({ event: 'pty.exit', data: { event: 'works.changed' } } as never);
 
     client.sendLine?.(smuggled);
     client.sendLine?.(feed);

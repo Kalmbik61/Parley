@@ -13,7 +13,7 @@ export interface TrustRecord {
   folder: string;
   /** Когда выдано, ISO-8601. */
   grantedAt: string;
-  by: 'window' | 'island' | 'telegram';
+  by: 'window' | 'island' | 'telegram' | 'phone';
 }
 
 /** Общие поля карточки согласия. */
@@ -100,7 +100,7 @@ export const consentMethodSchemas = {
   'trust.list': z.object({}),
   /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */
   'trust.check': z.object({ folder: z.string().min(1) }),
-  'trust.grant': z.object({ folder: z.string().min(1), by: z.enum(['window', 'island', 'telegram']) }),
+  'trust.grant': z.object({ folder: z.string().min(1), by: z.enum(['window', 'island', 'telegram', 'phone']) }),
   'trust.revoke': z.object({ folder: z.string().min(1) }),
 } as const;
 

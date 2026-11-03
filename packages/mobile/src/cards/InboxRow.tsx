@@ -90,7 +90,7 @@ function CardRow({ item, now, canAct, onOpen, onMenu }: InboxRowProps & { item: 
           <Gist text={view.summary} mono={view.mono} />
           <View style={styles.pair}>
             <Button title="Deny" flex disabled={!canAct || d.busy} onPress={() => void d.submit({ kind: 'permission', behavior: 'deny' })} />
-            <Button title="Allow" variant="prominent" icon="faceid" hint="Requires Face ID" flex loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'permission', behavior: 'allow' })} />
+            <Button title="Allow" variant="prominent" flex loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'permission', behavior: 'allow' })} />
           </View>
         </>
       ) : (

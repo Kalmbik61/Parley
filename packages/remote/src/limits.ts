@@ -20,6 +20,20 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'sessions.create',
   'rooms.create',
   'rooms.send',
+  // Сообщение агенту (A27, правки 13): повтор с тем же `clientMsgId` лимит не тратит (A30).
+  'pty.send',
+  // Решение по карточке согласия (A27): как `feed.decide`; цель в журнале — `id` карточки.
+  'consents.decide',
+  // Пробуждение спящей сессии (A37a, правки 19): лимит и журнал `call` с сессией из `ref`; `phone.action` нет.
+  'sessions.resume',
+  // Меню сессии (A38a, правки 20); `sessions.switchOptions` — чтение. Весомые: Close и замена провайдера.
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchAgent',
+  // Меню комнаты (A41a, правки 21): лимит, журнал `call` и `phone.action` после удачного вызова.
+  'rooms.archive',
+  'rooms.delete',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */
@@ -37,9 +51,6 @@ export function createRateLimiter(max: number, windowMs: number, now: () => numb
       recent.push(t);
       hits.set(key, recent);
       return true;
-    },
-    forget(key: string): void {
-      hits.delete(key);
     },
   };
 }

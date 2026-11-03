@@ -31,6 +31,10 @@ process.env['USERPROFILE'] = home;
 delete process.env['PARLEY_HOME'];
 delete process.env['HARNAS_HOME'];
 
+// Запуск Claude в папке с записью в `trust.json` пишет в файл состояния профиля (`claude-trust.ts`): унаследованная
+// `CLAUDE_CONFIG_DIR` направила бы эту запись в настоящий профиль человека. Свою папку тест ставит сам.
+delete process.env['CLAUDE_CONFIG_DIR'];
+
 // Хост, который тест поднимает отдельным процессом (`tsx main.ts` в `host.test.ts`), на старте
 // спрашивает у провайдеров версию (`<команда> --version`). Настоящие claude и codex в тестах
 // запускать нельзя даже с `--version`: пробу отключает переменная, её наследуют дочерние процессы.

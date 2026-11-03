@@ -2,8 +2,24 @@
 import type { FeedDecision } from '@parley/core';
 import {
   createRoom,
+  checkTrust,
   createSession,
   decide,
+  decideConsent,
+  type ConsentExtra,
+  sendMessage,
+  resumeSession,
+  sessionCommand,
+  archiveRoom,
+  deleteRoom,
+  loadSwitchOptions,
+  switchAgent,
+  type SessionCommand,
+  type SessionCommandOutcome,
+  type SwitchOptionsOutcome,
+  type SwitchAgentParams,
+  type SwitchAgentOutcome,
+  type ResumeSessionOutcome,
   loadProviders,
   loadRoles,
   readCards,
@@ -13,16 +29,20 @@ import {
   type CreateRoomParams,
   type CreateSessionOutcome,
   type CreateSessionParams,
+  type DecideConsentOutcome,
   type DecideOutcome,
+  type SendMessageOutcome,
+  type SendMessageParams,
   type ResolveOutcome,
   type ResolveProposalParams,
   type Rpc,
   type SendRoomMessageOutcome,
   type SendRoomMessageParams,
 } from './actions.js';
+import { createLiveSync, type LiveSync } from './live.js';
 import { createRefresher, type Clock, type Refresher } from './refresh.js';
 import { createRemoteStore, type RemoteStore } from './store.js';
-import { workKeyOf, type SessionRef } from './state.js';
+import { workKeyOf, type RoomRef, type SessionRef } from './state.js';
 
 export interface RemoteClientOptions {
   rpc: Rpc;
@@ -32,6 +52,7 @@ export interface RemoteClientOptions {
 export interface RemoteClient {
   store: RemoteStore;
   refresher: Refresher;
+  live: LiveSync;
   /** Кадр события моста или хоста. */
   handleEvent(event: string, data: unknown): void;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Promise<DecideOutcome>;
@@ -42,6 +63,33 @@ export interface RemoteClient {
   createSession(params: CreateSessionParams): Promise<CreateSessionOutcome>;
   createRoom(params: CreateRoomParams): Promise<CreateRoomOutcome>;
   sendRoomMessage(params: SendRoomMessageParams): Promise<SendRoomMessageOutcome>;
+  /** Экран комнаты открыт: история `context.messages` и живые `rooms.mail`. */
+  openRoom(ref: RoomRef): () => void;
+  /** Перечитать комнату / следующую более старую страницу. */
+  reloadRoom(ref: RoomRef): void;
+  loadOlder(ref: RoomRef): void;
+  /** Экран сессии открыт: лента подписана, пока вызов закрытия не сделан. */
+  openFeed(ref: SessionRef): () => void;
+  /** Написать агенту; повтор после `lost` — с тем же `clientMsgId`. */
+  sendMessage(params: SendMessageParams): Promise<SendMessageOutcome>;
+  /** Разбудить спящую сессию (`sessions.resume`); без автоповтора. */
+  resumeSession(ref: SessionRef): Promise<ResumeSessionOutcome>;
+  /** Stop (`feed.interrupt`), Put to sleep (`sessions.stop`), Close (`sessions.close`); без автоповтора. */
+  sessionCommand(method: SessionCommand, ref: SessionRef): Promise<SessionCommandOutcome>;
+  /** Archive room (`rooms.archive`); без автоповтора. */
+  archiveRoom(room: RoomRef, stopSessions: boolean): Promise<SessionCommandOutcome>;
+  /** Delete room (`rooms.delete`); без автоповтора. */
+  deleteRoom(room: RoomRef): Promise<SessionCommandOutcome>;
+  /** Цели замены провайдера (чтение). */
+  switchOptions(ref: SessionRef): Promise<SwitchOptionsOutcome>;
+  /** Заменить агента сессии; без автоповтора и без `force`. */
+  switchAgent(params: SwitchAgentParams): Promise<SwitchAgentOutcome>;
+  decideConsent(id: string, decision: 'allow' | 'deny', extra?: ConsentExtra): Promise<DecideConsentOutcome>;
+  /** Соединение готово / ушло; ведёт и перечитыватель карточек, и подписки. */
+  setConnected(connected: boolean): void;
+  setForeground(foreground: boolean): void;
+  /** Доверена ли папка проекта на Маке (`trust.check`); `null` — неизвестно. */
+  checkTrust(folder: string): Promise<boolean | null>;
   loadProviders(): Promise<boolean>;
   loadRoles(projectPath: string): Promise<boolean>;
   dispose(): void;
@@ -50,6 +98,7 @@ export interface RemoteClient {
 export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteClient {
   const store = createRemoteStore();
   const refresher = createRefresher({ store, rpc, clock });
+  const live = createLiveSync({ store, rpc, clock });
   const now = (): number => clock.now();
   const env = { now, sleep: (ms: number) => new Promise<void>((resolve) => clock.setTimeout(resolve, ms)) };
 
@@ -85,6 +134,7 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
   return {
     store,
     refresher,
+    live,
     handleEvent: (event, data) => store.handleEvent(event, data),
     decide: (ref, cardId, decision) => decide(store, rpc, now, ref, cardId, decision),
     resolveProposal: (params) => resolveProposal(store, rpc, params),
@@ -93,10 +143,32 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     createSession: (params) => createSession(store, rpc, env, params),
     createRoom: (params) => createRoom(store, rpc, env, params),
     sendRoomMessage: (params) => sendRoomMessage(store, rpc, env, params),
+    openFeed: (ref) => live.openFeed(ref),
+    openRoom: (ref) => live.openRoom(ref),
+    reloadRoom: (ref) => live.reloadRoom(ref),
+    loadOlder: (ref) => live.loadOlder(ref),
+    sendMessage: (params) => sendMessage(rpc, env, params),
+    resumeSession: (ref) => resumeSession(rpc, ref),
+    sessionCommand: (method, ref) => sessionCommand(rpc, method, ref),
+    archiveRoom: (room, stopSessions) => archiveRoom(rpc, room, stopSessions),
+    deleteRoom: (room) => deleteRoom(rpc, room),
+    switchOptions: (ref) => loadSwitchOptions(rpc, ref),
+    switchAgent: (params) => switchAgent(rpc, params),
+    decideConsent: (id, decision, extra) => decideConsent(store, rpc, id, decision, extra),
+    setConnected: (connected) => {
+      refresher.setConnected(connected);
+      live.setConnected(connected);
+    },
+    setForeground: (foreground) => {
+      refresher.setForeground(foreground);
+      live.setForeground(foreground);
+    },
+    checkTrust: (folder) => checkTrust(rpc, folder),
     loadProviders: () => loadProviders(store, rpc),
     loadRoles: (projectPath) => loadRoles(store, rpc, projectPath),
     dispose: () => {
       unsubscribe();
+      live.dispose();
       refresher.dispose();
     },
   };

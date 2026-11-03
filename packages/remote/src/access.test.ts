@@ -22,6 +22,7 @@ import {
   b64urlDecode,
   b64urlEncode,
   bridgeHelloSchema,
+  MIN_CLIENT_VERSION,
   parsePairUrl,
   type BridgeHello,
 } from '@parley/protocol/remote';
@@ -206,7 +207,7 @@ async function makeFixture(): Promise<Fixture> {
   const handler: SessionHandler = {
     hello: (): BridgeHello => ({
       protocol: 1,
-      minClient: '1.0.0',
+      minClient: MIN_CLIENT_VERSION,
       hostId: 'h',
       hostName: 'Mac',
       bridgeVersion: '0.0.0',
@@ -990,7 +991,7 @@ describe('A7 ↔ A8 through session-contract', () => {
         hostId: f.access.hostId,
         hostName: 'Test Mac',
         bridgeVersion: '0.0.0',
-        minClient: '1.0.0',
+        minClient: MIN_CLIENT_VERSION,
         relays: [f.relayHost],
       },
       deviceName: (id) => f.access.devices.get(id)?.name ?? '',

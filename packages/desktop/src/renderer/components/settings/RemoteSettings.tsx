@@ -293,7 +293,6 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
           </div>
 
           <div className="flex flex-col gap-2" data-testid="remote-pair">
-            <h3 className="text-sm font-medium">{TEXT.pair.heading}</h3>
             {pair.connected ? <p data-testid="remote-connected" className="text-xs">{TEXT.pair.connected}</p> : null}
             {pair.failedReason !== null ? (
               <p data-testid="remote-pair-failed" className="text-xs text-destructive">
@@ -337,6 +336,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                 {TEXT.pair.start}
               </Button>
             )}
+            {pair.offer === null ? <p className="text-xs text-muted-foreground">{TEXT.pair.startHint}</p> : null}
           </div>
 
           <div className="flex flex-col gap-2" data-testid="remote-devices">
@@ -359,7 +359,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                   data-testid="remote-revoke"
                   onClick={() =>
                     void run(S.errors.actions.saveSettings, async () => {
-                      await remote.call('devices.revoke', { deviceId: device.deviceId });
+                      await remote.call('devices.revokeConfirm', { deviceId: device.deviceId });
                       await loadLists();
                     })
                   }

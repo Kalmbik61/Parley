@@ -101,8 +101,7 @@ relay (`src/dev/seed-host.ts`). The relay does not know the route, so the banner
 Until pairing and a real Mac are in the loop, the A15 screens can be looked at with made-up data
 (`src/dev/demo.ts`): add `PARLEY_MOBILE_DEV_DEMO=1` (and `PARLEY_MOBILE_DEV_RELAY=...` so a host exists) to the
 `expo start` line. `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain` opens that screen once.
-`PARLEY_MOBILE_DEV_APPROVE=1` lets Allow pass without the Face ID gate (A16 provides the real one; without a provider
-approvals are refused). None of this exists in the release variant.
+None of this exists in the release variant.
 
 ## Release variant
 
@@ -135,6 +134,61 @@ export HERMES_ENGINE_TARBALL_PATH=$A/hermes-ios-260318099.0.5-hermes-ios-debug.t
 ```
 
 `export` them in the shell that runs `pod install`. On a network that reaches `repo.reactnative.dev`, skip all of this.
+
+## Run on your iPhone over Wi-Fi
+
+One command from the repository root builds the app for the phone, starts the relay on the Mac's LAN address, installs
+and launches:
+
+```sh
+packages/mobile/scripts/device-run.sh            # --skip-build to reuse the last build, --udid <hardware UDID> for another phone
+```
+
+What it does: finds the Mac's LAN IPv4 and starts the dev relay on it (`ws://<IP>:8787`, or the next free port; printed); downloads the
+**release** RN/Hermes archives from the Google mirror into `~/rn-artifacts/0.88.1` if missing (see "Network workaround");
+runs `expo prebuild` and `pod install`; builds with `xcodebuild -sdk iphoneos`, signed with the Personal Team read from the
+"Apple Development" certificate in the keychain (a bundle id `com.<mac user>.parley.mobile`; override with
+`PARLEY_MOBILE_BUNDLE_ID`); installs and launches with `xcrun devicectl`. If the phone is not `connected` it stops after the
+build and says so; connect and unlock the phone and run it again with `--skip-build`. The relay stays up until Ctrl-C.
+The log files are in `$TMPDIR/parley-device-run/`.
+
+**Why an embedded Release build, not a Debug dev client.** The build is the Release configuration of the **dev** variant: the JS
+bundle is inside the app, so the phone needs no Metro (nothing to reach over the LAN, no dev-launcher screens, no cable after
+the install), and Hermes is the optimised one, which A20 item 16 needs (Debug numbers are unusable). The dev variant keeps
+the Local Network keys, and `extra.devBuild` (set only by the dev variant, never by the release variant) keeps `ws://` to a
+private address allowed in that Release configuration (`DEV_BUILD` in `src/dev/build.ts`; Debug has `__DEV__`). The cost: a JS
+change needs a rebuild (`--skip-build` does not rebuild); use the simulator with Metro for UI iterations. The release variant
+and its refusal of `ws://` (A20 item 18, last clause) are checked with `APP_VARIANT=release` as in "Release variant" above.
+
+The window is not driven by the script (the control socket needs the window's own token): the Relay field is typed by hand.
+
+**Bench (A20 item 16).** Settings > Diagnostics > Crypto bench (dev builds only; absent in the release variant). It runs the S2
+cases on `@parley/noise` (one side of an IK handshake, ChaCha20-Poly1305 64 KiB and 1 MiB encrypt/decrypt, x25519, SHA-256;
+3 warm-up and 20 timed runs each), compares with the S7 thresholds (IK one side ≤ 150 ms, 64 KiB ≤ 50 ms) and shares the JSON.
+The line on top must say `Release` and `Hermes`. Phone on the charger, Low Power Mode off, screen on; run twice, a minute apart.
+
+### What you do, in order
+
+1. **Once:** Xcode > Settings > Accounts > add the Apple ID (the Mac already has the certificate "Apple Development:
+   kalmbik61@gmail.com (45Q696H75T)"; Xcode needs the account to create the provisioning profile).
+2. iPhone and Mac on the **same Wi-Fi** (not a guest network). Connect the iPhone by cable, unlock it, tap **Trust This
+   Computer**. `xcrun devicectl list devices` must show it as `connected` (now it says `unavailable`).
+3. **Developer Mode:** Settings > Privacy & Security > Developer Mode > on, restart the phone, confirm. If the switch is
+   missing, run the script once (the install attempt makes it appear), then do this.
+4. Run `packages/mobile/scripts/device-run.sh`. First build 10-20 minutes. macOS may ask whether `node` may accept incoming
+   connections (the relay): **Allow**.
+5. If launch says the developer is untrusted: iPhone Settings > General > VPN & Device Management > Developer App > your Apple
+   ID > **Trust**, then open Parley from the home screen.
+6. On the Mac, in the Parley window: Settings > **Remote access** on; Relay field = the address the script printed without
+   `ws://` (`<IP>:8787`; the window marks it "Local dev relay, no TLS"); open **Pair a phone** to show the QR code and the SAS.
+7. On the phone, Parley opens on the welcome screen: **Scan**, allow **Camera**, scan the QR; iOS asks for **Local
+   Network**: **Allow** (the first connect fails if it is refused; Settings > Parley > Local Network). Compare the SAS words
+   on both screens; **Confirm** in the window.
+8. Then the run: Inbox, Allow with Face ID (allow **Face ID** when asked), New session, Bench (see above), and the A20 list.
+   Reinstalling the app needs a new pairing (the Keychain is wiped on the first start after a reinstall).
+
+The two things that can still block: the phone staying `unavailable` (cable, Trust, Developer Mode) and a missing Apple ID in
+Xcode (`xcodebuild` then fails on provisioning; the script prints the matching hint).
 
 ## iPhone (Personal Team)
 

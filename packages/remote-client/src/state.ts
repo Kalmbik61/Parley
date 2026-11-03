@@ -1,7 +1,7 @@
 // Состояние телефона на одном хосте (спека §10.1): снимок-проекция, активность, ждущие карточки, письма.
 // Только типы и пустое состояние; переходы — `reducer.ts`, производные — `inbox.ts` и `works-view.ts`.
-import type { FeedCard, Message, RoleList, SessionActivity } from '@parley/core';
-import type { Result, SessionRef } from '@parley/protocol';
+import type { FeedCard, FeedItem, Message, RoleList, SessionActivity } from '@parley/core';
+import type { ConsentCard, EventData, FeedDecisions, Result, SessionRef } from '@parley/protocol';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 
 export type { SessionRef };
@@ -53,6 +53,37 @@ export interface RoomRef {
 /** Ключ комнаты для черновиков. */
 export const roomKey = (r: RoomRef): string => `${r.projectPath}\u0000${r.workId}\u0000${r.roomId}`;
 
+/** Лента открытой сессии: снимок `feed.snapshot` и дельты `feed.changed` по `revision` (спека §4.2). */
+export interface FeedEntry {
+  items: FeedItem[];
+  /** Последняя применённая `revision`; `0` — снимка ещё нет. */
+  revision: number;
+  mode: string | null;
+  decisions: FeedDecisions | null;
+  /** `loading` — снимка ещё нет; `ready`; `stale` — дельта с пропуском, нужен новый снимок; `error` — снимок не прочитан. */
+  status: 'loading' | 'ready' | 'stale' | 'error';
+  /** Дельты, пришедшие раньше снимка или с пропуском: применяются по порядку после снимка. */
+  queued: EventData<'feed.changed'>[];
+}
+
+/** Согласия хоста (`consents.list` + `consents.changed`): карточки всех видов. */
+export interface ConsentsState {
+  /** `false` — список ещё не прочитан в этой эпохе. */
+  loaded: boolean;
+  items: ConsentCard[];
+}
+
+/** History of a room open on the phone (`context.messages` pages + `rooms.mail`), ascending by time. */
+export interface RoomChat {
+  messages: Message[];
+  /** Cursor of the next OLDER page; `null` — the history is complete. */
+  older: string | null;
+  /** `loading` — the newest page is not read yet; `stale` — `rooms.mail` said `reread`; `error` — the read failed. */
+  status: 'loading' | 'ready' | 'stale' | 'error';
+  /** The older page is being read / failed. */
+  more: 'idle' | 'loading' | 'error';
+}
+
 export interface RemoteState {
   /** Текущая эпоха моста; `null` — ещё не пришла или хост без эпохи. */
   epoch: string | null;
@@ -78,6 +109,11 @@ export interface RemoteState {
   providers: ProviderCatalog | null;
   /** `roles.list` по проектам. Сбрасывается с эпохой. */
   roles: Record<string, RoleList>;
+  /** Open rooms by `roomKey`; the entries stay across an epoch and reload (status `loading`). */
+  roomChats: Record<string, RoomChat>;
+  /** Ленты открытых сессий по `sessionKey`; сбрасываются с эпохой. */
+  feeds: Record<string, FeedEntry>;
+  consents: ConsentsState;
   /** Черновики писем в комнату по `roomKey`: живут, пока письмо не принято хостом (и переживают эпоху). */
   drafts: Record<string, string>;
 }
@@ -95,6 +131,9 @@ export const initialRemoteState = (): RemoteState => ({
   methods: null,
   providers: null,
   roles: {},
+  roomChats: {},
+  feeds: {},
+  consents: { loaded: false, items: [] },
   drafts: {},
 });
 

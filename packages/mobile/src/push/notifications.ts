@@ -7,7 +7,7 @@ import { useRemoteState } from '../hooks/use-remote';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { runtime } from '../runtime/instance';
 import { clearHostNotifications } from './clear';
-import { resolvePushTarget } from './route';
+import { resolvePushRoute } from './route';
 
 /** Foreground: no banner (Inbox updates itself), badge yes. */
 Notifications.setNotificationHandler({
@@ -22,10 +22,10 @@ export interface Navigator {
 export const UNPAIRED_TOAST = "This notification is from a Mac that isn't paired anymore";
 
 export async function openFromPush(data: unknown, router: Navigator): Promise<void> {
-  const target = resolvePushTarget(data, await runtime.hostStore.list());
+  const { target, segment } = resolvePushRoute(data, await runtime.hostStore.list());
   if (target.kind === 'host') {
     await runtime.selectHost(target.host.hostId);
-    router.navigate('/');
+    router.navigate(segment === 'letters' ? { pathname: '/', params: { segment } } : '/');
   } else {
     // Unknown route: the host list (Settings → Macs) with a toast.
     router.navigate({ pathname: '/settings', params: { toast: UNPAIRED_TOAST } });

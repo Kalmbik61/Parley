@@ -18,8 +18,15 @@ export interface Colors {
   danger: string;
   warningBg: string;
   neutralBg: string;
+  /** Session/room bar material by theme (D1 §17.5); the strip under the bar uses `barBgSolid` (an RN view does not blur). */
+  barBg: string;
+  barBgSolid: string;
+  /** The whole subtitle of the bar and the chevron of its strip (D1 §17.5). */
+  barSubtitle: string;
   /** Tree guide lines of D1 §8.2. */
   treeLine: string;
+  /** Fill of inline code, code blocks and table headers: visible on both `bg` and `surface2` in both themes (A40). */
+  codeFill: string;
 }
 
 export const lightColors: Colors = {
@@ -34,13 +41,17 @@ export const lightColors: Colors = {
   onTint: '#FFFFFF',
   needsYou: '#C93400',
   working: '#A8531E',
-  idle: '#8E8E93',
+  idle: '#7C7C80',
   off: '#C7C7CC',
   success: '#248A3D',
   danger: '#D70015',
   warningBg: '#FFF4E5',
   neutralBg: '#E5E5EA',
+  barBg: 'rgba(249,249,249,0.94)',
+  barBgSolid: '#F9F9F9',
+  barSubtitle: '#636366',
   treeLine: 'rgba(60,60,67,0.30)',
+  codeFill: 'rgba(60,60,67,0.12)',
 };
 
 export const darkColors: Colors = {
@@ -61,7 +72,11 @@ export const darkColors: Colors = {
   danger: '#FF453A',
   warningBg: '#3A2A12',
   neutralBg: '#2C2C2E',
+  barBg: 'rgba(29,29,31,0.94)',
+  barBgSolid: '#1D1D1F',
+  barSubtitle: 'rgba(235,235,245,0.6)',
   treeLine: 'rgba(235,235,245,0.26)',
+  codeFill: 'rgba(235,235,245,0.18)',
 };
 
 /** D1 §17.3. Grid 4 pt. */

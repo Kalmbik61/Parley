@@ -164,12 +164,12 @@ export class AppRuntime {
     }
   }
 
-  requireBiometric(): Promise<boolean> {
-    return this.#deps.settings.requireBiometric();
+  lockEnabled(): Promise<boolean> {
+    return this.#deps.settings.lockEnabled();
   }
 
-  setRequireBiometric(on: boolean): Promise<void> {
-    return this.#deps.settings.setRequireBiometric(on);
+  setLockEnabled(on: boolean): Promise<void> {
+    return this.#deps.settings.setLockEnabled(on);
   }
 
   notificationsEnabled(): Promise<boolean> {
@@ -219,12 +219,13 @@ export class AppRuntime {
         if (next.snapshot !== prev.snapshot) this.#set({ lastUpdatedAt: platform.now() });
         if (next.hostStatus !== prev.hostStatus) this.#set({ hostStatus: next.hostStatus });
       }),
-      platform.appState.subscribe((s) => client.refresher.setForeground(s === 'active')),
+      platform.appState.subscribe((s) => client.setForeground(s === 'active')),
       supervisor.subscribe((status) => {
         const ready = status.state === 'ready';
         if (ready && this.#state.supervisor?.state !== 'ready') this.registerPush();
-        client.refresher.setConnected(ready);
+        // The hello first: the live subscriptions look at it before they ask the Mac for anything.
         client.setBridgeMethods(ready ? (status.hello?.methods ?? null) : null);
+        client.setConnected(ready);
         const failing = status.state === 'waiting' || status.state === 'offline';
         this.#set({
           supervisor: status,

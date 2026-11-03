@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RemoteRoom, RemoteSession } from '@parley/protocol/remote';
 import type { WorkRow } from '@parley/remote-client';
-import { buildTeams, subtreeOf, teamLine } from './teams';
+import { buildTeams, headLook, subtreeOf, teamLine } from './teams';
 
 const sess = (id: string): RemoteSession => ({
   id, label: id, provider: 'claude', model: null, role: null, parent: null, createdBy: null,
@@ -36,5 +36,25 @@ describe('buildTeams', () => {
     const rows = [row('a', 0, null), row('b', 1, 'a'), row('c', 2, 'b'), row('x', 0, null)];
     expect(subtreeOf(rows, 'a').map((x) => [x.row.kind === 'session' && x.row.session.id, x.depth])).toEqual([['b', 1], ['c', 2]]);
     expect(subtreeOf(rows, 'zz')).toEqual([]);
+  });
+});
+
+describe('a room nobody owns (A35a)', () => {
+  // The human's case: "тест" with `creator: human`, `ownerId: null`, lead s-02, members s-01 and s-02, both top-level.
+  const rows = [row('s-01', 0, null), row('s-02', 0, null), room('r-1', 0, null, ['s-01', 's-02'])];
+  it('is a team head of its own, and the head is looked at as a room that opens the room screen', () => {
+    const teams = buildTeams(rows, needs);
+    expect(teams.map((t) => t.id)).toEqual(['s-01', 's-02', 'r-1']);
+    const head = teams[2]!.head;
+    expect(head.kind).toBe('room');
+    expect(headLook(head)).toEqual({ kind: 'room', roomId: 'r-1' });
+    expect(teams[2]!.single).toBe(false);
+    expect(teams[2]!.counts).toEqual({ agents: 2, rooms: 1, swarms: 0 });
+    // The two members stay session rows of their own.
+    expect(teams.slice(0, 2).map((t) => headLook(t.head).kind)).toEqual(['session', 'session']);
+  });
+  it('a swarm nobody owns is looked at as a swarm', () => {
+    const swarm = { kind: 'swarm', swarm: { id: 'sw-1', tag: 'T', creator: { kind: 'human' }, queen: 'q', members: [], status: 'running', createdAt: 'x', endedAt: null, seenAt: null }, depth: 0, parent: null, members: [] } as unknown as WorkRow;
+    expect(headLook(buildTeams([swarm], needs)[0]!.head)).toEqual({ kind: 'swarm', swarmId: 'sw-1' });
   });
 });

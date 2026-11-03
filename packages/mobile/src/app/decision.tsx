@@ -1,14 +1,17 @@
-// Decision (D1 §10.1): accept or return a room's proposal. Both go with the shown `rev`; Accept asks Face ID.
+// Decision (D1 §10.1): accept or return a room's proposal. Both go with the shown `rev`.
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
-import { approve } from '../auth/instance';
 import { DEMO } from '../dev/flags';
+import { barBack } from '../ui/bar';
+import { touchAppLock } from '../auth/lock-instance';
+import { KeyboardAvoider } from '../ui/KeyboardAvoider';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
-import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
+import { Toast, useToast } from '../components/Toast';
 import { haptic } from '../haptics';
 import { RETURN_NOTE_MAX, canSendReturn, hapticFor, submitDecision, type DecisionView, type Proposal } from '../decision/decision-flow';
 import { useRemoteState } from '../hooks/use-remote';
@@ -16,11 +19,12 @@ import { useRuntimeState } from '../runtime/use-runtime';
 import { spacing, typography, useColors } from '../theme';
 
 const str = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''));
+const DEV_LONG_NOTE = Array.from({ length: 16 }, (_, i) => `${i + 1}. Split the migration into smaller steps and add a check for each.`).join('\n');
 
 export default function DecisionScreen() {
   const colors = useColors();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref: string; room: string; proposal?: string }>();
+  const params = useLocalSearchParams<{ ref: string; room: string; proposal?: string; devSheet?: string }>();
   const roomId = str(params.room);
   const { projectPath, workId } = parseWorkParam(str(params.ref)) ?? { projectPath: '', workId: '' };
   const remote = useRemoteState();
@@ -34,8 +38,12 @@ export default function DecisionScreen() {
   // What the human is looking at. A conflict replaces it; a live change of the proposal never silently re-targets a tap.
   const [view, setView] = useState<DecisionView | null>(null);
   const [busy, setBusy] = useState<'accept' | 'return' | null>(null);
-  const [sheet, setSheet] = useState(false);
-  const [note, setNote] = useState('');
+  // Developer build: `PARLEY_MOBILE_DEV_ROUTE=decision-sheet` opens with the "Return for rework" sheet up (screenshots, A35b);
+  // `decision-sheet-long` also fills a long note (A35e, critic s-220 m2).
+  const [sheet, setSheet] = useState(() => __DEV__ && (str(params.devSheet) === '1' || str(params.devSheet) === 'long'));
+  // Not while "return" is in flight (critic s-220 nit): its result closes the sheet, as in New session.
+  useCloseOnLock(sheet && busy === null, () => setSheet(false));
+  const [note, setNote] = useState(() => (__DEV__ && str(params.devSheet) === 'long' ? DEV_LONG_NOTE : ''));
   const sending = useRef(false);
 
   useEffect(() => {
@@ -59,11 +67,10 @@ export default function DecisionScreen() {
     sending.current = true;
     setBusy(action);
     try {
-      const res = await submitDecision(client, approve, { projectPath, workId, roomId, shown, action, note: action === 'return' ? note : undefined });
+      const res = await submitDecision(client, { projectPath, workId, roomId, shown, action, note: action === 'return' ? note : undefined });
       const h = hapticFor(res);
       if (h !== null) haptic[h]();
-      if (res.kind === 'cancelled') toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
-      else if (res.kind === 'rejected') toast.show(res.message);
+      if (res.kind === 'rejected') toast.show(res.message);
       else {
         setView(res.view);
         if (res.view.kind !== 'pending') setSheet(false);
@@ -79,7 +86,7 @@ export default function DecisionScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
-      <Stack.Screen options={{ title: done ? '' : title, headerBackTitle: 'Inbox' }} />
+      <Stack.Screen options={{ title: done ? '' : title, ...barBack('Inbox') }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         <ConnectionBanner />
         {room && work ? (
@@ -146,44 +153,47 @@ export default function DecisionScreen() {
             {busy === 'accept' ? (
               <ActivityIndicator color={colors.onTint} />
             ) : (
-              <>
-                <SymbolView name="faceid" tintColor={colors.onTint} size={18} />
-                <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Accept</Text>
-              </>
+              <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Accept</Text>
             )}
           </Pressable>
         </View>
       ) : null}
 
       <Modal visible={sheet} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => void (busy === null && setSheet(false))}>
-        <View style={[styles.page, { backgroundColor: colors.bg, padding: spacing.screenMargin, gap: 12 }]}>
-          <View style={styles.sheetHead}>
-            <Text accessibilityRole="header" allowFontScaling style={[typography.title3, { color: colors.label }]}>Return for rework</Text>
-            <Pressable accessibilityRole="button" disabled={busy !== null} onPress={() => setSheet(false)}>
-              <Text allowFontScaling style={[typography.body, { color: colors.tint }]}>Cancel</Text>
+        {/* A touch in the sheet restarts the idle term; the lock closes the sheet (plan A35b). The sheet reaches the screen
+            bottom, so `KeyboardAvoider` keeps Send above the keyboard; a long note scrolls inside its field (critic s-220 m2). */}
+        <KeyboardAvoider style={{ backgroundColor: colors.bg }}>
+          <View onTouchStart={touchAppLock} style={[styles.page, { padding: spacing.screenMargin, gap: 12 }]}>
+            <View style={styles.sheetHead}>
+              <Text accessibilityRole="header" allowFontScaling style={[typography.title3, { color: colors.label }]}>Return for rework</Text>
+              <Pressable accessibilityRole="button" disabled={busy !== null} onPress={() => setSheet(false)}>
+                <Text allowFontScaling style={[typography.body, { color: colors.tint }]}>Cancel</Text>
+              </Pressable>
+            </View>
+            <TextInput
+              autoFocus
+              multiline
+              value={note}
+              onChangeText={setNote}
+              placeholder="What should the lead change?"
+              placeholderTextColor={colors.label3}
+              style={[typography.body, styles.input, { backgroundColor: colors.surface, color: colors.label }]}
+            />
+            <Text allowFontScaling style={[typography.caption1, { color: note.length > RETURN_NOTE_MAX ? colors.danger : colors.label2, textAlign: 'right' }]}>
+              {note.length} / {RETURN_NOTE_MAX}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!canSendReturn(note) || !canAct}
+              onPress={() => void send('return')}
+              // `flex: 0`: in the sheet's column the row button's `flex: 1` stretched it to the bottom, and its label sat
+              // under the keyboard (plan A35e).
+              style={[styles.btn, { flex: 0, backgroundColor: colors.tint, borderColor: colors.tint, opacity: canSendReturn(note) && canAct ? 1 : 0.4 }]}
+            >
+              {busy === 'return' ? <ActivityIndicator color={colors.onTint} /> : <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Send</Text>}
             </Pressable>
           </View>
-          <TextInput
-            autoFocus
-            multiline
-            value={note}
-            onChangeText={setNote}
-            placeholder="What should the lead change?"
-            placeholderTextColor={colors.label3}
-            style={[typography.body, styles.input, { backgroundColor: colors.surface, color: colors.label }]}
-          />
-          <Text allowFontScaling style={[typography.caption1, { color: note.length > RETURN_NOTE_MAX ? colors.danger : colors.label2, textAlign: 'right' }]}>
-            {note.length} / {RETURN_NOTE_MAX}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={!canSendReturn(note) || !canAct}
-            onPress={() => void send('return')}
-            style={[styles.btn, { backgroundColor: colors.tint, borderColor: colors.tint, opacity: canSendReturn(note) && canAct ? 1 : 0.4 }]}
-          >
-            {busy === 'return' ? <ActivityIndicator color={colors.onTint} /> : <Text allowFontScaling style={[typography.button, { color: colors.onTint }]}>Send</Text>}
-          </Pressable>
-        </View>
+        </KeyboardAvoider>
       </Modal>
       <Toast message={toast.message} />
     </View>
@@ -199,5 +209,6 @@ const styles = StyleSheet.create({
   btn: { flex: 1, minHeight: spacing.decisionButtonHeight, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
   result: { alignItems: 'center', gap: 12, paddingTop: 48 },
   sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  input: { minHeight: 160, borderRadius: spacing.nestedRadius, padding: 12, textAlignVertical: 'top' },
+  // `flexShrink: 1`: a long note does not push Send down; the field stops at the space left and scrolls inside.
+  input: { minHeight: 160, flexShrink: 1, borderRadius: spacing.nestedRadius, padding: 12, textAlignVertical: 'top' },
 });

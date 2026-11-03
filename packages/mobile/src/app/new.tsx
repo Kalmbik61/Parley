@@ -1,19 +1,22 @@
-// New session / New room (D1 §8.4): start an agent or open a room from the phone. Face ID before every launch and every
-// send; the Mac decides (rules, known works, limits) and its words come back as they are.
+// New session / New room (D1 §8.4): start an agent or open a room from the phone. The Mac decides (rules, known works, limits) and its words come back as they are.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { approve } from '../auth/instance';
-import { FACE_ID_CANCELLED, NO_PASSCODE, Toast, useToast } from '../components/Toast';
+import { Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
-import { DEMO } from '../dev/flags';
+import { DEMO, DEV_FOCUS } from '../dev/flags';
+import { touchAppLock } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
+import { KeyboardAvoider } from '../ui/KeyboardAvoider';
 import { haptic } from '../haptics';
 import { selectLaunchCapabilities } from '@parley/remote-client';
 import { useCanAct, useRemoteState } from '../hooks/use-remote';
 import { Card, Divider, Label, MenuRow, Segmented, choose } from '../launch/form-parts';
 import {
   AUTONOMOUS_NOTE,
+  TRUST_OFF_NOTE,
+  TRUST_ON_NOTE,
   LETTER_PLACEHOLDER,
   ROOM_MODES,
   afterPartial,
@@ -28,7 +31,7 @@ import {
   roomProblem,
   sendFirstLetter,
   sessionProblem,
-  workspaces,
+  workspaceOptions,
   type LaunchFailure,
   type NewAgent,
   type RoleChoice,
@@ -38,6 +41,7 @@ import {
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { spacing, typography, useColors } from '../theme';
+import { barLeftText } from '../ui/bar';
 
 type Kind = 'session' | 'room';
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -54,12 +58,29 @@ export default function NewScreen() {
 
   const caps = selectLaunchCapabilities(state ?? { methods: DEMO ? ['sessions.create', 'rooms.create', 'rooms.send'] : null });
   const [kind, setKind] = useState<Kind>(str(params.mode) === 'room' || (!caps.canCreateSession && caps.canCreateRoom) ? 'room' : 'session');
-  const list = useMemo(() => (state === null ? [] : workspaces(state)), [state]);
+  // A session may start a NEW workspace in a known project; a room needs an existing one.
+  const list = useMemo(() => (state === null ? [] : workspaceOptions(state, kind === 'session')), [state, kind]);
   const from = useMemo(() => parseWorkParam(str(params.ref)), [params.ref]);
   const [ws, setWs] = useState<Workspace | null>(null);
   useEffect(() => {
-    if (ws === null && list.length > 0) setWs(defaultWorkspace(list, from));
-  }, [list, from, ws]);
+    if ((ws === null || (ws.workId === null && kind === 'room')) && list.length > 0) setWs(defaultWorkspace(list, from));
+  }, [list, from, ws, kind]);
+
+  // Folder trust (D1 §8.4): asked of the Mac for the project's folder; the switch exists only while it is not trusted.
+  const [trusted, setTrusted] = useState<boolean | null>(null);
+  const [trustOn, setTrustOn] = useState(false);
+  useEffect(() => {
+    setTrusted(null);
+    setTrustOn(false);
+    if (client === null || ws === null) return;
+    let live = true;
+    // Demo build: no Mac to ask — show the not-trusted state.
+    if (DEMO) setTrusted(false);
+    else void client.checkTrust(ws.projectPath).then((t) => live && setTrusted(t));
+    return () => {
+      live = false;
+    };
+  }, [client, ws?.projectPath]);
 
   // Catalogs: providers once, roles per project.
   useEffect(() => {
@@ -90,7 +111,7 @@ export default function NewScreen() {
   const [members, setMembers] = useState<string[]>([]);
   const [agents, setAgents] = useState<NewAgent[]>([]);
   const [lead, setLead] = useState<string | null>(null);
-  const work = state?.snapshot?.works.find((w) => ws !== null && w.projectPath === ws.projectPath && w.id === ws.workId) ?? null;
+  const work = state?.snapshot?.works.find((w) => ws !== null && ws.workId !== null && w.projectPath === ws.projectPath && w.id === ws.workId) ?? null;
   const candidates = work === null ? [] : roomCandidates(work);
 
   // Step 2 of a room: the first message.
@@ -101,10 +122,9 @@ export default function NewScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', provider, model, role, name, task, worktree };
+  const sessionForm = { projectPath: ws?.projectPath ?? '', workId: ws === null ? '' : ws.workId, provider, model, role, name, task, worktree, trustFolder: trusted === false && trustOn };
   const roomForm = { projectPath: ws?.projectPath ?? '', workId: ws?.workId ?? '', title, mode, members, agents, lead };
-  // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so and
-  // Face ID is not asked for a call that will not go (D1 §12a).
+  // A method the action needs is gone (the Mac switch was turned off while the sheet was open): the text says so.
   const gone = state === null || DEMO ? null : methodMissing(state, step === 'letter' ? 'letter' : kind, kind === 'room' ? agents.length : 0);
 
   const problem = step === 'letter' ? letterProblem(letter) : kind === 'session' ? sessionProblem(sessionForm, providers) : roomProblem(roomForm, providers);
@@ -130,6 +150,9 @@ export default function NewScreen() {
   usePreventRemove(draft && exit === null && !busy, ({ data }) => askDiscard(() => navigation.dispatch(data.action)));
 
   const close = () => (draft && !busy ? askDiscard(() => setExit({ route: null })) : setExit({ route: null }));
+  // The app locked (plan A35b): the screen closes without the "Discard this draft?" question, which would stand above the
+  // lock screen. A launch in flight is left to finish: it navigates on its own, under the lock screen.
+  useCloseOnLock(!busy && exit === null, () => setExit({ route: null }));
 
   const finish = (route: string, message: string) => {
     haptic.success();
@@ -144,19 +167,16 @@ export default function NewScreen() {
     setError(null);
     try {
       if (step === 'letter' && made !== null) {
-        const res = await sendFirstLetter(client, approve, made.ref, letter);
-        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+        const res = await sendFirstLetter(client, made.ref, letter);
         if (res.kind !== 'sent') return fail(res);
         return finish(`/work/${workParam({ projectPath: made.ref.projectPath, workId: made.ref.workId })}`, 'Task sent to the room');
       }
       if (kind === 'session') {
-        const res = await launchSession(client, approve, sessionForm);
-        if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+        const res = await launchSession(client, sessionForm);
         if (res.kind !== 'created') return fail(res);
-        return finish(`/session/${sessionParam(res.ref)}`, 'Session started');
+        return finish(`/session/${sessionParam(res.ref)}?fresh=1`, 'Session started');
       }
-      const res = await launchRoom(client, approve, roomForm);
-      if (res.kind === 'cancelled') return toast.show(res.reason === 'no-passcode' ? NO_PASSCODE : FACE_ID_CANCELLED);
+      const res = await launchRoom(client, roomForm);
       if (res.kind === 'partial') {
         // Agents that started stay: they become members, so a retry starts only what is missing.
         const next = afterPartial(roomForm, res.startedAgents);
@@ -222,13 +242,10 @@ export default function NewScreen() {
   const off = !online ? 'Reconnecting — actions are paused' : gone;
 
   return (
-    <View style={[styles.page, { backgroundColor: c.bg }]}>
-      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', headerBackVisible: false, headerLeft: () => (
-        <Pressable accessibilityRole="button" hitSlop={8} onPress={step === 'letter' ? later : close}>
-          <Text allowFontScaling style={[typography.body, { color: c.tint }]}>{step === 'letter' ? 'Later' : 'Cancel'}</Text>
-        </Pressable>
-      ) }} />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <View onTouchStart={touchAppLock} style={[styles.page, { backgroundColor: c.bg }]}>
+      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', ...barLeftText(step === 'letter' ? 'Later' : 'Cancel', step === 'letter' ? later : close) }} />
+      {/* The footer rides on the keyboard: the sheet's offset in the window counts (plan A35e). */}
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {/* First child of the scroll view, so it sits below a translucent sheet header (as on the M1 screens). */}
           <View style={styles.banner}>
@@ -267,6 +284,30 @@ export default function NewScreen() {
               <Card>
                 <MenuRow label="Workspace" value={ws === null ? '…' : `${ws.title}`} onPress={() => void pickWorkspace()} disabled={list.length < 2} />
               </Card>
+              {kind === 'session' && trusted !== null && (
+                <>
+                  <View style={{ height: 4 }} />
+                  <Card>
+                    {trusted === false ? (
+                      <View style={[styles.row, styles.pad]}>
+                        <SymbolView name="folder.badge.questionmark" size={18} tintColor={c.label2} />
+                        <Text allowFontScaling style={[typography.body, styles.flex, { color: c.label }]}>Trust this folder</Text>
+                        <Switch accessibilityLabel="Trust this folder" value={trustOn} onValueChange={setTrustOn} />
+                      </View>
+                    ) : (
+                      <View style={[styles.row, styles.pad]}>
+                        <SymbolView name="checkmark.shield" size={18} tintColor={c.label2} />
+                        <Text allowFontScaling style={[typography.body, styles.flex, { color: c.label }]}>This folder is trusted</Text>
+                      </View>
+                    )}
+                  </Card>
+                  {trusted === false && (
+                    <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+                      {trustOn ? TRUST_ON_NOTE : TRUST_OFF_NOTE}
+                    </Text>
+                  )}
+                </>
+              )}
 
               {kind === 'session' ? (
                 <>
@@ -297,7 +338,7 @@ export default function NewScreen() {
                   <Label>Session name</Label>
                   <TextInput accessibilityLabel="Session name" value={name} onChangeText={setName} placeholder="Optional" placeholderTextColor={c.label3} maxLength={64} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
                   <Label>Task</Label>
-                  <TextInput accessibilityLabel="Task" multiline value={task} onChangeText={setTask} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]} />
+                  <TextInput autoFocus={DEV_FOCUS} accessibilityLabel="Task" multiline value={task} onChangeText={setTask} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]} />
                   <Card>
                     <View style={[styles.row, styles.pad]}>
                       <SymbolView name="arrow.triangle.branch" size={18} tintColor={c.label2} />
@@ -309,7 +350,7 @@ export default function NewScreen() {
               ) : (
                 <>
                   <Label>Room name</Label>
-                  <TextInput accessibilityLabel="Room name" value={title} onChangeText={setTitle} placeholder="What the agents will discuss" placeholderTextColor={c.label3} maxLength={128} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
+                  <TextInput autoFocus={DEV_FOCUS} accessibilityLabel="Room name" value={title} onChangeText={setTitle} placeholder="What the agents will discuss" placeholderTextColor={c.label3} maxLength={128} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
                   <Label>Mode</Label>
                   <Segmented<RoomMode> label="Mode" value={mode} onChange={setMode} options={ROOM_MODES.map((m) => ({ value: m.mode, label: m.title }))} />
                   <Text allowFontScaling style={[typography.footnote, styles.note, { color: c.label2 }]}>
@@ -399,14 +440,11 @@ export default function NewScreen() {
             {busy ? (
               <ActivityIndicator color={c.onTint} />
             ) : (
-              <>
-                <SymbolView name="faceid" size={18} tintColor={c.onTint} />
-                <Text allowFontScaling style={[typography.button, { color: c.onTint }]}>{actionTitle}</Text>
-              </>
+              <Text allowFontScaling style={[typography.button, { color: c.onTint }]}>{actionTitle}</Text>
             )}
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
       <Toast message={toast.message} />
     </View>
   );

@@ -28,12 +28,14 @@ const config: ExpoConfig = {
   version: '0.1.0',
   scheme: 'parley',
   extra: dev
-    ? { devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devApprove: process.env.PARLEY_MOBILE_DEV_APPROVE === '1', devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null }
+    ? { devBuild: true, devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null, devConsent: process.env.PARLEY_MOBILE_DEV_CONSENT ?? null, devLockMs: Number(process.env.PARLEY_MOBILE_DEV_LOCK_MS) || null, devFocus: process.env.PARLEY_MOBILE_DEV_FOCUS === '1' }
     : {},
   platforms: ['ios'],
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   ios: {
+    // 1024x1024 without alpha (iOS rejects transparency): the desktop icon flattened onto its own background #191814.
+    icon: './assets/icon.png',
     bundleIdentifier: process.env.PARLEY_MOBILE_BUNDLE_ID ?? 'dev.example.parley.mobile',
     supportsTablet: false,
     ...(dev && {
@@ -60,7 +62,7 @@ const config: ExpoConfig = {
     'expo-secure-store',
     [
       'expo-local-authentication',
-      { faceIDPermission: 'Parley uses Face ID to confirm approvals.' },
+      { faceIDPermission: 'Parley uses Face ID to unlock the app and to confirm archiving or deleting a room.' },
     ],
     // Personal Team cannot provision Push Notifications; the aps-environment entitlement arrives with A24.
     ['expo-notifications', { enableRemoteNotifications: false }],

@@ -29,3 +29,7 @@ process.env['USERPROFILE'] = home;
 // и после его `afterEach` запасным становился бы унаследованный дом, то есть настоящий `~/.parley` или `~/.harnas`.
 delete process.env['PARLEY_HOME'];
 delete process.env['HARNAS_HOME'];
+
+// Запуск Claude в папке с записью в `trust.json` пишет в файл состояния профиля (`claude-trust.ts`): унаследованная
+// `CLAUDE_CONFIG_DIR` направила бы эту запись в настоящий профиль человека. Свою папку тест ставит сам.
+delete process.env['CLAUDE_CONFIG_DIR'];

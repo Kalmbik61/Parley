@@ -1,18 +1,18 @@
-// Settings that live only on this phone (D1 §11): the Face ID switch, which Mac is current, the names the person gave
+// Settings that live only on this phone (D1 §11): the app-lock switch, which Mac is current, the names the person gave
 // to Macs, and whether the app asks iOS to show notifications. One JSON blob in the Keychain; the bridge and the Mac
-// know nothing about it. A16 reads `requireBiometric()` for the approve gate.
+// know nothing about it. The lock gate reads `lockEnabled()`.
 import type { SecureStoreLike } from '../platform/key-store';
 
 export const SETTINGS_KEY = 'parley.settings';
 
 interface Stored {
-  requireBiometric: boolean;
+  lockApp: boolean;
   notifications: boolean;
   currentHostId: string | null;
   hostNames: Record<string, string>;
 }
 
-const DEFAULTS: Stored = { requireBiometric: true, notifications: true, currentHostId: null, hostNames: {} };
+const DEFAULTS: Stored = { lockApp: true, notifications: true, currentHostId: null, hostNames: {} };
 export const HOST_NAME_MAX = 64;
 
 export class LocalSettings {
@@ -35,7 +35,8 @@ export class LocalSettings {
         for (const [id, name] of Object.entries(p.hostNames)) if (typeof name === 'string') names[id] = name;
       }
       return {
-        requireBiometric: typeof p.requireBiometric === 'boolean' ? p.requireBiometric : DEFAULTS.requireBiometric,
+        // The old key (per-action Face ID) is gone with the gate; its value is not the lock's.
+        lockApp: typeof p.lockApp === 'boolean' ? p.lockApp : DEFAULTS.lockApp,
         notifications: typeof p.notifications === 'boolean' ? p.notifications : DEFAULTS.notifications,
         currentHostId: typeof p.currentHostId === 'string' ? p.currentHostId : null,
         hostNames: names,
@@ -56,12 +57,12 @@ export class LocalSettings {
     return run;
   }
 
-  /** "Require Face ID to allow"; on by default (spec §11.4). */
-  async requireBiometric(): Promise<boolean> {
-    return (await this.#read()).requireBiometric;
+  /** "Lock Parley with Face ID"; on by default (spec §11.4). */
+  async lockEnabled(): Promise<boolean> {
+    return (await this.#read()).lockApp;
   }
-  setRequireBiometric(on: boolean): Promise<void> {
-    return this.#update((s) => void (s.requireBiometric = on));
+  setLockEnabled(on: boolean): Promise<void> {
+    return this.#update((s) => void (s.lockApp = on));
   }
 
   async notificationsEnabled(): Promise<boolean> {

@@ -72,28 +72,11 @@ describe('questions', () => {
   });
 });
 
-describe('runDecision (spec §11.4)', () => {
+describe('runDecision', () => {
   const allow = { kind: 'permission', behavior: 'allow' } as const;
-  it('Deny and answers skip the gate; approvals go through it', async () => {
-    const approve = vi.fn(async (kind: string) => kind !== '');
-    const send = vi.fn(async () => ({ outcome: 'applied' as const }));
-    await runDecision({ kind: 'permission', behavior: 'deny' }, approve, send);
-    await runDecision({ kind: 'question', answers: {} }, approve, send);
-    expect(approve).not.toHaveBeenCalled();
-    await runDecision(allow, approve, send);
-    await runDecision({ ...allow, always: true }, approve, send);
-    await runDecision({ kind: 'plan', choice: 'manual' }, approve, send);
-    expect(approve.mock.calls.map((c) => c[0])).toEqual(['allow', 'always', 'plan']);
-  });
-  it('a cancelled gate sends nothing and the card stays', async () => {
-    const send = vi.fn();
-    expect(await runDecision(allow, async () => false, send)).toEqual({ kind: 'cancelled' });
-    expect(await runDecision(allow, async () => { throw new Error('x'); }, send)).toEqual({ kind: 'cancelled' });
-    expect(send).not.toHaveBeenCalled();
-  });
   it('lost is never retried and keeps or drops the card by the re-read', async () => {
     const send = vi.fn(async () => ({ outcome: 'lost' as const, stillPending: true }));
-    expect(await runDecision(allow, async () => true, send)).toEqual({ kind: 'unconfirmed' });
+    expect(await runDecision(allow, send)).toEqual({ kind: 'unconfirmed' });
     expect(send).toHaveBeenCalledTimes(1);
     expect(uiOfDecide({ outcome: 'lost', stillPending: false })).toEqual({ kind: 'no-longer-pending' });
     expect(uiOfDecide({ outcome: 'lost', stillPending: null })).toEqual({ kind: 'unconfirmed' });
@@ -101,7 +84,7 @@ describe('runDecision (spec §11.4)', () => {
     expect(uiOfDecide({ outcome: 'conflict' })).toEqual({ kind: 'conflict' });
   });
   it('a thrown send is an error, not a crash', async () => {
-    expect(await runDecision(allow, async () => true, async () => { throw new Error('bad_request'); })).toEqual({ kind: 'error' });
+    expect(await runDecision(allow, async () => { throw new Error('bad_request'); })).toEqual({ kind: 'error' });
   });
 });
 

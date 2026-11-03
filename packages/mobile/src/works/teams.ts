@@ -114,3 +114,15 @@ export function subtreeOf(rows: readonly WorkRow[], sessionId: string): Array<{ 
 export function teamOpenByDefault(attentions: readonly string[]): boolean {
   return attentions.some((a) => a === 'needs-you' || a === 'unseen' || a === 'working');
 }
+
+/**
+ * How the head of a team is drawn and what a tap on it does. A room or a swarm with no owning session (a person made it,
+ * `ownerId: null`) is a top-level team head: it is the room's / swarm's own container, never a session card with a letter.
+ */
+export type HeadLook = { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string } | { kind: 'swarm'; swarmId: string };
+
+export function headLook(head: WorkRow): HeadLook {
+  if (head.kind === 'room') return { kind: 'room', roomId: head.room.id };
+  if (head.kind === 'swarm') return { kind: 'swarm', swarmId: head.swarm.id };
+  return { kind: 'session', sessionId: head.session.id };
+}

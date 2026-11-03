@@ -42,6 +42,7 @@ function setup(opts: { enabled?: boolean; startDelayMs?: number; reconnectDelays
     detach: () => void (connected = false),
   };
   const events: RemoteEvent[] = [];
+  let confirmAnswer = true;
   let stored = opts.enabled ?? false;
   const service = createRemoteService({
     launcher,
@@ -49,10 +50,11 @@ function setup(opts: { enabled?: boolean; startDelayMs?: number; reconnectDelays
     loadEnabled: async () => stored,
     saveEnabled: async (value) => void (stored = value),
     broadcast: (event) => events.push(event),
+    confirmRevoke: async () => confirmAnswer,
     qrDataUrl: async (text) => `data:image/png;base64,${text}`,
     ...(opts.reconnectDelaysMs ? { reconnectDelaysMs: opts.reconnectDelaysMs } : {}),
   });
-  return { service, calls, events, listeners, closers, stored: () => stored, counts: () => ({ starts, stops }), client };
+  return { setConfirm: (v: boolean) => void (confirmAnswer = v), service, calls, events, listeners, closers, stored: () => stored, counts: () => ({ starts, stops }), client };
 }
 
 describe('remote service', () => {
@@ -138,5 +140,16 @@ describe('remote service', () => {
     expect(t.calls.find((c) => c.method === 'configure')?.params).toEqual({ relayUrl: 'relay.example.com' });
     await expect(t.service.call('configure', { relayUrl: 'relay.example.com/x' })).rejects.toMatchObject({ code: 'bad_request' });
     expect(t.calls.filter((c) => c.method === 'configure')).toHaveLength(1);
+  });
+
+  it('revokeConfirm revokes only after the native confirmation', async () => {
+    const t = setup();
+    await t.service.call('setEnabled', { enabled: true });
+    t.setConfirm(false);
+    expect(await t.service.call('devices.revokeConfirm', { deviceId: 'd1' })).toBe(false);
+    expect(t.calls.some((c) => c.method === 'devices.revoke')).toBe(false);
+    t.setConfirm(true);
+    expect(await t.service.call('devices.revokeConfirm', { deviceId: 'd1' })).toBe(true);
+    expect(t.calls.some((c) => c.method === 'devices.revoke')).toBe(true);
   });
 });

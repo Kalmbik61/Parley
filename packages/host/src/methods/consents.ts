@@ -19,10 +19,14 @@ export function createConsentHandlers(deps: { consents: ConsentsService; home: s
     'trust.revoke': Handler<'trust.revoke'>;
   } = {
     'consents.list': async () => ({ items: deps.consents.list() }),
-    // Окно и остров — один сокет хоста, оба пишут доверие от `window`; Telegram зовёт сервис напрямую с `telegram`.
-    'consents.decide': async (params) => params.enabled === undefined && params.revision === undefined
-        ? deps.consents.decide(params.id, params.decision, 'window')
-        : deps.consents.decide(params.id, params.decision, 'window', params.enabled, params.revision),
+    // Окно и остров — один сокет хоста, оба пишут доверие от `window`; мост телефонов (роль `remote`) — от `phone`;
+    // Telegram зовёт сервис напрямую с `telegram`.
+    'consents.decide': async (params, request) => {
+      const by = request.client.role === 'remote' ? 'phone' : 'window';
+      return params.enabled === undefined && params.revision === undefined
+        ? deps.consents.decide(params.id, params.decision, by)
+        : deps.consents.decide(params.id, params.decision, by, params.enabled, params.revision);
+    },
     'trust.list': async () => ({ folders: await listTrust(deps.home) }),
     // Realpath папки берёт сам `isTrusted`: путь через символическую ссылку — та же папка, что в `trust.json`.
     'trust.check': async (params) => ({ trusted: await isTrusted(params.folder, deps.home) }),

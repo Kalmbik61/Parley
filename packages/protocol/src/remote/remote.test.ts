@@ -12,6 +12,7 @@ import {
   REMOTE_NOTIFICATIONS,
   REMOTE_STAGES,
   REMOTE_PARAM_RULES,
+  REMOTE_MCP_ENABLED_MAX,
   checkRemoteParams,
   isRemoteForbidden,
   b64urlDecode,
@@ -35,6 +36,7 @@ import {
   controlStatusResult,
   pairFailedEvent,
   pairOfferClosedEvent,
+  phoneActionEvent,
   pairRequestEvent,
   routeIdSchema,
 } from './index.js';
@@ -91,14 +93,95 @@ describe('allowlist', () => {
     expect(Object.keys(REMOTE_PARAM_RULES)).toContain('pty.send');
   });
 
+  const ptySend = {
+    ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' },
+    text: 'hi',
+    submit: true,
+    requestedAt: 1,
+    clientMsgId: 'msg-12345',
+  };
+  it('A27: pty.send needs clientMsgId 8–64 [A-Za-z0-9_-], rejects extra keys', () => {
+    expect(checkRemoteParams('pty.send', ptySend)).toBe(true);
+    const noId: Record<string, unknown> = { ...ptySend };
+    delete noId.clientMsgId;
+    expect(checkRemoteParams('pty.send', noId)).toBe(false);
+    for (const id of ['short', 'a'.repeat(65), 'bad id!!!!', 5]) {
+      expect(checkRemoteParams('pty.send', { ...ptySend, clientMsgId: id }), String(id)).toBe(false);
+    }
+    expect(checkRemoteParams('pty.send', { ...ptySend, clientMsgId: 'a'.repeat(64) })).toBe(true);
+    expect(checkRemoteParams('pty.send', { ...ptySend, extra: 1 })).toBe(false);
+    expect(checkRemoteParams('pty.send', { ...ptySend, submit: 'yes' })).toBe(false);
+    expect(checkRemoteParams('pty.send', null)).toBe(false);
+  });
+
+  it('A27: consents.decide takes allow or deny only', () => {
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'deny' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'always' })).toBe(false);
+    expect(checkRemoteParams('consents.decide', null)).toBe(false);
+  });
+
+  it('A28 (critic m6): consents.decide takes only id c-NN and decision', () => {
+    expect(checkRemoteParams('consents.decide', { id: 'c-07', decision: 'deny' })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow', extra: 1 })).toBe(false);
+    for (const id of ['', 'c-', 'c-x', 'c-1 ', 'C-1', 'm-1', 7, undefined]) {
+      expect(checkRemoteParams('consents.decide', { id, decision: 'allow' }), String(id)).toBe(false);
+    }
+  });
+
+  it('A36a: consents.decide takes enabled MCP pairs only with allow, strictly {name, fingerprint}', () => {
+    const fp = 'a'.repeat(64);
+    const allow = (enabled: unknown): unknown => ({ id: 'c-3', decision: 'allow', enabled });
+    expect(checkRemoteParams('consents.decide', allow([{ name: 'github', fingerprint: fp }, { name: 'n'.repeat(200), fingerprint: '0123456789abcdef'.repeat(4) }]))).toBe(true);
+    expect(checkRemoteParams('consents.decide', allow([]))).toBe(true);
+    expect(checkRemoteParams('consents.decide', allow(Array.from({ length: REMOTE_MCP_ENABLED_MAX }, (_, i) => ({ name: `s${i}`, fingerprint: fp }))))).toBe(true);
+    // Больше 200 пар.
+    expect(checkRemoteParams('consents.decide', allow(Array.from({ length: REMOTE_MCP_ENABLED_MAX + 1 }, (_, i) => ({ name: `s${i}`, fingerprint: fp }))))).toBe(false);
+    // `enabled` с отказом.
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', enabled: [] })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', enabled: [{ name: 'a', fingerprint: fp }] })).toBe(false);
+    // Лишний ключ у пары и у параметров.
+    expect(checkRemoteParams('consents.decide', allow([{ name: 'a', fingerprint: fp, command: 'rm -rf /' }]))).toBe(false);
+    expect(checkRemoteParams('consents.decide', { ...(allow([{ name: 'a', fingerprint: fp }]) as object), extra: 1 })).toBe(false);
+    // Отпечаток не sha256 hex.
+    for (const fingerprint of ['A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), `${'a'.repeat(63)} `, '', 7, undefined]) {
+      expect(checkRemoteParams('consents.decide', allow([{ name: 'a', fingerprint }])), String(fingerprint)).toBe(false);
+    }
+    // Имя: строка 1–200.
+    for (const name of ['', 'n'.repeat(201), 7, null, undefined]) {
+      expect(checkRemoteParams('consents.decide', allow([{ name, fingerprint: fp }])), String(name)).toBe(false);
+    }
+    for (const enabled of [null, {}, 'a', [null], [[]], [{ name: 'a' }], [{ fingerprint: fp }]]) {
+      expect(checkRemoteParams('consents.decide', allow(enabled)), JSON.stringify(enabled)).toBe(false);
+    }
+  });
+
+  it('A36a: consents.decide takes revision, an integer from 1, with allow and with deny', () => {
+    const fp = 'a'.repeat(64);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'allow', revision: 1, enabled: [{ name: 'a', fingerprint: fp }] })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision: 7 })).toBe(true);
+    for (const revision of [0, -1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+      expect(checkRemoteParams('consents.decide', { id: 'c-3', decision: 'deny', revision }), String(revision)).toBe(false);
+    }
+  });
+
+  it('A27: stage A has feed/pty/consents/trust.check; trust.grant, revoke, list stay forbidden', () => {
+    for (const m of ['feed.subscribe', 'feed.unsubscribe', 'pty.send', 'consents.list', 'consents.decide', 'trust.check']) {
+      expect(REMOTE_STAGES.A.methods as readonly string[]).toContain(m);
+      expect(isRemoteForbidden(m), m).toBe(false);
+    }
+    for (const e of ['feed.changed', 'consents.changed']) expect(REMOTE_STAGES.A.events as readonly string[]).toContain(e);
+    for (const m of ['trust.grant', 'trust.revoke', 'trust.list']) expect(isRemoteForbidden(m), m).toBe(true);
+  });
+
   it('text rules (rooms.send moved to stage A and needs a room)', () => {
     const room = { roomId: 'r-1' };
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'a' })).toBe(true);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'decision', text: 'a' })).toBe(false);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8193) })).toBe(false);
     expect(checkRemoteParams('rooms.send', { ...room, kind: 'note', text: 'я'.repeat(8192) })).toBe(true);
-    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16385) })).toBe(false);
-    expect(checkRemoteParams('pty.send', { text: 'a'.repeat(16384) })).toBe(true);
+    expect(checkRemoteParams('pty.send', { ...ptySend, text: 'a'.repeat(16385) })).toBe(false);
+    expect(checkRemoteParams('pty.send', { ...ptySend, text: 'a'.repeat(16384) })).toBe(true);
   });
 });
 
@@ -113,7 +196,7 @@ describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
     expect([...REMOTE_STAGES.C.methods].sort()).toEqual([...REMOTE_STAGES.B.methods].sort());
     expect(REMOTE_FORBIDDEN).not.toContain('rooms.create');
     expect(isRemoteForbidden('rooms.create')).toBe(false);
-    for (const name of ['rooms.addMember', 'rooms.setLead', 'rooms.setMode', 'rooms.delete']) {
+    for (const name of ['rooms.addMember', 'rooms.setLead', 'rooms.setMode', 'rooms.reopen']) {
       expect(isRemoteForbidden(name), name).toBe(true);
     }
   });
@@ -142,11 +225,13 @@ describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
     expect(checkRemoteParams('sessions.create', { ...session, task: '' })).toBe(true);
   });
 
-  it('sessions.create: agent, effort, lean, new work, child session, long task or label → rejected', () => {
+  it('sessions.create: agent, effort, lean, child session, long task or label → rejected', () => {
     for (const extra of [{ agent: 'x' }, { effort: 'high' }, { lean: true }, { other: 1 }]) {
       expect(checkRemoteParams('sessions.create', { ...session, ...extra }), JSON.stringify(extra)).toBe(false);
     }
-    expect(checkRemoteParams('sessions.create', { ...session, workId: null })).toBe(false);
+    expect(checkRemoteParams('sessions.create', { ...session, workId: null })).toBe(true);
+    expect(checkRemoteParams('sessions.create', { ...session, trustFolder: true })).toBe(true);
+    expect(checkRemoteParams('sessions.create', { ...session, trustFolder: 'yes' })).toBe(false);
     expect(checkRemoteParams('sessions.create', { ...session, workId: '' })).toBe(false);
     expect(checkRemoteParams('sessions.create', { ...session, parent: { sessionId: 's-01' } })).toBe(false);
     const noParent: Record<string, unknown> = { ...session };
@@ -388,6 +473,48 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(pairOfferClosedEvent.safeParse({ reason: 'used' }).success).toBe(true);
     expect(pairOfferClosedEvent.safeParse({ reason: 'expired' }).success).toBe(false);
     expect(pairOfferClosedEvent.safeParse({ reason: 'used', requestId: id16 }).success).toBe(false);
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: ref }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'trust-folder', target: '/private/tmp/p' }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: 'c-7' }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'allow-always', target: { ...ref, text: 'agent text' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'plan-auto-accept', target: ref, text: 'x' }).success).toBe(false);
+    // A36a: `mcp-enable` — realpath репозитория и имена серверов, без команд и отпечатков; эта цель только у него.
+    const mcp = { repo: '/private/tmp/repo', servers: ['github', 'files'] };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: mcp }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: { ...mcp, servers: [] } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: { ...mcp, commands: ['npx x'] } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: '/private/tmp/repo' }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'trust-folder', target: mcp }).success).toBe(false);
+    // A38a: `session-close` — `ref` и имя сессии; эта цель только у него, лишнего (тексты агента) нет.
+    const closed = { ...ref, label: 'Reviewer' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: closed }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: 'Reviewer' }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, label: '' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, text: 'agent text' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: closed }).success).toBe(false);
+    // Критик A38a m1: прямая замена с телефона — `ref`, имя сессии и провайдер; эта цель только у `provider-switch`.
+    const moved = { ...closed, provider: 'Codex' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: moved }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: closed }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: { ...moved, provider: '' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: moved }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: moved }).success).toBe(false);
+    // A41a: `room-archive` и `room-delete` — проект, работа, комната и имя; эта цель только у них.
+    const roomTarget = { projectPath: '/p', workId: 'w-1', roomId: 'r-1', label: 'Design' };
+    for (const kind of ['room-archive', 'room-delete']) {
+      expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target: roomTarget }).success, kind).toBe(true);
+      for (const target of [ref, closed, 'Design', { ...roomTarget, label: '' }, { ...roomTarget, label: 'x'.repeat(257) }, { ...roomTarget, text: 'agent text' }, { ...roomTarget, sessionId: 's-1' }]) {
+        expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target }).success, `${kind} ${JSON.stringify(target)}`).toBe(false);
+      }
+    }
+    for (const kind of ['session-close', 'session-create', 'provider-switch', 'allow-always', 'trust-folder', 'mcp-enable']) {
+      expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target: roomTarget }).success, kind).toBe(false);
+    }
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);
@@ -396,12 +523,13 @@ describe('hardened strings and frames (critic A1)', () => {
 
 describe('bridge reads in stage A (wave 3)', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
-  it('W7: feed.snapshot only with scope attention and without agentId', () => {
+  it('A27: feed.snapshot takes the full feed and the attention scope', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(true);
     expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention' })).toBe(true);
-    expect(checkRemoteParams('feed.snapshot', { ref })).toBe(false);
+  });
+  it('A28 (critic m5): a subagent feed (agentId) is not for the phone', () => {
+    expect(checkRemoteParams('feed.snapshot', { ref, agentId: 'a1' })).toBe(false);
     expect(checkRemoteParams('feed.snapshot', { ref, scope: 'attention', agentId: 'a1' })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', { scope: 'attention' })).toBe(false);
-    expect(checkRemoteParams('feed.snapshot', null)).toBe(false);
   });
   it('W12: session.closing knows the protocol reason', () => {
     expect(bridgeEventSchemas['session.closing'].safeParse({ reason: 'protocol' }).success).toBe(true);

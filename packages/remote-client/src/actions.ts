@@ -1,6 +1,7 @@
 // Действия человека (спека §10.1, §11.4): итог — `applied | conflict | stale | lost`. Изменяющий вызов после потери
 // соединения не повторяется: клиент перечитывает состояние и называет итог по его данным.
 import type { FeedDecision, Message, RoleList } from '@parley/core';
+import type { Result } from '@parley/protocol';
 import { BRIDGE_CALL_DEADLINE_MS } from './rpc.js';
 import { remoteWorksSnapshotSchema, type RemoteRoom } from '@parley/protocol/remote';
 import type { RemoteStore } from './store.js';
@@ -183,7 +184,10 @@ const isoMs = (iso: string | null): number | null => {
 
 export interface CreateSessionParams {
   projectPath: string;
-  workId: string;
+  /** `null` — новая работа в известном проекте (хост создаёт её сам). */
+  workId: string | null;
+  /** Пометить папку доверенной (`trust.json`, `by: 'phone'`) до запуска. */
+  trustFolder?: boolean;
   provider: string;
   label: string;
   task: string;
@@ -227,7 +231,12 @@ async function awaitCreated<T>(store: RemoteStore, rpc: Rpc, env: ActionEnv, sta
 export async function createSession(store: RemoteStore, rpc: Rpc, env: ActionEnv, params: CreateSessionParams): Promise<CreateSessionOutcome> {
   const epoch = store.getState().epoch;
   const startedAt = env.now();
-  const before = new Set(workOf(store, params.projectPath, params.workId)?.sessions.map((x) => x.id));
+  // Новая работа (`workId: null`) неизвестна заранее: ищем по всем работам проекта.
+  const worksOf = (): NonNullable<ReturnType<typeof workOf>>[] =>
+    params.workId === null
+      ? (store.getState().snapshot?.works.filter((w) => w.projectPath === params.projectPath) ?? [])
+      : [workOf(store, params.projectPath, params.workId)].filter((w) => w !== undefined);
+  const before = new Set(worksOf().flatMap((w) => w.sessions.map((x) => x.id)));
   try {
     const res = (await rpc.call('sessions.create', { ...params, parent: null })) as { ref?: SessionRef } | null;
     if (store.getState().epoch === epoch && res?.ref !== undefined) return { outcome: 'created', ref: res.ref };
@@ -237,19 +246,23 @@ export async function createSession(store: RemoteStore, rpc: Rpc, env: ActionEnv
   }
   // Итог неизвестен: новая сессия — не из прежнего снимка, с тем же именем, провайдером и моделью, начатая не раньше вызова.
   const found = await awaitCreated(store, rpc, env, startedAt, () =>
-    workOf(store, params.projectPath, params.workId)
-      ?.sessions.filter((x) => {
-        if (before.has(x.id) || x.label !== params.label || x.provider !== params.provider) return false;
-        if (params.model && x.model !== null && x.model !== params.model) return false;
-        const started = isoMs(x.startedAt);
-        return started === null || started >= startedAt - CLOCK_SKEW_MS;
-      })
+    worksOf()
+      .flatMap((w) =>
+        w.sessions
+          .filter((x) => {
+            if (before.has(x.id) || x.label !== params.label || x.provider !== params.provider) return false;
+            if (params.model && x.model !== null && x.model !== params.model) return false;
+            const started = isoMs(x.startedAt);
+            return started === null || started >= startedAt - CLOCK_SKEW_MS;
+          })
+          .map((x) => ({ session: x, workId: w.id })),
+      )
       .at(-1),
   );
   if (found === null) return { outcome: 'lost' };
   return found === undefined
     ? { outcome: 'unknown' }
-    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: params.workId, sessionId: found.id } };
+    : { outcome: 'created', ref: { projectPath: params.projectPath, workId: found.workId, sessionId: found.session.id } };
 }
 
 export interface CreateRoomParams {
@@ -388,5 +401,199 @@ export async function loadRoles(store: RemoteStore, rpc: Rpc, projectPath: strin
     return store.getState().epoch === epoch;
   } catch {
     return false;
+  }
+}
+
+// ---- Сообщение агенту и решение по согласию (A31) ----
+
+export interface SendMessageParams {
+  ref: SessionRef;
+  text: string;
+  /** Ключ из прежней попытки: повтор после `lost` идёт с ним, и мост не пускает второй вызов хоста. */
+  clientMsgId?: string;
+}
+
+export type SendMessageOutcome =
+  /** Хост принял вызов; `submitted: false` — текст вставлен, но не отправлен (`reason` — почему). */
+  | { outcome: 'sent'; clientMsgId: string; inserted: boolean; submitted: boolean; reason: string | null }
+  | (Rejected & { clientMsgId: string })
+  /** Ответа нет: повторить с тем же `clientMsgId`. */
+  | { outcome: 'lost'; clientMsgId: string };
+
+/** Ключ сообщения: 8–64 знака `[A-Za-z0-9_-]` (правило протокола). */
+export function newClientMsgId(now: number): string {
+  const rnd = (): string => Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+  return `m${now.toString(36)}${rnd()}${rnd()}`.slice(0, 64);
+}
+
+const inFlightSends = new Map<string, Promise<SendMessageOutcome>>();
+
+/**
+ * Написать агенту. Вызов не повторяется самим клиентом; итог `lost` несёт `clientMsgId`, с которым человек (или экран)
+ * повторяет отправку: второго вызова хоста не будет (мост кэширует ответ 10 минут). Параллельная отправка с тем же
+ * ключом возвращает тот же итог.
+ */
+export function sendMessage(rpc: Rpc, env: Pick<ActionEnv, 'now'>, params: SendMessageParams): Promise<SendMessageOutcome> {
+  const clientMsgId = params.clientMsgId ?? newClientMsgId(env.now());
+  const running = inFlightSends.get(clientMsgId);
+  if (running !== undefined) return running;
+  const run = (async (): Promise<SendMessageOutcome> => {
+    try {
+      const res = (await rpc.call('pty.send', {
+        ref: params.ref,
+        text: params.text,
+        submit: true,
+        requestedAt: env.now(),
+        clientMsgId,
+      })) as { inserted?: boolean; submitted?: boolean; reason?: string | null } | null;
+      return { outcome: 'sent', clientMsgId, inserted: res?.inserted === true, submitted: res?.submitted === true, reason: typeof res?.reason === 'string' ? res.reason : null };
+    } catch (error) {
+      const rejected = rejection(error);
+      return rejected === null ? { outcome: 'lost', clientMsgId } : { ...rejected, clientMsgId };
+    }
+  })().finally(() => inFlightSends.delete(clientMsgId));
+  inFlightSends.set(clientMsgId, run);
+  return run;
+}
+
+// ---- Пробуждение спящей сессии с телефона (A37b) ----
+
+/** `ok` — хост принял вызов (сессия уйдёт из `sleeping` через `works.changed`); `lost` — итог неизвестен. */
+export type ResumeSessionOutcome = { outcome: 'ok' } | { outcome: 'lost' } | Rejected;
+
+/** `sessions.resume {ref}`. Изменяющий вызов: клиент его не повторяет, `connection_lost` — «не подтверждено». */
+export async function resumeSession(rpc: Rpc, ref: SessionRef): Promise<ResumeSessionOutcome> {
+  try {
+    await rpc.call('sessions.resume', { ref });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+// ---- Действия меню сессии (A38b): Stop, Put to sleep, Close, замена провайдера ----
+
+/** Команда по `ref` без результата: `feed.interrupt`, `sessions.stop`, `sessions.close`. */
+export type SessionCommandOutcome = { outcome: 'ok' } | { outcome: 'lost' } | Rejected;
+export type SessionCommand = 'feed.interrupt' | 'sessions.stop' | 'sessions.close';
+
+/** Изменяющий вызов: клиент его не повторяет, `connection_lost` — «не подтверждено». */
+export async function sessionCommand(rpc: Rpc, method: SessionCommand, ref: SessionRef): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call(method, { ref });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+// ---- Действия меню комнаты (A41b): Archive, Delete ----
+
+/** `rooms.archive {projectPath, workId, roomId, stopSessions}`. Изменяющий вызов: не повторяется. */
+export async function archiveRoom(rpc: Rpc, room: RoomRef, stopSessions: boolean): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call('rooms.archive', { projectPath: room.projectPath, workId: room.workId, roomId: room.roomId, stopSessions });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+/** `rooms.delete {projectPath, workId, roomId}`. Изменяющий вызов: не повторяется. */
+export async function deleteRoom(rpc: Rpc, room: RoomRef): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call('rooms.delete', { projectPath: room.projectPath, workId: room.workId, roomId: room.roomId });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+export type SwitchOptions = Result<'sessions.switchOptions'>;
+export type SwitchOptionsOutcome = { outcome: 'ok'; options: SwitchOptions } | { outcome: 'lost' } | Rejected;
+
+/** Цели замены агента (чтение, `sessions.switchOptions`). */
+export async function loadSwitchOptions(rpc: Rpc, ref: SessionRef): Promise<SwitchOptionsOutcome> {
+  try {
+    const options = (await rpc.call('sessions.switchOptions', { ref })) as SwitchOptions;
+    return { outcome: 'ok', options };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+export interface SwitchAgentParams {
+  ref: SessionRef;
+  /** uuid: один на открытие листа; повтор того же запроса хост отдаёт тем же ответом. Без `force` (только окно). */
+  requestId: string;
+  provider: string;
+  carry: 'handover' | 'transcript';
+}
+export type SwitchAgentOutcome = { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' } | { outcome: 'lost' } | Rejected;
+
+/** Заменить агента сессии (`sessions.switchAgent`). Не повторяется; модель и effort — умолчание роли. */
+export async function switchAgent(rpc: Rpc, params: SwitchAgentParams): Promise<SwitchAgentOutcome> {
+  try {
+    const res = (await rpc.call('sessions.switchAgent', params)) as { outcome?: string; carried?: string } | null;
+    const outcome = res?.outcome === 'held' || res?.outcome === 'queued' ? res.outcome : 'started';
+    return { outcome, carried: res?.carried === 'transcript' ? 'transcript' : 'handover' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+export type DecideConsentOutcome =
+  | { outcome: 'applied' | 'stale' }
+  /** `stillPending`: после перечитывания карточка ещё ждёт (`true`), ушла (`false`), перечитать не удалось (`null`). */
+  | { outcome: 'lost'; stillPending: boolean | null }
+  | Rejected;
+
+/** Решить карточку согласия (доверие к папке, смена провайдера). Не повторяется: после потери итог — по `consents.list`. */
+export interface ConsentExtra {
+  enabled?: ReadonlyArray<{ name: string; fingerprint: string }>;
+  revision?: number;
+}
+
+export async function decideConsent(
+  store: RemoteStore,
+  rpc: Rpc,
+  id: string,
+  decision: 'allow' | 'deny',
+  /** Карточка `project-mcp`: `enabled` — пары включённых серверов (только `allow`), `revision` — ревизия карточки (с обоими решениями). */
+  extra?: ConsentExtra,
+): Promise<DecideConsentOutcome> {
+  const epoch = store.getState().epoch;
+  const reread = async (): Promise<boolean | null> => {
+    try {
+      const res = (await rpc.call('consents.list', {})) as { items?: unknown } | null;
+      if (!Array.isArray(res?.items)) return null;
+      store.dispatch({ t: 'consents.loaded', epoch: store.getState().epoch, items: res.items as never[] });
+      return (res.items as Array<{ id?: string }>).some((c) => c.id === id);
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const res = (await rpc.call('consents.decide', { id, decision, ...(decision === 'allow' && extra?.enabled !== undefined ? { enabled: extra.enabled } : {}), ...(extra?.revision !== undefined ? { revision: extra.revision } : {}) })) as { applied?: boolean } | null;
+    store.dispatch({ t: 'consents.resolved', id });
+    if (store.getState().epoch === epoch) return { outcome: res?.applied === true ? 'applied' : 'stale' };
+  } catch (error) {
+    const rejected = rejection(error);
+    if (rejected !== null) {
+      // `bad_request` на `enabled`: список серверов мог измениться — карточка перечитывается, человек смотрит её заново.
+      if (rejected.code === 'bad_request') await reread();
+      return rejected;
+    }
+  }
+  return { outcome: 'lost', stillPending: await reread() };
+}
+
+/** `trust.check` для папки известного проекта; `null` — узнать не удалось (старый Мак, нет связи, отказ). */
+export async function checkTrust(rpc: Rpc, folder: string): Promise<boolean | null> {
+  try {
+    const res = (await rpc.call('trust.check', { folder })) as { trusted?: unknown } | null;
+    return typeof res?.trusted === 'boolean' ? res.trusted : null;
+  } catch {
+    return null;
   }
 }

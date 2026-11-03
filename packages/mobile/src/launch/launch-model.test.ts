@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RemoteState } from '@parley/remote-client';
-import type { Approve } from '../auth/approve';
 import {
   MAY_BE_STARTING,
   NOT_CONFIRMED,
@@ -12,6 +11,7 @@ import {
   hasDraft,
   launchRoom,
   launchSession,
+  workspaceOptions,
   letterProblem,
   partialMessage,
   providerChoices,
@@ -25,9 +25,6 @@ import {
   type SessionForm,
 } from './launch-model';
 
-const ok: Approve = vi.fn(async () => 'ok' as const);
-const no: Approve = vi.fn(async () => 'cancelled' as const);
-const noPasscode: Approve = vi.fn(async () => 'no-passcode' as const);
 
 const snapshot = (works: unknown[]) => ({ snapshot: { revision: 1, works } }) as unknown as Pick<RemoteState, 'snapshot'>;
 const work = (id: string, over: Record<string, unknown> = {}) => ({
@@ -136,56 +133,58 @@ describe('forms', () => {
   });
 });
 
-describe('launchSession', () => {
-  it('Face ID cancelled: nothing is sent', async () => {
+describe('A32: trust and new workspace', () => {
+  it('"Trust this folder" goes as trustFolder: true; off or unset sends no key', async () => {
     const c = client();
-    expect(await launchSession(c, no, sessionForm())).toEqual({ kind: 'cancelled', reason: 'cancelled' });
-    expect(await launchSession(c, noPasscode, sessionForm())).toEqual({ kind: 'cancelled', reason: 'no-passcode' });
-    expect(c.createSession).not.toHaveBeenCalled();
+    await launchSession(c, sessionForm({ trustFolder: true }));
+    expect(c.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ trustFolder: true }));
+    await launchSession(c, sessionForm({ trustFolder: false }));
+    expect(c.createSession.mock.calls.at(-1)![0]).not.toHaveProperty('trustFolder');
   });
 
-  it('created: the call carries the schema fields only, and Face ID asked as a launch', async () => {
+  it('a new workspace goes as workId null; workspaceOptions adds one per project for sessions only', async () => {
     const c = client();
-    const approve = vi.fn(async () => 'ok' as const);
-    const res = await launchSession(c, approve, sessionForm({ model: 'opus', role: { source: 'builtin', name: 'executor' }, worktree: true, name: 'Fix lint' }));
+    await launchSession(c, sessionForm({ workId: null }));
+    expect(c.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ workId: null }));
+    const snap = snapshot([work('w-3'), work('w-4')]);
+    expect(workspaceOptions(snap, true).map((w) => w.workId)).toEqual(['w-3', 'w-4', null]);
+    expect(workspaceOptions(snap, true).at(-1)).toMatchObject({ title: 'New workspace', projectName: 'proj' });
+    expect(workspaceOptions(snap, false).map((w) => w.workId)).toEqual(['w-3', 'w-4']);
+  });
+});
+
+describe('launchSession', () => {
+  it('created: the call carries the schema fields only', async () => {
+    const c = client();
+    const res = await launchSession(c, sessionForm({ model: 'opus', role: { source: 'builtin', name: 'executor' }, worktree: true, name: 'Fix lint' }));
     expect(res).toEqual({ kind: 'created', ref: { projectPath: '/Users/me/proj', workId: 'w-1', sessionId: 's-9' } });
-    expect(approve).toHaveBeenCalledWith('launch');
     expect(c.createSession).toHaveBeenCalledWith({
       projectPath: '/Users/me/proj', workId: 'w-1', provider: 'claude', label: 'Fix lint', task: 'do it', model: 'opus', role: { source: 'builtin', name: 'executor' }, worktree: true,
     });
-    await launchSession(c, ok, sessionForm());
+    await launchSession(c, sessionForm());
     expect(c.createSession).toHaveBeenLastCalledWith({ projectPath: '/Users/me/proj', workId: 'w-1', provider: 'claude', label: 'New session', task: 'do it' });
   });
 
   it('unknown_method: the Mac switch is off; a host limit keeps the host text', async () => {
     const off = client({ createSession: vi.fn(async () => ({ outcome: 'rejected', code: 'unknown_method', message: 'unknown method: sessions.create' })) });
-    expect(await launchSession(off, ok, sessionForm())).toEqual({ kind: 'refused', code: 'unknown_method', message: OFF_ON_MAC });
+    expect(await launchSession(off, sessionForm())).toEqual({ kind: 'refused', code: 'unknown_method', message: OFF_ON_MAC });
     const limit = client({ createSession: vi.fn(async () => ({ outcome: 'rejected', code: 'conflict', message: 'Session limit reached (12)' })) });
-    expect(await launchSession(limit, ok, sessionForm())).toEqual({ kind: 'refused', code: 'conflict', message: 'Session limit reached (12)' });
+    expect(await launchSession(limit, sessionForm())).toEqual({ kind: 'refused', code: 'conflict', message: 'Session limit reached (12)' });
   });
 
   it('lost → not confirmed; the re-read found nothing → it may still be starting', async () => {
     const lost = client({ createSession: vi.fn(async () => ({ outcome: 'lost' })) });
-    expect(await launchSession(lost, ok, sessionForm())).toEqual({ kind: 'unconfirmed', message: NOT_CONFIRMED });
+    expect(await launchSession(lost, sessionForm())).toEqual({ kind: 'unconfirmed', message: NOT_CONFIRMED });
     const unknown = client({ createSession: vi.fn(async () => ({ outcome: 'unknown' })) });
-    expect(await launchSession(unknown, ok, sessionForm())).toEqual({ kind: 'unknown', message: MAY_BE_STARTING });
+    expect(await launchSession(unknown, sessionForm())).toEqual({ kind: 'unknown', message: MAY_BE_STARTING });
   });
 });
 
 describe('launchRoom', () => {
-  it('Face ID cancelled: nothing is started', async () => {
-    const c = client();
-    expect(await launchRoom(c, no, roomForm({ agents: [{ key: 'a', provider: 'claude', model: null, role: null }] }))).toEqual({ kind: 'cancelled', reason: 'cancelled' });
-    expect(c.createSession).not.toHaveBeenCalled();
-    expect(c.createRoom).not.toHaveBeenCalled();
-  });
-
   it('existing members only: a quiet room with the chosen mode and lead', async () => {
     const c = client();
-    const approve = vi.fn(async () => 'ok' as const);
-    const res = await launchRoom(c, approve, roomForm({ members: ['s-1', 's-2'], lead: 's-2', title: '  Release review  ' }));
+    const res = await launchRoom(c, roomForm({ members: ['s-1', 's-2'], lead: 's-2', title: '  Release review  ' }));
     expect(res).toEqual({ kind: 'created', ref: { projectPath: '/Users/me/proj', workId: 'w-1', roomId: 'r-9' }, agents: 2 });
-    expect(approve).toHaveBeenCalledTimes(1);
     expect(c.createSession).not.toHaveBeenCalled();
     expect(c.createRoom).toHaveBeenCalledWith({ projectPath: '/Users/me/proj', workId: 'w-1', title: 'Release review', members: ['s-1', 's-2'], quiet: true, mode: 'verified', lead: 's-2' });
   });
@@ -194,7 +193,6 @@ describe('launchRoom', () => {
     const c = client();
     const res = await launchRoom(
       c,
-      ok,
       roomForm({ members: ['s-1'], agents: [{ key: 'n1', provider: 'claude', model: 'opus', role: { source: 'builtin', name: 'writer' } }], lead: 'n1' }),
     );
     expect(res).toMatchObject({ kind: 'created', agents: 2 });
@@ -206,7 +204,7 @@ describe('launchRoom', () => {
 
   it('a lead that is not a member is dropped (the host takes the first)', async () => {
     const c = client();
-    await launchRoom(c, ok, roomForm({ lead: 's-77' }));
+    await launchRoom(c, roomForm({ lead: 's-77' }));
     expect(c.createRoom.mock.calls[0]![0]).not.toHaveProperty('lead');
   });
 
@@ -220,7 +218,6 @@ describe('launchRoom', () => {
     });
     const res = await launchRoom(
       c,
-      ok,
       roomForm({ members: [], agents: [{ key: 'a', provider: 'claude', model: null, role: null }, { key: 'b', provider: 'claude', model: null, role: null }] }),
     );
     expect(res).toMatchObject({ kind: 'partial', started: 1, message: '1 agent started, the room was not created: Session limit reached' });
@@ -229,14 +226,14 @@ describe('launchRoom', () => {
 
   it('the room itself refused after agents started: they are counted in the message', async () => {
     const c = client({ createRoom: vi.fn(async () => ({ outcome: 'rejected', code: 'bad_request', message: 'unknown lead' })) });
-    const res = await launchRoom(c, ok, roomForm({ members: [], agents: [{ key: 'a', provider: 'claude', model: null, role: null }, { key: 'b', provider: 'claude', model: null, role: null }] }));
+    const res = await launchRoom(c, roomForm({ members: [], agents: [{ key: 'a', provider: 'claude', model: null, role: null }, { key: 'b', provider: 'claude', model: null, role: null }] }));
     expect(res).toMatchObject({ kind: 'partial', started: 2, message: '2 agents started, the room was not created: unknown lead' });
     expect(partialMessage(0, 'x')).toBe('x');
   });
 
   it('the Mac switch turned off during the launch: the fixed sentence', async () => {
     const c = client({ createRoom: vi.fn(async () => ({ outcome: 'rejected', code: 'unknown_method', message: 'x' })) });
-    const res = await launchRoom(c, ok, roomForm());
+    const res = await launchRoom(c, roomForm());
     expect(res).toMatchObject({ kind: 'partial', started: 0, message: OFF_ON_MAC });
   });
 });
@@ -253,7 +250,7 @@ describe('retry after a partial failure (critic final, A1)', () => {
       }),
     });
     const form = roomForm({ members: ['s-1'], agents: [agent('a'), agent('b'), agent('c')], lead: 'b' });
-    const first = await launchRoom(c, ok, form);
+    const first = await launchRoom(c, form);
     expect(first).toMatchObject({ kind: 'partial', started: 2, startedAgents: [{ key: 'a', sessionId: 's-11' }, { key: 'b', sessionId: 's-12' }] });
     if (first.kind !== 'partial') throw new Error('expected partial');
 
@@ -263,7 +260,7 @@ describe('retry after a partial failure (critic final, A1)', () => {
     expect(next.lead).toBe('s-12');
 
     // The human removes the third agent and presses again: no new agent at all, the room is created from what runs.
-    const retry = await launchRoom(c, ok, { ...next, agents: [] });
+    const retry = await launchRoom(c, { ...next, agents: [] });
     expect(retry).toMatchObject({ kind: 'created', agents: 3 });
     expect(c.createSession).toHaveBeenCalledTimes(3); // 2 started + the one that was refused; nothing started twice
     expect(c.createRoom).toHaveBeenCalledWith(expect.objectContaining({ members: ['s-1', 's-11', 's-12'], lead: 's-12' }));
@@ -272,13 +269,13 @@ describe('retry after a partial failure (critic final, A1)', () => {
   it('when only the room was refused, all agents are carried over and the retry starts none', async () => {
     const c = client({ createRoom: vi.fn(async () => ({ outcome: 'rejected', code: 'bad_request', message: 'x' })) });
     const form = roomForm({ members: [], agents: [agent('a'), agent('b')] });
-    const first = await launchRoom(c, ok, form);
+    const first = await launchRoom(c, form);
     if (first.kind !== 'partial') throw new Error('expected partial');
     const next = afterPartial(form, first.startedAgents);
     expect(next.agents).toEqual([]);
     expect(next.members).toHaveLength(2);
     c.createSession.mockClear();
-    await launchRoom(client(), ok, next);
+    await launchRoom(client(), next);
     expect(c.createSession).not.toHaveBeenCalled();
   });
 
@@ -288,7 +285,7 @@ describe('retry after a partial failure (critic final, A1)', () => {
 });
 
 describe('a method that is gone (critic final, a3)', () => {
-  it('names the Mac switch for the step whose method is missing; Face ID is not asked then', () => {
+  it('names the Mac switch for the step whose method is missing', () => {
     const all = ['sessions.create', 'rooms.create', 'rooms.send'];
     expect(methodMissing({ methods: all }, 'session')).toBeNull();
     expect(methodMissing({ methods: all }, 'room', 2)).toBeNull();
@@ -303,25 +300,16 @@ describe('a method that is gone (critic final, a3)', () => {
 describe('sendFirstLetter', () => {
   const room = { projectPath: '/Users/me/proj', workId: 'w-1', roomId: 'r-9' };
 
-  it('Face ID cancelled: nothing is sent (the draft stays on the sheet)', async () => {
+  it('sent as a note', async () => {
     const c = client();
-    expect(await sendFirstLetter(c, no, room, 'go')).toEqual({ kind: 'cancelled', reason: 'cancelled' });
-    expect(await sendFirstLetter(c, noPasscode, room, 'go')).toEqual({ kind: 'cancelled', reason: 'no-passcode' });
-    expect(c.sendRoomMessage).not.toHaveBeenCalled();
-  });
-
-  it('sent after a second Face ID, as a note', async () => {
-    const c = client();
-    const approve = vi.fn(async () => 'ok' as const);
-    expect(await sendFirstLetter(c, approve, room, 'go')).toEqual({ kind: 'sent' });
-    expect(approve).toHaveBeenCalledWith('letter');
+    expect(await sendFirstLetter(c, room, 'go')).toEqual({ kind: 'sent' });
     expect(c.sendRoomMessage).toHaveBeenCalledWith({ ...room, text: 'go', kind: 'note' });
   });
 
   it('refused and lost give words, not exceptions', async () => {
     const off = client({ sendRoomMessage: vi.fn(async () => ({ outcome: 'rejected', code: 'unknown_method', message: 'x' })) });
-    expect(await sendFirstLetter(off, ok, room, 'go')).toEqual({ kind: 'refused', code: 'unknown_method', message: OFF_ON_MAC });
+    expect(await sendFirstLetter(off, room, 'go')).toEqual({ kind: 'refused', code: 'unknown_method', message: OFF_ON_MAC });
     const lost = client({ sendRoomMessage: vi.fn(async () => ({ outcome: 'lost' })) });
-    expect(await sendFirstLetter(lost, ok, room, 'go')).toEqual({ kind: 'unconfirmed', message: NOT_CONFIRMED });
+    expect(await sendFirstLetter(lost, room, 'go')).toEqual({ kind: 'unconfirmed', message: NOT_CONFIRMED });
   });
 });
