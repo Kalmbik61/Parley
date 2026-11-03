@@ -56,6 +56,11 @@ export function createFollowController(io: FollowIo) {
     }, wait + 1);
   };
 
+  /** Not while the repeat scroll is still due: it would move the list a few points right after it is shown (critic Пm1). */
+  const tryReveal = (): void => {
+    const capped = state.openedAt !== null && io.now() - state.openedAt >= fe.REVEAL_CAP_MS;
+    if (settleTimer === null || capped) commit(fe.revealCheck(state, io.now()));
+  };
   /** The reveal check: one frame after the last growth, or at the cap since the first rows. */
   const armReveal = (): void => {
     if (revealTimer !== null) clearTimeout(revealTimer);
@@ -64,9 +69,9 @@ export function createFollowController(io: FollowIo) {
     if (wait === null) return;
     revealTimer = setTimeout(() => {
       revealTimer = null;
-      commit(fe.revealCheck(state, io.now()));
+      tryReveal();
       armReveal();
-    }, wait + 1);
+    }, Math.max(wait + 1, settleTimer === null ? 0 : 20));
   };
 
   return {
@@ -83,7 +88,8 @@ export function createFollowController(io: FollowIo) {
       run(fe.viewportChanged(state, height, io.now()));
     },
     scroll(m: fe.ScrollMetrics): void {
-      commit(fe.revealCheck(fe.scrolled(state, m, io.now(), keys), io.now()));
+      commit(fe.scrolled(state, m, io.now(), keys));
+      tryReveal();
       armReveal();
     },
     beginDrag(): void {

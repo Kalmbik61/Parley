@@ -1,3 +1,5 @@
+import { WINDOW_ROWS } from './window';
+
 // "Follow the end" of a feed (A44), shared by the session feed and the room feed. No React.
 //
 // Why it exists: rows below the window are drawn with estimated heights and their real heights (Markdown, tables, code,
@@ -50,6 +52,8 @@ export interface FollowState {
   readonly layoutHeight: number | null;
   /** The latest content height reported by the size callback. */
   readonly contentHeight: number | null;
+  /** Rows in the list at that callback. A list draws only its first rows before it has measured the rest. */
+  readonly rowCount: number;
   /** Growth that arrived while a finger was down: one scroll on release, if still at the bottom. */
   readonly pendingGrowth: boolean;
   /** The last item the human has seen; "new" is what comes after it. */
@@ -79,7 +83,7 @@ export function countAfter(keys: readonly string[], seenKey: string | null, prev
 export function open(): FollowState {
   return {
     pinned: true, revealed: false, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
-    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, contentHeight: null, pendingGrowth: false, seenKey: null, away: 0,
+    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, contentHeight: null, rowCount: 0, pendingGrowth: false, seenKey: null, away: 0,
   };
 }
 
@@ -99,9 +103,8 @@ export function contentChanged(s: FollowState, now: number, keys: readonly strin
   const base: FollowState = first
     ? { ...s, hadRows: true, pinned: !s.touching, openedAt: now, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS }
     : { ...s, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS };
-  const sized: FollowState = content === undefined ? base : { ...base, contentHeight: content };
-  const fits = content !== undefined && base.layoutHeight !== null && content <= base.layoutHeight;
-  const shown: FollowState = fits ? { ...sized, revealed: true } : sized;
+  const sized: FollowState = { ...base, rowCount: keys.length, ...(content === undefined ? {} : { contentHeight: content }) };
+  const shown: FollowState = content !== undefined && fitsWindow(sized) ? { ...sized, revealed: true } : sized;
   return follow(shown, now, keys, first);
 }
 
@@ -116,7 +119,8 @@ function follow(base: FollowState, now: number, keys: readonly string[], first: 
 
 /** The content fits the window: nothing to scroll, whatever order the size and layout events came in. */
 function fitsWindow(s: FollowState): boolean {
-  return s.contentHeight !== null && s.layoutHeight !== null && s.contentHeight <= s.layoutHeight;
+  // Only a window that was drawn whole in the first pass has measured all its rows (A44b, critic ПB1).
+  return s.rowCount <= WINDOW_ROWS && s.contentHeight !== null && s.layoutHeight !== null && s.contentHeight <= s.layoutHeight;
 }
 
 /** The last scroll event saw the latest content height and was at its end: the pin's scroll has landed. */

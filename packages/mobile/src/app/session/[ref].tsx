@@ -30,6 +30,7 @@ import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
 import { useFollowEnd } from '../../feed/use-follow-end';
+import { WINDOW_ROWS, widened, windowStart } from '../../feed/window';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -194,10 +195,17 @@ export default function SessionScreen() {
     ]);
   const pendingRow = resume.view.pending;
   const pendingMessage: OutMessage | null = pendingRow === null ? null : { id: 'resume-pending', text: pendingRow.text, at: 0, state: { kind: pendingRow.held ? 'held' : 'waking' } };
-  const rows = useMemo<Row[]>(
+  const allRows = useMemo<Row[]>(
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  // The list gets the tail window of the folded rows (A44b): all drawn and measured in one pass; older rows come from the top.
+  const [windowSize, setWindowSize] = useState(WINDOW_ROWS);
+  const start = useMemo(
+    () => windowStart(allRows.length, windowSize, (i) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }),
+    [allRows, windowSize],
+  );
+  const rows = useMemo(() => allRows.slice(start), [allRows, start]);
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
   const follow = useFollowEnd(list, rowKeys);
   // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
@@ -347,7 +355,7 @@ export default function SessionScreen() {
   const header = (
     <View style={styles.passport}>
       <ConnectionBanner />
-      {origin.length > 0 && (
+      {origin.length > 0 && start === 0 && (
         <View style={styles.origin}>
           <SymbolView name="arrow.turn.left.up" size={14} tintColor={c.label2} />
           <Text allowFontScaling numberOfLines={2} style={[typography.footnote, styles.flex, { color: c.label2 }]}>
@@ -484,6 +492,10 @@ export default function SessionScreen() {
         accessibilityElementsHidden={hiddenFeed}
         data={rows}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        initialNumToRender={WINDOW_ROWS}
+        maxToRenderPerBatch={WINDOW_ROWS}
+        onStartReached={() => { if (follow.revealed && start > 0) setWindowSize((n) => widened(allRows.length, n)); }}
+        onStartReachedThreshold={1}
         keyExtractor={rowKey}
         {...follow.handlers}
         scrollEventThrottle={64}

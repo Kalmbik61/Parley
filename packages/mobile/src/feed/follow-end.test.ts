@@ -313,6 +313,16 @@ describe('follow the end: reveal (A44b)', () => {
     expect(fe.contentChanged(laidOut, 1, K, 3000).state.revealed).toBe(false);
   });
 
+  it('a long feed whose first drawn rows look short is not revealed until it is measured (critic ПB1)', () => {
+    const long = Array.from({ length: 200 }, (_, i) => `r${i}`);
+    const laidOut = fe.viewportChanged(fe.open(), 760, 0).state;
+    const first = fe.contentChanged(laidOut, 1, long, 640).state; // only the first rows are drawn: 640 pt < 760 pt
+    expect(first.revealed).toBe(false);
+    expect(fe.revealCheck(fe.viewportChanged(first, 760, 2).state, 3).revealed).toBe(false);
+    const window30 = long.slice(-30);
+    expect(fe.contentChanged(laidOut, 1, window30, 640).state.revealed).toBe(true); // a whole 30-row window that fits
+  });
+
   it('a short feed shows at once whichever of the size and the layout event came first (critic m3)', () => {
     const sizeFirst = fe.contentChanged(fe.open(), 0, K, 500).state;
     expect(sizeFirst.revealed).toBe(false);
