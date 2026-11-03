@@ -5,8 +5,13 @@
 # (packages/desktop/package.json) обязаны совпасть, а коммит тега — лежать в истории master: create-release
 # проверяет оба условия. Задачи идут по цепочке:
 #   create-release  → черновик релиза с заметками из CHANGELOG.md;
-#   build-mac       → сборка без токена, проверка собранного, затем файлы и SHA256SUMS.txt — в черновик;
-#   publish-release → проверка, что черновик цел и файлы на месте, и публикация.
+#   relay-image     → образ relay (linux/amd64 и arm64) в GHCR под тегом версии; его digest уходит в сборку;
+#   build-mac       → сборка без токена (digest образа закрепляется в приложении), проверка собранного, затем
+#                     файлы и SHA256SUMS.txt — в черновик;
+#   publish-release → проверка, что черновик цел, файлы на месте, а образ в GHCR доступен без входа, и публикация.
+# Первый push пакета parley-relay в GHCR может оставить его приватным: тогда мастер установки на сервере образ не
+# скачает, и publish-release упадёт с подсказкой. Разово: GitHub → Packages → parley-relay → Package settings →
+# Change visibility → Public; затем «Re-run failed jobs».
 # Что-то упало — «Re-run failed jobs»: черновик и файлы в нём перезаписываются, повтор безопасен. Если
 # runner снова упёрся в системный лимит, после слияния исправления запустить workflow вручную с release_tag=vX.Y.Z
 # и dry_run=false: сборка возьмёт исходники именно из указанного тега.
@@ -27,8 +32,8 @@
 #   можно переставить без единого коммита здесь, и чужой код получил бы токен с записью. Обновить действие —
 #   найти SHA нужной версии (`git ls-remote --tags <репозиторий> <тег>`; у аннотированного тега — строка `^{}`)
 #   и поправить список в packages/desktop/src/release-workflows.test.ts;
-# - токен репозитория — только в `env` шага, который зовёт `gh` или скрипт из scripts/release; шаги, где
-#   идёт сборка или стоят зависимости, его не получают.
+# - токен репозитория — только в `env` шага, который зовёт `gh`, скрипт из scripts/release или `docker login`;
+#   шаги, где идёт сборка или стоят зависимости, его не получают.
 name: Release
 
 on:
@@ -140,11 +145,76 @@ jobs:
               ;;
           esac
 
+  relay-image:
+    name: Publish the relay image
+    needs: create-release
+    # Как у build-mac: create-release пропущена — пробный прогон, образ только собирается (без входа и без push).
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Запись в пакеты нужна только этой задаче; репозиторий она читает.
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      # Токен — только здесь: сборка и push его не видят, берут вход из конфига docker.
+      - name: Log in to GHCR
+        if: needs.create-release.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
+      # Пробный прогон: только сборка (результат отбрасывается), digest пуст. Настоящий: push под тегом версии и
+      # digest списка манифестов (amd64 + arm64) из metadata-файла. Метка source связывает пакет с репозиторием.
+      - name: Build and push the image
+        id: push
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          PUSH: ${{ needs.create-release.result == 'success' }}
+          METADATA_FILE: ${{ runner.temp }}/relay-image-metadata.json
+        run: |
+          set -euo pipefail
+          args=(--platform linux/amd64,linux/arm64 --file packages/relay/Dockerfile --provenance=false
+            --label "org.opencontainers.image.source=https://github.com/Kalmbik61/Parley")
+          if [ "$PUSH" != "true" ]; then
+            docker buildx build "${args[@]}" .
+            echo "digest=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unexpected release version: $VERSION"
+            exit 1
+          fi
+          docker buildx build "${args[@]}" --tag "ghcr.io/kalmbik61/parley-relay:$VERSION" \
+            --push --metadata-file "$METADATA_FILE" .
+          digest="$(jq -r '."containerimage.digest"' "$METADATA_FILE")"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The pushed image has no valid digest: $digest"
+            exit 1
+          fi
+          echo "Pushed ghcr.io/kalmbik61/parley-relay@$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
   build-mac:
     name: Build macOS (arm64 and x64)
-    needs: create-release
+    needs: [create-release, relay-image]
     # create-release пропущена — пробный прогон: собираем без публикации. Упала — не собираем.
-    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') && needs.relay-image.result == 'success' }}
     runs-on: macos-15
     timeout-minutes: 60
     # Запись нужна загрузке файлов в черновик и гейту после неё, и токен получают только эти два шага. GitHub не даёт
@@ -191,7 +261,21 @@ jobs:
           echo "::error::pnpm install failed three times"
           exit 1
 
+      # Настоящий выпуск без digest образа не собирается: приложение с заглушкой отказалось бы ставить relay.
+      - name: Check the relay image digest
+        if: needs.create-release.result == 'success'
+        env:
+          DIGEST: ${{ needs.relay-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The relay image digest is missing or malformed: '$DIGEST'"
+            exit 1
+          fi
+
       - name: Build
+        env:
+          PARLEY_RELAY_IMAGE_DIGEST: ${{ needs.relay-image.outputs.digest }}
         run: pnpm build
 
       # Встроенный Node 22 обеих архитектур: sha256 архивов сверяется с SHASUMS256.txt с nodejs.org.
@@ -209,7 +293,10 @@ jobs:
       # `dist` — сборка окна, раскладка хоста (pnpm deploy) и electron-builder; аргументы уходят ему. Токена у этой
       # цепочки нет, и `--publish never` — всегда: electron-builder ничего не выкладывает, а в релиз файлы кладёт
       # шаг ниже, после проверки. Без пользователя Apple: подпись ad-hoc, нотаризации нет (electron-builder.yml).
+      # `dist` пересобирает окно (`pnpm build`), поэтому digest образа нужен и здесь: он попадает в main-бандл.
       - name: Package for macOS
+        env:
+          PARLEY_RELAY_IMAGE_DIGEST: ${{ needs.relay-image.outputs.digest }}
         run: |
           set -euo pipefail
           # Ad-hoc подпись (@electron/osx-sign) обходит бандл без ограничения параллельности: открывает каждый
@@ -223,6 +310,12 @@ jobs:
 
       - name: Verify the packaged apps
         run: bash scripts/release/verify-packaged-apps.sh
+
+      - name: Check the relay image digest is baked into the app
+        if: needs.create-release.result == 'success'
+        env:
+          DIGEST: ${{ needs.relay-image.outputs.digest }}
+        run: grep -rqF "$DIGEST" packages/desktop/out/main
 
       - name: Create SHA256SUMS.txt
         working-directory: packages/desktop/dist
@@ -274,7 +367,7 @@ jobs:
     name: Publish release
     # Запускается только после успеха обеих задач. В пробном прогоне create-release пропущена,
     # а значит, пропущена и эта.
-    needs: [create-release, build-mac]
+    needs: [create-release, relay-image, build-mac]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -300,6 +393,23 @@ jobs:
           set -euo pipefail
           node scripts/release/assert-github-release-is-draft.mjs
           node scripts/release/verify-release-required-assets.mjs
+
+      # Образ relay в GHCR должен тянуться без входа: мастер установки на сервере логина не знает. Пакет, который
+      # GITHUB_TOKEN создал впервые, может быть приватным. Вход в ghcr.io здесь не делается (`logout` — страховка).
+      - name: Check the relay image is public
+        env:
+          DIGEST: ${{ needs.relay-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io || true
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The relay image digest is missing or malformed: '$DIGEST'"
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "ghcr.io/kalmbik61/parley-relay@$DIGEST" > /dev/null; then
+            echo "::error::The relay image cannot be pulled anonymously: make the parley-relay package public in GitHub → Packages → parley-relay → Package settings → Change visibility, then re-run failed jobs"
+            exit 1
+          fi
 
       # `--prerelease` задаёт тег (есть «-»), а не то, что осталось на релизе: иначе пререлиз мог бы
       # стать «последним» релизом репозитория.

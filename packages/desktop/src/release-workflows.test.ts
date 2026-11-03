@@ -40,6 +40,8 @@ const ALLOWED_ACTIONS: Record<string, { sha: string; version: string }> = {
     sha: 'fc324d3547104276b827a68afc52ff2a11cc49c9',
     version: 'v5.0.0',
   },
+  'docker/setup-buildx-action': { sha: 'e468171a9de216ec08956ac3ada2f0791b6bd435', version: 'v3.11.1' },
+  'docker/setup-qemu-action': { sha: '29109295f81e9208d7d86ff1c6c12d2833863392', version: 'v3.6.0' },
   'pnpm/action-setup': { sha: 'b906affcce14559ad1aafd4ab0e942779e9f58b1', version: 'v4.3.0' },
 };
 
@@ -192,27 +194,40 @@ describe('release.yml (V5)', () => {
     expect(release).toMatch(/^ {6}release_tag:\n(?: {8}.*\n)*? {8}type: string\n/m);
   });
 
-  it('права: по умолчанию чтение, запись — у трёх задач, и каждая просит её у себя; один прогон на ref, прерывать нельзя', () => {
+  it('права: по умолчанию чтение, запись — у трёх задач, packages: write — только у relay-image; один прогон на ref, прерывать нельзя', () => {
     expect(release).toMatch(/^permissions:\n {2}contents: read\n(?! )/m);
     const jobs = jobsOf(release);
-    expect([...jobs.keys()]).toEqual(['create-release', 'build-mac', 'publish-release']);
+    expect([...jobs.keys()]).toEqual([
+      'create-release',
+      'relay-image',
+      'build-mac',
+      'publish-release',
+    ]);
     for (const [name, job] of jobs) {
       expect(job, `${name}: права задачи`).toMatch(
-        /^ {4}permissions:\n {6}contents: write\n(?! {6})/m,
+        name === 'relay-image'
+          ? /^ {4}permissions:\n {6}contents: read\n {6}packages: write\n(?! {6})/m
+          : /^ {4}permissions:\n {6}contents: write\n(?! {6})/m,
       );
     }
+    expect(release.match(/packages: write/g)).toHaveLength(1);
     expect(release).toMatch(
       /^concurrency:\n {2}group: release-\$\{\{ inputs\.release_tag \|\| github\.ref \}\}\n {2}cancel-in-progress: false\n/m,
     );
   });
 
-  it('три задачи по цепочке: create-release → build-mac → publish-release', () => {
+  it('четыре задачи по цепочке: create-release → relay-image → build-mac → publish-release', () => {
     expect(release).toMatch(
-      /^ {2}create-release:\n[\s\S]*\n {2}build-mac:\n[\s\S]*\n {2}publish-release:\n/m,
+      /^ {2}create-release:\n[\s\S]*\n {2}relay-image:\n[\s\S]*\n {2}build-mac:\n[\s\S]*\n {2}publish-release:\n/m,
     );
-    expect(release).toMatch(/^ {2}build-mac:\n(?: {4}.*\n| *\n)*? {4}needs: create-release\n/m);
     expect(release).toMatch(
-      /^ {2}publish-release:\n(?: {4}.*\n| *\n)*? {4}needs: \[create-release, build-mac\]\n/m,
+      /^ {2}relay-image:\n(?: {4}.*\n| *\n)*? {4}needs: create-release\n/m,
+    );
+    expect(release).toMatch(
+      /^ {2}build-mac:\n(?: {4}.*\n| *\n)*? {4}needs: \[create-release, relay-image\]\n/m,
+    );
+    expect(release).toMatch(
+      /^ {2}publish-release:\n(?: {4}.*\n| *\n)*? {4}needs: \[create-release, relay-image, build-mac\]\n/m,
     );
     // Пробный прогон: create-release пропущена, и publish-release тоже; условия на publish-release нет.
     expect(release).toMatch(
@@ -294,12 +309,12 @@ describe('release.yml (V5)', () => {
         withToken += 1;
         const script = runScripts(step).join('\n');
         const where = `${jobName} / ${stepName(step)}`;
-        expect(script, where).toMatch(/\bgh (?:api|release) |node scripts\/release\//);
+        expect(script, where).toMatch(/\bgh (?:api|release) |node scripts\/release\/|\bdocker login /);
         expect(script, where).not.toMatch(/\b(?:pnpm|npm|npx|yarn|electron-builder)\b/);
       }
     }
-    // create-release (черновик), build-mac (загрузка, гейт), publish-release (проверка, публикация).
-    expect(withToken).toBe(5);
+    // create-release (черновик), relay-image (вход в GHCR), build-mac (загрузка, гейт), publish-release (проверка, публикация).
+    expect(withToken).toBe(6);
   });
 
   it('загрузка в черновик — после сборки, проверки собранного и SHA256SUMS.txt: битые файлы в релиз не попадают', () => {
@@ -377,6 +392,87 @@ describe('release.yml (V5)', () => {
 
     expect(check).toBeGreaterThan(names.indexOf('Check the tag and read the release notes'));
     expect(check).toBeLessThan(names.indexOf('Create the draft release'));
+  });
+
+  describe('relay-image', () => {
+    const job = (): string => jobsOf(release).get('relay-image') ?? '';
+    const step = (name: string): string =>
+      stepsOf(job()).find((item) => stepName(item) === name) ?? '';
+
+    it('собирает packages/relay/Dockerfile для amd64 и arm64 с меткой source и пушит тег версии', () => {
+      const script = runScripts(step('Build and push the image')).join('\n');
+
+      expect(job()).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+      expect(script).toContain('--platform linux/amd64,linux/arm64');
+      expect(script).toContain('--file packages/relay/Dockerfile');
+      expect(script).toContain(
+        'org.opencontainers.image.source=https://github.com/Kalmbik61/Parley',
+      );
+      expect(script).toContain('--tag "ghcr.io/kalmbik61/parley-relay:$VERSION"');
+      expect(script).toContain('--push');
+      expect(job()).toMatch(/^ {6}digest: \$\{\{ steps\.push\.outputs\.digest \}\}$/m);
+    });
+
+    it('digest проверяется регулярным выражением sha256:<64 hex> до записи в output', () => {
+      const script = runScripts(step('Build and push the image')).join('\n');
+
+      expect(script).toContain('^sha256:[0-9a-f]{64}$');
+      expect(script.indexOf('^sha256:[0-9a-f]{64}$')).toBeLessThan(
+        script.indexOf('echo "digest=$digest"'),
+      );
+    });
+
+    it('пробный прогон: вход и push пропускаются, digest пуст', () => {
+      expect(step('Log in to GHCR')).toMatch(/^ {8}if: needs\.create-release\.result == 'success'$/m);
+      const script = runScripts(step('Build and push the image')).join('\n');
+      const dry = script.slice(0, script.indexOf('--push'));
+
+      expect(step('Build and push the image')).toMatch(
+        /^ {10}PUSH: \$\{\{ needs\.create-release\.result == 'success' \}\}$/m,
+      );
+      expect(dry).toContain('if [ "$PUSH" != "true" ]; then');
+      expect(dry).toContain('echo "digest=" >> "$GITHUB_OUTPUT"');
+    });
+
+    it('токен — только у шага входа; сборка и push его не получают', () => {
+      expect(step('Log in to GHCR')).toContain('GH_TOKEN');
+      expect(step('Build and push the image')).not.toContain('GH_TOKEN');
+      expect(step('Build and push the image')).not.toContain('secrets.');
+    });
+  });
+
+  it('build-mac берёт digest образа через env сборки и в настоящем выпуске падает без него', () => {
+    const steps = stepsOf(jobsOf(release).get('build-mac') ?? '');
+    const find = (name: string): string => steps.find((item) => stepName(item) === name) ?? '';
+    const env = /^ {10}PARLEY_RELAY_IMAGE_DIGEST: \$\{\{ needs\.relay-image\.outputs\.digest \}\}$/m;
+
+    expect(find('Build')).toMatch(env);
+    expect(find('Package for macOS')).toMatch(env);
+    const check = find('Check the relay image digest');
+    expect(check).toMatch(/^ {8}if: needs\.create-release\.result == 'success'$/m);
+    expect(runScripts(check).join('\n')).toContain('^sha256:[0-9a-f]{64}$');
+    expect(steps.map(stepName).indexOf('Check the relay image digest')).toBeLessThan(
+      steps.map(stepName).indexOf('Build'),
+    );
+    expect(find('Check the relay image digest is baked into the app')).toContain(
+      'grep -rqF "$DIGEST" packages/desktop/out/main',
+    );
+  });
+
+  it('publish-release перед публикацией проверяет, что образ тянется без входа', () => {
+    const steps = stepsOf(jobsOf(release).get('publish-release') ?? '');
+    const names = steps.map(stepName);
+    const gate = steps[names.indexOf('Check the relay image is public')] ?? '';
+    const script = runScripts(gate).join('\n');
+
+    expect(names.indexOf('Check the relay image is public')).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf('Check the relay image is public')).toBeLessThan(
+      names.indexOf('Publish the release'),
+    );
+    expect(script).toContain('docker logout ghcr.io');
+    expect(script).toContain('docker buildx imagetools inspect "ghcr.io/kalmbik61/parley-relay@$DIGEST"');
+    expect(script).toContain('make the parley-relay package public');
+    expect(gate).not.toContain('GH_TOKEN');
   });
 
   it('все скрипты, которые зовут workflow, лежат в репозитории', () => {

@@ -87,8 +87,9 @@ stay in memory for one run; nothing is stored. A second run updates the image an
 to the previous files and image and "Remove relay" deletes `/opt/parley-relay` (the data only if you confirm that
 separately; Docker stays installed). Ubuntu 22.04/24.04 and Debian 12 only; elsewhere it stops after the survey.
 
-Two things are still open. The wizard refuses to install until the relay image is published (the digest in this build
-is a placeholder), and a run on a real server with a real certificate is still pending (A18b); it has been tested
+The release workflow publishes the relay image to GHCR (`ghcr.io/kalmbik61/parley-relay`, amd64 and arm64) and the
+app pins its digest at build time; a dev build keeps a placeholder digest and the wizard refuses to install with it.
+One thing is still open: a run on a real server with a real certificate is pending (A18b); the wizard has been tested
 against servers in Docker only.
 
 ### Not yet checked
