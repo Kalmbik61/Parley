@@ -167,10 +167,7 @@ volumes:
 
 /** Port 443 belongs to somebody else, so the TLS-ALPN challenge cannot work: Let's Encrypt must use HTTP-01 through nginx. */
 export const CADDYFILE_ACME = `# Certificate through the HTTP challenge on port 80 (nginx forwards it here); the app is served on RELAY_HTTPS_PORT.
-# No redirect from http://: it would send the browser to port 443 of your nginx.
-{
-\tauto_https disable_redirects
-}
+# No "auto_https disable_redirects" here: it also removes the listener on port 80, and the certificate needs that listener.
 {$RELAY_DOMAIN} {
 \ttls {
 \t\tissuer acme {

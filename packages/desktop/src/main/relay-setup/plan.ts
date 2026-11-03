@@ -88,12 +88,6 @@ function describeHolder(holder: PortHolder): string {
 export function decideLayout(probe: ProbeResult): Layout {
   const h80 = holderOf(probe, 80);
   const h443 = holderOf(probe, 443);
-  // A stopped container of somebody else that comes back by itself and wants 80/443 would lose them to our Caddy.
-  const waiting = probe.containers.find((c) => c.running === false && !isOurs(c) && !['', 'no'].includes(c.restartPolicy ?? '') && (c.boundPorts ?? []).some((port) => port === 80 || port === 443));
-  if (waiting !== undefined) {
-    const port = (waiting.boundPorts ?? []).includes(80) ? 80 : 443;
-    return { mode: 'blocked', reason: `Port ${port} is assigned to the stopped container ${waiting.name} (restart policy ${waiting.restartPolicy}). Start it or remove it, then run the wizard again.` };
-  }
   // A working manual `proxy` install stays as it is: a new layout would change the address and break the person's snippet.
   const env = probe.install;
   if (env?.RELAY_MODE === 'proxy' && probe.proxyHealthy === true && isValidDomain(env.RELAY_DOMAIN ?? '')) {
@@ -104,6 +98,13 @@ export function decideLayout(probe: ProbeResult): Layout {
     }
   }
   if (h80 === null) {
+    // Only where our Caddy would take 80/443 itself: a stopped container of somebody else that comes back by itself would lose them.
+    const wanted = h443 === null ? [80, 443] : [80];
+    const waiting = probe.containers.find((c) => c.running === false && !isOurs(c) && !['', 'no'].includes(c.restartPolicy ?? '') && (c.boundPorts ?? []).some((port) => wanted.includes(port)));
+    if (waiting !== undefined) {
+      const port = (waiting.boundPorts ?? []).includes(80) ? 80 : 443;
+      return { mode: 'blocked', reason: `Port ${port} is assigned to the stopped container ${waiting.name} (restart policy ${waiting.restartPolicy}). Start it or remove it, then run the wizard again.` };
+    }
     if (h443 === null) return { mode: 'caddy', httpPort: 80, httpsPort: 443 };
     if (holderOf(probe, 8443) !== null) return { mode: 'blocked', reason: 'Ports 443 and 8443 are both taken' };
     return { mode: 'caddy', httpPort: 80, httpsPort: 8443 };
@@ -668,7 +669,10 @@ export function buildPlan(ctx: PlanContext): Plan {
   const before = probe.install === null ? null : (addressFromEnv(probe.install)?.address ?? null);
   const wasProxy = probe.install?.RELAY_MODE === 'proxy';
   const wasPort = Number(probe.install?.RELAY_PROXY_PORT ?? '8787');
-  if (wasProxy && !(decision.mode === 'proxy' && decision.kept) && Number.isInteger(wasPort)) {
+  // The snippet keeps working only while the relay stays on the loopback port it had.
+  const loopback = decision.mode === 'proxy' ? network === null : decision.mode === 'caddy-site' && decision.runtime === 'host';
+  const newPort = decision.mode === 'proxy' || decision.mode === 'caddy-site' ? decision.relayPort : null;
+  if (wasProxy && Number.isInteger(wasPort) && !(loopback && newPort === wasPort)) {
     notes.push(`Your web server's manual snippet for the relay (127.0.0.1:${wasPort}) stops working after this run.`);
   }
   if (decision.mode === 'proxy' && decision.kept) notes.push(`Your web server already serves the relay at ${address}; Parley keeps this layout.`);

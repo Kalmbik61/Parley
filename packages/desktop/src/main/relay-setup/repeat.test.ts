@@ -241,6 +241,22 @@ describe('critic T5 fixes', () => {
     const p = plan(probe, 'remove');
     expect(p.blocked).toMatch(/your web server is not running now \(no program uses port 80\)\. Start your web server and run the wizard again\./);
   });
+  it('critic: a hand-stopped container beside a live Caddy holder does not block row 2', async () => {
+    const live = await surveyed(COURSE);
+    const stopped = { ...live.containers[0]!, id: '99'.repeat(32), name: 'old-site-1', running: false, restartPolicy: 'unless-stopped', boundPorts: [80], published: [], labels: {} };
+    const probe = { ...live, containers: [...live.containers, stopped] };
+    expect(decideLayout(probe)).toMatchObject({ mode: 'caddy-site', runtime: 'docker' });
+  });
+  it('critic: the snippet note only when the relay leaves its loopback port', () => {
+    const env = { RELAY_MODE: 'proxy', RELAY_DOMAIN: 'r.example.com', RELAY_PROXY_PORT: '8787', RELAY_HTTPS_PORT: '443' };
+    const busy = baseProbe({ listeners: [{ port: 80, processes: ['lighttpd'] }], containers: [], install: env, previous: null, proxyHealthy: false });
+    const same = buildPlan({ intent: 'install', probe: busy, decision: decideLayout(busy), name: 'r.example.com', image: IMAGE });
+    expect(same.mode).toBe('proxy');
+    expect(same.notes.join(' ')).not.toContain('stops working');
+    const taken = baseProbe({ listeners: [{ port: 80, processes: ['lighttpd'] }, { port: 8787, processes: ['x'] }], containers: [], install: env, previous: null, proxyHealthy: false });
+    const moved = buildPlan({ intent: 'install', probe: taken, decision: decideLayout(taken), name: 'r.example.com', image: IMAGE });
+    expect(moved.notes.join(' ')).toContain('(127.0.0.1:8787) stops working');
+  });
   it('m2: a stopped container of somebody else with a restart policy that is set to publish 80 or 443 blocks the plan', () => {
     const stopped = { ...parseContainers(read('containers.jsonl'))[0]!, id: '99'.repeat(32), name: 'shop-nginx-1', running: false, restartPolicy: 'unless-stopped', boundPorts: [80, 443], published: [], labels: {} };
     const free = { listeners: [], containers: [stopped] };
@@ -249,6 +265,8 @@ describe('critic T5 fixes', () => {
       reason: 'Port 80 is assigned to the stopped container shop-nginx-1 (restart policy unless-stopped). Start it or remove it, then run the wizard again.',
     });
     expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, boundPorts: [443] }] }))).toMatchObject({ mode: 'blocked', reason: expect.stringMatching(/^Port 443 is assigned/) });
+    // With 443 held by somebody that runs, only 80 is ours to take.
+    expect(decideLayout(baseProbe({ listeners: [{ port: 443, processes: ['haproxy'] }], containers: [{ ...stopped, boundPorts: [443] }] })).mode).toBe('caddy');
     // No restart policy, our own container or other ports: nothing waits for the ports.
     expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, restartPolicy: 'no' }] })).mode).toBe('caddy');
     expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, labels: { 'com.docker.compose.project': 'parley-relay' } }] })).mode).toBe('caddy');

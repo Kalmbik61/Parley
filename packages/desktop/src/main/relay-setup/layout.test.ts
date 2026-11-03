@@ -376,8 +376,8 @@ describe('critic fixes on the layouts', () => {
     expect(plan(plainProbe, 'relay.example.com').web!.edits[0]!.content).not.toContain('[::]');
     expect(nginxSiteFile('r.example.com', 'host', 18080, 8443, true)).toContain('listen [::]:80;');
   });
-  it('T4b minor: the ACME Caddyfile does not redirect http:// to 443', () => {
-    expect(CADDYFILE_ACME).toContain('auto_https disable_redirects');
+  it('T4b minor, reverted by the stand: `auto_https disable_redirects` would remove the listener on port 80 that the HTTP challenge needs', () => {
+    expect(CADDYFILE_ACME).not.toMatch(/^\s*auto_https\s+disable_redirects/m);
   });
 });
 

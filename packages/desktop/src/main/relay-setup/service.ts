@@ -219,7 +219,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     const env = probe.install;
     if (s.input.intent === 'install' && env?.RELAY_MODE === 'proxy' && isValidDomain(env.RELAY_DOMAIN ?? '')) {
       // Either answer keeps the layout: this machine's network (VPN, portal, DNS cache) can give a false refusal.
-      probe.proxyHealthy = (await answers(env.RELAY_DOMAIN ?? '')) || (await probeProxyOnServer(env.RELAY_DOMAIN ?? '', shell));
+      const [mac, onServer] = await Promise.all([answers(env.RELAY_DOMAIN ?? ''), probeProxyOnServer(env.RELAY_DOMAIN ?? '', shell)]);
+      probe.proxyHealthy = mac || onServer;
     }
     const previous = await probeActive(shell);
     probe.activeCommand = previous.active;
