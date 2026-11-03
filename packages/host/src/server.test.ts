@@ -544,6 +544,20 @@ describe('роль remote: белый список этапа A (спека мо
     client.close();
   });
 
+  it('voiceProvider.* от remote — unknown_method, значение параметра в ответ не попадает', async () => {
+    const { home, token } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    let id = 2000;
+    for (const method of ['voiceProvider.get', 'voiceProvider.setKey', 'voiceProvider.clearKey', 'voiceProvider.check']) {
+      id += 1;
+      client.send({ id, method, params: { key: 'marker-remote-value' } });
+      const answer = (await collectUntil(client, id)).at(-1);
+      expect(answer?.error, method).toMatchObject({ code: 'unknown_method' });
+      expect(JSON.stringify(answer), method).not.toContain('marker-remote-value');
+    }
+    client.close();
+  });
+
   it('каждый метод протокола вне REMOTE_METHODS — unknown_method при любых параметрах, до схемы', async () => {
     const { home, token, running } = await boot();
     const { client } = await connectAs(home, token, 'remote');

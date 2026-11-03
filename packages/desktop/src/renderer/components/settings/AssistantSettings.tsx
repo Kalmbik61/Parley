@@ -22,6 +22,7 @@ import { Button } from '../../ui/button.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
 import { ShortcutField } from './ShortcutField.js';
+import { VoiceProviderSection } from './VoiceProviderSection.js';
 
 type ProviderRow = Result<'providers.list'>['providers'][number];
 
@@ -279,6 +280,7 @@ export function AssistantSettings(): JSX.Element {
       </div>
       {voiceState?.state === 'unavailable' ? <p className="text-xs text-muted-foreground">{text.voiceUnavailable}</p> : null}
       <p className="text-xs text-muted-foreground">{text.voiceCredit}</p>
+      <VoiceProviderSection />
     </div>
   );
 }

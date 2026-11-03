@@ -1459,8 +1459,34 @@ export const S = {
      */
     checkForUpdates: 'Check for updates',
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
+    /** Settings → Assistant → Voice provider (API): OpenAI key for paid voice. */
+    voiceProvider: {
+      title: 'Voice provider (API)',
+      hint: 'Paid voice through OpenAI. The key stays on this Mac; only its last four characters are shown.',
+      tile: 'OpenAI',
+      keyLabel: 'OpenAI API key',
+      keyPlaceholder: 'Paste an OpenAI API key',
+      save: 'Save key',
+      check: 'Check',
+      checking: 'Checking…',
+      remove: 'Remove key',
+      ready: (hint: string) => `Ready · key ${hint}`,
+      saved: (hint: string) => `Key saved ${hint}. Run Check to make sure the voice model is available.`,
+      failed: {
+        no_key: 'No key saved yet.',
+        invalid_key: 'OpenAI rejected the key.',
+        model_unavailable: 'The key works, but the voice model gpt-live-1 is not available to it.',
+        rate_limited: 'OpenAI is rate limiting this key. Try again later.',
+        network: 'Could not reach OpenAI.',
+        unknown: 'OpenAI returned an unexpected answer.',
+      } as Record<string, string>,
+      dailyLabel: 'Daily limit, minutes',
+      saveError: 'Could not save the voice provider settings.',
+    },
     /** Settings → Remote access (mobile app plan A10, spec 12). */
     remote: {
+      allowVoice: 'Allow paid voice from the phone',
+      allowVoiceHint: 'Off by default. On: the phone can start voice sessions billed to your OpenAI key, within the daily limit. The key itself never leaves this Mac.',
       enabled: 'Remote access (beta)',
       enabledHint: 'Lets your paired phone see and answer your agents while this Mac is on. Traffic goes through your own relay, end-to-end encrypted.',
       allowCreate: 'Allow starting and messaging agents from the phone',

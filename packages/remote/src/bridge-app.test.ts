@@ -184,6 +184,17 @@ describe('dispatcher', () => {
     expect(audits).toEqual([expect.objectContaining({ kind: 'call-refused', method: 'settings.set', outcome: 'unknown_method' })]);
   });
 
+  it('voiceProvider.* from a phone never reaches the host', async () => {
+    let n = 0;
+    for (const method of ['voiceProvider.get', 'voiceProvider.setKey', 'voiceProvider.clearKey', 'voiceProvider.check']) {
+      const id = `v${(n += 1)}`;
+      call('d1', id, method, { key: 'k' });
+      await flush();
+      expect(sessions.of('d1').find((f) => f.id === id), method).toMatchObject({ error: { code: 'unknown_method' } });
+    }
+    expect(host.calls).toEqual([]);
+  });
+
   it('bad params are refused before the host (rooms.resolveProposal without rev)', async () => {
     call('d1', 'a', 'rooms.resolveProposal', { id: 'p' });
     await flush();

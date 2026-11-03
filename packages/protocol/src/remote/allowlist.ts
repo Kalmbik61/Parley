@@ -129,6 +129,7 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'providers.check',
   'providers.refreshLimits',
   'telegram.*',
+  'voiceProvider.*',
   'trust.grant',
   'trust.revoke',
   'trust.list',

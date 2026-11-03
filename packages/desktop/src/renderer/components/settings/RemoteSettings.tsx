@@ -292,6 +292,19 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
             {error !== undefined ? <p className="text-xs text-destructive">{error}</p> : null}
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center justify-between gap-2">
+              <span>{TEXT.allowVoice}</span>
+              <Switch
+                data-testid="remote-allow-voice"
+                checked={config?.remoteVoice ?? false}
+                disabled={config === null || locked.remoteVoice !== undefined}
+                onCheckedChange={(checked) => void save('remoteVoice', checked ? '1' : '0')}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">{TEXT.allowVoiceHint}</p>
+          </div>
+
           <div className="flex flex-col gap-2" data-testid="remote-pair">
             {pair.connected ? <p data-testid="remote-connected" className="text-xs">{TEXT.pair.connected}</p> : null}
             {pair.failedReason !== null ? (

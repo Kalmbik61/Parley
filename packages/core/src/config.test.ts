@@ -53,6 +53,8 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      remoteVoice: false,
+      voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -98,6 +100,8 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      remoteVoice: false,
+      voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -128,6 +132,8 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      remoteVoice: false,
+      voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -391,6 +397,8 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['telegramCards', 'TELEGRAM_CARDS', 'off', false],
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['remoteCreate', 'REMOTE_CREATE', 'off', false],
+    ['remoteVoice', 'REMOTE_VOICE', 'on', true],
+    ['voiceDailyMinutes', 'VOICE_DAILY_MINUTES', '45', 45],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
@@ -654,6 +662,18 @@ describe('remoteCreate setting (mobile spec 4.2, decision 5)', () => {
     expect(parseSetting('remoteCreate', '0')).toEqual({ value: false });
     expect(parseSetting('remoteCreate', 'on')).toEqual({ value: true });
     expect(parseSetting('remoteCreate', 'maybe')).toEqual({ error: 'remoteCreate: expected 0 or 1' });
+  });
+});
+
+describe('remoteVoice and voiceDailyMinutes settings', () => {
+  it('remoteVoice is off by default; the daily limit is bounded', () => {
+    expect(DEFAULT_CONFIG.remoteVoice).toBe(false);
+    expect(DEFAULT_CONFIG.voiceDailyMinutes).toBe(30);
+    expect(parseSetting('remoteVoice', '1')).toEqual({ value: true });
+    expect(parseSetting('remoteVoice', 'maybe')).toEqual({ error: 'remoteVoice: expected 0 or 1' });
+    expect(parseSetting('voiceDailyMinutes', '90')).toEqual({ value: 90 });
+    expect(parseSetting('voiceDailyMinutes', '0')).toHaveProperty('error');
+    expect(parseSetting('voiceDailyMinutes', '')).toHaveProperty('error');
   });
 });
 

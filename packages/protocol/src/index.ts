@@ -233,6 +233,8 @@ export type {
 } from './assistant.js';
 export { telegramMethodSchemas } from './telegram.js';
 export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';
+export { voiceProviderMethodSchemas } from './voice-provider.js';
+export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodResults, VoiceProviderState } from './voice-provider.js';
 export { consentMethodSchemas } from './consents.js';
 export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';

@@ -26,6 +26,8 @@ import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
+import { voiceProviderMethodSchemas } from './voice-provider.js';
+import type { VoiceProviderMethodResults } from './voice-provider.js';
 import type { TelegramMethodResults } from './telegram.js';
 import { consentMethodSchemas } from './consents.js';
 import type { ConsentMethodResults } from './consents.js';
@@ -99,6 +101,7 @@ export const EFFORT_TOKEN_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 export const METHODS = {
   ...assistantMethodSchemas,
   ...telegramMethodSchemas,
+  ...voiceProviderMethodSchemas,
   ...consentMethodSchemas,
   ...customProviderMethodSchemas,
   ...capabilityPluginMethodSchemas,
@@ -386,7 +389,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends AssistantMethodResults, TelegramMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
+export interface Results extends AssistantMethodResults, TelegramMethodResults, VoiceProviderMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };

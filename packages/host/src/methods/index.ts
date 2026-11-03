@@ -15,6 +15,7 @@ import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { TelegramService } from '../telegram/service.js';
 import { createTelegramHandlers } from './telegram.js';
+import { createVoiceProviderHandlers } from './voice-provider.js';
 import type { HealthService } from '../health/health-service.js';
 import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
@@ -256,6 +257,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
+    ...createVoiceProviderHandlers(),
     // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.
     ...(deps.capacityFeed === undefined ? {} : { 'capacity.get': createCapacityHandlers({ capacityFeed: deps.capacityFeed }).capacityGet as AnyHandler }),
     // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.
