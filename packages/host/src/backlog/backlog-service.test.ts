@@ -53,6 +53,11 @@ describe('bounded project backlog subscriptions', () => {
     value = { ...value, file: { ...value.file, choice: 'todos' } }; callbacks.get(root)!();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2)); expect(read).toHaveBeenCalledTimes(3);
   });
+  it('a change of board.json alone sends backlog.changed', async () => {
+    const { result } = service(); const notify = vi.fn(); await result.subscribe(root, 'one', notify);
+    value = { ...value, boardVersion: 'board-v2' }; callbacks.get(root)!();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledWith({ projectPath: root }));
+  });
   it('arms the newly created state directory and rearms on its inode replacement', async () => {
     const { result, watchDirectory } = service(); await result.subscribe(root, 'one', vi.fn());
     const directory = path.join(root, '.parley'); await mkdir(directory); callbacks.get(root)!();
