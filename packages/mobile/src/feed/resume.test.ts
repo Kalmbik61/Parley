@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResumeSessionOutcome } from '@parley/remote-client';
-import { createResume, READY_TIMEOUT_MS, STILL_WAKING_MS, type ResumeFacts } from './resume';
+import { createResume, READY_TIMEOUT_MS, STILL_WAKING_MS, type AutoSend, type ResumeFacts } from './resume';
 import { composerMode, type ComposerFacts } from './send';
 
 const asleep: ResumeFacts = { lifecycle: 'sleeping', held: false, idle: true, lastEventAt: 't0' };
@@ -9,13 +9,23 @@ const flush = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
 
-function setup(outcome: ResumeSessionOutcome | Promise<ResumeSessionOutcome> = { outcome: 'ok' }) {
+function setup(outcome: ResumeSessionOutcome | Promise<ResumeSessionOutcome> = { outcome: 'ok' }, answers: AutoSend[] = []) {
   const sent: string[] = [];
   const back: string[] = [];
+  const notes: string[] = [];
   const resume = vi.fn(async () => outcome);
-  const r = createResume({ resume, send: (t) => void sent.push(t), textBack: (t) => void back.push(t), onChange: () => {} });
+  const r = createResume({
+    resume,
+    send: async (t) => {
+      sent.push(t);
+      return answers.shift() ?? 'done';
+    },
+    textBack: (t) => void back.push(t),
+    notify: (t) => void notes.push(t),
+    onChange: () => {},
+  });
   r.observe(asleep);
-  return { r, sent, back, resume };
+  return { r, sent, back, resume, notes };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -33,10 +43,10 @@ describe('Resume button', () => {
     expect(r.view()).toEqual({ line: { kind: 'none' }, pending: null });
   });
 
-  it('a second tap while waking does nothing', async () => {
+  it('a second plain tap while waking does nothing and reports not-taken', async () => {
     const { r, resume } = setup();
-    r.start(null);
-    r.start(null);
+    expect(r.start(null)).toBe(true);
+    expect(r.start(null)).toBe(false);
     await flush();
     expect(resume).toHaveBeenCalledTimes(1);
   });
@@ -81,6 +91,7 @@ describe('Resume and send', () => {
     expect(r.view().pending).toEqual({ text: 'hello', held: false });
     r.observe(asleep);
     r.observe(up()); // woke, attention idle, but no hook event yet (same lastEventAt)
+    await flush();
     expect(sent).toEqual([]);
     r.observe(up({ idle: false, lastEventAt: 't1' })); // working
     expect(sent).toEqual([]);
@@ -90,6 +101,102 @@ describe('Resume and send', () => {
     r.observe(up({ lastEventAt: 't3' }));
     await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS * 2);
     expect(sent).toEqual(['hello']);
+  });
+
+  it('M1: "Resume and send" during a running wake attaches the text to it and sends once', async () => {
+    const { r, sent, resume } = setup();
+    r.start(null);
+    await flush();
+    expect(r.start('typed while waking')).toBe(true);
+    expect(r.start('a second one')).toBe(false); // only one waiting text; the field keeps this one
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(r.view().pending).toEqual({ text: 'typed while waking', held: false });
+    r.observe(up({ lastEventAt: 't1' }));
+    await flush();
+    expect(sent).toEqual(['typed while waking']);
+  });
+
+  it('M1: the text attached after the answer still gets its 2 minutes', async () => {
+    const { r, back } = setup();
+    r.start(null);
+    await flush();
+    r.start('late');
+    await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS);
+    expect(back).toEqual(['late']);
+  });
+
+  it('M2: a refusal where nothing reached the terminal keeps the text and retries on the next activity event', async () => {
+    const { r, sent, back } = setup({ outcome: 'ok' }, ['retry', 'retry', 'done']);
+    r.start('hello');
+    await flush();
+    r.observe(up({ lastEventAt: 't1' }));
+    await flush();
+    expect(sent).toEqual(['hello']);
+    expect(r.view().pending).toEqual({ text: 'hello', held: false });
+    r.observe(up({ lastEventAt: 't1' })); // the same event again: no second attempt
+    await flush();
+    expect(sent).toHaveLength(1);
+    r.observe(up({ lastEventAt: 't2' }));
+    await flush();
+    r.observe(up({ lastEventAt: 't3' }));
+    await flush();
+    expect(sent).toEqual(['hello', 'hello', 'hello']);
+    expect(r.view().pending).toBeNull();
+    expect(back).toEqual([]);
+  });
+
+  it('M2: still refused when the 2 minutes are up: the text goes back', async () => {
+    const { r, back } = setup({ outcome: 'ok' }, ['retry']);
+    r.start('hello');
+    await flush();
+    r.observe(up({ lastEventAt: 't1' }));
+    await flush();
+    await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS);
+    expect(back).toEqual(['hello']);
+  });
+
+  it('m1: no hook event (lastEventAt null) is not ready', async () => {
+    const { r, sent } = setup();
+    r.start('hello');
+    await flush();
+    r.observe(up({ lastEventAt: null }));
+    await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('m2: a card hides the row and pauses the 2 minutes', async () => {
+    const { r, back } = setup();
+    r.start('hello');
+    await flush();
+    await vi.advanceTimersByTimeAsync(STILL_WAKING_MS - 1);
+    r.observe(asleep);
+    r.observe({ ...asleep, held: true });
+    expect(r.view().line).toEqual({ kind: 'none' });
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // a person deciding the card
+    expect(back).toEqual([]);
+    expect(r.view().line).toEqual({ kind: 'none' });
+    r.observe({ ...asleep, held: false });
+    await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS - STILL_WAKING_MS + 1);
+    expect(back).toEqual(['hello']);
+  });
+
+  it('m3: a failure when the row is gone reaches the person as a toast', async () => {
+    const { r, notes } = setup({ outcome: 'ok' });
+    r.start('hello');
+    await flush();
+    r.observe(up({ idle: false })); // woke, not ready
+    await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS);
+    expect(notes).toEqual(["Couldn't wake it — it did not get ready in 2 minutes"]);
+  });
+
+  it('m4: a send that did not start gives the text back at once', async () => {
+    const { r, back } = setup({ outcome: 'ok' }, ['not-started']);
+    r.start('hello');
+    await flush();
+    r.observe(up({ lastEventAt: 't1' }));
+    await flush();
+    expect(back).toEqual(['hello']);
+    expect(r.view().pending).toBeNull();
   });
 
   it('never sends before the resume call is answered', async () => {

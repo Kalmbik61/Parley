@@ -5,6 +5,7 @@ import { newClientMsgId, sessionKey, type SessionRef } from '@parley/remote-clie
 import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
 import { draftOf, outboxOf, setDraft as saveDraft, setOutbox, type OutMessage } from './outbox';
+import type { AutoSend } from './resume';
 import { messageProblem, uiOfSend } from './send';
 
 export interface Chat {
@@ -17,7 +18,7 @@ export interface Chat {
   switchedOff: boolean;
   send(): Promise<void>;
   /** A message that waited for a wake-up: a normal `pty.send` with a NEW `clientMsgId`, not from the field. */
-  sendText(text: string): Promise<void>;
+  sendText(text: string): Promise<AutoSend>;
   retry(message: OutMessage): Promise<void>;
   edit(message: OutMessage): void;
 }
@@ -48,8 +49,8 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
   );
 
   const run = useCallback(
-    async (text: string, clientMsgId: string, replaces: string | null, fromDraft: boolean): Promise<void> => {
-      if (client === null || ref === null || inFlight.current) return;
+    async (text: string, clientMsgId: string, replaces: string | null, fromDraft: boolean, quiet = false): Promise<AutoSend> => {
+      if (client === null || ref === null || inFlight.current) return 'not-started';
       inFlight.current = true;
       setBusy(true);
       const entry: OutMessage = { id: clientMsgId, text, at: Date.now(), state: { kind: 'sending' } };
@@ -58,6 +59,12 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
         const outcome = await client.sendMessage({ ref, text, clientMsgId });
         if (fromDraft) setDraft('');
         const ui = uiOfSend(outcome, turnRunning);
+        // After waking: nothing reached the terminal (`busy`, `blocked`, `no-paste-mode`) means "not ready yet" — the
+        // bubble goes and the text is sent again on the next activity event.
+        if (quiet && outcome.outcome === 'sent' && !outcome.inserted && !outcome.submitted && (outcome.reason === 'busy' || outcome.reason === 'blocked' || outcome.reason === 'no-paste-mode')) {
+          update((l) => l.filter((m) => m.id !== clientMsgId));
+          return 'retry';
+        }
         if (ui.kind === 'failed') {
           haptic.error();
           if (ui.hideComposer) setSwitchedOff(true);
@@ -65,10 +72,11 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
             update((l) => l.filter((m) => m.id !== clientMsgId));
             setDraft(text);
             notify(ui.message);
-            return;
+            return 'done';
           }
         } else if (ui.kind === 'sent' || ui.kind === 'queued') haptic.success();
         update((l) => l.map((m) => (m.id === clientMsgId ? { ...m, state: ui } : m)));
+        return 'done';
       } finally {
         inFlight.current = false;
         setBusy(false);
@@ -89,7 +97,7 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
     },
       // After `lost` the same key goes again (the bridge answers from its cache, the agent reads the message once). After a
     // refusal nothing reached the agent: a new key.
-    sendText: (text) => run(text, newClientMsgId(Date.now()), null, false),
+    sendText: (text) => run(text, newClientMsgId(Date.now()), null, false, true),
     retry: async (message) => {
       const reuse = message.state.kind === 'unconfirmed';
       await run(message.text, reuse ? message.id : newClientMsgId(Date.now()), message.id, false);
