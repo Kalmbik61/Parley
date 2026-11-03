@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SwitchOptions } from '@parley/remote-client';
 import { commandToast, confirmOf, menuItems, type MenuFacts } from './session-menu';
-import { canContinue, carryChoices, clearLost, currentLine, defaultTarget, forgetLost, keepsLines, newAttempt, needsText, newRequestId, recallLost, rememberLost, switchParams, switchStep, switchToast, targetNote } from './switch-model';
+import { isDefinite, canContinue, carryChoices, clearLost, currentLine, defaultTarget, forgetLost, keepsLines, newAttempt, needsText, newRequestId, recallLost, rememberLost, switchParams, switchStep, switchToast, targetNote } from './switch-model';
 
 const ALL = ['feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchOptions', 'sessions.switchAgent', 'sessions.resume', 'pty.send'];
 const base: MenuFacts = { methods: ALL, lifecycle: 'active', working: false, teamAgents: 0, inRoom: false };
@@ -107,9 +107,9 @@ describe('switch sheet rules', () => {
     const rnd = () => (n++ % 16) / 16;
     const first = newAttempt(rnd);
     const lost = switchStep(first, { outcome: 'lost' }, t, rnd);
-    expect(lost).toEqual({ attempt: { requestId: first.requestId, lost: true }, close: false, toast: null });
+    expect(lost).toEqual({ attempt: { requestId: first.requestId, lost: true }, close: false, toast: null, line: "We couldn't confirm it" });
     const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
-    rememberLost('k', { attempt: lost.attempt, target: t, carry: 'handover' });
+    rememberLost('k', { attempt: lost.attempt, line: 'x', target: t, carry: 'handover' });
     // reopening: the same id goes again
     const again = recallLost('k')!;
     expect(switchParams(ref, again.attempt.requestId, again.target, again.carry).requestId).toBe(first.requestId);
@@ -126,5 +126,39 @@ describe('switch sheet rules', () => {
   it('m3: a call that never left the phone is "reconnecting"', () => {
     expect(commandToast('stop', { outcome: 'rejected', code: 'not_connected', message: 'not connected' })).toBe('Not sent — reconnecting');
     expect(switchToast({ outcome: 'rejected', code: 'not_connected', message: 'not connected' }, opts().targets[1]!)).toBe('Not sent — reconnecting');
+  });
+
+  it("M1': only a definite host answer ends the attempt; anything that may not have reached the host keeps the id", () => {
+    const t = opts().targets[1]!;
+    const id = newAttempt(() => 0.1);
+    const rej = (code: string, message = '') => ({ outcome: 'rejected' as const, code, message });
+    for (const o of [{ outcome: 'started', carried: 'handover' }, { outcome: 'held', carried: 'handover' }, { outcome: 'queued', carried: 'handover' }, rej('conflict', 'Stop the agent first'), rej('bad_request', 'unknown session')] as const) {
+      expect(isDefinite(o), JSON.stringify(o)).toBe(true);
+      expect(switchStep(id, o, t, () => 0.7).close).toBe(true);
+    }
+    for (const o of [{ outcome: 'lost' }, rej('timeout'), rej('connection_lost'), rej('not_connected'), rej('rate_limited', 'slow down'), rej('busy', 'switch still running')] as const) {
+      const step = switchStep(id, o, t);
+      expect(isDefinite(o), JSON.stringify(o)).toBe(false);
+      expect(step.close).toBe(false);
+      expect(step.attempt.requestId).toBe(id.requestId);
+      expect(step.line).not.toBeNull();
+    }
+    expect(switchStep(id, rej('not_connected'), t).line).toBe('Not sent — reconnecting');
+    expect(switchStep(id, rej('busy', 'switch still running'), t).line).toBe('switch still running');
+  });
+
+  it("m1': an attempt written before the call is what a reopened sheet finds", () => {
+    clearLost();
+    const t = opts().targets[1]!;
+    const a = newAttempt(() => 0.2);
+    rememberLost('k2', { attempt: { ...a, lost: true }, line: "We couldn't confirm it", target: t, carry: 'transcript' });
+    expect(recallLost('k2')).toMatchObject({ attempt: { requestId: a.requestId }, carry: 'transcript' });
+    forgetLost('k2');
+  });
+
+  it("m2': 'Now on' uses the catalog label, the id as fallback", () => {
+    const cur = { provider: 'claude', available: true, reason: null } as const;
+    expect(currentLine(cur, (id) => (id === 'claude' ? 'Claude Code' : null))).toBe('Now on Claude Code');
+    expect(currentLine(cur, () => null)).toBe('Now on Claude');
   });
 });
