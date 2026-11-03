@@ -43,6 +43,7 @@ describe('удержание копий окном', () => {
   it('windowPresent без признака — false', () => {
     const plain = client();
     const holds = createWorktreeHolds(() => [plain]);
+    holds.set(plain, []);
     expect(holds.windowPresent()).toBe(false);
   });
 
@@ -57,6 +58,7 @@ describe('удержание копий окном', () => {
   it('windowPresent не считает телефон с признаком', () => {
     const phone = client([WORKTREE_HOLDS_FEATURE], 'remote');
     const holds = createWorktreeHolds(() => [phone]);
+    holds.set(phone, []);
     expect(holds.windowPresent()).toBe(false);
   });
 });
