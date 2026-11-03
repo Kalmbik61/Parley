@@ -102,15 +102,18 @@ describe.skipIf(!ENABLED)('relay setup stand', () => {
     expect(phase).toEqual({ phase: 'auth-failed' });
   });
 
-  it('nginx on 80: proxy plan with a snippet, and /etc/nginx is byte for byte the same (acceptance 5)', async () => {
+  it('nginx on 80 under a service: nginx-acme plan with one server block in conf.d, and /etc/nginx is byte for byte the same after the probe (acceptance 5)', async () => {
     const server = servers.get('nginx')!;
     const before = snapshot(server.name, ['/etc/nginx']);
     const { service } = await wizard();
     const phase = await begin(service, server, { domain: undefined });
     expect(phase.phase).toBe('plan');
     if (phase.phase !== 'plan') return;
-    expect(phase.plan.proxy?.snippet).toContain('proxy_pass http://127.0.0.1:8787;');
-    expect(phase.plan.steps.flatMap((s) => s.commands).join('\n')).not.toMatch(/\/etc\/nginx/);
+    expect(phase.plan.blocked).toBeNull();
+    expect(phase.plan.proxy).toBeNull();
+    expect(phase.plan.steps.map((s) => s.id)).toEqual(['docker', 'dir', 'files', 'image', 'web', 'start']);
+    expect(phase.plan.web?.edits[0]).toMatchObject({ server: 'nginx (systemd)', file: '/etc/nginx/conf.d/parley-relay.conf', action: 'add' });
+    expect(phase.plan.address).toBe('203-0-113-7.sslip.io:8443');
     await service.call('cancel', {});
     expect(snapshot(server.name, ['/etc/nginx'])).toBe(before);
   });

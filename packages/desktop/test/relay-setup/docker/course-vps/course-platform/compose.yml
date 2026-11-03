@@ -1,0 +1,20 @@
+# The course platform of the person (a stand model of /opt/course-platform/deploy): its own Caddy owns 80 and 443,
+# the Caddyfile and the import directory are mounted read-only. The stand uses the Caddy image that is loaded into the
+# server and a Caddy answering on :3000 instead of the application.
+name: course-platform-prod
+services:
+  caddy:
+    image: caddy:2.11.7
+    restart: unless-stopped
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-course.localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/evdev-site/caddy:/etc/caddy/sites:ro
+  web:
+    image: caddy:2.11.7
+    restart: unless-stopped
+    command: caddy respond --listen :3000 "course-platform"

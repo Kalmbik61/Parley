@@ -3,10 +3,20 @@
 ARG BASE=ubuntu:24.04
 FROM ${BASE}
 ARG WITH_NGINX=0
+# WITH_DOCKER=1: Docker from the official apt repository is part of the image (a server that already runs Docker).
+ARG WITH_DOCKER=0
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-server sudo ca-certificates curl iproute2 procps netcat-openbsd \
  && if [ "$WITH_NGINX" = "1" ]; then apt-get install -y --no-install-recommends nginx; fi \
+ && if [ "$WITH_DOCKER" = "1" ]; then \
+      install -m 0755 -d /etc/apt/keyrings \
+      && . /etc/os-release \
+      && curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc \
+      && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; \
+    fi \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd \
  && useradd -m -s /bin/bash deploy \
@@ -17,4 +27,5 @@ RUN apt-get update \
 COPY entrypoint.sh /entrypoint.sh
 COPY docker-shim.sh /usr/local/bin/docker
 COPY stand-dockerd.sh /stand-dockerd.sh
+COPY systemctl-shim.sh /usr/local/bin/systemctl
 ENTRYPOINT ["/entrypoint.sh"]
