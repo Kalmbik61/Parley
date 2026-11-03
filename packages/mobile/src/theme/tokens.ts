@@ -25,6 +25,8 @@ export interface Colors {
   barSubtitle: string;
   /** Tree guide lines of D1 §8.2. */
   treeLine: string;
+  /** Fill of inline code, code blocks and table headers: visible on both `bg` and `surface2` in both themes (A40). */
+  codeFill: string;
 }
 
 export const lightColors: Colors = {
@@ -49,6 +51,7 @@ export const lightColors: Colors = {
   barBgSolid: '#F9F9F9',
   barSubtitle: '#636366',
   treeLine: 'rgba(60,60,67,0.30)',
+  codeFill: 'rgba(60,60,67,0.12)',
 };
 
 export const darkColors: Colors = {
@@ -73,6 +76,7 @@ export const darkColors: Colors = {
   barBgSolid: '#1D1D1F',
   barSubtitle: 'rgba(235,235,245,0.6)',
   treeLine: 'rgba(235,235,245,0.26)',
+  codeFill: 'rgba(235,235,245,0.18)',
 };
 
 /** D1 §17.3. Grid 4 pt. */

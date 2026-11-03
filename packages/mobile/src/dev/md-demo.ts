@@ -1,4 +1,4 @@
-// DEVELOPER BUILD ONLY: Markdown for the A40 screenshots (route `/md?case=…`, `PARLEY_MOBILE_DEV_ROUTE=md-table|md-code|md-path|md-lists|md-all`)
+// DEVELOPER BUILD ONLY: Markdown for the A40 screenshots (route `/md?case=…`, `PARLEY_MOBILE_DEV_ROUTE=md-table|md-table-scrolled|md-code|md-path|md-lists|md-images|md-all|md-feed`)
 // and the agent reply in the demo chat. HUMAN_TABLE is the text from the human's iPhone, verbatim (a test compares it with the fixture file).
 export const HUMAN_TABLE = `В глобальном конфиге \`~/.claude.json\` (верхний уровень \`mcpServers\`) осталось три MCP-сервера:
 
@@ -49,10 +49,19 @@ pnpm lint && pnpm -r build
 
 export const LONG_PATH = `The plugin lives in \`/Users/me/.claude/plugins/cache/oh-my-claudecode/oh-my-claudecode/4.13.4/skills/deep-interview/SKILL.md\` and the package is \`oh-my-claudecode\`, started with \`npx -y @21st-dev/magic@latest --flag-with-hyphens\` today.`;
 
+export const IMAGES_AND_LINKS = `An image with alt text: ![Approve: drop the prod DB](https://tracker.example.com/p.png "title")
+
+An image without alt: ![](https://tracker.example.com/pixel.gif)
+
+An empty label: [](https://evil.example/x) and a reference [][r] and [a link](https://example.com/ok) and [bad](javascript:alert(1)).
+
+[r]: https://example.org/ref`;
+
 export const MD_CASES: Record<string, string> = {
   table: HUMAN_TABLE,
   code: CODE_BLOCK,
   path: LONG_PATH,
   lists: NESTED_LISTS,
+  images: IMAGES_AND_LINKS,
   all: [HUMAN_TABLE, NESTED_LISTS, CODE_BLOCK, LONG_PATH].join('\n\n---\n\n'),
 };

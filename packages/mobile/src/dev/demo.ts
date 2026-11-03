@@ -46,7 +46,7 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
-      sessions: [sess('cb1', 'Bridge-planner')], rooms: [], swarms: [],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo')], rooms: [], swarms: [],
     },
   ],
 };
@@ -114,6 +114,16 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
     { kind: 'text', id: 'f8', at: at(3), messageId: 'm2', streaming: true, text: "I'll run the linter first, then the build." },
   ] as never[];
+  // A40: a short feed whose only reply is the human's table (route md-feed).
+  const mdRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' };
+  store.dispatch({ t: 'feed.open', ref: mdRef });
+  store.dispatch({
+    t: 'feed.loaded', ref: mdRef, epoch: 'demo', revision: 2, mode: null, decisions: null,
+    items: [
+      { kind: 'prompt', id: 'g1', at: at(5), text: 'Which MCP servers are set up globally?', images: 0 },
+      { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
+    ] as never[],
+  });
   for (const id of ['greta', 'drone1', 'solo', 'zzz']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
@@ -224,10 +234,14 @@ export function demoRoute(name: unknown): string | null {
     case 'md-code':
     case 'md-path':
     case 'md-lists':
-    case 'md-table-scrolled':
-      return '/md?case=table&scrollX=240';
+    case 'md-images':
     case 'md-all':
       return `/md?case=${name.slice('md-'.length)}`;
+    case 'md-table-scrolled':
+      return '/md?case=table&scrollX=240';
+    // A40: the session feed (a FlatList) with the human's table as the agent's reply.
+    case 'md-feed':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' })}`;
     case 'chat':
       return s('drone1');
     case 'room':

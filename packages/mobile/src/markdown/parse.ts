@@ -59,6 +59,29 @@ export const QUOTE_DEPTH_MAX = 100;
 const TOO_DEEP = new RegExp(`^(?:[ \\t]*>){${QUOTE_DEPTH_MAX + 1}}`, 'm');
 export const markdownTooDeep = (text: string): boolean => TOO_DEEP.test(text);
 
+/** Pathological input limits (A40 critic M2, M3): beyond them the text is shown raw / a table as its source. */
+export const MD_BYTES_MAX = 64 * 1024;
+export const MD_EMPHASIS_MAX = 2000;
+export const MD_TABLE_ROWS_MAX = 200;
+export const MD_TABLE_CELLS_MAX = 2000;
+export const MD_NEST_MAX = 24;
+
+const tooLarge = (text: string): boolean => {
+  if (text.length > MD_BYTES_MAX) return true;
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    if ((ch === 42 || ch === 95 || ch === 126) && ++n > MD_EMPHASIS_MAX) return true;
+  }
+  return false;
+};
+
+/** Lists and quotes nested inside each other, counted together. */
+export const nestDepth = (n: MdNode): number => {
+  const own = n.type === 'list' || n.type === 'blockquote' ? 1 : 0;
+  return own + Math.max(0, ...(n.children ?? []).map(nestDepth));
+};
+
 const LINE_BREAK = /\r\n|\r|\n/;
 
 const literalParagraph = (value: string): MdNode => ({ type: 'paragraph', children: [{ type: 'text', value, literal: true }] });
@@ -69,10 +92,12 @@ const sourceOf = (node: MdNode, source: string): string => {
   return start === undefined || end === undefined ? '' : source.slice(start, end);
 };
 
-/** A row with more cells than the header has columns: the extra cells would be dropped silently. */
-const hasExcessCells = (table: MdNode): boolean => {
+/** A row with more cells than the header has columns (the extra cells would be dropped silently), or a table too big to lay out. */
+const showTableAsSource = (table: MdNode): boolean => {
+  const rows = table.children ?? [];
   const columns = table.align?.length;
-  return columns !== undefined && (table.children ?? []).some((row) => (row.children?.length ?? 0) > columns);
+  if (columns !== undefined && rows.some((row) => (row.children?.length ?? 0) > columns)) return true;
+  return rows.length > MD_TABLE_ROWS_MAX || rows.reduce((sum, row) => sum + (row.children?.length ?? 0), 0) > MD_TABLE_CELLS_MAX;
 };
 
 /** What Markdown hides while rendering and the agent reads: see `remarkReveal` in the window's `room-remark.ts`. */
@@ -90,7 +115,7 @@ function revealHidden(parent: MdNode, source: string): void {
       next.push(literalParagraph(raw));
       continue;
     }
-    if (child.type === 'table' && raw !== '' && hasExcessCells(child)) {
+    if (child.type === 'table' && raw !== '' && showTableAsSource(child)) {
       next.push({ type: 'code', value: raw });
       continue;
     }
@@ -144,16 +169,22 @@ function expandText(value: string, literal: boolean): MdNode[] {
   return out;
 }
 
+function spaceNewlines(n: MdNode): void {
+  if (n.type === 'text' && n.value !== undefined) n.value = n.value.replace(/\r\n|\r|\n/g, ' ');
+  n.children?.forEach(spaceNewlines);
+}
+
 function expandChildren(parent: MdNode): void {
   if (parent.children === undefined) return;
   const next: MdNode[] = [];
   for (const child of parent.children) {
     if (child.type === 'text' && child.value !== undefined) {
-      // Inside a link `@s02` is part of the address: text stays, only newlines turn into breaks.
-      next.push(...expandText(child.value, child.literal === true || parent.type === 'link' || parent.type === 'linkReference'));
+      next.push(...expandText(child.value, child.literal === true));
       continue;
     }
-    expandChildren(child);
+    // Like the window: a link is not entered (`@s02` is part of its address); a newline in its label reads as a space.
+    if (child.type === 'link' || child.type === 'linkReference') spaceNewlines(child);
+    else expandChildren(child);
     next.push(child);
   }
   parent.children = next;
@@ -167,9 +198,10 @@ export function rawRoot(text: string): MdNode {
 /** Text → mdast (GFM, positions) with the window's transforms applied. Never throws on ordinary input. */
 export function parseMarkdown(text: string): MdNode {
   const src = text.replace(/\r\n?/g, '\n');
-  if (markdownTooDeep(src)) return rawRoot(text);
+  if (markdownTooDeep(src) || tooLarge(src)) return rawRoot(text);
   const tree = fromMarkdown(src, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }) satisfies Root;
   const root = tree as unknown as MdNode;
+  if (nestDepth(root) > MD_NEST_MAX) return rawRoot(text);
   revealHidden(root, src);
   expandChildren(root);
   return root;

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { hostOf, isOpenableUrl, markdownTooDeep, parseMarkdown, type MdNode } from './parse';
-import { columnWidths, noHyphenBreak, plainText } from './helpers';
+import { hostOf, isOpenableUrl, markdownTooDeep, MD_NEST_MAX, parseMarkdown, type MdNode } from './parse';
+import { addressOf, codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, noHyphenBreak, plainText } from './helpers';
+import { definitionsOf } from './parse';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -28,7 +29,7 @@ describe('markdown: the human table fixture', () => {
   it('column widths: longest cell × 8 + 20, clamped 64…200, equal for every row', () => {
     const w = columnWidths(kids(table));
     expect(w).toHaveLength(3);
-    expect(w[0]).toBe(Math.round('21st-dev-magic'.length * 1.1 * 8) + 20); // inline code weighs 1.1 per char
+    expect(w[0]).toBe(Math.round('21st-dev-magic'.length * 1.1 * 8 + 20)); // inline code weighs 1.1 per char
     expect(w[2]).toBe(200); // "не подключился: нет API-ключа" is wider than the cap and wraps
     expect(columnWidths([{ type: 'tableRow', children: [{ type: 'tableCell', children: [] }] }])).toEqual([64]);
   });
@@ -186,5 +187,124 @@ describe('the renderer cannot load anything', () => {
     const rnImport = /import\s*\{([^}]*)\}\s*from 'react-native'/.exec(src)?.[1] ?? '';
     expect(rnImport).not.toMatch(/\bImage\b|WebView/);
     expect(src).not.toMatch(/fetch\(|expo-image|<Image|dangerouslySet/);
+  });
+});
+
+const longPath = readFileSync('src/markdown/fixtures/long-path.md', 'utf8').trimEnd();
+
+describe('inline code display (long path fixture)', () => {
+  const code = all(parseMarkdown(longPath)).filter((n) => n.type === 'inlineCode').map((n) => n.value ?? '');
+  it('the fixture has a long path and a hyphenated name as inline code', () => {
+    expect(code).toHaveLength(3);
+    expect(code[0]).toMatch(/^\/Users\/me\/\.claude\/plugins\/.*SKILL\.md$/);
+  });
+  it('noHyphenBreak puts a word joiner after every hyphen and leaves "/" alone', () => {
+    for (const value of code) {
+      const shown = noHyphenBreak(value);
+      expect(shown.replace(/\u2060/g, '')).toBe(value);
+      expect((shown.match(/-\u2060/g) ?? []).length).toBe((value.match(/-/g) ?? []).length);
+      expect(shown).not.toMatch(/-(?!\u2060)/);
+      expect(shown.split('/').length).toBe(value.split('/').length);
+    }
+  });
+  it('a newline inside inline code is a space', () => {
+    const para = kids(parseMarkdown('`a\nb-c`'))[0]!;
+    expect(codeText(kids(para)[0]!.value ?? '')).toBe('a b-\u2060c');
+  });
+});
+
+describe('renderer safety helpers', () => {
+  const defs = (md: string) => definitionsOf(parseMarkdown(md));
+  const first = (md: string, type: string): MdNode => all(parseMarkdown(md)).find((n) => n.type === type)!;
+
+  it('linkTarget opens only strict http(s)', () => {
+    const bad = ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,hi', 'mailto:a@b.c', '//evil.example/x', 'https://evil.com\\@good.com/', 'https://user@good.com/'];
+    for (const url of bad) expect(linkTarget({ type: 'link', url }, new Map())).toBeNull();
+    expect(linkTarget({ type: 'link', url: ' https://example.com/a ' }, new Map())).toBe('https://example.com/a');
+  });
+
+  it('the GFM email autolink is not openable', () => {
+    const link = first('write to me@example.com now', 'link');
+    expect(link.url).toBe('mailto:me@example.com');
+    expect(linkTarget(link, new Map())).toBeNull();
+  });
+
+  it('a linkReference resolves through its definition (first one wins), unsafe stays null', () => {
+    const md = '[a][x] [b][y]\n\n[x]: https://example.com/x\n[x]: https://other.example/\n[y]: javascript:alert(1)';
+    const d = defs(md);
+    const [a, b] = all(parseMarkdown(md)).filter((n) => n.type === 'linkReference');
+    expect(linkTarget(a!, d)).toBe('https://example.com/x');
+    expect(linkTarget(b!, d)).toBeNull();
+    expect(addressOf(b!, d)).toBe('javascript:alert(1)');
+  });
+
+  it('an empty or blank label falls back to the address', () => {
+    expect(linkLabelIsEmpty(first('[](https://e.com/x)', 'link'))).toBe(true);
+    expect(linkLabelIsEmpty(first('[ ](https://e.com/x)', 'link'))).toBe(true);
+    expect(linkLabelIsEmpty(first('[a](https://e.com/x)', 'link'))).toBe(false);
+    const md = '[][r]\n\n[r]: https://e.com/ref';
+    const ref = first(md, 'linkReference');
+    expect(linkLabelIsEmpty(ref)).toBe(true);
+    expect(addressOf(ref, defs(md))).toBe('https://e.com/ref');
+  });
+
+  it('an image is a line with its host and alt, without alt its full address; never anything to load', () => {
+    const img = first('![Approve: drop the prod DB](https://x.example/p.png)', 'image');
+    expect(imageLine(img, new Map())).toBe('[Image not loaded · x.example] Approve: drop the prod DB');
+    expect(imageLine(first('![](https://x.example/p.png?a=1)', 'image'), new Map())).toBe('[Image not loaded · x.example] https://x.example/p.png?a=1');
+    const md = '![pic][i]\n\n[i]: https://y.example/z.png';
+    expect(imageLine(first(md, 'imageReference'), defs(md))).toBe('[Image not loaded · y.example] pic');
+    expect(imageLine({ type: 'image', url: 'javascript:x', alt: '' }, new Map())).toBe('[Image not loaded] javascript:x');
+  });
+});
+
+describe('limits', () => {
+  it('text over 64 KB or with over 2000 emphasis delimiters is raw', () => {
+    const big = `${'a'.repeat(65 * 1024)}\n\n# h`;
+    expect(types(parseMarkdown(big))).toEqual(['paragraph']);
+    const bomb = '*a '.repeat(2001);
+    expect(plainText(parseMarkdown(bomb))).toBe(bomb);
+    expect(types(parseMarkdown('**ok** _fine_'))).toEqual(['paragraph']);
+    expect(all(parseMarkdown('**ok** _fine_')).some((n) => n.type === 'strong')).toBe(true);
+  });
+
+  it('a table over 200 rows or 2000 cells becomes a code block with its source', () => {
+    const rows = (n: number, cols: number) => `| ${Array.from({ length: cols }, (_, i) => `h${i}`).join(' | ')} |\n|${'---|'.repeat(cols)}\n${Array.from({ length: n }, () => `| ${Array.from({ length: cols }, () => 'x').join(' | ')} |`).join('\n')}`;
+    const tall = rows(200, 2); // 201 rows with the header
+    expect(kids(parseMarkdown(tall))[0]).toMatchObject({ type: 'code', value: tall });
+    const wide = rows(100, 25); // 101 rows × 25 = 2525 cells
+    expect(kids(parseMarkdown(wide))[0]!.type).toBe('code');
+    expect(kids(parseMarkdown(rows(50, 5)))[0]!.type).toBe('table');
+  });
+
+  it('lists and quotes nested deeper than 24 together are raw text', () => {
+    const nest = (depth: number) => Array.from({ length: depth }, (_, i) => `${'  '.repeat(i)}- x`).join('\n');
+    expect(types(parseMarkdown(nest(MD_NEST_MAX)))).toEqual(['list']);
+    const deep = nest(MD_NEST_MAX + 1);
+    expect(plainText(parseMarkdown(deep))).toBe(deep);
+    const mixed = (pairs: number) => `${'> - '.repeat(pairs)}x`; // a quote and a list per pair
+    expect(kids(parseMarkdown(mixed(12)))[0]!.type).toBe('blockquote');
+    expect(plainText(parseMarkdown(mixed(13)))).toBe(mixed(13));
+  });
+});
+
+describe('links are not entered', () => {
+  it('a mention or newline inside a link label stays text / a space, as in the window', () => {
+    const link = first('[**@s02** hi\nthere](https://e.com)');
+    expect(all(link).some((n) => n.type === 'mention')).toBe(false);
+    expect(plainText(link)).toBe('@s02 hi there');
+  });
+  function first(md: string): MdNode {
+    return all(parseMarkdown(md)).find((n) => n.type === 'link')!;
+  }
+});
+
+describe('table width and font scale', () => {
+  it('widths and clamps grow with the font scale', () => {
+    const cell = (v: string): MdNode => ({ type: 'tableCell', children: [{ type: 'text', value: v }] });
+    const rows: MdNode[] = [{ type: 'tableRow', children: [cell('x'.repeat(10))] }];
+    expect(columnWidths(rows, 1)).toEqual([100]);
+    expect(columnWidths(rows, 2)).toEqual([180]);
+    expect(columnWidths([{ type: 'tableRow', children: [cell('')] }], 2)).toEqual([128]);
   });
 });

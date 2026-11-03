@@ -2,11 +2,11 @@
 // (D1 §9.2–9.3). A render error falls back to the raw text, the screen never crashes.
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
-import { Component, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { typography, useColors } from '../theme';
-import { columnWidths, noHyphenBreak } from './helpers';
-import { definitionsOf, hostOf, isOpenableUrl, parseMarkdown, rawRoot, type MdNode } from './parse';
+import { codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, plainText, addressOf, type Defs } from './helpers';
+import { definitionsOf, hostOf, parseMarkdown, rawRoot, type MdNode } from './parse';
 
 export function confirmOpen(url: string): void {
   const host = hostOf(url) ?? url;
@@ -17,7 +17,7 @@ export function confirmOpen(url: string): void {
 }
 
 interface Ctx {
-  defs: Map<string, { url: string; title: string | null }>;
+  defs: Defs;
   labelOf?: (sessionId: string) => string;
   /** Screenshots only: a table starts scrolled sideways by this much. */
   tableOffset?: number;
@@ -55,26 +55,25 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
             );
           case 'inlineCode':
             return (
-              <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2), backgroundColor: c.surface2 }]}>
-                {noHyphenBreak(n.value ?? '')}
+              <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2), backgroundColor: c.codeFill }]}>
+                {codeText(n.value ?? '')}
               </Text>
             );
           case 'link':
           case 'linkReference': {
-            const url = n.type === 'link' ? (n.url ?? '') : (ctx.defs.get(n.identifier ?? '')?.url ?? '');
-            if (!isOpenableUrl(url)) return <Text key={i}>{kids}</Text>;
+            const target = linkTarget(n, ctx.defs);
+            // A blank label shows the address, so the human sees what the agent wrote.
+            const label = linkLabelIsEmpty(n) ? addressOf(n, ctx.defs) : kids;
+            if (target === null) return <Text key={i}>{label}</Text>;
             return (
-              <Text key={i} accessibilityRole="link" onPress={() => confirmOpen(url.trim())} style={{ color: c.tint, textDecorationLine: 'underline' }}>
-                {kids}
+              <Text key={i} accessibilityRole="link" onPress={() => confirmOpen(target)} style={{ color: c.tint, textDecorationLine: 'underline' }}>
+                {label}
               </Text>
             );
           }
           case 'image':
-          case 'imageReference': {
-            const url = n.type === 'image' ? (n.url ?? '') : (ctx.defs.get(n.identifier ?? '')?.url ?? '');
-            const host = hostOf(url);
-            return `\n[Image not loaded${host === null ? '' : ` · ${host}`}]\n`;
-          }
+          case 'imageReference':
+            return `\n${imageLine(n, ctx.defs)}\n`;
           case 'mention':
           case 'humanMention': {
             if (ctx.labelOf === undefined) return n.raw ?? '';
@@ -136,9 +135,9 @@ function CodeBlock({ node }: { node: MdNode }) {
     });
   };
   return (
-    <View style={[styles.code, { backgroundColor: c.surface2, borderColor: c.separator }]}>
+    <View style={[styles.code, { backgroundColor: c.codeFill, borderColor: c.separator }]}>
       <View style={styles.codeHead}>
-        <Text allowFontScaling numberOfLines={1} style={[typography.caption1, styles.flex, { color: c.label2 }]}>
+        <Text allowFontScaling style={[typography.caption1, styles.flex, { color: c.label2 }]}>
           {node.caption ?? ''}
         </Text>
         <Pressable accessibilityRole="button" accessibilityLabel={copied ? 'Copied' : 'Copy code'} hitSlop={8} onPress={copy} style={styles.copy}>
@@ -160,14 +159,15 @@ function CodeBlock({ node }: { node: MdNode }) {
 function Table({ node, ctx }: { node: MdNode; ctx: Ctx }) {
   const c = useColors();
   const rows = node.children ?? [];
-  const widths = useMemo(() => columnWidths(rows), [rows]);
+  const { fontScale } = useWindowDimensions();
+  const widths = useMemo(() => columnWidths(rows, fontScale), [rows, fontScale]);
   const align = node.align ?? [];
   const size = typography.subheadline.fontSize;
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tableScroll} contentOffset={{ x: ctx.tableOffset ?? 0, y: 0 }}>
       <View style={[styles.table, { borderColor: c.separator }]}>
         {rows.map((row, r) => (
-          <View key={r} style={[styles.row, r < rows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.separator }, r === 0 && { backgroundColor: c.surface2 }]}>
+          <View key={r} style={[styles.row, r < rows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.separator }, r === 0 && { backgroundColor: c.codeFill }]}>
             {widths.map((w, col) => {
               const cell = row.children?.[col];
               return (
@@ -190,36 +190,59 @@ function Table({ node, ctx }: { node: MdNode; ctx: Ctx }) {
 
 function ListView({ node, ctx }: { node: MdNode; ctx: Ctx }) {
   const c = useColors();
+  const { fontScale } = useWindowDimensions();
   const first = node.start ?? 1;
   const items = node.children ?? [];
   const digits = String(first + items.length - 1).length;
-  const markerWidth = node.ordered === true ? Math.max(22, digits * 10 + 12) : 22;
+  const markerWidth = Math.ceil((node.ordered === true ? Math.max(22, digits * 10 + 12) : 22) * fontScale);
+  const symbol = Math.round(17 * fontScale);
   return (
     <View style={styles.list}>
-      {items.map((item, i) => (
-        <View key={i} style={styles.item}>
-          <View style={{ width: markerWidth }}>
-            {typeof item.checked === 'boolean' ? (
-              <SymbolView
-                name={item.checked ? 'checkmark.square.fill' : 'square'}
-                size={17}
-                tintColor={item.checked ? c.tint : c.label2}
-                accessibilityLabel={item.checked ? 'done' : 'not done'}
-                style={styles.task}
-              />
-            ) : (
+      {items.map((item, i) => {
+        const blocks = item.children ?? [];
+        if (typeof item.checked === 'boolean') {
+          // A task item is one accessible checkbox: the symbol and the first paragraph, labelled with its text.
+          const head = blocks[0]?.type === 'paragraph' ? blocks[0] : null;
+          const rest = head === null ? blocks : blocks.slice(1);
+          return (
+            <View key={i} style={styles.itemBody}>
+              <View
+                accessible
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: item.checked }}
+                accessibilityLabel={head === null ? (item.checked ? 'done' : 'not done') : plainText(head)}
+                style={styles.item}
+              >
+                <View style={{ width: markerWidth }}>
+                  <SymbolView name={item.checked ? 'checkmark.square.fill' : 'square'} size={symbol} tintColor={item.checked ? c.tint : c.label2} style={{ width: symbol, height: Math.round(22 * fontScale) }} />
+                </View>
+                <View style={styles.flex}>{head !== null && <BlockView node={head} ctx={ctx} />}</View>
+              </View>
+              {rest.length > 0 && (
+                <View style={[styles.itemBody, { paddingLeft: markerWidth }]}>
+                  {rest.map((b, k) => (
+                    <BlockView key={k} node={b} ctx={ctx} />
+                  ))}
+                </View>
+              )}
+            </View>
+          );
+        }
+        return (
+          <View key={i} style={styles.item}>
+            <View style={{ width: markerWidth }}>
               <Text allowFontScaling style={[typography.body, { color: c.label2 }]}>
                 {node.ordered === true ? `${first + i}.` : '•'}
               </Text>
-            )}
+            </View>
+            <View style={[styles.flex, styles.itemBody]}>
+              {blocks.map((b, k) => (
+                <BlockView key={k} node={b} ctx={ctx} />
+              ))}
+            </View>
           </View>
-          <View style={[styles.flex, styles.itemBody]}>
-            {(item.children ?? []).map((b, k) => (
-              <BlockView key={k} node={b} ctx={ctx} />
-            ))}
-          </View>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -300,11 +323,32 @@ function Tree({ text, labelOf, tableOffset }: { text: string; labelOf?: (session
   );
 }
 
-/** `labelOf` turns a session id into the name shown in a `@s-02` mention; without it mentions stay as written. */
-export function Markdown({ text, labelOf, tableOffset }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number }) {
+/** While `active` (a reply being written) the text is taken at most every `ms`; otherwise at once. */
+function useThrottled(text: string, active: boolean, ms: number): string {
+  const [shown, setShown] = useState(text);
+  const last = useRef(Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setTimeout(() => {
+      last.current = Date.now();
+      setShown(text);
+    }, Math.max(0, last.current + ms - Date.now()));
+    return () => clearTimeout(timer);
+  }, [text, active, ms]);
+  return active ? shown : text;
+}
+
+export const STREAM_PARSE_MS = 250;
+
+/**
+ * `labelOf` turns a session id into the name shown in a `@s-02` mention; without it mentions stay as written.
+ * `streaming`: the reply is still being written, so it is parsed at most every 250 ms.
+ */
+export function Markdown({ text, labelOf, tableOffset, streaming = false }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number; streaming?: boolean }) {
+  const shown = useThrottled(text, streaming, STREAM_PARSE_MS);
   return (
-    <Boundary text={text}>
-      <Tree text={text} {...(labelOf === undefined ? {} : { labelOf })} {...(tableOffset === undefined ? {} : { tableOffset })} />
+    <Boundary text={shown}>
+      <Tree text={shown} {...(labelOf === undefined ? {} : { labelOf })} {...(tableOffset === undefined ? {} : { tableOffset })} />
     </Boundary>
   );
 }
@@ -324,7 +368,6 @@ const styles = StyleSheet.create({
   list: { gap: 4 },
   item: { flexDirection: 'row' },
   itemBody: { gap: 4 },
-  task: { width: 17, height: 22 },
   tableScroll: { flexGrow: 0 },
   table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'stretch' },
