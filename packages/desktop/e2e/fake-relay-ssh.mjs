@@ -3,7 +3,9 @@
 // Docker with an import directory, a manual relay file of the previous run), the image step streams Engine API JSON
 // slowly, the start step is held until the test creates the file named by `PARLEY_RELAY_SETUP_FAKE_RELEASE`.
 // Every command it does not know is appended to `PARLEY_RELAY_SETUP_FAKE_LOG` and answered with exit code 1.
+import { Buffer } from 'node:buffer';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { setTimeout } from 'node:timers';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
