@@ -1334,8 +1334,9 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(host.calls.filter((c) => c.method === 'sessions.resume')).toHaveLength(1);
     expect(audits).toEqual([
       expect.objectContaining({ kind: 'call-refused', method: 'sessions.resume', outcome: 'bad_request' }),
-      expect.objectContaining({ kind: 'call', method: 'sessions.resume', deviceId: D, target: 's-1', outcome: 'ok' }),
+      expect.objectContaining({ kind: 'call', method: 'sessions.resume', deviceId: D, target: 's-1', outcome: 'ok', detail: expect.stringMatching(/^workId=w-1 project:sha256=[0-9a-f]{12}$/) }),
     ]);
+    expect(JSON.stringify(audits)).not.toContain('"/p"');
     for (let i = 0; i < 29; i++) {
       call(D, `m${i}`, 'sessions.resume', { ref: ref('s-1') });
       await flush();
@@ -1345,5 +1346,17 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(host.calls.filter((c) => c.method === 'sessions.resume')).toHaveLength(30);
     expect(answer('over')).toMatchObject({ error: { code: 'rate_limited' } });
     expect(actions).toEqual([]);
+  });
+
+  it('critic A37a m3: ref-based calls write workId and a projectPath hash into the audit detail; the path itself is not written', async () => {
+    call(D, 'a', 'pty.send', { ref: { projectPath: '/Users/a/secret-repo', workId: 'w-2', sessionId: 's-1' }, text: 'SECRET', submit: true, clientMsgId: 'msg-00000777' });
+    call(D, 'b', 'sessions.resume', { ref: { projectPath: '/Users/a/other', workId: 'w-2', sessionId: 's-1' } });
+    await flush();
+    const [send, resume] = audits.filter((a) => a.kind === 'call');
+    expect(send).toMatchObject({ method: 'pty.send', target: 's-1', detail: expect.stringMatching(/^workId=w-2 project:sha256=[0-9a-f]{12} /) });
+    expect(resume).toMatchObject({ method: 'sessions.resume', target: 's-1', detail: expect.stringMatching(/^workId=w-2 project:sha256=[0-9a-f]{12}$/) });
+    expect(send?.detail?.split(' ')[1]).not.toBe(resume?.detail?.split(' ')[1]);
+    expect(JSON.stringify(audits)).not.toContain('secret-repo');
+    expect(JSON.stringify(audits)).not.toContain('SECRET');
   });
 });

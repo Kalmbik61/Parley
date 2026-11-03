@@ -110,8 +110,9 @@ function describeParams(params: unknown): string | undefined {
  * `decision`): цель — сессия, в подробностях карточка, вид и выбор; ответы на вопрос и текст отказа — длиной и хэшем.
  */
 function auditOf(method: string, params: unknown): { target: string | undefined; detail: string | undefined } {
+  const where = refDetail(params);
   if (method !== 'feed.decide' || typeof params !== 'object' || params === null) {
-    return { target: targetOf(params), detail: describeParams(params) };
+    return { target: targetOf(params), detail: joinDetail([...where, describeParams(params)]) };
   }
   const p = params as { ref?: unknown; cardId?: unknown; decision?: unknown };
   const ref = typeof p.ref === 'object' && p.ref !== null ? (p.ref as Record<string, unknown>) : {};
@@ -123,7 +124,27 @@ function auditOf(method: string, params: unknown): { target: string | undefined;
   if (typeof d.always === 'boolean') parts.push(`always=${d.always}`);
   if (typeof d.message === 'string') parts.push(opaque('message', d.message));
   if (d.answers !== undefined) parts.push(opaque('answers', JSON.stringify(d.answers) ?? ''));
-  return { target, detail: parts.length ? parts.join(' ') : undefined };
+  return { target, detail: joinDetail([...where, ...parts]) };
+}
+
+const joinDetail = (parts: Array<string | undefined>): string | undefined => {
+  const present = parts.filter((part): part is string => part !== undefined && part !== '');
+  return present.length ? present.join(' ') : undefined;
+};
+
+/**
+ * Где сессия из `ref` (критик A37a m3): номера сессий повторяются между работами, поэтому в журнал — `workId` и хэш
+ * `projectPath` (путь сам не пишется).
+ */
+function refDetail(params: unknown): string[] {
+  if (typeof params !== 'object' || params === null) return [];
+  const ref = (params as { ref?: unknown }).ref;
+  if (typeof ref !== 'object' || ref === null) return [];
+  const { projectPath, workId } = ref as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof workId === 'string') parts.push(/^[\w.:-]{1,64}$/.test(workId) ? `workId=${workId}` : opaque('workId', workId));
+  if (typeof projectPath === 'string') parts.push(`project:sha256=${createHash('sha256').update(projectPath).digest('hex').slice(0, 12)}`);
+  return parts;
 }
 
 /** Текст журнала: только длина и хэш. */

@@ -971,6 +971,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         const entry = worksService.entry(projectPath, workId);
         return entry !== undefined && entry.map.work.status !== 'archived' && entry.map.sessions.some((session) => session.id === sessionId);
       },
+      // Свежая карта, не снимок: телефон шлёт вызов по своему, возможно устаревшему, снимку (критик A37a M1).
+      sessionState: async (projectPath, workId, sessionId) => {
+        if (worksService.entry(projectPath, workId) === undefined) return null;
+        const map = await readMap(projectPath, workId).catch(() => null);
+        const session = map?.sessions.find((entry) => entry.id === sessionId);
+        return map && session ? { workArchived: map.work.status === 'archived', lifecycle: session.lifecycle } : null;
+      },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
       trustFolder: async (projectPath) => {

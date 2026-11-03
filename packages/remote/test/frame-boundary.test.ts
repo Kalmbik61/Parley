@@ -163,6 +163,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
         roomAutonomous: () => false,
         projectKnown: (projectPath) => projectPath === '/p',
         workKnown: (projectPath, workId) => projectPath === '/p' && workId === 'w-1',
+        sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping' }),
       },
     });
     await new Promise<void>((r) => server.listen(socketPath, r));
