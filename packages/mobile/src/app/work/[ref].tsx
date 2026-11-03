@@ -1,32 +1,36 @@
-import { useMemo } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { selectWorks } from '@parley/remote-client';
+import { selectWork } from '@parley/remote-client';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { useRemoteState } from '../../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { NewButton } from '../../launch/NewButton';
 import { barBack, barRight, LargeTitle, useBarTitleOnScroll } from '../../ui/bar';
-import { typography, useColors } from '../../theme';
+import { useColors } from '../../theme';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, SingleGroup, TeamCard, type TreeEnv } from '../../works/TeamTree';
+import { ClosedLinks } from '../../works/ClosedLinks';
+import { DEMO } from '../../dev/flags';
+import { closedStore, useExpansion } from '../../works/closed-store';
 import { buildTeams, type Team } from '../../works/teams';
 
 export default function WorkScreen() {
   const c = useColors();
   const router = useRouter();
-  const { ref: param } = useLocalSearchParams<{ ref: string }>();
+  const { ref: param, preview } = useLocalSearchParams<{ ref: string; preview?: string }>();
   const ref = parseWorkParam(param);
   const state = useRemoteState();
-  const view = useMemo(() => {
-    if (state === null || ref === null) return null;
-    for (const g of selectWorks(state, { showClosed: true })) {
-      const v = g.works.find((w) => w.work.projectPath === ref.projectPath && w.work.id === ref.workId);
-      if (v !== undefined) return v;
-    }
-    return null;
-  }, [state, ref?.projectPath, ref?.workId]);
+  const { key: storeKey, expansion } = useExpansion(ref);
+  // Developer build, screenshots: `preview=closed-open` / `archived-open` expands the links by itself.
+  useEffect(() => {
+    if (!DEMO || storeKey === '') return;
+    if (preview === 'closed-open' && !expansion.closed) closedStore.toggle(storeKey, 'closed');
+    if (preview === 'archived-open' && !expansion.archived) closedStore.toggle(storeKey, 'archived');
+  }, [preview, storeKey]);
+  // An archived work still opens; `showClosed` only decides the rows (A43).
+  const view = useMemo(() => (state === null || ref === null ? null : selectWork(state, ref, { showClosed: expansion.closed })), [state, ref?.projectPath, ref?.workId, expansion.closed]);
 
   const body = (() => {
     if (state === null || state.snapshot === null) return <Skeleton />;
@@ -44,7 +48,8 @@ export default function WorkScreen() {
       session: (s) => attentionOf(env, s) === 'needs-you',
       room: (r) => r.room.proposal !== null,
     });
-    if (teams.length === 0) return <EmptyState icon="person.2" title="No sessions yet" />;
+    const links = <ClosedLinks view={view} storeKey={storeKey} expansion={expansion} onOpenRoom={env.actions.openRoom} />;
+    if (teams.length === 0) return view.closedCount > 0 || view.archivedRooms.length > 0 ? links : <EmptyState icon="person.2" title="No sessions yet" />;
     // Single sessions that follow each other share one card.
     const out: Array<{ key: string; singles?: Team[]; team?: Team }> = [];
     for (const t of teams) {
@@ -56,11 +61,7 @@ export default function WorkScreen() {
     return (
       <View style={{ gap: 12 }}>
         {out.map((o) => (o.team !== undefined ? <TeamCard key={o.key} team={o.team} env={env} /> : <SingleGroup key={o.key} teams={o.singles!} env={env} />))}
-        {view.archivedRooms.length > 0 && (
-          <Text allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
-            {view.archivedRooms.length} archived room{view.archivedRooms.length === 1 ? '' : 's'}
-          </Text>
-        )}
+        {links}
       </View>
     );
   })();

@@ -8,7 +8,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FeedItem } from '@parley/core';
-import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
+import { attentionOfSession, selectWork, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
 import { ActiveCard } from '../../cards/CardViews';
@@ -45,6 +45,8 @@ import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial }
 import { Button } from '../../ui/Button';
 import { ReplyPlate } from '../../ui/ReplyPlate';
 import { EmptyState, Skeleton } from '../../ui/parts';
+import { ClosedLinks } from '../../works/ClosedLinks';
+import { useExpansion } from '../../works/closed-store';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
 import { subtreeOf, teamLine } from '../../works/teams';
@@ -141,14 +143,9 @@ export default function SessionScreen() {
     return work !== undefined && session !== undefined ? { work, session } : null;
   }, [state, ref?.projectPath, ref?.workId, ref?.sessionId]);
 
-  const view = useMemo(() => {
-    if (state === null || ref === null) return null;
-    for (const g of selectWorks(state, { showClosed: true })) {
-      const v = g.works.find((w) => w.work.projectPath === ref.projectPath && w.work.id === ref.workId);
-      if (v !== undefined) return v;
-    }
-    return null;
-  }, [state, ref?.projectPath, ref?.workId]);
+  // The same set and the same per-work toggle as the Work screen (A43).
+  const { key: expandKey, expansion } = useExpansion(ref);
+  const view = useMemo(() => (state === null || ref === null ? null : selectWork(state, ref, { showClosed: expansion.closed })), [state, ref?.projectPath, ref?.workId, expansion.closed]);
 
   const feed = state !== null && ref !== null ? state.feeds[sessionKey(ref)] : undefined;
   const items = feed?.items;
@@ -588,6 +585,7 @@ export default function SessionScreen() {
             <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
               <TreeRows rows={team} env={{ ...env, actions: { openSession: (id) => { setTeamOpen(false); env.actions.openSession(id); }, openDecision: (r, p) => { setTeamOpen(false); env.actions.openDecision(r, p); }, openRoom: (r) => { setTeamOpen(false); env.actions.openRoom(r); } } }} />
             </View>
+            <ClosedLinks view={view} storeKey={expandKey} expansion={expansion} onOpenRoom={() => undefined} only="closed" />
           </ScrollView>
         </View>
       </Modal>

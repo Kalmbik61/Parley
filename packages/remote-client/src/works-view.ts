@@ -28,6 +28,8 @@ export interface WorkView {
   needsYou: number;
   lastEventAt: string;
   rows: WorkRow[];
+  /** Все закрытые сессии работы (число в «N more closed», как `closedCount` карточки окна), не зависит от `showClosed`. */
+  closedCount: number;
   /** Архивные комнаты — под ссылкой «N archived rooms». */
   archivedRooms: RemoteRoom[];
 }
@@ -215,7 +217,8 @@ function workView(state: RemoteState, work: RemoteWork, showClosed: boolean): Wo
     level = 'needs-you';
   }
   const { rows, archivedRooms } = workRows(state, work, showClosed);
-  return { key: workKeyOf(work.projectPath, work.id), work, level, needsYou, lastEventAt, rows, archivedRooms };
+  const closedCount = work.sessions.filter((s) => s.lifecycle === 'closed').length;
+  return { key: workKeyOf(work.projectPath, work.id), work, level, needsYou, lastEventAt, rows, closedCount, archivedRooms };
 }
 
 const tail = (w: RemoteWork): number => (w.status === 'archived' ? 2 : w.status === 'done' ? 1 : 0);
@@ -246,4 +249,13 @@ export function selectWorks(state: RemoteState, options: WorksViewOptions = {}):
     else g.works.push(v);
   }
   return [...groups.values()];
+}
+
+/**
+ * Одна работа по ссылке, в том числе архивная (ссылка из Works открывается всегда). `showClosed` касается только строк
+ * дерева, не выбора работы: по умолчанию закрытые сессии спрятаны, как на карточке окна.
+ */
+export function selectWork(state: RemoteState, ref: { projectPath: string; workId: string }, options: WorksViewOptions = {}): WorkView | null {
+  const work = state.snapshot?.works.find((w) => w.projectPath === ref.projectPath && w.id === ref.workId);
+  return work === undefined ? null : workView(state, work, options.showClosed ?? false);
 }
