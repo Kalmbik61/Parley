@@ -6,7 +6,7 @@ import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
 import { draftOf, outboxOf, quoteOf, setDraft as saveDraft, setOutbox, setQuote as saveQuote, type OutMessage } from './outbox';
 import { againMessage } from './message-actions';
-import { afterSend, composeMessage } from './reply';
+import { afterSend, carriesQuote, composeMessage, retryCarriesPlate } from './reply';
 import type { AutoSend } from './resume';
 import { messageProblem, uiOfSend } from './send';
 
@@ -70,11 +70,12 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
   );
 
   const run = useCallback(
-    async (text: string, clientMsgId: string, replaces: string | null, fromDraft: boolean, quiet = false, carriesPlate = false, seen?: number): Promise<AutoSend> => {
+    async (text: string, clientMsgId: string, replaces: string | null, fromDraft: boolean, quiet = false, carriesPlate = false, seen?: number, again = false): Promise<AutoSend> => {
       if (client === null || ref === null || inFlight.current) return 'not-started';
       inFlight.current = true;
       setBusy(true);
-      const entry: OutMessage = { id: clientMsgId, text, at: Date.now(), state: { kind: 'sending' }, ...(seen === undefined ? {} : { seen }) };
+      const plateNow = quoteOf(key);
+      const entry: OutMessage = { id: clientMsgId, text, at: Date.now(), state: { kind: 'sending' }, ...(seen === undefined ? {} : { seen }), ...(carriesPlate && plateNow !== null && carriesQuote(text, plateNow) ? { plate: plateNow } : {}) };
       update((l) => [...l.filter((m) => m.id !== replaces && m.id !== clientMsgId), entry]);
       try {
         const outcome = await client.sendMessage({ ref, text, clientMsgId });
@@ -95,6 +96,7 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
           carriesPlate,
           fromDraft,
           draftFree: draftOf(key) === '',
+          again,
         });
         if (after.draft !== null) setDraft(after.draft);
         if (after.clearPlate) setQuote(null);
@@ -103,8 +105,9 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
           if (ui.hideComposer) setSwitchedOff(true);
           if (ui.textBack) {
             notify(ui.message);
-            // Given back: the bubble goes. Not given back (a draft is in the field): the bubble stays with the reason.
-            if (after.giveBack) {
+            // Given back: the bubble goes. A refused Send again goes too, with the toast (the prompt is in the feed anyway).
+            // Anything else not given back (a draft in the field) keeps its bubble with the reason.
+            if (after.dropBubble) {
               update((l) => l.filter((m) => m.id !== clientMsgId));
               return 'done';
             }
@@ -129,7 +132,7 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
     composed,
     again: (text, seen) => {
       const m = againMessage(text, Date.now());
-      return run(m.text, m.clientMsgId, null, false, false, false, seen);
+      return run(m.text, m.clientMsgId, null, false, false, false, seen, true);
     },
     giveBack: (text) => {
       const a = afterSend({ accepted: false, textBack: true, sent: text, plate: quoteOf(key), carriesPlate: true, fromDraft: false, draftFree: draftOf(key) === '' });
@@ -146,7 +149,7 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
     sendText: (text) => run(text, newClientMsgId(Date.now()), null, false, true, true),
     retry: async (message) => {
       const reuse = message.state.kind === 'unconfirmed';
-      await run(message.text, reuse ? message.id : newClientMsgId(Date.now()), message.id, false, false, false, message.seen);
+      await run(message.text, reuse ? message.id : newClientMsgId(Date.now()), message.id, false, false, retryCarriesPlate(message.plate, quoteOf(key)), message.seen);
     },
     edit: (message) => {
       update((l) => l.filter((m) => m.id !== message.id));

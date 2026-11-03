@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { againMessage, copyText, messageActions } from './message-actions';
+import { againMessage, copyText, messageActions, sendAgainReason } from './message-actions';
 
 const ids = (kind: 'agent' | 'prompt', over: { hasPtySend?: boolean; closed?: boolean; canSend?: boolean } = {}): string[] => messageActions({ kind, hasPtySend: true, closed: false, canSend: true, ...over }).map((a) => a.id);
 
@@ -44,5 +44,23 @@ describe('againMessage', () => {
     expect(a.text).toBe('run the linter');
     expect(b.text).toBe(a.text);
     expect(b.clientMsgId).not.toBe(a.clientMsgId);
+  });
+});
+
+describe('sendAgainReason', () => {
+  const input = { kind: 'input', sendEnabled: true, note: null } as const;
+  it('null when the field would send', () => {
+    expect(sendAgainReason({ mode: input, busy: false, text: 'go' })).toBeNull();
+  });
+  it('the field is replaced by a line: that line is the reason', () => {
+    expect(sendAgainReason({ mode: { kind: 'hidden', text: 'This session is closed' }, busy: false, text: 'go' })).toBe('This session is closed');
+  });
+  it('a card in place of the field', () => {
+    expect(sendAgainReason({ mode: { kind: 'hidden', text: '' }, busy: false, text: 'go' })).toBe('Answer the card first');
+  });
+  it('a message on its way, an offline field with its note, a text over 16 KB', () => {
+    expect(sendAgainReason({ mode: input, busy: true, text: 'go' })).toBe('Wait — another message is on its way');
+    expect(sendAgainReason({ mode: { kind: 'input', sendEnabled: false, note: 'Reconnecting — actions are paused' }, busy: false, text: 'go' })).toBe('Reconnecting — actions are paused');
+    expect(sendAgainReason({ mode: input, busy: false, text: 'a'.repeat(16 * 1024 + 1) })).toBe('Too long for one message — 16 KB max');
   });
 });

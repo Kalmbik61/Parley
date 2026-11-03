@@ -1,4 +1,5 @@
 import { newClientMsgId } from '@parley/remote-client';
+import { messageProblem, type ComposerMode } from './send';
 
 // The long-press sheet of a chat message (D1 §9.2, plan A42): which actions an agent reply and an own prompt offer. No React.
 
@@ -41,4 +42,15 @@ export const copyText = (kind: MessageKind, text: string): string => (kind === '
 /** Send again: the same text, a NEW `clientMsgId` (the old one belongs to the first send and its bridge cache). */
 export function againMessage(text: string, now: number): { text: string; clientMsgId: string } {
   return { text, clientMsgId: newClientMsgId(now) };
+}
+
+/**
+ * Why Send again cannot go now (null — it can): the field's own rules (D1 §9.5), so the VoiceOver action, which stays in
+ * the list whenever `pty.send` exists, refuses with a reason instead of bypassing them (critic A42 m17).
+ */
+export function sendAgainReason(f: { mode: ComposerMode; busy: boolean; text: string }): string | null {
+  if (f.mode.kind === 'hidden') return f.mode.text === '' ? 'Answer the card first' : f.mode.text;
+  if (f.busy) return 'Wait — another message is on its way';
+  if (!f.mode.sendEnabled) return f.mode.note ?? 'Not available right now';
+  return messageProblem(f.text);
 }

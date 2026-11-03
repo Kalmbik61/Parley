@@ -22,7 +22,7 @@ import { DEMO } from '../../dev/flags';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
-import { copyText, messageActions, type ActionId } from '../../feed/message-actions';
+import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
@@ -191,7 +191,7 @@ export default function SessionScreen() {
   // Developer preview of the message pieces (A42): set during render once the session is found.
   // The message actions, read through a ref so the feed rows keep a stable prop and `memo` works (critic A42 m8).
   const msgRef = useRef<MessageApi | null>(null);
-  const msgApi = useMemo<MessageApi>(() => ({ actions: (i) => msgRef.current?.actions(i) ?? [], run: (i, id) => msgRef.current?.run(i, id), sheet: (i) => msgRef.current?.sheet(i) }), []);
+  const msgApi = useMemo<MessageApi>(() => ({ actions: (i) => msgRef.current?.actions(i) ?? [], run: (i, id) => msgRef.current?.run(i, id), sheet: (i) => msgRef.current?.sheet(i), copyCode: (code) => msgRef.current?.copyCode(code) }), []);
   const previewMsg = useRef<{ reply(): void; prompt(): void; select(): void; plate(): void } | null>(null);
   useEffect(() => {
     if (!DEMO || found === null || preview === undefined) return;
@@ -395,6 +395,13 @@ export default function SessionScreen() {
   const runAction = (item: FeedItem, id: ActionId): void => {
     if (item.kind !== 'text' && item.kind !== 'prompt') return;
     const kind = kindOf(item);
+    // The list for VoiceOver may be older than the field's state: check the action against the facts of now (critic m17).
+    const now = actionsOf(item).find((a) => a.id === id);
+    if (now === undefined) return;
+    if (now.disabled === true) {
+      toast.show(sendAgainReason({ mode: hidden, busy: chat.busy || resume.view.pending !== null, text: item.text.trim() }) ?? 'Not available right now');
+      return;
+    }
     if (id === 'copy') {
       void Clipboard.setStringAsync(copyText(kind, item.text));
       toast.show('Copied');
@@ -411,6 +418,10 @@ export default function SessionScreen() {
   msgRef.current = {
     actions: actionsOf,
     run: runAction,
+    copyCode: (code) => {
+      void Clipboard.setStringAsync(code);
+      toast.show('Copied');
+    },
     sheet: (item) => {
       const actions = actionsOf(item);
       if (actions.length === 0) return;

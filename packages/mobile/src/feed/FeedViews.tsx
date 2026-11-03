@@ -14,7 +14,8 @@ import { CARD_STATE_TEXT, errorText, noticeText, toolName, toolSummary } from '.
 import type { OutMessage } from './outbox';
 import { HELD_BUBBLE, WAITING_BUBBLE } from './resume';
 import type { Action, ActionId } from './message-actions';
-import { quotePreview } from './quote-preview';
+import { confirmOpen } from '../markdown/Markdown';
+import { plainOf, promptLabel, quotePreview, replyExtras } from './quote-preview';
 import { splitQuote } from './reply';
 
 export const soft = (color: string, alpha = '26'): string => (/^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color);
@@ -36,6 +37,8 @@ export interface MessageApi {
   actions(item: FeedItem): Action[];
   run(item: FeedItem, id: ActionId): void;
   sheet(item: FeedItem): void;
+  /** "Copy code N" of a reply, as an action of the reply for VoiceOver. */
+  copyCode(code: string): void;
 }
 
 /** The prompt's leading `>` lines as a folded quote (D1 §9.2): a `tint` bar, up to three lines, without Markdown marks. */
@@ -54,7 +57,7 @@ function Bubble({ text, dim, msg, item, children }: { text: string; dim?: boolea
   const c = useColors();
   // The host's paste may leave blank lines at the edges: split the trimmed text (as the window does).
   const { quote, text: body } = splitQuote(text.trim());
-  const label = `You: ${quote === null ? '' : `quoting ${quotePreview(quote)}. `}${body}`;
+  const label = promptLabel(quote, body);
   const style = [styles.bubble, { backgroundColor: soft(c.tint), opacity: dim === true ? 0.6 : 1 }];
   const inner = (
     <>
@@ -66,7 +69,8 @@ function Bubble({ text, dim, msg, item, children }: { text: string; dim?: boolea
       )}
     </>
   );
-  const actions = msg !== undefined && item !== undefined ? msg.actions(item).filter((a) => a.disabled !== true) : [];
+  // VoiceOver keeps Send again whenever it exists; `run` refuses it with a reason when the field would not send (critic m17).
+  const actions = msg !== undefined && item !== undefined ? msg.actions(item) : [];
   return (
     <View style={styles.bubbleWrap}>
       {msg === undefined || item === undefined ? (
@@ -181,22 +185,32 @@ function Centered({ text, icon, tone }: { text: string; icon?: SFSymbol; tone?: 
   );
 }
 
-/** An agent reply: one accessible element "Agent: <text>" (D1 §9.6) with the message actions; long press anywhere, links included. */
+/** An agent reply: one accessible element "Agent: <whole text>" (D1 §9.6) with the message actions, its links and its code blocks. */
 function ReplyText({ item, msg }: { item: Extract<FeedItem, { kind: 'text' }>; msg?: MessageApi }) {
   const c = useColors();
-  const label = useMemo(() => `Agent: ${quotePreview(item.text)}`, [item.text]);
-  const actions = msg === undefined ? [] : msg.actions(item).filter((a) => a.disabled !== true);
+  // The whole text without markup, no cut (critic A42 M7). A reply still being written is not parsed on every delta.
+  const { label, extras } = useMemo(() => (item.streaming ? { label: `Agent: ${quotePreview(item.text)}`, extras: { links: [], codes: [] } } : { label: `Agent: ${plainOf(item.text)}`, extras: replyExtras(item.text) }), [item.text, item.streaming]);
   const sheet = msg !== undefined && !item.streaming ? () => msg.sheet(item) : undefined;
-  return (
-    <Pressable
-      disabled={sheet === undefined}
-      onLongPress={sheet}
-      accessible
-      accessibilityLabel={label}
-      accessibilityActions={sheet === undefined ? [] : actions.map((a) => ({ name: a.id, label: a.title }))}
-      onAccessibilityAction={(e) => msg?.run(item, e.nativeEvent.actionName as ActionId)}
-      style={styles.reply}
-    >
+  const actions =
+    sheet === undefined || msg === undefined
+      ? []
+      : [
+          ...msg.actions(item).map((a) => ({ name: a.id, label: a.title })),
+          ...extras.links.map((l, i) => ({ name: `link:${i}`, label: `Open link ${l.host}` })),
+          ...extras.codes.map((_, i) => ({ name: `code:${i}`, label: `Copy code ${i + 1}` })),
+        ];
+  const onAction = (name: string): void => {
+    const [kind, idx] = name.split(':');
+    if (kind === 'link') {
+      const l = extras.links[Number(idx)];
+      if (l !== undefined) confirmOpen(l.url);
+    } else if (kind === 'code') {
+      const code = extras.codes[Number(idx)];
+      if (code !== undefined) msg?.copyCode(code);
+    } else msg?.run(item, name as ActionId);
+  };
+  const body = (
+    <>
       <Markdown text={item.text} streaming={item.streaming} {...(sheet === undefined ? {} : { onLongPress: sheet })} />
       {item.streaming && (
         <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
@@ -208,6 +222,19 @@ function ReplyText({ item, msg }: { item: Extract<FeedItem, { kind: 'text' }>; m
           Text truncated — open the terminal for the rest
         </Text>
       )}
+    </>
+  );
+  // Still being written: no actions, and a plain View (a disabled Pressable would be read as "dimmed").
+  if (sheet === undefined) {
+    return (
+      <View accessible accessibilityLabel={label} style={styles.reply}>
+        {body}
+      </View>
+    );
+  }
+  return (
+    <Pressable onLongPress={sheet} accessible accessibilityLabel={label} accessibilityActions={actions} onAccessibilityAction={(e) => onAction(e.nativeEvent.actionName)} style={styles.reply}>
+      {body}
     </Pressable>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { afterSend, carriesQuote, composeMessage, isSlashCommand, REPLY_QUOTE_MAX, replyQuote, splitQuote, typedPart, withQuote, type AfterSendFacts } from './reply';
+import { afterSend, carriesQuote, composeMessage, isSlashCommand, REPLY_QUOTE_MAX, replyQuote, retryCarriesPlate, splitQuote, typedPart, withQuote, type AfterSendFacts } from './reply';
 
 describe('replyQuote', () => {
   it(`without a selection — the whole text up to ${REPLY_QUOTE_MAX} characters, else the start and "…"`, () => {
@@ -68,14 +68,14 @@ describe('afterSend', () => {
   const plate = 'the claim';
   const base: AfterSendFacts = { accepted: false, textBack: false, sent: withQuote(plate, 'why?'), plate, carriesPlate: true, fromDraft: true, draftFree: true };
   it('an accepted send that carried the plate clears it and the field', () => {
-    expect(afterSend({ ...base, accepted: true })).toEqual({ draft: '', clearPlate: true, giveBack: false });
+    expect(afterSend({ ...base, accepted: true })).toEqual({ draft: '', clearPlate: true, giveBack: false, dropBubble: false });
   });
   it('a lost call or a refusal without text back: the plate stays, the field is cleared (the bubble keeps the text)', () => {
-    expect(afterSend(base)).toEqual({ draft: '', clearPlate: false, giveBack: false });
+    expect(afterSend(base)).toEqual({ draft: '', clearPlate: false, giveBack: false, dropBubble: false });
   });
   it('a refusal with text back (not_found, blocked): only what was typed returns, the plate stays — no double quote', () => {
     const r = afterSend({ ...base, textBack: true });
-    expect(r).toEqual({ draft: 'why?', clearPlate: false, giveBack: true });
+    expect(r).toEqual({ draft: 'why?', clearPlate: false, giveBack: true, dropBubble: true });
     // The next send composes the quote once.
     expect(composeMessage(r.draft as string, plate)).toBe(withQuote(plate, 'why?'));
   });
@@ -84,13 +84,41 @@ describe('afterSend', () => {
   });
   it('Send again: a refusal never overwrites a draft; with a free field the text returns as it is', () => {
     const again = { ...base, carriesPlate: false, fromDraft: false, sent: 'run the linter', textBack: true };
-    expect(afterSend({ ...again, draftFree: false })).toEqual({ draft: null, clearPlate: false, giveBack: false });
-    expect(afterSend({ ...again, draftFree: true })).toEqual({ draft: 'run the linter', clearPlate: false, giveBack: true });
+    expect(afterSend({ ...again, draftFree: false })).toEqual({ draft: null, clearPlate: false, giveBack: false, dropBubble: false });
+    expect(afterSend({ ...again, draftFree: true })).toEqual({ draft: 'run the linter', clearPlate: false, giveBack: true, dropBubble: true });
   });
   it('Send again does not clear the plate even when its text starts with the same quote', () => {
     expect(afterSend({ ...base, carriesPlate: false, fromDraft: false, accepted: true })).toMatchObject({ clearPlate: false, draft: null });
   });
   it('a slash command carried no quote: the plate stays even when accepted', () => {
     expect(afterSend({ ...base, sent: '/compact', accepted: true })).toMatchObject({ clearPlate: false });
+  });
+
+  it('m14: "blocked" is accepted by the bridge but nothing reached the agent — the text goes back, the plate stays', () => {
+    const r = afterSend({ ...base, accepted: true, textBack: true });
+    expect(r).toMatchObject({ draft: 'why?', clearPlate: false, giveBack: true });
+  });
+  it('m14: a repeated prompt that carries the plate quote is given back without it', () => {
+    const r = afterSend({ ...base, carriesPlate: false, fromDraft: false, again: true, textBack: true, draftFree: true });
+    expect(r).toMatchObject({ draft: 'why?', clearPlate: false });
+    expect(composeMessage(r.draft as string, plate)).toBe(withQuote(plate, 'why?'));
+  });
+  it('m16: a refused Send again with a busy field drops its bubble and leaves the draft', () => {
+    const r = afterSend({ ...base, carriesPlate: false, fromDraft: false, again: true, textBack: true, draftFree: false, sent: 'run the linter' });
+    expect(r).toEqual({ draft: null, clearPlate: false, giveBack: false, dropBubble: true });
+  });
+});
+
+describe('retryCarriesPlate (m15)', () => {
+  it('only when the plate still holds the quote the message carried', () => {
+    expect(retryCarriesPlate('Q', 'Q')).toBe(true);
+    expect(retryCarriesPlate('Q', 'other')).toBe(false);
+    expect(retryCarriesPlate('Q', null)).toBe(false);
+    expect(retryCarriesPlate(undefined, 'Q')).toBe(false);
+  });
+  it('a lost call retried and accepted clears the plate it carried', () => {
+    const plate = 'Q';
+    const r = afterSend({ accepted: true, textBack: false, sent: withQuote(plate, 'why?'), plate, carriesPlate: retryCarriesPlate(plate, plate), fromDraft: false, draftFree: true });
+    expect(r.clearPlate).toBe(true);
   });
 });

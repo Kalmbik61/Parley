@@ -11,6 +11,8 @@ export interface OutMessage {
   at: number;
   /** Send again: how many prompts with this text the feed held at the call; only a newer one is this message. */
   seen?: number;
+  /** The quote of the reply plate this text carried (a Retry clears the plate only while it still holds it). */
+  plate?: string;
   state: { kind: 'sending' } | { kind: 'waking' } | { kind: 'held' } | SentUi;
 }
 
