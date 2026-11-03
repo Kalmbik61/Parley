@@ -1,12 +1,14 @@
 // The lock screen (decision 6, plan A33): covers the whole app until Face ID says yes, and also while the app is not
 // active, so the app switcher shows no data. It shows nothing of the app — only the name, a lock and Unlock.
 //
-// Above everything (critic N2, plan A35b): natively presented screens (New session/room, pairing, the RN <Modal> sheets)
-// sit above the root view, so the cover is drawn in a `FullWindowOverlay`, which puts it into the window above every
-// presented controller each time it appears. A plain RN <Modal> would not do: it is presented from the root controller,
-// and UIKit does not present a second controller from one that already presents a sheet. On lock the open sheets also
-// close (`lock-sheets.ts`).
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+// Above everything (critic N2, plan A35b): natively presented screens (New session/room, the RN <Modal> sheets) sit above
+// the root view, so the cover is drawn in a `FullWindowOverlay`. It adds its container to the window once, as it appears,
+// so it lies above the controllers presented BEFORE it; a controller presented later would lie above it. That is why the
+// open sheets close on lock (`lock-sheets.ts`) and nothing is opened under the cover. The one screen that opens by itself
+// is pairing, and only with no paired Mac — and then there is no lock at all (spec §11.4, critic s-220 m1), so pairing
+// never meets the cover. A plain RN <Modal> would not do: it is presented from the root controller, and UIKit does not
+// present a second controller from one that already presents a sheet.
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AppState, StyleSheet, Text, View } from 'react-native';
 import { FullWindowOverlay } from 'react-native-screens';
 import { SymbolView } from 'expo-symbols';
@@ -14,6 +16,7 @@ import { DEMO, DEV_LOCK_MS } from '../dev/flags';
 import { appLock, startLock } from '../auth/lock-instance';
 import { shouldCover, type AppLock, type UnlockResult } from '../auth/app-lock';
 import { runtime } from '../runtime/instance';
+import { useRuntimeState } from '../runtime/use-runtime';
 import { typography, useColors } from '../theme';
 import { Button } from '../ui/Button';
 import { biometryKind, biometryLabel, type BiometryKind } from '../settings/biometric';
@@ -44,6 +47,13 @@ function RealLockGate({ children }: { children: ReactNode }) {
   const [kind, setKind] = useState<BiometryKind>('faceid');
   const [note, setNote] = useState<string | null>(null);
   const { locked } = useLockState(lock);
+  // Paired Macs: `null` while the list is not read yet (it is set before `ready`, so empty and booting means unknown).
+  const { phase, hosts: hostList } = useRuntimeState();
+  const hosts = hostList.length > 0 ? hostList.length : phase === 'ready' ? 0 : null;
+  // No paired Mac — no lock (spec §11.4): Face ID is not asked either; it is asked once the first Mac is paired.
+  const paired = hosts !== null && hosts > 0;
+  const pairedRef = useRef(paired);
+  pairedRef.current = paired;
 
   // The setting decides whether the lock exists at all; until it is read the app stays covered.
   useEffect(() => {
@@ -60,15 +70,17 @@ function RealLockGate({ children }: { children: ReactNode }) {
     void l.unlock().then((r: UnlockResult) => setNote(r === 'no-passcode' ? 'Set a device passcode to unlock Parley' : null));
   };
 
-  // Cold start: ask at once. Foreground after a long trip: the lock locks itself, then asks.
+  // Cold start (or the first Mac just paired): ask at once. Foreground after a long trip: the lock locks itself, then asks.
+  useEffect(() => {
+    if (lock !== null && paired && lock.state() === 'locked' && AppState.currentState === 'active') ask(lock);
+  }, [lock, paired]);
   useEffect(() => {
     if (lock === null) return;
-    if (lock.state() === 'locked' && AppState.currentState === 'active') ask(lock);
     const sub = AppState.addEventListener('change', (s) => {
       setActive(s === 'active');
       if (s === 'active') {
         lock.onForeground();
-        if (lock.state() === 'locked') ask(lock);
+        if (lock.state() === 'locked' && pairedRef.current) ask(lock);
       } else lock.onBackground();
     });
     // Five minutes without a touch while on screen lock again (plan A34): the term is checked every few seconds.
@@ -82,7 +94,7 @@ function RealLockGate({ children }: { children: ReactNode }) {
   const label = biometryLabel(kind);
   // Locked (or still reading the setting), or away from the foreground with the lock on (the app switcher snapshot is
   // taken as the app goes inactive): nothing of the app shows.
-  const hide = shouldCover(lock, active);
+  const hide = shouldCover(lock, active, hosts);
   return (
     // `onTouchStart` bubbles from every touch inside, whoever handles it: it only restarts the idle term.
     <View style={styles.flex} onTouchStart={() => lock?.touch()}>

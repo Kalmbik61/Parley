@@ -152,5 +152,9 @@ export function createAppLock({ auth, enabled: initial, thresholdMs = LOCK_AFTER
 /**
  * Whether the lock screen covers the app: locked, still reading the setting, or away from the foreground with the lock on
  * (`inactive` and `background` both: the app-switcher snapshot is taken as the app leaves the foreground).
+ *
+ * No paired Mac — no lock (spec §11.4, critic s-220 m1): with `hosts === 0` there is nothing to protect, and pairing must
+ * stay usable (also on a phone without a passcode). `hosts === null` — the list is not read yet: covered as locked.
  */
-export const shouldCover = (lock: AppLock | null, active: boolean): boolean => lock === null || lock.covered() || (!active && lock.enabled());
+export const shouldCover = (lock: AppLock | null, active: boolean, hosts: number | null): boolean =>
+  hosts !== 0 && (lock === null || lock.covered() || (!active && lock.enabled()));
