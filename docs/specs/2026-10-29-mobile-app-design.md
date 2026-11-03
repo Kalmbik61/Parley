@@ -220,8 +220,8 @@ Parley на Маке из любой сети. Подключение «как �
 
 | Этап | Методы → хост | События ← хост | Правила |
 |---|---|---|---|
-| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list`; пробуждение спящей сессии (правки 19): `sessions.resume` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
-| **B** | + `mail.markRead`, `sessions.stop`, `pty.send`, `feed.subscribe`, `feed.unsubscribe`, `feed.interrupt`, `pty.attach`, `pty.detach`, `consents.list`, `consents.decide`, `rooms.usage`; уведомление `activity.seen` | + `feed.changed`, `pty.output`, `pty.resync`, `pty.exit`, `consents.changed`, `providers.limitsChanged` | `pty.send`: текст ≤ 16 КБ |
+| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list`; пробуждение спящей сессии (правки 19): `sessions.resume`; действия меню сессии (правки 20): `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
+| **B** | + `mail.markRead`, `pty.send`, `feed.subscribe`, `feed.unsubscribe`, `pty.attach`, `pty.detach`, `consents.list`, `consents.decide`, `rooms.usage`; уведомление `activity.seen` | + `feed.changed`, `pty.output`, `pty.resync`, `pty.exit`, `consents.changed`, `providers.limitsChanged` | `pty.send`: текст ≤ 16 КБ |
 | **C** | — (`sessions.create` переехал в A, решение 5) | — | — |
 
 **Запуск с телефона: сессии и комнаты** (решение 5, решено человеком 2026-10-31; правки 11–12):
@@ -318,6 +318,28 @@ Parley на Маке из любой сети. Подключение «как �
   `phone.action` не уходит: пробуждение не весомое действие (решение человека 2026-11-03), уведомления на Маке нет.
 - **Телефон.** Отдельного Face ID нет, действует блокировка приложения (решение 6, 11.4). Экран сессии — D1 §9.5.
 
+**Действия меню сессии с телефона** (решение человека 2026-11-03, правки 20). Меню `⋯` экрана сессии получает
+действия окна, которые имеют смысл на телефоне (D1 §9.1):
+- **Методы этапа A** (все за переключателем `remoteCreate`; выключен → `unknown_method`, методов нет в
+  `hello.methods`, пунктов в меню нет):
+  - `feed.interrupt {ref}` — Stop: прервать идущий ход (Esc агенту, как кнопка Stop в чате окна);
+  - `sessions.stop {ref}` — Put to sleep: остановить процесс агента; сессия становится `sleeping`, Resume (правки 19)
+    её поднимает;
+  - `sessions.close {ref}` — Close session: закрыть сессию (уходит из перечня 4.3);
+  - `sessions.switchOptions {ref}` (чтение) и `sessions.switchAgent` — Continue on another provider, поток замены
+    агента окна (#143).
+- **Правила параметров** (`REMOTE_PARAM_RULES`, лишний ключ → `bad_request`): у `feed.interrupt`, `sessions.stop`,
+  `sessions.close`, `sessions.switchOptions` — только `ref` со строгими `projectPath`, `workId`, `sessionId`;
+  `sessions.switchAgent` — ключи `ref`, `requestId` (uuid), `provider` (1–64 знака), `model` (строка ≤ 200 или
+  `null`), `effort` (токен или `null`), `carry` ∈ {`handover`, `transcript`}; `force` → `bad_request` (принудительная
+  замена при блокерах — только в окне).
+- **Хост — власть.** Обработчики окна, цель — известный проект и работа; удаление (`sessions.delete`), переименование,
+  модель, режим, сжатие и «Keep awake» с телефона по-прежнему закрыты (4.3).
+- **Мост.** Все пять — изменяющие (лимит и `call` в журнале), кроме `sessions.switchOptions` (чтение). Весомые
+  (12): `sessions.close` → `phone.action` вида `session-close` (target — ref сессии и её имя); `sessions.switchAgent`
+  → вида `provider-switch` (target — имя провайдера). Stop и Put to sleep не весомые, уведомления нет.
+- **Телефон.** Face ID на действие нет. Close и Put to sleep — с системным подтверждением.
+
 Почему `feed.decide` и `rooms.resolveProposal` переехали в A. Ради решений человек и берёт телефон. Защиты от
 гонки уже есть: `feed.decide → {applied, state}` (`methods.ts:317`, результат `:495`) и `rev` у
 `rooms.resolveProposal` (`methods.ts:250-260`). В С1 они ждали плана «Chat» — он выполнен.
@@ -338,7 +360,7 @@ Parley на Маке из любой сети. Подключение «как �
 - `settings.*`, `host.shutdown`, `host.profile.*`, `host.diagnostics`, `wake.*`;
 - уведомления `pty.input` и `pty.resize`;
 - `works.create`, `works.delete`, `works.rename`, `works.setStatus`;
-- `sessions.delete`, `sessions.close`, `sessions.setMode`, `sessions.setEffort`, `sessions.setModel`,
+- `sessions.delete`, `sessions.setMode`, `sessions.setEffort`, `sessions.setModel`,
   `sessions.compact`, `sessions.cancelCompact`, `sessions.resumeInterrupted`, `sessions.rename`;
 - `rooms.addMember`, `rooms.setLead`, `rooms.setOwner`, `rooms.delete`, `rooms.archive`,
   `rooms.reopen`, `rooms.rename`, `rooms.setMode`;
@@ -1410,7 +1432,7 @@ Heartbeat (из RN нельзя слать WS ping, поэтому прикла�
 - присутствие — окно шлёт `presence` по сокету управления (9.3, 9.6);
 - **уведомление о весомых действиях телефона** (решение человека 2026-11-02, критик R5): окно показывает системное
   уведомление macOS, когда телефон доверяет папку (`trustFolder`, Allow на карточке доверия), разрешает «Always»,
-  одобряет план с `auto-accept`, одобряет смену провайдера или запускает сессию (New session). Текст — имя устройства
+  одобряет план с `auto-accept`, одобряет смену провайдера или запускает сессию (New session), включает серверы MCP (A36), закрывает сессию или переводит её на другого провайдера (правки 20). Текст — имя устройства
   и действие («iPhone trusted folder …», «iPhone started a session in …»), без текстов агентов; кнопка «Revoke this
   phone» в уведомлении вызывает `devices.revoke` после подтверждения. Источник — новое событие сокета управления
   `phone.action {deviceId, kind, target}`, которое мост шлёт по тем же вызовам, что пишут `call` в журнал;
@@ -1793,3 +1815,10 @@ ID на действия» остаётся.
 | № | Решение | Что изменено |
 |---|---|---|
 | 19.1 | `sessions.resume` переходит из этапа B в A, за переключателем `remoteCreate`; изменяющий метод без `phone.action`; тот же путь запуска, что у окна | 4.2 |
+
+**Правки 20 — решение человека 2026-11-03: действия в меню сессии.**
+
+| № | Решение | Что изменено |
+|---|---|---|
+| 20.1 | В этап A: `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent` за переключателем; `sessions.close` уходит из запретного перечня | 4.2, 4.3 |
+| 20.2 | Весомые: закрытие сессии (`session-close`) и замена провайдера (`provider-switch`); Stop и Put to sleep — нет | 4.2, 12 |

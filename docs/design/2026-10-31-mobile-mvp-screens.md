@@ -918,9 +918,26 @@ Work → «This work is no longer on your Mac» и возврат к Works.
   `separator` с отступом 16. Значок 16 pt — цветом состояния (`needsYou`, у решения — `tint`), текст `subheadline`
   semibold цветом `label`, справа действие `tint` («Review ›») или шеврон `barSubtitle`. Палитра и контраст — 17.5. Тап — прокрутка к концу ленты. Плашка подключения (раздел 4) встаёт под
   полоской.
-- Справа — `ellipsis.circle` меню (пины 5–6): **Team (N)** (лист с деревом 8.2 от этой сессии вниз, только у сессии,
-  под которой что-то есть), **Open room** (у участника комнаты), **Open work**, **Copy session ID**. Остальных команд
-  (стоп, сжатие, модель) у телефона нет (§4.3). Ссылка «N more under …» с экрана работы открывает Session этой
+- Справа — `ellipsis.circle` меню (пины 5–6; решение человека 2026-11-03, A38), системный лист действий в таком
+  порядке:
+  - **Team (N)** — лист с деревом 8.2 от этой сессии вниз, только у сессии, под которой что-то есть;
+  - **Open room** — у участника комнаты;
+  - **Resume** — у `sleeping` (A37, то же, что кнопка над полем);
+  - **Stop** — у идущего хода (`working`): `feed.interrupt`, без подтверждения; итог — тост «Stopped» или текст
+    хоста;
+  - **Put to sleep** — у живой сессии: подтверждение «Put "<label>" to sleep?» / «The agent stops. Resume wakes it
+    with its conversation.» → `sessions.stop`;
+  - **Continue on another provider…** — лист: цели из `sessions.switchOptions` (недоступные — серым с причиной
+    `needs`), что сохранится (`keeps`), выбор «Hand over a summary» / «Carry the transcript» (если `transcript`) →
+    `sessions.switchAgent` с новым `requestId`; при непустых `blockers` — их текст и кнопки нет. Итог `held` /
+    `queued` — как у запуска (9.6);
+  - **Copy session ID**;
+  - **Close session** — `destructive`, у не закрытой: подтверждение «Close "<label>"?» / «It will no longer receive
+    mail.» → `sessions.close`.
+  - **Open work** («назад к работе») убран: у экрана есть «‹».
+  - Без переключателя на Маке (метода нет в hello) пункта нет. Отказ хоста — тост с его текстом. Face ID нет;
+    закрытие и замена провайдера дают уведомление на Маке (спека §12).
+  - Сжатия, модели, режима, переименования, удаления и «Keep awake» у телефона нет (§4.3). Ссылка «N more under …» с экрана работы открывает Session этой
   сессии сразу с листом Team.
 - **Происхождение** — первая строка истории (уезжает при прокрутке): `arrow.turn.left.up` `Greta › # iOS app: stage
   A`; сессии в пути — ссылки на их экраны, комната — на экран Room (9.7).
