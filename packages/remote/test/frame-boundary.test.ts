@@ -55,6 +55,9 @@ describe('белый список против запретного списка
     'sessions.switchOptions', 'swarms.cancel', 'swarms.create', 'swarms.seen',
     // Из master после слияния 2026-11-01 (лимиты агентов, сон, закрытие готовых сессий): телефону не открыты.
     'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
+    // Постраничная синхронизация окна (PR #164): её берёт клиент с признаком `works-sync` в hello, телефон пока живёт на
+    // `works.list` и `works.changed`.
+    'works.mailState', 'works.sync',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);
