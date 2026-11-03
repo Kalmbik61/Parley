@@ -118,6 +118,8 @@ function make(): TelegramService {
     reset: vi.fn(),
     decide: vi.fn(async () => ({ applied: true, error: null })),
     onState: () => () => undefined,
+    card: () => null,
+    onCardChanged: () => () => undefined,
     settings: () => SETTINGS,
     state: () => IDLE_STATE,
   };

@@ -72,7 +72,7 @@ export interface TelegramServiceDeps {
    * или id не найден — имя строится по одному id.
    */
   providers?(): Promise<Record<string, Pick<ProviderEntry, 'id' | 'label'>>>;
-  assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state'>;
+  assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state' | 'card' | 'onCardChanged'>;
   /** Карточки согласия на папку (`ConsentsService` хоста): структурно, без импорта модуля согласий. */
   consents?: {
     list(): ConsentCard[];

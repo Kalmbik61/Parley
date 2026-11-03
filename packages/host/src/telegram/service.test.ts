@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, mapLetterTx, telegramBotId, telegramTokenFingerprint } from '@parley/core';
 import type { FeedCard, FeedItem, Message, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
-import type { AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
+import type { AssistantCardChanged, AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
 import type { TriggerLetters } from './notify.js';
@@ -77,6 +77,7 @@ let host: { broadcast: ReturnType<typeof vi.fn>; hold: ReturnType<typeof vi.fn>;
 let feed: { snapshot: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn>; unsubscribe: ReturnType<typeof vi.fn> };
 let assistant: { ask: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn>; [key: string]: unknown };
 let assistantListener: ((next: AssistantState) => void) | null;
+let assistantCardListener: ((change: AssistantCardChanged) => void) | null;
 let sendLetter: ReturnType<typeof vi.fn>;
 let resolveRoomProposal: ReturnType<typeof vi.fn>;
 let secret: { read: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.fn> };
@@ -282,6 +283,7 @@ beforeEach(async () => {
   activityListener = null;
   feedClient = null;
   assistantListener = null;
+  assistantCardListener = null;
   voiceMock.transcribe.mockReset();
   logs = [];
   host = { broadcast: vi.fn(), hold: vi.fn(), log: { info: () => {}, warn: () => {}, error: () => {} } };
@@ -307,6 +309,11 @@ beforeEach(async () => {
     },
     settings: () => SETTINGS,
     state: () => IDLE_STATE,
+    card: () => null,
+    onCardChanged: (listener: (change: AssistantCardChanged) => void) => {
+      assistantCardListener = listener;
+      return () => undefined;
+    },
   };
   sendLetter = vi.fn(async () => 'm-9');
   resolveRoomProposal = vi.fn(async () => 'm-8');
@@ -1065,6 +1072,7 @@ describe('createTelegramService: финальное ревью', () => {
     emitAssistant({ phase: 'awaiting-confirm', proposal: PROPOSAL });
     await settle();
     emitAssistant({ phase: 'idle', proposal: null, outcome: 'sent' });
+    assistantCardListener?.({ cardId: 'p1', kind: 'message', state: 'decided', revision: 3, expiresAt: 0, decidedVia: 'island', outcome: 'sent' });
     expect(edits()).toEqual([]);
 
     ungateSends();
@@ -1086,7 +1094,7 @@ describe('createTelegramService: финальное ревью', () => {
 
     push([tap(recorded, 'pa1:p1:send')]);
     await settle();
-    expect(assistant.decide).toHaveBeenCalledWith('p1', 'send');
+    expect(assistant.decide).toHaveBeenCalledWith('p1', 'send', undefined, 'telegram');
   });
 
   it('/help не обещает /unlink, называет /new и отвязку на Mac; /start владельца даёт ту же справку', async () => {

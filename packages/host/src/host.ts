@@ -820,6 +820,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log: (line) => log.info(line),
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
+  assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
   handle.context.onShutdown(async () => assistantJobs.stop());
 
@@ -963,6 +964,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
+    assistantJobs,
     telegram,
     health,
     profiler,

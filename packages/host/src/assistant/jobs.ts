@@ -6,9 +6,10 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import type { AssistantJobCorrelation, AssistantJobOrigin } from '@parley/protocol';
 
-export type JobOrigin = 'island' | 'telegram' | 'mobile' | 'reminder' | 'system';
-export type JobCorrelation = { voiceSessionId: string; delegationId: string; turnId: string } | { mode: 'text' };
+export type JobOrigin = AssistantJobOrigin;
+export type JobCorrelation = AssistantJobCorrelation;
 export type JobState = 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
 
 export interface Job {
@@ -24,6 +25,8 @@ export interface Job {
   provider: string;
   createdAt: number;
   updatedAt: number;
+  /** Экран уже показал финал job (`ackInline`): push по этому событию не нужен. Читает раздел уведомлений. */
+  deliveredInline: boolean;
 }
 
 /** Чем кончился прогон CLI. `confirmed` — хост или инструмент подтвердили исполнение; без него успех не объявляется. */
@@ -59,10 +62,17 @@ export interface SubmitInput {
   provider?: string;
 }
 
+export type AckInlineResult = { ok: boolean; deliveredInline: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' };
+
 export interface Jobs {
   submitJob(input: SubmitInput): { jobId: string; revision: number };
   getJob(jobId: string): Job | null;
   cancelJob(jobId: string): Job | null;
+  /**
+   * Идемпотентно ставит флаг `deliveredInline` и больше ничего не меняет: ни состояние, ни ревизию, ни событие.
+   * Принимается только ревизия финального состояния; ack устаревшей ревизии или живого job — `stale`.
+   */
+  ackInline(jobId: string, revision: number): AckInlineResult;
   onJobChanged(listener: (job: Job) => void): () => void;
   /** Старт хоста: job в `running` без процесса сверяется с реальностью; queued продолжают очередь. */
   recover(): Promise<void>;
@@ -99,6 +109,7 @@ const fromRaw = (row: Raw): Job => ({
   provider: row.provider,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  deliveredInline: false,
 });
 
 export function createJobs(deps: JobsDeps): Jobs {
@@ -106,6 +117,12 @@ export function createJobs(deps: JobsDeps): Jobs {
   const now = deps.now ?? Date.now;
   const cap = deps.capPerProvider ?? JOB_CAP_PER_PROVIDER;
   const retryMs = deps.limitRetryMs ?? JOB_LIMIT_RETRY_MS;
+  /**
+   * Флаг `deliveredInline` пока только в памяти: колонку `outcome` занимает решение человека (db.ts, C2), а отдельной
+   * колонки нет — миграцию ведёт lane NOTIFY. После рестарта флаг сбрасывается (зависимость: колонка `delivered_inline`).
+   */
+  const delivered = new Set<string>();
+  const hydrate = (row: Raw): Job => ({ ...fromRaw(row), deliveredInline: delivered.has(row.job_id) });
   const listeners = new Set<(job: Job) => void>();
   const runs = new Map<string, JobRun>();
   /** Job после `limit`: до этого момента не стартует (в памяти — после рестарта повтор сразу). */
@@ -115,7 +132,7 @@ export function createJobs(deps: JobsDeps): Jobs {
 
   const get = (jobId: string): Job | null => {
     const row = db.prepare('SELECT * FROM assistant_jobs WHERE job_id = ?').get(jobId) as unknown as Raw | undefined;
-    return row === undefined ? null : fromRaw(row);
+    return row === undefined ? null : hydrate(row);
   };
   const emit = (job: Job): void => {
     for (const listener of [...listeners]) {
@@ -161,7 +178,7 @@ export function createJobs(deps: JobsDeps): Jobs {
 
   function pumpOnce(): void {
     const stamp = now();
-    const queued = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);
+    const queued = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(hydrate);
     const busy = new Map<string, number>();
     for (const row of db.prepare(`SELECT provider, COUNT(*) AS n FROM assistant_jobs WHERE state = 'running' GROUP BY provider`).all() as unknown as Array<{ provider: string; n: number }>) {
       busy.set(row.provider, Number(row.n));
@@ -169,8 +186,19 @@ export function createJobs(deps: JobsDeps): Jobs {
     for (const job of queued) {
       if ((busy.get(job.provider) ?? 0) >= cap) continue;
       if ((notBefore.get(job.jobId) ?? 0) > stamp) continue;
+      // move() сообщает слушателям синхронно, и слушатель может отменить job до запуска: заглушка принимает отмену.
+      const early = { cancelled: false };
+      runs.set(job.jobId, {
+        cancel: () => {
+          early.cancelled = true;
+        },
+        done: new Promise<JobEnd>(() => {}),
+      });
       const started = move(job.jobId, ['queued'], 'running');
-      if (started === null) continue;
+      if (started === null || early.cancelled) {
+        runs.delete(job.jobId);
+        continue;
+      }
       notBefore.delete(job.jobId);
       busy.set(job.provider, (busy.get(job.provider) ?? 0) + 1);
       launch(started);
@@ -225,7 +253,7 @@ export function createJobs(deps: JobsDeps): Jobs {
         `INSERT INTO assistant_jobs (job_id, idempotency_key, origin, correlation_json, state, revision, request_text, provider, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 1, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING`,
       ).run(jobId, input.idempotencyKey, input.origin, JSON.stringify(input.correlation), input.text, input.provider ?? deps.defaultProvider(), stamp, stamp);
       const row = db.prepare('SELECT * FROM assistant_jobs WHERE idempotency_key = ?').get(input.idempotencyKey) as unknown as Raw;
-      const job = fromRaw(row);
+      const job = hydrate(row);
       // Повторный submit с тем же ключом (reconnect, рестарт) ничего не запускает и не оповещает: job тот же.
       if (job.jobId === jobId) {
         emit(job);
@@ -245,6 +273,14 @@ export function createJobs(deps: JobsDeps): Jobs {
       }
       return get(jobId);
     },
+    ackInline(jobId, revision) {
+      const job = get(jobId);
+      if (job === null) return { ok: false, deliveredInline: false, reason: 'not_found' };
+      if (!['completed', 'failed', 'cancelled'].includes(job.state) || job.revision !== revision) return { ok: false, deliveredInline: job.deliveredInline, reason: 'stale' };
+      const already = delivered.has(jobId);
+      delivered.add(jobId);
+      return { ok: true, deliveredInline: true, reason: already ? 'already_acked' : 'acked' };
+    },
     onJobChanged(listener) {
       listeners.add(listener);
       return () => {
@@ -252,7 +288,7 @@ export function createJobs(deps: JobsDeps): Jobs {
       };
     },
     async recover() {
-      const orphans = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'running'`).all() as unknown as Raw[]).map(fromRaw).filter((job) => !runs.has(job.jobId));
+      const orphans = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'running'`).all() as unknown as Raw[]).map(hydrate).filter((job) => !runs.has(job.jobId));
       for (const job of orphans) {
         let verdict: 'confirmed' | 'unconfirmed' = 'unconfirmed';
         try {

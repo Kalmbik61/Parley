@@ -3,6 +3,7 @@ import { BROWSER_AGENT_ERROR_CODES } from '@parley/protocol';
 import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, NotificationName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
+import type { Jobs } from '../assistant/jobs.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { CapacityFeed } from '../capacity/capacity-feed.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -150,6 +151,8 @@ export interface MethodDeps {
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
   /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
   assistant?: AssistantService;
+  /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */
+  assistantJobs?: Jobs;
   /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
   telegram?: TelegramService;
   /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
@@ -255,7 +258,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...createHistoryHandlers(),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects, deps.autonomousEngine) : {}),
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
-    ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
+    ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant, deps.assistantJobs)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
     ...createVoiceProviderHandlers(),
     // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.

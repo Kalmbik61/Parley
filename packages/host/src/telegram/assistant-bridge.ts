@@ -4,7 +4,7 @@
  * не знает, только его интерфейс.
  */
 
-import { reportLine, type AssistantProposal, type AssistantState } from '@parley/protocol';
+import { reportLine, type AssistantCardChanged, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import { splitText } from './format.js';
 import { T } from './texts.js';
@@ -14,7 +14,7 @@ const TYPING_MS = 4000;
 const STATUS_QUESTION = 'What is going on?';
 
 export interface BridgeDeps {
-  assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state'>;
+  assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state' | 'card' | 'onCardChanged'>;
   /** Одно сообщение (через outbox, `notice`); мост сам режет длинный текст `splitText`. */
   sendText(text: string): Promise<void>;
   /** Карточка предложения; messageId запоминает вызывающая сторона. */
@@ -46,7 +46,8 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
   const now = deps.now ?? Date.now;
   const every = deps.setInterval ?? setInterval;
   let typingTimer: ReturnType<typeof setInterval> | null = null;
-  let lastProposal: string | null = null;
+  /** Карточки, что окно уже показывало: каждая рассматривается для чата один раз, даже когда она снова становится видимой. */
+  const offered = new Set<string>();
   /** Карточки, что мы отправили в чат: закрывать нужно только их. */
   const cards = new Set<string>();
   /** Карточка `actions`, что ушла в выполнение: её квитанцию даёт итог отчёта, а не исход карточки. */
@@ -78,23 +79,21 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
       }
     } else stopTyping();
 
+    // Закрытие карточек (решена, вытеснена, просрочена) идёт по событиям карточек — `onCard`: при двух активных карточках
+    // из разных источников состояние окна показывает только последнюю и не говорит, какая из них решена.
     const proposal = state.proposal;
-    if (proposal !== null && proposal.id !== lastProposal && lastProposal !== null && cards.delete(lastProposal)) {
-      // Новая карточка вытеснила нашу: кнопки старой больше ничего не решают.
-      void deps.closeCard(lastProposal, 'current').catch(fail('closeCard'));
-    }
-    if (proposal !== null && proposal.id !== lastProposal && (toChat(state) || deps.cardsToggle())) {
-      cards.add(proposal.id);
-      void deps.sendCard(proposal).catch(fail('sendCard'));
+    if (proposal !== null && !offered.has(proposal.id)) {
+      offered.add(proposal.id);
+      if (toChat(state) || deps.cardsToggle()) {
+        cards.add(proposal.id);
+        void deps.sendCard(proposal).catch(fail('sendCard'));
+      }
     }
     const report = state.report ?? null;
-    if (proposal === null && lastProposal !== null && report?.proposalId === lastProposal && report.status === 'running' && cards.delete(lastProposal)) {
+    if (report?.status === 'running' && report.proposalId !== runningPlan && cards.delete(report.proposalId)) {
       // План пошёл: кнопки карточки уже ничего не решают, но квитанцию закроет итог отчёта.
-      runningPlan = lastProposal;
-    } else if (proposal === null && lastProposal !== null && state.outcome !== null && cards.delete(lastProposal)) {
-      void deps.closeCard(lastProposal, state.outcome).catch(fail('closeCard'));
+      runningPlan = report.proposalId;
     }
-    lastProposal = proposal?.id ?? null;
     if (runningPlan !== null && report?.proposalId === runningPlan && report.status !== 'running') {
       const id = runningPlan;
       runningPlan = null;
@@ -112,7 +111,21 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
     }
   }
 
+  /** Квитанция по исходу ядра; неожиданный исход (`failed`, `unknown`) — «больше не актуальна». */
+  const receiptOf = (outcome: string | null): 'sent' | 'done' | 'stopped' | 'cancelled' | 'current' =>
+    outcome === 'sent' || outcome === 'done' || outcome === 'stopped' || outcome === 'cancelled' ? outcome : 'current';
+
+  function onCard(change: AssistantCardChanged): void {
+    // Закрываем ровно ту карточку, что решена, вытеснена или просрочена, и только если мы её отправили в чат.
+    if (change.state === 'needs_confirmation' || (change.state === 'decided' && change.outcome === null)) return;
+    // Терминальная карточка больше не предлагается: id выводим из `offered`, если окно её уже не показывает (иначе её вернёт onState).
+    if (deps.assistant.state().proposal?.id !== change.cardId) offered.delete(change.cardId);
+    if (!cards.delete(change.cardId)) return;
+    void deps.closeCard(change.cardId, change.state === 'decided' ? receiptOf(change.outcome) : 'current').catch(fail('closeCard'));
+  }
+
   const unsubscribe = deps.assistant.onState(onState);
+  const unsubscribeCards = deps.assistant.onCardChanged(onCard);
 
   async function onText(text: string): Promise<void> {
     if (text.length > MAX_TEXT) return deps.sendText(T.tooLong);
@@ -135,14 +148,15 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
       await deps.sendText(T.newConversation);
     },
     async onCallback(proposalId, code) {
-      // Карточка плана подтверждается только с `action: 'actions'`: хост без него план не выполнит.
-      const current = deps.assistant.state().proposal;
-      const forPlan = current !== null && current.id === proposalId && current.action === 'actions';
-      const result = await (forPlan ? deps.assistant.decide(proposalId, code, 'actions') : deps.assistant.decide(proposalId, code));
+      // Карточка плана подтверждается только с `action: 'actions'`: хост без него план не выполнит. Вид берём из
+      // durable-карточки ядра, а не из того, что сейчас показывает остров. Решение идёт через ядро, канал — telegram.
+      const forPlan = deps.assistant.card(proposalId)?.kind === 'actions';
+      const result = await deps.assistant.decide(proposalId, code, forPlan ? 'actions' : undefined, 'telegram');
       return result.applied ? (result.error ?? '') : (result.error ?? T.noLongerCurrent);
     },
     stop() {
       unsubscribe();
+      unsubscribeCards();
       stopTyping();
     },
   };

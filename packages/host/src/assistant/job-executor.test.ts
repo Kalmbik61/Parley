@@ -21,6 +21,7 @@ function setup(end: TurnEnd, extra: Partial<JobExecutorDeps> = {}) {
     launchEnv: async () => ({}),
     binary: async (command) => `/bin/${command}`,
     cwd: '/tmp/assistant',
+    ensureDir: async () => {},
     run: run as unknown as JobExecutorDeps['run'],
     ...extra,
   });
@@ -69,5 +70,16 @@ describe('job executor', () => {
     run.cancel();
     await expect(run.done).resolves.toMatchObject({ ok: false, kind: 'cancelled' });
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it('рабочая папка создаётся до запуска процесса', async () => {
+    const order: string[] = [];
+    const { execute, run } = setup({ ok: true }, { ensureDir: async (dir) => void order.push(`mkdir ${dir}`) });
+    run.mockImplementationOnce(() => {
+      order.push('run');
+      return { cancel: vi.fn(), done: Promise.resolve({ ok: true }) } as TurnHandle;
+    });
+    await execute(job).done;
+    expect(order).toEqual(['mkdir /tmp/assistant', 'run']);
   });
 });

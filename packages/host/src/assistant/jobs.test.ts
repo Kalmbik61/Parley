@@ -152,4 +152,44 @@ describe('assistant jobs', () => {
     expect(runs).toHaveLength(2);
     expect(runs.map((run) => run.job.requestText)).toEqual(['outer', 'inner']);
   });
+
+  it('cancelJob из события queued→running: job отменён и не запускается', () => {
+    const { jobs, runs, execute, submit } = setup();
+    let id = '';
+    jobs.onJobChanged((job) => {
+      if (job.state === 'running') jobs.cancelJob(job.jobId);
+      id = job.jobId;
+    });
+    submit('k1');
+    expect(execute).not.toHaveBeenCalled();
+    expect(runs).toHaveLength(0);
+    expect(jobs.getJob(id)).toMatchObject({ state: 'cancelled' });
+  });
+
+  it('ackInline: флаг ставится один раз, повтор — no-op без нового события и ревизии', async () => {
+    const { jobs, runs, submit } = setup();
+    const events: Job[] = [];
+    jobs.onJobChanged((job) => events.push(job));
+    const { jobId } = submit('k1');
+    runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    await settled();
+    const final = jobs.getJob(jobId)!;
+    expect(final.deliveredInline).toBe(false);
+    const count = events.length;
+    expect(jobs.ackInline(jobId, final.revision)).toEqual({ ok: true, deliveredInline: true, reason: 'acked' });
+    expect(jobs.ackInline(jobId, final.revision)).toEqual({ ok: true, deliveredInline: true, reason: 'already_acked' });
+    expect(events).toHaveLength(count);
+    expect(jobs.getJob(jobId)).toMatchObject({ deliveredInline: true, revision: final.revision, state: 'completed' });
+  });
+
+  it('ackInline: живой job, устаревшая ревизия и чужой id флаг не ставят', async () => {
+    const { jobs, runs, submit } = setup();
+    const { jobId, revision } = submit('k1');
+    expect(jobs.ackInline(jobId, jobs.getJob(jobId)!.revision)).toMatchObject({ ok: false, reason: 'stale' });
+    runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    await settled();
+    expect(jobs.ackInline(jobId, revision)).toMatchObject({ ok: false, reason: 'stale' });
+    expect(jobs.getJob(jobId)!.deliveredInline).toBe(false);
+    expect(jobs.ackInline('job-none', 1)).toEqual({ ok: false, deliveredInline: false, reason: 'not_found' });
+  });
 });

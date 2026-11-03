@@ -216,19 +216,24 @@ export type {
   BrowserAgentTabsResult,
   BrowserAgentWaitResult,
 } from './browser-agent.js';
-export { ASSISTANT_ACTIONS_FEATURE, assistantMethodSchemas, reportLine } from './assistant.js';
+export { ASSISTANT_ACTIONS_FEATURE, assistantDecidedViaSchema, assistantJobCorrelationSchema, assistantJobOriginSchema, assistantMethodSchemas, reportLine } from './assistant.js';
 export type {
   ActionStepView,
   ActionVerb,
   ActionsReport,
+  AssistantCardChanged,
+  AssistantDecidedVia,
   AssistantDetail,
   AssistantJobChanged,
+  AssistantJobCorrelation,
+  AssistantJobOrigin,
   AssistantMethodResults,
   AssistantOrigin,
   AssistantPhase,
   AssistantProposal,
   AssistantSettings,
   AssistantState,
+  CardDecideResult,
   ProposalCardView,
   RoomProposalView,
 } from './assistant.js';

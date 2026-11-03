@@ -7,6 +7,7 @@ import { closeWorkDb, createWork, openMemoryDb, WorkNotFoundError, writeLetters 
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
+import { createAssistantBridge } from '../telegram/assistant-bridge.js';
 import { createCardStore } from './cards.js';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { Reminder } from './reminders.js';
@@ -1665,6 +1666,155 @@ describe('assistant-service: durable карточки', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(service.state().proposal?.id).toBe(card.id);
     await expect(service.decide(card.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    service.stop();
+  });
+
+  it('overview() отдаёт обзор без разговора и без запуска CLI', async () => {
+    const service = createAssistantService(deps);
+    const text = await service.overview();
+    expect(text).toContain('Room "Auth"');
+    expect(turns).toHaveLength(0);
+    service.stop();
+  });
+
+  it('события карточек: needs_confirmation, superseded, decided с каналом, expired', async () => {
+    let clock = 1_000_000;
+    const service = createAssistantService({ ...deps, now: () => clock, cardTtlMs: 60_000 });
+    const events: Array<[string, string, string | null, string | null]> = [];
+    service.onCardChanged((change) => events.push([change.cardId, change.state, change.decidedVia, change.outcome]));
+    const one = await propose(service, 'раз', 'island');
+    const two = await propose(service, 'два', 'island');
+    await service.decide(two.id, 'send', undefined, 'telegram');
+    const three = await propose(service, 'три', 'island');
+    clock += 61_000;
+    service.state();
+    expect(events).toEqual([
+      [one.id, 'needs_confirmation', null, null],
+      [one.id, 'superseded', null, null],
+      [two.id, 'needs_confirmation', null, null],
+      [two.id, 'decided', 'telegram', 'sent'],
+      [three.id, 'needs_confirmation', null, null],
+      [three.id, 'expired', null, null],
+    ]);
+    service.stop();
+  });
+
+  it('две активные карточки: событие решения несёт id именно решённой', async () => {
+    const service = createAssistantService(deps);
+    const changes: Array<[string, string]> = [];
+    service.onCardChanged((change) => change.state === 'decided' && changes.push([change.cardId, String(change.decidedVia)]));
+    const island = await propose(service, 'остров', 'island');
+    const telegram = await propose(service, 'телеграм', 'telegram');
+    await service.decide(island.id, 'cancel', undefined, 'island');
+    expect(changes).toEqual([[island.id, 'island']]);
+    expect(service.card(telegram.id)).toMatchObject({ kind: 'message', state: 'active' });
+    service.stop();
+  });
+
+  it('decideCard: ревизия сверяется, mobile пишется в карточку, повтор и чужой id — отказ без действия', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store });
+    const card = await propose(service, 'Пропусти Safari');
+    const revision = store.get(card.id)!.revision;
+    await expect(service.decideCard({ cardId: card.id, revision: revision + 1, choice: 'send' })).resolves.toMatchObject({ applied: false, reason: 'already_handled' });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    await expect(service.decideCard({ cardId: card.id, revision, choice: 'send' })).resolves.toEqual({ applied: true, error: null, reason: 'applied' });
+    expect(store.get(card.id)).toMatchObject({ state: 'decided', decidedVia: 'mobile', outcome: 'sent' });
+    await expect(service.decideCard({ cardId: card.id, revision, choice: 'send' })).resolves.toMatchObject({ applied: false, reason: 'already_handled' });
+    await expect(service.decideCard({ cardId: 'p-none', revision: 1, choice: 'send' })).resolves.toMatchObject({ applied: false, reason: 'not_found' });
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it('decideCard: просроченная карточка — expired без действия', async () => {
+    let clock = 1_000_000;
+    const service = createAssistantService({ ...deps, now: () => clock, cardTtlMs: 60_000 });
+    const card = await propose(service, 'Пропусти Safari');
+    clock += 61_000;
+    await expect(service.decideCard({ cardId: card.id, revision: 1, choice: 'send' })).resolves.toMatchObject({ applied: false, reason: 'expired' });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    service.stop();
+  });
+
+  it('один decide на три входа: island, telegram и mobile пишутся в одну durable-карточку', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store });
+    const via = async (name: 'island' | 'telegram' | 'mobile'): Promise<string> => {
+      const card = await propose(service, name);
+      if (name === 'mobile') await service.decideCard({ cardId: card.id, revision: store.get(card.id)!.revision, choice: 'send' });
+      else await service.decide(card.id, 'send', undefined, name);
+      return `${store.get(card.id)!.decidedVia}`;
+    };
+    expect([await via('island'), await via('telegram'), await via('mobile')]).toEqual(['island', 'telegram', 'mobile']);
+    service.stop();
+  });
+
+  it('карточка, что не вернулась после сбоя, закрывается как failed, а не unknown', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store });
+    const card = await propose(service, 'Пропусти Safari');
+    let fail: (error: Error) => void = () => {};
+    (deps.sendLetter as Mock).mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+    const pending = service.decide(card.id, 'send');
+    service.reset(); // разговор сброшен, пока письмо в пути: вернуть карточку нельзя
+    fail(new Error('offline'));
+    await expect(pending).resolves.toEqual({ applied: false, error: 'offline' });
+    expect(store.get(card.id)).toMatchObject({ state: 'decided', outcome: 'failed' });
+    service.stop();
+  });
+
+  it('сбой отправки возвращает карточку в активные с новым событием и таймером срока', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createCardStore(openMemoryDb());
+      const service = createAssistantService({ ...deps, cards: store, cardTtlMs: 60_000 });
+      const card = await propose(service, 'Пропусти Safari');
+      const events: string[] = [];
+      service.onCardChanged((change) => events.push(change.state));
+      (deps.sendLetter as Mock).mockRejectedValueOnce(new Error('offline'));
+      await expect(service.decide(card.id, 'send')).resolves.toMatchObject({ applied: false });
+      expect(store.get(card.id)?.state).toBe('active');
+      expect(events).toEqual(['needs_confirmation']);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(store.get(card.id)?.state).toBe('expired');
+      service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sweep всегда перевзводит таймер: поздняя карточка гаснет вовремя', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createCardStore(openMemoryDb());
+      const service = createAssistantService({ ...deps, cards: store, cardTtlMs: 60_000 });
+      const first = await propose(service, 'остров', 'island');
+      await vi.advanceTimersByTimeAsync(30_000);
+      const second = await propose(service, 'телеграм', 'telegram');
+      service.state(); // sweep без просроченных карточек не должен обнулить таймер
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(store.get(first.id)?.state).toBe('expired');
+      expect(store.get(second.id)?.state).toBe('active');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(store.get(second.id)?.state).toBe('expired');
+      service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('кнопка Telegram через мост решает durable-карточку ядра с decidedVia telegram и закрывает именно её', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store });
+    const closeCard = vi.fn().mockResolvedValue(undefined);
+    const bridge = createAssistantBridge({ assistant: service, sendText: vi.fn(), sendCard: vi.fn().mockResolvedValue(undefined), closeCard, typing: vi.fn(), cardsToggle: () => true, log: () => {} });
+    const telegram = await propose(service, 'телеграм', 'telegram');
+    await propose(service, 'остров', 'island');
+    expect(await bridge.onCallback(telegram.id, 'send')).toBe('');
+    expect(store.get(telegram.id)).toMatchObject({ state: 'decided', decidedVia: 'telegram', outcome: 'sent' });
+    expect(closeCard).toHaveBeenCalledTimes(1);
+    expect(closeCard).toHaveBeenCalledWith(telegram.id, 'sent');
+    bridge.stop();
     service.stop();
   });
 });

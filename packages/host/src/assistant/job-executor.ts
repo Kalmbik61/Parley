@@ -5,6 +5,7 @@
  * по умолчанию прогон только отвечает текстом и подтверждения у него нет.
  */
 
+import { mkdir } from 'node:fs/promises';
 import { assistantCommand, classifyAssistantError, parseClaudeLine, parseCodexLine, type ProviderEntry } from '@parley/core';
 import type { Job, JobEnd, JobRun } from './jobs.js';
 import { runTurn, type TurnHandle, type TurnSpec } from './turn.js';
@@ -20,6 +21,8 @@ export interface JobExecutorDeps {
   binary(command: string): Promise<string>;
   /** Рабочая папка прогона (папка помощника). */
   cwd: string;
+  /** Создаёт рабочую папку перед запуском (без неё spawn падает с ENOENT); по умолчанию `mkdir -p`. */
+  ensureDir?(dir: string): Promise<void>;
   /** Подтвердил ли хост исполнение; без него job уходит в `needs_confirmation`. */
   confirm?(job: Job, summary: string): boolean;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
@@ -41,6 +44,8 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
       if (command === null) return failure('start', `${entry.label} can't run the assistant`);
       const binary = await deps.binary(command.command);
       const env = await deps.launchEnv(entry);
+      if (cancelled) return failure('cancelled', 'cancelled');
+      await (deps.ensureDir ?? ((dir) => mkdir(dir, { recursive: true }).then(() => undefined)))(deps.cwd);
       if (cancelled) return failure('cancelled', 'cancelled');
       const codex = entry.runner.mcpConfig === 'codex-override';
       let text = '';

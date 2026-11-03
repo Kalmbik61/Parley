@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ActionsReport, AssistantProposal, AssistantSettings, AssistantState } from '@parley/protocol';
+import type { ActionsReport, AssistantCardChanged, AssistantProposal, AssistantSettings, AssistantState } from '@parley/protocol';
 import { createAssistantBridge, type BridgeDeps } from './assistant-bridge.js';
 import { T } from './texts.js';
 
@@ -32,12 +32,15 @@ const REPORT: ActionsReport = {
 let state: AssistantState;
 let settings: AssistantSettings | null;
 let listener: ((next: AssistantState) => void) | null;
+let cardListener: ((change: AssistantCardChanged) => void) | null;
+let durableKind: string | null;
 let cards: boolean;
 let service: {
   ask: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
   decide: ReturnType<typeof vi.fn>;
+  card: ReturnType<typeof vi.fn>;
 };
 let deps: BridgeDeps;
 const sendText = vi.fn();
@@ -49,6 +52,8 @@ const emit = (patch: Partial<AssistantState>): void => {
   state = { ...state, ...patch };
   listener?.(state);
 };
+const cardEvent = (cardId: string, patch: Partial<AssistantCardChanged>): void =>
+  cardListener?.({ cardId, kind: 'message', state: 'decided', revision: 3, expiresAt: 0, decidedVia: 'island', outcome: null, ...patch });
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 };
@@ -58,6 +63,8 @@ beforeEach(() => {
   state = BASE;
   settings = SETTINGS;
   listener = null;
+  cardListener = null;
+  durableKind = null;
   cards = false;
   for (const fn of [sendText, sendCard, closeCard, typing]) fn.mockReset().mockResolvedValue(undefined);
   service = {
@@ -65,6 +72,7 @@ beforeEach(() => {
     cancel: vi.fn(),
     reset: vi.fn(),
     decide: vi.fn().mockResolvedValue({ applied: true, error: null }),
+    card: vi.fn(() => (durableKind === null ? null : { kind: durableKind, state: 'active', revision: 1 })),
   };
   deps = {
     assistant: {
@@ -73,6 +81,12 @@ beforeEach(() => {
         listener = next;
         return () => {
           listener = null;
+        };
+      },
+      onCardChanged: (next: (change: AssistantCardChanged) => void) => {
+        cardListener = next;
+        return () => {
+          cardListener = null;
         };
       },
       settings: () => settings,
@@ -150,7 +164,7 @@ describe('assistant-bridge: вход', () => {
   it('callback: applied → пустой тост, applied:false → noLongerCurrent', async () => {
     const bridge = createAssistantBridge(deps);
     expect(await bridge.onCallback('p-1', 'send')).toBe('');
-    expect(service.decide).toHaveBeenCalledWith('p-1', 'send');
+    expect(service.decide).toHaveBeenCalledWith('p-1', 'send', undefined, 'telegram');
     service.decide.mockResolvedValue({ applied: false, error: null });
     expect(await bridge.onCallback('p-1', 'cancel')).toBe(T.noLongerCurrent);
   });
@@ -163,17 +177,23 @@ describe('assistant-bridge: вход', () => {
 
   it('кнопка карточки actions — decide с action: actions; ошибка — в тосте', async () => {
     const bridge = createAssistantBridge(deps);
-    state = { ...BASE, proposal: ACTIONS };
+    durableKind = 'actions';
     service.decide.mockResolvedValue({ applied: false, error: 'Another plan is still running' });
     expect(await bridge.onCallback('p7', 'send')).toBe('Another plan is still running');
-    expect(service.decide).toHaveBeenCalledWith('p7', 'send', 'actions');
+    expect(service.decide).toHaveBeenCalledWith('p7', 'send', 'actions', 'telegram');
   });
 
-  it('карточка actions уже не текущая — decide без action', async () => {
+  it('вид карточки берётся из durable-карточки, а не из state().proposal', async () => {
     const bridge = createAssistantBridge(deps);
+    // Остров показывает другую карточку; нажата кнопка карточки actions, что уже не на острове.
+    state = { ...BASE, proposal: CARD };
+    durableKind = 'actions';
+    await bridge.onCallback('p7', 'send');
+    expect(service.decide).toHaveBeenLastCalledWith('p7', 'send', 'actions', 'telegram');
+    durableKind = 'message';
     state = { ...BASE, proposal: ACTIONS };
-    await bridge.onCallback('p-old', 'send');
-    expect(service.decide).toHaveBeenCalledWith('p-old', 'send');
+    await bridge.onCallback('p-1', 'send');
+    expect(service.decide).toHaveBeenLastCalledWith('p-1', 'send', undefined, 'telegram');
   });
 });
 
@@ -243,11 +263,21 @@ describe('assistant-bridge: выход', () => {
     expect(sendCard).toHaveBeenLastCalledWith(third);
   });
 
+  it('карточка снова стала видимой — второй раз в чат не уходит', async () => {
+    createAssistantBridge(deps);
+    const other = { ...CARD, id: 'p-2' } as AssistantProposal;
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: CARD });
+    emit({ proposal: other });
+    emit({ proposal: CARD });
+    expect(sendCard.mock.calls.map((call) => (call[0] as AssistantProposal).id)).toEqual(['p-1', 'p-2']);
+  });
+
   it('новая карточка вытеснила нашу — старая закрывается с current', async () => {
     createAssistantBridge(deps);
     emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: CARD });
     const next = { ...CARD, id: 'p-2' } as AssistantProposal;
     emit({ proposal: next });
+    cardEvent('p-1', { state: 'superseded' });
     await flush();
     expect(closeCard).toHaveBeenCalledWith('p-1', 'current');
     expect(sendCard).toHaveBeenLastCalledWith(next);
@@ -257,11 +287,41 @@ describe('assistant-bridge: выход', () => {
     createAssistantBridge(deps);
     emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: CARD });
     emit({ phase: 'idle', proposal: null, outcome: 'sent' });
+    cardEvent('p-1', { outcome: 'sent' });
     await flush();
     expect(closeCard).toHaveBeenCalledWith('p-1', 'sent');
     emit({ phase: 'awaiting-confirm', origin: 'island', proposal: { ...CARD, id: 'p-9' } as AssistantProposal });
     emit({ phase: 'idle', proposal: null, outcome: 'cancelled' });
+    cardEvent('p-9', { outcome: 'cancelled' });
     expect(closeCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('две активные карточки из двух источников: квитанция уходит той, что решена, а не последней', async () => {
+    createAssistantBridge(deps);
+    const island = { ...CARD, id: 'p-island' } as AssistantProposal;
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: CARD });
+    emit({ origin: 'island', proposal: island });
+    cards = true;
+    // Решена первая (telegram), хотя окно показывает вторую.
+    cardEvent('p-1', { outcome: 'sent', decidedVia: 'telegram' });
+    await flush();
+    expect(closeCard).toHaveBeenCalledTimes(1);
+    expect(closeCard).toHaveBeenCalledWith('p-1', 'sent');
+  });
+
+  it('карточка просрочена или закрыта как failed — «больше не актуальна»; решённая без исхода и needs_confirmation не закрывают', async () => {
+    createAssistantBridge(deps);
+    emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: CARD });
+    cardEvent('p-1', { state: 'needs_confirmation' });
+    cardEvent('p-1', { state: 'decided', outcome: null });
+    expect(closeCard).not.toHaveBeenCalled();
+    cardEvent('p-1', { state: 'decided', outcome: 'failed' });
+    await flush();
+    expect(closeCard).toHaveBeenCalledWith('p-1', 'current');
+    emit({ proposal: { ...CARD, id: 'p-2' } as AssistantProposal });
+    cardEvent('p-2', { state: 'expired' });
+    await flush();
+    expect(closeCard).toHaveBeenCalledWith('p-2', 'current');
   });
 
   it('план остановился — квитанция «Stopped» с шагом и причиной', async () => {
@@ -320,6 +380,7 @@ describe('assistant-bridge: выход', () => {
     createAssistantBridge(deps);
     emit({ phase: 'awaiting-confirm', origin: 'telegram', proposal: ACTIONS });
     emit({ phase: 'idle', proposal: null, outcome: 'cancelled' });
+    cardEvent('p7', { kind: 'actions', outcome: 'cancelled' });
     await flush();
     expect(closeCard).toHaveBeenCalledWith('p7', 'cancelled');
   });
@@ -329,6 +390,7 @@ describe('assistant-bridge: выход', () => {
     emit({ phase: 'thinking', origin: 'telegram' });
     bridge.stop();
     expect(listener).toBeNull();
+    expect(cardListener).toBeNull();
     vi.advanceTimersByTime(12_000);
     expect(typing).toHaveBeenCalledTimes(1);
   });

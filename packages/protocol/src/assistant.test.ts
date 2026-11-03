@@ -2,6 +2,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AssistantMood } from '@parley/core';
 import {
   ASSISTANT_ACTIONS_FEATURE,
+  assistantJobCorrelationSchema,
+  assistantJobOriginSchema,
   assistantMethodSchemas,
   reportLine,
   type ActionStepView,
@@ -130,5 +132,39 @@ describe('протокол карточки действий', () => {
   });
   it('AssistantState.report необязателен: ActionsReport или null', () => {
     expectTypeOf<AssistantState['report']>().toEqualTypeOf<ActionsReport | null | undefined>();
+  });
+});
+
+describe('Assistant Core: origin, correlation, cards.decide, jobs.ackInline', () => {
+  it('origin: пять источников, чужой отвергается', () => {
+    for (const origin of ['island', 'telegram', 'mobile', 'reminder', 'system']) expect(assistantJobOriginSchema.safeParse(origin).success).toBe(true);
+    expect(assistantJobOriginSchema.safeParse('voice').success).toBe(false);
+  });
+  it('correlation: голос с тремя полями и текстовый режим проходят', () => {
+    expect(assistantJobCorrelationSchema.safeParse({ voiceSessionId: 'v1', delegationId: 'd1', turnId: 't1' }).success).toBe(true);
+    expect(assistantJobCorrelationSchema.safeParse({ mode: 'text' }).success).toBe(true);
+  });
+  it('correlation: голос без voiceSessionId, text с delegationId и пустые поля отвергаются', () => {
+    expect(assistantJobCorrelationSchema.safeParse({ delegationId: 'd1', turnId: 't1' }).success).toBe(false);
+    expect(assistantJobCorrelationSchema.safeParse({ mode: 'text', delegationId: 'd1' }).success).toBe(false);
+    expect(assistantJobCorrelationSchema.safeParse({ voiceSessionId: '', delegationId: 'd1', turnId: 't1' }).success).toBe(false);
+    expect(assistantJobCorrelationSchema.safeParse({ mode: 'voice' }).success).toBe(false);
+    expect(assistantJobCorrelationSchema.safeParse({}).success).toBe(false);
+  });
+  it('cards.decide: id, целая ревизия и send или cancel', () => {
+    const decide = METHODS['cards.decide'];
+    expect(decide.safeParse({ cardId: 'p1', revision: 1, choice: 'send' }).success).toBe(true);
+    expect(decide.safeParse({ cardId: 'p1', revision: 1, choice: 'cancel' }).success).toBe(true);
+    expect(decide.safeParse({ cardId: 'p1', revision: 1.5, choice: 'send' }).success).toBe(false);
+    expect(decide.safeParse({ cardId: 'p1', revision: -1, choice: 'send' }).success).toBe(false);
+    expect(decide.safeParse({ cardId: '', revision: 1, choice: 'send' }).success).toBe(false);
+    expect(decide.safeParse({ cardId: 'p1', revision: 1, choice: 'maybe' }).success).toBe(false);
+    expect(decide.safeParse({ cardId: 'p1', choice: 'send' }).success).toBe(false);
+  });
+  it('jobs.ackInline: id и целая ревизия', () => {
+    const ack = METHODS['jobs.ackInline'];
+    expect(ack.safeParse({ jobId: 'job-1', revision: 3 }).success).toBe(true);
+    expect(ack.safeParse({ jobId: 'job-1' }).success).toBe(false);
+    expect(ack.safeParse({ jobId: '', revision: 3 }).success).toBe(false);
   });
 });
