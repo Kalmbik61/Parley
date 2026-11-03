@@ -132,11 +132,11 @@ describe('switch sheet rules', () => {
     const t = opts().targets[1]!;
     const id = newAttempt(() => 0.1);
     const rej = (code: string, message = '') => ({ outcome: 'rejected' as const, code, message });
-    for (const o of [{ outcome: 'started', carried: 'handover' }, { outcome: 'held', carried: 'handover' }, { outcome: 'queued', carried: 'handover' }, rej('conflict', 'Stop the agent first'), rej('bad_request', 'unknown session')] as const) {
+    for (const o of [{ outcome: 'started', carried: 'handover' }, { outcome: 'held', carried: 'handover' }, { outcome: 'queued', carried: 'handover' }, rej('conflict', 'Stop the agent first'), rej('bad_request', 'unknown session'), rej('not_found'), rej('unknown_method')] as const) {
       expect(isDefinite(o), JSON.stringify(o)).toBe(true);
       expect(switchStep(id, o, t, () => 0.7).close).toBe(true);
     }
-    for (const o of [{ outcome: 'lost' }, rej('timeout'), rej('connection_lost'), rej('not_connected'), rej('rate_limited', 'slow down'), rej('busy', 'switch still running')] as const) {
+    for (const o of [{ outcome: 'lost' }, rej('timeout'), rej('connection_lost'), rej('not_connected'), rej('rate_limited', 'slow down'), rej('host_offline', 'host offline'), rej('internal', 'boom'), rej('something_new')] as const) {
       const step = switchStep(id, o, t);
       expect(isDefinite(o), JSON.stringify(o)).toBe(false);
       expect(step.close).toBe(false);
@@ -144,7 +144,8 @@ describe('switch sheet rules', () => {
       expect(step.line).not.toBeNull();
     }
     expect(switchStep(id, rej('not_connected'), t).line).toBe('Not sent — reconnecting');
-    expect(switchStep(id, rej('busy', 'switch still running'), t).line).toBe('switch still running');
+    // host_offline: the call already went to the host, so the switch may have run
+    expect(switchStep(id, rej('host_offline', 'Parley is not running on your Mac'), t)).toMatchObject({ close: false, line: 'Parley is not running on your Mac' });
   });
 
   it("m1': an attempt written before the call is what a reopened sheet finds", () => {
