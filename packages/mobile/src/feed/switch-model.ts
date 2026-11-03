@@ -30,24 +30,73 @@ export const carryChoices = (target: Target | undefined): Carry[] => (target?.tr
 /** Blockers: their text, no button. */
 export const canContinue = (options: SwitchOptions, target: Target | undefined): boolean => options.blockers.length === 0 && target !== undefined && target.available;
 
-/** What the session keeps: only the non-empty parts. */
-export function keepsLines(keeps: SwitchOptions['keeps']): string[] {
+export const NO_TARGETS = 'No other provider on your Mac';
+export const NOT_AVAILABLE = 'Not available';
+
+/** Why a target is unavailable: the host sends a code (`cli | key | sign-in | error`), the phone says it in words. */
+export function needsText(needs: string | null): string {
+  switch (needs) {
+    case 'cli':
+      return 'Install or update the CLI on your Mac';
+    case 'key':
+      return 'Add the key on your Mac';
+    case 'sign-in':
+      return 'Sign in on your Mac';
+    default:
+      return NOT_AVAILABLE;
+  }
+}
+
+const capital = (id: string): string => (id === '' ? id : id[0]!.toUpperCase() + id.slice(1));
+
+/** "Now on Claude · usage limit": the provider the session is on, which the host leaves out of the targets. */
+export function currentLine(current: SwitchOptions['current']): string {
+  const why = current.available ? null : current.reason === 'limit' ? 'usage limit' : current.reason === 'sign-in' ? 'signed out' : current.reason === 'provider-missing' ? 'not installed' : 'not available';
+  return [`Now on ${capital(current.provider)}`, why].filter((x): x is string => x !== null).join(' · ');
+}
+
+/** What the session keeps: only the non-empty parts. `leads` and `owns` are room ids: `roomTitle` turns them into names. */
+export function keepsLines(keeps: SwitchOptions['keeps'], roomTitle: (id: string) => string = (id) => id): string[] {
   const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  const rooms = (verb: string, ids: string[]): string | null => (ids.length === 0 ? null : `${verb} ${ids.length === 1 ? 'room' : 'rooms'} ${ids.map(roomTitle).join(', ')}`);
   return [
     keeps.rooms > 0 ? plural(keeps.rooms, 'room', 'rooms') : null,
-    keeps.leads.length > 0 ? `Leads ${keeps.leads.join(', ')}` : null,
-    keeps.owns.length > 0 ? `Owns ${keeps.owns.join(', ')}` : null,
+    rooms('Leads', keeps.leads),
+    rooms('Owns', keeps.owns),
     keeps.children > 0 ? plural(keeps.children, 'child session', 'child sessions') : null,
     keeps.unread > 0 ? plural(keeps.unread, 'unread letter', 'unread letters') : null,
     keeps.worktree === null ? null : `Worktree ${keeps.worktree}`,
   ].filter((x): x is string => x !== null);
 }
 
-/** The line under a target: why it is unavailable, else its limits. */
+/** The line under a target: why it is unavailable, else its limits (percents rounded). */
 export function targetNote(t: Target): string | null {
-  if (!t.available) return t.needs;
-  const parts = [t.limits?.fiveHour == null ? null : `5 h ${t.limits.fiveHour.usedPercent}%`, t.limits?.week == null ? null : `week ${t.limits.week.usedPercent}%`].filter((x): x is string => x !== null);
+  if (!t.available) return needsText(t.needs);
+  const parts = [
+    t.limits?.fiveHour == null ? null : `5 h ${Math.round(t.limits.fiveHour.usedPercent)}%`,
+    t.limits?.week == null ? null : `week ${Math.round(t.limits.week.usedPercent)}%`,
+  ].filter((x): x is string => x !== null);
   return parts.length === 0 ? null : parts.join(' · ');
+}
+
+/**
+ * One request id per sheet opening, kept across a lost answer: the host answers a repeated id with the same answer, so
+ * "Try again" cannot switch twice. A new id only after a definite answer.
+ */
+export interface SwitchAttempt {
+  requestId: string;
+  /** The last call got no answer: the sheet stays open with target and carry frozen. */
+  lost: boolean;
+}
+
+export const newAttempt = (random?: () => number): SwitchAttempt => ({ requestId: newRequestId(random), lost: false });
+
+export const UNCONFIRMED_LINE = "We couldn't confirm it";
+
+/** After a call: `close` — a definite answer (toast it, close the sheet, next opening has a new id); lost — stay. */
+export function switchStep(attempt: SwitchAttempt, outcome: SwitchAgentOutcome, target: Target, random?: () => number): { attempt: SwitchAttempt; close: boolean; toast: string | null } {
+  if (outcome.outcome === 'lost') return { attempt: { ...attempt, lost: true }, close: false, toast: null };
+  return { attempt: newAttempt(random), close: true, toast: switchToast(outcome, target) };
 }
 
 export function switchParams(ref: SwitchAgentParams['ref'], requestId: string, target: Target, carry: Carry): SwitchAgentParams {
@@ -60,3 +109,16 @@ export function switchToast(outcome: SwitchAgentOutcome, target: Target): string
   if (outcome.outcome === 'rejected') return hostLine(outcome);
   return outcome.outcome === 'held' ? HELD_TOAST : outcome.outcome === 'queued' ? QUEUED_TOAST : `Continuing on ${target.label}`;
 }
+
+/** A call that got no answer outlives the sheet: reopening it shows the frozen target and "Try again" with the same id. */
+export interface LostSwitch {
+  attempt: SwitchAttempt;
+  target: Target;
+  carry: Carry;
+}
+const lostSwitches = new Map<string, LostSwitch>();
+export const recallLost = (key: string): LostSwitch | undefined => lostSwitches.get(key);
+export const rememberLost = (key: string, lost: LostSwitch): void => void lostSwitches.set(key, lost);
+export const forgetLost = (key: string): void => void lostSwitches.delete(key);
+/** Tests. */
+export const clearLost = (): void => lostSwitches.clear();

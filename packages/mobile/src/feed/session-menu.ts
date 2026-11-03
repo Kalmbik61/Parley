@@ -55,7 +55,11 @@ export function confirmOf(id: 'sleep' | 'close', label: string): Confirm {
 
 export const NOT_CONFIRMED_TOAST = "We couldn't confirm it — check your Mac";
 
-export const hostLine = (outcome: { code: string; message: string }): string => (outcome.message.trim() === '' ? outcome.code : outcome.message);
+export const RECONNECTING = 'Not sent — reconnecting';
+
+/** The host's text; a call that never left the phone (`not_connected`) is "reconnecting", not a code. */
+export const hostLine = (outcome: { code: string; message: string }): string =>
+  outcome.code === 'not_connected' ? RECONNECTING : outcome.message.trim() === '' ? outcome.code : outcome.message;
 
 const DONE: Record<'stop' | 'sleep' | 'close', string> = { stop: 'Stopped', sleep: 'Put to sleep', close: 'Closed' };
 

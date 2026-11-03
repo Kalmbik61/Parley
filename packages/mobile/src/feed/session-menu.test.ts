@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SwitchOptions } from '@parley/remote-client';
 import { commandToast, confirmOf, menuItems, type MenuFacts } from './session-menu';
-import { canContinue, carryChoices, defaultTarget, keepsLines, newRequestId, switchParams, switchToast, targetNote } from './switch-model';
+import { canContinue, carryChoices, clearLost, currentLine, defaultTarget, forgetLost, keepsLines, newAttempt, needsText, newRequestId, recallLost, rememberLost, switchParams, switchStep, switchToast, targetNote } from './switch-model';
 
 const ALL = ['feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchOptions', 'sessions.switchAgent', 'sessions.resume', 'pty.send'];
 const base: MenuFacts = { methods: ALL, lifecycle: 'active', working: false, teamAgents: 0, inRoom: false };
@@ -44,7 +44,7 @@ describe('confirms and toasts', () => {
 const opts = (over: Partial<SwitchOptions> = {}): SwitchOptions => ({
   current: { provider: 'claude', available: true, reason: null },
   targets: [
-    { id: 'claude', label: 'Claude', family: null, available: false, needs: 'Usage limit until 14:30', limits: null, transcript: false },
+    { id: 'claude', label: 'Claude', family: null, available: false, needs: 'sign-in', limits: null, transcript: false },
     { id: 'codex', label: 'Codex', family: null, available: true, needs: null, limits: null, transcript: true },
   ],
   suggested: 'claude',
@@ -77,9 +77,10 @@ describe('switch sheet rules', () => {
     expect(Object.keys(switchParams(ref, id, o.targets[1]!, 'handover'))).not.toContain('force');
   });
   it('keeps and target notes show only what exists', () => {
-    expect(keepsLines(opts().keeps)).toEqual(['1 room', 'Leads Greta', '2 child sessions']);
-    expect(targetNote(opts().targets[0]!)).toBe('Usage limit until 14:30');
-    expect(targetNote({ ...opts().targets[1]!, limits: { fiveHour: { usedPercent: 40 }, week: { usedPercent: 12 } } as never })).toBe('5 h 40% · week 12%');
+    expect(keepsLines(opts().keeps)).toEqual(['1 room', 'Leads room Greta', '2 child sessions']);
+    expect(keepsLines({ ...opts().keeps, leads: ['r1'], owns: ['r1', 'r2'] }, (id) => ({ r1: 'iOS app', r2: 'Docs' })[id] ?? id)).toEqual(['1 room', 'Leads room iOS app', 'Owns rooms iOS app, Docs', '2 child sessions']);
+    expect(targetNote(opts().targets[0]!)).toBe('Sign in on your Mac');
+    expect(targetNote({ ...opts().targets[1]!, limits: { fiveHour: { usedPercent: 40.4 }, week: { usedPercent: 11.6 } } as never })).toBe('5 h 40% · week 12%');
   });
   it('held and queued read like a launch; refusals show the host text', () => {
     const t = opts().targets[1]!;
@@ -87,5 +88,43 @@ describe('switch sheet rules', () => {
     expect(switchToast({ outcome: 'held', carried: 'handover' }, t)).toBe('Waiting for your answer — see the request on this session');
     expect(switchToast({ outcome: 'queued', carried: 'handover' }, t)).toBe('Queued — starts when a slot frees on your Mac');
     expect(switchToast({ outcome: 'rejected', code: 'conflict', message: 'Stop the agent first' }, t)).toBe('Stop the agent first');
+  });
+
+  it('m1: the host\'s needs codes are said in words', () => {
+    expect(needsText('cli')).toBe('Install or update the CLI on your Mac');
+    expect(needsText('key')).toBe('Add the key on your Mac');
+    expect(needsText('sign-in')).toBe('Sign in on your Mac');
+    expect(needsText('error')).toBe('Not available');
+    expect(needsText(null)).toBe('Not available');
+    expect(currentLine({ provider: 'claude', available: false, reason: 'limit' })).toBe('Now on Claude · usage limit');
+    expect(currentLine({ provider: 'codex', available: true, reason: null })).toBe('Now on Codex');
+  });
+
+  it('M1: a lost answer keeps the request id (and survives the sheet), a definite answer issues a new one', () => {
+    clearLost();
+    const t = opts().targets[1]!;
+    let n = 0;
+    const rnd = () => (n++ % 16) / 16;
+    const first = newAttempt(rnd);
+    const lost = switchStep(first, { outcome: 'lost' }, t, rnd);
+    expect(lost).toEqual({ attempt: { requestId: first.requestId, lost: true }, close: false, toast: null });
+    const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+    rememberLost('k', { attempt: lost.attempt, target: t, carry: 'handover' });
+    // reopening: the same id goes again
+    const again = recallLost('k')!;
+    expect(switchParams(ref, again.attempt.requestId, again.target, again.carry).requestId).toBe(first.requestId);
+    const done = switchStep(again.attempt, { outcome: 'started', carried: 'handover' }, t, () => 0.3);
+    expect(done.close).toBe(true);
+    expect(done.attempt.requestId).not.toBe(first.requestId);
+    expect(done.toast).toBe('Continuing on Codex');
+    forgetLost('k');
+    expect(recallLost('k')).toBeUndefined();
+    // a refusal is definite too
+    expect(switchStep(first, { outcome: 'rejected', code: 'conflict', message: 'Stop the agent first' }, t).close).toBe(true);
+  });
+
+  it('m3: a call that never left the phone is "reconnecting"', () => {
+    expect(commandToast('stop', { outcome: 'rejected', code: 'not_connected', message: 'not connected' })).toBe('Not sent — reconnecting');
+    expect(switchToast({ outcome: 'rejected', code: 'not_connected', message: 'not connected' }, opts().targets[1]!)).toBe('Not sent — reconnecting');
   });
 });

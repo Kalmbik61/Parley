@@ -357,4 +357,14 @@ describe('session menu actions (A38b)', () => {
     });
     expect(await c2.switchAgent({ ref: R, requestId: id, provider: 'codex', carry: 'handover' })).toMatchObject({ outcome: 'rejected', message: 'Stop the agent first' });
   });
+
+  it('m5: connection_lost on switchAgent and switchOptions is "lost", one call each, nothing retried', async () => {
+    const { client, rpc } = setup(() => {
+      throw lost();
+    });
+    expect(await client.switchOptions(R)).toEqual({ outcome: 'lost' });
+    expect(await client.switchAgent({ ref: R, requestId: '3f1c9a52-7a4e-4c0e-9b8d-2f5e6a7b8c9d', provider: 'codex', carry: 'handover' })).toEqual({ outcome: 'lost' });
+    expect(calls(rpc, 'sessions.switchOptions')).toHaveLength(1);
+    expect(calls(rpc, 'sessions.switchAgent')).toHaveLength(1);
+  });
 });

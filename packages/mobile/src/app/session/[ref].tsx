@@ -193,9 +193,9 @@ export default function SessionScreen() {
   // Developer preview (screenshots): `?preview=waking|failed|pending|alert` sets the state without taps.
   useEffect(() => {
     if (!DEMO || preview === undefined) return;
-    if (preview === 'waking') resume.seed({ line: { kind: 'waking' }, pending: null });
-    else if (preview === 'failed') resume.seed({ line: { kind: 'failed', message: "Couldn't wake it — no free slot on your Mac" }, pending: null });
-    else if (preview === 'pending') resume.seed({ line: { kind: 'waking' }, pending: { text: 'Please run the linter once more', held: false } });
+    if (preview === 'waking') resume.seed({ line: { kind: 'waking' }, hidden: false, pending: null });
+    else if (preview === 'failed') resume.seed({ line: { kind: 'failed', message: "Couldn't wake it — no free slot on your Mac" }, hidden: false, pending: null });
+    else if (preview === 'pending') resume.seed({ line: { kind: 'waking' }, hidden: false, pending: { text: 'Please run the linter once more', held: false } });
     else if (preview === 'alert') {
       chat.setDraft('Please run the linter once more');
       askResumeAndSend('Please run the linter once more');
@@ -457,7 +457,7 @@ export default function SessionScreen() {
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
-        {sleeping && hasResume && first === undefined && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
+        {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined && parts !== null ? (
           parts.actions
         ) : (
@@ -510,6 +510,7 @@ export default function SessionScreen() {
           client={client}
           sessionRef={ref}
           label={session.label}
+          roomTitle={(id) => view.work.rooms.find((r) => r.id === id)?.title ?? id}
           onClose={() => setSwitchOpen(false)}
           onDone={(text) => {
             setSwitchOpen(false);
