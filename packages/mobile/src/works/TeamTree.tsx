@@ -226,7 +226,7 @@ function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, {
                 {m.member.role === 'drone' ? ` ${m.member.n}` : ''}
               </Text>
               <Text allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-                {m.member.handedAt !== null ? 'handed in ✓' : m.session === null ? 'closed' : capsuleIn(env, m.session).label}
+                {m.member.handedAt !== null ? 'handed in ✓' : m.session === null ? 'closed' : capsuleIn(env, m.session).label.toLowerCase()}
               </Text>
             </Pressable>
           ))}

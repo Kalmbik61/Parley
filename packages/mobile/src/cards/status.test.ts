@@ -17,7 +17,7 @@ describe('capsuleOf (D1 §9.2)', () => {
     expect(capsuleOf({ ...base, session: session(), attention: 'working', waitingFor: 's-12' })).toMatchObject({ detail: 'Waiting for s-12' });
     expect(capsuleOf({ ...base, session: session(), attention: 'unseen', turnEndedAt: '2026-10-31T11:57:00Z' })).toMatchObject({ label: 'Finished a turn', tone: 'unseen', ring: true, detail: '3 min ago' });
     expect(capsuleOf({ ...base, session: session({ lifecycle: 'pending' }) })).toMatchObject({ label: 'Starting', ring: true, detail: null });
-    expect(capsuleOf({ ...base, session: session({ lifecycle: 'sleeping', lastEvent: { event: 'x', at: '2026-10-31T11:00:00Z' } }) })).toMatchObject({ label: 'Sleeping', detail: 'Last active 1 h ago' });
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'sleeping', lastEvent: { event: 'x', at: '2026-10-31T11:00:00Z' } }) })).toMatchObject({ label: 'Sleeping', ring: true, detail: 'Last active 1 h ago' });
   });
 
   it('idle takes its age from the last hook event, then from the history', () => {

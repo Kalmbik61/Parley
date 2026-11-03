@@ -9,7 +9,7 @@ export interface Capsule {
   icon: 'hand.raised.fill' | 'ellipsis' | 'pause.circle' | 'moon.zzz' | 'checkmark.circle.fill' | 'xmark.circle.fill' | 'minus.circle';
   label: string;
   tone: CapsuleTone;
-  /** A ring instead of a filled dot: "finished a turn" and "starting" (D1 §9.1). */
+  /** A ring instead of a filled dot: "finished a turn", "starting" and "sleeping" (D1 §9.1). */
   ring: boolean;
   /** Second line. */
   detail: string | null;
@@ -69,7 +69,7 @@ export function capsuleOf(i: CapsuleInput): Capsule {
   if (s.lifecycle === 'sleeping') {
     if (s.result !== null) return resultCapsule(s, i.now);
     const ago = timeAgo(s.lastEvent?.at ?? null, i.now);
-    return { icon: 'moon.zzz', label: 'Sleeping', tone: 'off', ring: false, detail: ago === null ? null : `Last active ${ago} ago` };
+    return { icon: 'moon.zzz', label: 'Sleeping', tone: 'off', ring: true, detail: ago === null ? null : `Last active ${ago} ago` };
   }
   if (s.lifecycle === 'pending') return { icon: 'ellipsis', label: 'Starting', tone: 'idle', ring: true, detail: null };
   if (i.attention === 'needs-you') {
