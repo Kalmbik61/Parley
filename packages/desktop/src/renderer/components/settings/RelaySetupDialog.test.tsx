@@ -268,6 +268,21 @@ describe('RelaySetupDialog', () => {
     expect(names(bridge).filter((n) => n === 'state').length - before).toBeGreaterThanOrEqual(2);
   });
 
+  it('the cross in the «could not read the run» state only hides the window and never cancels', async () => {
+    const onClose = vi.fn();
+    const bridge = mount(onClose);
+    bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
+    bridge.setRelaySetupHandler('run', () => ({ phase: 'running' }));
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    fireEvent.click(await screen.findByTestId('relay-setup-run'));
+    await screen.findByTestId('relay-setup-failed');
+    // Two buttons are called Close: the one in the footer has a test id, the cross has none.
+    fireEvent.click(screen.getAllByRole('button', { name: S.common.close }).find((b) => b.getAttribute('data-testid') === null)!);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(names(bridge)).not.toContain('cancel');
+  });
+
   it('only the expired session is told as «the session has ended»; another refusal keeps its words', async () => {
     const bridge = mount();
     bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
