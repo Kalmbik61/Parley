@@ -6,7 +6,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WORK_DB_FILE, WORK_DB_SCHEMA_VERSION, closeWorkDb, workDb } from './db.js';
+import { spawn } from 'node:child_process';
+import {
+  BUSY_TIMEOUT_MS,
+  MIGRATIONS,
+  WORK_DB_FILE,
+  WORK_DB_SCHEMA_VERSION,
+  closeWorkDb,
+  runMigrations,
+  workDb,
+} from './db.js';
 
 let root = '';
 let home = '';
@@ -331,5 +340,132 @@ describe('durable work incarnations', () => {
     expect(() => insertWork('w-0002')).toThrow('exhausted');
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
     expect(workDb().prepare('SELECT value FROM work_incarnation_clock').get()?.['value']).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe('реестр миграций', () => {
+  type Db = import('node:sqlite').DatabaseSync;
+  const open = (file: string): Db => {
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    return new DatabaseSync(file);
+  };
+  const version = (db: Db): number => Number(db.prepare('PRAGMA user_version').get()?.['user_version']);
+  const tables = (db: Db): string[] =>
+    db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+      .all()
+      .map((row) => String(row['name']));
+
+  it('шаги идут по возрастанию без пропусков, версия схемы — номер последнего шага', () => {
+    expect(MIGRATIONS.map((step) => step.version)).toEqual(MIGRATIONS.map((_, index) => index + 1));
+    expect(WORK_DB_SCHEMA_VERSION).toBe(MIGRATIONS[MIGRATIONS.length - 1]!.version);
+  });
+
+  it('свежая база проходит все шаги до текущей версии', () => {
+    mkdirSync(home, { recursive: true });
+    const db = open(path.join(home, 'replay.db'));
+    try {
+      runMigrations(db);
+      expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
+      expect(tables(db)).toEqual(
+        expect.arrayContaining(['works', 'entries', 'messages', 'message_reads', 'message_unread', 'work_incarnation_clock']),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('база текущей версии: повторный запуск ничего не меняет, данные целы', () => {
+    insertWork('w-0001');
+    const schema = (): unknown => workDb().prepare(`SELECT type, name, sql FROM sqlite_master ORDER BY name`).all();
+    const before = schema();
+    closeWorkDb();
+
+    expect(pragma('user_version')).toBe(WORK_DB_SCHEMA_VERSION);
+    runMigrations(workDb());
+    expect(schema()).toEqual(before);
+    expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
+  });
+
+  it('сбой внутри шага не меняет user_version и не оставляет частичного состояния', () => {
+    mkdirSync(home, { recursive: true });
+    const db = open(path.join(home, 'failing.db'));
+    try {
+      runMigrations(db, MIGRATIONS.slice(0, 2));
+      const before = tables(db);
+      const failing = {
+        version: 3,
+        up: (handle: Db): void => {
+          handle.exec('CREATE TABLE half_done (id INTEGER)');
+          throw new Error('boom');
+        },
+      };
+
+      expect(() => runMigrations(db, [...MIGRATIONS.slice(0, 2), failing])).toThrow('boom');
+
+      expect(version(db)).toBe(2);
+      expect(tables(db)).toEqual(before);
+      // Транзакция закрыта: следующий шаг проходит с этой же базой.
+      runMigrations(db);
+      expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('база новее кода: открытие не пишет в схему (ни индекс, ни версию)', () => {
+    insertWork('w-0001');
+    workDb().exec('DROP INDEX messages_sender');
+    closeWorkDb();
+    const raw = open(path.join(home, WORK_DB_FILE));
+    raw.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION + 5}`);
+    raw.close();
+
+    const db = workDb();
+    expect(pragma('user_version')).toBe(WORK_DB_SCHEMA_VERSION + 5);
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'messages_sender'`).all()).toEqual([]);
+    expect(db.prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
+  });
+
+  it('второй handle при записи ждёт замок в пределах BUSY_TIMEOUT_MS и не портит данные', async () => {
+    insertWork('w-0001');
+    closeWorkDb();
+    const file = path.join(home, WORK_DB_FILE);
+    // Версия на шаг ниже текущей: у базы текущей версии быстрый путь замок записи не берёт и ждать было бы нечего.
+    const old = open(file);
+    old.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION - 1}`);
+    old.close();
+    const holdMs = 600;
+    // Замок держит отдельный процесс: node:sqlite синхронный, в одном потоке ожидание не отпустило бы замок.
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);
+         db.exec('BEGIN IMMEDIATE');db.exec("UPDATE works SET title='Held'");
+         process.stdout.write('ready\\n');
+         setTimeout(()=>{db.exec('COMMIT');db.close();},${holdMs});`,
+        file,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code) => reject(new Error(`holder exited early: ${code}`)));
+        child.stdout.once('data', () => resolve());
+      });
+      const started = Date.now();
+      const db = workDb(); // BEGIN IMMEDIATE в шаге упирается в BUSY и ждёт до busy_timeout
+      const waited = Date.now() - started;
+
+      expect(waited).toBeGreaterThanOrEqual(holdMs / 6);
+      expect(waited).toBeLessThan(BUSY_TIMEOUT_MS);
+      expect(pragma('user_version')).toBe(WORK_DB_SCHEMA_VERSION);
+      expect(db.prepare('SELECT id, title FROM works').all()).toEqual([{ id: 'w-0001', title: 'Held' }]);
+      expect(db.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
+    } finally {
+      child.kill();
+    }
   });
 });

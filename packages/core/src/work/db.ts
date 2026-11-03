@@ -23,7 +23,6 @@ const { DatabaseSync: Database } = createRequire(import.meta.url)(
 ) as typeof import('node:sqlite');
 
 export const WORK_DB_FILE = 'parley.db';
-export const WORK_DB_SCHEMA_VERSION = 3;
 /** Сколько соединение ждёт чужую блокировку по умолчанию; запись на время транзакции ставит своё и возвращает это (спека хранилища 6.9). */
 export const BUSY_TIMEOUT_MS = 5000;
 
@@ -90,9 +89,6 @@ CREATE INDEX message_unread_seq ON message_unread(project_path, work_id, seq);
  */
 const MESSAGES_SENDER_INDEX = 'CREATE INDEX IF NOT EXISTS messages_sender ON messages(project_path, work_id, room_id, sender, seq)';
 
-/** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) `upgradeLettersSchema` поднимает до неё. */
-const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
-
 /** Номер создания не зависит от часов/rowid и не освобождается при удалении работы. */
 function upgradeIncarnations(db: DatabaseSync): void {
   db.exec(`
@@ -118,6 +114,71 @@ function upgradeIncarnations(db: DatabaseSync): void {
         WHERE project_path = NEW.project_path AND id = NEW.id;
     END;
   `);
+}
+
+/** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
+export interface MigrationStep {
+  version: number;
+  up(db: DatabaseSync): void;
+}
+
+/**
+ * Реестр миграций: упорядоченный по возрастанию `version` список. Шаги 1–3 — записанная история схемы, не правится;
+ * новая схема — новый шаг в конец с номером на единицу больше (номера не резервируются, версию схемы задаёт последний шаг).
+ * Каждая закоммиченная промежуточная версия должна быть годной точкой старта для следующих шагов: шаг 2, например,
+ * опирается на то, что его путь для базы версии 1 переносит и пустую базу.
+ */
+export const MIGRATIONS: readonly MigrationStep[] = [
+  // 1: основа (`works`, `entries`).
+  { version: 1, up: (db) => db.exec(SCHEMA_BASE) },
+  // 2: письма в своих таблицах; базу версии 1 (письма в `entries`) здесь же переносят и сверяют (спека хранилища 6.6).
+  // Перенос читает работы вместе с `incarnation`, поэтому базе версии 1 номера создания выдаются до него.
+  {
+    version: 2,
+    up: (db) => {
+      db.exec(SCHEMA_LETTERS);
+      upgradeIncarnationsOnce(db);
+      upgradeLettersSchema(db);
+    },
+  },
+  // 3: durable-номера создания работ (базам версии 2; пройденным через шаг 2 уже выданы).
+  { version: 3, up: upgradeIncarnationsOnce },
+];
+
+export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+
+/**
+ * Прогоняет шаги, которых в базе ещё нет, каждый в своей `BEGIN IMMEDIATE` транзакции вместе с подъёмом `user_version`:
+ * упал шаг — откатились и его таблицы, и версия, база остаётся на предыдущем шаге. Версия читается под замком записи,
+ * поэтому второй процесс, дождавшийся замка, видит уже поднятую версию и шаг пропускает.
+ */
+export function runMigrations(db: DatabaseSync, steps: readonly MigrationStep[] = MIGRATIONS): void {
+  // Быстрый путь: база уже на последнем шаге — замок записи не берём. Под замком версия всё равно перечитывается.
+  const last = steps[steps.length - 1];
+  if (!last || userVersion(db) >= last.version) return;
+  for (const step of steps) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (userVersion(db) < step.version) {
+        step.up(db);
+        db.exec(`PRAGMA user_version = ${step.version}`);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Транзакции уже нет (COMMIT не прошёл или SQLite откатила сама): причина — исходная ошибка, её и бросаем.
+      }
+      throw error;
+    }
+  }
+}
+
+/** Номера создания выдаются один раз: у базы, где колонка уже есть (прошла шаг 2 с версии 1 или нового дома), шаг пропускается. */
+function upgradeIncarnationsOnce(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(works)').all();
+  if (!columns.some((column) => column['name'] === 'incarnation')) upgradeIncarnations(db);
 }
 
 interface Opened {
@@ -169,8 +230,7 @@ export function closeWorkDb(): void {
 
 /**
  * Настройки соединения и схема. Сначала `busy_timeout`: остальные PRAGMA и создание схемы тоже могут упереться
- * в замок другого процесса (CLI агента открывает ту же базу). Версия схемы читается уже под `BEGIN IMMEDIATE`,
- * чтобы два процесса не создали таблицы дважды.
+ * в замок другого процесса (CLI агента открывает ту же базу). Схему ведёт реестр `MIGRATIONS`.
  */
 function prepare(db: DatabaseSync): void {
   db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
@@ -178,32 +238,10 @@ function prepare(db: DatabaseSync): void {
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');
 
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const version = userVersion(db);
-    if (version === 1) {
-      // База версии 1 (сборка плана 3, письма — строки `entries`): письменные таблицы создаются рядом, письма переезжают в
-      // них и сверяются, и всё это одной транзакцией с подъёмом версии — упало что-то, остаётся схема 1 (спека хранилища 6.6).
-      db.exec(SCHEMA_LETTERS);
-      upgradeIncarnations(db);
-      upgradeLettersSchema(db);
-    } else if (version === 0) {
-      db.exec(SCHEMA_V2);
-    }
-    if (version < 3 && version !== 1) upgradeIncarnations(db);
-    if (version <= WORK_DB_SCHEMA_VERSION) {
-      db.exec(MESSAGES_SENDER_INDEX);
-      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
-    }
-    db.exec('COMMIT');
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      // Транзакции уже нет (COMMIT не прошёл или SQLite откатила сама): причина — исходная ошибка, её и бросаем.
-    }
-    throw error;
-  }
+  runMigrations(db);
+  // Индекс отправителя чинится и у баз, где он пропал: `IF NOT EXISTS` у целой базы ничего не делает.
+  // База новее кода (user_version выше известной) остаётся нетронутой: схему там ведёт более новый код.
+  if (userVersion(db) <= WORK_DB_SCHEMA_VERSION) db.exec(MESSAGES_SENDER_INDEX);
 }
 
 function userVersion(db: DatabaseSync): number {
