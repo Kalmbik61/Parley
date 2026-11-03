@@ -34,10 +34,13 @@ import {
   type SyntheticEvent,
 } from 'react';
 import { Paperclip, Square } from 'lucide-react';
+import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { registerComposer } from '../keys/type-to-focus.js';
 import { keepCaretVisible } from '../lib/keep-caret-visible.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { useComposerDropTarget } from '../sidebar/use-drop-target.js';
 import { Button } from '../ui/button.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { MicButton } from '../voice/MicButton.js';
@@ -84,6 +87,11 @@ export interface ComposerProps {
   onPasteImage: () => Promise<string | null>;
   /** Id цели диктовки (`chat:<refKey>`, спека 3.2). */
   dictationId: string;
+  /**
+   * Сессия — владелец поля: карточка доски, брошенная на поле, становится черновиком этой сессии
+   * (`board/board-drafts.ts`). Нет — поле не цель броска.
+   */
+  dropSession?: SessionRef;
 }
 
 export function Composer({
@@ -102,9 +110,15 @@ export function Composer({
   onPickFiles,
   onPasteImage,
   dictationId,
+  dropSession,
   history = NO_HISTORY,
 }: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
+  // Карточка доски, брошенная на поле, становится черновиком сессии `dropSession`; без неё поле не цель броска.
+  const { setNodeRef: setDropRef, over: cardOver } = useComposerDropTarget(
+    dropSession === undefined ? '' : workKeyOf(dropSession.projectPath, dropSession.workId),
+    dropSession === undefined ? null : { sessionId: dropSession.sessionId },
+  );
   // Поле открыто для набора с любого места окна (`keys/type-to-focus.ts`).
   useEffect(() => (field.current === null ? undefined : registerComposer(field.current)), []);
   useEffect(() => {
@@ -253,7 +267,12 @@ export function Composer({
     submit();
   };
   return (
-    <div data-testid="chat-composer" className="relative flex shrink-0 flex-col gap-2 border-t border-border px-4 pb-3 pt-2.5">
+    <div
+      ref={setDropRef}
+      data-testid="chat-composer"
+      {...(cardOver ? { 'data-card-over': '' } : {})}
+      className={`relative flex shrink-0 flex-col gap-2 border-t border-border px-4 pb-3 pt-2.5${cardOver ? ' ring-2 ring-inset ring-ring' : ''}`}
+    >
       {open ? <SuggestionList items={items} selected={current} onSelect={setSelected} onAccept={accept} /> : null}
       {attachments.length === 0 ? null : (
         // Предел высоты: десятки брошенных файлов не должны вытеснить ленту — лишние прокручиваются.

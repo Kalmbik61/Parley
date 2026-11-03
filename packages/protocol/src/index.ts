@@ -138,8 +138,8 @@ export type {
   WorksSyncWorkKey,
 } from './works-sync.js';
 
-export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogFileChoice, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';
-export type { BacklogAuthor, BacklogChanged, BacklogDiagnostic, BacklogErrorCode, BacklogFileChoice, BacklogMethodName, BacklogMethodParams, BacklogMethodResults, BacklogRule, BacklogSnapshot } from './backlog.js';
+export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogFileChoice, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogInboxResult, backlogRule, backlogSnapshot, backlogState, backlogSuggestion, backlogTransferResult } from './backlog.js';
+export type { BacklogAuthor, BacklogChanged, BacklogDiagnostic, BacklogErrorCode, BacklogFileChoice, BacklogMethodName, BacklogMethodParams, BacklogMethodResults, BacklogRule, BacklogSnapshot, BacklogState } from './backlog.js';
 
 export { capabilityPluginActions } from './capability-snapshot.js';
 export type { CapabilityPluginActions } from './capability-snapshot.js';

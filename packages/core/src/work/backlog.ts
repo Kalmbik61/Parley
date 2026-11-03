@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { MISSING_SHARED_VERSION, SharedStateError, prepareSharedIgnore, readSharedFile, sharedProjectPaths,
   withBacklogChoice, withSharedProjectLock, writeSharedFile } from './store.js';
+import { updateBoardMeta } from './board-meta.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedProjectPaths, SharedWriteOptions } from './store.js';
 
 export interface BacklogItem {
@@ -274,6 +275,13 @@ function sectionHeadings(source: string): { title: string; start: number }[] {
   return headings;
 }
 
+/** Время создания карточки живёт в board.json; уже записанное `created` не перезаписывается. Замок держит транзакция. */
+async function recordCreated(tx: BacklogTransaction, id: string): Promise<void> {
+  const now = new Date().toISOString();
+  // Строка бэклога к этому моменту уже записана, а created не критично: сбой board.json не должен ронять добавление.
+  try { await updateBoardMeta(tx.paths, meta => { meta.items[id] = { created: now, ...meta.items[id] }; }); } catch { /* created не записан */ }
+}
+
 async function applyAppend(tx: BacklogTransaction, operation: AppendOperation, options: SharedWriteOptions, recovering = false, preparedSource?: string): Promise<BacklogWriteResult> {
   let diagnostics: SharedDiagnostic[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -285,7 +293,7 @@ async function applyAppend(tx: BacklogTransaction, operation: AppendOperation, o
     if (existing) {
       if (existing.title !== operation.input.title.trim() || existing.details !== (operation.input.details ?? '') || existing.by !== operation.input.by)
         throw new SharedStateError('backlog-conflict');
-      operation.status = 'applied'; await saveBacklogLocal(tx);
+      operation.status = 'applied'; await saveBacklogLocal(tx); await recordCreated(tx, operation.backlogId);
       return { id: operation.backlogId, document: { source: before.text, version: before.version, items }, diagnostics };
     }
     if (recovering && before.version !== operation.beforeVersion) throw new SharedStateError('backlog-conflict');
@@ -302,7 +310,7 @@ async function applyAppend(tx: BacklogTransaction, operation: AppendOperation, o
       if (error instanceof SharedStateError && error.code === 'backlog-conflict' && options.expectedVersion === undefined && !recovering) continue;
       throw error;
     }
-    operation.status = 'applied'; await saveBacklogLocal(tx);
+    operation.status = 'applied'; await saveBacklogLocal(tx); await recordCreated(tx, operation.backlogId);
     const after = await readSharedFile(tx.paths.backlog);
     return { id: operation.backlogId, document: { source: after.text, version: after.version, items: parseBacklog(after.text) }, diagnostics };
   }

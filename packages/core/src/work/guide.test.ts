@@ -366,6 +366,8 @@ describe('профиль short в гиде', () => {
       expect(guideTopic('tools', { toolProfile: 'short' }) ?? '', name).not.toContain(name);
     }
     expect(guideTopic('tools', { toolProfile: 'short' })).toContain('backlog_suggest');
+    expect(guideTopic('tools', { toolProfile: 'short' })).toContain('backlog_take(id)');
+    expect(guideTopic('tools', { toolProfile: 'short' })).toContain('a done result finishes');
     expect(guideTopic('tools', { toolProfile: 'short' })).toContain('report(status, summary, artifacts)');
   });
 

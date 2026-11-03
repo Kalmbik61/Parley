@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { Command as CommandPrimitive } from 'cmdk';
 import { toast } from 'sonner';
-import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Mail, Plus, Search, SquareTerminal } from 'lucide-react';
+import { Command as CommandIcon, File as FileIcon, Folder, GitCompare, Globe, Hash, Kanban, Mail, Plus, Search, SquareTerminal } from 'lucide-react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileList, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -61,6 +61,7 @@ const MORE_PREFIX = 'more:';
 
 const ICONS: Record<Exclude<PaletteIcon, 'terminal'>, typeof Folder> = {
   mail: Mail,
+  board: Kanban,
   room: Hash,
   diff: GitCompare,
   file: FileIcon,

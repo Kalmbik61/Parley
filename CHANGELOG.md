@@ -6,6 +6,57 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.28.0
+
+**Impact**
+
+- **Goal:** Make the iPhone app usable on a real phone, let Parley keep the agent CLIs from stopping a session at a startup prompt, and bring the Board and a tidier status bar into the window.
+- **Behaviour:** The phone can wake, stop, put to sleep, close and move sessions to another provider, manage a whole room and show chat Markdown like the window, behind an app lock with Face ID. Codex no longer shows its update picker; Parley checks Codex and Claude versions daily and offers an update; Claude's "new MCP servers found" prompt becomes a Parley card, off by default. The Board collects tasks of all projects. The status bar shows connected providers only and folds the rest into an ellipsis popover.
+- **Numbers:** From the PR checks: the iPhone work ran at 3,802 host, 9,659 desktop, 523 protocol, 207 remote, 150 remote-client and 236 mobile tests passed, with `pnpm lint` and root typecheck clean; the CLI-update work ran at 5,651 core, 3,780 host, 516 protocol and 9,642 desktop tests passed; two `contextFromEnv` failures in core also fail on master. The iPhone PR changed 317 files (+19,803 / −1,689) and the CLI-update PR 59 files (+4,325 / −58). The Claude startup picker appeared once without the MCP decision and 0 times with it. The final run of this release is in the release PR.
+- **Screens:** iPhone screens were captured in the iOS 27.2 simulator (light and dark); the MCP card, the Settings row and the status-bar mark were captured in a test harness, not in the real window. The Board was not checked in a live window at 800×500.
+- **For the human:** Install the iPhone build and check the room menu, the session menu, the MCP card, Resume and Face ID on a real device. Press Update on the first CLI update yourself. The Board needs a host restart after the update to show card states.
+- **Risk:** Medium. The project MCP card is a trust decision about code execution (every unclear case enables nothing). Several phone actions raise a Mac notification, and some paths were checked only against the code (for example "Resume and send" on a Codex session). iOS 17–25 was not tested.
+- **Cost:** Runtime cost is not measured.
+- **Verdict:** Ready to release as a beta of the phone features; the checks on a real iPhone listed in "What is not proven yet" remain open.
+
+### Added
+
+- **Board.** One board for all projects: Backlog, In progress, Review and Done. Write a task by text or voice, send a card to a session or room with a button or by dragging it (Undo for 5 seconds), accept or return the result. The Backlog tab of the project panel moved to the board.
+- **Board groundwork.** Backlog cards get a Review state and timestamps, kept in `.parley/board.json` next to the backlog. Agents can take a card when you ask (`backlog_take`) and hand it into Review with `report(..., backlog)`. The host serves card states and moves cards between columns and projects.
+- **CLI updates from Parley.** The host checks the latest Codex and Claude versions once a day in the background (from GitHub, brew and npm), stays silent offline and detects how each CLI was installed: standalone, npm or brew. Settings → Providers shows a row such as "Codex 0.162.0 → 0.166.0 · standalone · Update · Skip this version", and the status bar shows a "↑" mark. Update runs the binary's own `update` command with no shell, a scrubbed environment and a 5-minute timeout, in its own process group that is killed on timeout and when the host stops. Running sessions keep the old binary; new launches use the new one.
+- **Project MCP card.** Claude's "N new MCP servers found in this project" prompt no longer stops a session at the terminal. Parley shows a card in the window, the island and the phone with one switch per server, and holds the launch or resume until you decide. It is off by default and anything unclear enables nothing. The decision is tied to each server's name and a fingerprint of its whole entry, covers every worktree of the repository and writes nothing into the project.
+- **iPhone app on a real device.** A Wi-Fi run script builds a Release app with an embedded bundle; the app has an icon. From the phone you can:
+  - wake a sleeping session with Resume, or "Resume and send" for a message to a sleeping agent;
+  - stop a turn, put a session to sleep, continue it on another provider or close it from its menu;
+  - open the project MCP card and enable servers;
+  - message agents and see the session feed; a launch from a trusted folder no longer stops at Claude's trust screen;
+  - use the room ⋯ menu: Put all to sleep, Wake all, Copy room ID, Archive room and Delete room. Archive and Delete ask for Face ID (or the passcode); Delete keeps the room's sessions and Archive stops its agents, as in the window.
+- **App lock on the iPhone.** The app asks for Face ID on open and after 5 minutes in the background, locks again after 5 minutes idle, covers its content in the app switcher, locks above open sheets and does not lock while no Mac is paired.
+- **Mac notification with "Revoke this phone".** Weighty phone actions raise a notification on the Mac that can revoke the phone at once: trusting a folder, Allow "Always", plan auto-accept, a provider switch, starting a session, enabling MCP servers and closing a session.
+- **Chat Markdown on the phone.** Agent replies render natively like the window's chat: GFM tables (scrolling sideways), fenced code with a Copy button, nested and task lists, quotes and strikethrough, with the window's reveal, line-break and mention rules. Unusual input may show as plain text instead of formatted.
+
+### Changed
+
+- Codex starts without its own update picker: every Codex launch and resume passes `-c check_for_update_on_startup=false`. Your `~/.codex/config.toml` is untouched.
+- **Face ID on approvals is replaced by the app lock.** The 0.27.0 note "Face ID on approvals" no longer applies: the phone does not ask for Face ID per Allow, Accept or plan approval. It asks when the app opens or comes back, and for Archive and Delete of a room.
+- Phone actions that start, message or manage agents sit behind the window switch "Allow starting and messaging agents from the phone", have strict parameter rules on the bridge and the host, and are rate-limited and recorded in Activity.
+- **The phone does not touch sessions of a running autonomous engine, or its rooms.** Stop, sleep, close, provider switch and the room menu actions are refused for them, on the phone and on the host. Deleting, renaming, model, mode and compact stay closed to the phone.
+- The status bar shows only connected providers and no longer has "Add provider" (providers are set up in Settings). Providers that do not fit move into an ellipsis popover that opens on click and recalculates when the window, the providers or the limits change.
+- iPhone layout: rooms and swarms nobody owns open as containers, bar buttons have no capsules, one bar palette in light and dark, the footer rides above the keyboard and large titles are drawn in the content.
+- The window sync methods `works.sync` and `works.mailState` are not opened to the phone; the phone keeps using the works list and its change events.
+
+### Fixed
+
+- The macOS release build raises the system limits on open files before packaging and logs the limits it started from, which fixes "too many open files" failures at packaging.
+- The status bar no longer shows disconnected providers or squeezes its segments when the window is narrow (checked at 800, 1100 and 1400 px).
+
+### What is not proven yet
+
+- On a real iPhone, not yet run: Resume and "Resume and send", the session menu actions, the MCP card, the lock above sheets, the edge swipe, the large-title fix, the keyboard, Face ID for Archive and Delete, the Markdown rendering and the room menu. The Mac notifications for close, provider switch and MCP enable were not checked against a real host and bridge. iOS 17–25 was not tested.
+- The last fixes to Markdown rendering on pathological input were merged without a second independent review.
+- A real `codex update` or `claude update` has never been run, and it is not shown live that the Codex picker is suppressed (the control launch without the flag did not show it either).
+- The relay on a real server and live push are still open, as in 0.27.0.
+
 ## 0.27.0
 
 **Impact**

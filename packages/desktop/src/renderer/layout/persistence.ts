@@ -37,6 +37,7 @@ export function isTabAlive(entry: WindowWorkEntry, tab: TabSpec): boolean {
     case 'room':
       return entry.map.rooms.some((room) => room.id === tab.roomId);
     case 'mail':
+    case 'board':
     case 'browser':
       return true;
     case 'file': {

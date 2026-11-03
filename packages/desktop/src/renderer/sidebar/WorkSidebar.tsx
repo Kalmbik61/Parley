@@ -37,6 +37,7 @@ import { ProjectArchivedLink, ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
 import { useSidebarKeys } from './use-sidebar-keys.js';
 import { useSidebarAttention, useSidebarSections } from './use-sidebar-sections.js';
+import { BoardNavItem } from './BoardNavItem.js';
 import { showArchivedRooms, showClosedSessions, WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
@@ -50,6 +51,8 @@ export interface WorkSidebarProps {
   onOpenMail(workKey: string): void;
   /** Выбор комнаты в меню `#` карточки — вкладка комнаты (кусок 3.4). */
   onOpenRoom(workKey: string, roomId: string): void;
+  /** Пункт Board: без пути — вся доска, с путём — доска с фильтром проекта (меню секции). */
+  onOpenBoard?(projectPath?: string): void;
 }
 
 /** С какого числа карточек список виртуализируется (спека 6.1). */
@@ -127,7 +130,7 @@ interface CardHandlers {
   onOpenRoom(roomId: string): void;
 }
 
-export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail, onOpenRoom }: WorkSidebarProps): JSX.Element {
+export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail, onOpenRoom, onOpenBoard }: WorkSidebarProps): JSX.Element {
   const sections = useSidebarSections();
   const attention = useSidebarAttention();
   const entries = useWorksStore((state) => state.entries);
@@ -250,6 +253,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
           <span className="flex-1 text-left">{S.sidebar.addWorkspace}</span>
           <kbd className={SHORTCUT}>⌘N</kbd>
         </button>
+        <BoardNavItem onOpen={() => onOpenBoard?.()} className={NAV_ROW} />
       </div>
       {/* Один и тот же узел списка по обе стороны порога виртуализации: иначе при переходе
           через 50 карточек под указателем старый узел пропадал без `pointerleave`, и флаг
@@ -277,6 +281,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
             renderCard={renderCard}
             onToggleCollapsed={toggleCollapsed}
             onNewWork={openNewWorkDialog}
+            {...(onOpenBoard === undefined ? {} : { onOpenBoard })}
           />
         ) : (
           // Между проектами 16 (спека 1.2); зазор между карточками — верхний отступ самой карточки.
@@ -287,6 +292,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
                 section={section}
                 onToggleCollapsed={() => toggleCollapsed(section.key)}
                 onNewWork={openNewWorkDialog}
+                {...(onOpenBoard === undefined ? {} : { onOpenBoard })}
               >
                 {section.collapsed ? null : section.works.map(renderCard)}
               </ProjectGroup>
@@ -305,10 +311,11 @@ interface VirtualListProps {
   renderCard(entry: WindowWorkEntry): JSX.Element;
   onToggleCollapsed(projectPath: string): void;
   onNewWork(projectPath: string): void;
+  onOpenBoard?(projectPath?: string): void;
 }
 
 /** Больше 50 карточек (спека 6.1): в DOM — только видимые строки и запас по краям. */
-function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork }: VirtualListProps): JSX.Element {
+function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork, onOpenBoard }: VirtualListProps): JSX.Element {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -347,6 +354,7 @@ function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork
                 section={row.section}
                 onToggleCollapsed={() => onToggleCollapsed(row.section.key)}
                 onNewWork={onNewWork}
+                {...(onOpenBoard === undefined ? {} : { onOpenBoard })}
                 headerOnly
               />
             ) : row.kind === 'archived' ? (

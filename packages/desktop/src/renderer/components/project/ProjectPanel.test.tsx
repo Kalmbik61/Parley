@@ -233,23 +233,10 @@ it('ignores late old-host session counts and falls back safely on a failed or ma
 });
 
 
-it('keeps Suggested count live before tab selection and opens only a prepared same-project task context', async () => {
-  const names = ['backlog.get', 'backlog.subscribe', 'backlog.unsubscribe', 'backlog.prepareTake', 'backlog.take'];
-  useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, ...names] } });
-  useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: PROJECT }), makeWork('w-02', { projectPath: '/foreign' })] });
-  const value = { projectPath: PROJECT, sharedProjectPath: PROJECT, version: 'v1', file: { relativePath: '.parley/backlog.md' as const, exists: true }, rule: 'ask' as const, diagnostics: [],
-    suggestions: [{ id: 'sg-01', kind: 'idea' as const, title: 'Pending', details: '', why: 'Reason', workId: 'w-01', sessionId: 's-01', createdAt: 'now', status: 'pending' as const }],
-    items: [{ id: 'b-001', title: 'Backlog task', details: 'Task details', checked: false, section: null }] };
-  bridge.setHandler('backlog.subscribe', () => value); bridge.setHandler('backlog.get', () => value);
-  bridge.setHandler('backlog.unsubscribe', () => ({ ok: true })); bridge.setHandler('backlog.prepareTake', () => ({ id: 'b-001', snapshot: value }));
-  const close = vi.fn(); render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={close} />);
-  await screen.findByRole('tab', { name: 'Backlog (1)' });
-  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Backlog (1)' }), { button: 0 });
-  await screen.findByRole('button', { name: 'Take into room…' });
-  fireEvent.click(screen.getByRole('button', { name: 'Take into room…' }));
-  await waitFor(() => expect(useUiStore.getState().dialogs.newSession.backlog).toEqual({ projectPath: PROJECT, id: 'b-001', version: 'v1', task: 'Backlog task\n\nTask details' }));
-  expect(useUiStore.getState().dialogs.newSession.work).toEqual({ projectPath: PROJECT, workId: 'w-01' }); expect(close).toHaveBeenCalledWith(false);
-  expect(bridge.calls.some(row => row.method === 'backlog.take')).toBe(false);
+it('has no Backlog tab in the project panel', async () => {
+  render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+  await screen.findByRole('tab', { name: 'Decisions' });
+  expect(screen.queryByRole('tab', { name: /Backlog/ })).toBeNull();
 });
 
 describe('Decisions tab in the existing project panel', () => {

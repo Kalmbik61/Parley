@@ -55,7 +55,7 @@ import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
 import { isCodexThreadBinding, transitionSession } from '../work/map.js';
-import { readBacklog } from '../work/backlog.js';
+import { boardTake, markBoardReview, planBacklogIds, readBoardItems, type BoardSkipReason } from '../work/board.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { rememberProjectMemory } from '../work/memory-suggestions.js';
 import { HISTORY_SCOPES, HistorySearchError, MAX_SEARCH_LIMIT, searchHistory } from '../work/history-search.js';
@@ -420,6 +420,12 @@ export const TOOLS: Tool[] = [
     }, required: ['kind', 'title', 'why'], additionalProperties: false },
   },
   {
+    name: 'backlog_take', annotations: WRITES,
+    description: 'Mark one backlog item as taken by you when the human asks you to take it from the board.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^b-\\d{3,}$' } },
+      required: ['id'], additionalProperties: false },
+  },
+  {
     name: 'remember', annotations: WRITES,
     description: 'Propose one lasting project fact, lesson or agreement, with a reason. The human accepts it first, unless they just asked you to remember it: then set onHumanRequest. One short fact per call.',
     inputSchema: { type: 'object', properties: {
@@ -494,6 +500,8 @@ export const TOOLS: Tool[] = [
             required: ['kind', 'path'],
           },
         },
+        backlog: { type: 'array', maxItems: 30, uniqueItems: true, items: { type: 'string', pattern: '^b-\\d{3,}$' },
+          description: 'Board cards this done result finishes; they move to Review.' },
       },
       required: ['status', 'summary'],
     },
@@ -865,6 +873,7 @@ async function report(
   const status = enumArg(args, 'status', ['done', 'failed', 'progress'] as const);
   const summary = stringArg(args, 'summary');
   const artifacts = artifactsArg(args);
+  const backlogIds = backlogIdsArg(args);
 
   // Резюме пишем до смены статуса: ждущий `wait_for` просыпается на статусе и
   // должен увидеть уже готовое резюме, а не пустое поле.
@@ -886,6 +895,17 @@ async function report(
 
   const session = requireSession(map, sessionId);
   const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
+  // Карточки доски: только при done; при progress и failed номера молча не учитываются.
+  let board: { review: string[]; skipped: { id: string; reason: BoardSkipReason }[] } | undefined;
+  let backlogHint: string | undefined;
+  if (status === 'done') {
+    const takenBy = boardTakenBy(map, context.workId, sessionId);
+    if (backlogIds.length > 0) {
+      board = await markBoardReview(context.projectPath, backlogIds, takenBy, planBacklogIds(map));
+    } else {
+      backlogHint = await boardCardsHint(context.projectPath, takenBy);
+    }
+  }
   return {
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
@@ -894,7 +914,37 @@ async function report(
     summary: session.summary,
     artifacts: session.artifacts,
     ...(next !== null ? { next } : {}),
+    ...(board !== undefined ? { backlog: board } : {}),
+    ...(backlogHint !== undefined ? { backlogHint } : {}),
   };
+}
+
+function backlogIdsArg(args: Record<string, unknown>): string[] {
+  const value = args['backlog'];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 30 || new Set(value).size !== value.length ||
+    value.some((id) => typeof id !== 'string' || !/^b-\d{3,}$/.test(id))) {
+    throw new Error('argument backlog: expected up to 30 unique card ids like b-012');
+  }
+  return value as string[];
+}
+
+/** Кто «владеет» карточкой для отчёта: сама сессия и её живые комнаты (`taken` бывает вида workId/s-NN или workId/r-NN). */
+function boardTakenBy(map: WorkMap, workId: string, sessionId: string): string[] {
+  return [`${workId}/${sessionId}`, ...map.rooms.filter((room) => isMember(room, sessionId) && !isRoomArchived(room))
+    .map((room) => `${workId}/${room.id}`)];
+}
+
+/** Подсказка в момент действия: done без `backlog`, а у сессии есть карточки в In progress. */
+async function boardCardsHint(projectPath: string, takenBy: readonly string[]): Promise<string | undefined> {
+  let ids: string[];
+  try {
+    ids = (await readBoardItems(projectPath)).items
+      .filter((item) => item.state === 'in-progress' && item.taken !== undefined && takenBy.includes(item.taken))
+      .flatMap((item) => item.id === null ? [] : [item.id]);
+  } catch { return undefined; }
+  if (ids.length === 0) return undefined;
+  return `Board cards ${ids.join(', ')} are in progress for you. If this result finishes them, call report again with status done and backlog [${ids.map((id) => `"${id}"`).join(', ')}].`;
 }
 
 /**
@@ -1461,7 +1511,7 @@ const NO_SESSION =
 /** Only the immutable launched caller supplies project/work/session identity; tool arguments cannot redirect it. */
 async function backlogTool(context: McpContext, name: string, args: Record<string, unknown>): Promise<unknown> {
   try {
-    const allowed = name === 'backlog_list' ? ['filter', 'text'] : ['kind', 'title', 'details', 'why'];
+    const allowed = name === 'backlog_list' ? ['filter', 'text'] : name === 'backlog_take' ? ['id'] : ['kind', 'title', 'details', 'why'];
     if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('backlog-invalid');
     const sessionId = context.sessionId;
     if (sessionId === null) throw new Error('Backlog tools require a known launched session.');
@@ -1472,7 +1522,7 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
       const filter = args.filter ?? 'open'; const text = args.text ?? '';
       if (!['open', 'taken', 'done', 'all'].includes(String(filter)) || typeof filter !== 'string' ||
         typeof text !== 'string' || text.length > 4096 || text.includes('\0')) throw new SharedStateError('backlog-invalid');
-      const document = await readBacklog(context.projectPath);
+      const document = await readBoardItems(context.projectPath);
       const needle = text.toLowerCase();
       const items = document.items.filter(row => (filter === 'all' || (filter === 'done' ? row.checked :
         filter === 'taken' ? !row.checked && row.taken !== undefined : !row.checked)) &&
@@ -1485,6 +1535,12 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
       if (items.length > 10_000 || pending.length > 10_000 || Buffer.byteLength(JSON.stringify(result), 'utf8') > 4 * 1024 * 1024)
         throw new Error('The backlog snapshot is too large.');
       return result;
+    }
+    if (name === 'backlog_take') {
+      if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to take backlog work.');
+      if (typeof args.id !== 'string' || !/^b-\d{3,}$/.test(args.id)) throw new SharedStateError('backlog-invalid');
+      const taken = await boardTake(context.projectPath, args.id, `${context.workId}/${sessionId}`);
+      return { message: `taken: ${taken.id}`, id: taken.id };
     }
     if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to suggest backlog work.');
     if (!['bug', 'debt', 'idea'].includes(String(args.kind)) || typeof args.kind !== 'string' ||
@@ -1510,7 +1566,7 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
     if (error instanceof SharedStateError) throw new Error(`Backlog operation failed (${error.code}).`);
     // Never return parser/filesystem/raw-input errors through the generic MCP error handler.
     const safe = error instanceof Error && ['Backlog tools require a known launched session.',
-      'A live launched session is required to suggest backlog work.', 'The backlog snapshot is too large.'].includes(error.message);
+      'A live launched session is required to suggest backlog work.', 'A live launched session is required to take backlog work.', 'The backlog snapshot is too large.'].includes(error.message);
     throw new Error(safe ? (error as Error).message : 'Backlog operation could not be completed.');
   }
 }
@@ -1598,7 +1654,7 @@ async function dispatch(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
+  if (name === 'backlog_list' || name === 'backlog_suggest' || name === 'backlog_take') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context, args, signal);
   if (name === 'get_capacity') {

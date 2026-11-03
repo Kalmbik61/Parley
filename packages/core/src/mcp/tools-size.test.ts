@@ -13,9 +13,12 @@ import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from './swarm-tools.js';
  * Ещё подняты ровно на `plan_progress` и `plan_tasks` (задания комнаты): строки description — 357 байт, JSON обоих
  * инструментов с запятыми — 1421; запас прежний. Нужны они, чтобы агент не терял позицию на пункте плана и видел
  * свои задания, когда письмо уже прочитано.
+ * Ещё подняты ровно на `backlog_take` и поле `backlog` в схеме `report` (доска задач, план 1, задача 4): строки description —
+ * 147 байт (88 + 59), JSON инструмента с запятой и свойства с ключом и запятой — 539; запас прежний. Нужны они, чтобы
+ * агент брал карточку по просьбе человека и сдавал её в Review отчётом.
  */
-const DESCRIPTIONS_MAX_BYTES = 5600 + 232 + 357;
-const SCHEMAS_MAX_BYTES = 21000 + 386 + 1421;
+const DESCRIPTIONS_MAX_BYTES = 5600 + 232 + 357 + 147;
+const SCHEMAS_MAX_BYTES = 21000 + 386 + 1421 + 539;
 
 /** Сумма байт всех строк `description` на любой глубине схемы (описания свойств включены). */
 function descriptionBytes(node: unknown): number {

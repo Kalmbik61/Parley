@@ -60,10 +60,10 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { agentStatus, autoSleepWord, queuedWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
+import { needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
 import { openAgentInPanel } from '../agents/open-agents.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
@@ -73,6 +73,7 @@ import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
+import { sessionWord } from '../lib/session-word.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { relativeTime } from '../lib/relative-time.js';
 import type { ActivityEntry } from '../store/activity.js';
@@ -234,14 +235,8 @@ export const SessionRow = memo(function SessionRow({
   // живой и закрытой её снимает `transitionSession`, а если она осталась, жизненный цикл главнее. Слово очереди — там,
   // где `agentStatus` называет сессию `queued` (с итогом остаётся слово итога); тултип очереди — при любом итоге, как у сна.
   const queued = session.lifecycle === 'pending' || session.lifecycle === 'sleeping' ? (session.queued ?? null) : null;
-  const word =
-    need !== null
-      ? needLabel(need, now.getTime())
-      : queued !== null && agentStatus(session) === 'queued'
-        ? queuedWord(queued)
-        : hostSleep !== null && agentStatus(session) === 'asleep'
-          ? autoSleepWord(hostSleep.reason)
-          : stateWord(state, session.lifecycle);
+  // Слово выбирает `sessionWord` (`lib/session-word.ts`): тот же выбор у карточки доски.
+  const word = sessionWord(session, live, now);
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);

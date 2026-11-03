@@ -48,4 +48,21 @@ describe('backlog wire boundary', () => {
     expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: 'notes.md', exists: true } }).success).toBe(false);
     expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: '.parley/backlog.md', exists: true, choice: null, todos: '../TODOS.md' } }).success).toBe(false);
   });
+  it('принимает состояния доски и версию board.json', () => {
+    const T = '2026-11-01T10:00:00.000Z';
+    const base = { projectPath: '/project', sharedProjectPath: '/project', file: { relativePath: '.parley/backlog.md', exists: true }, version: 'v', suggestions: [], rule: 'ask', diagnostics: [], boardVersion: 'missing' };
+    const item = { id: 'b-001', title: 'T', details: '', checked: false, section: null, taken: 'w-1/s-2', created: T, sent: T, review: T, state: 'review' };
+    expect(backlogSnapshot.parse({ ...base, items: [item] })).toEqual({ ...base, items: [item] });
+    expect(backlogSnapshot.safeParse({ ...base, items: [{ ...item, state: 'blocked' }] }).success).toBe(false);
+  });
+  it('проверяет методы backlog.move, backlog.transfer и backlog.inbox', () => {
+    const move = { projectPath: '/project', id: 'b-001', version: 'v', to: 'review' };
+    expect(backlogMethodSchemas['backlog.move'].parse(move)).toEqual(move);
+    expect(backlogMethodSchemas['backlog.move'].safeParse({ ...move, to: 'archived' }).success).toBe(false);
+    const transfer = { projectPath: '/project', id: 'b-001', version: 'v', toProjectPath: '/other' };
+    expect(backlogMethodSchemas['backlog.transfer'].parse(transfer)).toEqual(transfer);
+    expect(backlogMethodSchemas['backlog.transfer'].safeParse({ projectPath: '/project', id: 'b-001', version: 'v' }).success).toBe(false);
+    expect(backlogMethodSchemas['backlog.inbox'].safeParse({}).success).toBe(true);
+    expect(backlogMethodSchemas['backlog.inbox'].safeParse({ x: 1 }).success).toBe(false);
+  });
 });
