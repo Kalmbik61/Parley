@@ -4,6 +4,7 @@ import type { FeedCard } from '@parley/core';
 import type { RemoteClient, SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
+import { EMPTY_QUESTION_DRAFT, type QuestionDraft } from '../cards/model';
 import { HUMAN_TABLE } from './md-demo';
 
 const P = '/Users/me/parley';
@@ -68,8 +69,28 @@ const permission: FeedCard = {
 } as unknown as FeedCard;
 const question: FeedCard = {
   kind: 'question', id: 'card-2', cardId: 'card-2', at: ago(5), state: 'pending', toolUseId: null, toolName: 'AskUserQuestion', toolInput: {},
-  questions: [{ question: 'Which branch should I rebase onto?', header: 'Branch', multiSelect: false, options: [{ label: 'main', description: 'The default branch' }, { label: 'feat/mobile-stage-a', description: null }] }],
+  // A45: three questions — single, multiSelect, and one answered with a typed "Other".
+  questions: [
+    { question: 'Which branch should I rebase onto?', header: 'Branch', multiSelect: false, options: [{ label: 'main', description: 'The default branch' }, { label: 'feat/mobile-stage-a', description: null }] },
+    { question: 'Which checks should run before the push?', header: 'Checks', multiSelect: true, options: [{ label: 'Lint', description: 'pnpm lint' }, { label: 'Typecheck', description: null }, { label: 'Tests', description: 'pnpm test' }] },
+    { question: 'What should the commit message say?', header: 'Message', multiSelect: false, options: [{ label: 'Rebase onto main', description: null }] },
+  ],
 } as unknown as FeedCard;
+
+/** A45 screenshots: `?preview=q1|q2|q3` on the session screen opens the demo question card at that step with answers picked. */
+export function demoQuestionDraft(preview: unknown): QuestionDraft | null {
+  const base = { picked: { 0: ['main'] }, otherOn: {}, otherText: {} };
+  switch (preview) {
+    case 'q1':
+      return { ...EMPTY_QUESTION_DRAFT, picked: { 0: ['main'] }, step: 0 };
+    case 'q2':
+      return { ...base, picked: { 0: ['main'], 1: ['Lint', 'Tests'] }, step: 1 };
+    case 'q3':
+      return { picked: { 0: ['main'], 1: ['Lint', 'Tests'], 2: [] }, otherOn: { 2: true }, otherText: { 2: 'Rebase feat/mobile-stage-a onto main' }, step: 2 };
+    default:
+      return null;
+  }
+}
 
 /** `onlyConsent`: show only that consent card (screenshots, PARLEY_MOBILE_DEV_CONSENT). */
 export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
@@ -218,7 +239,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=question-1|question-2|question-3|a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -231,6 +252,12 @@ export function demoRoute(name: unknown): string | null {
       return s('d1');
     case 'question':
       return s('a13');
+    case 'question-1':
+      return `${s('a13')}?preview=q1`;
+    case 'question-2':
+      return `${s('a13')}?preview=q2`;
+    case 'question-3':
+      return `${s('a13')}?preview=q3`;
     case 'decision':
       return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
     case 'decision-sheet':

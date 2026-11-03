@@ -19,6 +19,7 @@ import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
 import { DEMO } from '../../dev/flags';
+import { demoQuestionDraft } from '../../dev/demo';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
@@ -621,7 +622,7 @@ export default function SessionScreen() {
         )}
       </Modal>
       {first !== undefined ? (
-        <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
+        <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} {...(DEMO && demoQuestionDraft(preview) !== null ? { initialDraft: demoQuestionDraft(preview)! } : {})}>
           {(parts) => content(parts)}
         </ActiveCard>
       ) : (

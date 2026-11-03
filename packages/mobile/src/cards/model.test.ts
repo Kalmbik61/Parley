@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FeedPermissionCard, FeedQuestionCard } from '@parley/core';
+import { answerOf as windowAnswerOf } from '../../../desktop/src/renderer/lib/question-answer';
 import {
   alwaysRules,
+  answerOf,
+  backStep,
+  canNext,
+  canSend,
+  hasBack,
+  nextStep,
+  stepLabel,
+  stepOf,
   canAlways,
   EMPTY_QUESTION_DRAFT,
   fullCommand,
@@ -105,5 +114,64 @@ describe('fullCommand', () => {
     expect(fullCommand(card({ command: ['git', 'push'] }))).toBe('git push');
     expect(fullCommand(card({ file_path: 'x' }))).toBeNull();
     expect(fullCommand({ kind: 'plan' } as never)).toBeNull();
+  });
+});
+
+describe('question steps', () => {
+  const q = (question: string, multiSelect: boolean) => ({ question, header: null, options: [{ label: 'a', description: null }, { label: 'b', description: null }], multiSelect });
+  const three = { kind: 'question', cardId: 'q3', state: 'pending', questions: [q('One?', false), q('Two?', true), q('Three?', false)] } as unknown as FeedQuestionCard;
+  const one = { kind: 'question', cardId: 'q1', state: 'pending', questions: [q('Only?', false)] } as unknown as FeedQuestionCard;
+  const pick = (d: typeof EMPTY_QUESTION_DRAFT, at: number, label: string) => togglePick(d, at, three.questions[at]!, label);
+
+  it('Next is disabled without an answer, then moves one step', () => {
+    expect(canNext(three, EMPTY_QUESTION_DRAFT)).toBe(false);
+    expect(nextStep(three, EMPTY_QUESTION_DRAFT)).toBe(EMPTY_QUESTION_DRAFT);
+    const d = nextStep(three, pick(EMPTY_QUESTION_DRAFT, 0, 'a'));
+    expect(d.step).toBe(1);
+    expect(stepLabel(d, 3)).toBe('Question 2 of 3');
+    expect(canNext(three, d)).toBe(false);
+  });
+  it('Back appears from the second question and keeps the picks', () => {
+    expect(hasBack(EMPTY_QUESTION_DRAFT, 3)).toBe(false);
+    const d = nextStep(three, pick(EMPTY_QUESTION_DRAFT, 0, 'b'));
+    expect(hasBack(d, 3)).toBe(true);
+    const back = backStep(three, d);
+    expect(back.step).toBe(0);
+    expect(back.picked[0]).toEqual(['b']);
+    expect(backStep(three, back)).toBe(back);
+  });
+  it('Send answer only on the last question and only with every answer', () => {
+    let d = pick(EMPTY_QUESTION_DRAFT, 0, 'a');
+    d = nextStep(three, pick(d, 1, 'a'));
+    expect(canSend(three, d)).toBe(false); // not the last
+    d = nextStep(three, d);
+    expect(canNext(three, d)).toBe(false); // the last has no Next
+    expect(canSend(three, d)).toBe(false); // no answer to the last
+    d = pick(d, 2, 'b');
+    expect(canSend(three, d)).toBe(true);
+    // an earlier question unanswered (picked cleared) blocks Send
+    expect(canSend(three, { ...d, picked: { ...d.picked, 0: [] } })).toBe(false);
+  });
+  it('a single question has no "1 of 1" and no Back, and sends at once', () => {
+    expect(stepLabel(EMPTY_QUESTION_DRAFT, 1)).toBeNull();
+    expect(hasBack(EMPTY_QUESTION_DRAFT, 1)).toBe(false);
+    expect(canSend(one, EMPTY_QUESTION_DRAFT)).toBe(false);
+    expect(canSend(one, togglePick(EMPTY_QUESTION_DRAFT, 0, one.questions[0]!, 'a'))).toBe(true);
+  });
+  it('a stored step past the card end is clamped', () => {
+    expect(stepOf({ ...EMPTY_QUESTION_DRAFT, step: 9 }, 3)).toBe(2);
+    expect(stepOf({ ...EMPTY_QUESTION_DRAFT, step: -1 }, 3)).toBe(0);
+  });
+  it('the payload equals the window\'s on the same answers (single, multi, Other)', () => {
+    let d = pick(EMPTY_QUESTION_DRAFT, 0, 'a');
+    d = toggleOther(pick(pick(d, 1, 'a'), 1, 'b'), 1, three.questions[1]!);
+    d = { ...d, otherText: { 1: '  mine ' } };
+    d = toggleOther(d, 2, three.questions[2]!);
+    d = { ...d, otherText: { ...d.otherText, 2: ' typed ' }, step: 2 };
+    const expected: Record<string, string> = {};
+    three.questions.forEach((x, at) => { expected[x.question] = windowAnswerOf(x, at, d); });
+    expect(expected).toEqual({ 'One?': 'a', 'Two?': 'a, b, mine', 'Three?': 'typed' });
+    expect(questionDecision(three, d)).toEqual({ kind: 'question', answers: expected });
+    three.questions.forEach((x, at) => expect(answerOf(x, at, d)).toBe(windowAnswerOf(x, at, d)));
   });
 });
