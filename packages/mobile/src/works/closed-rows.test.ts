@@ -6,7 +6,7 @@ import { projectWorksSnapshot } from '@parley/protocol/remote';
 import { createRemoteStore, selectWork } from '@parley/remote-client';
 import type { RemoteWork } from '@parley/protocol/remote';
 import { archivedLabel, closedLabel, createClosedStore } from './closed-state';
-import { buildTeams, closedIn, countRows, subtreeOf } from './teams';
+import { buildTeams, closedAdded, countRows, subtreeOf } from './teams';
 
 const sess = (id: string, over: Record<string, unknown> = {}) => ({
   id, label: id, provider: 'claude', model: null, role: null, parent: null, createdBy: null,
@@ -70,9 +70,10 @@ describe('A43: closed rows on the phone', () => {
     const sheet = (rows: typeof all.rows) => subtreeOf(rows, 'lead').map((x) => x.row);
     // Same as the header of the lead's team ("7a1r3w" by default).
     expect(countRows(sheet(shown.rows), 'lead')).toEqual({ agents: 7, rooms: 1, swarms: 3 });
-    // Closed sessions under lead in the full tree: old, anchor, m-closed, cc and its swarm member, the cancelled/seen swarms' queens.
-    expect(closedIn(sheet(all.rows))).toBe(7);
+    // Closed sessions under lead that expanding adds: old, m-closed, cc and its swarm member, the cancelled/seen swarms' queens.
+    // The closed anchor of the open room is visible without expanding, so it is not counted.
+    expect(closedAdded(sheet(all.rows), sheet(shown.rows))).toBe(6);
     // Other sessions have none under them: no link.
-    expect(closedIn(subtreeOf(all.rows, 'worker').map((x) => x.row))).toBe(0);
+    expect(closedAdded(subtreeOf(all.rows, 'worker').map((x) => x.row), subtreeOf(shown.rows, 'worker').map((x) => x.row))).toBe(0);
   });
 });

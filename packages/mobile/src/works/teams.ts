@@ -60,8 +60,8 @@ export function countRows(rows: readonly WorkRow[], extraAgent?: string): TeamCo
   return { agents: agents.size, rooms, swarms };
 }
 
-/** Closed sessions among the rows (session rows, room members, swarm members), each once: what "N more closed" would add. */
-export function closedIn(rows: readonly WorkRow[]): number {
+/** Ids of closed sessions among the rows (session rows, room members, swarm members). */
+function closedIds(rows: readonly WorkRow[]): Set<string> {
   const closed = new Set<string>();
   const add = (s: RemoteSession | null): void => {
     if (s !== null && s.lifecycle === 'closed') closed.add(s.id);
@@ -71,7 +71,18 @@ export function closedIn(rows: readonly WorkRow[]): number {
     else if (row.kind === 'room') row.members.forEach(add);
     else row.members.forEach((m) => add(m.session));
   }
-  return closed.size;
+  return closed;
+}
+
+/**
+ * What "N more closed" would add: closed sessions in the full rows that the shown rows do not already contain
+ * (a closed room anchor or a closed member of a shown swarm is visible without expanding).
+ */
+export function closedAdded(full: readonly WorkRow[], shown: readonly WorkRow[]): number {
+  const visible = closedIds(shown);
+  let n = 0;
+  for (const id of closedIds(full)) if (!visible.has(id)) n++;
+  return n;
 }
 
 export function buildTeams(rows: readonly WorkRow[], needs: NeedsYouOf): Team[] {
