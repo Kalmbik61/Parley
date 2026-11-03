@@ -19,7 +19,7 @@ import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
 import { useRoomChat } from '../room/use-room-chat';
 import { typography, useColors } from '../theme';
-import { barBack, BarSymbol, barRight } from '../ui/bar';
+import { BAR_STRIP_HEIGHT, barBack, BarStrip, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
 import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
@@ -29,6 +29,7 @@ const str = (v: string | string[] | undefined): string | undefined => (Array.isA
 
 export default function RoomScreen() {
   const c = useColors();
+  const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ ref?: string; room?: string }>();
@@ -145,22 +146,29 @@ export default function RoomScreen() {
           headerLargeTitle: false,
           ...barBack(null),
           title: room.title,
-          headerTransparent: Platform.OS === 'ios',
-          headerBlurEffect: 'systemChromeMaterial',
+          ...material,
           headerTitle: () => (
             <View accessible accessibilityRole="header" accessibilityLabel={`Room ${room.title}. ${header.subtitle}`} style={styles.titleBox}>
               <Text numberOfLines={1} allowFontScaling style={[typography.headline, { color: c.label }]}>
                 <Text style={{ color: c.label2 }}>#</Text> {room.title}
               </Text>
-              <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: header.state === 'needs-you' || header.state === 'decision' ? c.needsYou : c.label2 }]}>
-                {header.subtitle}
-              </Text>
+              <View style={styles.statusLine}>
+                <View style={[styles.dot, { backgroundColor: header.state === 'needs-you' || header.state === 'decision' ? c.needsYou : header.state === 'working' ? c.working : c.idle }]} />
+                <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.barSubtitle }]}>
+                  {header.subtitle}
+                </Text>
+              </View>
             </View>
           ),
           ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={openMenu} />),
         }}
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+        {room.proposal !== null ? (
+          <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review ›" top={insets.top + 44} onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
+        ) : waiting[0] !== undefined ? (
+          <BarStrip icon="hand.raised" iconColor={c.needsYou} text={`${waiting[0].label} needs you`} top={insets.top + 44} onPress={() => router.push(`/session/${sessionParam({ ...target, sessionId: waiting[0]!.id })}` as never)} />
+        ) : null}
         <FlatList
           ref={list}
           data={data}
@@ -171,29 +179,11 @@ export default function RoomScreen() {
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, (room.proposal !== null || waiting[0] !== undefined) && { paddingTop: BAR_STRIP_HEIGHT + 4 }]}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>
               <ConnectionBanner />
-              {room.proposal !== null && (
-                <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} style={[styles.strip, { backgroundColor: c.warningBg }]}>
-                  <SymbolView name="checkmark.seal" size={16} tintColor={c.needsYou} />
-                  <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
-                    Decision {room.proposal.id} · rev {room.proposal.rev}
-                  </Text>
-                  <Text allowFontScaling style={[typography.subheadline, { color: c.tint, fontWeight: '600' }]}>Review ›</Text>
-                </Pressable>
-              )}
-              {waiting[0] !== undefined && (
-                <Pressable accessibilityRole="button" onPress={() => router.push(`/session/${sessionParam({ ...target, sessionId: waiting[0]!.id })}` as never)} style={[styles.strip, { backgroundColor: c.warningBg }]}>
-                  <SymbolView name="hand.raised" size={16} tintColor={c.needsYou} />
-                  <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
-                    {waiting[0].label} needs you
-                  </Text>
-                  <Text allowFontScaling style={[typography.subheadline, { color: c.tint }]}>›</Text>
-                </Pressable>
-              )}
               {entry?.older != null && (
                 <View style={styles.older}>
                   {entry.more === 'error' ? (
@@ -335,8 +325,9 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   list: { padding: 16, paddingTop: 8, paddingBottom: 12 },
   titleBox: { alignItems: 'flex-start', maxWidth: 240 },
+  statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
   bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  strip: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, minHeight: 44 },
   older: { alignItems: 'center' },
   center: { alignItems: 'center', gap: 8, paddingVertical: 24 },
   footer: { paddingHorizontal: 16, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, gap: 4 },

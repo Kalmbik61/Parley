@@ -2,8 +2,8 @@
 // `headerTintColor` does not remove. The native-stack items API can hide that shared background: a custom item with
 // `hidesSharedBackground: true` draws only what we put in it, in the Parley accent. The back button is such an item too
 // (`router.back()`); the stack keeps its own edge-swipe, which does not depend on the visible button.
-import type { ComponentProps, ReactElement } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { useEffect, useState, type ComponentProps, type ReactElement } from 'react';
+import { AccessibilityInfo, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { typography, useColors } from '../theme';
@@ -76,5 +76,62 @@ export function BarSymbol({ name, label, onPress, disabled = false }: { name: Co
 const styles = StyleSheet.create({
   back: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, minWidth: 44, paddingRight: 4 },
   text: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  strip: { position: 'absolute', left: 0, right: 0, zIndex: 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, height: 40 },
+  stripText: { flex: 1, fontWeight: '600' },
+  stripLine: { position: 'absolute', left: 16, right: 16, bottom: 0, height: StyleSheet.hairlineWidth },
   symbol: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
 });
+
+/**
+ * Bar material by theme (D1 §17.5). iOS 26+: transparent header with NO blur effect — the system glass follows the theme.
+ * iOS 17–25: the chrome material of the current theme. A fixed `systemChromeMaterial` was the light bar in dark mode.
+ */
+export function useBarMaterial() {
+  const dark = useColorScheme() === 'dark';
+  const modern = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
+  return {
+    headerTransparent: Platform.OS === 'ios',
+    ...(modern ? {} : { headerBlurEffect: dark ? ('systemChromeMaterialDark' as const) : ('systemChromeMaterialLight' as const) }),
+  };
+}
+
+function useReduceTransparency(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    void AccessibilityInfo.isReduceTransparencyEnabled().then(setOn);
+    const sub = AccessibilityInfo.addEventListener('reduceTransparencyChanged', setOn);
+    return () => sub.remove();
+  }, []);
+  return on;
+}
+
+/**
+ * The waiting strip as the bar's second row (D1 §17.5): bar material, no warning fill, a 0.5 pt separator inset 16, text in
+ * `label` semibold, the icon in the state colour, and either a tint action ("Review ›") or a `barSubtitle` chevron.
+ */
+export function BarStrip({ icon, iconColor, text, action, top, onPress }: { icon: ComponentProps<typeof SymbolView>['name']; iconColor: string; text: string; action?: string; top: number; onPress: () => void }) {
+  const c = useColors();
+  const solid = useReduceTransparency();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={action === undefined ? text : `${text}. ${action}`}
+      onPress={onPress}
+      style={[styles.strip, { top, backgroundColor: solid ? c.barBgSolid : c.barBg }]}
+    >
+      <SymbolView name={icon} size={16} tintColor={iconColor} />
+      <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.stripText, { color: c.label }]}>
+        {text}
+      </Text>
+      {action === undefined ? (
+        <SymbolView name="chevron.right" size={12} weight="semibold" tintColor={c.barSubtitle} />
+      ) : (
+        <Text allowFontScaling style={[typography.subheadline, { color: c.tint, fontWeight: '600' }]}>{action}</Text>
+      )}
+      <View pointerEvents="none" style={[styles.stripLine, { backgroundColor: c.separator }]} />
+    </Pressable>
+  );
+}
+
+/** Height of the strip row, for the list's top padding. */
+export const BAR_STRIP_HEIGHT = 40;

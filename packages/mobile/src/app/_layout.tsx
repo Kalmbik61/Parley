@@ -1,6 +1,7 @@
 import '../polyfills';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { BlockedView, useBlockedScreen } from '../components/BlockedView';
 import { LockGate } from '../components/LockGate';
 import { useClearOnOpen, usePushTaps } from '../push/notifications';
@@ -32,6 +33,7 @@ export default function RootLayout() {
   }, [devRoute, phase, router]);
   return (
     <LockGate>
+    <StatusBar style="auto" />
     {/* Bar buttons: plain, in the Parley accent in both themes (plan A33). */}
     <Stack screenOptions={{ headerTintColor: colors.tint }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

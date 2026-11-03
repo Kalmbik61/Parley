@@ -2,12 +2,15 @@ import { useMemo } from 'react';
 import { NativeTabs } from 'expo-router/native-tabs';
 import { selectNeedsYouCount } from '@parley/remote-client';
 import { useRemoteState } from '../../hooks/use-remote';
+import { useColors } from '../../theme';
 
 export default function TabLayout() {
   const state = useRemoteState();
   const needsYou = useMemo(() => (state === null ? 0 : selectNeedsYouCount(state)), [state]);
+  const colors = useColors();
   return (
-    <NativeTabs>
+    // The selected tab is the Parley accent, not system blue (plan A35d).
+    <NativeTabs tintColor={colors.tint}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>Inbox</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="tray" />
