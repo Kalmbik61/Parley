@@ -28,7 +28,6 @@ import { matchConfirm } from '@parley/core/assistant';
 import type { AssistantState } from '@parley/protocol';
 import { ttsAvailable, type IslandAssistantConfig, type IslandBridge, type IslandSpeechApi, type IslandSpeechConfig, type IslandTtsMessage, type TtsEngineState } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
-import { TTS_VOICES } from '../../../shared/tts-types.js';
 import type { Listening } from './listen.js';
 import type { Speaker } from './speaker.js';
 import { createSentenceFeed, type FeedSentence, type SentenceFeed } from './speech-queue.js';
@@ -201,13 +200,11 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       if (TURN_PHASES.has(get().host.phase)) void deps?.call('assistant.cancel', {});
     };
     const speechSettings = (): IslandSpeechConfig | undefined => deps?.config().speech;
-    /** Голос может звучать на языке помощника: веса скачаны, движок не отказал (G3, Р8). */
+    /** Голос может звучать: движок не отказал (G3, Р8). */
     const voiceReady = (): boolean => {
       const settings = speechSettings();
       if (deps?.speech === undefined || settings === undefined) return false;
-      const language = deps.config().language;
-      const supported = TTS_VOICES.some((voice) => voice.id === settings.voice && voice.languages.includes(language));
-      return supported && (engine === null ? settings.available : ttsAvailable(engine));
+      return engine === null ? settings.available : ttsAvailable(engine);
     };
     const canSpeak = (): boolean => speechSettings()?.enabled === true && voiceReady();
     const clearTimer = (timer: ReturnType<typeof setTimeout> | null): null => {
@@ -349,10 +346,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         newTalk(turn);
         return;
       }
-      if (engine?.state === 'not-downloaded' && !hinted) {
+      if (engine?.state === 'no-key' && !hinted) {
         hinted = true;
-        const voice = TTS_VOICES.find((entry) => entry.id === settings.voice);
-        set({ notice: S.assistant.voiceMissing(voice?.name ?? settings.voice) });
+        set({ notice: S.assistant.voiceNoKey });
       }
     };
     /** Свободен помощник (нет хода, вопроса в пути и записи) — очередь уходит одним ходом, в пределах `ASK_MAX`. */
@@ -479,7 +475,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         set({ open: true, collapsed: false, byHover: false, notice: null });
         deps?.keyboard(true);
         // Прогрев при открытии режима (Р5): прячет повторную загрузку модели после выгрузки.
-        if (!state.open && canSpeak()) void deps?.speech?.api.warmup().catch(() => undefined);
+        if (!state.open && speechSettings()?.enabled === true) void deps?.speech?.api.warmup().catch(() => undefined);
         if (request.listen) {
           stopTurn();
           startListening('send');

@@ -687,19 +687,16 @@ test.describe('помощник на острове', () => {
     await expect(face).not.toHaveAttribute('data-shape', 'face', { timeout: 60_000 });
   });
 
-  test('голос не скачан (G3): ответ текстом без лица и строка-подсказка один раз; Parley ничего не качает', async () => {
-    // Без `PARLEY_TTS=fake` — настоящая служба голоса: на Apple Silicon с пустым домом веса «не скачаны». На x64 голос
-    // недоступен вовсе (Р8), и подсказки о скачивании там нет.
-    test.skip(process.platform !== 'darwin' || process.arch !== 'arm64', 'нейроголос есть только на Apple Silicon');
+  test('no voice (S-del): the answer is text without the face and no hint about weights', async () => {
+    // Without PARLEY_TTS=fake the engine is OpenAI without a key: answers stay text and the notice says why.
     test.setTimeout(120_000);
     const window = await launchWithAssistant({ PARLEY_VOICE: 'fake' }, { speak: true, language: 'en' });
     const island = await openAssistant(window);
     await recordFace(island);
-    const hint = island.getByText('Voice "Serena" isn\'t downloaded — open Settings');
 
     await ask(island, 'moods how is it going?');
     await expect(island.getByTestId('assistant-answer')).toContainText('Did you expect that result?', { timeout: 30_000 });
-    await expect(hint).toBeVisible();
+    await expect(island.getByText('Add an OpenAI key in Settings → Assistant to hear answers')).toBeVisible();
     await island.waitForTimeout(1000);
     expect((await faceLog(island)).filter((entry) => entry.shape === 'face')).toEqual([]);
 
@@ -707,9 +704,8 @@ test.describe('помощник на острове', () => {
     await ask(island, 'voice check');
     await expect(island.getByTestId('assistant-answer')).toContainText('Voice note: none.', { timeout: 30_000 });
     await island.waitForTimeout(1000);
-    await expect(hint).toHaveCount(0);
     expect((await faceLog(island)).filter((entry) => entry.shape === 'face')).toEqual([]);
-    // Весов в доме теста нет: скачивание — только по кнопке в Settings.
+    // Весов нет: старый каталог убран при запуске, новых никто не качает.
     const weights = await readdir(path.join(home, 'desktop', 'voice', 'tts')).catch(() => [] as string[]);
     expect(weights.filter((name) => name.endsWith('.gguf'))).toEqual([]);
   });

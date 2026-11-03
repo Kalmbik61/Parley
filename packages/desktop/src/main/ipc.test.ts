@@ -20,8 +20,7 @@ import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
 import { bindWorksSyncWindow, forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError, type RegisterIpcOptions } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
-import { TTS_VOICES, type TtsModelId } from '../shared/tts-types.js';
-import type { TtsService, TtsState } from './assistant/tts.js';
+import type { TtsState } from './assistant/tts.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -49,18 +48,10 @@ class FakeIpcMain {
   }
 }
 
-/** Подменная служба нейроголоса (план 3b, B15): веса не скачаны, скачивание отдаёт один шаг прогресса. */
+/** Подменная служба озвучки: настройкам нужно только состояние. */
 function fakeTts() {
   return {
-    voices: vi.fn(async () => TTS_VOICES.map((voice) => ({ ...voice, downloaded: false }))),
-    models: vi.fn(async (): Promise<TtsModelId[]> => ['qwen3-tts-0.6b-q8_0']),
-    download: vi.fn<TtsService['download']>(async (id, onProgress) => {
-      onProgress({ id, receivedBytes: 5, totalBytes: 10 });
-      return { ok: true };
-    }),
-    cancelDownload: vi.fn(),
-    remove: vi.fn(async () => undefined),
-    state: vi.fn((): TtsState => ({ state: 'not-downloaded' })),
+    state: vi.fn((): TtsState => ({ state: 'no-key' })),
   };
 }
 
@@ -684,69 +675,13 @@ describe('registerIpc', () => {
   });
 });
 
-describe('нейроголос помощника для настроек (план 3b, B15)', () => {
-  it('app:assistant-voices отдаёт каталог службы; G3: нескачанный голос — downloaded: false, ничего не качается само', async () => {
-    const { ipcMain, tts } = setup();
-    const voices = (await ipcMain.invoke('app:assistant-voices')) as { id: string; downloaded: boolean }[];
-    expect(voices.map((voice) => voice.id)).toEqual(TTS_VOICES.map((voice) => voice.id));
-    expect(voices.every((voice) => !voice.downloaded)).toBe(true);
-    expect(await ipcMain.invoke('app:assistant-voice-state')).toEqual({ state: 'not-downloaded' });
-    expect(tts.download).not.toHaveBeenCalled();
-  });
-
-  it('app:assistant-voice-download качает модель из запроса и шлёт прогресс отправителю; закрытому окну — нет', async () => {
-    const { ipcMain, tts } = setup();
-    const sender = { isDestroyed: vi.fn(() => false), send: vi.fn() };
-    await expect(ipcMain.invokeWithEvent('app:assistant-voice-download', { sender }, 'qwen3-tts-1.7b-q8_0')).resolves.toEqual({ ok: true });
-    expect(tts.download).toHaveBeenCalledTimes(1);
-    expect(tts.download).toHaveBeenCalledWith('qwen3-tts-1.7b-q8_0', expect.any(Function));
-    expect(sender.send).toHaveBeenCalledWith('app:assistant-voice-progress', { id: 'qwen3-tts-1.7b-q8_0', receivedBytes: 5, totalBytes: 10 });
-    const gone = { isDestroyed: vi.fn(() => true), send: vi.fn() };
-    await ipcMain.invokeWithEvent('app:assistant-voice-download', { sender: gone }, 'qwen3-tts-0.6b-q8_0');
-    expect(tts.download).toHaveBeenLastCalledWith('qwen3-tts-0.6b-q8_0', expect.any(Function));
-    expect(gone.send).not.toHaveBeenCalled();
-  });
-
-  it('D5: app:assistant-voice-cancel → cancelDownload(id), app:assistant-voice-remove → remove(id)', async () => {
-    const { ipcMain, tts } = setup();
-    await ipcMain.invoke('app:assistant-voice-cancel', 'qwen3-tts-1.7b-q8_0');
-    expect(tts.cancelDownload).toHaveBeenCalledTimes(1);
-    expect(tts.cancelDownload).toHaveBeenCalledWith('qwen3-tts-1.7b-q8_0');
-    expect(tts.remove).not.toHaveBeenCalled();
-    await ipcMain.invoke('app:assistant-voice-remove', 'qwen3-tts-0.6b-q8_0');
-    expect(tts.remove).toHaveBeenCalledTimes(1);
-    expect(tts.remove).toHaveBeenCalledWith('qwen3-tts-0.6b-q8_0');
-    expect(tts.download).not.toHaveBeenCalled();
-  });
-
-  it('чужой id модели (в том числе id голоса или модели Whisper) → bad_request, служба не вызывается', async () => {
-    const { ipcMain, tts } = setup();
-    const sender = { isDestroyed: vi.fn(() => false), send: vi.fn() };
-    const codeOf = async (promise: unknown): Promise<string> => {
-      try {
-        await promise;
-        return 'ok';
-      } catch (error) {
-        return decodeIpcError(error).code;
-      }
-    };
-    for (const id of [undefined, null, 7, 'base', 'qwen3-0.6b/serena', 'qwen3-tts-1.7b-q4_0', '__proto__']) {
-      expect(await codeOf(ipcMain.invokeWithEvent('app:assistant-voice-download', { sender }, id)), String(id)).toBe('bad_request');
-      expect(await codeOf(ipcMain.invoke('app:assistant-voice-cancel', id)), String(id)).toBe('bad_request');
-      expect(await codeOf(ipcMain.invoke('app:assistant-voice-remove', id)), String(id)).toBe('bad_request');
+describe('озвучка помощника для настроек (S-del)', () => {
+  it('app:assistant-voice-state отдаёт состояние службы; каналов каталога, скачивания и удаления весов больше нет', async () => {
+    const { ipcMain } = setup();
+    expect(await ipcMain.invoke('app:assistant-voice-state')).toEqual({ state: 'no-key' });
+    for (const channel of ['voices', 'voice-models', 'voice-download', 'voice-cancel', 'voice-remove']) {
+      expect(() => ipcMain.invoke(`app:assistant-${channel}`), channel).toThrow();
     }
-    expect(tts.download).not.toHaveBeenCalled();
-    expect(tts.cancelDownload).not.toHaveBeenCalled();
-    expect(tts.remove).not.toHaveBeenCalled();
-    expect(sender.send).not.toHaveBeenCalled();
-  });
-
-  it('app:assistant-voice-models отдаёт скачанные модели службы', async () => {
-    const { ipcMain, tts } = setup();
-    await expect(ipcMain.invoke('app:assistant-voice-models')).resolves.toEqual(['qwen3-tts-0.6b-q8_0']);
-    tts.models.mockResolvedValueOnce(['qwen3-tts-0.6b-q8_0', 'qwen3-tts-1.7b-q8_0']);
-    await expect(ipcMain.invoke('app:assistant-voice-models')).resolves.toEqual(['qwen3-tts-0.6b-q8_0', 'qwen3-tts-1.7b-q8_0']);
-    expect(tts.download).not.toHaveBeenCalled();
   });
 });
 

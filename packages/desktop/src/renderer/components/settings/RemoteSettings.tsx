@@ -25,6 +25,8 @@ export interface RemoteSettingsProps {
   save: (key: keyof ParleyConfig, value: string) => Promise<void>;
   /** Error of the last failed `settings.set` for `remoteCreate`. */
   error?: string | undefined;
+  /** Error of the last failed settings.set for remoteVoice. */
+  voiceError?: string | undefined;
 }
 
 const OFF: RemoteState = { enabled: false, process: 'off', error: null, status: null };
@@ -41,7 +43,7 @@ function timeText(iso: string): string {
   return Number.isNaN(ms) ? iso : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
 }
 
-export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSettingsProps): JSX.Element {
+export function RemoteSettings({ bridge, config, locked, save, error, voiceError }: RemoteSettingsProps): JSX.Element {
   const remote = bridge.remote;
   const [state, setState] = useState<RemoteState>(OFF);
   const [pair, dispatch] = useReducer(pairReducer, INITIAL_PAIR);
@@ -303,6 +305,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
               />
             </label>
             <p className="text-xs text-muted-foreground">{TEXT.allowVoiceHint}</p>
+            {voiceError !== undefined ? <p className="text-xs text-destructive">{voiceError}</p> : null}
           </div>
 
           <div className="flex flex-col gap-2" data-testid="remote-pair">

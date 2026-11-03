@@ -47,25 +47,24 @@ export interface IslandAssistantConfig {
 export interface IslandSpeechConfig {
   /** «Speak answers» (`assistant.speak`). */
   enabled: boolean;
-  /** Голос каталога; на чистой установке — `DEFAULT_VOICE` (G4). */
+  /** Id голоса; на чистой установке — `DEFAULT_VOICE`. */
   voice: AssistantVoiceId;
   /** Род голоса: шаблонные фразы помощника (G2). */
   gender: VoiceGender;
-  /** Голос может звучать (`ttsAvailable`); нет — ответы текстом, само ничего не качается (G3, Р8). */
+  /** Голос может звучать (`ttsAvailable`); нет (например, нет ключа) — ответы текстом (G3, Р8). */
   available: boolean;
 }
 
 /** Состояние нейроголоса в main (`TtsService.state()`, B10): его видят остров (порт) и настройки. */
 export type TtsEngineState =
   | { state: 'unavailable'; reason: string }
-  | { state: 'not-downloaded' }
-  | { state: 'warming' }
+  | { state: 'no-key' }
   | { state: 'ready' }
   | { state: 'speaking' };
 
-/** Голос может звучать: веса скачаны и движок не отказал (`warming` — `speak` дождётся `ready`). */
+/** Голос может звучать: ключ OpenAI сохранён и движок не отказал. */
 export function ttsAvailable(state: TtsEngineState): boolean {
-  return state.state === 'ready' || state.state === 'speaking' || state.state === 'warming';
+  return state.state === 'ready' || state.state === 'speaking';
 }
 
 /** Предел текста одного предложения в `island:tts-speak`: длиннее — `bad_request`. */

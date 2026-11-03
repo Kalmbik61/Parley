@@ -178,7 +178,7 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
     onNavigatePending: vi.fn((listener: () => void) => { pendingNavigationHandler = listener; return () => { pendingNavigationHandler = null; }; }),
     onKeyboardBlur: vi.fn(() => () => undefined),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
-    speech: { connect: vi.fn(), speak: vi.fn(async () => ({ state: 'not-downloaded' as const })), cancel: vi.fn(), warmup: vi.fn(async () => ({ state: 'not-downloaded' as const })), setSpeak: vi.fn(async () => undefined) },
+    speech: { connect: vi.fn(), speak: vi.fn(async () => ({ state: 'no-key' as const })), cancel: vi.fn(), warmup: vi.fn(async () => ({ state: 'no-key' as const })), setSpeak: vi.fn(async () => undefined) },
   };
 }
 let pendingNavigationHandler: (() => void) | null = null;
@@ -1114,7 +1114,7 @@ describe('речь помощника (план 3b B22)', () => {
   });
 
   it('до прихода настроек речь выключена и голоса нет', () => {
-    expect(INITIAL_CONFIG.assistant.speech).toEqual({ enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false });
+    expect(INITIAL_CONFIG.assistant.speech).toEqual({ enabled: false, voice: 'alloy', gender: 'female', available: false });
   });
 });
 

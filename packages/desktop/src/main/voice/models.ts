@@ -1,6 +1,5 @@
 /**
- * Модели Whisper на диске (спека 4.2, 6.2): `~/.parley/desktop/voice/models` рядом с `ui.json`; веса нейроголоса
- * (план 3b, B04) — тем же хранилищем в `~/.parley/desktop/voice/tts`. Скачивание —
+ * Модели Whisper на диске (спека 4.2, 6.2): `~/.parley/desktop/voice/models` рядом с `ui.json`. Скачивание —
  * `net.fetch` main (системный прокси, переадресации Hugging Face на CDN) в `<файл>.part`, sha256 по ходу потока,
  * затем переименование. Обрыв, отмена и чужой sha256 удаляют `.part`; докачки нет. Одна модель качается один раз:
  * повторный вызов получает тот же промис.
@@ -22,8 +21,16 @@ export function voiceModelsDir(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'voice', 'models');
 }
 
-export function ttsModelsDir(home: string = parleyHome()): string {
-  return path.join(home, 'desktop', 'voice', 'tts');
+/**
+ * Разовая очистка (план 2026-11-03, S-del): веса прежнего локального нейроголоса лежали в `<home>/desktop/voice/tts` (до 3,5 ГБ,
+ * с недокачанными `.part`). Каталога нет — ничего не делает, поэтому годится на каждый запуск. Модели Whisper лежат
+ * рядом, в `voice/models`, и не затрагиваются. Возвращает, был ли каталог.
+ */
+export async function removeLegacyTtsDir(home: string = parleyHome()): Promise<boolean> {
+  const dir = path.join(home, 'desktop', 'voice', 'tts');
+  const existed = await stat(dir).then(() => true, () => false);
+  if (existed) await rm(dir, { recursive: true, force: true });
+  return existed;
 }
 
 export async function freeBytes(dir: string): Promise<number> {
@@ -32,8 +39,8 @@ export async function freeBytes(dir: string): Promise<number> {
 }
 
 /**
- * Запись каталога, которую умеет качать хранилище: модель Whisper (`VoiceModel`) или TTS (`TtsModel`). Своего `url`
- * у Whisper нет — его строит `voiceModelUrl`; у TTS адрес закреплён на коммит и лежит в записи.
+ * Запись каталога, которую умеет качать хранилище: модель Whisper (`VoiceModel`). Своего `url` у Whisper нет — его
+ * строит `voiceModelUrl`; поле осталось для записей с закреплённым адресом.
  */
 export interface StoredModel {
   id: string;

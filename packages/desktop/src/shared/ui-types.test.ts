@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VOICE } from './tts-types.js';
-import { assistantVoice, DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
+import { assistantGender, DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
 
 describe('normalizeUi', () => {
   it('пустой объект → DEFAULT_UI', () => {
@@ -254,7 +253,7 @@ describe('normalizeUi: звук и движение острова (#9 §5)', ()
 
 describe('normalizeUi: помощник', () => {
   it('нет ключа — умолчание: выключен, Alt+Space, провайдер, модель и язык не выбраны', () => {
-    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, voice: null });
+    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, gender: null, apiVoice: 'alloy' });
   });
 
   it('мусор — умолчание, годные поля остаются', () => {
@@ -269,7 +268,8 @@ describe('normalizeUi: помощник', () => {
       hotkey: 'Control+Alt+J',
       language: 'ru',
       speak: false,
-      voice: null,
+      gender: null,
+      apiVoice: 'alloy',
     });
   });
 
@@ -279,17 +279,33 @@ describe('normalizeUi: помощник', () => {
     expect(normalizeUi({ assistant: { language: 'english' } }).assistant.language).toBeNull();
   });
 
-  it('речь (план 3b, B15): speak выключен по умолчанию, голос — id каталога или null; старый ui.json без полей — умолчания', () => {
-    expect(normalizeUi({ assistant: { enabled: true } }).assistant).toMatchObject({ speak: false, voice: null });
-    expect(normalizeUi({ assistant: { speak: true, voice: 'qwen3-0.6b/ryan' } }).assistant).toMatchObject({ speak: true, voice: 'qwen3-0.6b/ryan' });
-    expect(normalizeUi({ assistant: { speak: 'yes', voice: 'Milena' } }).assistant).toMatchObject({ speak: false, voice: null });
-    expect(normalizeUi({ assistant: { speak: 1, voice: 5 } }).assistant).toMatchObject({ speak: false, voice: null });
+  it('речь (план 3b, B15): speak выключен по умолчанию, пол — female/male/neutral или null; старый ui.json без полей — умолчания', () => {
+    expect(normalizeUi({ assistant: { enabled: true } }).assistant).toMatchObject({ speak: false, gender: null });
+    expect(normalizeUi({ assistant: { speak: true, gender: 'male', apiVoice: 'alloy' } }).assistant).toMatchObject({ speak: true, gender: 'male' });
+    // старый ui.json без apiVoice: Speak answers выключается один раз при обновлении
+    expect(normalizeUi({ assistant: { speak: true, gender: 'male' } }).assistant).toMatchObject({ speak: false, gender: 'male' });
+    expect(normalizeUi({ assistant: { speak: 'yes', gender: 'robot' } }).assistant).toMatchObject({ speak: false, gender: null });
+    expect(normalizeUi({ assistant: { speak: 1, gender: 5 } }).assistant).toMatchObject({ speak: false, gender: null });
   });
 
-  it('G4: на чистой установке голос помощника — serena; выбранный — свой', () => {
-    expect(assistantVoice(normalizeUi({}).assistant)).toMatchObject({ id: DEFAULT_VOICE, name: 'Serena', gender: 'female' });
-    expect(DEFAULT_VOICE).toBe('qwen3-0.6b/serena');
-    expect(assistantVoice({ ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/ryan' })).toMatchObject({ id: 'qwen3-0.6b/ryan', gender: 'male' });
+  it('S-del: пол из старого assistant.voice (Qwen) переезжает в assistant.gender, старое поле не остаётся', () => {
+    const aiden = normalizeUi({ assistant: { voice: 'qwen3-0.6b/aiden' } }).assistant;
+    expect(aiden.gender).toBe('male');
+    expect(aiden).not.toHaveProperty('voice');
+    expect(normalizeUi({ assistant: { voice: 'qwen3-0.6b/ryan' } }).assistant.gender).toBe('male');
+    expect(normalizeUi({ assistant: { voice: 'qwen3-0.6b/serena' } }).assistant.gender).toBe('female');
+    expect(normalizeUi({ assistant: { apiVoice: 'nova' } }).assistant.apiVoice).toBe('nova');
+    expect(normalizeUi({ assistant: { apiVoice: 'nope' } }).assistant.apiVoice).toBe('alloy');
+    expect(normalizeUi({ assistant: { voice: 'qwen3-0.6b/vivian' } }).assistant.gender).toBe('female');
+    expect(normalizeUi({ assistant: { voice: 'qwen3-0.6b/ono_anna' } }).assistant.gender).toBe('female');
+    expect(normalizeUi({ assistant: { voice: 'Milena' } }).assistant.gender).toBeNull();
+    // Уже мигрированный файл: свой gender главнее старого голоса.
+    expect(normalizeUi({ assistant: { gender: 'neutral', voice: 'qwen3-0.6b/aiden' } }).assistant.gender).toBe('neutral');
+  });
+
+  it('S-del: без поля пол — female, как раньше', () => {
+    expect(assistantGender(normalizeUi({}).assistant)).toBe('female');
+    expect(assistantGender({ ...DEFAULT_UI.assistant, gender: 'male' })).toBe('male');
   });
 });
 

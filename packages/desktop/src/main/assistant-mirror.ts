@@ -1,11 +1,11 @@
 /**
  * Зеркало настроек помощника для хоста (план B, задача 11): хост отвечает из Telegram и сам настроек окна не видит,
  * поэтому main отправляет их методом `assistant.configure` при каждом подключении и сохранении ui.json. Род голоса
- * (план 3b, Р3) — из выбранного голоса каталога: им помощник говорит о себе на всех путях разговора.
+ * (план 3b, Р3) — из `assistant.gender`: им помощник говорит о себе на всех путях разговора.
  */
 import type { AssistantLanguage } from '@parley/core/assistant';
 import type { AssistantSettings } from '@parley/protocol';
-import { assistantVoice, type UiFile } from '../shared/ui-types.js';
+import { assistantGender, type UiFile } from '../shared/ui-types.js';
 import type { VoiceModelId } from '../shared/voice-types.js';
 
 export function assistantSettingsOf(
@@ -20,7 +20,7 @@ export function assistantSettingsOf(
     model: ui.assistant.model,
     language: language(ui),
     voiceModel: ui.voice.enabled && model !== null && voice.downloaded(model) ? voice.path(model) : null,
-    voiceGender: assistantVoice(ui.assistant).gender,
+    voiceGender: assistantGender(ui.assistant),
     // Провайдер последней новой работы — умолчание для агентов, которых помощник создаёт сам.
     defaultProvider: ui.lastProvider,
   };

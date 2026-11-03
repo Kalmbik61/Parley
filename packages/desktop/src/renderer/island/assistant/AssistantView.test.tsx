@@ -579,9 +579,9 @@ describe('речь: лицо, значок динамика, кадр голос
     expect(screen.getByTestId('assistant-speak').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('строка G3: голос не скачан — подсказка видна в середине вида', () => {
-    render(<AssistantView {...props({ notice: S.assistant.voiceMissing('Serena') }, { answer: 'Two agents.' })} />);
-    expect(screen.getByTestId('assistant-scroll').textContent).toContain('Voice "Serena" isn\'t downloaded — open Settings');
+  it('строка G3: нет ключа — подсказка видна в середине вида', () => {
+    render(<AssistantView {...props({ notice: S.assistant.voiceNoKey }, { answer: 'Two agents.' })} />);
+    expect(screen.getByTestId('assistant-scroll').textContent).toContain('Add an OpenAI key in Settings → Assistant to hear answers');
   });
 
   it('кадр голоса: геттер voice читается в кадре роя (подставной rAF), не при рендере', () => {

@@ -332,7 +332,7 @@
         </div>
         <h3>Ask the assistant. It acts only on your click.</h3>
         <p>Press ⌥Space or click the swarm and ask about your agents, works and rooms. The assistant sees every open work, room and session. It prepares cards — a letter, a room, an answer to an agent, a whole plan of new agents — and nothing happens until you confirm. It runs on your own subscription: each question is a short CLI run, not an API call.</p>
-        <p>With Speak answers on, it talks in a neural voice: Qwen3-TTS, run on your Mac by speech.cpp, with five voices. Its swarm becomes a face whose mouth follows the voice. No text or audio leaves your Mac for the voice.</p>
+        <p>With Speak answers on, it talks in a neural voice through the OpenAI speech API, with your own key and your choice of voice. Its swarm becomes a face whose mouth follows the voice. Only the answer text is sent to OpenAI, and only when you turn the voice on.</p>
       </article>
       <article class="icard" data-reveal>
         <div class="assist-demo" aria-hidden="true">
@@ -446,7 +446,7 @@
         <li data-reveal><span class="rule-no" aria-hidden="true">01</span><div><h3>Nothing starts without you.</h3><p>No YOLO flags. No work before you accept the decision. Parley never closes a session or puts it to sleep on its own, and quitting asks first.</p></div></li>
         <li data-reveal><span class="rule-no" aria-hidden="true">02</span><div><h3>Your CLIs, your login.</h3><p>Parley starts the unmodified claude and codex from your PATH, signed in as you. It never reads or stores their credentials, makes no requests to the Anthropic or OpenAI APIs, and adds no API keys and no extra bill.</p></div></li>
         <li data-reveal><span class="rule-no" aria-hidden="true">03</span><div><h3>Local only.</h3><p>The window and parley-host talk over a unix socket with its own handshake token; nothing is reachable from the network. No server, no telemetry. Parley's own requests are a once-a-day release check on GitHub, which you can turn off, and, for GLM, a quota query to Z.ai.</p></div></li>
-        <li data-reveal><span class="rule-no" aria-hidden="true">04</span><div><h3>Voice stays on your Mac.</h3><p>Dictation runs on Whisper and the assistant's voice on Qwen3-TTS, both on your Mac: no text or audio leaves it for them.</p></div></li>
+        <li data-reveal><span class="rule-no" aria-hidden="true">04</span><div><h3>Dictation stays on your Mac.</h3><p>Dictation runs on Whisper on your Mac: no audio leaves it. The assistant's spoken answers are optional and use your own OpenAI key.</p></div></li>
         <li data-reveal><span class="rule-no" aria-hidden="true">05</span><div><h3>Honest release notes.</h3><p>Every release says what is not proven yet.</p></div></li>
       </ol>
       <figure class="quote" id="quote" data-reveal>
