@@ -343,7 +343,8 @@ Parley на Маке из любой сети. Подключение «как �
   `bad_request`, закрытая сессия и архивная работа — `conflict` у всех пяти; Stop и Put to sleep — только сессии, чей
   процесс идёт в этом хосте, иначе `conflict` «session is not running»; `switchAgent` — только спящей или идущей в
   этом хосте (`pending` с процессом вне Parley дал бы второго агента в том же worktree), иначе `conflict`.
-  Сессии автономного движка (с `workspace`) телефон не меняет (правки 14: телефон не вмешивается в идущий прогон):
+  Сессии автономного движка (с `workspace`) телефон не меняет (правки 14: телефон не вмешивается в идущий прогон;
+  решено человеком 2026-11-03, окно не затронуто):
   `sessions.close`, `sessions.stop`, `feed.interrupt`, `sessions.switchAgent` и `sessions.resume` → `conflict`;
   `sessions.switchOptions` читается. `requestId` замены привязан к сессии и провайдеру: тот же `requestId` с другими →
   `conflict`, а не запомненный успех.
@@ -1838,3 +1839,4 @@ ID на действия» остаётся.
 |---|---|---|
 | 20.1 | В этап A: `feed.interrupt`, `sessions.stop`, `sessions.close`, `sessions.switchOptions`, `sessions.switchAgent` за переключателем; `sessions.close` уходит из запретного перечня | 4.2, 4.3 |
 | 20.2 | Весомые: закрытие сессии (`session-close`) и замена провайдера (`provider-switch`); Stop и Put to sleep — нет | 4.2, 12 |
+| 20.3 | Сессии идущего автономного движка телефон не закрывает, не останавливает, не будит и не переводит (`conflict`); окно не затронуто. Решено человеком 2026-11-03 | 4.2 |
