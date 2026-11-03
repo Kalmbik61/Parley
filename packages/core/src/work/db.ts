@@ -116,6 +116,44 @@ function upgradeIncarnations(db: DatabaseSync): void {
   `);
 }
 
+/**
+ * Assistant Core: `assistant_jobs` — задания помощника (`idempotency_key` не даёт выполнить одно дело дважды),
+ * `assistant_cards` — карточки подтверждения, что переживают рестарт хоста. `payload_json` карточки — всё, что хост
+ * знает о действии помимо вида для окна (`view_json`). `IF NOT EXISTS`: шаг повторяем на базе, у которой версию опустили.
+ */
+const SCHEMA_ASSISTANT_CORE = `
+  CREATE TABLE IF NOT EXISTS assistant_jobs (
+    job_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    origin TEXT NOT NULL,
+    correlation_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued','running','needs_confirmation','completed','failed','cancelled')),
+    revision INTEGER NOT NULL,
+    request_text TEXT NOT NULL,
+    result_summary TEXT,
+    provider TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_via TEXT,
+    outcome TEXT);
+  CREATE INDEX IF NOT EXISTS assistant_jobs_state ON assistant_jobs(state, provider, created_at);
+  CREATE TABLE IF NOT EXISTS assistant_cards (
+    proposal_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    view_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('active','decided','expired','superseded')),
+    revision INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_via TEXT,
+    outcome TEXT);
+  CREATE INDEX IF NOT EXISTS assistant_cards_state ON assistant_cards(state, source, created_at);
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -143,6 +181,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   },
   // 3: durable-номера создания работ (базам версии 2; пройденным через шаг 2 уже выданы).
   { version: 3, up: upgradeIncarnationsOnce },
+  // 4: durable jobs и карточки Assistant Core (спека 2026-11-03, задача C2).
+  { version: 4, up: (db) => db.exec(SCHEMA_ASSISTANT_CORE) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
@@ -219,6 +259,13 @@ function createPrivateFile(file: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
+}
+
+/** База в памяти со всей схемой: для тестов и для сервисов, которым хранилище ещё не передали. */
+export function openMemoryDb(): DatabaseSync {
+  const db = new Database(':memory:');
+  runMigrations(db);
+  return db;
 }
 
 /** Закрывает базу, если она открыта: для тестов и остановки хоста. Повторный вызов ничего не делает. */

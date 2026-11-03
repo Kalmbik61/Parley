@@ -222,6 +222,7 @@ export type {
   ActionVerb,
   ActionsReport,
   AssistantDetail,
+  AssistantJobChanged,
   AssistantMethodResults,
   AssistantOrigin,
   AssistantPhase,

@@ -208,6 +208,8 @@ export const assistantMethodSchemas = {
     /** `actions` — решение по карточке с планом; без поля хост такой план не выполнит. Старый хост поле молча отбросит. */
     action: z.literal('actions').optional(),
   }),
+  /** «Запросить заново»: новая карточка на месте просроченной (новый id). */
+  'assistant.reissue': z.object({ proposalId: z.string().min(1) }),
   'assistant.reset': z.object({}),
   'assistant.state': z.object({}),
   'assistant.sent': z.object({ ref: sessionRef }),
@@ -229,10 +231,18 @@ export const assistantMethodSchemas = {
 /** Параметры `assistant.configure`. */
 export type AssistantSettings = z.infer<(typeof assistantMethodSchemas)['assistant.configure']>;
 
+/** Событие `assistant.job.changed`: job помощника сменил состояние; `revision` растёт только вверх. */
+export interface AssistantJobChanged {
+  jobId: string;
+  state: 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
+  revision: number;
+}
+
 export interface AssistantMethodResults {
   'assistant.ask': { ok: true };
   'assistant.cancel': { ok: true };
   'assistant.decide': { applied: boolean; error: string | null };
+  'assistant.reissue': { applied: boolean; error: string | null; proposalId: string | null };
   'assistant.reset': { ok: true };
   'assistant.state': AssistantState;
   'assistant.configure': { ok: true };

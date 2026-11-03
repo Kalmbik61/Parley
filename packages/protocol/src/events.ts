@@ -1,4 +1,4 @@
-import type { AssistantState } from './assistant.js';
+import type { AssistantJobChanged, AssistantState } from './assistant.js';
 import type { TelegramStatus } from './telegram.js';
 import type { ConsentCard } from './consents.js';
 import type { BacklogChanged } from './backlog.js';
@@ -74,6 +74,7 @@ export interface Events {
    */
   'browser.agentOp': BrowserAgentOpEvent;
   'assistant.changed': AssistantState;
+  'assistant.job.changed': AssistantJobChanged;
   'telegram.changed': TelegramStatus;
   /**
    * Изменились карточки согласий (спека 2026-10-21, 4.4): `upsert` — новые и изменённые, `removed` — `id` решённых

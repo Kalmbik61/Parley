@@ -3,10 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { closeWorkDb, createWork, WorkNotFoundError, writeLetters } from '@parley/core';
+import { closeWorkDb, createWork, openMemoryDb, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
+import { createCardStore } from './cards.js';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
@@ -1550,5 +1551,120 @@ describe('assistant-service: план действий', () => {
     void service;
     turns[0]?.emit({ type: 'tool', name: 'propose_actions', input: { steps: [] } });
     expect(last().detail).toEqual({ tool: 'propose', target: null });
+  });
+});
+
+describe('assistant-service: durable карточки', () => {
+  const propose = async (service: ReturnType<typeof createAssistantService>, text: string, origin?: 'island' | 'telegram') => {
+    await service.ask(ASK, origin);
+    expect((await service.tool('propose_message', { target: 'Auth', text })).status).toBe(200);
+    return last().proposal!;
+  };
+
+  it('рестарт с активной карточкой: она перепубликуется, подтверждение работает ровно один раз', async () => {
+    const store = createCardStore(openMemoryDb());
+    const before = createAssistantService({ ...deps, cards: store });
+    const card = await propose(before, 'Пропусти Safari');
+    before.stop();
+
+    const after = createAssistantService({ ...deps, cards: store });
+    expect(after.state()).toMatchObject({ phase: 'awaiting-confirm', proposal: { id: card.id, text: 'Пропусти Safari' } });
+    const [first, second] = await Promise.all([after.decide(card.id, 'send', undefined, 'mobile'), after.decide(card.id, 'send')]);
+    expect([first.applied, second.applied].sort()).toEqual([false, true]);
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    expect(store.get(card.id)).toMatchObject({ state: 'decided', decidedVia: 'mobile', outcome: 'sent' });
+    after.stop();
+  });
+
+  it('рестарт: захваченная карточка без итога получает unknown и не подтверждается', async () => {
+    const store = createCardStore(openMemoryDb());
+    const before = createAssistantService({ ...deps, cards: store });
+    const card = await propose(before, 'Пропусти Safari');
+    before.stop();
+    store.claim(card.id, Date.now()); // хост умер между захватом и итогом
+    const after = createAssistantService({ ...deps, cards: store });
+    expect(store.get(card.id)).toMatchObject({ state: 'decided', outcome: 'unknown' });
+    expect(after.state().proposal).toBeNull();
+    await expect(after.decide(card.id, 'send')).resolves.toMatchObject({ applied: false });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    after.stop();
+  });
+
+  it('рестарт: проверка сроков стоит на ближайшем expiresAt, а не на полном TTL', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createCardStore(openMemoryDb());
+      const before = createAssistantService({ ...deps, cards: store, cardTtlMs: 60_000 });
+      const card = await propose(before, 'Пропусти Safari');
+      before.stop();
+      vi.setSystemTime(Date.now() + 50_000); // осталось 10 с из 60
+      const after = createAssistantService({ ...deps, cards: store, cardTtlMs: 60_000 });
+      expect(after.state().proposal?.id).toBe(card.id);
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(store.get(card.id)?.state).toBe('expired');
+      expect(after.state().proposal).toBeNull();
+      after.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('новый хост продолжает нумерацию карточек: id не повторяется', async () => {
+    const store = createCardStore(openMemoryDb());
+    const first = createAssistantService({ ...deps, cards: store });
+    const one = await propose(first, 'раз');
+    first.stop();
+    const second = createAssistantService({ ...deps, cards: store });
+    await second.decide(one.id, 'cancel');
+    const two = await propose(second, 'два');
+    expect(two.id).not.toBe(one.id);
+    second.stop();
+  });
+
+  it('истёкшая карточка терминальна: decide отказывает без действия, «Запросить заново» выдаёт новый id', async () => {
+    let clock = 1_000_000;
+    const service = createAssistantService({ ...deps, now: () => clock, cardTtlMs: 60_000 });
+    const card = await propose(service, 'Пропусти Safari');
+    clock += 61_000;
+    await expect(service.decide(card.id, 'send')).resolves.toEqual({ applied: false, error: 'This card has already expired' });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    expect(service.state().proposal).toBeNull();
+    await expect(service.decide(card.id, 'send')).resolves.toMatchObject({ applied: false });
+
+    const again = service.reissue(card.id);
+    expect(again).toMatchObject({ applied: true, error: null });
+    expect(again.proposalId).not.toBe(card.id);
+    expect(service.state().proposal).toMatchObject({ id: again.proposalId, text: 'Пропусти Safari' });
+    await expect(service.decide(again.proposalId!, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it('карточка одного источника не затирает карточку другого', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store });
+    const island = await propose(service, 'остров', 'island');
+    const telegram = await propose(service, 'телеграм', 'telegram');
+    expect(store.get(island.id)?.state).toBe('active');
+    expect(store.get(telegram.id)?.state).toBe('active');
+    await expect(service.decide(island.id, 'send', undefined, 'telegram')).resolves.toEqual({ applied: true, error: null });
+    expect(store.get(island.id)).toMatchObject({ decidedVia: 'telegram', outcome: 'sent' });
+    expect(store.get(telegram.id)?.state).toBe('active');
+    // Новая карточка того же источника вытесняет прежнюю.
+    const next = await propose(service, 'остров 2', 'island');
+    const newer = await propose(service, 'остров 3', 'island');
+    expect(store.get(next.id)?.state).toBe('superseded');
+    expect(newer.id).not.toBe(next.id);
+    service.stop();
+  });
+
+  it('конец диалога CLI по тишине карточку не снимает', async () => {
+    const service = createAssistantService({ ...deps, idleMs: 30 });
+    const card = await propose(service, 'ждёт');
+    turns[0]?.end({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(service.state().proposal?.id).toBe(card.id);
+    await expect(service.decide(card.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    service.stop();
   });
 });

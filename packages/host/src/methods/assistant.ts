@@ -13,6 +13,7 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     return { ok: true };
   };
   const decide: Handler<'assistant.decide'> = (params) => service.decide(params.proposalId, params.decision, params.action);
+  const reissue: Handler<'assistant.reissue'> = async (params) => service.reissue(params.proposalId);
   const reset: Handler<'assistant.reset'> = async () => {
     service.reset();
     return { ok: true };
@@ -27,6 +28,7 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     'assistant.ask': ask as AnyHandler,
     'assistant.cancel': cancel as AnyHandler,
     'assistant.decide': decide as AnyHandler,
+    'assistant.reissue': reissue as AnyHandler,
     'assistant.reset': reset as AnyHandler,
     'assistant.state': state as AnyHandler,
     'assistant.sent': sent as AnyHandler,

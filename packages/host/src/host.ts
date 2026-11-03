@@ -13,9 +13,12 @@ import { fileURLToPath } from 'node:url';
 import {
   AGENT_TOOLS_PATH,
   ASSISTANT_MIN_VERSIONS,
+  ASSISTANT_PROVIDER_ORDER,
+  assistantCwd,
   bothEnv,
   clearSecret,
   closeWorkDb,
+  workDb,
   createWork,
   findRunnerBinary,
   grantTrust,
@@ -106,6 +109,9 @@ import { addRoomMember, createHumanRoom, resolveRoomProposal, sendHumanLetter } 
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { createReminderStore } from './assistant/reminders.js';
+import { createCardStore } from './assistant/cards.js';
+import { createJobs } from './assistant/jobs.js';
+import { createJobExecutor } from './assistant/job-executor.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
@@ -728,6 +734,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
     return null;
   };
+  const assistantReady = async (entry: ProviderEntry): Promise<string | null> => {
+    const notReady = await sessionReady(entry);
+    if (notReady !== null) return notReady;
+    const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];
+    const version = providerVersions.get(entry.runner.command);
+    return min !== undefined && version !== null && !versionAtLeast(version, min)
+      ? `Update the ${entry.label} CLI to ${min} or newer to use the assistant`
+      : null;
+  };
+  const assistantLaunchEnv = async (entry: ProviderEntry): Promise<NodeJS.ProcessEnv> => providerLaunchEnv(entry, process.env, {}, await secretOf(entry));
   const reminders = createReminderStore({ home: parleyHome(), log: (line) => log.info(line) });
   assistantService = createAssistantService({
     broadcast: (event, data) => handle.context.broadcast(event, data),
@@ -779,23 +795,33 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       handle.context.clients().some((client) => client.features.has(ASSISTANT_ACTIONS_FEATURE)) ||
       (telegram.status().enabled && telegram.status().owner !== null),
     providers: () => loadProviders(),
-    ready: async (entry) => {
-      const notReady = await sessionReady(entry);
-      if (notReady !== null) return notReady;
-      const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];
-      const version = providerVersions.get(entry.runner.command);
-      return min !== undefined && version !== null && !versionAtLeast(version, min)
-        ? `Update the ${entry.label} CLI to ${min} or newer to use the assistant`
-        : null;
-    },
-    launchEnv: async (entry) => providerLaunchEnv(entry, process.env, {}, await secretOf(entry)),
+    ready: assistantReady,
+    launchEnv: assistantLaunchEnv,
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
+    cards: createCardStore(workDb()),
     home: parleyHome(),
     log: (line) => log.info(line),
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
   });
   const reminderTarget = assistantService;
+
+  // Jobs помощника: отдельный прогон CLI на job; перед стартом хоста сверяются «зависшие» running, при остановке прогоны гасятся.
+  const assistantJobs = createJobs({
+    db: workDb(),
+    execute: createJobExecutor({
+      providers: () => loadProviders(),
+      ready: assistantReady,
+      launchEnv: assistantLaunchEnv,
+      binary: (command) => findRunnerBinary(command, process.env),
+      cwd: assistantCwd(parleyHome()),
+    }),
+    defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
+    log: (line) => log.info(line),
+  });
+  assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
+  void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
+  handle.context.onShutdown(async () => assistantJobs.stop());
 
   // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.
   const telegram = createTelegramService({

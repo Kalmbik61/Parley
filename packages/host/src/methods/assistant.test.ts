@@ -32,6 +32,13 @@ describe('createAssistantHandlers', () => {
     expect(decide).toHaveBeenCalledWith('p1', 'cancel', undefined);
   });
 
+  it('assistant.reissue передаёт id сервису и возвращает новый', async () => {
+    const reissue = vi.fn().mockReturnValue({ applied: true, error: null, proposalId: 'p9' });
+    const handlers = createAssistantHandlers({ reissue } as unknown as AssistantService);
+    expect(await call(handlers, 'assistant.reissue', METHODS['assistant.reissue'].parse({ proposalId: 'p1' }))).toEqual({ applied: true, error: null, proposalId: 'p9' });
+    expect(reissue).toHaveBeenCalledWith('p1');
+  });
+
   it('assistant.ask не меняется: рода в параметрах вопроса нет', () => {
     const parsed = METHODS['assistant.ask'].parse({ text: 'x', provider: null, model: null, language: 'ru', voiceGender: 'male' });
     expect(parsed).not.toHaveProperty('voiceGender');
