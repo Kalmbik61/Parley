@@ -167,7 +167,10 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   };
 
   const worktree = session?.worktree ?? null;
-  const canDiscard = ref !== null && worktree !== null && worktree.createdAt !== null && !discarded;
+  // Папку копии убрала уборка хоста: остаётся ветка (или, если она слита, ничего).
+  const removed = worktree !== null && Boolean(worktree.removedAt);
+  const branchDeleted = source?.kind === 'worktree' && source.diff.branchDeleted === true;
+  const canDiscard = ref !== null && worktree !== null && worktree.createdAt !== null && !discarded && !branchDeleted;
   const discard = (force: boolean): void => {
     if (ref === null || key === null) return;
     // Вкладки файлов этого worktree — сначала, с вопросом о несохранённых (раунд fix-final-c, п. 3),
@@ -335,15 +338,23 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
     );
   }
 
+  const removedNote =
+    removed && worktree !== null && ref !== null && !discarded && error === null && source?.kind === 'worktree' ? (
+      <div className="shrink-0 px-3 py-1 text-xs text-muted-foreground">
+        {branchDeleted ? S.changes.branchMergedDeleted : S.changes.copyRemoved(worktree.branch)}
+      </div>
+    ) : null;
+
   return (
     <div data-testid="changes-panel" className="flex min-h-0 flex-1 flex-col">
       {header}
       {ref !== null && !discarded && error === null ? summary : null}
+      {removedNote}
       {body}
       <ConfirmDialog
         open={discardFirst}
         title={S.changes.discardWorktreeTitle(sessionTag(sessionId ?? ''))}
-        description={S.changes.discardWorktreeDescription}
+        description={removed ? S.changes.discardBranchDescription : S.changes.discardWorktreeDescription}
         confirmLabel={S.changes.discard}
         onConfirm={() => {
           // Незакоммиченное пропадёт — только второй вопрос шлёт force: true.

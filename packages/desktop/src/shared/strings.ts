@@ -1395,6 +1395,26 @@ export const S = {
     projectsGrantedAt: (iso: string): string => new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }),
     projectsBy: (by: string): string => `by ${by}`,
     worktreeRoot: 'Worktree root',
+    /** Секция Worktrees в Projects: копии, которые хост не смог убрать сам. */
+    worktrees: {
+      heading: 'Worktrees',
+      empty: 'Nothing to clean up.',
+      reason: {
+        dirty: (files: number | null): string => `${files ?? 0} uncommitted files`,
+        unsaved: 'Unsaved edits in an open tab',
+        refused: (message: string | null): string => `Git refused: ${message ?? 'unknown reason'}`,
+        inUse: 'The session is still running',
+      },
+      size: (bytes: number): string =>
+        bytes < 1_073_741_824 ? `${Math.max(1, Math.round(bytes / 1_048_576))} MB` : `${(bytes / 1_073_741_824).toFixed(1)} GB`,
+      sizeLabel: (formatted: string): string => `≈ ${formatted}`,
+      sizeHint: 'size on disk is approximate',
+      removeCopy: 'Remove copy',
+      removeAll: 'Remove all',
+      confirmBody: 'Uncommitted changes in this copy will be lost. Commits stay in its branch.',
+      confirmAllTitle: (count: number): string => `Remove ${count} copies?`,
+      confirmTitle: 'Remove this copy?',
+    },
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
       heading: 'Work limits',
@@ -1757,6 +1777,10 @@ export const S = {
     discardWorktreeEllipsis: 'Discard worktree…',
     discardWorktreeTitle: (session: string): string => `Discard the worktree of ${session}?`,
     discardWorktreeDescription: 'The session will be stopped and closed. Its worktree folder and branch will be deleted.',
+    /** Копию убрала уборка хоста (`removedAt`): папки нет, ветка жива. */
+    copyRemoved: (branch: string): string => `The worktree folder was removed. Its branch ${branch} is kept.`,
+    branchMergedDeleted: 'The branch was merged, and Parley deleted it together with the worktree folder.',
+    discardBranchDescription: 'The session will be closed. Its branch will be deleted.',
     /**
      * Вкладка диффа (кусок 8.3, спека 11.3) — `review/DiffTab.tsx` и соседи. Двоичный файл —
      * `S.files.binary`, сбой Monaco — `S.files.editorFailed`, заголовок вкладки — `S.tabs.diffTitle`.
@@ -2721,6 +2745,8 @@ export const S = {
       saveSettings: 'save settings',
       loadTrustedFolders: 'load trusted folders',
       revokeTrust: 'revoke trust',
+      loadWorktrees: 'load the leftover worktrees',
+      removeWorktree: 'remove the worktree copy',
       checkFolderTrust: 'check the folder trust',
       grantTrust: 'trust the folder',
       renameWorkspace: 'rename workspace',

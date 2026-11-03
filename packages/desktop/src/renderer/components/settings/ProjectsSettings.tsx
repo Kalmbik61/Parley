@@ -9,7 +9,9 @@ import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { shortenMiddle } from '../../lib/shorten-middle.js';
+import { useHostSupports } from '../../lib/capabilities.js';
 import { Button } from '../../ui/button.js';
+import { WorktreeLeftovers } from './WorktreeLeftovers.js';
 
 export interface ProjectsSettingsProps {
   bridge: ParleyBridge;
@@ -55,6 +57,7 @@ export function ProjectsSettings({ bridge }: ProjectsSettingsProps): JSX.Element
     }
   };
 
+  const hasLeftovers = useHostSupports('worktrees.leftovers');
   const text = S.settings;
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -87,6 +90,7 @@ export function ProjectsSettings({ bridge }: ProjectsSettingsProps): JSX.Element
           ))}
         </ul>
       ) : null}
+      {hasLeftovers ? <WorktreeLeftovers bridge={bridge} /> : null}
     </div>
   );
 }

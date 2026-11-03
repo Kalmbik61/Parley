@@ -85,6 +85,14 @@ describe('loadSides (тест 1)', () => {
     expect(sides).toEqual({ original: 'head\n', modified: 'disk\n', tooLarge: false, binary: false });
   });
 
+  it('убранная копия: правая сторона — gitShow(head) корня проекта, диск не читается', async () => {
+    bridge.setGitShow(PROJECT, BASE, 'a.ts', text('old\n'));
+    bridge.setGitShow(PROJECT, HASH, 'a.ts', text('branch\n'));
+    const sides = await loadSides({ files: bridge.files, root: PROJECT, file: file('a.ts'), mode: { kind: 'branch', base: BASE, head: HASH } });
+    expect(sides).toEqual({ original: 'old\n', modified: 'branch\n', tooLarge: false, binary: false });
+    expect(bridge.readTextCalls).toEqual([]);
+  });
+
   it('2 МБ → tooLarge, текст есть (для «Show anyway»); отказ files:too-large → tooLarge без текста', async () => {
     const big = 'x'.repeat(2 * 1024 * 1024);
     bridge.setGitShow(WT, BASE, 'big.txt', text('small\n'));

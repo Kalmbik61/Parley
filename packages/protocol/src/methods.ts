@@ -9,8 +9,10 @@ import type {
   MergeCheck,
   MergeResult,
   ProjectChanges,
+  RemoveCopyResult,
   RoomUsage,
   WorktreeDiff,
+  WorktreeLeftover,
 } from '@parley/core';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
 import { capabilityPluginMethodSchemas } from './capability-plugin-actions.js';
@@ -333,6 +335,10 @@ export const METHODS = {
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
   // Этап 8: конфликты до слияния и изменения папки проекта для сессии без worktree (спека 3.2, 11.5).
   'worktrees.mergeCheck': z.object({ ref: sessionRef }),
+  'worktrees.hold': z.object({ refs: z.array(sessionRef).max(500) }),
+  // Остатки уборки копий и принудительное «Remove copy» (спека 2026-11-03, 4.1).
+  'worktrees.leftovers': z.object({}),
+  'worktrees.removeCopy': z.object({ ref: sessionRef }),
   'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
   'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
   // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
@@ -572,6 +578,9 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
   'worktrees.mergeCheck': MergeCheck;
+  'worktrees.hold': { ok: true };
+  'worktrees.leftovers': { items: WorktreeLeftover[] };
+  'worktrees.removeCopy': RemoveCopyResult;
   'changes.project': ProjectChanges;
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };

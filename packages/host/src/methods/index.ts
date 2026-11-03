@@ -33,6 +33,8 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
+import type { WorktreeHolds } from '../worktrees/holds.js';
+import type { WorktreeSweeper } from '../worktrees/worktree-sweeper.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createAssistantHandlers } from './assistant.js';
@@ -93,6 +95,10 @@ export interface MethodDeps {
   swarms?: Pick<SwarmsService, 'humanClosed'>;
   wake: WakeService;
   worktrees: WorktreesService;
+  /** Копии, которые держит окно (несохранённые вкладки); уборка читает их же. */
+  holds?: WorktreeHolds;
+  /** Служба уборки копий (`worktrees.leftovers`, `worktrees.removeCopy`). */
+  sweeper?: WorktreeSweeper;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
   /**
@@ -343,6 +349,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
     'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
     'worktrees.mergeCheck': worktrees.worktreesMergeCheck as AnyHandler,
+    'worktrees.hold': worktrees.worktreesHold as AnyHandler,
+    'worktrees.leftovers': worktrees.worktreesLeftovers as AnyHandler,
+    'worktrees.removeCopy': worktrees.worktreesRemoveCopy as AnyHandler,
     'changes.project': changes.changesProject as AnyHandler,
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
     'swarms.create': createSwarmsCreate(deps.sessions) as AnyHandler,

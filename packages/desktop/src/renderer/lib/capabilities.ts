@@ -81,6 +81,9 @@ export const REQUIRED_METHODS: readonly string[] = [
   'swarms.seen',
   'sessions.setKeepAwake',
   'capacity.get',
+  'worktrees.hold',
+  'worktrees.leftovers',
+  'worktrees.removeCopy',
 ];
 
 /** Методы хоста; без связи — пусто: звать всё равно некого. */

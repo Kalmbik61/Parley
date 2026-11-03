@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   addSystemMessage,
@@ -286,6 +287,13 @@ export interface SessionsService {
   /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
   delete(ref: SessionRef, force?: boolean): Promise<void>;
   live(ref: SessionRef): boolean;
+  /**
+   * Уборка копии под замком сессии: `null` без запуска `run`, если сессия жива, запускается или закрывается; иначе
+   * `launch` этой сессии ждёт окончания `run` (ошибку он не видит).
+   */
+  sweepGuard<T>(ref: SessionRef, run: () => Promise<T>): Promise<T | null>;
+  /** Разрешается, когда уборка копии этой сессии не идёт: сброс и замена ждут её, как запуск. */
+  afterSweep(ref: SessionRef): Promise<void>;
   stopAll(): Promise<void>;
   /** Собирает прерванных посреди хода — на старте хоста, после сверки живости. */
   collectInterrupted(): Promise<void>;
@@ -517,6 +525,8 @@ export function createSessionsService(
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
   // ручной `sessions.resume` одновременно с подъёмом той же сессии письмом.
   const launching = new Set<string>();
+  /** Сессии, чью копию сейчас убирают: ключ → промис уборки. Запуск ждёт его до своих проверок. */
+  const sweeping = new Map<string, Promise<unknown>>();
 
   // Идущие замены агента (спека замены агента, 5.3, 6.13): по сессии — id запроса и его исход. Живут только в памяти
   // этого хоста: `switching` в карте без записи здесь после перезапуска — оборванная замена (`clearStaleSwitches`).
@@ -771,6 +781,12 @@ export function createSessionsService(
     }
   }
 
+  /** Ждёт окончания идущей уборки копии этой сессии (ошибку уборки не видит). */
+  async function afterSweep(ref: SessionRef): Promise<void> {
+    const sweep = sweeping.get(refKey(ref));
+    if (sweep !== undefined) await sweep.catch(() => {});
+  }
+
   /** Исход запуска и, для `held`, причина удержания; запись причины живёт ровно один вызов — подъёмы и продолжения её не копят. */
   async function launchDetailed(
     ref: SessionRef,
@@ -778,6 +794,7 @@ export function createSessionsService(
     options: LaunchChoice = {},
   ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
+    await afterSweep(ref);
     if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
@@ -988,10 +1005,25 @@ export function createSessionsService(
       // Worktree запланирован (`plannedWorktree` в `create()` или в старой карте
       // в core), но каталога на диске ещё нет — заводим его перед первым же
       // запуском, в том числе перед `resume` прерванной сессии (спека 8.1–8.3).
-      if (session.worktree !== null && session.worktree.createdAt === null) {
-        const worktree = session.worktree;
+      // Убранная копия (`removedAt` или каталог пропал) поднимается из своей ветки (`reuseBranch`).
+      const planned = session.worktree;
+      let needsWorktree = false;
+      if (planned !== null) {
+        needsWorktree = planned.createdAt === null || Boolean(planned.removedAt);
+        if (!needsWorktree) {
+          try {
+            await stat(planned.path);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            needsWorktree = code === 'ENOENT' || code === 'ENOTDIR';
+          }
+        }
+      }
+      if (planned !== null && needsWorktree) {
+        const worktree = planned;
+        const reuseBranch = worktree.createdAt !== null;
         try {
-          await timer.step('worktree', () => createWorktree(ref.projectPath, worktree));
+          await timer.step('worktree', () => createWorktree(ref.projectPath, worktree, { reuseBranch }));
         } catch (error) {
           const text = `worktree for ${sessionTag(ref.sessionId)} was not created: ${(error as Error).message}`;
           host.broadcast('host.notice', {
@@ -1019,10 +1051,12 @@ export function createSessionsService(
         }
         const createdAt = new Date().toISOString();
         worktree.createdAt = createdAt;
+        delete worktree.removedAt;
         await timer.step('worktree', () => updateMap(ref.projectPath, ref.workId, (current) => {
           const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
           if (target?.worktree !== null && target?.worktree !== undefined) {
             target.worktree.createdAt = createdAt;
+            delete target.worktree.removedAt;
           }
         }));
       }
@@ -1881,6 +1915,8 @@ export function createSessionsService(
   /** Шаги 1–9 спеки 5.3 под замком `exclusive` и ключом `launching` на весь срок (6.3). */
   async function runSwitch(ref: SessionRef, request: SwitchRequest): Promise<Result<'sessions.switchAgent'>> {
     const key = refKey(ref);
+    // Идущая уборка копии держит замок сессии: замена, что запустила бы агента посреди неё, нашла бы копию без папки.
+    await afterSweep(ref);
     const carry = request.carry ?? 'handover';
     const map = await readMap(ref.projectPath, ref.workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1920,7 +1956,7 @@ export function createSessionsService(
     if (current.switching !== null && current.switching !== undefined) {
       throw busyError('The session is already continuing on another provider');
     }
-    if (launching.has(key) || closing.has(key)) throw busyError('The session is starting; try again in a moment');
+    if (launching.has(key) || closing.has(key) || sweeping.has(key)) throw busyError('The session is starting; try again in a moment');
     // Причина — по снимку до остановки: выход процесса и `endBySwitch` снимают `stuck`.
     const reason = switchReason(current, registry);
 
@@ -2239,6 +2275,7 @@ export function createSessionsService(
   }
 
   async function del(ref: SessionRef, force = false): Promise<void> {
+    await afterSweep(ref);
     await stop(ref);
     // Worktree — рабочая копия на диске, а не только запись в карте: грязную
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
@@ -2316,6 +2353,18 @@ export function createSessionsService(
     switchAgent,
     clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
+    afterSweep,
+    async sweepGuard(ref, run) {
+      const key = refKey(ref);
+      if (pty.get(ref) !== undefined || launching.has(key) || closing.has(key) || sweeping.has(key)) return null;
+      const running = run();
+      sweeping.set(key, running);
+      try {
+        return await running;
+      } finally {
+        sweeping.delete(key);
+      }
+    },
     async stopAll() {
       await Promise.all(
         pty.list().map((handle) =>

@@ -100,14 +100,49 @@ export async function baseBranchOf(checkoutPath: string): Promise<string> {
   return (await run('git', [...NO_FSMONITOR, '-C', checkoutPath, 'rev-parse', 'HEAD'])).stdout.trim();
 }
 
+/** Каталог есть: ENOENT/ENOTDIR — нет, любая другая ошибка `stat` (EACCES, EMFILE) — не «нет», а сбой. */
+async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    await stat(dir);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
+  }
+}
+
+/** Знает ли git этот путь как рабочую копию; git пишет realpath, а каталога может не быть — сравнение по realpath родителя. */
+async function isRegistered(projectPath: string, dir: string): Promise<boolean> {
+  // Нет и родителя — копия не могла быть зарегистрирована под realpath, остаётся сравнение как есть.
+  const parent = await realpath(path.dirname(dir)).catch(() => path.dirname(dir));
+  const real = path.join(parent, path.basename(dir));
+  return (await listWorktrees(projectPath)).some((entry) => entry.path === real || entry.path === dir);
+}
+
 /**
  * Заводит worktree на диске: каталог создаёт сама команда, родителя — на всякий случай мы.
  * База и ветка — из карты (база бывает веткой родителя): проверка до git и до
  * mkdir, `--end-of-options` — чтобы база вида `--upload-pack=…` не стала флагом.
+ * `reuseBranch` поднимает копию на уже существующей ветке (после уборки каталога);
+ * без него существующая ветка — отказ git, как и прежде.
  */
-export async function createWorktree(projectPath: string, info: WorktreeInfo): Promise<void> {
+export async function createWorktree(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { reuseBranch?: boolean } = {},
+): Promise<void> {
   await assertRevisions(projectPath, [info.base, info.branch]);
   await mkdir(path.dirname(info.path), { recursive: true });
+  // Регистрация осталась после ручного удаления каталога — git иначе откажет в `add`.
+  if ((await isRegistered(projectPath, info.path)) && !(await directoryExists(info.path))) {
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
+  }
+  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+  if (options.reuseBranch === true && code === 0) {
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'add', '--end-of-options', info.path, info.branch]);
+    return;
+  }
   await run('git', [
     ...NO_FSMONITOR,
     '-C',
@@ -791,6 +826,75 @@ export interface WorktreeDiff {
    * хост старее раунда fix-final-c, считать 0.
    */
   uncountedUntracked?: number;
+  /** Копию убрала уборка и влитую ветку удалила вместе с ней: дифф пуст. Нет поля — старый хост. */
+  branchDeleted?: boolean;
+}
+
+/** Есть ли локальная ветка `refs/heads/<branch>`. */
+async function branchExists(projectPath: string, branch: string): Promise<boolean> {
+  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  return code === 0;
+}
+
+/** Дифф ветки, чью копию убрала уборка: всё из папки проекта, без чтения копии. */
+async function branchOnlyDiff(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { patch?: boolean },
+): Promise<WorktreeDiff> {
+  const project = await readerAt(projectPath);
+  const baseCheckout = await findBaseCheckout(projectPath, info.base);
+  const baseDirty =
+    baseCheckout === null
+      ? false
+      : await isDirty(await checkoutReader(projectPath, baseCheckout), await projectPrefix(project));
+  if (!(await branchExists(projectPath, info.branch))) {
+    return {
+      patch: '',
+      files: [],
+      uncommitted: false,
+      baseCheckout,
+      baseDirty,
+      mergeBase: '',
+      stats: { additions: 0, deletions: 0 },
+      commits: [],
+      uncommittedPaths: [],
+      uncountedUntracked: 0,
+      branchDeleted: true,
+    };
+  }
+  const mergeBase = (await readGit(project, ['merge-base', '--end-of-options', info.base, info.branch])).trim();
+  const range = `${mergeBase}..${info.branch}`;
+  const [status, numstat] = await Promise.all([
+    readGitBuffer(project, ['diff', ...DIFF_READ, '-M', '--name-status', '-z', '--end-of-options', range]),
+    readGitBuffer(project, ['diff', ...DIFF_READ, '-M', '--numstat', '-z', '--end-of-options', range]),
+  ]);
+  const counts = parseNumstat(numstat);
+  const files = joinDiffFiles(parseNameStatusZ(status), counts);
+  const commits = parseCommits(
+    await readGit(project, [
+      'log',
+      '-n',
+      String(MAX_COMMITS),
+      '--format=%H%x00%s%x00%an%x00%aI',
+      '--end-of-options',
+      range,
+    ]),
+  );
+  const patch =
+    options.patch === false ? '' : await readGit(project, ['diff', ...DIFF_READ, '--end-of-options', range]);
+  return {
+    patch,
+    files,
+    uncommitted: false,
+    baseCheckout,
+    baseDirty,
+    mergeBase,
+    stats: sumStats(files),
+    commits,
+    uncommittedPaths: [],
+    uncountedUntracked: 0,
+  };
 }
 
 /**
@@ -805,6 +909,7 @@ export async function worktreeDiff(
 ): Promise<WorktreeDiff> {
   return withGitState(projectPath, async () => {
     await assertRevisions(projectPath, [info.base, info.branch]);
+    if (info.removedAt) return branchOnlyDiff(projectPath, info, options);
     const worktree = await checkoutReader(projectPath, info.path);
     const project = await readerAt(projectPath);
     const mergeBase = (
@@ -1043,12 +1148,15 @@ export async function mergeWorktree(
   if (baseCheckout === null) return { ok: false, reason: 'base_not_checked_out', files: [] };
 
   // Обе копии — до любого git в них: база бывает веткой родителя, то есть его worktree.
-  const own = await pinnedCheckout(projectPath, info.path);
+  // Копию убрала уборка — своей копии нет, сливается одна ветка.
+  const own = info.removedAt ? null : await pinnedCheckout(projectPath, info.path);
   const base = await pinnedCheckout(projectPath, baseCheckout);
   const prefix = await projectPrefix(await readerAt(projectPath));
   if (await isDirty(await readerAt(base.cwd, base.pin), prefix)) return { ok: false, reason: 'base_dirty', files: [] };
 
-  if (await isDirty(await readerAt(own.cwd, own.pin), prefix)) return { ok: false, reason: 'uncommitted', files: [] };
+  if (own !== null && (await isDirty(await readerAt(own.cwd, own.pin), prefix))) {
+    return { ok: false, reason: 'uncommitted', files: [] };
+  }
 
   const inBase = [...NO_FSMONITOR, '-C', base.cwd, ...base.pin];
   try {
@@ -1080,6 +1188,13 @@ export async function discardWorktree(
   // Ветка из карты — проверка раньше `worktree remove`: иначе каталог уже
   // удалён, а `branch -D` с флагом вместо имени падает на полпути.
   await assertRevisions(projectPath, [info.branch]);
+  if (info.removedAt) {
+    // Копии нет: остаётся ветка, если её не удалила уборка.
+    if (await branchExists(projectPath, info.branch)) {
+      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+    }
+    return;
+  }
   // Подменённый `.git` — не отбрасываем: `worktree remove` и так откажет, а проверка
   // чистоты ниже запустила бы git в копии агента.
   const own = await pinnedCheckout(projectPath, info.path);
@@ -1100,4 +1215,81 @@ export async function discardWorktree(
   removeArgs.push('--', info.path);
   await run('git', [...NO_FSMONITOR, ...removeArgs]);
   await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+}
+
+/** Влита ли ветка в базу: `branch` — предок `base`. Код 0 — да, 1 — нет, прочее — сбой git. */
+export async function isBranchMerged(projectPath: string, branch: string, base: string): Promise<boolean> {
+  const { code } = await exitCode(['-C', projectPath, 'merge-base', '--is-ancestor', '--end-of-options', branch, base]);
+  if (code === 0) return true;
+  if (code === 1) return false;
+  throw new Error(`git merge-base --is-ancestor: exit code ${code}`);
+}
+
+export type RemoveCopyResult =
+  | { removed: true; branchDeleted: boolean }
+  | { removed: false; reason: 'dirty'; files: number }
+  | { removed: false; reason: 'refused'; message: string };
+
+/**
+ * Убирает каталог копии сессии, ветку удаляет только влитую в базу. Грязная копия без
+ * `force` не трогается (`dirty` с числом записей; каталог состояния проекта не в счёт).
+ * Каталога уже нет — шаг удаления пропускается, но правило ветки применяется.
+ */
+export async function removeWorktreeCopy(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { force?: boolean } = {},
+): Promise<RemoveCopyResult> {
+  await assertRevisions(projectPath, [info.base, info.branch]);
+  if (await directoryExists(info.path)) {
+    let own: { cwd: string; pin: string[] };
+    try {
+      own = await pinnedCheckout(projectPath, info.path);
+    } catch (error) {
+      if (error instanceof GitStateError) return { removed: false, reason: 'refused', message: error.message };
+      throw error;
+    }
+    if (options.force !== true) {
+      const prefix = await projectPrefix(await readerAt(projectPath));
+      const entries = parsePorcelainPaths(
+        await readGitBuffer(await readerAt(own.cwd, own.pin), [
+          'status',
+          '--porcelain',
+          '-z',
+          '--untracked-files=all',
+          NO_SUBMODULE_WALK,
+          '--',
+          '.',
+          ...STATE_DIRS.map((dir) => `:(exclude)${prefix}${dir}`),
+        ]),
+      );
+      if (entries.length > 0) return { removed: false, reason: 'dirty', files: entries.length };
+    }
+    const removeArgs = ['-C', projectPath, 'worktree', 'remove'];
+    if (options.force === true) removeArgs.push('--force');
+    removeArgs.push('--', info.path);
+    try {
+      await run('git', [...NO_FSMONITOR, ...removeArgs]);
+    } catch (error) {
+      const stderr = (error as { stderr?: unknown }).stderr;
+      const first = typeof stderr === 'string' ? (stderr.split('\n').find((line) => line.trim() !== '') ?? '') : '';
+      return { removed: false, reason: 'refused', message: first !== '' ? first : String(error) };
+    }
+  } else if (await isRegistered(projectPath, info.path)) {
+    // Регистрация осталась после ручного удаления: с ней git не даст снять ветку.
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
+  }
+
+  // Каталог уже убран: сбой правила ветки не должен терять этот факт.
+  let branchDeleted = false;
+  try {
+    const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+    if (code === 0 && info.branch !== info.base && (await isBranchMerged(projectPath, info.branch, info.base))) {
+      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+      branchDeleted = true;
+    }
+  } catch {
+    branchDeleted = false;
+  }
+  return { removed: true, branchDeleted };
 }

@@ -577,6 +577,8 @@ merges the branch into the base (Merge; only committed work can be merged) or th
 whole worktree away (Discard): the session is then stopped and closed, and the worktree
 folder and the branch are deleted.
 
+After the session is closed, or its room or workspace is archived, Parley removes a clean worktree folder by itself. A branch merged into the base is deleted too; an unmerged one stays, and a sleeping session that wakes up continues on it.
+
 Therefore:
 
 - do not switch the branch;

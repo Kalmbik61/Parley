@@ -5,10 +5,17 @@
  */
 
 import type { Handler } from '../context.js';
+import { HostError } from '../errors.js';
+import type { WorktreeHolds } from '../worktrees/holds.js';
+import type { WorktreeSweeper } from '../worktrees/worktree-sweeper.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 
 export interface WorktreesMethodDeps {
   worktrees: WorktreesService;
+  /** Удержания окон; без них `worktrees.hold` ничего не запоминает. */
+  holds?: WorktreeHolds;
+  /** Служба уборки копий; без неё остатков нет и убрать копию нельзя. */
+  sweeper?: WorktreeSweeper;
 }
 
 export interface WorktreesHandlers {
@@ -18,6 +25,9 @@ export interface WorktreesHandlers {
   worktreesMerge: Handler<'worktrees.merge'>;
   worktreesDiscard: Handler<'worktrees.discard'>;
   worktreesMergeCheck: Handler<'worktrees.mergeCheck'>;
+  worktreesHold: Handler<'worktrees.hold'>;
+  worktreesLeftovers: Handler<'worktrees.leftovers'>;
+  worktreesRemoveCopy: Handler<'worktrees.removeCopy'>;
 }
 
 export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHandlers {
@@ -44,5 +54,19 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
     },
 
     worktreesMergeCheck: async (params) => deps.worktrees.mergeCheck(params.ref),
+
+    worktreesHold: async (params, request) => {
+      deps.holds?.set(request.client, params.refs);
+      // Первое удержание свежего окна открывает уборку.
+      deps.sweeper?.nudge();
+      return { ok: true };
+    },
+
+    worktreesLeftovers: async () => ({ items: deps.sweeper?.leftovers() ?? [] }),
+
+    worktreesRemoveCopy: async (params) => {
+      if (deps.sweeper === undefined) throw new HostError('internal', 'The worktree sweeper is not available.');
+      return deps.sweeper.removeCopy(params.ref);
+    },
   };
 }

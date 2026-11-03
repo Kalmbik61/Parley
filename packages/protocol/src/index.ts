@@ -102,7 +102,7 @@ export type { CapabilityMcpInput, CapabilityMcpAdd, CapabilityMcpTarget, Capabil
 export { capabilityActionReason, capabilityActionAvailability, capabilityMcpActions, capabilityMcpAddAvailability } from './capability-snapshot.js';
 export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMcpActions, CapabilityMcpAddAvailability } from './capability-snapshot.js';
 
-export { COMPACT_MAX_INSTRUCTIONS, COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, contextPageMethodSchemas } from './context-pages.js';
+export { COMPACT_MAX_INSTRUCTIONS, COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, WORKTREE_HOLDS_FEATURE, contextPageMethodSchemas } from './context-pages.js';
 export type { ContextPageMethodName, ContextPageMethodParams, ContextPageMethodResults } from './context-pages.js';
 
 export {

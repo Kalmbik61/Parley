@@ -308,6 +308,7 @@ describe('ссылки между темами гида', () => {
   it('«Инструменты» отсылают за правилами worktree к теме `worktrees`, а та лежит отдельно от `window`', () => {
     expect(flat('tools')).toContain('The rules for working in it are in topic `worktrees`.');
     expect(guideTopic('worktrees')).toContain('do not switch the branch');
+    expect(guideTopic('worktrees')).toContain('removes a clean worktree folder by itself');
     expect(guideTopic('window')).not.toContain('do not switch the branch');
   });
 });

@@ -15,6 +15,11 @@ export const COMPACT_WORKS_FEATURE = 'compact-works';
  * счётчики, отметки прочтения), а не вместе со снимком работ (спека rooms.mail 6.10). Клиент без неё получает письма в `works.changed`, как прежде.
  */
 export const ROOMS_MAIL_FEATURE = 'rooms-mail';
+/**
+ * Возможность клиента в `hello.features`: окно сообщает хосту копии с несохранёнными правками (`worktrees.hold`), и
+ * уборка их не трогает. Хост, где окно без неё, копии не убирает — держать нечем.
+ */
+export const WORKTREE_HOLDS_FEATURE = 'worktree-holds';
 /** Предел инструкции сжатия, знаков (UTF-16): общий для хоста и окна (спека 2026-10-15, 5.3). */
 export const COMPACT_MAX_INSTRUCTIONS = 350;
 

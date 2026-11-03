@@ -643,6 +643,38 @@ describe('Discard worktree… (тест 8)', () => {
   });
 });
 
+describe('Убранная копия (removedAt)', () => {
+  const REMOVED = { ...WORKTREE, removedAt: '2026-11-03T10:00:00Z' };
+  const removedWork = (): WindowWorkEntry => work([makeSession('s-02', 'two', { worktree: REMOVED })]);
+
+  it('убранная копия: заметка с веткой и нет Commit', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    renderPanel(removedWork());
+    expect(await screen.findByText('The worktree folder was removed. Its branch harnas/w-a/s02 is kept.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Commit' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Merge into master' })).toBeTruthy();
+  });
+
+  it('Discard убранной копии — текст про ветку', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    renderPanel(removedWork());
+    await screen.findByRole('button', { name: 'Merge into master' });
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'Changes options' }), { key: 'Enter' });
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Discard worktree…'));
+    expect(dialog().textContent).toContain('The session will be closed. Its branch will be deleted.');
+    expect(dialog().textContent).not.toContain('worktree folder and branch');
+  });
+
+  it('ветка удалена: заметка о слиянии, Discard нет', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ branchDeleted: true }));
+    renderPanel(removedWork());
+    expect(await screen.findByText('The branch was merged, and Parley deleted it together with the worktree folder.')).toBeTruthy();
+    expect(screen.queryByText(/Its branch .* is kept/)).toBeNull();
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'Changes options' }), { key: 'Enter' });
+    expect(within(screen.getByRole('menu')).queryByText('Discard worktree…')).toBeNull();
+  });
+});
+
 describe('Вид кнопки подтверждения (раунд 8, пункт 4)', () => {
   const primary = (name: string): string => within(dialog()).getByRole('button', { name }).className;
 
