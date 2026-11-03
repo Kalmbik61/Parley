@@ -6,6 +6,28 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.28.1
+
+**Impact**
+
+- **Goal:** Let the Settings → Remote access wizard ("Set up on my server…") install the relay on a real server, which 0.28.0 refused because the release never published the relay image.
+- **Behaviour:** The release now builds the relay image for amd64 and arm64, pushes it to GHCR (`ghcr.io/kalmbik61/parley-relay`) and the app pins its digest at build time. A release without a valid digest is not built, and the release is not published while the image cannot be pulled without a login. Nothing else changes for users.
+- **Numbers:** From my runs on this branch: 5,732 core tests passed and 2 failed (the two `contextFromEnv` failures that also fail on master), 3,813 host, 525 protocol, 9,830 desktop and the other packages' tests passed; `pnpm build`, root typecheck and `pnpm lint` were clean; the frame tests (62) passed. A desktop build with a fake digest in the environment has it in the main bundle, and without it the bundle keeps the all-zero placeholder. Image size and build time are not measured: the image was not built.
+- **Screens:** None; no screen changed. The wizard was not opened.
+- **For the human:** If the first release push leaves the `parley-relay` package private in GitHub, make it public once (Packages → parley-relay → Package settings → Change visibility); the publish step stops with that instruction and "Re-run failed jobs" continues. Then run the wizard on a real server.
+- **Risk:** Medium for the release itself: the new job and its anonymous-pull gate have not run on GitHub yet (no dry run of this workflow exists before it is on master). The app and the host are unchanged.
+- **Cost:** Release time grows by one Linux job that builds two architectures (QEMU); not measured.
+- **Verdict:** Ready to release; whether the wizard now works end to end is shown only by the check on a real server listed in "What is not proven yet".
+
+### Fixed
+
+- The relay setup wizard can install the relay: the release publishes the relay image to GHCR for amd64 and arm64 and the app pins its digest, instead of the placeholder that made the wizard refuse every real server.
+- A CI-only fix: the source frame scan no longer flags an agent config path in a mobile dev fixture.
+
+### What is not proven yet
+
+- The wizard on a real server with a real certificate (A18b) has not been run by us, and neither has the new release job on GitHub.
+
 ## 0.28.0
 
 **Impact**
