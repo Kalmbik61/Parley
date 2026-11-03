@@ -420,7 +420,7 @@ Main разбирает строки шага `image`: слоёв всего и 
 ### 7.2 Отмена
 
 - Шаг `image` прерываемый: Cancel вторым каналом SSH завершает группу процессов текущей команды
-  (`kill -TERM -- -<pgid>` по файлу раздела 7.3). `curl` к Engine API рвёт запрос, `docker pull` выходит;
+  (`kill -TERM -- -<pid>` по файлу `$D/pid` раздела 7.3). `curl` к Engine API рвёт запрос, `docker pull` выходит;
   отменяет ли движок Docker загрузку на своей стороне, не проверено (особенно с хранилищем containerd) — окно
   этого не обещает: «Cancelled. A download may finish on the server by itself; running the setup again picks it
   up.» Скачанные слои остаются, повтор продолжит. Шаг — `stopped`.
@@ -439,15 +439,23 @@ SIGPIPE: `apt-get` погиб бы посреди `dpkg` («dpkg was interrupted
 проверка) запускается на сервере отдельно от канала:
 
 ```
-D=/var/tmp/parley-relay-setup; mkdir -p -m 0700 "$D"
-setsid sh -c '<команда>; echo $? > "$D/<id>.code"' > "$D/<id>.log" 2>&1 < /dev/null &
-echo "$! <id>" > "$D/active"
-tail -n +1 -f --pid=$! "$D/<id>.log"; c=$(cat "$D/<id>.code" 2>/dev/null || echo 255); rm -f "$D/active"; exit "$c"
+D=/var/tmp/parley-relay-setup; mkdir -p -m 0700 "$D"; rm -f "$D/<id>.code"
+setsid flock -n "$D/lock" sh -c 'echo "<id>" > "$D/active"; <команда>; echo $? > "$D/<id>.code"; rm -f "$D/active"' \
+  > "$D/<id>.log" 2>&1 < /dev/null &
+p=$!; echo "$p" > "$D/pid"
+tail -n +1 -f --pid="$p" "$D/<id>.log"; cat "$D/<id>.code" 2>/dev/null && exit "$(cat "$D/<id>.code")"; exit 255
 ```
 
-Окно получает строки `tail`. Обрыв канала убивает только `tail`; команда доходит до конца. Каталог — вне
-`/opt/parley-relay` (его ещё нет до шага `dir` и его удаляет Remove). Разведка читает `$D/active`: процесс жив →
-план блокируется (раздел 3.3); мёртв — хвост его журнала показывается в заметках плана. Итог при обрыве:
+Состоянием владеет фоновая часть: она держит `flock` на `$D/lock` всё время работы, сама пишет код и сама
+снимает `active`. Передняя часть только показывает журнал: при обрыве канала она умирает или доходит до конца,
+ничего не снимая. Окно получает строки `tail`; обрыв канала убивает только `tail`, команда доходит до конца.
+Каталог — вне `/opt/parley-relay` (его ещё нет до шага `dir` и его удаляет Remove).
+
+Разведка: `flock -n "$D/lock" true` не прошёл → команда прошлого прогона жива → план блокируется (раздел 3.3),
+что именно — из `$D/active`. Блокировка снимается ядром со смертью процесса и после перезагрузки, поэтому pid и
+`kill -0` не нужны (pid переиспользуется). Прошёл, а `active` есть → команда умерла посреди работы; хвост её
+журнала (`tail -n 20`) — в заметках плана. Отмена прерываемого шага: `kill -TERM -- -<pid из $D/pid>`
+(`setsid` делает процесс лидером новой группы). Итог при обрыве:
 «The connection to the server was lost. Commands keep running on the server and finish on their own; run the
 wizard again in a minute.» `setsid`, `tail --pid` — util-linux и coreutils, есть на Ubuntu 22.04/24.04 и Debian 12.
 
