@@ -910,7 +910,7 @@ Work → «This work is no longer on your Mac» и возврат к Works.
 | `idle` | `idle` | **Idle** | нет |
 | только что запущена (8.4) | `working`, пульс | **Starting** / **Queued** | «Queued — starts when a slot frees on your Mac» (только у `queued`) |
 | удержана согласием на папку (8.4) | `needsYou` | **Needs you** | нет: карточка согласия — в нижней панели |
-| `sleeping` | `idle`, полая | **Sleeping** | нет (поле сообщения заменено строкой, 9.5) |
+| `sleeping` | `idle`, полая | **Sleeping** | нет (кнопка Resume — над полем сообщения, 9.5) |
 | закрыта: `done` / `failed` | `checkmark.circle.fill` `success` / `xmark.circle.fill` `danger` | **Done** / **Failed** | нет |
 
 - **Полоска «нужен ты»** — вторая строка той же панели (пины 5–6: не большие карточки над чатом): тот же материал
@@ -1033,11 +1033,30 @@ UTF-8: с 15 КБ над полем счётчик «15.2 / 16 KB», выше п
 | ждущая карточка (`needs-you`) | поля нет — панель действий карточки (9.4); над ней подпись «Answer the request to message the agent» | нет: хост ответил бы `blocked` |
 | `blocked` без карточки | поле выключено, «Answer at your Mac first» | нет |
 | лимит / вход | обычное, строка «Usage limit · resets at 14:30 — the agent reads it after the reset» | разрешена |
-| `sleeping` | вместо поля строка `moon.zzz` «Sleeping — resume it on your Mac to message it» | нет (`sessions.resume` — этап B) |
+| `sleeping` | поле обычное; над ним строка `moon.zzz` «Sleeping» и кнопка **Resume** (ниже, «Пробуждение») | `⬆` спрашивает «Resume and send» (ниже); без `sessions.resume` в hello — вместо поля прежняя строка «Sleeping — resume it on your Mac to message it» |
 | закрыта (`done` / `failed`) | вместо поля «This session is closed» | нет |
 | запускается / в очереди (8.4) | обычное | разрешена; `busy` до первого хука — как ниже |
 | офлайн / переподключение | поле доступно для набора, `⬆` выключена, «Reconnecting — actions are paused» | нет |
 | переключатель на Маке выключен (`pty.send` нет в hello) | вместо поля «Messaging agents from the phone is turned off on your Mac» | нет |
+
+**Пробуждение спящей сессии** (A37, решение человека 2026-11-03; спека §4.2, правки 19). Только `lifecycle:
+'sleeping'`; закрытая сессия остаётся «This session is closed».
+- **Строка над полем:** слева `moon.zzz` 16 pt цветом `idle` и «Sleeping» (`subheadline`, `label2`), справа кнопка
+  **Resume** — `tint`, semibold, цель 44×44, без подложки. Face ID нет, действует блокировка приложения.
+- **Тап Resume** → `sessions.resume {ref}`. Кнопка заменяется на `ProgressView` и «Waking up…»; поле доступно для
+  набора. Успех — сессия ушла из `sleeping` (`works.changed`): строка исчезает, в панели **Starting**, дальше как у
+  запуска (9.6). Запуск удержан согласием (папка, серверы MCP) — карточка встаёт над лентой, как в A36; строка
+  исчезает, панель — **Needs you**. Отказ хоста — строка `exclamationmark.triangle` `needsYou` «Couldn't wake it —
+  <текст хоста>» и **Retry**. Ответ пришёл, а сессия 30 с всё ещё `sleeping` — «Still waking up — check your Mac»,
+  без автоповтора. `connection_lost` — «We couldn't confirm it woke up», после переподключения состояние берётся из
+  снимка.
+- **Сообщение спящей сессии.** Тап `⬆` открывает системный диалог «<label> is sleeping» с кнопками **Resume and
+  send** и **Cancel**. Resume and send → `sessions.resume`, пузырь «моего» сообщения с `ProgressView` и «Waiting for
+  the agent to wake up…». Текст уходит обычным `pty.send` (новый `clientMsgId`), когда сессия первый раз стала
+  `idle` после пробуждения, не раньше: до первого хука CLI ввод не принимает. Запуск удержан карточкой — пузырь
+  «Waits for your answer above», текст уходит после решения и первого `idle`. Отказ пробуждения или 2 минуты без
+  `idle` — пузырь уходит, текст возвращается в поле, строка как у отказа выше. Cancel — текст остаётся в поле.
+- **Выключено на Маке** (`sessions.resume` нет в hello) — прежняя строка вместо поля, кнопки нет.
 
 **Состояния моего сообщения** (пузырь справа, подпись под ним `caption1`):
 

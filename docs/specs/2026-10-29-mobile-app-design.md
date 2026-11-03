@@ -220,8 +220,8 @@ Parley на Маке из любой сети. Подключение «как �
 
 | Этап | Методы → хост | События ← хост | Правила |
 |---|---|---|---|
-| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
-| **B** | + `mail.markRead`, `sessions.resume`, `sessions.stop`, `pty.send`, `feed.subscribe`, `feed.unsubscribe`, `feed.interrupt`, `pty.attach`, `pty.detach`, `consents.list`, `consents.decide`, `rooms.usage`; уведомление `activity.seen` | + `feed.changed`, `pty.output`, `pty.resync`, `pty.exit`, `consents.changed`, `providers.limitsChanged` | `pty.send`: текст ≤ 16 КБ |
+| **A** | `works.list`, `host.info`, `feed.snapshot`, `feed.decide`, `rooms.resolveProposal`, `context.messages`, `context.letter`, `context.text`; запуск с телефона (решение 5, правки 11–12): `sessions.create`, `rooms.create`, `rooms.send`, `providers.list`, `roles.list`; пробуждение спящей сессии (правки 19): `sessions.resume` | `works.changed`, `rooms.mail`, `activity.changed`, `host.notice` | `rooms.resolveProposal` без `rev` → `bad_request`; запуск с телефона — правила ниже |
+| **B** | + `mail.markRead`, `sessions.stop`, `pty.send`, `feed.subscribe`, `feed.unsubscribe`, `feed.interrupt`, `pty.attach`, `pty.detach`, `consents.list`, `consents.decide`, `rooms.usage`; уведомление `activity.seen` | + `feed.changed`, `pty.output`, `pty.resync`, `pty.exit`, `consents.changed`, `providers.limitsChanged` | `pty.send`: текст ≤ 16 КБ |
 | **C** | — (`sessions.create` переехал в A, решение 5) | — | — |
 
 **Запуск с телефона: сессии и комнаты** (решение 5, решено человеком 2026-10-31; правки 11–12):
@@ -296,6 +296,27 @@ Parley на Маке из любой сети. Подключение «как �
 - **Мост.** Подписка на ленту — счётчик по `ref` на все телефоны (5.6, теперь этап A): первый подписчик
   подписывает мост у хоста, последний отписавшийся снимает; `feed.changed` уходит только подписанным телефонам;
   снимок при подписке — каждому телефону свой. `consents.changed` — всем телефонам.
+
+**Пробуждение спящей сессии с телефона** (решение человека 2026-11-03, правки 19):
+- **Белый список A** дополняется `sessions.resume` (из этапа B). Телефон будит сессию с `lifecycle: 'sleeping'`:
+  это и сессия, которую усыпил человек или хост, и сессия, чей процесс вышел, но не закрыт. Хост поднимает обе одним
+  путём, `launch(ref, 'resume')`. Закрытую (`closed`) хост не поднимает и сейчас, это не меняется; телефон кнопку
+  у неё не показывает.
+- **Правило параметров** (`REMOTE_PARAM_RULES`): ключ только `ref`, у него строго `projectPath`, `workId`,
+  `sessionId` — непустые строки. Лишний ключ → `bad_request`.
+- **Хост — власть.** Для роли `remote`:
+  - метод закрыт тем же переключателем «Allow starting and messaging agents from the phone» (`remoteCreate`):
+    выключен → `unknown_method`, метода нет в `hello.methods`, телефон показывает прежнюю строку «resume it on
+    your Mac»;
+  - `ref` — сессия известного хосту проекта и существующей работы; архивную работу хост отвергает (`conflict`), как
+    окну;
+  - путь тот же, что у окна: удержание запуска согласием (доверие к папке у Codex, карточка `project-mcp` у Claude,
+    `requestedBy.source: 'resume'`), отметка доверия Claude для папок из `trust.json` (A29), лимиты и очередь машины.
+    Поднятый с телефона Claude не встаёт на окне выбора серверов MCP: запуск ждёт карточку, телефон её показывает
+    (A36).
+- **Мост.** `sessions.resume` — изменяющий метод: лимит изменяющих вызовов и запись `call` в журнале. Событие
+  `phone.action` не уходит: пробуждение не весомое действие (решение человека 2026-11-03), уведомления на Маке нет.
+- **Телефон.** Отдельного Face ID нет, действует блокировка приложения (решение 6, 11.4). Экран сессии — D1 §9.5.
 
 Почему `feed.decide` и `rooms.resolveProposal` переехали в A. Ради решений человек и берёт телефон. Защиты от
 гонки уже есть: `feed.decide → {applied, state}` (`methods.ts:317`, результат `:495`) и `rev` у
@@ -1766,3 +1787,9 @@ ID на действия» остаётся.
 | 18.1 | Повторная блокировка после 5 минут без касаний, пока Parley на экране; монотонные часы | 11.4 |
 | 18.2 | Уведомление на Маке о весомых действиях телефона с «Revoke this phone»; событие `phone.action` сокета управления | 12; 5.3 (новое событие) |
 | 18.3 | Отклонено: точечный Face ID на постоянные полномочия, второй переключатель для одобрений | — |
+
+**Правки 19 — решение человека 2026-11-03: телефон будит спящую сессию.**
+
+| № | Решение | Что изменено |
+|---|---|---|
+| 19.1 | `sessions.resume` переходит из этапа B в A, за переключателем `remoteCreate`; изменяющий метод без `phone.action`; тот же путь запуска, что у окна | 4.2 |
