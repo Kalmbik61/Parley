@@ -57,6 +57,8 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
 
     worktreesHold: async (params, request) => {
       deps.holds?.set(request.client, params.refs);
+      // Первое удержание свежего окна открывает уборку.
+      deps.sweeper?.nudge();
       return { ok: true };
     },
 

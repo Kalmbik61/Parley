@@ -10,6 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import {
+  readMap,
   removeWorktreeCopy,
   sessionWorktreeFinished,
   updateMap,
@@ -22,6 +23,7 @@ import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
+import { gitFailure } from './worktrees-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreeHolds } from './holds.js';
@@ -35,11 +37,17 @@ export interface WorktreeSweeperDeps {
   /** Размер каталога в байтах; сбой — `null`. По умолчанию `du -sk`. */
   size?: (dir: string) => Promise<number | null>;
   now?: () => Date;
+  /** Не чаще одного прохода за столько мс по `nudge()`; по умолчанию 10 с. */
+  throttleMs?: number;
+  /** Сколько мс помнить, что копию убрать не вышло (`dirty`/`refused`), прежде чем пробовать снова; по умолчанию 5 мин. */
+  recheckMs?: number;
 }
 
 export interface WorktreeSweeper {
   start(): void;
   stop(): void;
+  /** Просьба о проходе из потока изменений: проходы идут не чаще `throttleMs`, лишние просьбы сливаются в один. */
+  nudge(): void;
   /** Один проход (или ожидание идущего вместе с повтором, если он заказан). */
   pass(): Promise<void>;
   leftovers(): WorktreeLeftover[];
@@ -61,6 +69,8 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
   const remove = deps.remove ?? removeWorktreeCopy;
   const measure = deps.size ?? duSize;
   const now = deps.now ?? ((): Date => new Date());
+  const throttleMs = deps.throttleMs ?? 10_000;
+  const recheckMs = deps.recheckMs ?? 300_000;
 
   let list: WorktreeLeftover[] = [];
   /** Размеры по пути копии: считаются один раз, в фоне. */
@@ -69,6 +79,14 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
   let loop: Promise<void> | null = null;
   let again = false;
   let unsubscribe: (() => void) | null = null;
+  let stopped = false;
+  let lastStart = Number.NEGATIVE_INFINITY;
+  let timer: NodeJS.Timeout | null = null;
+  /** Неудачные уборки: ключ `refKey` + путь → когда проверено и что показано человеку. */
+  const checked = new Map<string, { at: number; item: WorktreeLeftover }>();
+  const checkKey = (ref: SessionRef, dir: string): string => `${refKey(ref)}\0${dir}`;
+  /** Результат замка, когда хозяин или запись изменились с решения прохода: копию не трогали. */
+  const SKIPPED = Symbol('skipped');
 
   function sizeOf(dir: string): number | null {
     if (sizes.has(dir)) return sizes.get(dir) ?? null;
@@ -113,6 +131,19 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
     });
   }
 
+  /** Запись всё ещё говорит, что копию пора убрать (карта перечитана под замком сессии). */
+  async function stillDue(ref: SessionRef, dir: string): Promise<boolean> {
+    const map = await readMap(ref.projectPath, ref.workId);
+    const info = map.sessions.find((session) => session.id === ref.sessionId)?.worktree;
+    return (
+      info != null &&
+      info.path === dir &&
+      info.createdAt !== null &&
+      info.removedAt == null &&
+      sessionWorktreeFinished(map, ref.sessionId)
+    );
+  }
+
   async function onePass(): Promise<void> {
     if (!deps.holds.windowPresent()) {
       list = [];
@@ -120,38 +151,64 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
     }
     const held = deps.holds.held();
     const next: WorktreeLeftover[] = [];
+    const seen = new Set<string>();
     for (const entry of deps.works.snapshot().entries) {
       for (const session of entry.map.sessions) {
+        if (stopped) return;
         const info = session.worktree;
         if (info == null || info.createdAt === null || info.removedAt != null) continue;
         if (!sessionWorktreeFinished(entry.map, session.id)) continue;
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
+        const key = checkKey(ref, info.path);
         try {
           if (held.has(refKey(ref))) {
             next.push(leftover(ref, session, info, 'unsaved'));
             continue;
           }
+          const previous = checked.get(key);
+          if (previous !== undefined && Date.now() - previous.at < recheckMs) {
+            seen.add(key);
+            next.push({ ...previous.item });
+            continue;
+          }
           const result = await deps.sessions.sweepGuard(ref, async () => {
+            if (!(await stillDue(ref, info.path))) return SKIPPED;
             const outcome = await remove(entry.projectPath, info);
             if (outcome.removed) await markRemoved(ref, info.path);
             return outcome;
           });
+          if (result === SKIPPED) continue;
           if (result === null) {
             next.push(leftover(ref, session, info, 'in-use'));
-          } else if (result.removed) {
-            host.log.info('копия сессии убрана', { ref, path: info.path, branchDeleted: result.branchDeleted });
-          } else if (result.reason === 'dirty') {
-            next.push(leftover(ref, session, info, 'dirty', { files: result.files }));
-          } else {
-            next.push(leftover(ref, session, info, 'refused', { message: result.message }));
+            continue;
           }
+          if (result.removed) {
+            checked.delete(key);
+            host.log.info('копия сессии убрана', { ref, path: info.path, branchDeleted: result.branchDeleted });
+            continue;
+          }
+          const item =
+            result.reason === 'dirty'
+              ? leftover(ref, session, info, 'dirty', { files: result.files })
+              : leftover(ref, session, info, 'refused', { message: result.message });
+          checked.set(key, { at: Date.now(), item });
+          seen.add(key);
+          next.push(item);
         } catch (error) {
           host.log.warn('уборка копии сессии не удалась', { ref, error: String(error) });
+          // Остаток с текстом ошибки; запомненный, он не даёт повторять предупреждение на каждом проходе.
+          const item = leftover(ref, session, info, 'refused', { message: String(error) });
+          checked.set(key, { at: Date.now(), item });
+          seen.add(key);
+          next.push(item);
         }
       }
     }
+    for (const key of checked.keys()) if (!seen.has(key)) checked.delete(key);
     // Размер мог досчитаться посреди прохода, когда записи ещё не было в `list`.
     for (const item of next) item.sizeBytes = sizes.get(item.path) ?? item.sizeBytes;
+    const paths = new Set(next.map((item) => item.path));
+    for (const dir of sizes.keys()) if (!paths.has(dir)) sizes.delete(dir);
     list = next;
   }
 
@@ -168,7 +225,7 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
         } catch (error) {
           host.log.error('уборка копий: проход не удался', { error: String(error) });
         }
-      } while (again);
+      } while (again && !stopped);
     })().finally(() => {
       loop = null;
     });
@@ -176,20 +233,43 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
     return running;
   }
 
+  function startPass(): void {
+    lastStart = Date.now();
+    void request();
+  }
+
+  function nudge(): void {
+    if (stopped || timer !== null) return;
+    const wait = lastStart + throttleMs - Date.now();
+    if (wait <= 0) {
+      startPass();
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      if (!stopped) startPass();
+    }, wait);
+    timer.unref();
+  }
+
   return {
     start() {
       if (unsubscribe !== null) return;
-      unsubscribe = deps.works.onChange(() => {
-        void request();
-      });
-      void request();
+      stopped = false;
+      unsubscribe = deps.works.onChange(nudge);
+      startPass();
     },
 
     stop() {
+      stopped = true;
       unsubscribe?.();
       unsubscribe = null;
       again = false;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
     },
+
+    nudge,
 
     pass: request,
 
@@ -205,12 +285,20 @@ export function createWorktreeSweeper(host: HostContext, deps: WorktreeSweeperDe
         throw new HostError('bad_request', 'The session is not finished yet.');
       }
       const info = session.worktree;
-      const result = await deps.sessions.sweepGuard(ref, async () => {
-        const outcome = await remove(ref.projectPath, info, { force: true });
-        if (outcome.removed) await markRemoved(ref, info.path);
-        return outcome;
-      });
+      checked.delete(checkKey(ref, info.path));
+      let result: RemoveCopyResult | typeof SKIPPED | null;
+      try {
+        result = await deps.sessions.sweepGuard(ref, async () => {
+          if (!(await stillDue(ref, info.path))) return SKIPPED;
+          const outcome = await remove(ref.projectPath, info, { force: true });
+          if (outcome.removed) await markRemoved(ref, info.path);
+          return outcome;
+        });
+      } catch (error) {
+        throw gitFailure(error);
+      }
       if (result === null) throw new HostError('conflict', 'The session is running.');
+      if (result === SKIPPED) throw new HostError('bad_request', 'The session is not finished yet.');
       if (result.removed) {
         const key = refKey(ref);
         list = list.filter((item) => refKey(item.ref) !== key);

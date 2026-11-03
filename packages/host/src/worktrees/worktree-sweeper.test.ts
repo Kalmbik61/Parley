@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
@@ -198,7 +198,7 @@ describe('служба уборки копий', () => {
       await gate;
       return { removed: false, reason: 'dirty', files: 1 };
     };
-    const sweeper = boot();
+    const sweeper = boot({ throttleMs: 0 });
     sweeper.start();
     await new Promise((resolve) => setTimeout(resolve, 20));
     // Три изменения за время одного прохода.
@@ -283,5 +283,75 @@ describe('служба уборки копий', () => {
     const { worktreesRemoveCopy } = createWorktreesHandlers({ worktrees: {} as WorktreesService, sweeper });
     await expect(worktreesRemoveCopy({ ref }, {} as never)).rejects.toMatchObject({ code: 'bad_request' });
     expect(removed).toEqual([]);
+  });
+
+  it('грязная копия не перепроверяется до recheckMs', async () => {
+    await seed('closed');
+    removeImpl = async () => ({ removed: false, reason: 'dirty', files: 1 });
+    const cached = boot();
+    await cached.pass();
+    await cached.pass();
+    expect(removed).toHaveLength(1);
+    expect(cached.leftovers()).toHaveLength(1);
+    removed = [];
+    const fresh = boot({ recheckMs: 0 });
+    await fresh.pass();
+    await fresh.pass();
+    expect(removed).toHaveLength(2);
+  });
+
+  it('брошенная ошибка уборки — остаток refused', async () => {
+    await seed('closed');
+    removeImpl = async () => {
+      throw new Error('git сломался');
+    };
+    const sweeper = boot();
+    await sweeper.pass();
+    const [item] = sweeper.leftovers();
+    expect(item?.reason).toBe('refused');
+    expect(item?.message).toContain('git сломался');
+  });
+
+  it('разархивированная работа посреди прохода — копия не тронута', async () => {
+    await seed('sleeping');
+    await updateMap(project, workId, (map) => {
+      map.work.status = 'archived';
+    });
+    const sweeper = boot({
+      sessions: {
+        sweepGuard: async (_ref, work) => {
+          await updateMap(project, workId, (map) => {
+            map.work.status = 'active';
+          });
+          return work();
+        },
+      },
+    });
+    await sweeper.pass();
+    expect(removed).toEqual([]);
+    expect(sweeper.leftovers()).toEqual([]);
+  });
+
+  it('частые изменения дают один проход за интервал', async () => {
+    await seed('closed');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const sweeper = boot({ throttleMs: 1000 });
+      sweeper.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const before = snapshots;
+      for (const listener of worksListeners) {
+        listener();
+        listener();
+        listener();
+      }
+      await vi.advanceTimersByTimeAsync(999);
+      expect(snapshots).toBe(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(snapshots).toBe(before + 1);
+      sweeper.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
