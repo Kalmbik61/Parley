@@ -580,7 +580,8 @@ function rollbackSteps(): PlanStep[] {
 }
 
 function removeSteps(ctx: PlanContext, undo: PlanStep | null): PlanStep[] {
-  const down = ctx.removeData === true ? `${COMPOSE} down -v` : `${COMPOSE} down`;
+  // `--remove-orphans`: a container of an earlier layout (compose no longer knows its service) would keep its volume in use and fail `down -v`.
+  const down = ctx.removeData === true ? `${COMPOSE} down -v --remove-orphans` : `${COMPOSE} down --remove-orphans`;
   const rules = `if [ -f ${D}/ufw-rules ]; then grep -E '^[0-9]{1,5}/tcp$' ${D}/ufw-rules | while read -r rule; do ufw delete allow "$rule"; done; fi`;
   // Volumes left over from an earlier layout (compose no longer knows them) go with the data, found by the project label.
   const leftovers = 'docker volume ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker volume rm';

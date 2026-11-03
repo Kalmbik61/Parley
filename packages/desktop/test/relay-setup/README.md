@@ -36,7 +36,11 @@ RELAY_SETUP_STAND=1 RELAY_SETUP_FULL=1 pnpm --filter @parley/desktop exec vitest
 | S2b | The same layout: removal at once, without a repeat |
 | S3 | nginx on the host (`systemctl` is a stand shim, `docker/systemctl-shim.sh`) → `nginx-acme`: `nginx -t`, the default site still answers, our name reaches our Caddy; removal restores `/etc/nginx` byte for byte |
 
-S1 and S2 servers run with `--dns 127.0.0.1`: nothing inside them can reach an ACME server (the course names are real). S3 needs internet (Docker Hub for the pinned Caddy).
+S1 and S2 servers run with `--dns 127.0.0.1`: nothing inside them can reach an ACME server (the course names are real; S1 asserts that a public name does not resolve). S2 also models the container of run 2 that never started (`parley-relay-caddy-1`, state Created).
+
+S3 is online: the server pulls the pinned Caddy from Docker Hub, and the stand's own Caddy (`parley-relay-acme`) then asks Let's Encrypt **production** for a certificate for the TEST-NET name `203-0-113-7.sslip.io`. The validation fails (nothing answers at 203.0.113.7), but the request leaves this Mac and counts for that name at Let's Encrypt.
+
+Each server keeps ~470 MB of anonymous volume until its container is removed with `docker rm -fv`; the suites do that, and remove their temporary directories.
 
 The tests remove their containers (`parley-stand-*`) when they finish.
 

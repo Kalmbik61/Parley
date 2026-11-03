@@ -115,6 +115,7 @@ services:
       - parley-relay
     environment:
       RELAY_DOMAIN: \${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay host name}
+      RELAY_HTTPS_PORT: \${RELAY_HTTPS_PORT:-8443}
     ports:
       - '\${RELAY_HTTPS_PORT:-8443}:443'
     volumes:
@@ -152,6 +153,7 @@ services:
       - parley-relay
     environment:
       RELAY_DOMAIN: \${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay host name}
+      RELAY_HTTPS_PORT: \${RELAY_HTTPS_PORT:-8443}
     ports:
       - '\${RELAY_HTTPS_PORT:-8443}:443'
       - '127.0.0.1:\${RELAY_ACME_PORT:?set RELAY_ACME_PORT}:80'
@@ -167,7 +169,10 @@ volumes:
 
 /** Port 443 belongs to somebody else, so the TLS-ALPN challenge cannot work: Let's Encrypt must use HTTP-01 through nginx. */
 export const CADDYFILE_ACME = `# Certificate through the HTTP challenge on port 80 (nginx forwards it here); the app is served on RELAY_HTTPS_PORT.
-# No "auto_https disable_redirects" here: it also removes the listener on port 80, and the certificate needs that listener.
+# Port 80 stays open (the challenge and nginx need it); a browser on http:// is sent to the port the relay answers on.
+http://{$RELAY_DOMAIN} {
+\tredir https://{host}:{$RELAY_HTTPS_PORT}{uri} 308
+}
 {$RELAY_DOMAIN} {
 \ttls {
 \t\tissuer acme {

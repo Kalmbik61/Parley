@@ -376,8 +376,11 @@ describe('critic fixes on the layouts', () => {
     expect(plan(plainProbe, 'relay.example.com').web!.edits[0]!.content).not.toContain('[::]');
     expect(nginxSiteFile('r.example.com', 'host', 18080, 8443, true)).toContain('listen [::]:80;');
   });
-  it('T4b minor, reverted by the stand: `auto_https disable_redirects` would remove the listener on port 80 that the HTTP challenge needs', () => {
-    expect(CADDYFILE_ACME).not.toMatch(/^\s*auto_https\s+disable_redirects/m);
+  it('the ACME Caddyfile keeps a permanent listener on port 80 and sends http:// to the port the relay answers on', () => {
+    expect(CADDYFILE_ACME).toContain('http://{$RELAY_DOMAIN} {\n\tredir https://{host}:{$RELAY_HTTPS_PORT}{uri} 308\n}');
+    expect(CADDYFILE_ACME).not.toMatch(/^\s*auto_https/m);
+    expect(COMPOSE_ACME_DOCKER).toContain('RELAY_HTTPS_PORT: ${RELAY_HTTPS_PORT:-8443}');
+    expect(COMPOSE_ACME_HOST).toContain('RELAY_HTTPS_PORT: ${RELAY_HTTPS_PORT:-8443}');
   });
 });
 
