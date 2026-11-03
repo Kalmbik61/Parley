@@ -112,6 +112,10 @@ export default function RoomScreen() {
   // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
   const follow = useFollowEnd(list, keys);
+  // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
+  const shownEmpty = useRef(false);
+  if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && data.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || params.dev === undefined || client === null || target === null) return;
@@ -345,15 +349,15 @@ export default function RoomScreen() {
           </BarStripStack>
         )}
         <View style={styles.flex}>
-          {!follow.revealed && data.length > 0 && (
+          {hiddenFeed && (
             <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
               <Skeleton rows={4} />
             </View>
           )}
         <FlatList
           ref={list}
-          style={{ opacity: follow.revealed || data.length === 0 ? 1 : 0 }}
-          accessibilityElementsHidden={!follow.revealed && data.length > 0}
+          style={{ opacity: hiddenFeed ? 0 : 1 }}
+          accessibilityElementsHidden={hiddenFeed}
           data={data}
           keyExtractor={rowKey}
           {...follow.handlers}

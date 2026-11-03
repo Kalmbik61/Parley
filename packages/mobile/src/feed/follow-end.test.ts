@@ -313,6 +313,13 @@ describe('follow the end: reveal (A44b)', () => {
     expect(fe.contentChanged(laidOut, 1, K, 3000).state.revealed).toBe(false);
   });
 
+  it('a short feed shows at once whichever of the size and the layout event came first (critic m3)', () => {
+    const sizeFirst = fe.contentChanged(fe.open(), 0, K, 500).state;
+    expect(sizeFirst.revealed).toBe(false);
+    expect(fe.viewportChanged(sizeFirst, 800, 1).state.revealed).toBe(true);
+    expect(fe.revealCheck(fe.viewportChanged(fe.contentChanged(fe.open(), 0, K, 3000).state, 800, 1).state, 2).revealed).toBe(false);
+  });
+
   it('a touch shows the list', () => {
     expect(fe.dragBegan(fe.open()).revealed).toBe(true);
   });

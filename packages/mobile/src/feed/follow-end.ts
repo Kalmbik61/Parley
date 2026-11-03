@@ -114,6 +114,11 @@ function follow(base: FollowState, now: number, keys: readonly string[], first: 
   return { state: { ...base, away: countAfter(keys, base.seenKey, base.away) }, scroll: 'none' };
 }
 
+/** The content fits the window: nothing to scroll, whatever order the size and layout events came in. */
+function fitsWindow(s: FollowState): boolean {
+  return s.contentHeight !== null && s.layoutHeight !== null && s.contentHeight <= s.layoutHeight;
+}
+
 /** The last scroll event saw the latest content height and was at its end: the pin's scroll has landed. */
 function landed(s: FollowState): boolean {
   if (s.scrollContent === null || s.scrollViewport === null || s.scrollOffset === null) return false;
@@ -124,6 +129,7 @@ function landed(s: FollowState): boolean {
 /** Time passed: the feed shows once the pin's scroll has landed at the end and one frame passed without growth, or at the cap since the first real rows. A skeleton-only phase has no `openedAt`, so it starts nothing. */
 export function revealCheck(s: FollowState, now: number): FollowState {
   if (s.revealed || !s.hadRows || s.openedAt === null) return s;
+  if (fitsWindow(s)) return { ...s, revealed: true };
   const quiet = now - s.lastGrowthAt >= REVEAL_FRAME_MS && landed(s);
   return quiet || now - s.openedAt >= REVEAL_CAP_MS ? { ...s, revealed: true } : s;
 }
@@ -193,7 +199,8 @@ export function momentumEnded(s: FollowState, m: ScrollMetrics, now: number, key
 /** The window of the list changed height (keyboard, multi-line draft, reply plate, Sleeping row, cards, mention menu). */
 export function viewportChanged(s: FollowState, height: number, now: number): Step {
   const shrunk = s.layoutHeight !== null && height < s.layoutHeight;
-  const next = { ...s, layoutHeight: height, echoUntil: now + GROWTH_ECHO_MS };
+  const sized = { ...s, layoutHeight: height, echoUntil: now + GROWTH_ECHO_MS };
+  const next = s.hadRows && fitsWindow(sized) ? { ...sized, revealed: true } : sized;
   if (shrunk && next.atBottom && !humanBusy(next)) return issue(next, now, 'instant');
   return { state: next, scroll: 'none' };
 }

@@ -200,6 +200,10 @@ export default function SessionScreen() {
   );
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
   const follow = useFollowEnd(list, rowKeys);
+  // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
+  const shownEmpty = useRef(false);
+  if (rows.length === 0 && feed?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && rows.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
@@ -469,16 +473,17 @@ export default function SessionScreen() {
         </BarStripStack>
       )}
       <View style={styles.flex}>
-        {!follow.revealed && rows.length > 0 && (
+        {hiddenFeed && (
           <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
             <Skeleton rows={3} />
           </View>
         )}
       <FlatList
         ref={list}
-        style={{ opacity: follow.revealed || rows.length === 0 ? 1 : 0 }}
-        accessibilityElementsHidden={!follow.revealed && rows.length > 0}
+        style={{ opacity: hiddenFeed ? 0 : 1 }}
+        accessibilityElementsHidden={hiddenFeed}
         data={rows}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         keyExtractor={rowKey}
         {...follow.handlers}
         scrollEventThrottle={64}
@@ -554,7 +559,10 @@ export default function SessionScreen() {
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined ? (
-          <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
+          // The body is in the hidden list: the buttons stay out of sight and out of reach with it (critic m1).
+          <View pointerEvents={hiddenFeed ? 'none' : 'auto'} accessibilityElementsHidden={hiddenFeed} style={{ opacity: hiddenFeed ? 0 : 1 }}>
+            <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
+          </View>
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
