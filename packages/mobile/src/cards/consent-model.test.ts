@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ConsentCard } from '@parley/protocol';
 import type { DecideConsentOutcome, RemoteClient } from '@parley/remote-client';
 import type { ProjectMcpCard } from '@parley/protocol';
-import { MCP_CHANGED, canDecideConsent, enabledPairs, mcpShapeKey, mcpTitle, pendingConsents, projectMcpDrawable, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
+import { MCP_CHANGED, canDecideConsent, cardBelongsToSession, enabledPairs, mcpShapeKey, mcpTitle, pendingConsents, projectMcpDrawable, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
 
 const trust: ConsentCard = { id: 'c-1', kind: 'folder-trust', projectPath: '/p', folder: '/Users/me/parley', at: '2026-11-01T10:00:00.000Z', state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } };
 const swit: ConsentCard = { id: 'c-2', kind: 'agent-switch', projectPath: '/p', at: '2026-11-01T11:00:00.000Z', state: 'pending', ref: { projectPath: '/p', workId: 'w', sessionId: 's' }, provider: 'codex', providerLabel: 'Codex', model: null, reason: 'Usage limit', requestedBy: { sessionId: 's', label: 'Greta' } };
@@ -79,5 +79,30 @@ describe('project-mcp card (A36b)', () => {
     const bare: Partial<ProjectMcpCard> = { ...mcp };
     delete bare.version;
     expect(projectMcpDrawable(bare as never)).toBe(false);
+  });
+});
+
+describe('cardBelongsToSession (M1)', () => {
+  const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+  const by = (requestedBy: ProjectMcpCard['requestedBy'], projectPath = '/p') => ({ ...mcp, projectPath, requestedBy }) as ProjectMcpCard;
+
+  it('a human launch without sessionId shows on the held session of its work', () => {
+    expect(cardBelongsToSession(by({ source: 'launch', workId: 'w' }), ref)).toBe(true);
+  });
+  it('a child launch whose requester is the parent shows on the parent and on the child of the same work', () => {
+    const card = by({ source: 'agent', sessionId: 'parent', workId: 'w' });
+    expect(cardBelongsToSession(card, { ...ref, sessionId: 'child' })).toBe(true);
+    expect(cardBelongsToSession(card, { ...ref, sessionId: 'parent' })).toBe(true);
+  });
+  it('another work or another project does not match', () => {
+    expect(cardBelongsToSession(by({ source: 'launch', workId: 'other' }), ref)).toBe(false);
+    expect(cardBelongsToSession(by({ source: 'launch', workId: 'w' }, '/q'), ref)).toBe(false);
+    expect(cardBelongsToSession(by({ source: 'launch' }), ref)).toBe(false);
+  });
+  it('the requester match holds across project paths; agent-switch keeps its own rule', () => {
+    expect(cardBelongsToSession(by({ source: 'agent', sessionId: 's', workId: 'w' }, '/q'), ref)).toBe(true);
+    expect(cardBelongsToSession(swit, { projectPath: '/p', workId: 'w', sessionId: 's' })).toBe(true);
+    expect(cardBelongsToSession(swit, { ...ref, sessionId: 'x' })).toBe(false);
+    expect(cardBelongsToSession(trust, ref)).toBe(false);
   });
 });

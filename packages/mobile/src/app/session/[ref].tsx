@@ -9,6 +9,7 @@ import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
+import { cardBelongsToSession } from '../../cards/consent-model';
 import { ActiveCard } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
@@ -432,11 +433,7 @@ function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
   const consents = useConsents();
   const canAct = useCanAct();
   const now = useNow(30_000);
-  const mine = consents.rows.filter(({ card }) =>
-    card.kind === 'agent-switch'
-      ? card.ref.sessionId === sessionRef.sessionId && card.ref.workId === sessionRef.workId
-      : card.kind === 'project-mcp' && card.requestedBy.sessionId === sessionRef.sessionId && card.requestedBy.workId === sessionRef.workId,
-  );
+  const mine = consents.rows.filter(({ card }) => cardBelongsToSession(card, sessionRef));
   if (mine.length === 0) return null;
   return (
     <View style={styles.switchWrap}>
