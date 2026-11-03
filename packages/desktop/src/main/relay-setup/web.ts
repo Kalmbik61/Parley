@@ -11,7 +11,7 @@ import { BLOCK_BEGIN_SOURCE, BLOCK_END_SOURCE } from './templates.js';
  * and `shQuote`. A value that does not pass makes the web server «not supported» with a reason, never an error.
  */
 
-export const STATE_DIR = '/var/tmp/parley-relay-setup';
+export const STATE_DIR = '/var/lib/parley-relay-setup';
 export const ACTIVE_FILE = `${STATE_DIR}/active`;
 /** Exit code 0: no command of the previous run holds the lock (or there is no state directory yet, or no `flock`). */
 export const LOCK_CHECK = `[ ! -d ${STATE_DIR} ] || ! command -v flock >/dev/null 2>&1 || flock -n ${STATE_DIR}/lock true`;

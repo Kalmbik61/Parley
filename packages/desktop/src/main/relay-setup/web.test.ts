@@ -7,7 +7,6 @@ import { parseContainers, parseEnv, parseListeners, parseOsRelease, type Contain
 import type { RemoteShell, RunResult } from './shell.js';
 import { BLOCK_BEGIN, BLOCK_BEGIN_NL, BLOCK_END, caddyBlockAppend } from './templates.js';
 import {
-  probeProxyOnServer,
   chooseNetwork,
   countMarkers,
   hostPathOf,
@@ -386,14 +385,14 @@ describe('probeWeb: nginx and host servers', () => {
 });
 
 describe('the previous run (spec 7.3)', () => {
-  const ACTIVE = 'cat /var/tmp/parley-relay-setup/active';
+  const ACTIVE = 'cat /var/lib/parley-relay-setup/active';
   it('a held lock blocks and names the command; a free lock with nothing left does not', async () => {
     expect((await probeActive(shellOf({ [LOCK_CHECK]: { code: 1 }, [ACTIVE]: 'files\n' }))).active).toEqual({ id: 'files' });
     expect((await probeActive(shellOf({ [LOCK_CHECK]: { code: 1 } }))).active).toEqual({ id: 'unknown' });
     expect(await probeActive(shellOf({ [LOCK_CHECK]: '' }))).toEqual({ active: null, tail: null });
   });
   it('a free lock with `active` left over: the command died, its log tail goes to the notes', async () => {
-    const dead = await probeActive(shellOf({ [LOCK_CHECK]: '', [ACTIVE]: 'files\n', 'tail -n 20 /var/tmp/parley-relay-setup/files.log': 'E: dpkg was interrupted\n' }));
+    const dead = await probeActive(shellOf({ [LOCK_CHECK]: '', [ACTIVE]: 'files\n', 'tail -n 20 /var/lib/parley-relay-setup/files.log': 'E: dpkg was interrupted\n' }));
     expect(dead).toEqual({ active: null, tail: { id: 'files', text: 'E: dpkg was interrupted\n' } });
   });
   it('the id from the server is checked before it reaches a command; no pid, no kill', async () => {
@@ -410,12 +409,12 @@ describe('the previous run (spec 7.3)', () => {
 
 describe('stage 3 only reads', () => {
   it('every command has a fixed read-only form', async () => {
-    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|base64 -w0 '\/[A-Za-z0-9._@+/-]+'|cat \/var\/tmp\/parley-relay-setup\/active|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log)$/;
+    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|base64 -w0 '\/[A-Za-z0-9._@+/-]+'|cat \/var\/lib\/parley-relay-setup\/active|tail -n 20 \/var\/lib\/parley-relay-setup\/[a-z][a-z0-9-]*\.log)$/;
     const shells = [shellOf(COURSE), shellOf({})];
     await probeWeb(probeOf(), shells[0] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['caddy'] }], containers: [] }), shells[1] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['nginx'] }], containers: [] }), shells[1] as RemoteShell);
-    const dead = shellOf({ [LOCK_CHECK]: '', 'cat /var/tmp/parley-relay-setup/active': 'x' });
+    const dead = shellOf({ [LOCK_CHECK]: '', 'cat /var/lib/parley-relay-setup/active': 'x' });
     await probeActive(dead);
     shells.push(dead);
     const ran = shells.flatMap((s) => (s as ReturnType<typeof shellOf>).ran);
