@@ -1,5 +1,3 @@
-import { mkdtemp } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RelaySetupEvent, RelaySetupPhase } from '../../src/shared/relay-setup-types.js';
@@ -7,7 +5,7 @@ import { createKnownHosts } from '../../src/main/relay-setup/known-hosts.js';
 import { createRunLog } from '../../src/main/relay-setup/log.js';
 import { createRelaySetup } from '../../src/main/relay-setup/service.js';
 import { connectSsh } from '../../src/main/relay-setup/ssh.js';
-import { docker, dockerAvailable, exec, removeServer, saveImages, startServer, waitForSsh, type Flavour, type Server } from './stand.js';
+import { docker, dockerAvailable, exec, removeServer, removeTempDirs, saveImages, startServer, tempDir, waitForSsh, type Flavour, type Server } from './stand.js';
 
 /**
  * Full install on servers that run their own Docker (privileged containers, real apt, real `docker compose`).
@@ -69,7 +67,7 @@ const done = (events: RelaySetupEvent[]) => events.filter((e) => e.event === 'st
 
 describe.skipIf(!ENABLED)('relay setup stand: full install', () => {
   beforeAll(async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'relay-stand-'));
+    const root = tempDir('relay-stand-');
     known = path.join(root, 'known_hosts');
     const imagesDir = path.join(root, 'images');
     saveImages(imagesDir);
@@ -83,6 +81,7 @@ describe.skipIf(!ENABLED)('relay setup stand: full install', () => {
   afterAll(() => {
     for (const server of servers.values()) removeServer(server.name);
     removeServer('parley-stand-full-busy443');
+    removeTempDirs();
   });
 
   it('443 taken by something else, 80 free → Caddy on 8443, the port is part of the address (acceptance 5)', async () => {

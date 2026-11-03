@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -79,9 +79,23 @@ export async function freePort(): Promise<number> {
   });
 }
 
+const temps: string[] = [];
+
+/** A temporary directory the suite removes in `removeTempDirs` (call it in `afterAll`). */
+export function tempDir(prefix: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  temps.push(dir);
+  return dir;
+}
+
+export function removeTempDirs(): void {
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
 export function removeServer(name: string): void {
   try {
-    docker(['rm', '-f', name]);
+    // `-v`: the anonymous volumes of a DinD server (~470 MB each) go with the container.
+    docker(['rm', '-fv', name]);
   } catch {
     // not there
   }
@@ -167,7 +181,7 @@ export interface WizardOptions {
 
 /** The real service over real SSH; DNS, the bridge and the HTTPS probe are stubs (the probe is a command in the server). */
 export function createWizard(server: Server, options: WizardOptions = {}): Wizard {
-  const root = options.root ?? mkdtempSync(path.join(os.tmpdir(), 'relay-stand-'));
+  const root = options.root ?? tempDir('relay-stand-');
   const events: RelaySetupEvent[] = [];
   const configured: string[] = [];
   const health = options.healthCommand;

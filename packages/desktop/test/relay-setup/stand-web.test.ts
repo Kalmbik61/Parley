@@ -1,9 +1,8 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
-import os from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CADDYFILE, COMPOSE_CADDY, COMPOSE_PROXY } from '../../src/main/relay-setup/templates.js';
-import { COURSE_DIR, docker, dockerAvailable, drive, exec, putFile, putTree, removeServer, saveImages, sha256Of, snapshot, startServer, waitDockerReady, waitForSsh, type Server } from './stand.js';
+import { COURSE_DIR, docker, dockerAvailable, drive, exec, putFile, putTree, removeServer, removeTempDirs, saveImages, sha256Of, snapshot, startServer, tempDir, waitDockerReady, waitForSsh, type Server } from './stand.js';
 
 /**
  * The person's own web server on the stand (spec 10): S1 a Caddy in Docker with read-only mounts and a `relay` service of
@@ -60,12 +59,13 @@ const names = (server: Server): string[] => exec(server.name, 'docker ps -a --fo
 
 describe.skipIf(!ENABLED)('relay setup stand: the web server of the person', () => {
   beforeAll(() => {
-    imagesDir = path.join(mkdtempSync(path.join(os.tmpdir(), 'relay-stand-web-')), 'images');
+    imagesDir = path.join(tempDir('relay-stand-web-'), 'images');
     saveImages(imagesDir);
   }, 300_000);
 
   afterAll(() => {
     for (const server of servers) removeServer(server.name);
+    removeTempDirs();
   });
 
   it('S1: a Caddy of the person with :ro mounts and a relay service of their own → caddy-site; their Caddyfile is not changed', async () => {

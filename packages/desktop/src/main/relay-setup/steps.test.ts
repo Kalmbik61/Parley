@@ -146,6 +146,26 @@ describe('runPlan: cancel', () => {
     expect(log).toEqual(['dir:running', 'dir:done', 'image:stopped', 'start:stopped']);
   });
 
+  it('when both interrupt attempts fail the window is told to wait for the step, and the stop is not reported as an interrupt', async () => {
+    const g = gated('pull-1', () => 0);
+    const tries: string[] = [];
+    g.s.interrupt = async (id) => {
+      tries.push(id);
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    const cancelling = vi.fn();
+    const handle = createCancelHandle();
+    const running = runPlan(imagePlan, g.s, { step: () => undefined, line: () => undefined, cancelling }, handle);
+    await g.inside;
+    await requestCancel(handle);
+    expect(tries).toEqual(['image-1', 'image-1']);
+    expect(cancelling).toHaveBeenCalledTimes(1);
+    g.release();
+    const outcome = await running;
+    expect(outcome).toMatchObject({ stopped: true, failedStep: 'image' });
+    expect(outcome.interrupted).toBeUndefined();
+  });
+
   it('a cancel during a check starts no commands', async () => {
     const handle = createCancelHandle();
     const ran: string[] = [];
@@ -184,7 +204,7 @@ describe('runPlan: cancel', () => {
         if (command === 'pull-1') await requestCancel(handle);
         return { code: command === 'chk' ? 1 : 0, stdout: '', stderr: '' };
       },
-      interrupt: async () => ({ code: 1, stdout: '', stderr: '' }),
+      interrupt: async () => ({ code: 0, stdout: '', stderr: '' }),
     };
     const imagePlan: Plan = {
       ...plan,

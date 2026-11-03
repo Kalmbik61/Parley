@@ -112,9 +112,12 @@ export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents,
         try {
           if ((await shell.interrupt?.(id))?.code === 0) return;
         } catch {
-          // the second channel failed: the command ends on its own and the run stops after it
+          // the second channel failed
         }
       }
+      // Nothing was killed: the command ends on its own and the run stops after it, as for a step that cannot be interrupted.
+      live.interrupted = false;
+      events.cancelling?.();
     } else if (live.step?.interruptible !== true) events.cancelling?.();
     // An interruptible step between its commands (or in its check) stops by itself at the next check.
   };

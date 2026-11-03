@@ -175,6 +175,14 @@ describe.skipIf(!available)(`the wrapper of spec 7.3 (${hasLocal ? 'local' : 'ub
     expect(out).toContain('other-alive');
   }, 60_000);
 
+  it('a stale pid file of the same id is gone as soon as the command starts', () => {
+    const out = runScript(
+      [asVar('W', w('sleep 2')), `mkdir -p -m 0700 ${DIR}; echo 99999 > ${DIR}/step-1.pid`, `sh -c "$W" > /dev/null 2>&1 &`, 'sleep 1', `echo "pid=$(cat ${DIR}/step-1.pid)"`, 'sleep 2'].join('\n'),
+    );
+    expect(out).toMatch(/pid=\d+/);
+    expect(out).not.toContain('pid=99999');
+  });
+
   it('an unsafe directory (not root-only, or a link) stops the command before it writes anything', () => {
     const out = runScript(
       [

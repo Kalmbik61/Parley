@@ -50,14 +50,15 @@ export const COMMAND_ID = /^[a-z0-9-]+$/;
  */
 export function detachedCommand(command: string, id: string, dir: string = SETUP_DIR): string {
   if (!COMMAND_ID.test(id)) throw new Error(`invalid command id: ${id}`);
-  // `ps -o pgid=`: after `setsid` the leader of the group is `flock` and `sh` is its child, so `$$` is not the group.
+  // The process group is field 5 of `/proc/$$/stat` (no `ps`: minimal Debian has none): after `setsid` the leader of the
+  // group is `flock` and `sh` is its child, so `$$` is not the group.
   // The command runs in a subshell, so an `exit` inside it still lets the exit code be written.
-  const background = `echo ${id} > ${dir}/active; ps -o pgid= -p $$ | tr -d " " > ${dir}/${id}.pid; (\n${command}\n); echo $? > ${dir}/${id}.code; rm -f ${dir}/active ${dir}/${id}.pid`;
+  const background = `echo ${id} > ${dir}/active; read -r _ _ _ _ g _ < /proc/$$/stat; echo $g > ${dir}/${id}.pid; (\n${command}\n); echo $? > ${dir}/${id}.code; rm -f ${dir}/active ${dir}/${id}.pid`;
   return [
     `D=${dir}; mkdir -p -m 0700 "$D"`,
     `[ "$(stat -c %u:%a "$D")" = "0:700" ] && [ ! -L "$D" ] || { echo "unsafe $D"; exit 254; }`,
     // The log is created before the background part starts: `tail` must find it even if the child is not scheduled yet.
-    `: > "$D/${id}.log"; rm -f "$D/${id}.code"`,
+    `: > "$D/${id}.log"; rm -f "$D/${id}.code" "$D/${id}.pid"`,
     `setsid flock -n -o "$D/lock" sh -c ${shQuote(background)} >> "$D/${id}.log" 2>&1 < /dev/null &`,
     `tail -n +1 -f --pid=$! "$D/${id}.log"`,
     `[ -f "$D/${id}.code" ] && exit "$(cat "$D/${id}.code")"`,

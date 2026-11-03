@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +67,7 @@ describe.skipIf(!ENABLED)('relay setup stand', () => {
   afterAll(() => {
     for (const server of servers.values()) removeServer(server.name);
     if (keychange !== null) removeServer(keychange.name);
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   });
 
   it.each(['ubuntu24', 'debian12'] as const)('%s: real SSH, host key trust on first use, read-only probe, full plan on screen', async (flavour) => {
