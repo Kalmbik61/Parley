@@ -52,11 +52,17 @@ The tests remove their containers (`parley-stand-*`) when they finish.
 | 2 second run changes nothing | `stand-install` «re-run changes nothing» |
 | 3 update keeps `data/` (volume) and changes the image | `stand-install` «update keeps the data» |
 | 4 roll back; remove keeps data until confirmed | `stand-install` same test |
-| 5 nginx on 80 untouched + snippet; 443 busy → 8443 in the address | `stand` «nginx on 80», `stand-install` «443 taken» |
+| 5 nginx on 80: `nginx-acme` plan, `/etc/nginx` untouched by the probe; 443 busy → 8443 in the address | `stand` «nginx on 80 under a service», `stand-install` «443 taken» |
 | 6 host key change stops the run | `stand` «changed host key» |
 | 7 hostile input refused before connecting | unit tests (`src/main/relay-setup/input.test.ts`, `service.test.ts`) |
 | 8 no credential in log, IPC or on disk | unit test «no password, passphrase or sudo password reaches…» |
 | 9 Alpine: stop after the probe, nothing changed | `stand` «Alpine» |
+| 10 Caddy of the person in Docker (`:ro` mounts, a `relay` service of their own) → `caddy-site`; their sites keep answering; repeat; `down`/`up` of their project; removal takes only our file | `stand-web` S1 |
+| 11 manual layout of the course VPS: repeat, second repeat, rollback blocked, removal with data; run 2's `Created` container | `stand-web` S2 |
+| 12 the same layout: removal at once | `stand-web` S2b |
+| 13 nginx on the host → `nginx-acme` (own Caddy on 8443): nginx still answers, our name reaches our Caddy, removal restores `/etc/nginx` | `stand-web` S3 |
+
+Layouts the stand covers: `caddy` (own Caddy), `caddy-site` in Docker (S1, S2), `nginx-acme` on the host (S3) and, through the probe cases, the `proxy` plan. Not covered: `caddy-site` under systemd, `nginx-acme` in Docker, a working TLS certificate.
 
 ## What the stand does not cover
 

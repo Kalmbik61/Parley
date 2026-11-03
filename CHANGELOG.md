@@ -6,6 +6,20 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- The relay setup wizard no longer mistakes a foreign container for its own earlier install: who holds port 80 and 443 is read from the running and stopped containers and the listeners, not guessed from the process name or from an old `.env`. On a server whose Caddy owns both ports the wizard no longer plans a second Caddy.
+- Commands the wizard starts on the server keep running when the SSH connection drops, and a repeated run waits for a command that is still alive instead of starting a second one.
+- Removing the relay also removes the volumes and the stopped containers an earlier layout left behind, and takes its own site out of your web server first.
+- The Relay field accepts an `https://` address; `http://` is refused with a reason.
+
+### Changed
+
+- One-button install next to your own web server: the wizard adds a site to your Caddy (in Docker or under systemd) or, for nginx, runs its own Caddy on port 8443 behind one `server` block in nginx. It changes only its own file or its own marked block, shows every file, the backup in `/var/backups/parley-relay/`, the check and the reload before you press Run, and restores the file when the check or the reload fails. Servers it cannot change keep the manual snippet.
+- Repeating the wizard, rolling back and removing follow what the server shows now; a working manual `proxy` install keeps its layout.
+- The image download shows its progress and can be cancelled.
+- The wizard window stays open while a run goes on, closes only with the buttons, and reopens the same run from Settings, also after the window is reloaded.
+
 ## 0.28.1
 
 **Impact**
