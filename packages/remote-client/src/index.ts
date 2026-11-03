@@ -22,6 +22,8 @@ export {
   sendMessage,
   resumeSession,
   sessionCommand,
+  archiveRoom,
+  deleteRoom,
   loadSwitchOptions,
   switchAgent,
   type SessionCommand,

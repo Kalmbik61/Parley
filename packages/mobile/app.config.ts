@@ -62,7 +62,7 @@ const config: ExpoConfig = {
     'expo-secure-store',
     [
       'expo-local-authentication',
-      { faceIDPermission: 'Parley uses Face ID to confirm approvals.' },
+      { faceIDPermission: 'Parley uses Face ID to unlock the app and to confirm archiving or deleting a room.' },
     ],
     // Personal Team cannot provision Push Notifications; the aps-environment entitlement arrives with A24.
     ['expo-notifications', { enableRemoteNotifications: false }],
