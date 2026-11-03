@@ -40,7 +40,7 @@ describe('белый список против запретного списка
   it('то, что телефону нельзя никогда, не лежит ни в одном этапе (в том числе `settings.set`)', () => {
     const mustBeForbidden = [
       'settings.set', 'settings.get', 'host.shutdown', 'wake.now', 'pty.input', 'pty.resize', 'works.create', 'works.delete',
-      'sessions.delete', 'sessions.rename', 'rooms.delete', 'rooms.archive', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
+      'sessions.delete', 'sessions.rename', 'rooms.reopen', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
       'providers.setKey', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
     ];
     for (const name of mustBeForbidden) {
@@ -123,6 +123,24 @@ describe('белый список против запретного списка
     }
   });
 
+  it('A41a: меню комнаты — этап A, не в запретном перечне; правила параметров строгие', () => {
+    for (const m of ['rooms.archive', 'rooms.delete']) {
+      expect(REMOTE_STAGES.A.methods as readonly string[], m).toContain(m);
+      expect(isRemoteForbidden(m), m).toBe(false);
+    }
+    for (const m of ['rooms.reopen', 'rooms.rename', 'rooms.setMode', 'rooms.addMember']) expect(isRemoteForbidden(m), m).toBe(true);
+    const room = { projectPath: '/p', workId: 'w-1', roomId: 'r-1' };
+    expect(checkRemoteParams('rooms.archive', { ...room, stopSessions: true })).toBe(true);
+    expect(checkRemoteParams('rooms.archive', { ...room, stopSessions: false })).toBe(true);
+    expect(checkRemoteParams('rooms.delete', room)).toBe(true);
+    for (const bad of [{}, room, { ...room, stopSessions: 'yes' }, { ...room, stopSessions: 1 }, { ...room, stopSessions: undefined }, { ...room, stopSessions: true, extra: 1 }, { ...room, stopSessions: true, roomId: '' }, { ...room, stopSessions: true, workId: '' }, { ...room, stopSessions: true, projectPath: '' }, { ...room, stopSessions: true, roomId: 5 }]) {
+      expect(checkRemoteParams('rooms.archive', bad), `archive ${JSON.stringify(bad)}`).toBe(false);
+    }
+    for (const bad of [{}, { ...room, stopSessions: true }, { ...room, force: true }, { ...room, roomId: '' }, { ...room, workId: '' }, { ...room, projectPath: '' }, { projectPath: '/p', workId: 'w-1' }, { ...room, roomId: 7 }]) {
+      expect(checkRemoteParams('rooms.delete', bad), `delete ${JSON.stringify(bad)}`).toBe(false);
+    }
+  });
+
   it('A37a: sessions.resume — этап A; правило: ключ только ref со строгими projectPath, workId, sessionId', () => {
     expect(REMOTE_STAGES.A.methods).toContain('sessions.resume');
     expect(isRemoteForbidden('sessions.resume')).toBe(false);
@@ -192,6 +210,8 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
       'sessions.stop': vi.fn(async () => ({ ok: true })),
       'sessions.close': vi.fn(async () => ({ ok: true })),
       'sessions.switchOptions': vi.fn(async () => ({ current: { provider: 'claude', available: true, reason: null }, targets: [], suggested: null, keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] })),
+      'rooms.archive': vi.fn(async () => ({ ok: true })),
+      'rooms.delete': vi.fn(async () => ({ ok: true })),
       'sessions.switchAgent': vi.fn(async () => ({ outcome: 'started', carried: 'handover' })),
     };
     const pty = { input: vi.fn(), resize: vi.fn() };
@@ -209,6 +229,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
         roomAutonomous: () => false,
         projectKnown: (projectPath) => projectPath === '/p',
         workKnown: (projectPath, workId) => projectPath === '/p' && workId === 'w-1',
+        roomState: async (_projectPath, _workId, roomId) => (roomId === 'r-1' ? { workArchived: false, autonomous: false } : null),
         sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
       },
     });
@@ -330,6 +351,33 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
     expect(h.spies['sessions.switchAgent']).toHaveBeenCalledTimes(1);
     // Удаление с телефона по-прежнему закрыто.
     expect(await codeOf(h.link.call('sessions.delete', { ref }))).toBe('unknown_method');
+  });
+
+  it('A41a: меню комнаты за переключателем; известная работа и комната; лишний ключ и нет stopSessions — bad_request до обработчика', async () => {
+    const room = { projectPath: '/p', workId: 'w-1', roomId: 'r-1' };
+    const archive = { ...room, stopSessions: false };
+    const cases = [['rooms.archive', archive], ['rooms.delete', room]] as const;
+    const off = await hostWith({ enabled: false, open: true });
+    for (const [m, params] of cases) {
+      expect(off.link.methods, m).not.toContain(m);
+      expect(await codeOf(off.link.call(m, params)), m).toBe('unknown_method');
+      expect(off.spies[m], m).not.toHaveBeenCalled();
+    }
+    const h = await hostWith({ enabled: true, open: true });
+    for (const [m, params] of cases) {
+      expect(h.link.methods, m).toContain(m);
+      expect(await codeOf(h.link.call(m, params)), m).toBe('ok');
+      expect(await codeOf(h.link.call(m, { ...params, projectPath: '/etc' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, workId: 'w-9' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, roomId: 'r-9' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, extra: 1 })), m).toBe('bad_request');
+      expect(h.spies[m], m).toHaveBeenCalledTimes(1);
+    }
+    expect(await codeOf(h.link.call('rooms.archive', room))).toBe('bad_request');
+    expect(await codeOf(h.link.call('rooms.archive', { ...archive, stopSessions: 'no' }))).toBe('bad_request');
+    expect(h.spies['rooms.archive']).toHaveBeenCalledTimes(1);
+    // Прочее меню комнаты по-прежнему закрыто.
+    expect(await codeOf(h.link.call('rooms.rename', { ...room, title: 'x' }))).toBe('unknown_method');
   });
 
   it('A37a: sessions.resume за переключателем; известная работа; лишний ключ — bad_request до обработчика', async () => {
