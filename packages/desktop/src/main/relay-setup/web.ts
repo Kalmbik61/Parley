@@ -182,7 +182,7 @@ export function parseExecStart(text: string): string[] {
 
 /** Markers of our block in a Caddyfile (spec 5.3). */
 export function countMarkers(text: string): { begin: number; end: number } {
-  return { begin: (text.match(/^# BEGIN parley-relay\s*$/gm) ?? []).length, end: (text.match(/^# END parley-relay\s*$/gm) ?? []).length };
+  return { begin: (text.match(/^# BEGIN parley-relay\b.*$/gm) ?? []).length, end: (text.match(/^# END parley-relay\s*$/gm) ?? []).length };
 }
 
 /** Is this file one the wizard wrote (or the manual layout of the same shape)? Spec 5.3. */
@@ -214,11 +214,13 @@ export interface WebSurvey {
   /** Directory our file goes to (host and as the server sees it) and the suffix of its name. */
   include: { hostDir: string; containerDir: string; suffix: string } | null;
   /** Our earlier change: a file or a block between markers. */
-  ours: { kind: 'file'; hostPath: string } | { kind: 'block' } | null;
+  ours: { kind: 'file'; hostPath: string; sha256: string } | { kind: 'block' } | null;
   /** `parley-relay` / `parley-relay-acme` already belong to somebody else in the chosen network. */
   nameClash: boolean;
   /** Why a site cannot be added; empty — it can. */
   reasons: string[];
+  /** The reasons that must stop the plan (a file of somebody else with our name, a broken marker, a name clash) instead of falling back to layout 5. */
+  blockers: string[];
 }
 
 export const NAME_CLASH_REASON = 'The names parley-relay and parley-relay-acme are already used by another container in the web server network';
@@ -254,6 +256,7 @@ const empty = (holder: PortHolder, kind: WebKind, runtime: WebSurvey['runtime'],
   ours: null,
   nameClash: false,
   reasons,
+  blockers: [],
 });
 
 /** Stage 3: what holds port 80 and what can be added to it. `null` when nothing holds it. Reads only. */
@@ -288,6 +291,10 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
 
   const reasons: string[] = [];
   const survey = empty(holder, kind, runtime, reasons);
+  const block = (text: string): void => {
+    reasons.push(text);
+    survey.blockers.push(text);
+  };
 
   if (container !== null) {
     if (container.networkMode === 'host') reasons.push('The web server container uses the host network');
@@ -299,7 +306,7 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
         probe.containers.some((c) => !isOurs(c) && c.id !== container?.id && c.networks.includes(network) && (c.name === name || (c.networkAliases[network] ?? []).includes(name)));
       if (taken('parley-relay') || taken('parley-relay-acme')) {
         survey.nameClash = true;
-        reasons.push(NAME_CLASH_REASON);
+        block(NAME_CLASH_REASON);
       }
     }
   } else {
@@ -345,7 +352,7 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
           else if (info.admin !== null && !isAdminAddress(info.admin)) reasons.push('The Caddy admin address has an unsupported form');
           else survey.admin = info.admin ?? '127.0.0.1:2019';
           const markers = countMarkers(read.stdout);
-          if (markers.begin + markers.end > 2 || markers.begin !== markers.end) reasons.push('The Caddyfile has an unpaired or repeated parley-relay marker');
+          if (markers.begin + markers.end > 2 || markers.begin !== markers.end) block('The Caddyfile has an unpaired or repeated parley-relay marker');
           else if (markers.begin === 1) survey.ours = { kind: 'block' };
           const target = resolveImport(configPath, info.imports);
           if (target !== null) {
@@ -375,18 +382,28 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
     const hostPath = `${survey.include.hostDir}/parley-relay${survey.include.suffix}`;
     const read = await run(`cat ${shQuote(hostPath)}`);
     if (read.code === 0) {
-      if (isOurFile(read.stdout, probe.install?.RELAY_PROXY_PORT)) survey.ours = { kind: 'file', hostPath };
-      else reasons.push(`${hostPath} exists and was not written by Parley`);
+      if (isOurFile(read.stdout, probe.install?.RELAY_PROXY_PORT)) survey.ours = { kind: 'file', hostPath, sha256: sha256(read.stdout) };
+      else block(`${hostPath} exists and was not written by Parley`);
     }
   }
   return survey;
 }
 
-/** The previous run's command, if its process is still alive (spec 7.3). */
-export async function probeActive(shell: RemoteShell): Promise<ActiveCommand | null> {
+export interface PreviousCommand {
+  /** Alive: the plan is blocked. */
+  active: ActiveCommand | null;
+  /** Dead: the end of its log, shown in the plan notes. */
+  tail: { id: string; text: string } | null;
+}
+
+/** The previous run's command: alive (blocks the plan) or dead (its log tail is shown). Spec 7.3. */
+export async function probeActive(shell: RemoteShell): Promise<PreviousCommand> {
+  const none: PreviousCommand = { active: null, tail: null };
   const file = await shell.run(`cat ${ACTIVE_FILE}`, { sudo: true });
   const match = file.code === 0 ? /^(\d{1,9}) ([a-z][a-z0-9-]{0,31})$/.exec(file.stdout.trim()) : null;
-  if (match?.[1] === undefined || match[2] === undefined) return null;
+  if (match?.[1] === undefined || match[2] === undefined) return none;
   const alive = await shell.run(`kill -0 ${match[1]}`, { sudo: true });
-  return alive.code === 0 ? { pid: Number(match[1]), id: match[2] } : null;
+  if (alive.code === 0) return { active: { pid: Number(match[1]), id: match[2] }, tail: null };
+  const log = await shell.run(`tail -n 20 /var/tmp/parley-relay-setup/${match[2]}.log`, { sudo: true });
+  return { active: null, tail: log.code === 0 && log.stdout.trim() !== '' ? { id: match[2], text: log.stdout } : null };
 }

@@ -80,6 +80,8 @@ export interface ProbeResult {
   web: WebSurvey | null;
   /** A command of the previous run still alive on the server (spec 7.3). */
   activeCommand: ActiveCommand | null;
+  /** The end of the log of the previous run's last command, when that command is dead (shown in the plan notes). */
+  previousTail: { id: string; text: string } | null;
   /** `.env` of the earlier install (the wizard writes it), `null` — none. */
   install: Record<string, string> | null;
   previous: Record<string, string> | null;
@@ -248,6 +250,7 @@ export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<Pr
     containers: parseContainers(containers.stdout),
     web: null,
     activeCommand: null,
+    previousTail: null,
     ufwActive: ufw.code === 0 && parseUfwActive(ufw.stdout),
     install: env.code === 0 ? parseEnv(env.stdout) : null,
     previous: previous.code === 0 ? parseEnv(previous.stdout) : null,

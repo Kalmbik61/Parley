@@ -38,6 +38,7 @@ function probeOf(over: Partial<ProbeResult> = {}): ProbeResult {
     containers: parseContainers(read('containers.jsonl')),
     web: null,
     activeCommand: null,
+    previousTail: null,
     ufwActive: false,
     install: parseEnv(read('env.txt')),
     previous: parseEnv(read('previous-env.txt')),
@@ -93,6 +94,8 @@ describe('parsers', () => {
   it('markers', () => {
     expect(countMarkers(read('Caddyfile.marker-block'))).toEqual({ begin: 1, end: 1 });
     expect(countMarkers(read('Caddyfile.marker-single'))).toEqual({ begin: 1, end: 0 });
+    // The marker line the wizard writes carries a note after the name.
+    expect(countMarkers('# BEGIN parley-relay (added by the Parley relay setup wizard; remove it with the wizard)\nx\n# END parley-relay\n')).toEqual({ begin: 1, end: 1 });
     expect(countMarkers(read('Caddyfile'))).toEqual({ begin: 0, end: 0 });
   });
   it('nginx -T: main file, http includes only, conf.d first', () => {
@@ -151,7 +154,7 @@ describe('probeWeb: course VPS', () => {
       config: { host: '/opt/course-platform/deploy/Caddyfile', container: '/etc/caddy/Caddyfile' },
       admin: '127.0.0.1:2019',
       include: { hostDir: '/opt/evdev-site/caddy', containerDir: '/etc/caddy/sites', suffix: '.caddy' },
-      ours: { kind: 'file', hostPath: '/opt/evdev-site/caddy/parley-relay.caddy' },
+      ours: { kind: 'file', hostPath: '/opt/evdev-site/caddy/parley-relay.caddy', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
       nameClash: false,
       reasons: [],
     });
@@ -206,6 +209,7 @@ describe('probeWeb: every unsupported layout has its own reason', () => {
   it('a foreign file with our name', async () => {
     const answers = { ...COURSE, "cat '/opt/evdev-site/caddy/parley-relay.caddy'": read('foreign-parley-relay.caddy') };
     expect(await reasonOf(probeOf(), answers)).toEqual([expect.stringMatching(/was not written by Parley/)]);
+    expect((await probeWeb(probeOf(), shellOf(answers)))?.blockers).toHaveLength(1);
   });
   it('one marker only', async () => {
     const answers = { ...COURSE, "cat '/opt/course-platform/deploy/Caddyfile'": read('Caddyfile.marker-single') };
@@ -270,7 +274,7 @@ describe('probeWeb: nginx and host servers', () => {
       kind: 'nginx', runtime: 'docker', include: { hostDir: '/srv/nginx/conf.d', containerDir: '/etc/nginx/conf.d', suffix: '.conf' }, ours: null, reasons: [],
     });
     const mine = { ...answers, "cat '/srv/nginx/conf.d/parley-relay.conf'": '# parley-relay: added by the Parley relay setup wizard.\nserver {}\n' };
-    expect((await probeWeb(probe, shellOf(mine)))?.ours).toEqual({ kind: 'file', hostPath: '/srv/nginx/conf.d/parley-relay.conf' });
+    expect((await probeWeb(probe, shellOf(mine)))?.ours).toMatchObject({ kind: 'file', hostPath: '/srv/nginx/conf.d/parley-relay.conf' });
   });
   it('nginx in Docker without a mount for conf.d → a reason', async () => {
     const probe = probeOf({ listeners: [], containers: [nginxContainer([])] });
@@ -300,23 +304,26 @@ describe('probeWeb: nginx and host servers', () => {
 
 describe('the previous run (spec 7.3)', () => {
   it('a live process blocks, a dead one or no file does not', async () => {
-    expect(await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': '' }))).toEqual({ pid: 4242, id: 'files' });
-    expect(await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': { code: 1 } }))).toBeNull();
-    expect(await probeActive(shellOf({}))).toBeNull();
+    expect((await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': '' }))).active).toEqual({ pid: 4242, id: 'files' });
+    const dead = await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': { code: 1 }, 'tail -n 20 /var/tmp/parley-relay-setup/files.log': 'E: dpkg was interrupted\n' }));
+    expect(dead).toEqual({ active: null, tail: { id: 'files', text: 'E: dpkg was interrupted\n' } });
+    expect(await probeActive(shellOf({}))).toEqual({ active: null, tail: null });
     const shell = shellOf({ 'cat /var/tmp/parley-relay-setup/active': '1; reboot x\n' });
-    expect(await probeActive(shell)).toBeNull();
+    expect((await probeActive(shell)).active).toBeNull();
     expect(shell.ran).toEqual(['cat /var/tmp/parley-relay-setup/active']);
   });
 });
 
 describe('stage 3 only reads', () => {
   it('every command has a fixed read-only form', async () => {
-    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|cat '\/[A-Za-z0-9._@+/-]+'|cat \/var\/tmp\/parley-relay-setup\/active|kill -0 \d+)$/;
+    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|cat '\/[A-Za-z0-9._@+/-]+'|cat \/var\/tmp\/parley-relay-setup\/active|kill -0 \d+|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log)$/;
     const shells = [shellOf(COURSE), shellOf({})];
     await probeWeb(probeOf(), shells[0] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['caddy'] }], containers: [] }), shells[1] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['nginx'] }], containers: [] }), shells[1] as RemoteShell);
-    await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '7 x' }));
+    const dead = shellOf({ 'cat /var/tmp/parley-relay-setup/active': '7 x', 'kill -0 7': { code: 1 } });
+    await probeActive(dead);
+    shells.push(dead);
     const ran = shells.flatMap((s) => (s as ReturnType<typeof shellOf>).ran);
     expect(ran.length).toBeGreaterThan(5);
     for (const command of ran) expect(command).toMatch(READ);
