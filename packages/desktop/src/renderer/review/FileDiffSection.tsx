@@ -35,7 +35,7 @@ import { notesKey, useNotesStore } from './notes/store.js';
 type DiffEditorApi = Parameters<DiffOnMount>[0];
 type SideEditor = ReturnType<DiffEditorApi['getModifiedEditor']>;
 
-export type DiffMode = { kind: 'branch'; base: string } | { kind: 'commit'; hash: string };
+export type DiffMode = { kind: 'branch'; base: string; head?: string } | { kind: 'commit'; hash: string };
 
 /** Заметки секции (8.4b): чьи они и как их отправить. В режиме коммита — null. */
 export interface SectionNotes {

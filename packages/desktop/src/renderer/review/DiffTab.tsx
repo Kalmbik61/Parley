@@ -485,7 +485,9 @@ export function DiffTab({ bridge, workKey, entry, tab, font, sendDeps }: DiffTab
   const loadable = supported && !pending && !discarded;
   const commit = tab.commit;
   const changes = useChanges({ bridge, entry, sessionId: loadable && commit === null ? sessionId : null, mergeCheck: false });
-  const hasWorktree = worktree !== null;
+  // Копию убрала уборка: папки нет, стороны читаются из корня проекта по коммитам ветки.
+  const removed = worktree !== null && worktree.removedAt != null && worktree.removedAt !== '';
+  const hasWorktree = worktree !== null && !removed;
   const root = useMemo<FileRoot>(
     () => ({ workKey, spec: hasWorktree ? { kind: 'worktree', sessionId } : { kind: 'project' } }),
     [workKey, hasWorktree, sessionId],
@@ -515,9 +517,17 @@ export function DiffTab({ bridge, workKey, entry, tab, font, sendDeps }: DiffTab
 
   const source = changes.source;
   const base = source?.kind === 'worktree' ? source.diff.mergeBase : source?.kind === 'project' ? 'HEAD' : null;
+  const head = removed && source?.kind === 'worktree' ? (source.diff.commits[0]?.hash ?? base) : null;
   const mode = useMemo<DiffMode | null>(
-    () => (commit !== null ? { kind: 'commit', hash: commit } : base === null ? null : { kind: 'branch', base }),
-    [commit, base],
+    () =>
+      commit !== null
+        ? { kind: 'commit', hash: commit }
+        : base === null
+          ? null
+          : head === null
+            ? { kind: 'branch', base }
+            : { kind: 'branch', base, head },
+    [commit, base, head],
   );
 
   if (connected && !supported) {

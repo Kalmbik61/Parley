@@ -34,13 +34,14 @@ async function side(read: Promise<TextFile | null>): Promise<TextFile | null | t
 
 /**
  * Стороны файла: ветка — base ↔ рабочее дерево (base — mergeBase, у сессии без worktree — 'HEAD');
- * коммит — родитель ↔ коммит; R — original по oldPath.
+ * коммит — родитель ↔ коммит; R — original по oldPath. У ветки с `head` (копию убрала уборка, папки нет)
+ * правая сторона — файл в этом коммите ветки, рабочее дерево не читается.
  */
 export async function loadSides(input: {
   files: FilesApi;
   root: FileRoot;
   file: DiffFile;
-  mode: { kind: 'branch'; base: string } | { kind: 'commit'; hash: string };
+  mode: { kind: 'branch'; base: string; head?: string } | { kind: 'commit'; hash: string };
 }): Promise<DiffSides> {
   const { files, root, file, mode } = input;
   const before = mode.kind === 'branch' ? mode.base : `${mode.hash}^`;
@@ -49,7 +50,13 @@ export async function loadSides(input: {
   const modified =
     file.status === 'D'
       ? null
-      : side(mode.kind === 'branch' ? files.readText(root, file.path) : files.gitShow(root, mode.hash, file.path));
+      : side(
+          mode.kind === 'commit'
+            ? files.gitShow(root, mode.hash, file.path)
+            : mode.head === undefined
+              ? files.readText(root, file.path)
+              : files.gitShow(root, mode.head, file.path),
+        );
   const [left, right] = await Promise.all([original, modified]);
   if (left === TOO_LARGE || right === TOO_LARGE) {
     // Текста стороны больше 20 МБ нет вовсе: «Show anyway» показал бы пустую сторону — без текста обеих.

@@ -254,6 +254,41 @@ describe('worktree отсутствует (раунд исправлений 8, 
     await expect(service.mergeCheck(ref)).rejects.toMatchObject(missing);
   });
 
+  it('убранная копия: diff и merge по ветке без папки', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+    await service.commit(ref, 'бэкенд: черновик');
+    await git(project, ['worktree', 'remove', '--force', info.path]);
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+    });
+
+    const diff = await service.diff(ref);
+    expect(diff.files.map((file) => file.path)).toContain('draft.md');
+    expect(diff.commits).toHaveLength(1);
+
+    const result = await service.merge(ref);
+    expect(result.ok).toBe(true);
+    await expect(readFile(path.join(project, 'draft.md'), 'utf8')).resolves.toContain('черновик');
+  });
+
+  it('убранная копия: commit — worktree-missing', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await git(project, ['worktree', 'remove', '--force', info.path]);
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+    });
+
+    await expect(service.commit(ref, 'm')).rejects.toMatchObject({
+      code: 'bad_request',
+      data: { reason: 'worktree-missing' },
+    });
+  });
+
   it('папку worktree удалили мимо хоста (агент, руками) — diff с той же причиной', async () => {
     const { ref, info } = await sessionWithWorktree();
     const service = createWorktreesService(stubSessions());

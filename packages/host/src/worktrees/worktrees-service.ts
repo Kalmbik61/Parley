@@ -109,12 +109,15 @@ async function requireWorktree(
  * git отказал бы `internal` без причины — окно не отличило бы это от сбоя и показывало бы ошибку
  * вместо «worktree отброшен» (раунд исправлений 8, пункт 1). Причина — по пути, не по тексту git.
  * Заявка, ещё не созданная (`createdAt: null`), — не «отсутствует».
+ * Копия, убранная самим хостом (`removedAt`), — не ошибка: папки нет намеренно, ветка осталась, и
+ * core отдаёт дифф, слияние и сброс по одной ветке; отказывает только `commit` (ему нужна папка).
  */
 async function requirePresentWorktree(
   ref: SessionRef,
 ): Promise<{ label: string; worktree: WorktreeInfo }> {
   const found = await requireWorktree(ref);
-  if (found.worktree.createdAt !== null) {
+  const removed = found.worktree.removedAt != null && found.worktree.removedAt !== '';
+  if (found.worktree.createdAt !== null && !removed) {
     // «Нет папки» — только ENOENT/ENOTDIR или не каталог: временный отказ (EACCES, EMFILE, сетевой
     // том) идёт прежним путём ошибки хоста, иначе живой worktree на время выглядел бы отброшенным.
     const present = await stat(found.worktree.path).then(
@@ -156,6 +159,11 @@ export function createWorktreesService(
 
     async commit(ref, message) {
       const { worktree } = await requirePresentWorktree(ref);
+      if (worktree.removedAt != null && worktree.removedAt !== '') {
+        throw new HostError('bad_request', `worktree of session ${ref.sessionId} was removed: ${worktree.path}`, {
+          reason: HOST_ERROR_REASONS.worktreeMissing,
+        });
+      }
       // Только worktree-corrupt — с причиной; прочий сбой коммита идёт как раньше.
       try {
         return await commitWorktree(ref.projectPath, worktree, message);
