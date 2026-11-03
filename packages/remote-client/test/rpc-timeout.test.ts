@@ -12,10 +12,10 @@ describe('RPC timeout policy (W1)', () => {
 
   it('mutating calls wait longer than the bridge host deadline; reads keep 15 s', () => {
     expect(RPC_MUTATING_TIMEOUT_MS).toBeGreaterThan(BRIDGE_CALL_DEADLINE_MS + 10_000);
-    for (const m of ['feed.decide', 'rooms.resolveProposal', 'sessions.create', 'rooms.create', 'rooms.send', 'pty.send', 'sessions.resume']) {
+    for (const m of ['feed.decide', 'rooms.resolveProposal', 'sessions.create', 'rooms.create', 'rooms.send', 'pty.send', 'sessions.resume', 'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchAgent']) {
       expect(defaultTimeoutFor(m), m).toBe(RPC_MUTATING_TIMEOUT_MS);
     }
-    for (const m of ['works.list', 'feed.snapshot', 'context.messages']) expect(defaultTimeoutFor(m), m).toBe(RPC_TIMEOUT_MS);
+    for (const m of ['works.list', 'feed.snapshot', 'context.messages', 'sessions.switchOptions']) expect(defaultTimeoutFor(m), m).toBe(RPC_TIMEOUT_MS);
   });
 
   it('a sessions.create answered after 20 s still resolves; a read gives up at 15 s', async () => {

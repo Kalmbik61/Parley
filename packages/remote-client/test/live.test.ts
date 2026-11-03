@@ -326,3 +326,35 @@ describe('resumeSession', () => {
     expect((r3.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'sessions.resume')).toHaveLength(1);
   });
 });
+
+describe('session menu actions (A38b)', () => {
+  const calls = (rpc: { call: unknown }, m: string) => (rpc.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === m).map((c) => c[1]);
+  it.each(['feed.interrupt', 'sessions.stop', 'sessions.close'] as const)('%s: params {ref} only, ok / rejected / lost, one call', async (method) => {
+    const { client, rpc } = setup(() => ({ ok: true }));
+    expect(await client.sessionCommand(method, R)).toEqual({ outcome: 'ok' });
+    expect(calls(rpc, method)).toEqual([{ ref: R }]);
+    const { client: c2 } = setup(() => {
+      throw Object.assign(new Error('session is not running'), { code: 'conflict' });
+    });
+    expect(await c2.sessionCommand(method, R)).toEqual({ outcome: 'rejected', code: 'conflict', message: 'session is not running' });
+    const { client: c3, rpc: r3 } = setup(() => {
+      throw lost();
+    });
+    expect(await c3.sessionCommand(method, R)).toEqual({ outcome: 'lost' });
+    expect(calls(r3, method)).toHaveLength(1);
+  });
+
+  it('switchOptions reads {ref}; switchAgent sends requestId, provider, carry and never force', async () => {
+    const options = { current: { provider: 'claude', available: true, reason: null }, targets: [], suggested: null, keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] };
+    const { client, rpc } = setup((m) => (m === 'sessions.switchOptions' ? options : { outcome: 'queued', carried: 'transcript' }));
+    expect(await client.switchOptions(R)).toEqual({ outcome: 'ok', options });
+    expect(calls(rpc, 'sessions.switchOptions')).toEqual([{ ref: R }]);
+    const id = '3f1c9a52-7a4e-4c0e-9b8d-2f5e6a7b8c9d';
+    expect(await client.switchAgent({ ref: R, requestId: id, provider: 'codex', carry: 'transcript' })).toEqual({ outcome: 'queued', carried: 'transcript' });
+    expect(calls(rpc, 'sessions.switchAgent')).toEqual([{ ref: R, requestId: id, provider: 'codex', carry: 'transcript' }]);
+    const { client: c2 } = setup(() => {
+      throw Object.assign(new Error('Stop the agent first'), { code: 'conflict' });
+    });
+    expect(await c2.switchAgent({ ref: R, requestId: id, provider: 'codex', carry: 'handover' })).toMatchObject({ outcome: 'rejected', message: 'Stop the agent first' });
+  });
+});

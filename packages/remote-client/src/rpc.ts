@@ -22,6 +22,10 @@ const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'rooms.send',
   'pty.send',
   'sessions.resume',
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchAgent',
   'consents.decide',
 ]);
 

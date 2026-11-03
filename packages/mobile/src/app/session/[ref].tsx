@@ -25,6 +25,8 @@ import { FoldRowView, OutBubble } from '../../feed/FeedViews';
 import { foldFeed, type FoldRow } from '../../feed/fold';
 import { visibleOut, type OutMessage } from '../../feed/outbox';
 import { SleepingRow } from '../../feed/ResumeViews';
+import { commandToast, confirmOf, menuItems, type MenuId } from '../../feed/session-menu';
+import { SwitchSheet } from '../../feed/SwitchSheet';
 import { composerMode, messageProblem } from '../../feed/send';
 import type { ResumeFacts } from '../../feed/resume';
 import { useResume } from '../../feed/use-resume';
@@ -88,6 +90,8 @@ export default function SessionScreen() {
   const [away, setAway] = useState(0);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
+  const [switchOpen, setSwitchOpen] = useState(false);
+  useCloseOnLock(switchOpen, () => setSwitchOpen(false));
   const seen = useRef(0);
 
   const load = (r: SessionRef): void => {
@@ -173,6 +177,17 @@ export default function SessionScreen() {
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  // Developer preview of the ⋯ menu pieces: the functions exist only once the session is found (set during render).
+  const previewActs = useRef<{ menu(): void; close(): void; switchSheet(): void } | null>(null);
+  useEffect(() => {
+    if (!DEMO || found === null) return;
+    const t = setTimeout(() => {
+      if (preview === 'menu') previewActs.current?.menu();
+      else if (preview === 'close') previewActs.current?.close();
+      else if (preview === 'switch') previewActs.current?.switchSheet();
+    }, 600);
+    return () => clearTimeout(t);
+  }, [preview, found !== null]);
   // Developer preview (screenshots): `?preview=waking|failed|pending|alert` sets the state without taps.
   useEffect(() => {
     if (!DEMO || preview === undefined) return;
@@ -305,17 +320,45 @@ export default function SessionScreen() {
     </View>
   );
   const memberOf = view.rows.find((r) => r.kind === 'room' && r.room.members.includes(session.id));
-  const menu = (): void => {
-    const entries: Array<{ title: string; run(): void }> = [];
-    if (team.length > 0) entries.push({ title: `Team (${counts.agents})`, run: () => setTeamOpen(true) });
-    if (memberOf !== undefined && memberOf.kind === 'room') {
-      const roomId = memberOf.room.id;
-      entries.push({ title: 'Open room', run: () => env.actions.openRoom(roomId) });
-    }
-    entries.push({ title: 'Open work', run: () => router.push(`/work/${workParam(ref)}` as never) });
-    entries.push({ title: 'Copy session ID', run: () => void Clipboard.setStringAsync(session.id) });
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...entries.map((e) => e.title), 'Cancel'], cancelButtonIndex: entries.length }, (i) => entries[i]?.run());
+  // Demo data has no hello: every menu method counts as present (screenshots).
+  const menuMethods = DEMO ? ['sessions.resume', 'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchOptions', 'sessions.switchAgent'] : state.methods;
+  const runCommand = (id: 'stop' | 'sleep' | 'close'): void => {
+    const method = id === 'stop' ? 'feed.interrupt' : id === 'sleep' ? 'sessions.stop' : 'sessions.close';
+    void client?.sessionCommand(method, ref).then((outcome) => {
+      if (outcome.outcome === 'ok') haptic.success();
+      else haptic.error();
+      toast.show(commandToast(id, outcome));
+    });
   };
+  const confirmThen = (id: 'sleep' | 'close'): void => {
+    const q = confirmOf(id, session.label);
+    Alert.alert(q.title, q.message, [{ text: q.button, style: id === 'close' ? 'destructive' : 'default', onPress: () => runCommand(id) }, { text: 'Cancel', style: 'cancel' }]);
+  };
+  const menu = (): void => {
+    const items = menuItems({
+      methods: menuMethods,
+      lifecycle: session.lifecycle,
+      working: attention === 'working' || turnRunning,
+      teamAgents: team.length > 0 ? counts.agents : 0,
+      inRoom: memberOf !== undefined && memberOf.kind === 'room',
+    });
+    const run: Record<MenuId, () => void> = {
+      team: () => setTeamOpen(true),
+      room: () => memberOf !== undefined && memberOf.kind === 'room' && env.actions.openRoom(memberOf.room.id),
+      resume: () => resume.start(null),
+      stop: () => runCommand('stop'),
+      sleep: () => confirmThen('sleep'),
+      switch: () => setSwitchOpen(true),
+      copy: () => void Clipboard.setStringAsync(session.id),
+      close: () => confirmThen('close'),
+    };
+    const destructive = items.findIndex((i) => i.destructive === true);
+    ActionSheetIOS.showActionSheetWithOptions(
+      { options: [...items.map((i) => i.title), 'Cancel'], cancelButtonIndex: items.length, ...(destructive >= 0 ? { destructiveButtonIndex: destructive } : {}) },
+      (i) => (items[i] === undefined ? undefined : run[items[i]!.id]()),
+    );
+  };
+  previewActs.current = { menu, close: () => confirmThen('close'), switchSheet: () => setSwitchOpen(true) };
   // "Needs you" without a card on screen is one pinned line under the bar (D1 §9.1); with a card the card says it.
   const strip =
     attention === 'needs-you' && first === undefined && !loading
@@ -459,6 +502,18 @@ export default function SessionScreen() {
             </View>
           </ScrollView>
         </View>
+      </Modal>
+      <Modal visible={switchOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSwitchOpen(false)}>
+        <SwitchSheet
+          client={client}
+          sessionRef={ref}
+          label={session.label}
+          onClose={() => setSwitchOpen(false)}
+          onDone={(text) => {
+            setSwitchOpen(false);
+            toast.show(text);
+          }}
+        />
       </Modal>
       {first !== undefined ? (
         <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>

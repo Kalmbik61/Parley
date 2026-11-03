@@ -84,7 +84,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     ],
   });
   // The "+" and the New session / New room sheet (A26): launch methods in the hello, a made-up provider and role list.
-  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping', 'pty.send', 'consents.list', 'consents.decide', 'trust.check', 'sessions.resume']);
+  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping', 'pty.send', 'consents.list', 'consents.decide', 'trust.check', 'sessions.resume', 'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchOptions', 'sessions.switchAgent']);
   store.dispatch({
     t: 'catalog.providers', epoch: 'demo',
     providers: { providers: [
@@ -172,7 +172,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -205,6 +205,15 @@ export function demoRoute(name: unknown): string | null {
     case 'sleeping-pending':
     case 'sleeping-alert':
       return `${s('zzz')}?preview=${name.slice('sleeping-'.length)}`;
+    // A38b screenshots (menu opens by itself in the developer build).
+    case 'menu-working':
+      return `${s('drone1')}?preview=menu`;
+    case 'menu-sleeping':
+      return `${s('zzz')}?preview=menu`;
+    case 'close-confirm':
+      return `${s('drone1')}?preview=close`;
+    case 'switch-sheet':
+      return `${s('greta')}?preview=switch`;
     case 'session-strip':
       return s('solo');
     case 'chat':

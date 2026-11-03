@@ -9,6 +9,14 @@ import {
   type ConsentExtra,
   sendMessage,
   resumeSession,
+  sessionCommand,
+  loadSwitchOptions,
+  switchAgent,
+  type SessionCommand,
+  type SessionCommandOutcome,
+  type SwitchOptionsOutcome,
+  type SwitchAgentParams,
+  type SwitchAgentOutcome,
   type ResumeSessionOutcome,
   loadProviders,
   loadRoles,
@@ -64,6 +72,12 @@ export interface RemoteClient {
   sendMessage(params: SendMessageParams): Promise<SendMessageOutcome>;
   /** Разбудить спящую сессию (`sessions.resume`); без автоповтора. */
   resumeSession(ref: SessionRef): Promise<ResumeSessionOutcome>;
+  /** Stop (`feed.interrupt`), Put to sleep (`sessions.stop`), Close (`sessions.close`); без автоповтора. */
+  sessionCommand(method: SessionCommand, ref: SessionRef): Promise<SessionCommandOutcome>;
+  /** Цели замены провайдера (чтение). */
+  switchOptions(ref: SessionRef): Promise<SwitchOptionsOutcome>;
+  /** Заменить агента сессии; без автоповтора и без `force`. */
+  switchAgent(params: SwitchAgentParams): Promise<SwitchAgentOutcome>;
   decideConsent(id: string, decision: 'allow' | 'deny', extra?: ConsentExtra): Promise<DecideConsentOutcome>;
   /** Соединение готово / ушло; ведёт и перечитыватель карточек, и подписки. */
   setConnected(connected: boolean): void;
@@ -129,6 +143,9 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     loadOlder: (ref) => live.loadOlder(ref),
     sendMessage: (params) => sendMessage(rpc, env, params),
     resumeSession: (ref) => resumeSession(rpc, ref),
+    sessionCommand: (method, ref) => sessionCommand(rpc, method, ref),
+    switchOptions: (ref) => loadSwitchOptions(rpc, ref),
+    switchAgent: (params) => switchAgent(rpc, params),
     decideConsent: (id, decision, extra) => decideConsent(store, rpc, id, decision, extra),
     setConnected: (connected) => {
       refresher.setConnected(connected);
