@@ -6,17 +6,9 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { touchAppLock } from '../auth/lock-instance';
 import { spacing, typography, useColors } from '../theme';
 import { Button } from '../ui/Button';
+import { selectedFragment, type Selection } from './selection';
 
-export interface Selection {
-  start: number;
-  end: number;
-}
-
-/** The selected fragment of `text`; empty when nothing (or only blanks) is selected. */
-export function selectedFragment(text: string, sel: Selection): string {
-  const part = text.slice(Math.min(sel.start, sel.end), Math.max(sel.start, sel.end));
-  return part.trim() === '' ? '' : part;
-}
+export type { Selection };
 
 export function SelectTextSheet({ text, initial, onReply, onClose }: { text: string; /** Developer preview: a selection to show. */ initial?: Selection; onReply(selected: string): void; onClose(): void }) {
   const c = useColors();
@@ -36,7 +28,7 @@ export function SelectTextSheet({ text, initial, onReply, onClose }: { text: str
         editable={false}
         scrollEnabled
         value={text}
-        selection={sel}
+        {...(initial === undefined ? {} : { selection: sel })}
         onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
         autoFocus={initial !== undefined}
         style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]}

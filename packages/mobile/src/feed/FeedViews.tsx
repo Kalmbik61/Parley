@@ -1,6 +1,6 @@
 // Feed rows for the session screen (D1 §9.2–9.3): bubbles, Markdown replies, tool rows, subagents, notices, the folded
 // work row and the turn status line. Raw Markdown is never shown: replies and prompts go through <Markdown>/<Text>.
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import type { FeedItem } from '@parley/core';
@@ -13,6 +13,8 @@ import { turnStatusText } from './fold';
 import { CARD_STATE_TEXT, errorText, noticeText, toolName, toolSummary } from './summary';
 import type { OutMessage } from './outbox';
 import { HELD_BUBBLE, WAITING_BUBBLE } from './resume';
+import type { Action, ActionId } from './message-actions';
+import { quotePreview } from './quote-preview';
 import { splitQuote } from './reply';
 
 export const soft = (color: string, alpha = '26'): string => (/^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color);
@@ -29,38 +31,60 @@ const KIND_ICON: Record<WorkKind, SFSymbol> = {
   tools: 'wrench.and.screwdriver',
 };
 
-/** The prompt's leading `>` lines as a folded quote (D1 §9.2): a `tint` bar, up to three lines. */
-function QuoteBlock({ quote }: { quote: string }) {
+/** What the long-press sheet does, shared with VoiceOver's custom actions (critic A42 M6). Stable: it is read through a ref. */
+export interface MessageApi {
+  actions(item: FeedItem): Action[];
+  run(item: FeedItem, id: ActionId): void;
+  sheet(item: FeedItem): void;
+}
+
+/** The prompt's leading `>` lines as a folded quote (D1 §9.2): a `tint` bar, up to three lines, without Markdown marks. */
+export function QuoteBlock({ quote }: { quote: string }) {
   const c = useColors();
   return (
     <View style={[styles.quote, { borderLeftColor: c.tint }]}>
       <Text numberOfLines={3} allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
-        {quote}
+        {quotePreview(quote)}
       </Text>
     </View>
   );
 }
 
-function Bubble({ text, dim, onLongPress, children }: { text: string; dim?: boolean; onLongPress?(): void; children?: React.ReactNode }) {
+function Bubble({ text, dim, msg, item, children }: { text: string; dim?: boolean; msg?: MessageApi; item?: FeedItem; children?: React.ReactNode }) {
   const c = useColors();
-  const { quote, text: body } = splitQuote(text);
+  // The host's paste may leave blank lines at the edges: split the trimmed text (as the window does).
+  const { quote, text: body } = splitQuote(text.trim());
+  const label = `You: ${quote === null ? '' : `quoting ${quotePreview(quote)}. `}${body}`;
+  const style = [styles.bubble, { backgroundColor: soft(c.tint), opacity: dim === true ? 0.6 : 1 }];
+  const inner = (
+    <>
+      {quote !== null && <QuoteBlock quote={quote} />}
+      {body !== '' && (
+        <Text allowFontScaling style={[typography.body, { color: c.label }]}>
+          {body}
+        </Text>
+      )}
+    </>
+  );
+  const actions = msg !== undefined && item !== undefined ? msg.actions(item).filter((a) => a.disabled !== true) : [];
   return (
     <View style={styles.bubbleWrap}>
-      <Pressable
-        disabled={onLongPress === undefined}
-        onLongPress={onLongPress}
-        accessible
-        accessibilityLabel={`You: ${text}`}
-        accessibilityHint={onLongPress === undefined ? undefined : 'Long press for actions'}
-        style={[styles.bubble, { backgroundColor: soft(c.tint), opacity: dim === true ? 0.6 : 1 }]}
-      >
-        {quote !== null && <QuoteBlock quote={quote} />}
-        {body !== '' && (
-          <Text allowFontScaling style={[typography.body, { color: c.label }]}>
-            {body}
-          </Text>
-        )}
-      </Pressable>
+      {msg === undefined || item === undefined ? (
+        <View accessible accessibilityLabel={label} style={style}>
+          {inner}
+        </View>
+      ) : (
+        <Pressable
+          onLongPress={() => msg.sheet(item)}
+          accessible
+          accessibilityLabel={label}
+          accessibilityActions={actions.map((a) => ({ name: a.id, label: a.title }))}
+          onAccessibilityAction={(e) => msg.run(item, e.nativeEvent.actionName as ActionId)}
+          style={style}
+        >
+          {inner}
+        </Pressable>
+      )}
       {children}
     </View>
   );
@@ -157,28 +181,44 @@ function Centered({ text, icon, tone }: { text: string; icon?: SFSymbol; tone?: 
   );
 }
 
-/** Items of the feed. Pending cards are not drawn here: the screen shows the live card body at the end (D1 §9.4). */
-export const FeedItemView = memo(function FeedItemView({ item, onLongPress }: { item: FeedItem; /** Long press on an agent reply or an own prompt (the action sheet, D1 §9.2). */ onLongPress?(item: FeedItem): void }) {
+/** An agent reply: one accessible element "Agent: <text>" (D1 §9.6) with the message actions; long press anywhere, links included. */
+function ReplyText({ item, msg }: { item: Extract<FeedItem, { kind: 'text' }>; msg?: MessageApi }) {
   const c = useColors();
+  const label = useMemo(() => `Agent: ${quotePreview(item.text)}`, [item.text]);
+  const actions = msg === undefined ? [] : msg.actions(item).filter((a) => a.disabled !== true);
+  const sheet = msg !== undefined && !item.streaming ? () => msg.sheet(item) : undefined;
+  return (
+    <Pressable
+      disabled={sheet === undefined}
+      onLongPress={sheet}
+      accessible
+      accessibilityLabel={label}
+      accessibilityActions={sheet === undefined ? [] : actions.map((a) => ({ name: a.id, label: a.title }))}
+      onAccessibilityAction={(e) => msg?.run(item, e.nativeEvent.actionName as ActionId)}
+      style={styles.reply}
+    >
+      <Markdown text={item.text} streaming={item.streaming} {...(sheet === undefined ? {} : { onLongPress: sheet })} />
+      {item.streaming && (
+        <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
+          Writing…
+        </Text>
+      )}
+      {item.truncated === true && (
+        <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+          Text truncated — open the terminal for the rest
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
+/** Items of the feed. Pending cards are not drawn here: the screen shows the live card body at the end (D1 §9.4). */
+export const FeedItemView = memo(function FeedItemView({ item, msg }: { item: FeedItem; /** Message actions on an agent reply and an own prompt (D1 §9.2). */ msg?: MessageApi }) {
   switch (item.kind) {
     case 'prompt':
-      return <Bubble text={item.images > 0 && item.text === '' ? `${item.images} images` : item.text} {...(onLongPress === undefined || item.text.trim() === '' ? {} : { onLongPress: () => onLongPress(item) })} />;
+      return <Bubble text={item.images > 0 && item.text === '' ? `${item.images} images` : item.text} {...(msg === undefined || item.text.trim() === '' ? {} : { msg, item })} />;
     case 'text':
-      return (
-        <Pressable disabled={onLongPress === undefined || item.streaming} onLongPress={() => onLongPress?.(item)} accessible={false} style={styles.reply}>
-          <Markdown text={item.text} streaming={item.streaming} />
-          {item.streaming && (
-            <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-              Writing…
-            </Text>
-          )}
-          {item.truncated === true && (
-            <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
-              Text truncated — open the terminal for the rest
-            </Text>
-          )}
-        </Pressable>
-      );
+      return <ReplyText item={item} {...(msg === undefined ? {} : { msg })} />;
     case 'tool':
       return <ToolRow item={item} />;
     case 'agent':
@@ -196,9 +236,9 @@ export const FeedItemView = memo(function FeedItemView({ item, onLongPress }: { 
   }
 });
 
-export function FoldRowView({ row, onToggleGroup, onToggleTurn, onLongPress }: { row: FoldRow; onToggleGroup(key: string): void; onToggleTurn(key: string): void; onLongPress?(item: FeedItem): void }) {
+export function FoldRowView({ row, onToggleGroup, onToggleTurn, msg }: { row: FoldRow; onToggleGroup(key: string): void; onToggleTurn(key: string): void; msg?: MessageApi }) {
   const c = useColors();
-  if (row.kind === 'item') return <FeedItemView item={row.item} {...(onLongPress === undefined ? {} : { onLongPress })} />;
+  if (row.kind === 'item') return <FeedItemView item={row.item} {...(msg === undefined ? {} : { msg })} />;
   if (row.kind === 'control') {
     const tone = row.status === 'failed' ? c.danger : row.status === 'stopped' ? c.needsYou : c.label2;
     const text = turnStatusText(row.status, row.durationMs);

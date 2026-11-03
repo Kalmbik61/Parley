@@ -5,7 +5,8 @@ import { haptic } from '../haptics';
 import { Markdown } from '../markdown/Markdown';
 import { spacing, typography, useColors } from '../theme';
 import { SenderAvatar } from '../ui/avatars';
-import { soft } from '../feed/FeedViews';
+import { QuoteBlock, soft } from '../feed/FeedViews';
+import { splitQuote } from '../feed/reply';
 import { quote, toLine, type Mentionable } from './model';
 import type { OutLetter } from './out-letters';
 import { Button } from '../ui/Button';
@@ -131,12 +132,17 @@ export function LetterView({
 
 export function OutLetterView({ letter, onRetry }: { letter: OutLetter; onRetry(l: OutLetter): void }) {
   const c = useColors();
+  // A selected fragment rides as a `> …` block: shown folded, without Markdown marks (D1 §9.2).
+  const { quote, text } = splitQuote(letter.text.trim());
   return (
     <View style={styles.mine}>
       <View style={[styles.bubble, { backgroundColor: soft(c.tint), opacity: letter.state === 'sending' ? 0.6 : 1 }]}>
-        <Text allowFontScaling style={[typography.body, { color: c.label }]}>
-          {letter.text}
-        </Text>
+        {quote !== null && <QuoteBlock quote={quote} />}
+        {text !== '' && (
+          <Text allowFontScaling style={[typography.body, { color: c.label }]}>
+            {text}
+          </Text>
+        )}
       </View>
       <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.caption1, { color: letter.state === 'failed' ? c.needsYou : c.label2 }]}>
         {letter.state === 'sending' ? 'Sending…' : letter.state === 'sent' ? 'Sent' : (letter.note ?? 'Not sent')}

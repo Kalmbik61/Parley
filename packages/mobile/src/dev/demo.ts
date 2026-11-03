@@ -29,8 +29,9 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         sess('zzz', 'Docs-editor', { role: 'writer', model: 'sonnet', lifecycle: 'sleeping' as never, lastEvent: { event: 'Stop', at: ago(180) } }),
         // A35a: the human's case — a room a person made (no owning session), its two members top-level.
         sess('rel', 'Release-notes-writer', { role: 'writer' }),
-        sess('msgs', 'Docs-reviewer', { role: 'reviewer' }),
         sess('rel2', 'Release-QA', { role: 'verifier' }),
+        // A42: a session for the message actions.
+        sess('msgs', 'Docs-reviewer', { role: 'reviewer' }),
         sess('cb2', 'Engine-worker 1', { role: 'executor' }),
         sess('cb3', 'Engine-worker 2', { role: 'verifier' }),
         sess('s-01', 'Аналитик', { role: 'analyst' }),
@@ -133,7 +134,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'prompt', id: 'h1', at: at(30), text: 'Why did the build fail on CI?', images: 0 },
       { kind: 'text', id: 'h2', at: at(29), messageId: 'mh2', streaming: false, text: 'The **lint** step failed because `eslint` found three unused imports in `room.tsx`.\n\nI removed them and the build is green again.' },
       { kind: 'turn', id: 'h3', at: at(28), durationMs: 95_000 },
-      { kind: 'prompt', id: 'h4', at: at(10), text: '> The lint step failed because eslint found three unused imports in room.tsx.\n\nCan you also add a test so it cannot come back?', images: 0 },
+      { kind: 'prompt', id: 'h4', at: at(10), text: '> The **lint** step failed because `eslint` found three unused imports in `room.tsx`.\n\nCan you also add a test so it cannot come back?', images: 0 },
       { kind: 'text', id: 'h5', at: at(9), messageId: 'mh5', streaming: false, text: 'Done — the new test fails when an unused import is added.' },
       { kind: 'turn', id: 'h6', at: at(8), durationMs: 41_000 },
     ] as never[],
@@ -217,7 +218,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -293,6 +294,8 @@ export function demoRoute(name: unknown): string | null {
       return s('msgs');
     case 'a42-room-plate':
       return `/room?ref=${encodeURIComponent(w)}&room=r1&preview=plate`;
+    case 'a42-room-outgoing':
+      return `/room?ref=${encodeURIComponent(w)}&room=r1&preview=outgoing`;
     case 'a42-room-select':
       return `/room?ref=${encodeURIComponent(w)}&room=r1&preview=select`;
     // A41b screenshots (the sheet opens by itself in the developer build).

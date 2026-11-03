@@ -25,4 +25,11 @@ describe('outbox', () => {
     expect(mergedWith(msg({ kind: 'sending' }), items)).toBe(false);
     expect(mergedWith(msg({ kind: 'failed', message: 'x', retry: true, edit: false, textBack: false, hideComposer: false }), items)).toBe(false);
   });
+
+  it('Send again: the old prompt with the same text is not this message; only a newer one is', () => {
+    const old = prompt('go', '2026-11-01T10:00:00.500Z');
+    const again: OutMessage = { ...msg({ kind: 'sent' }), seen: 1 };
+    expect(mergedWith(again, [old])).toBe(false);
+    expect(mergedWith(again, [old, prompt('go', '2026-11-01T10:00:03.000Z')])).toBe(true);
+  });
 });

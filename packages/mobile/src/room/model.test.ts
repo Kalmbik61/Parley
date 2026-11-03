@@ -18,6 +18,7 @@ import {
   uiOfRoomSend,
   type Mentionable,
 } from './model';
+import { typedPart } from '../feed/reply';
 
 const A: Mentionable = { id: 's-1', label: 'Greta', meta: 'opus · idle' };
 const B: Mentionable = { id: 's-2', label: 'Critic-A1', meta: 'sonnet · working' };
@@ -145,5 +146,12 @@ describe('roomOutgoing (Reply with selection, D1 §9.7)', () => {
   });
   it('Reply with selection: replyTo and the fragment as a quote block', () => {
     expect(roomOutgoing('why?', { message: m, selected: ' A27 goes in parallel ' })).toEqual({ text: '> A27 goes in parallel\n\nwhy?', replyTo: 'm-9' });
+  });
+
+  it('a refusal gives back only what was typed: the quote block is stripped, the reply stays (no double quote)', () => {
+    const reply = { message: m, selected: ' A27 goes in parallel ' };
+    const out = roomOutgoing('why?', reply);
+    expect(typedPart(out.text, reply.selected.trim())).toBe('why?');
+    expect(roomOutgoing(typedPart(out.text, reply.selected.trim()), reply).text).toBe(out.text);
   });
 });

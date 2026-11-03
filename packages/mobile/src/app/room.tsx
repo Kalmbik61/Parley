@@ -17,11 +17,12 @@ import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
-import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, type Mentionable } from '../room/model';
+import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
-import { SelectTextSheet, type Selection } from '../feed/SelectTextSheet';
-import { replyQuote } from '../feed/reply';
+import { SelectTextSheet } from '../feed/SelectTextSheet';
+import type { Selection } from '../feed/selection';
+import { replyQuote, withQuote } from '../feed/reply';
 import { ReplyPlate } from '../ui/ReplyPlate';
 import { ResultSheet } from '../room/ResultSheet';
 import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
@@ -71,7 +72,7 @@ export default function RoomScreen() {
   useEffect(() => {
     if (deleted && focused && router.canGoBack()) router.back();
   }, [deleted, focused]);
-  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void; plate(): void; select(): void } | null>(null);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void; plate(): void; select(): void; outgoing(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -261,7 +262,11 @@ export default function RoomScreen() {
     },
     select: () => {
       const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
-      if (m !== undefined) setSelectFor({ message: m, initial: { start: 0, end: Math.min(30, m.text.length) } });
+      if (m !== undefined) setSelectFor({ message: m, initial: { start: 0, end: Math.max(0, m.text.indexOf(' A28')) } });
+    },
+    outgoing: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) chat.seedOut({ id: 'out-demo', text: withQuote('Wave 3 is merged; next A27', 'Why not in parallel with A28?'), typed: 'Why not in parallel with A28?', to: [], replyTo: m.id, at: Date.now(), state: 'sent', note: null, messageId: null });
     },
     busy: () => {
       roomRuns.seedPending(runKey, { kind: 'sleep', done: 2, total: 4 });
@@ -280,6 +285,7 @@ export default function RoomScreen() {
       else if (params.preview === 'busy') p?.busy();
       else if (params.preview === 'plate') p?.plate();
       else if (params.preview === 'select') p?.select();
+      else if (params.preview === 'outgoing') p?.outgoing();
     }, 700);
     return () => clearTimeout(t);
   }, [params.preview, found !== null]);
@@ -297,7 +303,9 @@ export default function RoomScreen() {
   const q = mentionQuery(chat.draft);
   const menu = q === null || hidden.kind === 'hidden' ? null : filterMentionable(mentionables, q.query);
   const to = recipientsOf(chat.draft, chat.chips).map((x) => x.label);
-  const problem = letterProblem(chat.draft);
+  const outgoing = roomOutgoing(chat.draft, chat.reply);
+  // The whole letter is measured, with the selected fragment's quote block (critic A42 M3).
+  const problem = letterProblem(chat.draft) ?? letterProblem(outgoing.text);
   const canSend = hidden.kind === 'input' && hidden.sendEnabled && problem === null && !chat.busy;
   const memberIds = room.members;
 
@@ -492,7 +500,7 @@ export default function RoomScreen() {
         )}
       </Modal>
       {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
-      <Modal visible={run.unseen !== null && !covered && focused} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+      <Modal visible={run.unseen !== null && !covered && focused && selectFor === null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
         {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
       </Modal>
     </View>

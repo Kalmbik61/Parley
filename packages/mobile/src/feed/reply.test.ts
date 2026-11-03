@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeMessage, isSlashCommand, plateCleared, REPLY_QUOTE_MAX, replyQuote, splitQuote, withQuote } from './reply';
+import { afterSend, carriesQuote, composeMessage, isSlashCommand, REPLY_QUOTE_MAX, replyQuote, splitQuote, typedPart, withQuote, type AfterSendFacts } from './reply';
 
 describe('replyQuote', () => {
   it(`without a selection — the whole text up to ${REPLY_QUOTE_MAX} characters, else the start and "…"`, () => {
@@ -48,16 +48,49 @@ describe('composeMessage (the session field)', () => {
   });
 });
 
-describe('plateCleared', () => {
-  const quote = 'the claim';
-  const sent = composeMessage('why?', quote);
-  it('only a send that carried the quote and was accepted clears the plate', () => {
-    expect(plateCleared(quote, sent, true)).toBe(true);
-    // A refusal or a lost call: the plate stays.
-    expect(plateCleared(quote, sent, false)).toBe(false);
-    // A slash command did not carry it: the plate stays even when accepted.
-    expect(plateCleared(quote, '/compact', true)).toBe(false);
-    // No plate: nothing to clear.
-    expect(plateCleared(null, 'hello', true)).toBe(false);
+describe('carriesQuote and typedPart', () => {
+  const quote = 'The lint';
+  it('the block is a prefix only before an empty line or alone; a longer quote does not match a shorter plate', () => {
+    expect(carriesQuote(withQuote(quote, 'why?'), quote)).toBe(true);
+    expect(carriesQuote(withQuote(quote, ''), quote)).toBe(true);
+    expect(carriesQuote(withQuote('The lint step failed', 'x'), 'The')).toBe(false);
+    expect(carriesQuote('why?', quote)).toBe(false);
+    expect(carriesQuote('why?', null)).toBe(false);
+  });
+  it('typedPart strips the block; text without it is as it is', () => {
+    expect(typedPart(withQuote(quote, 'why?'), quote)).toBe('why?');
+    expect(typedPart(withQuote(quote, ''), quote)).toBe('');
+    expect(typedPart('/compact', quote)).toBe('/compact');
+  });
+});
+
+describe('afterSend', () => {
+  const plate = 'the claim';
+  const base: AfterSendFacts = { accepted: false, textBack: false, sent: withQuote(plate, 'why?'), plate, carriesPlate: true, fromDraft: true, draftFree: true };
+  it('an accepted send that carried the plate clears it and the field', () => {
+    expect(afterSend({ ...base, accepted: true })).toEqual({ draft: '', clearPlate: true, giveBack: false });
+  });
+  it('a lost call or a refusal without text back: the plate stays, the field is cleared (the bubble keeps the text)', () => {
+    expect(afterSend(base)).toEqual({ draft: '', clearPlate: false, giveBack: false });
+  });
+  it('a refusal with text back (not_found, blocked): only what was typed returns, the plate stays — no double quote', () => {
+    const r = afterSend({ ...base, textBack: true });
+    expect(r).toEqual({ draft: 'why?', clearPlate: false, giveBack: true });
+    // The next send composes the quote once.
+    expect(composeMessage(r.draft as string, plate)).toBe(withQuote(plate, 'why?'));
+  });
+  it('a failed wake-up (from the field, the field is free): the same, typed part only', () => {
+    expect(afterSend({ ...base, fromDraft: false, textBack: true, draftFree: true })).toMatchObject({ draft: 'why?', giveBack: true });
+  });
+  it('Send again: a refusal never overwrites a draft; with a free field the text returns as it is', () => {
+    const again = { ...base, carriesPlate: false, fromDraft: false, sent: 'run the linter', textBack: true };
+    expect(afterSend({ ...again, draftFree: false })).toEqual({ draft: null, clearPlate: false, giveBack: false });
+    expect(afterSend({ ...again, draftFree: true })).toEqual({ draft: 'run the linter', clearPlate: false, giveBack: true });
+  });
+  it('Send again does not clear the plate even when its text starts with the same quote', () => {
+    expect(afterSend({ ...base, carriesPlate: false, fromDraft: false, accepted: true })).toMatchObject({ clearPlate: false, draft: null });
+  });
+  it('a slash command carried no quote: the plate stays even when accepted', () => {
+    expect(afterSend({ ...base, sent: '/compact', accepted: true })).toMatchObject({ clearPlate: false });
   });
 });

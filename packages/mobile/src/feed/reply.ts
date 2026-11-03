@@ -45,7 +45,46 @@ export function composeMessage(typed: string, quote: string | null): string {
   return quote !== null && !isSlashCommand(typed) ? withQuote(quote, typed) : typed;
 }
 
-/** The plate is cleared by a send that carried it and that the host accepted — not by a refusal or a lost call. */
-export function plateCleared(quote: string | null, sent: string, accepted: boolean): boolean {
-  return accepted && quote !== null && sent.startsWith(withQuote(quote, ''));
+/** `sent` starts with the plate's quote block (then the typed text or nothing). */
+export function carriesQuote(sent: string, plate: string | null): boolean {
+  if (plate === null) return false;
+  const block = withQuote(plate, '');
+  return sent === block || sent.startsWith(`${block}\n\n`);
+}
+
+/** What the person typed: `sent` without the plate's block (a refusal gives back only this, the plate stays). */
+export function typedPart(sent: string, plate: string | null): string {
+  if (!carriesQuote(sent, plate)) return sent;
+  return sent.slice(withQuote(plate as string, '').length).replace(/^\n\n/, '');
+}
+
+export interface AfterSendFacts {
+  /** The host accepted the message (`pty.send` answered `sent`). */
+  accepted: boolean;
+  /** The refusal wants the text back in the field. */
+  textBack: boolean;
+  /** The text that went (the draft with the plate's block, or an old prompt for Send again). */
+  sent: string;
+  /** The plate now. */
+  plate: string | null;
+  /** The send came from the field or from a wake-up of it (not Send again, not Retry). */
+  carriesPlate: boolean;
+  /** The text was taken from the field (it was cleared then). */
+  fromDraft: boolean;
+  /** The field is empty now. */
+  draftFree: boolean;
+}
+
+/**
+ * What to do with the field and the plate once the call has an answer (critic A42 M1, M2, m1):
+ * - the plate goes only with an accepted send that carried it;
+ * - text goes back to the field only when it came from there or the field is empty, and only what the person typed
+ *   (the plate stays, so the quote does not go twice).
+ * `draft`: the new field text; `null` — leave it. `giveBack` — the text went back, the bubble goes.
+ */
+export function afterSend(f: AfterSendFacts): { draft: string | null; clearPlate: boolean; giveBack: boolean } {
+  const carried = f.carriesPlate && carriesQuote(f.sent, f.plate);
+  const giveBack = f.textBack && (f.fromDraft || f.draftFree);
+  const typed = carried ? typedPart(f.sent, f.plate) : f.sent;
+  return { draft: giveBack ? typed : f.fromDraft ? '' : null, clearPlate: f.accepted && carried, giveBack };
 }

@@ -23,6 +23,8 @@ export interface RoomChatFlow {
   switchedOff: boolean;
   send(): Promise<void>;
   retry(letter: OutLetter): Promise<void>;
+  /** Developer preview only: put a letter on its way without a call. */
+  seedOut(letter: OutLetter): void;
 }
 
 export function useRoomChat(room: RoomTarget | null, notify: (text: string) => void): RoomChatFlow {
@@ -79,7 +81,7 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
           if (ui.hideComposer) setSwitchedOff(true);
           // The text goes back to the field (when the field is free); the bubble goes.
           update((l) => l.filter((x) => x.id !== letter.id));
-          if (fromDraft || drafts.get(key) === undefined) setDraft(letter.text);
+          if (fromDraft || drafts.get(key) === undefined) setDraft(letter.typed ?? letter.text);
           notify(ui.message);
           return;
         }
@@ -106,8 +108,9 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
       const out = roomOutgoing(draft, reply);
       if (letterProblem(draft) !== null || letterProblem(out.text) !== null) return;
       const to = recipientsOf(draft, chips).map((c) => c.id);
-      await run({ id: `out-${Date.now().toString(36)}`, text: out.text, to, replyTo: out.replyTo, at: Date.now(), state: 'sending', note: null, messageId: null }, true);
+      await run({ id: `out-${Date.now().toString(36)}`, text: out.text, typed: draft, to, replyTo: out.replyTo, at: Date.now(), state: 'sending', note: null, messageId: null }, true);
     },
     retry: (letter) => run(letter, false),
+    seedOut: (letter) => update((l) => [...l, letter]),
   };
 }

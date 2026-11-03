@@ -9,6 +9,8 @@ export interface OutMessage {
   text: string;
   /** When the call went (`requestedAt`, ms); a feed `prompt` older than this is not ours. */
   at: number;
+  /** Send again: how many prompts with this text the feed held at the call; only a newer one is this message. */
+  seen?: number;
   state: { kind: 'sending' } | { kind: 'waking' } | { kind: 'held' } | SentUi;
 }
 
@@ -17,8 +19,12 @@ export function mergedWith(message: OutMessage, items: readonly FeedItem[], skew
   // Only a message the agent may have received can turn into a prompt.
   const kind = message.state.kind;
   if (kind !== 'sent' && kind !== 'queued' && kind !== 'unconfirmed') return false;
+  if (message.seen !== undefined) return promptCount(items, message.text) > message.seen;
   return items.some((i) => i.kind === 'prompt' && i.text.trim() === message.text.trim() && Date.parse(i.at) >= message.at - skewMs);
 }
+
+/** How many prompts with this text the feed holds. */
+export const promptCount = (items: readonly FeedItem[], text: string): number => items.filter((i) => i.kind === 'prompt' && i.text.trim() === text.trim()).length;
 
 /** What stays on screen: messages the feed has not absorbed. */
 export function visibleOut(out: readonly OutMessage[], items: readonly FeedItem[]): OutMessage[] {
