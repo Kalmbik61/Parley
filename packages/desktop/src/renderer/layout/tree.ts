@@ -656,6 +656,8 @@ function parseTabSpec(value: unknown): TabSpec | null {
     }
     case 'mail':
       return id === 'mail' ? { kind: 'mail', id: 'mail' } : null;
+    case 'board':
+      return id === 'board' ? { kind: 'board', id: 'board' } : null;
     case 'room':
       return typeof value.roomId === 'string' ? { kind: 'room', id, roomId: value.roomId } : null;
     case 'diff': {

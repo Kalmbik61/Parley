@@ -25,7 +25,7 @@
  */
 
 import { toast } from 'sonner';
-import { GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
+import { GitCompare, Globe, Hash, Kanban, Mail as MailIcon, X } from 'lucide-react';
 import type { SessionLifecycle } from '@parley/core';
 import type { DotState } from '@parley/core/session-state';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
@@ -74,6 +74,8 @@ function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JS
       return dot === null ? null : <AgentStateDot state={dot.state} lifecycle={dot.lifecycle} />;
     case 'mail':
       return <MailIcon className={ICON} aria-hidden="true" />;
+    case 'board':
+      return <Kanban className={ICON} aria-hidden="true" />;
     case 'room':
       return <Hash className={ICON} aria-hidden="true" />;
     case 'diff':

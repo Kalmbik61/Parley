@@ -781,6 +781,23 @@ describe('AppShell — вход «Почта» сайдбара (тест 10 к�
   });
 });
 
+describe('AppShell — вход Board сайдбара', () => {
+  it('пункт Board в сайдбаре открывает вкладку доски в активной работе', async () => {
+    await renderShell(fourWorks().slice(0, 2));
+    act(() => useLayoutStore.getState().setActiveWork(keyOf('w-02')));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyOf('w-02')]).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Board' }));
+
+    const tabsOf = (key: string): string[] => {
+      const layout = useLayoutStore.getState().layouts[key];
+      return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+    };
+    expect(tabsOf(keyOf('w-02'))).toEqual([tabId.board()]);
+    expect(tabsOf(keyOf('w-01'))).toEqual([]);
+  });
+});
+
 describe('AppShell — меню find (тест 15 куска 2.5)', () => {
   it('полоса поиска открывается только у видимой поверхности активной группы', async () => {
     mockNonZeroRects();

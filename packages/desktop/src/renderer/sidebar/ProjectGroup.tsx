@@ -39,6 +39,8 @@ export interface ProjectGroupProps {
   onToggleCollapsed(): void;
   /** «+» заголовка — форма новой работы с проектом этой группы (кусок 3.5). */
   onNewWork(projectPath: string): void;
+  /** Пункт Board меню секции проекта. */
+  onOpenBoard?(projectPath?: string): void;
   /** Только заголовок виртуального списка: ссылку «N archived» тогда рисует своя строка списка, а не группа. */
   headerOnly?: boolean;
   children?: ReactNode;
@@ -77,7 +79,7 @@ function groupSwarmBadge(section: SidebarSection): ReturnType<typeof swarmBadgeV
   return swarmBadgeView({ active, ready });
 }
 
-export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly = false, children }: ProjectGroupProps): JSX.Element {
+export function ProjectGroup({ section, onToggleCollapsed, onNewWork, onOpenBoard, headerOnly = false, children }: ProjectGroupProps): JSX.Element {
   const swarmView = section.collapsed ? groupSwarmBadge(section) : null;
   const iconTheme = useSwarmIconTheme();
   return (
@@ -138,7 +140,7 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly
             )}
           />
           <span className="min-w-0 flex-1" />
-          <SectionMenu sectionKey={section.key} />
+          <SectionMenu sectionKey={section.key} {...(onOpenBoard === undefined ? {} : { onOpenBoard })} />
           <button
             type="button"
             aria-label={S.sidebar.newWorkspaceInProject(section.title)}

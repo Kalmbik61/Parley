@@ -778,6 +778,14 @@ describe('parseWorkLayout', () => {
     expect(parseWorkLayout(raw)).toBeNull();
   });
 
+  it('вкладка board переживает parseWorkLayout, а board с чужим id даёт null', () => {
+    const layout = openTab(emptyLayout(), { kind: 'board', id: 'board' }, 'active');
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+    const raw = JSON.parse(JSON.stringify(layout)) as { root: { tabs: unknown[] } };
+    raw.root.tabs[0] = { kind: 'board', id: 'other' };
+    expect(parseWorkLayout(raw)).toBeNull();
+  });
+
   it('отвергает сплит с одним ребёнком', () => {
     const layout = validLayout();
     const raw = JSON.parse(JSON.stringify(layout)) as { root: { children?: unknown[] } };

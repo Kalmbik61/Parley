@@ -73,6 +73,7 @@ import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDi
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { BoardSync } from '../board/BoardSync.js';
+import { useBoardStore } from '../board/board-store.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { cn } from '../lib/cn.js';
@@ -662,6 +663,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // становится активной (id `mail` общий на раскладку), затем вкладка
   // открывается в её раскладке.
   const handleOpenMail = (key: string): void => openTabInWork(key, { kind: 'mail', id: tabId.mail() });
+  // Доска одна на работу, как почта. С путём проекта (меню секции) сначала ставится фильтр доски; без активной работы — ничего.
+  const handleOpenBoard = (projectPath?: string): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    if (key === null) return;
+    if (projectPath !== undefined) useBoardStore.getState().setFilter({ kind: 'project', path: projectPath });
+    openTabInWork(key, { kind: 'board', id: tabId.board() });
+  };
   const handleOpenRoom = (key: string, roomId: string): void => openTabInWork(key, { kind: 'room', id: tabId.room(roomId), roomId });
 
   const shell = (
@@ -686,6 +694,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                     }
                     onOpenMail={handleOpenMail}
                     onOpenRoom={handleOpenRoom}
+                    onOpenBoard={handleOpenBoard}
                   />
                 </ErrorBoundary>
               </div>

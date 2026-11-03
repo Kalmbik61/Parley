@@ -52,6 +52,7 @@ export type TabSpec =
   // view: нет поля — умолчание по сессии (`renderer/lib/feed-view.ts`); есть — выбор человека переключателем.
   | { kind: 'terminal'; id: string; sessionId: string; view?: TerminalView }
   | { kind: 'mail'; id: 'mail' }
+  | { kind: 'board'; id: 'board' }
   | { kind: 'room'; id: string; roomId: string }
   // commit: null — все изменения ветки, иначе один коммит.
   | { kind: 'diff'; id: string; sessionId: string; commit: string | null }

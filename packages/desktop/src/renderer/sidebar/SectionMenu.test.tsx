@@ -98,3 +98,15 @@ it('the pinned menu has no Remove from list', async () => {
  await screen.findByRole('menuitemcheckbox', { name: S.sidebar.showDone });
  expect(screen.queryByRole('menuitem', { name: S.sidebar.removeFromList })).toBeNull();
 });
+
+it('пункт Board в меню секции передаёт путь проекта', async () => {
+ const onOpenBoard = vi.fn();
+ render(<SectionMenu sectionKey={PROJECT} onOpenBoard={onOpenBoard} />); openMenu();
+ fireEvent.click(await screen.findByRole('menuitem', { name: S.board.title }));
+ expect(onOpenBoard).toHaveBeenCalledWith(PROJECT);
+});
+
+it('у Pinned пункта Board нет', () => {
+ render(<SectionMenu sectionKey="pinned" onOpenBoard={() => {}} />); openMenu();
+ expect(screen.queryByRole('menuitem', { name: S.board.title })).toBeNull();
+});

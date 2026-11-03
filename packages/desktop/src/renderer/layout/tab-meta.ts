@@ -35,7 +35,7 @@ export type TabTint = 'accent' | 'accent-2';
 
 export interface TabMeta {
   title: string;
-  icon: 'terminal' | 'mail' | 'room' | 'diff' | 'file' | 'browser';
+  icon: 'terminal' | 'mail' | 'board' | 'room' | 'diff' | 'file' | 'browser';
   /** Для точки состояния (`Tab.tsx`, спека 4.2) — только у `terminal`. */
   session: WorkSession | null;
   /** Сессия вкладки-терминала в `needs-you` или `unseen` (спека 7.3): пометка `data-unread`. */
@@ -167,6 +167,8 @@ export function tabMeta(tab: TabSpec, entry: WindowWorkEntry | null, extras: Tab
       const unread = entry !== null && humanUnreadDirect(entry.map) > 0;
       return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty, tint: unread ? 'accent' : null };
     }
+    case 'board':
+      return { title: truncateTitle(S.tabs.board), icon: 'board', session: null, ...empty };
     case 'room': {
       const room = entry?.map.rooms.find((candidate) => candidate.id === tab.roomId) ?? null;
       // Решение ждёт человека — то же правило, что у строки комнаты и карточки (`roomAwaitsDecision`).
