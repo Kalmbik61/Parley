@@ -30,6 +30,8 @@ const A_METHODS = [
   'consents.list',
   'consents.decide',
   'trust.check',
+  // Пробуждение спящей сессии (решение человека 2026-11-03, правки 19): хост пускает только при `remoteCreate`.
+  'sessions.resume',
 ] as const;
 const A_EVENTS = [
   'works.changed',
@@ -42,7 +44,6 @@ const A_EVENTS = [
 
 const B_METHODS = [
   'mail.markRead',
-  'sessions.resume',
   'sessions.stop',
   'feed.interrupt',
   'pty.attach',
@@ -214,6 +215,8 @@ const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
   'trustFolder',
 ]);
 const PTY_SEND_KEYS: ReadonlySet<string> = new Set(['ref', 'text', 'submit', 'requestedAt', 'clientMsgId']);
+const SESSION_RESUME_KEYS: ReadonlySet<string> = new Set(['ref']);
+const SESSION_REF_KEYS: ReadonlySet<string> = new Set(['projectPath', 'workId', 'sessionId']);
 const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision', 'enabled', 'revision']);
 /** Пара сервера MCP из карточки `project-mcp` (спека 2026-11-02, 7.2): строго имя и отпечаток. */
@@ -312,6 +315,18 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       (p.requestedAt === undefined || typeof p.requestedAt === 'number') &&
       typeof p.clientMsgId === 'string' &&
       CLIENT_MSG_ID.test(p.clientMsgId)
+    );
+  },
+  // Пробуждение спящей сессии (спека 4.2, правки 19): ключ только `ref`, у него строго три непустые строки.
+  'sessions.resume': params => {
+    const p = record(params);
+    const ref = p === null ? null : record(p.ref);
+    return (
+      p !== null &&
+      onlyKeys(p, SESSION_RESUME_KEYS) &&
+      ref !== null &&
+      onlyKeys(ref, SESSION_REF_KEYS) &&
+      [ref.projectPath, ref.workId, ref.sessionId].every(v => typeof v === 'string' && v.length > 0)
     );
   },
   'consents.decide': params => {

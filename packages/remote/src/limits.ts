@@ -24,6 +24,8 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'pty.send',
   // Решение по карточке согласия (A27): как `feed.decide`; цель в журнале — `id` карточки.
   'consents.decide',
+  // Пробуждение спящей сессии (A37a, правки 19): лимит и журнал `call` с сессией из `ref`; `phone.action` нет.
+  'sessions.resume',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */
