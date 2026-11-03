@@ -37,7 +37,9 @@ function baseProbe(over: Partial<ProbeResult> = {}): ProbeResult {
 function shellOf(answers: Record<string, string>): RemoteShell {
   return {
     async run(command): Promise<RunResult> {
-      const out = answers[command];
+      const file = /^base64 -w0 ('.*')$/.exec(command);
+      const plain = file === null ? undefined : answers[`cat ${file[1]}`];
+      const out = plain !== undefined ? Buffer.from(plain, 'utf8').toString('base64') : answers[command];
       return { code: out === undefined ? 1 : 0, stdout: out ?? '', stderr: '' };
     },
   };
@@ -193,7 +195,7 @@ describe('course VPS: install plan', () => {
   });
 
   it('a live command of the previous run blocks; the tail of a dead one is in the notes', async () => {
-    expect(plan(await surveyed(COURSE, { activeCommand: { pid: 7, id: 'image' } })).blocked).toMatch(/still running on the server: image/);
+    expect(plan(await surveyed(COURSE, { activeCommand: { id: 'image' } })).blocked).toMatch(/still running on the server: image/);
     const p = plan(await surveyed(COURSE, { previousTail: { id: 'files', text: 'line one\nE: dpkg was interrupted\n' } }));
     expect(p.notes.join('\n')).toMatch(/stopped in the command «files».*dpkg was interrupted/);
   });

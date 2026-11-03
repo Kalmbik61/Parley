@@ -1,8 +1,11 @@
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseContainers, parseEnv, parseListeners, parseOsRelease, type ContainerInfo, type ProbeResult } from './probe.js';
 import type { RemoteShell, RunResult } from './shell.js';
+import { BLOCK_BEGIN, BLOCK_BEGIN_NL, BLOCK_END, caddyBlockAppend } from './templates.js';
 import {
   chooseNetwork,
   countMarkers,
@@ -12,6 +15,7 @@ import {
   isNetworkName,
   isOurFile,
   isSafePath,
+  LOCK_CHECK,
   NAME_CLASH_REASON,
   parseCaddyfile,
   parseCaddyStart,
@@ -53,7 +57,10 @@ function shellOf(answers: Answers): RemoteShell & { ran: string[] } {
     ran,
     async run(command): Promise<RunResult> {
       ran.push(command);
-      const answer = answers[command];
+      // Files are read as `base64 -w0 <path>`; the tests list them as `cat <path>` with the plain text.
+      const file = /^base64 -w0 ('.*')$/.exec(command);
+      const plain = file === null ? undefined : answers[`cat ${file[1]}`];
+      const answer = typeof plain === 'string' ? Buffer.from(plain, 'utf8').toString('base64') : answers[command];
       if (answer === undefined) return { code: 1, stdout: '', stderr: '' };
       return typeof answer === 'string' ? { code: 0, stdout: answer, stderr: '' } : { code: answer.code, stdout: answer.stdout ?? '', stderr: '' };
     },
@@ -244,6 +251,79 @@ describe('probeWeb: every unsupported layout has its own reason', () => {
   });
 });
 
+describe('critic fixes on the probe', () => {
+  it('M1: the marker lines the wizard writes are recognised, from one constant; a longer name is not a marker', () => {
+    expect(read('Caddyfile.marker-block')).toContain(`${BLOCK_BEGIN}\n`);
+    expect(read('Caddyfile.marker-block')).toContain(`${BLOCK_END}\n`);
+    for (const existing of ['a {\n}\n', 'a {\n}']) {
+      expect(countMarkers(existing + caddyBlockAppend(existing, 'r.example.com', 'parley-relay:8787'))).toEqual({ begin: 1, end: 1 });
+    }
+    expect(countMarkers(`${BLOCK_BEGIN_NL}\n${BLOCK_END}\n`)).toEqual({ begin: 1, end: 1 });
+    expect(countMarkers('# BEGIN parley-relay-foo\n# END parley-relay-foo\n')).toEqual({ begin: 0, end: 0 });
+  });
+  it('M1: a block of the wizard on the server is recognised as ours, not as a broken marker', async () => {
+    const answers = { ...COURSE, "cat '/opt/course-platform/deploy/Caddyfile'": read('Caddyfile.marker-block') };
+    const survey = await probeWeb(probeOf(), shellOf(answers));
+    expect(survey?.ours).toEqual({ kind: 'block' });
+    expect(survey?.blockers).toEqual([]);
+  });
+  it('m1: «./» and «//» in a relative import are noise, «..» is still refused', async () => {
+    const run = async (imp: string): Promise<string[]> => {
+      const answers = { ...COURSE, "cat '/opt/course-platform/deploy/Caddyfile'": `import ${imp}\n` };
+      const probe = withCaddy((c) => ({ mounts: [...c.mounts, { type: 'bind', source: '/opt/course-platform/deploy/sites', destination: '/etc/caddy/sites2', rw: true }] }));
+      const survey = await probeWeb(probe, shellOf(answers));
+      return survey?.include === null ? ['none'] : [survey?.include?.hostDir ?? '', ...(survey?.reasons ?? [])];
+    };
+    expect((await run('./sites/*.caddy'))[0]).not.toBe('none');
+    expect((await run('/etc/caddy//sites/*.caddy'))[0]).toBe('/opt/evdev-site/caddy');
+    expect((await run('../x/*.caddy'))[0]).toBe('none');
+  });
+  it('m2: «admin {» keeps the default address and «admin :2019» becomes loopback', () => {
+    expect(parseCaddyfile('{\n\tadmin {\n\t\torigins localhost\n\t}\n}\n').admin).toBeNull();
+    expect(parseCaddyfile('{\n\tadmin :2019\n}\n').admin).toBe('127.0.0.1:2019');
+    expect(isAdminAddress('127.0.0.1:2019')).toBe(true);
+  });
+  it('m3: nginx scanner honours single quotes across lines and quoted include paths', () => {
+    const dump = parseNginxDump(read('nginx-t-quoted.txt'));
+    expect(dump.httpIncludes).toEqual(['/etc/nginx/conf.d', '/etc/nginx/extra']);
+    // A `}` inside a quoted string does not close the block, a `#` inside quotes is not a comment.
+    expect(parseNginxDump('# configuration file /e/nginx.conf:\nhttp {\n  x "}#";\n  include /a/b/*.conf;\n}\n').httpIncludes).toEqual(['/a/b']);
+  });
+  it('m4: a network name that fails the pattern is not kept; a main file without a mount is not passed off as a host path', async () => {
+    const odd = withCaddy(() => ({ networks: ['bad name'], networkAliases: { 'bad name': [] } }));
+    const survey = await probeWeb(odd, shellOf(COURSE));
+    expect(survey?.container?.network).toBeNull();
+    expect(survey?.reasons.length).toBeGreaterThan(0);
+    const NGINX_ID = 'f5'.repeat(32);
+    const container: ContainerInfo = {
+      id: NGINX_ID, name: 'n', image: 'nginx', labels: {}, path: 'nginx', args: [], workdir: '',
+      mounts: [{ type: 'bind', source: '/srv/conf.d', destination: '/etc/nginx/conf.d', rw: true }],
+      published: [{ hostPort: 80, hostIp: '0.0.0.0' }], networks: ['site_default'], networkAliases: {}, networkMode: 'site_default',
+    };
+    const answers = { [`docker exec '${NGINX_ID}' nginx -v`]: '', [`docker exec '${NGINX_ID}' nginx -T`]: read('nginx-t-official.txt') };
+    const nginx = await probeWeb(probeOf({ listeners: [], containers: [container] }), shellOf(answers));
+    expect(nginx?.include?.hostDir).toBe('/srv/conf.d');
+    expect(nginx?.config).toBeNull();
+  });
+  it('m5: files are read as bytes; the hash is of the bytes on disk, and a non-UTF-8 file is refused', async () => {
+    const survey = await probeWeb(probeOf(), shellOf(COURSE));
+    expect(survey?.caddyfile?.text).toBe(read('Caddyfile'));
+    expect(survey?.caddyfile?.sha256).toBe(createHash('sha256').update(readFileSync(path.join(dir, 'Caddyfile'))).digest('hex'));
+    const shell: RemoteShell = {
+      async run(command): Promise<RunResult> {
+        if (command === `docker exec '${CADDY_ID}' caddy version`) return { code: 0, stdout: 'v2', stderr: '' };
+        if (command.startsWith('base64 -w0')) return { code: 0, stdout: Buffer.from([0x23, 0xe9, 0x0a]).toString('base64'), stderr: '' };
+        return { code: 1, stdout: '', stderr: '' };
+      },
+    };
+    expect((await probeWeb(probeOf(), shell))?.reasons).toEqual([expect.stringMatching(/not valid UTF-8/)]);
+  });
+  it('m6: the server container itself having the alias parley-relay is a name clash', async () => {
+    const probe = withCaddy((c) => ({ networkAliases: { ...c.networkAliases, 'course-platform-prod_default': ['caddy', 'parley-relay'] } }));
+    expect((await probeWeb(probe, shellOf(COURSE)))?.nameClash).toBe(true);
+  });
+});
+
 describe('network choice is deterministic', () => {
   const server = (networks: string[]): ContainerInfo => ({
     id: CADDY_ID, name: 'c', image: 'caddy:2', labels: {}, path: 'caddy', args: [], workdir: '', mounts: [], published: [], networks, networkAliases: {}, networkMode: 'x',
@@ -303,29 +383,40 @@ describe('probeWeb: nginx and host servers', () => {
 });
 
 describe('the previous run (spec 7.3)', () => {
-  it('a live process blocks, a dead one or no file does not', async () => {
-    expect((await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': '' }))).active).toEqual({ pid: 4242, id: 'files' });
-    const dead = await probeActive(shellOf({ 'cat /var/tmp/parley-relay-setup/active': '4242 files\n', 'kill -0 4242': { code: 1 }, 'tail -n 20 /var/tmp/parley-relay-setup/files.log': 'E: dpkg was interrupted\n' }));
+  const ACTIVE = 'cat /var/tmp/parley-relay-setup/active';
+  it('a held lock blocks and names the command; a free lock with nothing left does not', async () => {
+    expect((await probeActive(shellOf({ [LOCK_CHECK]: { code: 1 }, [ACTIVE]: 'files\n' }))).active).toEqual({ id: 'files' });
+    expect((await probeActive(shellOf({ [LOCK_CHECK]: { code: 1 } }))).active).toEqual({ id: 'unknown' });
+    expect(await probeActive(shellOf({ [LOCK_CHECK]: '' }))).toEqual({ active: null, tail: null });
+  });
+  it('a free lock with `active` left over: the command died, its log tail goes to the notes', async () => {
+    const dead = await probeActive(shellOf({ [LOCK_CHECK]: '', [ACTIVE]: 'files\n', 'tail -n 20 /var/tmp/parley-relay-setup/files.log': 'E: dpkg was interrupted\n' }));
     expect(dead).toEqual({ active: null, tail: { id: 'files', text: 'E: dpkg was interrupted\n' } });
-    expect(await probeActive(shellOf({}))).toEqual({ active: null, tail: null });
-    const shell = shellOf({ 'cat /var/tmp/parley-relay-setup/active': '1; reboot x\n' });
-    expect((await probeActive(shell)).active).toBeNull();
-    expect(shell.ran).toEqual(['cat /var/tmp/parley-relay-setup/active']);
+  });
+  it('the id from the server is checked before it reaches a command; no pid, no kill', async () => {
+    const shell = shellOf({ [LOCK_CHECK]: '', [ACTIVE]: '1; reboot x\n' });
+    expect((await probeActive(shell)).tail).toBeNull();
+    expect(shell.ran).toEqual([LOCK_CHECK, ACTIVE]);
+  });
+  it('the lock check passes without a state directory or without flock', () => {
+    const { status } = spawnSync('/bin/sh', ['-c', LOCK_CHECK], { encoding: 'utf8' });
+    expect(status).toBe(0);
+    expect(LOCK_CHECK).toContain('command -v flock');
   });
 });
 
 describe('stage 3 only reads', () => {
   it('every command has a fixed read-only form', async () => {
-    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|cat '\/[A-Za-z0-9._@+/-]+'|cat \/var\/tmp\/parley-relay-setup\/active|kill -0 \d+|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log)$/;
+    const READ = /^(docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|nginx -T|systemctl (is-active caddy nginx apache2 httpd|show -p Exec(Start|Reload) --value caddy)|base64 -w0 '\/[A-Za-z0-9._@+/-]+'|cat \/var\/tmp\/parley-relay-setup\/active|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log)$/;
     const shells = [shellOf(COURSE), shellOf({})];
     await probeWeb(probeOf(), shells[0] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['caddy'] }], containers: [] }), shells[1] as RemoteShell);
     await probeWeb(probeOf({ listeners: [{ port: 80, processes: ['nginx'] }], containers: [] }), shells[1] as RemoteShell);
-    const dead = shellOf({ 'cat /var/tmp/parley-relay-setup/active': '7 x', 'kill -0 7': { code: 1 } });
+    const dead = shellOf({ [LOCK_CHECK]: '', 'cat /var/tmp/parley-relay-setup/active': 'x' });
     await probeActive(dead);
     shells.push(dead);
     const ran = shells.flatMap((s) => (s as ReturnType<typeof shellOf>).ran);
     expect(ran.length).toBeGreaterThan(5);
-    for (const command of ran) expect(command).toMatch(READ);
+    for (const command of ran) expect(command === LOCK_CHECK || READ.test(command)).toBe(true);
   });
 });

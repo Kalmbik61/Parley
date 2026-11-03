@@ -196,6 +196,9 @@ const FILE_NOTE = '# parley-relay: added by the Parley relay setup wizard. Remov
 export const BLOCK_BEGIN = '# BEGIN parley-relay (added by the Parley relay setup wizard; remove it with the wizard)';
 export const BLOCK_BEGIN_NL = '# BEGIN parley-relay (added by the Parley relay setup wizard; remove it with the wizard; newline-added)';
 export const BLOCK_END = '# END parley-relay';
+/** The one place that recognises the marker lines the wizard writes (the reader of `web.ts` and `removeCaddyBlock`). */
+export const BLOCK_BEGIN_SOURCE = '^# BEGIN parley-relay(?:[ \\t].*)?$';
+export const BLOCK_END_SOURCE = '^# END parley-relay(?:[ \\t].*)?$';
 
 /** The whole file `parley-relay<suffix>` in the directory Caddy imports. */
 export const caddySiteFile = (name: string, upstream: string): string => `${FILE_NOTE}\n${caddySiteBlock(name, upstream)}`;
@@ -211,10 +214,13 @@ export function caddyBlockAppend(existing: string, name: string, upstream: strin
 
 /** The Caddyfile without our block, the empty line before it and (by the marker) the newline the wizard added; `null` — no block. */
 export function removeCaddyBlock(text: string): string | null {
-  const begin = /^# BEGIN parley-relay\b.*$/m.exec(text);
-  const end = /^# END parley-relay[ \t]*(?:\r?\n|$)/m.exec(text);
+  const begin = new RegExp(BLOCK_BEGIN_SOURCE, 'm').exec(text);
+  const end = new RegExp(BLOCK_END_SOURCE, 'm').exec(text);
   if (begin === null || end === null || end.index < begin.index) return null;
   let before = text.slice(0, begin.index);
   for (let i = begin[0].endsWith('; newline-added)') ? 2 : 1; i > 0 && before.endsWith('\n'); i--) before = before.slice(0, -1);
-  return before + text.slice(end.index + end[0].length);
+  let after = end.index + end[0].length;
+  if (text.startsWith('\r\n', after)) after += 2;
+  else if (text.startsWith('\n', after)) after += 1;
+  return before + text.slice(after);
 }

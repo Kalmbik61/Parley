@@ -73,7 +73,7 @@ export interface ProbeResult {
   docker: boolean;
   compose: boolean;
   listeners: Listener[];
-  /** Running containers; empty without Docker or when the command failed. */
+  /** Running containers; empty without Docker or when nothing was printed. */
   containers: ContainerInfo[];
   ufwActive: boolean;
   /** The web server on 80/443 and what can be added to it (stage 3, `probeWeb`); `null` — not surveyed or nothing there. */

@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { isValidHost, shQuote } from './input.js';
 import { holderOf, isOurs, type ContainerInfo, type ContainerMount, type PortHolder, type ProbeResult } from './probe.js';
 import type { RemoteShell } from './shell.js';
-import { sha256 } from './templates.js';
+import { BLOCK_BEGIN_SOURCE, BLOCK_END_SOURCE } from './templates.js';
 
 /**
  * Stage 3 of the probe (spec 3.3, 3.4, 5.3): what holds 80/443 and whether a site can be added to it.
@@ -10,7 +11,10 @@ import { sha256 } from './templates.js';
  * and `shQuote`. A value that does not pass makes the web server «not supported» with a reason, never an error.
  */
 
-export const ACTIVE_FILE = '/var/tmp/parley-relay-setup/active';
+export const STATE_DIR = '/var/tmp/parley-relay-setup';
+export const ACTIVE_FILE = `${STATE_DIR}/active`;
+/** Exit code 0: no command of the previous run holds the lock (or there is no state directory yet, or no `flock`). */
+export const LOCK_CHECK = `[ ! -d ${STATE_DIR} ] || ! command -v flock >/dev/null 2>&1 || flock -n ${STATE_DIR}/lock true`;
 
 // --- patterns for values that come from the server (spec 3.4) ---
 
@@ -82,7 +86,11 @@ export function parseCaddyfile(text: string): CaddyfileInfo {
         }
       } else if (inGlobal && depth === 1) {
         const adminMatch = /^admin\s+(\S+)/.exec(code);
-        if (adminMatch?.[1] !== undefined) admin = unquote(adminMatch[1]);
+        if (adminMatch?.[1] !== undefined) {
+          const value = unquote(adminMatch[1]);
+          // `admin { … }` keeps the default address; `admin :2019` listens on all interfaces, which loopback reaches too.
+          if (value !== '{') admin = /^:\d{1,5}$/.test(value) ? `127.0.0.1${value}` : value;
+        }
       }
     }
     depth = Math.max(0, depth + open - close);
@@ -99,6 +107,46 @@ export interface NginxDump {
   files: string[];
 }
 
+/**
+ * `include <dir>/*.conf;` statements directly inside `http { … }`. Quotes (`'` and `"`, also across lines, as in
+ * `log_format`) and `#` comments are honoured; a quoted include path loses its quotes.
+ */
+function nginxHttpIncludes(body: string): string[] {
+  const found: string[] = [];
+  const stack: string[] = [];
+  let statement = '';
+  let quote: string | null = null;
+  const flush = (): string => {
+    const text = statement.trim();
+    statement = '';
+    return text;
+  };
+  for (let i = 0; i < body.length; i++) {
+    const ch = body.charAt(i);
+    if (quote !== null) {
+      statement += ch;
+      if (ch === '\\') statement += body.charAt(++i);
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      statement += ch;
+    } else if (ch === '#' && (statement === '' || /\s$/.test(statement))) {
+      while (i + 1 < body.length && body.charAt(i + 1) !== '\n') i++;
+    } else if (ch === '{') {
+      stack.push(flush());
+    } else if (ch === '}') {
+      flush();
+      stack.pop();
+    } else if (ch === ';') {
+      const include = stack.length === 1 && stack[0] === 'http' ? /^include\s+(\S+)$/.exec(flush()) : (flush(), null);
+      const path = include?.[1] === undefined ? '' : unquote(include[1]);
+      const dir = /^(\/.*)\/\*\.conf$/.exec(path);
+      if (dir?.[1] !== undefined) found.push(dir[1]);
+    } else statement += ch;
+  }
+  return found;
+}
+
 export function parseNginxDump(text: string): NginxDump {
   const files: string[] = [];
   let mainBody: string[] | null = null;
@@ -111,20 +159,7 @@ export function parseNginxDump(text: string): NginxDump {
       if (files.length === 1) mainBody = current;
     } else current?.push(line);
   }
-  const httpIncludes: string[] = [];
-  let depth = 0;
-  let httpDepth: number | null = null;
-  for (const line of mainBody ?? []) {
-    const { text: code, open, close } = scanLine(line);
-    if (httpDepth === null && /^http\s*\{/.test(code)) httpDepth = depth + 1;
-    else if (httpDepth !== null && depth === httpDepth) {
-      const include = /^include\s+(\S+)\/\*\.conf\s*;/.exec(code);
-      if (include?.[1] !== undefined) httpIncludes.push(include[1]);
-    }
-    depth = Math.max(0, depth + open - close);
-    if (httpDepth !== null && depth < httpDepth) httpDepth = null;
-  }
-  return { mainFile: files[0] ?? null, httpIncludes, files };
+  return { mainFile: files[0] ?? null, httpIncludes: nginxHttpIncludes((mainBody ?? []).join('\n')), files };
 }
 
 /** The directory nginx includes our file from: `conf.d` first, then the first one. */
@@ -182,7 +217,10 @@ export function parseExecStart(text: string): string[] {
 
 /** Markers of our block in a Caddyfile (spec 5.3). */
 export function countMarkers(text: string): { begin: number; end: number } {
-  return { begin: (text.match(/^# BEGIN parley-relay\b.*$/gm) ?? []).length, end: (text.match(/^# END parley-relay\s*$/gm) ?? []).length };
+  return {
+    begin: (text.match(new RegExp(BLOCK_BEGIN_SOURCE, 'gm')) ?? []).length,
+    end: (text.match(new RegExp(BLOCK_END_SOURCE, 'gm')) ?? []).length,
+  };
 }
 
 /** Is this file one the wizard wrote (or the manual layout of the same shape)? Spec 5.3. */
@@ -196,7 +234,6 @@ export function isOurFile(content: string, proxyPort: string | undefined): boole
 export type WebKind = 'caddy' | 'nginx' | 'apache' | 'other';
 
 export interface ActiveCommand {
-  pid: number;
   id: string;
 }
 
@@ -237,7 +274,9 @@ const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || 
 
 function resolveImport(configPath: string, imports: string[]): { dir: string; suffix: string } | null {
   for (const raw of imports) {
-    const path = raw.startsWith('/') ? raw : `${dirOf(configPath)}/${raw}`;
+    const joined = raw.startsWith('/') ? raw : `${dirOf(configPath)}/${raw}`;
+    // «./» and «//» are plain noise; «..» stays and is refused by the path pattern later.
+    const path = joined.replace(/\/(?:\.\/)+/g, '/').replace(/\/{2,}/g, '/');
     const match = /^(\/[^*]*)\/\*([A-Za-z0-9._-]{0,32})$/.exec(path);
     if (match?.[1] !== undefined) return { dir: match[1], suffix: match[2] ?? '' };
   }
@@ -298,12 +337,14 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
 
   if (container !== null) {
     if (container.networkMode === 'host') reasons.push('The web server container uses the host network');
-    const network = chooseNetwork(container, probe.containers);
-    if (network === null || !isNetworkName(network)) reasons.push('The web server container is only in the default bridge network, where containers cannot find each other by name');
+    const chosen = chooseNetwork(container, probe.containers);
+    // A network name that fails the pattern is never kept: it would end up in `.env` and in a compose file.
+    const network = chosen !== null && isNetworkName(chosen) ? chosen : null;
+    if (network === null) reasons.push('The web server container is only in the default bridge network, where containers cannot find each other by name');
     survey.container = { id: container.id, name: isContainerName(container.name) ? container.name.replace(/^\//, '') : container.id.slice(0, 12), network };
     if (network !== null) {
       const taken = (name: string): boolean =>
-        probe.containers.some((c) => !isOurs(c) && c.id !== container?.id && c.networks.includes(network) && (c.name === name || (c.networkAliases[network] ?? []).includes(name)));
+        probe.containers.some((c) => !isOurs(c) && c.networks.includes(network) && (c.name === name || (c.networkAliases[network] ?? []).includes(name)));
       if (taken('parley-relay') || taken('parley-relay-acme')) {
         survey.nameClash = true;
         block(NAME_CLASH_REASON);
@@ -315,6 +356,15 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
     const active = hostUnit === 'caddy' ? states[0] === 'active' : states[1] === 'active';
     if (!active) reasons.push(`${hostUnit} on the host is not managed by systemd`);
   }
+
+  /** A file as bytes (`base64 -w0`): the hash is over what is on disk, whatever the encoding, and a non-UTF-8 file is refused. */
+  const readFile = async (path: string): Promise<{ text: string; sha256: string } | 'unreadable' | 'not-utf8'> => {
+    const out = await run(`base64 -w0 ${shQuote(path)}`);
+    if (out.code !== 0) return 'unreadable';
+    const bytes = Buffer.from(out.stdout.trim(), 'base64');
+    const text = bytes.toString('utf8');
+    return Buffer.from(text, 'utf8').equals(bytes) ? { text, sha256: createHash('sha256').update(bytes).digest('hex') } : 'not-utf8';
+  };
 
   const toHost = (containerPath: string): string | null => (container === null ? containerPath : hostPathOf(container.mounts, containerPath));
   const exec = (command: string): string => (container === null ? command : `docker exec ${shQuote(container.id)} ${command}`);
@@ -342,16 +392,17 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
       else if (hostConfig === null) reasons.push('The Caddyfile is not on a mounted volume, so it cannot be changed from the host');
       else if (!isSafePath(hostConfig)) reasons.push('The Caddyfile path on the host has an unsupported form');
       else {
-        const read = await run(`cat ${shQuote(hostConfig)}`);
-        if (read.code !== 0) reasons.push('The Caddyfile could not be read');
+        const read = await readFile(hostConfig);
+        if (read === 'unreadable') reasons.push('The Caddyfile could not be read');
+        else if (read === 'not-utf8') reasons.push('The Caddyfile is not valid UTF-8 text, so it is left alone');
         else {
           survey.config = { host: hostConfig, container: configPath };
-          survey.caddyfile = { sha256: sha256(read.stdout), text: read.stdout };
-          const info = parseCaddyfile(read.stdout);
+          survey.caddyfile = { sha256: read.sha256, text: read.text };
+          const info = parseCaddyfile(read.text);
           if (info.admin === 'off') reasons.push('The Caddy admin endpoint is off, so the configuration cannot be reloaded');
           else if (info.admin !== null && !isAdminAddress(info.admin)) reasons.push('The Caddy admin address has an unsupported form');
           else survey.admin = info.admin ?? '127.0.0.1:2019';
-          const markers = countMarkers(read.stdout);
+          const markers = countMarkers(read.text);
           if (markers.begin + markers.end > 2 || markers.begin !== markers.end) block('The Caddyfile has an unpaired or repeated parley-relay marker');
           else if (markers.begin === 1) survey.ours = { kind: 'block' };
           const target = resolveImport(configPath, info.imports);
@@ -373,16 +424,18 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
       if (hostDir === null || !isSafePath(hostDir)) reasons.push('The nginx include directory is not on a mounted volume');
       else {
         survey.include = { hostDir, containerDir: dir, suffix: '.conf' };
-        if (parsed.mainFile !== null) survey.config = { host: toHost(parsed.mainFile) ?? parsed.mainFile, container: parsed.mainFile };
+        const mainHost = parsed.mainFile !== null && isSafePath(parsed.mainFile) ? toHost(parsed.mainFile) : null;
+        if (parsed.mainFile !== null && mainHost !== null && isSafePath(mainHost)) survey.config = { host: mainHost, container: parsed.mainFile };
       }
     }
   }
 
   if (survey.include !== null && survey.ours === null) {
     const hostPath = `${survey.include.hostDir}/parley-relay${survey.include.suffix}`;
-    const read = await run(`cat ${shQuote(hostPath)}`);
-    if (read.code === 0) {
-      if (isOurFile(read.stdout, probe.install?.RELAY_PROXY_PORT)) survey.ours = { kind: 'file', hostPath, sha256: sha256(read.stdout) };
+    const read = await readFile(hostPath);
+    if (read === 'not-utf8') block(`${hostPath} exists and was not written by Parley`);
+    else if (read !== 'unreadable') {
+      if (isOurFile(read.text, probe.install?.RELAY_PROXY_PORT)) survey.ours = { kind: 'file', hostPath, sha256: read.sha256 };
       else block(`${hostPath} exists and was not written by Parley`);
     }
   }
@@ -390,20 +443,23 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
 }
 
 export interface PreviousCommand {
-  /** Alive: the plan is blocked. */
+  /** Alive (the lock is held): the plan is blocked; `id` is what it runs. */
   active: ActiveCommand | null;
-  /** Dead: the end of its log, shown in the plan notes. */
+  /** Dead in the middle of its work (`active` is left over): the end of its log, shown in the plan notes. */
   tail: { id: string; text: string } | null;
 }
 
-/** The previous run's command: alive (blocks the plan) or dead (its log tail is shown). Spec 7.3. */
+/**
+ * The previous run's command (spec 7.3). The background part holds `flock` on `<state>/lock` while it works, so the
+ * lock — not a pid — tells whether it is alive; the kernel drops it when the process dies and after a reboot.
+ */
 export async function probeActive(shell: RemoteShell): Promise<PreviousCommand> {
-  const none: PreviousCommand = { active: null, tail: null };
-  const file = await shell.run(`cat ${ACTIVE_FILE}`, { sudo: true });
-  const match = file.code === 0 ? /^(\d{1,9}) ([a-z][a-z0-9-]{0,31})$/.exec(file.stdout.trim()) : null;
-  if (match?.[1] === undefined || match[2] === undefined) return none;
-  const alive = await shell.run(`kill -0 ${match[1]}`, { sudo: true });
-  if (alive.code === 0) return { active: { pid: Number(match[1]), id: match[2] }, tail: null };
-  const log = await shell.run(`tail -n 20 /var/tmp/parley-relay-setup/${match[2]}.log`, { sudo: true });
-  return { active: null, tail: log.code === 0 && log.stdout.trim() !== '' ? { id: match[2], text: log.stdout } : null };
+  const as = { sudo: true };
+  const free = (await shell.run(LOCK_CHECK, as)).code === 0;
+  const file = await shell.run(`cat ${ACTIVE_FILE}`, as);
+  const raw = file.code === 0 ? file.stdout.trim() : null;
+  if (!free) return { active: { id: raw !== null && /^[a-z][a-z0-9-]{0,31}$/.test(raw) ? raw : 'unknown' }, tail: null };
+  if (raw === null || !/^[a-z][a-z0-9-]{0,31}$/.test(raw)) return { active: null, tail: null };
+  const log = await shell.run(`tail -n 20 ${STATE_DIR}/${raw}.log`, as);
+  return { active: null, tail: log.code === 0 && log.stdout.trim() !== '' ? { id: raw, text: log.stdout } : null };
 }

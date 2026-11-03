@@ -105,7 +105,7 @@ describe('course VPS (run 2 of 2026-11-03)', () => {
 
 describe('a command of the previous run is still alive (spec 7.3)', () => {
   it('blocks every intent with the command named', () => {
-    const alive = probe({ activeCommand: { pid: 4242, id: 'files' } });
+    const alive = probe({ activeCommand: { id: 'files' } });
     for (const intent of ['install', 'rollback', 'remove'] as const) {
       const plan = buildPlan({ intent, probe: alive, decision: decideLayout(alive), name: 'x.example.com', image: IMAGE });
       expect(plan.blocked).toMatch(/still running on the server: files\. Wait a minute/);
