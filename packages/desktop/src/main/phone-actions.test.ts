@@ -120,4 +120,19 @@ describe('phone action notifications', () => {
     await flush();
     expect(t.shown.map((n) => n.body)).toEqual(['Trusted folder one', 'Trusted folder two']);
   });
+
+  it('A38a: session-close names the session and its work, with the Revoke button; two sessions both notify', async () => {
+    const t = setup();
+    const closed = (sessionId: string, label: string) => ({ projectPath: '/Users/a/proj', workId: 'w-1', sessionId, label });
+    t.notifier.handle({ deviceId: ID, kind: 'session-close', target: closed('s-1', 'Reviewer') });
+    t.notifier.handle({ deviceId: ID, kind: 'session-close', target: closed('s-2', 'Builder') });
+    t.notifier.handle({ deviceId: ID, kind: 'session-close', target: closed('s-1', 'Reviewer') });
+    // A label belongs to session-close only; a plain ref is not a session-close target.
+    t.notifier.handle({ deviceId: ID, kind: 'session-close', target: { projectPath: '/Users/a/proj', workId: 'w-1', sessionId: 's-3' } });
+    t.notifier.handle({ deviceId: ID, kind: 'session-create', target: closed('s-4', 'x') });
+    await flush();
+    expect(t.shown.map((n) => n.body)).toEqual(['Closed session Reviewer in Auth rework', 'Closed session Builder in Auth rework']);
+    expect(t.shown[0]).toMatchObject({ title: 'Parley — Anna iPhone' });
+    expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
+  });
 });

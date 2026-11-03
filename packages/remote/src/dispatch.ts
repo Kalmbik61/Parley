@@ -265,6 +265,23 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     if (seen === undefined || host.status !== 'online' || seen === methodsKey()) return;
     sessions.close(deviceId, 'rekey');
   }
+  /** Имя сессии из снимка эпохи — цель `session-close` (правки 20); снимок берётся до `sessions.close`. */
+  function sessionLabelOf(params: unknown): string | null {
+    const ref = sessionRefOf(params);
+    const entry = ref === null ? undefined : host.snapshot?.entries.find((e) => e.projectPath === ref.projectPath && e.map.work.id === ref.workId);
+    const label = entry?.map.sessions.find((session) => session.id === ref?.sessionId)?.label;
+    return typeof label === 'string' && label !== '' ? label.slice(0, 256) : null;
+  }
+  /** Имена провайдеров для людей из ответов `sessions.switchOptions`: цель `provider-switch` после `switchAgent`. */
+  const providerLabels = new Map<string, string>();
+  function learnProviders(result: unknown): void {
+    const targets = (result as { targets?: unknown } | null)?.targets;
+    if (!Array.isArray(targets)) return;
+    for (const t of targets as Array<{ id?: unknown; label?: unknown } | null>) {
+      if (typeof t?.id === 'string' && typeof t.label === 'string' && t.label !== '') providerLabels.set(t.id, t.label);
+    }
+  }
+
   /** Карточки согласий из `consents.list` и `consents.changed`; `id` у хоста сквозной, эпоха их не обесценивает. */
   const consentCards = new Map<string, ConsentCardInfo>();
   function learnCards(items: unknown): void {
@@ -309,9 +326,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
 
   /**
    * Весомые действия удавшегося вызова (спека 12, A34): запуск сессии, доверие к папке, смена провайдера, Allow «Always»,
-   * план с `auto-accept`, включение серверов MCP (A36a). Обычный Allow, сообщения агентам и письма в комнаты — не весомые.
+   * план с `auto-accept`, включение серверов MCP (A36a), закрытие сессии и замена провайдера с телефона (правки 20).
+   * Обычный Allow, сообщения агентам, письма в комнаты, Stop и Put to sleep — не весомые.
    */
-  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
+  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
     const r = (typeof result === 'object' && result !== null ? result : {}) as Record<string, unknown>;
     // `applied: false` — карточка уже не ждала, ничего не произошло.
@@ -330,6 +348,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         const servers = [...new Set((p.enabled as { name: string }[]).map((pair) => pair.name))];
         if (servers.length > 0) actions.push({ kind: 'mcp-enable', target: { repo: card.repo, servers } });
       }
+    } else if (method === 'sessions.close') {
+      // Цель — `ref` и имя сессии; без имени (сессии нет в снимке) — её номер.
+      const ref = cleanRef(p.ref);
+      if (ref) actions.push({ kind: 'session-close', target: { ...ref, label: label ?? ref.sessionId } });
+    } else if (method === 'sessions.switchAgent' && typeof p.provider === 'string') {
+      actions.push({ kind: 'provider-switch', target: providerLabels.get(p.provider) ?? p.provider });
     } else if (method === 'feed.decide') {
       const ref = cleanRef(p.ref);
       const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
@@ -340,10 +364,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   }
 
   /** `phone.action` окну; событие проверяется схемой — лишнее (тексты) не уходит. Сбой не трогает ответ телефону. */
-  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<void> {
+  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null): Promise<void> {
     if (!options.onPhoneAction) return;
     try {
-      for (const action of await phoneActions(method, params, result, card)) {
+      for (const action of await phoneActions(method, params, result, card, label)) {
         const event = phoneActionEvent.safeParse({ deviceId, ...action });
         if (event.success) options.onPhoneAction(event.data);
         else log.warn('dispatch.phone_action_invalid', { method, kind: action.kind });
@@ -523,6 +547,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       } else {
         const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         const trustAfter = method === 'sessions.create' ? await trustWrittenBy(params) : null;
+        const label = method === 'sessions.close' ? sessionLabelOf(params) : null;
         try {
           raw = await host.call(method, params ?? {});
         } catch (error) {
@@ -531,7 +556,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         }
         if (trustAfter !== null) await trustAfter(deviceId);
         if (method === 'consents.list') learnCards((raw as { items?: unknown } | null)?.items);
-        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card);
+        if (method === 'sessions.switchOptions') learnProviders(raw);
+        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card, label);
       }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;

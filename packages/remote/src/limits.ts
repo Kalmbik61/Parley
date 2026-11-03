@@ -26,6 +26,11 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'consents.decide',
   // Пробуждение спящей сессии (A37a, правки 19): лимит и журнал `call` с сессией из `ref`; `phone.action` нет.
   'sessions.resume',
+  // Меню сессии (A38a, правки 20); `sessions.switchOptions` — чтение. Весомые: Close и замена провайдера.
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchAgent',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */

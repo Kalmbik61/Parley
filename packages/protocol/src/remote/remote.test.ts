@@ -488,6 +488,14 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: '/private/tmp/repo' }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'mcp-enable', target: ref }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'trust-folder', target: mcp }).success).toBe(false);
+    // A38a: `session-close` — `ref` и имя сессии; эта цель только у него, лишнего (тексты агента) нет.
+    const closed = { ...ref, label: 'Reviewer' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: closed }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: 'Reviewer' }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, label: '' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, text: 'agent text' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: closed }).success).toBe(false);
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);

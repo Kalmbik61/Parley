@@ -1359,4 +1359,64 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(JSON.stringify(audits)).not.toContain('secret-repo');
     expect(JSON.stringify(audits)).not.toContain('SECRET');
   });
+
+  it('A38a: session-close and provider-switch only after a successful close and switchAgent; Stop and sleep emit nothing', async () => {
+    const uuid = '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+    host.handler = async (method, params) => {
+      const p = params as { ref?: { sessionId?: string }; provider?: string };
+      if (method === 'sessions.close' && p.ref?.sessionId === 's-8') throw new HostCallError('conflict', 'no');
+      if (method === 'sessions.switchAgent' && p.provider === 'broken') throw new HostCallError('conflict', 'blocked');
+      if (method === 'sessions.switchOptions') {
+        return { current: { provider: 'claude', available: true, reason: null }, targets: [{ id: 'codex', label: 'Codex', family: null, available: true, needs: null, limits: null, transcript: true }], suggested: 'codex', keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] };
+      }
+      if (method === 'sessions.switchAgent') return { outcome: 'started', carried: 'handover' };
+      return { ok: true };
+    };
+    call(D, 'a', 'feed.interrupt', { ref: ref('s-1') });
+    call(D, 'b', 'sessions.stop', { ref: ref('s-1') });
+    call(D, 'c', 'sessions.close', { ref: ref('s-1') });
+    call(D, 'd', 'sessions.close', { ref: ref('s-9') });
+    call(D, 'e', 'sessions.close', { ref: ref('s-8') });
+    await flush();
+    call(D, 'f', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'codex' });
+    await flush();
+    call(D, 'g', 'sessions.switchOptions', { ref: ref('s-1') });
+    await flush();
+    call(D, 'h', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'codex' });
+    call(D, 'i', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'broken' });
+    call(D, 'j', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'codex', force: true });
+    await flush();
+    expect(answer('j')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'session-close', target: { ...ref('s-1'), label: 'l' } },
+      // Сессии нет в снимке — её номер вместо имени.
+      { deviceId: D, kind: 'session-close', target: { ...ref('s-9'), label: 's-9' } },
+      // Имя провайдера для людей — из ответа switchOptions; до него — id.
+      { deviceId: D, kind: 'provider-switch', target: 'codex' },
+      { deviceId: D, kind: 'provider-switch', target: 'Codex' },
+    ]);
+    expect(JSON.stringify(actions)).not.toContain('SECRET');
+    // Журнал: четыре изменяющих метода — `call`, switchOptions — чтение, без записи.
+    const calls = audits.filter((a) => a.kind === 'call');
+    expect(calls.map((a) => a.method)).toEqual([
+      'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.close', 'sessions.close', 'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent',
+    ]);
+    expect(calls[0]).toMatchObject({ target: 's-1', outcome: 'ok' });
+    expect(calls[4]).toMatchObject({ target: 's-8', outcome: 'conflict' });
+    expect(audits.some((a) => a.method === 'sessions.switchOptions')).toBe(false);
+  });
+
+  it('A38a: the session menu shares the mutating limit; switchOptions does not spend it', async () => {
+    const menu = ['feed.interrupt', 'sessions.stop', 'sessions.close'];
+    for (let i = 0; i < 30; i++) {
+      call(D, `m${i}`, menu[i % 3]!, { ref: ref('s-1') });
+      await flush();
+    }
+    call(D, 'read', 'sessions.switchOptions', { ref: ref('s-1') });
+    call(D, 'over', 'sessions.switchAgent', { ref: ref('s-1'), requestId: '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f', provider: 'codex' });
+    await flush();
+    expect(answer('read')).toMatchObject({ result: { ok: true } });
+    expect(answer('over')).toMatchObject({ error: { code: 'rate_limited' } });
+    expect(host.calls.filter((c) => c.method === 'sessions.switchAgent')).toEqual([]);
+  });
 });

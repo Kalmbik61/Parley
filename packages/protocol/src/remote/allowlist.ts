@@ -32,6 +32,13 @@ const A_METHODS = [
   'trust.check',
   // Пробуждение спящей сессии (решение человека 2026-11-03, правки 19): хост пускает только при `remoteCreate`.
   'sessions.resume',
+  // Меню сессии (решение человека 2026-11-03, правки 20): Stop, Put to sleep, Close, замена провайдера — тоже за
+  // `remoteCreate`.
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchOptions',
+  'sessions.switchAgent',
 ] as const;
 const A_EVENTS = [
   'works.changed',
@@ -44,8 +51,6 @@ const A_EVENTS = [
 
 const B_METHODS = [
   'mail.markRead',
-  'sessions.stop',
-  'feed.interrupt',
   'pty.attach',
   'pty.detach',
   'rooms.usage',
@@ -101,7 +106,6 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'works.rename',
   'works.setStatus',
   'sessions.delete',
-  'sessions.close',
   'sessions.setMode',
   'sessions.setEffort',
   'sessions.setModel',
@@ -166,6 +170,22 @@ function record(params: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** `ref` сессии: строго `projectPath`, `workId`, `sessionId` — непустые строки. */
+function sessionRef(value: unknown): boolean {
+  const ref = record(value);
+  return (
+    ref !== null &&
+    onlyKeys(ref, SESSION_REF_KEYS) &&
+    [ref.projectPath, ref.workId, ref.sessionId].every(v => typeof v === 'string' && v.length > 0)
+  );
+}
+
+/** Параметры — только `ref` сессии. */
+function refOnly(params: unknown): boolean {
+  const p = record(params);
+  return p !== null && onlyKeys(p, REF_ONLY_KEYS) && sessionRef(p.ref);
+}
+
 /** Только эти ключи (спека 4.2: лишний ключ → `bad_request`). */
 function onlyKeys(p: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(p).every(key => allowed.has(key));
@@ -215,8 +235,15 @@ const SESSION_CREATE_KEYS: ReadonlySet<string> = new Set([
   'trustFolder',
 ]);
 const PTY_SEND_KEYS: ReadonlySet<string> = new Set(['ref', 'text', 'submit', 'requestedAt', 'clientMsgId']);
-const SESSION_RESUME_KEYS: ReadonlySet<string> = new Set(['ref']);
+const REF_ONLY_KEYS: ReadonlySet<string> = new Set(['ref']);
 const SESSION_REF_KEYS: ReadonlySet<string> = new Set(['projectPath', 'workId', 'sessionId']);
+/** `force` (замена при блокерах) — только из окна (спека 4.2, правки 20). */
+const SWITCH_AGENT_KEYS: ReadonlySet<string> = new Set(['ref', 'requestId', 'provider', 'model', 'effort', 'carry']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Тот же токен, что `EFFORT_TOKEN_RE` схемы хоста. */
+const EFFORT_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
+export const REMOTE_PROVIDER_MAX = 64;
+const MODEL_MAX = 200;
 const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision', 'enabled', 'revision']);
 /** Пара сервера MCP из карточки `project-mcp` (спека 2026-11-02, 7.2): строго имя и отпечаток. */
@@ -318,15 +345,24 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
     );
   },
   // Пробуждение спящей сессии (спека 4.2, правки 19): ключ только `ref`, у него строго три непустые строки.
-  'sessions.resume': params => {
+  'sessions.resume': refOnly,
+  // Меню сессии (спека 4.2, правки 20): Stop, Put to sleep, Close и цели замены — только `ref`.
+  'feed.interrupt': refOnly,
+  'sessions.stop': refOnly,
+  'sessions.close': refOnly,
+  'sessions.switchOptions': refOnly,
+  'sessions.switchAgent': params => {
     const p = record(params);
-    const ref = p === null ? null : record(p.ref);
     return (
       p !== null &&
-      onlyKeys(p, SESSION_RESUME_KEYS) &&
-      ref !== null &&
-      onlyKeys(ref, SESSION_REF_KEYS) &&
-      [ref.projectPath, ref.workId, ref.sessionId].every(v => typeof v === 'string' && v.length > 0)
+      onlyKeys(p, SWITCH_AGENT_KEYS) &&
+      sessionRef(p.ref) &&
+      typeof p.requestId === 'string' &&
+      UUID.test(p.requestId) &&
+      charsBetween(p.provider, 1, REMOTE_PROVIDER_MAX) &&
+      (p.model === undefined || p.model === null || textUpTo(p.model, MODEL_MAX)) &&
+      (p.effort === undefined || p.effort === null || (typeof p.effort === 'string' && EFFORT_TOKEN.test(p.effort))) &&
+      (p.carry === undefined || p.carry === 'handover' || p.carry === 'transcript')
     );
   },
   'consents.decide': params => {

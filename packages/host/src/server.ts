@@ -73,6 +73,8 @@ export interface RemoteLaunchPolicy {
 export interface RemoteSessionState {
   workArchived: boolean;
   lifecycle: string;
+  /** Процесс агента идёт в этом хосте (его PTY). */
+  live: boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -98,7 +100,8 @@ const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', '
 /**
  * За одним переключателем `remoteCreate` (спека 4.2, правки 17): запуск, сообщение агенту и согласия — `trustFolder`
  * ключом `sessions.create`, `consents.decide` (Allow — доверие к папке или агент на другом провайдере; критик M2),
- * `sessions.resume` (пробуждение спящей сессии, правки 19; цель — известный проект и работа по `ref`).
+ * `sessions.resume` (пробуждение спящей сессии, правки 19) и меню сессии (правки 20: Stop, Put to sleep, Close, замена
+ * провайдера); у них цель — известный проект и работа по `ref`.
  * `providers.list`, `roles.list`, `consents.list` и `trust.check` — чтение.
  */
 const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
@@ -106,15 +109,28 @@ const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
   'pty.send',
   'consents.decide',
   'sessions.resume',
+  'feed.interrupt',
+  'sessions.stop',
+  'sessions.close',
+  'sessions.switchOptions',
+  'sessions.switchAgent',
 ]);
 
 /**
- * Состояние сессии, в котором её метод с телефона имеет смысл (критик A37a): будить — только спящую. Закрытая сессия,
- * архивная работа и неизвестная сессия отсекаются до правила для всех методов из этого списка.
+ * Состояние сессии, в котором её метод с телефона имеет смысл (критик A37a): будить — только спящую, Stop и Put to
+ * sleep — только идущую в этом хосте (A38a). Закрытая сессия, архивная работа и неизвестная сессия отсекаются до
+ * правила для всех методов из этого списка.
  */
+const anyOpen = (): null => null;
+const onlyLive = (state: RemoteSessionState): string | null => (state.live ? null : 'session is not running');
 const REMOTE_SESSION_RULES: Readonly<Record<string, (state: RemoteSessionState) => string | null>> = {
   // `active` без PTY этого хоста — второй `claude --resume`; `pending` — запуск раньше движка или терминала.
   'sessions.resume': (state) => (state.lifecycle === 'sleeping' ? null : 'session is not asleep'),
+  'feed.interrupt': onlyLive,
+  'sessions.stop': onlyLive,
+  'sessions.close': anyOpen,
+  'sessions.switchOptions': anyOpen,
+  'sessions.switchAgent': anyOpen,
 };
 
 /** Проверка сессии до обработчика (критик A37a M1, m1, m2): ошибка с кодом протокола, без рассылки `host.notice`. */
