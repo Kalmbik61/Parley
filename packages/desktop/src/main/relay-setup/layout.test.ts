@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlan, decideLayout, type Plan } from './plan.js';
+import { CADDYFILE_ACME, COMPOSE_ACME_DOCKER, COMPOSE_ACME_HOST, nginxSiteFile } from './templates.js';
 import { parseContainers, parseEnv, parseListeners, parseOsRelease, type ContainerInfo, type ProbeResult } from './probe.js';
 import type { RemoteShell, RunResult } from './shell.js';
 import { probeWeb } from './web.js';
@@ -208,5 +209,121 @@ describe('course VPS: install plan', () => {
       .join('\n');
     // After quoting is removed, no id, path, network or name of the server is left in any command.
     for (const value of [CADDY_ID, 'course-platform-prod', '/opt/evdev-site', '/opt/course-platform', NAME]) expect(stripped).not.toContain(value);
+  });
+});
+
+describe('nginx-acme (spec 4 rows 3 and 4б, 4.1)', () => {
+  const NGINX_ID = 'f5'.repeat(32);
+  const nginxContainer = (over: Partial<ContainerInfo> = {}): ContainerInfo => ({
+    id: NGINX_ID,
+    name: 'shop-nginx-1',
+    image: 'nginx:1.27',
+    labels: { 'com.docker.compose.project': 'shop' },
+    path: 'nginx',
+    args: [],
+    workdir: '',
+    mounts: [{ type: 'bind', source: '/srv/nginx/conf.d', destination: '/etc/nginx/conf.d', rw: false }],
+    published: [{ hostPort: 80, hostIp: '0.0.0.0' }, { hostPort: 443, hostIp: '0.0.0.0' }],
+    networks: ['shop_default'],
+    networkAliases: {},
+    networkMode: 'shop_default',
+    ...over,
+  });
+  const DUMP = read('nginx-t-official.txt');
+  const dockerAnswers = (dump = DUMP): Record<string, string> => ({ [`docker exec '${NGINX_ID}' nginx -v`]: 'nginx version: nginx/1.27.0', [`docker exec '${NGINX_ID}' nginx -T`]: dump });
+  const dockerProbe = (over: Partial<ProbeResult> = {}, c: Partial<ContainerInfo> = {}): Promise<ProbeResult> =>
+    surveyed(dockerAnswers(), { containers: [nginxContainer(c)], listeners: [], ...over });
+  const hostAnswers: Record<string, string> = {
+    'systemctl is-active caddy nginx apache2 httpd': 'inactive\nactive\ninactive\ninactive\n',
+    'nginx -T': DUMP,
+  };
+  const hostProbe = (over: Partial<ProbeResult> = {}, answers = hostAnswers): Promise<ProbeResult> =>
+    surveyed(answers, { containers: [], listeners: [{ port: 80, processes: ['nginx'] }, { port: 443, processes: ['nginx'] }], ...over });
+  const NAME = 'relay.example.com';
+
+  it('row 3: nginx in Docker → nginx-acme in its network, the address carries 8443', async () => {
+    const probe = await dockerProbe();
+    expect(decideLayout(probe)).toMatchObject({ mode: 'nginx-acme', runtime: 'docker', network: 'shop_default' });
+    const p = plan(probe, NAME);
+    expect(p.blocked).toBeNull();
+    expect(p.mode).toBe('nginx-acme');
+    expect(p.address).toBe(`${NAME}:8443`);
+    expect(p.steps.map((s) => s.id)).toEqual(['docker', 'dir', 'files', 'image', 'web', 'start']);
+    expect(plan({ ...probe, ufwActive: true }, NAME).steps.map((s) => s.id)).toEqual(['docker', 'dir', 'files', 'image', 'ufw', 'web', 'start']);
+    expect(p.steps.find((s) => s.id === 'ufw') ?? plan({ ...probe, ufwActive: true }, NAME).steps.find((s) => s.id === 'ufw')!.commands[0]!.run).toContain('8443/tcp');
+    expect(p.steps.find((s) => s.id === 'image')!.commands.map((c) => c.show).join('\n')).toMatch(/parley-relay@sha256:a+\ndocker pull caddy:2\.11\.7@sha256:/);
+    const start = p.steps.find((s) => s.id === 'start')!;
+    expect(start.check).toContain('grep -qx parley-relay &&');
+    expect(start.check).toContain('grep -qx parley-relay-acme');
+    const card = p.web!.edits[0]!;
+    expect(card).toMatchObject({ server: 'nginx (Docker)', file: '/srv/nginx/conf.d/parley-relay.conf', action: 'add', content: nginxSiteFile(NAME, 'docker', null) });
+    expect(card.content).toContain('resolver 127.0.0.11 valid=30s;');
+    expect(card.check).toContain(`docker exec '${NGINX_ID}' nginx -t`);
+    expect(card.check).toContain(`conflicting server name "${NAME}"`);
+    expect(card.check).toContain('# configuration file /etc/nginx/conf.d/parley-relay.conf:');
+    expect(card.reload).toBe(`docker exec '${NGINX_ID}' nginx -s reload`);
+    expect(p.web!.network).toBe('shop_default');
+    expect(p.notes.join(' ')).toMatch(/Port 443 stays yours: the relay answers on port 8443/);
+  });
+
+  it('the files: network compose with two services, the ACME Caddyfile, the new .env keys', async () => {
+    const p = plan(await dockerProbe(), NAME);
+    const body = (file: string): string => Buffer.from(/'([^']+)'/.exec(p.steps.find((s) => s.id === 'files')!.commands.find((c) => c.show.startsWith(`write /opt/parley-relay/${file}`))!.run)![1]!, 'base64').toString();
+    expect(body('compose.yml')).toBe(COMPOSE_ACME_DOCKER);
+    expect(body('Caddyfile')).toBe(CADDYFILE_ACME);
+    expect(COMPOSE_ACME_DOCKER).toMatch(/^ {2}parley-relay:$/m);
+    expect(COMPOSE_ACME_DOCKER).toMatch(/^ {2}parley-relay-acme:$/m);
+    expect(CADDYFILE_ACME).toContain('disable_tlsalpn_challenge');
+    expect(CADDYFILE_ACME).toContain('reverse_proxy parley-relay:8787');
+    const env = body('.env');
+    expect(env).toContain('RELAY_MODE=nginx-acme\n');
+    expect(env).toContain('RELAY_HTTPS_PORT=8443\n');
+    expect(env).toContain('RELAY_WEB_RUNTIME=docker\nRELAY_WEB_FILE=/srv/nginx/conf.d/parley-relay.conf\nRELAY_WEB_EDIT=file\nRELAY_NETWORK=shop_default\n');
+    expect(env).not.toContain('RELAY_ACME_PORT');
+    // This layout keeps its own Caddyfile: the files check does not demand its absence.
+    expect(p.steps.find((s) => s.id === 'files')!.check).not.toContain('! -e Caddyfile');
+  });
+
+  it('row 4б: nginx under systemd → nginx-acme with Caddy HTTP on loopback', async () => {
+    const probe = await hostProbe({}, hostAnswers);
+    expect(decideLayout(probe)).toMatchObject({ mode: 'nginx-acme', runtime: 'host', network: null, acmePort: 18080 });
+    const busy = await hostProbe({ listeners: [{ port: 80, processes: ['nginx'] }, { port: 18080, processes: ['x'] }] });
+    expect(decideLayout(busy)).toMatchObject({ mode: 'nginx-acme', acmePort: 28080 });
+    const p = plan(probe, NAME);
+    expect(p.steps.map((s) => s.id)).toEqual(['docker', 'dir', 'files', 'image', 'web', 'start']);
+    const card = p.web!.edits[0]!;
+    expect(card).toMatchObject({ server: 'nginx (systemd)', file: '/etc/nginx/conf.d/parley-relay.conf', action: 'add', reload: 'nginx -s reload' });
+    expect(card.content).toContain('proxy_pass http://127.0.0.1:18080;');
+    expect(card.content).not.toContain('resolver');
+    expect(card.check).toMatch(/^out=\$\(nginx -t 2>&1\) && ! echo "\$out" \| grep -qF 'conflicting server name "relay\.example\.com"' && nginx -T 2>\/dev\/null \| grep -qF '# configuration file \/etc\/nginx\/conf\.d\/parley-relay\.conf:'$/);
+    const body = (file: string): string => Buffer.from(/'([^']+)'/.exec(p.steps.find((s) => s.id === 'files')!.commands.find((c) => c.show.startsWith(`write /opt/parley-relay/${file}`))!.run)![1]!, 'base64').toString();
+    expect(body('compose.yml')).toBe(COMPOSE_ACME_HOST);
+    expect(COMPOSE_ACME_HOST).toContain("'127.0.0.1:${RELAY_ACME_PORT:?set RELAY_ACME_PORT}:80'");
+    expect(body('.env')).toContain('RELAY_ACME_PORT=18080\n');
+    expect(body('.env')).not.toContain('RELAY_NETWORK');
+  });
+
+  it('a file of ours is replaced; one of somebody else blocks', async () => {
+    const path = "base64 -w0 '/srv/nginx/conf.d/parley-relay.conf'";
+    const ours = Buffer.from(nginxSiteFile(NAME, 'docker', null).replace('relay.example.com', 'old.example.com'), 'utf8').toString('base64');
+    const probe = await surveyed({ ...dockerAnswers(), [path]: ours }, { containers: [nginxContainer()], listeners: [] });
+    expect(plan(probe, NAME).web!.edits[0]).toMatchObject({ action: 'replace', file: '/srv/nginx/conf.d/parley-relay.conf' });
+    const foreign = await surveyed({ ...dockerAnswers(), [path]: Buffer.from('server { listen 80; server_name x; }\n').toString('base64') }, { containers: [nginxContainer()], listeners: [] });
+    expect(decideLayout(foreign)).toMatchObject({ mode: 'blocked', reason: expect.stringMatching(/was not written by Parley/) });
+  });
+
+  it('every reason that sends nginx to layout 5 is named', async () => {
+    const reason = (layout: ReturnType<typeof decideLayout>): string => {
+      expect(layout.mode).toBe('proxy');
+      return layout.mode === 'proxy' ? layout.reason ?? '' : '';
+    };
+    const noInclude = DUMP.replace('    include /etc/nginx/conf.d/*.conf;\n', '');
+    expect(reason(decideLayout(await surveyed(dockerAnswers(noInclude), { containers: [nginxContainer()], listeners: [] })))).toMatch(/no include <directory>\/\*\.conf/);
+    expect(reason(decideLayout(await dockerProbe({}, { mounts: [] })))).toMatch(/not on a mounted volume/);
+    expect(reason(decideLayout(await dockerProbe({}, { networks: ['bridge'], networkAliases: { bridge: [] } })))).toMatch(/default bridge network/);
+    expect(reason(decideLayout(await dockerProbe({ listeners: [{ port: 8443, processes: ['x'] }] })))).toMatch(/port 8443/);
+    expect(reason(decideLayout(await hostProbe({ listeners: [{ port: 80, processes: ['nginx'] }, { port: 8443, processes: ['x'] }] })))).toMatch(/port 8443/);
+    expect(reason(decideLayout(await hostProbe({ listeners: [{ port: 80, processes: ['nginx'] }, { port: 18080, processes: ['a'] }, { port: 28080, processes: ['b'] }] })))).toMatch(/no local port/);
+    expect(reason(decideLayout(await hostProbe({}, { ...hostAnswers, 'systemctl is-active caddy nginx apache2 httpd': 'inactive\ninactive\ninactive\ninactive\n' })))).toMatch(/not managed by systemd/);
   });
 });

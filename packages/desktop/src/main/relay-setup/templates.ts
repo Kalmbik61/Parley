@@ -42,6 +42,9 @@ volumes:
   caddy-config:
 `;
 
+/** The Caddy image of `COMPOSE_CADDY`; `nginx-acme` uses the same one. */
+export const CADDY_IMAGE = 'caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e';
+
 export const CADDYFILE = `# TLS on 443 with an automatic certificate; WebSocket upgrades pass through reverse_proxy as is.
 # RELAY_DOMAIN comes from the environment (see compose.yml), for example relay.example.com.
 {$RELAY_DOMAIN} {
@@ -88,7 +91,93 @@ networks:
     external: true
 `;
 
-export type SetupMode = 'caddy' | 'caddy-site' | 'proxy';
+/**
+ * `nginx-acme`, nginx in Docker (spec 6.1): the relay and its own Caddy sit in the Docker network of the person's nginx;
+ * nginx forwards the HTTP of our name to `parley-relay-acme:80`, and Caddy serves TLS on `${RELAY_HTTPS_PORT}` (8443).
+ */
+export const COMPOSE_ACME_DOCKER = `# Parley relay with its own Caddy next to your nginx: nginx forwards port 80 of our name here, TLS is on \${RELAY_HTTPS_PORT}.
+services:
+  parley-relay:
+    image: \${RELAY_IMAGE:?set RELAY_IMAGE}
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: '1'
+    volumes:
+      - relay-data:/data
+    expose:
+      - '8787'
+    networks:
+      - web
+  parley-relay-acme:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      - parley-relay
+    environment:
+      RELAY_DOMAIN: \${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay host name}
+    ports:
+      - '\${RELAY_HTTPS_PORT:-8443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - web
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
+networks:
+  web:
+    name: \${RELAY_NETWORK:?set RELAY_NETWORK}
+    external: true
+`;
+
+/** `nginx-acme`, nginx on the host: Caddy's HTTP side listens on loopback only, for nginx. */
+export const COMPOSE_ACME_HOST = `# Parley relay with its own Caddy next to your nginx: nginx forwards port 80 of our name to 127.0.0.1:\${RELAY_ACME_PORT}.
+services:
+  parley-relay:
+    image: \${RELAY_IMAGE:?set RELAY_IMAGE}
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: '1'
+    volumes:
+      - relay-data:/data
+    expose:
+      - '8787'
+  parley-relay-acme:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      - parley-relay
+    environment:
+      RELAY_DOMAIN: \${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay host name}
+    ports:
+      - '\${RELAY_HTTPS_PORT:-8443}:443'
+      - '127.0.0.1:\${RELAY_ACME_PORT:?set RELAY_ACME_PORT}:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
+`;
+
+/** Port 443 belongs to somebody else, so the TLS-ALPN challenge cannot work: Let's Encrypt must use HTTP-01 through nginx. */
+export const CADDYFILE_ACME = `# Certificate through the HTTP challenge on port 80 (nginx forwards it here); the app is served on RELAY_HTTPS_PORT.
+{$RELAY_DOMAIN} {
+\ttls {
+\t\tissuer acme {
+\t\t\tdisable_tlsalpn_challenge
+\t\t}
+\t}
+\treverse_proxy parley-relay:8787
+}
+`;
+
+export type SetupMode = 'caddy' | 'caddy-site' | 'nginx-acme' | 'proxy';
 
 export interface EnvValues {
   mode: SetupMode;
@@ -135,6 +224,14 @@ export interface ManagedFile {
 
 export function managedFiles(values: EnvValues): ManagedFile[] {
   const env: ManagedFile = { name: '.env', content: renderEnv(values), mode: '0600', showContent: false };
+  if (values.mode === 'nginx-acme') {
+    const compose = values.network !== undefined ? COMPOSE_ACME_DOCKER : COMPOSE_ACME_HOST;
+    return [
+      { name: 'compose.yml', content: compose, mode: '0644', showContent: true },
+      { name: 'Caddyfile', content: CADDYFILE_ACME, mode: '0644', showContent: true },
+      env,
+    ];
+  }
   if (values.mode !== 'caddy') {
     const compose = values.network !== undefined ? COMPOSE_NETWORK : COMPOSE_PROXY;
     return [{ name: 'compose.yml', content: compose, mode: '0644', showContent: true }, env];
@@ -223,4 +320,24 @@ export function removeCaddyBlock(text: string): string | null {
   if (text.startsWith('\r\n', after)) after += 2;
   else if (text.startsWith('\n', after)) after += 1;
   return before + text.slice(after);
+}
+
+/**
+ * The only block the wizard puts into nginx (spec 4.1): port 80, one name, no TLS. In Docker the upstream is resolved at
+ * request time (`resolver` and a variable), so `nginx -t` passes before our Caddy exists and survives its re-creation.
+ */
+export function nginxSiteFile(name: string, runtime: 'docker' | 'host', acmePort: number | null, httpsPort = 8443): string {
+  const head = [
+    '# parley-relay: added by the Parley relay setup wizard. Remove it with the wizard (Remove relay).',
+    `# Port 80 of ${name} goes to the relay's own Caddy, which gets the certificate and serves https://${name}:${httpsPort}.`,
+    'server {',
+    '    listen 80;',
+    `    server_name ${name};`,
+  ];
+  const upstream =
+    runtime === 'docker'
+      ? ['    resolver 127.0.0.11 valid=30s;', '    set $parley_relay_acme http://parley-relay-acme:80;']
+      : [];
+  const pass = runtime === 'docker' ? '$parley_relay_acme' : `http://127.0.0.1:${acmePort ?? 18080}`;
+  return [...head, ...upstream, '    location / {', `        proxy_pass ${pass};`, '        proxy_set_header Host $host;', '    }', '}', ''].join('\n');
 }

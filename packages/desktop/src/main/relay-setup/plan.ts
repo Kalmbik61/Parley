@@ -3,9 +3,11 @@ import { shQuote, type SetupIntent } from './input.js';
 import type { RelayPlanWeb } from '../../shared/relay-setup-types.js';
 import { INSTALL_DIR, holderOf, type PortHolder, type ProbeResult } from './probe.js';
 import {
+  CADDY_IMAGE,
   caddyBlockAppend,
   caddySiteFile,
   managedFiles,
+  nginxSiteFile,
   proxySnippet,
   removeCaddyBlock,
   sha256,
@@ -13,7 +15,19 @@ import {
   type ProxyServer,
   type SetupMode,
 } from './templates.js';
-import { BACKUP_DIR, afterShaOf, buildEditScript, caddyCommands, editCommand, webStepCheck, type CaddyTarget, type EditAction } from './web-edit.js';
+import {
+  BACKUP_DIR,
+  afterShaOf,
+  buildEditScript,
+  caddyCommands,
+  editCommand,
+  nginxCommands,
+  nginxStepCheck,
+  webStepCheck,
+  type CaddyTarget,
+  type EditAction,
+  type NginxTarget,
+} from './web-edit.js';
 import { chooseNetwork, type WebSurvey } from './web.js';
 
 /**
@@ -40,14 +54,18 @@ export interface PlanStep {
   rerunOnChange?: boolean;
 }
 
-/** The layouts of spec 4: 1, 1б → `caddy`; 2, 4а → `caddy-site`; 5 → `proxy`. (Rows 3 and 4б, nginx, are layout 5 for now.) */
+/** The layouts of spec 4: 1, 1б → `caddy`; 2, 4а → `caddy-site`; 3, 4б → `nginx-acme`; 5 → `proxy`. */
 export type Layout =
   | { mode: 'caddy'; httpPort: 80; httpsPort: 443 | 8443 }
   | { mode: 'caddy-site'; runtime: 'docker' | 'host'; web: WebSurvey; network: string | null; relayPort: number }
+  | { mode: 'nginx-acme'; runtime: 'docker' | 'host'; web: WebSurvey; network: string | null; acmePort: number | null }
   | { mode: 'proxy'; relayPort: number; server: ProxyServer; holder: string; reason: string | null; network: string | null }
   | { mode: 'blocked'; reason: string };
 
 const PROXY_PORT_CANDIDATES = [8787, 18787, 28787];
+const ACME_PORT_CANDIDATES = [18080, 28080];
+/** The port the relay is reachable on behind nginx. */
+export const NGINX_ACME_PORT = 8443;
 
 function serverKind(holder: PortHolder | null, web: WebSurvey | null): ProxyServer {
   if (holder?.kind === 'container') return web?.kind === 'nginx' ? 'nginx' : 'other';
@@ -84,10 +102,21 @@ export function decideLayout(probe: ProbeResult): Layout {
   if (usable && web.kind === 'caddy' && web.runtime === 'host' && h443?.kind === 'process' && h443.names.includes('caddy') && freePort !== undefined) {
     return { mode: 'caddy-site', runtime: 'host', web, network: null, relayPort: freePort };
   }
+  // Rows 3 and 4б: nginx forwards port 80 of our name to the relay's own Caddy on 8443.
+  const nginxOk = web !== null && web.kind === 'nginx' && web.reasons.length === 0 && web.include !== null;
+  const acmePort = ACME_PORT_CANDIDATES.find((port) => holderOf(probe, port) === null);
+  let nginxReason: string | null = null;
+  if (nginxOk && holderOf(probe, 8443) !== null) nginxReason = 'port 8443, where the relay would be reachable, is taken';
+  else if (nginxOk && web.runtime === 'docker' && h80.kind === 'container' && web.container?.network) {
+    return { mode: 'nginx-acme', runtime: 'docker', web, network: web.container.network, acmePort: null };
+  } else if (nginxOk && web.runtime === 'host') {
+    if (acmePort === undefined) nginxReason = 'no local port is free for the relay’s Caddy';
+    else return { mode: 'nginx-acme', runtime: 'host', web, network: null, acmePort };
+  }
   if (freePort === undefined) return { mode: 'blocked', reason: 'Port 80 is taken and no local port is free for the relay' };
-  let reason: string | null = web?.reasons[0] ?? null;
+  let reason: string | null = web?.reasons[0] ?? nginxReason;
   if (reason === null && web?.kind === 'caddy') reason = 'one Caddy must hold both port 80 and port 443';
-  else if (reason === null && web?.kind === 'nginx') reason = 'setting up nginx automatically is not available yet';
+  else if (reason === null && web?.kind === 'nginx') reason = 'nginx could not be set up automatically';
   const network = h80.kind === 'container' && h80.container.networkMode !== 'host' ? chooseNetwork(h80.container, probe.containers) : null;
   return { mode: 'proxy', relayPort: freePort, server: serverKind(h80, web), holder: describeHolder(h80), reason, network };
 }
@@ -96,6 +125,7 @@ export const sslipName = (ip: string): string => `${ip.replace(/\./g, '-')}.ssli
 
 /** The `host[:port]` for the Relay field and the QR. */
 export function relayAddress(name: string, decision: Layout): string {
+  if (decision.mode === 'nginx-acme') return `${name}:${NGINX_ACME_PORT}`;
   return decision.mode === 'caddy' && decision.httpsPort !== 443 ? `${name}:${decision.httpsPort}` : name;
 }
 
@@ -191,18 +221,25 @@ function imageStep(images: string[]): PlanStep {
   };
 }
 
-/** One edit of the person's Caddy (spec 5.1, 5.2) and the cards the screen shows for it. */
-interface CaddyEdit {
+/** One edit of the person's web server (spec 5.1, 5.2): what is written and the commands around it. */
+interface SiteEdit {
   action: EditAction;
   target: string;
   content: string;
   beforeSha: string | null;
   afterSha: string | null;
   kind: 'file' | 'block';
-  caddy: CaddyTarget;
+  /** `Caddy` or `nginx`, and where it runs. */
+  server: string;
+  serverName: 'Caddy' | 'nginx';
+  check: string | null;
+  reload: string;
+  /** «Already done» for the step. */
+  stepCheck: string;
+  note: string;
 }
 
-function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string): CaddyEdit | null {
+function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string): SiteEdit | null {
   const { web } = layout;
   if (web.caddyfile === null || web.config === null) return null;
   const upstream = layout.runtime === 'docker' ? 'parley-relay:8787' : `127.0.0.1:${layout.relayPort}`;
@@ -212,9 +249,24 @@ function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string
     containerFile: layout.runtime === 'docker' ? web.config.container : null,
     admin: web.admin ?? '127.0.0.1:2019',
   };
-  const edit = (action: EditAction, target: string, content: string, beforeSha: string | null, existing: string | null, kind: 'file' | 'block'): CaddyEdit => ({
-    action, target, content, beforeSha, afterSha: afterShaOf(action, content, existing), kind, caddy,
-  });
+  const commands = caddyCommands(caddy);
+  const edit = (action: EditAction, target: string, content: string, beforeSha: string | null, existing: string | null, kind: 'file' | 'block'): SiteEdit => {
+    const afterSha = afterShaOf(action, content, existing);
+    return {
+      action,
+      target,
+      content,
+      beforeSha,
+      afterSha,
+      kind,
+      server: caddy.runtime === 'docker' ? 'Caddy (Docker)' : 'Caddy (systemd)',
+      serverName: 'Caddy',
+      check: commands.check,
+      reload: commands.reload,
+      stepCheck: webStepCheck(target, afterSha ?? '', caddy, name),
+      note: 'none: Caddy checks the whole configuration while loading it and keeps the old one if it is bad',
+    };
+  };
   if (web.ours?.kind === 'file') return edit('replace', web.ours.hostPath, caddySiteFile(name, upstream), web.ours.sha256, null, 'file');
   const text = web.caddyfile.text;
   if (web.ours?.kind === 'block') {
@@ -226,42 +278,65 @@ function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string
   return edit('append', web.config.host, caddyBlockAppend(text, name, upstream), web.caddyfile.sha256, text, 'block');
 }
 
-function webStep(edit: CaddyEdit, name: string): { step: PlanStep; card: NonNullable<RelayPlanWeb['edits'][number]> } {
-  const commands = caddyCommands(edit.caddy);
+/** The nginx server block for our name (spec 4.1): one file in the directory nginx already includes. */
+function nginxEdit(layout: Extract<Layout, { mode: 'nginx-acme' }>, name: string): SiteEdit | null {
+  const { web } = layout;
+  if (web.include === null) return null;
+  const target = web.ours?.kind === 'file' ? web.ours.hostPath : `${web.include.hostDir}/parley-relay.conf`;
+  const content = nginxSiteFile(name, layout.runtime, layout.acmePort, NGINX_ACME_PORT);
+  const afterSha = afterShaOf('replace', content, null);
+  const nginx: NginxTarget = { runtime: layout.runtime, containerId: web.container?.id ?? null, name, file: `${web.include.containerDir}/parley-relay.conf` };
+  const commands = nginxCommands(nginx);
+  return {
+    action: web.ours?.kind === 'file' ? 'replace' : 'add',
+    target,
+    content,
+    beforeSha: web.ours?.kind === 'file' ? web.ours.sha256 : null,
+    afterSha,
+    kind: 'file',
+    server: layout.runtime === 'docker' ? 'nginx (Docker)' : 'nginx (systemd)',
+    serverName: 'nginx',
+    check: commands.check,
+    reload: commands.reload,
+    stepCheck: nginxStepCheck(target, afterSha ?? '', nginx),
+    note: 'nginx -t must pass without «conflicting server name» for our name, and nginx -T must list our file; nginx -s reload does not report its own failure',
+  };
+}
+
+function webStep(edit: SiteEdit): { step: PlanStep; card: NonNullable<RelayPlanWeb['edits'][number]> } {
   const script = buildEditScript({
     action: edit.action,
     target: edit.target,
     beforeSha: edit.beforeSha,
     content: edit.content,
     afterSha: edit.afterSha,
-    check: commands.check,
-    reload: commands.reload,
+    check: edit.check,
+    reload: edit.reload,
   });
-  const check = webStepCheck(edit.target, edit.afterSha ?? '', edit.caddy, name);
   const verb = { add: 'Add', replace: 'Replace', append: 'Append a block to', remove: 'Remove', 'remove-block': 'Remove our block from' }[edit.action];
   const backup = edit.beforeSha === null ? 'none (the file is new)' : `${BACKUP_DIR}/<time>-${edit.target.split('/').pop() ?? ''}`;
-  const checkText = commands.check ?? 'none: Caddy checks the whole configuration while loading it and keeps the old one if it is bad';
+  const checkText = edit.check ?? edit.note;
   return {
     step: {
       id: 'web',
-      title: `${verb} ${edit.target} (your Caddy)`,
-      check,
-      checkShow: check,
+      title: `${verb} ${edit.target} (your ${edit.serverName})`,
+      check: edit.stepCheck,
+      checkShow: edit.stepCheck,
       commands: [
         {
           run: editCommand(script),
-          show: `${verb.toLowerCase()} ${edit.target}\n    backup: ${backup}\n    check: ${checkText}\n    reload: ${commands.reload}\n    if a step fails, the file is restored`,
+          show: `${verb.toLowerCase()} ${edit.target}\n    backup: ${backup}\n    check: ${checkText}\n    reload: ${edit.reload}\n    if a step fails, the file is restored`,
         },
       ],
     },
     card: {
-      server: edit.caddy.runtime === 'docker' ? 'Caddy (Docker)' : 'Caddy (systemd)',
+      server: edit.server,
       file: edit.target,
       action: edit.action,
       content: edit.content,
       backup,
       check: checkText,
-      reload: commands.reload,
+      reload: edit.reload,
     },
   };
 }
@@ -277,8 +352,10 @@ function installSteps(ctx: PlanContext, env: EnvValues, web: PlanStep | null): P
     checkShow: `test -d ${D}`,
     commands: [plain(`install -d -m 0755 ${D}`)],
   });
+  // `caddy` and `nginx-acme` run their own Caddy and so own a Caddyfile; the other layouts must have none.
+  const ownCaddyfile = env.mode === 'caddy' || env.mode === 'nginx-acme';
   const sums = files.map((f) => `${sha256(f.content)}  ${f.name}`);
-  const check = `cd ${D} && printf '%s\\n' ${sums.map(shQuote).join(' ')} | sha256sum -c --status -${env.mode !== 'caddy' ? ' && [ ! -e Caddyfile ]' : ''}`;
+  const check = `cd ${D} && printf '%s\\n' ${sums.map(shQuote).join(' ')} | sha256sum -c --status -${ownCaddyfile ? '' : ' && [ ! -e Caddyfile ]'}`;
   steps.push({
     id: 'files',
     title: 'Configuration files (the previous ones are kept in previous/)',
@@ -289,31 +366,37 @@ function installSteps(ctx: PlanContext, env: EnvValues, web: PlanStep | null): P
         `cd ${D} && mkdir -p previous && if [ -f .env ]; then rm -f previous/compose.yml previous/Caddyfile previous/.env; for f in compose.yml Caddyfile .env; do if [ -f "$f" ]; then cp -p "$f" "previous/$f"; fi; done; fi`,
       ),
       ...files.map((f) => writeFile(`${D}/${f.name}`, f.content, f.mode, f.showContent)),
-      ...(env.mode !== 'caddy' ? [plain(`rm -f ${D}/Caddyfile`)] : []),
+      ...(ownCaddyfile ? [] : [plain(`rm -f ${D}/Caddyfile`)]),
     ],
   });
-  steps.push(imageStep([ctx.image]));
+  steps.push(imageStep(env.mode === 'nginx-acme' ? [ctx.image, CADDY_IMAGE] : [ctx.image]));
   if (ctx.probe.ufwActive && ctx.decision.mode === 'caddy') {
     steps.push(ufwRules(ctx.decision.httpsPort === 443 ? [80, 443] : [80, ctx.decision.httpsPort]));
   }
+  if (ctx.probe.ufwActive && ctx.decision.mode === 'nginx-acme') steps.push(ufwRules([NGINX_ACME_PORT]));
+  // `nginx-acme`: nginx must already forward our port 80 when our Caddy starts and asks for the certificate.
+  if (env.mode === 'nginx-acme' && web !== null) steps.push(web);
   // The compose service is `relay` (own Caddy, loopback) or `parley-relay` (joins a network of the person's server).
   const service = env.network !== undefined ? 'parley-relay' : 'relay';
-  const up = `${COMPOSE} ps --status running --services | grep -qx ${service}`;
+  const running = (name: string): string => `${COMPOSE} ps --status running --services | grep -qx ${name}`;
+  const up = env.mode === 'nginx-acme' ? `${running('parley-relay')} && ${running('parley-relay-acme')}` : running(service);
   steps.push({
     id: 'start',
     title:
       env.mode === 'caddy'
         ? 'Start the relay and Caddy'
+        : env.mode === 'nginx-acme'
+          ? 'Start the relay and its Caddy'
         : env.network !== undefined
-          ? `Start the relay in the Docker network ${env.network}`
-          : 'Start the relay on 127.0.0.1',
+            ? `Start the relay in the Docker network ${env.network}`
+            : 'Start the relay on 127.0.0.1',
     check: up,
     checkShow: up,
     rerunOnChange: true,
     commands: [plain(`${COMPOSE} up -d --remove-orphans --quiet-pull`)],
   });
   // `caddy-site`: the person's Caddy gets the certificate and proxies once the relay already answers.
-  if (web !== null) steps.push(web);
+  if (env.mode !== 'nginx-acme' && web !== null) steps.push(web);
   return steps;
 }
 
@@ -385,21 +468,22 @@ export function buildPlan(ctx: PlanContext): Plan {
     return empty('Docker is installed without the Compose plugin. Install docker-compose-plugin and run the wizard again.');
   }
   if (decision.mode === 'blocked') return empty(decision.reason);
-  const edit = decision.mode === 'caddy-site' ? caddyEdit(decision, ctx.name) : null;
-  if (decision.mode === 'caddy-site' && edit === null) return empty('The Caddyfile could not be prepared for the change');
-  const network = decision.mode === 'caddy-site' || decision.mode === 'proxy' ? decision.network : null;
+  const edit = decision.mode === 'caddy-site' ? caddyEdit(decision, ctx.name) : decision.mode === 'nginx-acme' ? nginxEdit(decision, ctx.name) : null;
+  if ((decision.mode === 'caddy-site' || decision.mode === 'nginx-acme') && edit === null) return empty('The web server configuration could not be prepared for the change');
+  const network = decision.mode === 'caddy-site' || decision.mode === 'nginx-acme' || decision.mode === 'proxy' ? decision.network : null;
   const env: EnvValues = {
     mode: decision.mode,
     domain: ctx.name,
     image: ctx.image,
     httpPort: 80,
-    httpsPort: decision.mode === 'caddy' ? decision.httpsPort : 443,
-    proxyPort: decision.mode === 'caddy' ? 8787 : decision.relayPort,
-    ...(decision.mode === 'caddy-site' && edit !== null ? { webRuntime: decision.runtime, webFile: edit.target, webEdit: edit.kind } : {}),
+    httpsPort: decision.mode === 'caddy' ? decision.httpsPort : decision.mode === 'nginx-acme' ? NGINX_ACME_PORT : 443,
+    proxyPort: decision.mode === 'caddy' || decision.mode === 'nginx-acme' ? 8787 : decision.relayPort,
+    ...((decision.mode === 'caddy-site' || decision.mode === 'nginx-acme') && edit !== null ? { webRuntime: decision.runtime, webFile: edit.target, webEdit: edit.kind } : {}),
+    ...(decision.mode === 'nginx-acme' && decision.acmePort !== null ? { acmePort: decision.acmePort } : {}),
     ...(network !== null ? { network } : {}),
   };
   const notes = [
-    decision.mode === 'caddy-site'
+    decision.mode === 'caddy-site' || decision.mode === 'nginx-acme'
       ? 'Parley changes your web server as shown below and nothing else of it. The rest of the server is touched only in /opt/parley-relay, the firewall rules of this wizard and the Docker packages.'
       : 'Only /opt/parley-relay, firewall rules of this wizard and the Docker packages are touched on the server.',
     'If your hosting provider has a firewall in front of the server, open the ports there yourself; the wizard cannot see it.',
@@ -408,14 +492,24 @@ export function buildPlan(ctx: PlanContext): Plan {
   let proxy: Plan['proxy'] = null;
   let web: Plan['web'] = null;
   let webStepDef: PlanStep | null = null;
-  if (decision.mode === 'caddy-site' && edit !== null) {
-    const built = webStep(edit, ctx.name);
+  if ((decision.mode === 'caddy-site' || decision.mode === 'nginx-acme') && edit !== null) {
+    const built = webStep(edit);
     webStepDef = built.step;
-    web = { summary: `${describeHolder(decision.web.holder)} holds ports 80 and 443. Parley adds the relay site to its Caddy.`, network, edits: [built.card] };
+    web = {
+      summary:
+        decision.mode === 'caddy-site'
+          ? `${describeHolder(decision.web.holder)} holds ports 80 and 443. Parley adds the relay site to its Caddy.`
+          : `${describeHolder(decision.web.holder)} holds port 80. Parley adds one server block to its nginx that forwards port 80 of ${ctx.name} to the relay's own Caddy.`,
+      network,
+      edits: [built.card],
+    };
     notes.push(
-      `Parley adds one site to your Caddy (${edit.target}). A backup is kept in ${BACKUP_DIR}/. If the check or the reload fails, the file is restored and your server keeps its current configuration. The reload applies your server's whole configuration as it is on disk now.`,
+      `Parley adds one ${decision.mode === 'caddy-site' ? 'site to your Caddy' : 'server block to your nginx'} (${edit.target}). A backup is kept in ${BACKUP_DIR}/. If the check or the reload fails, the file is restored and your server keeps its current configuration. The reload applies your server's whole configuration as it is on disk now.`,
     );
-    if (network !== null) notes.push(`The relay container joins the Docker network ${network} of your Caddy; it answers there as parley-relay.`);
+    if (decision.mode === 'nginx-acme') {
+      notes.push(`Port 443 stays yours: the relay answers on port ${NGINX_ACME_PORT}, and its Caddy gets the certificate through port 80 of nginx. Open port ${NGINX_ACME_PORT} at your hosting provider if it has a firewall.`);
+    }
+    if (network !== null) notes.push(`The relay containers join the Docker network ${network} of your ${edit.serverName}; they answer there as parley-relay${decision.mode === 'nginx-acme' ? ' and parley-relay-acme' : ''}.`);
   } else if (decision.mode === 'proxy') {
     const upstream = network !== null ? 'parley-relay:8787' : undefined;
     proxy = proxySnippet(decision.server, decision.relayPort, upstream);

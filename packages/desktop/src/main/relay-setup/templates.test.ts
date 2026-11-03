@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLOCK_BEGIN, BLOCK_BEGIN_NL, caddyBlockAppend, caddySiteFile, COMPOSE_NETWORK, managedFiles, proxySnippet, removeCaddyBlock, renderEnv } from './templates.js';
+import { CADDY_IMAGE, COMPOSE_CADDY, nginxSiteFile, BLOCK_BEGIN, BLOCK_BEGIN_NL, caddyBlockAppend, caddySiteFile, COMPOSE_NETWORK, managedFiles, proxySnippet, removeCaddyBlock, renderEnv } from './templates.js';
 
 const IMAGE = 'ghcr.io/kalmbik61/parley-relay@sha256:' + 'a'.repeat(64);
 const BASE = { domain: 'r.example.com', image: IMAGE, httpPort: 80, httpsPort: 443, proxyPort: 8787 } as const;
@@ -40,5 +40,31 @@ describe('texts of the edits (spec 5.1)', () => {
     expect(proxySnippet('nginx', 8787, 'parley-relay:8787').snippet).toContain('proxy_pass http://parley-relay:8787;');
     expect(proxySnippet('nginx', 8787).snippet).toContain('proxy_pass http://127.0.0.1:8787;');
     expect(proxySnippet('apache', 8787, 'parley-relay:8787').snippet).toContain('ws://parley-relay:8787/v1/$1');
+  });
+});
+
+describe('nginx block (spec 4.1)', () => {
+  it('Docker: resolver and a variable; host: loopback port; both one server on port 80 for one name, no TLS', () => {
+    const docker = nginxSiteFile('r.example.com', 'docker', null);
+    expect(docker).toBe(`# parley-relay: added by the Parley relay setup wizard. Remove it with the wizard (Remove relay).
+# Port 80 of r.example.com goes to the relay's own Caddy, which gets the certificate and serves https://r.example.com:8443.
+server {
+    listen 80;
+    server_name r.example.com;
+    resolver 127.0.0.11 valid=30s;
+    set $parley_relay_acme http://parley-relay-acme:80;
+    location / {
+        proxy_pass $parley_relay_acme;
+        proxy_set_header Host $host;
+    }
+}
+`);
+    const host = nginxSiteFile('r.example.com', 'host', 18080);
+    expect(host).toContain('proxy_pass http://127.0.0.1:18080;');
+    for (const text of [docker, host]) expect(text).not.toMatch(/ssl|listen 443/);
+    expect(host).not.toContain('resolver');
+  });
+  it('the Caddy image of nginx-acme is the one of the own-Caddy layout', () => {
+    expect(COMPOSE_CADDY).toContain(`image: ${CADDY_IMAGE}`);
   });
 });

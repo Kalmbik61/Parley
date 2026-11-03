@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { caddyBlockAppend, removeCaddyBlock, sha256 } from './templates.js';
-import { afterShaOf, buildEditScript, caddyCommands, editCommand, EDIT_EXIT, FILE_CHANGED, webStepCheck, type EditAction } from './web-edit.js';
+import { afterShaOf, buildEditScript, caddyCommands, editCommand, EDIT_EXIT, FILE_CHANGED, nginxCommands, nginxStepCheck, webStepCheck, type EditAction } from './web-edit.js';
 
 let dir = '';
 beforeEach(() => {
@@ -17,7 +17,7 @@ interface Run {
   stderr: string;
 }
 
-function run(over: { action: EditAction; target: string; content: string; before: string | null; check?: string | null; reload?: string; after?: string | null }): Run {
+function run(over: { action: EditAction; target: string; content: string; before: string | null; check?: string | null; reload?: string; after?: string | null; env?: NodeJS.ProcessEnv }): Run {
   const existing = over.before === null || !existsSync(over.target) ? null : readFileSync(over.target, 'utf8');
   const script = buildEditScript({
     action: over.action,
@@ -31,7 +31,7 @@ function run(over: { action: EditAction; target: string; content: string; before
   });
   const file = path.join(dir, 'script.sh');
   writeFileSync(file, script);
-  const result = spawnSync('/bin/sh', [file], { encoding: 'utf8' });
+  const result = spawnSync('/bin/sh', [file], { encoding: 'utf8', env: over.env ?? process.env });
   return { status: result.status, stderr: result.stderr };
 }
 
@@ -162,5 +162,58 @@ describe('Caddy commands', () => {
     expect(docker).toContain(`docker exec '${id}' wget -qO- 'http://127.0.0.1:2019/config/' | grep -qF 'r.example.com'`);
     expect(docker).toContain(`= '${'a'.repeat(64)}' ]`);
     expect(webStepCheck('/x', 'b'.repeat(64), { runtime: 'host', containerId: null, containerFile: null, admin: '127.0.0.1:2019' }, 'r.example.com')).toContain("curl -s 'http://127.0.0.1:2019/config/'");
+  });
+});
+
+describe('nginx edit (spec 5.2, 4.1)', () => {
+  /** A stand-in `nginx`: `-t` warns about a conflicting name when the marker file says so, `-T` lists the target when it exists. */
+  function fakeNginx(target: string, conflict: boolean): NodeJS.ProcessEnv {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    const script = [
+      '#!/bin/sh',
+      'case "$1" in',
+      `  -t) ${conflict ? 'echo \'nginx: [warn] conflicting server name "relay.example.com" on 0.0.0.0:80, ignored\' >&2;' : ''} echo "nginx: configuration file /etc/nginx/nginx.conf test is successful" >&2; exit 0 ;;`,
+      `  -T) [ -e ${JSON.stringify(target)} ] && echo "# configuration file ${target}:"; exit 0 ;;`,
+      '  -s) exit 0 ;;',
+      'esac',
+      '',
+    ].join('\n');
+    writeFileSync(path.join(bin, 'nginx'), script, { mode: 0o755 });
+    return { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+  }
+  const commands = (target: string) => nginxCommands({ runtime: 'host', containerId: null, name: 'relay.example.com', file: target });
+
+  it('a good check lists our file and the reload goes through', () => {
+    const target = path.join(dir, 'parley-relay.conf');
+    const { check, reload } = commands(target);
+    const result = run({ action: 'add', target, content: 'server {}\n', before: null, check, reload, env: fakeNginx(target, false) });
+    expect(result.status).toBe(0);
+    expect(readFileSync(target, 'utf8')).toBe('server {}\n');
+  });
+  it('«conflicting server name» in nginx -t is a failed check: the new file is removed', () => {
+    const target = path.join(dir, 'parley-relay.conf');
+    const { check, reload } = commands(target);
+    const result = run({ action: 'add', target, content: 'server {}\n', before: null, check, reload, env: fakeNginx(target, true) });
+    expect(result.status).toBe(EDIT_EXIT.check);
+    expect(result.stderr).toContain('check failed: the file was restored');
+    expect(existsSync(target)).toBe(false);
+  });
+  it('an old file of ours comes back when the check fails', () => {
+    const target = path.join(dir, 'parley-relay.conf');
+    writeFileSync(target, 'old\n');
+    const { check, reload } = commands(target);
+    const result = run({ action: 'replace', target, content: 'new\n', before: sha256('old\n'), check, reload, env: fakeNginx(target, true) });
+    expect(result.status).toBe(EDIT_EXIT.check);
+    expect(readFileSync(target, 'utf8')).toBe('old\n');
+  });
+  it('the nginx commands in Docker go through docker exec with the id; the step check needs sha and listing', () => {
+    const id = 'f5'.repeat(32);
+    const t = { runtime: 'docker' as const, containerId: id, name: 'relay.example.com', file: '/etc/nginx/conf.d/parley-relay.conf' };
+    expect(nginxCommands(t).reload).toBe(`docker exec '${id}' nginx -s reload`);
+    expect(nginxCommands(t).check).toContain(`docker exec '${id}' nginx -t 2>&1`);
+    expect(nginxStepCheck('/srv/x/parley-relay.conf', 'a'.repeat(64), t)).toBe(
+      `[ "$(sha256sum '/srv/x/parley-relay.conf' | cut -d' ' -f1)" = '${'a'.repeat(64)}' ] && docker exec '${id}' nginx -T 2>/dev/null | grep -qF '# configuration file /etc/nginx/conf.d/parley-relay.conf:'`,
+    );
   });
 });

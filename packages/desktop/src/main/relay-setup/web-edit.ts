@@ -107,3 +107,33 @@ export function webStepCheck(target: string, expectedSha: string, caddy: CaddyTa
   const fetch = caddy.runtime === 'docker' && caddy.containerId !== null ? `docker exec ${shQuote(caddy.containerId)} wget -qO- ${shQuote(url)}` : `curl -s ${shQuote(url)}`;
   return `${same} && ${fetch} | grep -qF ${shQuote(name)}`;
 }
+
+export interface NginxTarget {
+  runtime: 'docker' | 'host';
+  containerId: string | null;
+  /** The host name of our server block (it must not conflict with another one). */
+  name: string;
+  /** Our file as nginx sees it (inside the container for Docker). */
+  file: string;
+}
+
+const nginxIn = (target: NginxTarget, command: string): string => (target.runtime === 'docker' && target.containerId !== null ? `docker exec ${shQuote(target.containerId)} ${command}` : command);
+
+/**
+ * Check and reload of an nginx edit (spec 5.2): `nginx -t` passes without «conflicting server name» for our name (nginx
+ * would silently ignore such a block), and `nginx -T` lists our file. The reload does not report its own failure.
+ */
+export function nginxCommands(target: NginxTarget): { check: string; reload: string } {
+  const conflict = shQuote(`conflicting server name "${target.name}"`);
+  const listed = shQuote(`# configuration file ${target.file}:`);
+  return {
+    check: `out=$(${nginxIn(target, 'nginx -t')} 2>&1) && ! echo "$out" | grep -qF ${conflict} && ${nginxIn(target, 'nginx -T')} 2>/dev/null | grep -qF ${listed}`,
+    reload: nginxIn(target, 'nginx -s reload'),
+  };
+}
+
+/** «Already done» for the `web` step of nginx: the sha256 is right and the running nginx lists our file. */
+export function nginxStepCheck(hostFile: string, expectedSha: string, target: NginxTarget): string {
+  const same = `[ "$(sha256sum ${shQuote(hostFile)} | cut -d' ' -f1)" = ${shQuote(expectedSha)} ]`;
+  return `${same} && ${nginxIn(target, 'nginx -T')} 2>/dev/null | grep -qF ${shQuote(`# configuration file ${target.file}:`)}`;
+}
