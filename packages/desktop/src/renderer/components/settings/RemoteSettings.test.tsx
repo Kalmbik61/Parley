@@ -79,6 +79,20 @@ describe('RemoteSettings', () => {
     expect(field.value).toBe('192.168.1.10:8787');
   });
 
+  it('relay: https:// is dropped before configure; http:// shows the insecure text and does not configure', async () => {
+    const { bridge } = mount(RUNNING, (b) => b.setRemoteHandler('configure', () => RUNNING));
+    const field = (await screen.findByTestId('remote-relay')) as HTMLInputElement;
+    await waitFor(() => expect(field.value).toBe('relay.example.com'));
+    fireEvent.change(field, { target: { value: 'http://relay.example.com' } });
+    fireEvent.click(screen.getByTestId('remote-relay-save'));
+    expect((await screen.findByTestId('remote-relay-error')).textContent).toBe(T.relayInsecure);
+    expect(bridge.remoteCalls.some((c) => c.name === 'configure')).toBe(false);
+    fireEvent.change(field, { target: { value: 'https://relay.example.com:8443/' } });
+    fireEvent.click(screen.getByTestId('remote-relay-save'));
+    await waitFor(() => expect(bridge.remoteCalls.at(-1)).toEqual({ name: 'configure', params: { relayUrl: 'relay.example.com:8443' } }));
+    expect(field.value).toBe('relay.example.com:8443');
+  });
+
   it('Check asks the bridge for its status again', async () => {
     const { bridge } = mount();
     await screen.findByText(T.status.host.online);

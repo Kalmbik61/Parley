@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialo
 import { Input } from '../../ui/input.js';
 import { Switch } from '../../ui/switch.js';
 import { isPrivateRelayHost } from '@parley/protocol/remote';
-import { normalizeRelayInput } from '../../../shared/relay-input.js';
+import { normalizeRelayInput, relayInputProblem } from '../../../shared/relay-input.js';
 import { RelaySetupDialog } from './RelaySetupDialog.js';
 import { groupSas, INITIAL_PAIR, pairReducer, platformLabel, reissueDue } from './remote-pairing.js';
 
@@ -249,7 +249,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
                   // The bridge takes `host[:port]`: a typed scheme is dropped, a path or `@` is shown at the field.
                   const host = normalizeRelayInput(relay);
                   if (host === null) {
-                    setRelayError(TEXT.relayInvalid);
+                    setRelayError(relayInputProblem(relay) === 'insecure' ? TEXT.relayInsecure : TEXT.relayInvalid);
                     return;
                   }
                   setRelay(host);
