@@ -8,6 +8,8 @@ import {
   decideConsent,
   type ConsentExtra,
   sendMessage,
+  resumeSession,
+  type ResumeSessionOutcome,
   loadProviders,
   loadRoles,
   readCards,
@@ -60,6 +62,8 @@ export interface RemoteClient {
   openFeed(ref: SessionRef): () => void;
   /** Написать агенту; повтор после `lost` — с тем же `clientMsgId`. */
   sendMessage(params: SendMessageParams): Promise<SendMessageOutcome>;
+  /** Разбудить спящую сессию (`sessions.resume`); без автоповтора. */
+  resumeSession(ref: SessionRef): Promise<ResumeSessionOutcome>;
   decideConsent(id: string, decision: 'allow' | 'deny', extra?: ConsentExtra): Promise<DecideConsentOutcome>;
   /** Соединение готово / ушло; ведёт и перечитыватель карточек, и подписки. */
   setConnected(connected: boolean): void;
@@ -124,6 +128,7 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     reloadRoom: (ref) => live.reloadRoom(ref),
     loadOlder: (ref) => live.loadOlder(ref),
     sendMessage: (params) => sendMessage(rpc, env, params),
+    resumeSession: (ref) => resumeSession(rpc, ref),
     decideConsent: (id, decision, extra) => decideConsent(store, rpc, id, decision, extra),
     setConnected: (connected) => {
       refresher.setConnected(connected);

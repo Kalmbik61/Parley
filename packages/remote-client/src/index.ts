@@ -20,6 +20,8 @@ export {
   createRoom,
   sendRoomMessage,
   sendMessage,
+  resumeSession,
+  type ResumeSessionOutcome,
   checkTrust,
   decideConsent,
   newClientMsgId,

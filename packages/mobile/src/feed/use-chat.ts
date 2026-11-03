@@ -16,6 +16,8 @@ export interface Chat {
   /** `pty.send` answered `unknown_method`: the Mac switch is off, the composer is replaced by a line. */
   switchedOff: boolean;
   send(): Promise<void>;
+  /** A message that waited for a wake-up: a normal `pty.send` with a NEW `clientMsgId`, not from the field. */
+  sendText(text: string): Promise<void>;
   retry(message: OutMessage): Promise<void>;
   edit(message: OutMessage): void;
 }
@@ -87,6 +89,7 @@ export function useChat(ref: SessionRef | null, turnRunning: boolean, notify: (t
     },
       // After `lost` the same key goes again (the bridge answers from its cache, the agent reads the message once). After a
     // refusal nothing reached the agent: a new key.
+    sendText: (text) => run(text, newClientMsgId(Date.now()), null, false),
     retry: async (message) => {
       const reuse = message.state.kind === 'unconfirmed';
       await run(message.text, reuse ? message.id : newClientMsgId(Date.now()), message.id, false);

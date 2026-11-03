@@ -21,6 +21,7 @@ const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'rooms.create',
   'rooms.send',
   'pty.send',
+  'sessions.resume',
   'consents.decide',
 ]);
 

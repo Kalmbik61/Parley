@@ -1,7 +1,7 @@
 // Feed rows for the session screen (D1 §9.2–9.3): bubbles, Markdown replies, tool rows, subagents, notices, the folded
 // work row and the turn status line. Raw Markdown is never shown: replies and prompts go through <Markdown>/<Text>.
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import type { FeedItem } from '@parley/core';
 import { haptic } from '../haptics';
@@ -12,6 +12,7 @@ import type { FoldRow, WorkKind } from './fold';
 import { turnStatusText } from './fold';
 import { CARD_STATE_TEXT, errorText, noticeText, toolName, toolSummary } from './summary';
 import type { OutMessage } from './outbox';
+import { HELD_BUBBLE, WAITING_BUBBLE } from './resume';
 
 export const soft = (color: string, alpha = '26'): string => (/^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color);
 
@@ -216,6 +217,11 @@ export function OutBubble({ message, onRetry, onEdit }: { message: OutMessage; o
   let caption: string | null = null;
   let icon: SFSymbol | null = null;
   if (s.kind === 'sending') caption = 'Sending…';
+  else if (s.kind === 'waking') caption = WAITING_BUBBLE;
+  else if (s.kind === 'held') {
+    caption = HELD_BUBBLE;
+    icon = 'hand.raised.fill';
+  }
   else if (s.kind === 'sent') caption = 'Sent';
   else if (s.kind === 'queued') {
     caption = 'Queued — the agent reads it when the turn ends';
@@ -231,9 +237,10 @@ export function OutBubble({ message, onRetry, onEdit }: { message: OutMessage; o
     icon = 'exclamationmark.circle';
   }
   return (
-    <Bubble text={message.text} dim={s.kind === 'sending'}>
+    <Bubble text={message.text} dim={s.kind === 'sending' || s.kind === 'waking' || s.kind === 'held'}>
       <View style={styles.caption}>
-        {icon !== null && <SymbolView name={icon} size={12} tintColor={s.kind === 'failed' || s.kind === 'typed-not-sent' ? c.needsYou : c.label2} />}
+        {s.kind === 'waking' && <ActivityIndicator size="small" color={c.label2} />}
+        {icon !== null && <SymbolView name={icon} size={12} tintColor={s.kind === 'failed' || s.kind === 'typed-not-sent' || s.kind === 'held' ? c.needsYou : c.label2} />}
         <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.caption1, styles.flexShrink, { color: c.label2, textAlign: 'right' }]}>
           {caption}
         </Text>

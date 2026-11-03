@@ -309,3 +309,20 @@ describe('hello моста', () => {
     expect(methods()).toContain('consents.list');
   });
 });
+
+describe('resumeSession', () => {
+  it('sessions.resume {ref}: ok; отказ несёт код и текст; connection_lost — lost, без повтора', async () => {
+    const { client, rpc } = setup(() => ({}));
+    expect(await client.resumeSession(R)).toEqual({ outcome: 'ok' });
+    expect(rpc.call).toHaveBeenCalledWith('sessions.resume', { ref: R });
+    const { client: c2 } = setup(() => {
+      throw Object.assign(new Error('Archived work'), { code: 'conflict' });
+    });
+    expect(await c2.resumeSession(R)).toEqual({ outcome: 'rejected', code: 'conflict', message: 'Archived work' });
+    const { client: c3, rpc: r3 } = setup(() => {
+      throw lost();
+    });
+    expect(await c3.resumeSession(R)).toEqual({ outcome: 'lost' });
+    expect((r3.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'sessions.resume')).toHaveLength(1);
+  });
+});

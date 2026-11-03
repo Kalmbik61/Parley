@@ -455,6 +455,21 @@ export function sendMessage(rpc: Rpc, env: Pick<ActionEnv, 'now'>, params: SendM
   return run;
 }
 
+// ---- Пробуждение спящей сессии с телефона (A37b) ----
+
+/** `ok` — хост принял вызов (сессия уйдёт из `sleeping` через `works.changed`); `lost` — итог неизвестен. */
+export type ResumeSessionOutcome = { outcome: 'ok' } | { outcome: 'lost' } | Rejected;
+
+/** `sessions.resume {ref}`. Изменяющий вызов: клиент его не повторяет, `connection_lost` — «не подтверждено». */
+export async function resumeSession(rpc: Rpc, ref: SessionRef): Promise<ResumeSessionOutcome> {
+  try {
+    await rpc.call('sessions.resume', { ref });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
 export type DecideConsentOutcome =
   | { outcome: 'applied' | 'stale' }
   /** `stillPending`: после перечитывания карточка ещё ждёт (`true`), ушла (`false`), перечитать не удалось (`null`). */

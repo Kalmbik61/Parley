@@ -2,6 +2,7 @@
 // and the composer. No React. Nothing is retried by itself: a retry is a tap, and after `lost` it carries the same key.
 import type { SendMessageOutcome } from '@parley/remote-client';
 import { TEXT_MAX_BYTES, utf8Length } from '../launch/launch-model';
+import { OLD_SLEEPING_LINE } from './resume';
 
 export const COUNTER_FROM_BYTES = 15 * 1024;
 export const TOO_LONG = 'Too long for one message — 16 KB max';
@@ -68,6 +69,8 @@ export interface ComposerFacts {
   hasMethod: boolean;
   closed: boolean;
   sleeping: boolean;
+  /** `sessions.resume` is in the bridge's hello (the Mac switch is on). */
+  hasResume: boolean;
   /** `needs-you` with a card the phone answers (the card panel replaces the composer). */
   hasCard: boolean;
   blockedNoCard: boolean;
@@ -81,7 +84,7 @@ export interface ComposerFacts {
 export function composerMode(f: ComposerFacts): ComposerMode {
   if (!f.hasMethod) return { kind: 'hidden', text: 'Messaging agents from the phone is turned off on your Mac' };
   if (f.closed) return { kind: 'hidden', text: 'This session is closed' };
-  if (f.sleeping) return { kind: 'hidden', text: 'Sleeping — resume it on your Mac to message it' };
+  if (f.sleeping) return f.hasResume ? { kind: 'input', sendEnabled: f.online, note: f.online ? null : 'Reconnecting — actions are paused' } : { kind: 'hidden', text: OLD_SLEEPING_LINE };
   if (f.hasCard) return { kind: 'hidden', text: '' };
   if (f.blockedNoCard) return { kind: 'input', sendEnabled: false, note: 'Answer at your Mac first' };
   const note = !f.online ? 'Reconnecting — actions are paused' : f.working ? 'The agent is working — your message waits for this turn' : f.limitNote;
