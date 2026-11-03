@@ -70,9 +70,7 @@ export const MD_BRACKET_DEPTH_MAX = 32;
 export const MD_LAZY_RUN_MAX = 500;
 export const MD_LINES_MAX = 5000;
 /** The counts over the whole text (code not skipped) may reach this many times a limit. */
-const BACKSTOP = 2;
-/** `[` nesting over the whole text (the backstop); ESC-prefixed `[` of ANSI colours do not count. */
-const BACKSTOP_DEPTH_MAX = 64;
+const BACKSTOP = 4;
 /** A list with more items than this is shown as its source, like a table over its limit (`MD_TABLE_*`): ~5 native views per item. */
 export const MD_LIST_ITEMS_MAX = 300;
 /** Message-wide budgets (M7): extra markers before parsing; list items + table cells, and block nodes, after it. */
@@ -87,8 +85,12 @@ const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
 /** Quote and list markers on one line, counted together (`- - - …`, `>- >- …`): they hang the parse itself. */
 const markersRe = (n: number): RegExp => new RegExp(`^(?:[ \\t]*${MARKER}){${n}}`);
 const MARKERS_TOO_DEEP = markersRe(MD_NEST_MAX + 1);
-/** The same count over every line, thematic breaks and code included: the backstop (2× the limit, lines 4×). */
+/** The same count over every line, thematic breaks and code included: the backstop (4× the limit). */
 const MARKERS_TOO_DEEP_RAW = markersRe(MD_NEST_MAX * BACKSTOP + 1);
+/** A blank line exactly as CommonMark has it (no `trim()`: NBSP, FF, BOM, U+3000 are not blank). */
+const BLANK = /^[ \t]*$/;
+/** A line that starts a fence (up to 3 spaces): it interrupts a paragraph in CommonMark too. */
+const FENCE_LIKE = /^ {0,3}(?:`{3,}|~{3,})/;
 const BLOCK_MARKER = new RegExp(`^[ \\t]*${MARKER}`);
 const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
@@ -106,92 +108,107 @@ const HTML_START = /^ {0,3}</;
 const HTML_LONG = /^ {0,3}<(?:(?:script|pre|style|textarea)(?:[ \t>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/i;
 
 /**
- * Pre-parse guards (A40 critic M2, M3, M5, M6): text that would hang the parser is shown raw. One pass over the lines;
- * fenced code is skipped (code is not parsed, so its `[`, `*` and markers cost nothing and must not count), but the
- * skip is only a convenience: every count is ALSO kept over the whole text with nothing skipped, and any of them over
- * 2× its limit shows raw text, so a fence the parser does not agree with can never hide a bomb.
- *  - more than 64 KB; more than 2000 `*`, `_`, `~`; more than 2000 `[` or `[` nested deeper than 32 (an ESC `[` of an
- *    ANSI colour does not count);
- *  - 25 quote/list markers on one line (not a thematic break such as `- - - …`);
- *  - a run of more than 500 lines without a block marker after a quote/list line (lazy continuation is quadratic; a
- *    heading ends it), and, as a backstop, more than 5000 non-empty lines.
+ * Pre-parse guards (A40 critic M2, M3, M5, M6, M8, M9): text that would hang the parser is shown raw. Two independent
+ * parts, so a mismatch with CommonMark in the first never costs more than the second allows:
+ *
+ * 1. `limitsWithCodeSkipped`: the real limits (1×), with fenced code skipped (code is not parsed, so its `[`, `*` and
+ *    markers cost nothing) and HTML blocks respected. This is the part that can disagree with micromark.
+ * 2. `backstop`: ONE complete count over the raw text with NO code skip and NO HTML logic, every guard at 4× its limit.
+ *    It only knows blank lines (`/^[ \t]*$/`) and fence-like lines (they reset the lazy count). Whatever the first part
+ *    gets wrong, a bomb costs at most what 4× allows.
+ *
+ * The limits: 64 KB; 2000 `*`, `_`, `~`; 2000 `[` or `[` nested deeper than 32 (an ESC `[` of an ANSI colour does not
+ * count); 25 quote/list markers on one line (not a thematic break), and a sum over all lines of (markers - 2) of 300;
+ * more than 500 lines without a block marker after a quote/list line (lazy continuation is quadratic; a heading or a
+ * fence ends it); more than 5000 non-empty lines.
  */
 export const tooHeavy = (text: string): boolean => {
   if (text.length > MD_BYTES_MAX) return true;
-  // Counts with the code skipped (limit) and over everything (BACKSTOP × limit).
-  const skip = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false, extraMarkers: 0 };
-  const all = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
-  // Skipped code: a coarse backstop (4×, no depth limit), so a fence the guard misreads can never hide a bomb (M8).
-  const code = { emphasis: 0, brackets: 0, depth: 0 };
+  const lines = text.split('\n');
+  return backstop(lines) || limitsWithCodeSkipped(lines);
+};
+
+type Counts = { emphasis: number; brackets: number; depth: number };
+
+/** The backstop: raw text, nothing skipped, 4× the limits (the `[` depth limit is 4× 32 too). */
+function backstop(lines: string[]): boolean {
+  const c: Counts = { emphasis: 0, brackets: 0, depth: 0 };
+  let nonEmpty = 0;
+  let lazy = 0;
+  let inBlock = false;
+  let extra = 0;
+  for (const line of lines) {
+    if (BLANK.test(line)) {
+      inBlock = false;
+      lazy = 0;
+      continue;
+    }
+    if (++nonEmpty > MD_LINES_MAX * BACKSTOP) return true;
+    if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
+    if ((extra += Math.max(0, markersOn(line) - 2)) > MD_EXTRA_MARKERS_MAX * BACKSTOP) return true;
+    if (FENCE_LIKE.test(line)) {
+      inBlock = false;
+      lazy = 0;
+    } else if (BLOCK_MARKER.test(line)) {
+      inBlock = true;
+      lazy = 0;
+    } else if (inBlock && ++lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
+    if (count(line, c, BACKSTOP, MD_BRACKET_DEPTH_MAX * BACKSTOP)) return true;
+  }
+  return false;
+}
+
+/** The limits proper, with code skipped (a convenience: it may disagree with micromark, the backstop covers that). */
+function limitsWithCodeSkipped(textLines: string[]): boolean {
+  const c: Counts = { emphasis: 0, brackets: 0, depth: 0 };
+  let nonEmpty = 0;
+  let lazy = 0;
+  let inBlock = false;
+  let extra = 0;
   let fence: string | null = null;
   let html = false;
   let codeSkipOff = false;
-  for (const line of text.split('\n')) {
-    const blank = line.trim() === '';
-    const inCode: boolean = fence !== null;
-    const opener: RegExpExecArray | null = !inCode && !blank && !html && !codeSkipOff ? FENCE_OPEN.exec(line) : null;
-    // Over everything, nothing skipped (the backstop). Code the column-0 fence rule already skips counts its lines and
-    // `*`, `_`, `~`, `[` only coarsely (4×, no depth): real code has many (m20) but never without bound.
-    if (blank) {
-      all.inBlock = false;
-      all.lazy = 0;
-    } else {
-      // A long code block of short lines is legal, so lines have more room than the other counts.
-      if (++all.lines > MD_LINES_MAX * BACKSTOP * 2) return true;
-      if (opener !== null) {
-        all.inBlock = false;
-        all.lazy = 0;
-      } else if (inCode) {
-        if (count(line, code, BACKSTOP * 2, Infinity)) return true;
-      } else {
-        if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
-        if (HEADING.test(line)) {
-          all.inBlock = false;
-          all.lazy = 0;
-        } else if (BLOCK_MARKER.test(line)) {
-          all.inBlock = true;
-          all.lazy = 0;
-        } else if (all.inBlock && ++all.lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
-        if (count(line, all, BACKSTOP, BACKSTOP_DEPTH_MAX)) return true;
-      }
-    }
-    // The fence / HTML state, as far as the guard can tell.
-    if (inCode) {
+  for (const line of textLines) {
+    const blank = BLANK.test(line);
+    if (fence !== null) {
       const close = FENCE_CLOSE.exec(line);
-      if (close !== null && close[1]![0] === fence![0] && close[1]!.length >= fence!.length) fence = null;
+      if (close !== null && close[1]![0] === fence[0] && close[1]!.length >= fence.length) fence = null;
       continue;
     }
     if (blank) {
       html = false;
-      skip.inBlock = false;
-      skip.lazy = 0;
+      inBlock = false;
+      lazy = 0;
       continue;
     }
-    if (opener !== null) {
-      fence = opener[1] ?? opener[2]!;
-      skip.inBlock = false;
-      skip.lazy = 0;
-      continue;
+    if (!html && !codeSkipOff) {
+      const open = FENCE_OPEN.exec(line);
+      if (open !== null) {
+        fence = open[1] ?? open[2]!;
+        inBlock = false;
+        lazy = 0;
+        continue;
+      }
     }
     if (HTML_START.test(line)) {
       html = true;
       if (HTML_LONG.test(line)) codeSkipOff = true;
     }
-    if (++skip.lines > MD_LINES_MAX) return true;
+    if (++nonEmpty > MD_LINES_MAX) return true;
     if (!THEMATIC_BREAK.test(line) && MARKERS_TOO_DEEP.test(line)) return true;
     // One message-wide budget for markers: a line with k markers adds k - 2 (M7).
-    if ((skip.extraMarkers += Math.max(0, markersOn(line) - 2)) > MD_EXTRA_MARKERS_MAX) return true;
+    if ((extra += Math.max(0, markersOn(line) - 2)) > MD_EXTRA_MARKERS_MAX) return true;
     if (HEADING.test(line)) {
-      skip.inBlock = false;
-      skip.lazy = 0;
+      inBlock = false;
+      lazy = 0;
     } else if (BLOCK_MARKER.test(line)) {
-      skip.inBlock = true;
-      skip.lazy = 0;
-    } else if (skip.inBlock && ++skip.lazy > MD_LAZY_RUN_MAX) return true;
-    if (count(line, skip, 1)) return true;
+      inBlock = true;
+      lazy = 0;
+    } else if (inBlock && ++lazy > MD_LAZY_RUN_MAX) return true;
+    if (count(line, c, 1)) return true;
   }
   return false;
-};
+}
 
 const MARKER_AT_START = new RegExp(`^[ \\t]*${MARKER}`);
 /** How many quote/list markers a line starts with (at most 30: enough for the budget). */
@@ -370,8 +387,9 @@ export function parseMarkdown(text: string): MdNode {
   const root = tree as unknown as MdNode;
   if (nestDepth(root) > MD_NEST_MAX) return rawRoot(text);
   revealHidden(root, src);
-  if (overBudget(root)) return rawRoot(text);
   expandChildren(root);
+  // After the expansion: every mention and line break is a node too (a room message of 12 000 `@s02`).
+  if (overBudget(root)) return rawRoot(text);
   return root;
 }
 
