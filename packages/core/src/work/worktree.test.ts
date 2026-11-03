@@ -592,6 +592,59 @@ describe('removeWorktreeCopy', () => {
   });
 });
 
+describe('убранная копия (removedAt)', () => {
+  /** Копия с одним коммитом `b.txt`, затем её каталог убран; ветка осталась. */
+  async function removed() {
+    await initProject();
+    const planned = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, planned);
+    await setIdentity(planned.path);
+    await writeFile(path.join(planned.path, 'b.txt'), 'b1\n', 'utf8');
+    await git(planned.path, ['add', 'b.txt']);
+    await git(planned.path, ['commit', '-m', 'свой']);
+    await git(project, ['worktree', 'remove', planned.path]);
+    return { ...planned, removedAt: new Date().toISOString() };
+  }
+
+  it('worktreeDiff показывает коммиты и файлы ветки', async () => {
+    const info = await removed();
+
+    const diff = await worktreeDiff(project, info);
+
+    expect(diff.commits).toHaveLength(1);
+    expect(diff.files.find((file) => file.path === 'b.txt')?.additions).toBeGreaterThan(0);
+    expect(diff.uncommitted).toBe(false);
+    expect(diff.patch).toContain('b.txt');
+  });
+
+  it('mergeWorktree вливает ветку в базу', async () => {
+    const info = await removed();
+
+    const result = await mergeWorktree(project, info, 'слияние');
+
+    expect(result.ok).toBe(true);
+    await expect(stat(path.join(project, 'b.txt'))).resolves.toBeTruthy();
+  });
+
+  it('discardWorktree удаляет ветку и не падает без каталога', async () => {
+    const info = await removed();
+
+    await discardWorktree(project, info);
+
+    expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
+  });
+
+  it('ветки нет — branchDeleted', async () => {
+    const info = await removed();
+    await git(project, ['branch', '-D', info.branch]);
+
+    const diff = await worktreeDiff(project, info);
+
+    expect(diff.branchDeleted).toBe(true);
+    expect(diff.commits).toHaveLength(0);
+  });
+});
+
 describe('baseBranchOf', () => {
   it('обычный чекаут — имя ветки', async () => {
     await initProject();

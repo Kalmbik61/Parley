@@ -826,6 +826,75 @@ export interface WorktreeDiff {
    * хост старее раунда fix-final-c, считать 0.
    */
   uncountedUntracked?: number;
+  /** Копию убрала уборка и влитую ветку удалила вместе с ней: дифф пуст. Нет поля — старый хост. */
+  branchDeleted?: boolean;
+}
+
+/** Есть ли локальная ветка `refs/heads/<branch>`. */
+async function branchExists(projectPath: string, branch: string): Promise<boolean> {
+  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  return code === 0;
+}
+
+/** Дифф ветки, чью копию убрала уборка: всё из папки проекта, без чтения копии. */
+async function branchOnlyDiff(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { patch?: boolean },
+): Promise<WorktreeDiff> {
+  const project = await readerAt(projectPath);
+  const baseCheckout = await findBaseCheckout(projectPath, info.base);
+  const baseDirty =
+    baseCheckout === null
+      ? false
+      : await isDirty(await checkoutReader(projectPath, baseCheckout), await projectPrefix(project));
+  if (!(await branchExists(projectPath, info.branch))) {
+    return {
+      patch: '',
+      files: [],
+      uncommitted: false,
+      baseCheckout,
+      baseDirty,
+      mergeBase: '',
+      stats: { additions: 0, deletions: 0 },
+      commits: [],
+      uncommittedPaths: [],
+      uncountedUntracked: 0,
+      branchDeleted: true,
+    };
+  }
+  const mergeBase = (await readGit(project, ['merge-base', '--end-of-options', info.base, info.branch])).trim();
+  const range = `${mergeBase}..${info.branch}`;
+  const [status, numstat] = await Promise.all([
+    readGitBuffer(project, ['diff', ...DIFF_READ, '-M', '--name-status', '-z', '--end-of-options', range]),
+    readGitBuffer(project, ['diff', ...DIFF_READ, '-M', '--numstat', '-z', '--end-of-options', range]),
+  ]);
+  const counts = parseNumstat(numstat);
+  const files = joinDiffFiles(parseNameStatusZ(status), counts);
+  const commits = parseCommits(
+    await readGit(project, [
+      'log',
+      '-n',
+      String(MAX_COMMITS),
+      '--format=%H%x00%s%x00%an%x00%aI',
+      '--end-of-options',
+      range,
+    ]),
+  );
+  const patch =
+    options.patch === false ? '' : await readGit(project, ['diff', ...DIFF_READ, '--end-of-options', range]);
+  return {
+    patch,
+    files,
+    uncommitted: false,
+    baseCheckout,
+    baseDirty,
+    mergeBase,
+    stats: sumStats(files),
+    commits,
+    uncommittedPaths: [],
+    uncountedUntracked: 0,
+  };
 }
 
 /**
@@ -840,6 +909,7 @@ export async function worktreeDiff(
 ): Promise<WorktreeDiff> {
   return withGitState(projectPath, async () => {
     await assertRevisions(projectPath, [info.base, info.branch]);
+    if (info.removedAt) return branchOnlyDiff(projectPath, info, options);
     const worktree = await checkoutReader(projectPath, info.path);
     const project = await readerAt(projectPath);
     const mergeBase = (
@@ -1078,12 +1148,15 @@ export async function mergeWorktree(
   if (baseCheckout === null) return { ok: false, reason: 'base_not_checked_out', files: [] };
 
   // Обе копии — до любого git в них: база бывает веткой родителя, то есть его worktree.
-  const own = await pinnedCheckout(projectPath, info.path);
+  // Копию убрала уборка — своей копии нет, сливается одна ветка.
+  const own = info.removedAt ? null : await pinnedCheckout(projectPath, info.path);
   const base = await pinnedCheckout(projectPath, baseCheckout);
   const prefix = await projectPrefix(await readerAt(projectPath));
   if (await isDirty(await readerAt(base.cwd, base.pin), prefix)) return { ok: false, reason: 'base_dirty', files: [] };
 
-  if (await isDirty(await readerAt(own.cwd, own.pin), prefix)) return { ok: false, reason: 'uncommitted', files: [] };
+  if (own !== null && (await isDirty(await readerAt(own.cwd, own.pin), prefix))) {
+    return { ok: false, reason: 'uncommitted', files: [] };
+  }
 
   const inBase = [...NO_FSMONITOR, '-C', base.cwd, ...base.pin];
   try {
@@ -1115,6 +1188,13 @@ export async function discardWorktree(
   // Ветка из карты — проверка раньше `worktree remove`: иначе каталог уже
   // удалён, а `branch -D` с флагом вместо имени падает на полпути.
   await assertRevisions(projectPath, [info.branch]);
+  if (info.removedAt) {
+    // Копии нет: остаётся ветка, если её не удалила уборка.
+    if (await branchExists(projectPath, info.branch)) {
+      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+    }
+    return;
+  }
   // Подменённый `.git` — не отбрасываем: `worktree remove` и так откажет, а проверка
   // чистоты ниже запустила бы git в копии агента.
   const own = await pinnedCheckout(projectPath, info.path);
