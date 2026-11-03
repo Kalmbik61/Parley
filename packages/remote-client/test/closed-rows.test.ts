@@ -60,7 +60,7 @@ describe('A43: work rows hide closed and archived like the window', () => {
     // An archived room: the active member is an ordinary row, the sleeping one is not; the room itself is under the link.
     expect(rows).not.toContain('arch-sleeping');
     expect(rows).not.toContain('r-arch');
-    expect(v.archivedRooms.map((r) => r.id)).toEqual(['r-arch']);
+    expect(v.archivedRooms.map((r) => r.room.id)).toEqual(['r-arch']);
   });
 
   it('a closed room member is not in the open room row, an open one is', () => {

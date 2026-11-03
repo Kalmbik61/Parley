@@ -48,7 +48,7 @@ export default function WorkScreen() {
       session: (s) => attentionOf(env, s) === 'needs-you',
       room: (r) => r.room.proposal !== null,
     });
-    const links = <ClosedLinks view={view} storeKey={storeKey} expansion={expansion} onOpenRoom={env.actions.openRoom} />;
+    const links = <ClosedLinks closedCount={view.closedCount} archivedRooms={view.archivedRooms} storeKey={storeKey} expansion={expansion} onOpenRoom={env.actions.openRoom} />;
     if (teams.length === 0) return view.closedCount > 0 || view.archivedRooms.length > 0 ? links : <EmptyState icon="person.2" title="No sessions yet" />;
     // Single sessions that follow each other share one card.
     const out: Array<{ key: string; singles?: Team[]; team?: Team }> = [];

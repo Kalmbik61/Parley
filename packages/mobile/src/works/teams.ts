@@ -39,6 +39,41 @@ export interface NeedsYouOf {
   room(row: Extract<WorkRow, { kind: 'room' }>): boolean;
 }
 
+/**
+ * Counts of a set of rows: agents (sessions, room members, swarm members that still exist, each once), rooms, swarms.
+ * The team header and the Team sheet count the same way. `extraAgent` — a session that heads the rows but is not among them.
+ */
+export function countRows(rows: readonly WorkRow[], extraAgent?: string): TeamCounts {
+  const agents = new Set<string>(extraAgent === undefined ? [] : [extraAgent]);
+  let rooms = 0;
+  let swarms = 0;
+  for (const row of rows) {
+    if (row.kind === 'session') agents.add(row.session.id);
+    else if (row.kind === 'room') {
+      rooms++;
+      for (const m of row.members) agents.add(m.id);
+    } else {
+      swarms++;
+      for (const m of row.members) if (m.session !== null) agents.add(m.session.id);
+    }
+  }
+  return { agents: agents.size, rooms, swarms };
+}
+
+/** Closed sessions among the rows (session rows, room members, swarm members), each once: what "N more closed" would add. */
+export function closedIn(rows: readonly WorkRow[]): number {
+  const closed = new Set<string>();
+  const add = (s: RemoteSession | null): void => {
+    if (s !== null && s.lifecycle === 'closed') closed.add(s.id);
+  };
+  for (const row of rows) {
+    if (row.kind === 'session') add(row.session);
+    else if (row.kind === 'room') row.members.forEach(add);
+    else row.members.forEach((m) => add(m.session));
+  }
+  return closed.size;
+}
+
 export function buildTeams(rows: readonly WorkRow[], needs: NeedsYouOf): Team[] {
   const seen = new Set<string>();
   const groups: WorkRow[][] = [];
@@ -60,31 +95,21 @@ export function buildTeams(rows: readonly WorkRow[], needs: NeedsYouOf): Team[] 
       const owner = [...all.slice(0, firstCut)].reverse().find((x) => x.row.kind === 'session' && x.depth === MAX_DEPTH);
       if (owner?.row.kind === 'session') more = { count: cut.length, underSessionId: owner.row.session.id, underLabel: owner.row.session.label };
     }
-    const agents = new Set<string>();
-    let rooms = 0;
-    let swarms = 0;
+    const counts = countRows([head, ...all.map((x) => x.row)]);
     let needsYou = 0;
     for (const { row } of [{ row: head }, ...all]) {
       if (row.kind === 'session') {
-        agents.add(row.session.id);
         if (needs.session(row.session)) needsYou++;
       } else if (row.kind === 'room') {
-        rooms++;
-        for (const m of row.members) {
-          agents.add(m.id);
-          if (needs.session(m)) needsYou++;
-        }
+        for (const m of row.members) if (needs.session(m)) needsYou++;
         if (needs.room(row)) needsYou++;
-      } else {
-        swarms++;
-        for (const m of row.members) if (m.session !== null) agents.add(m.session.id);
       }
     }
     return {
       id: rowId(head),
       head,
       children: shown,
-      counts: { agents: agents.size, rooms, swarms },
+      counts,
       needsYou,
       more,
       single: head.kind === 'session' && g.length === 1,
@@ -105,8 +130,16 @@ export function subtreeOf(rows: readonly WorkRow[], sessionId: string): Array<{ 
   const at = rows.findIndex((r) => r.kind === 'session' && r.session.id === sessionId);
   if (at < 0) return [];
   const base = rows[at]!.depth;
+  // By `parent`, like `buildTeams`: a row indented under the session but whose parent is not shown (a hidden closed parent)
+  // is not in its team, so the sheet and the team header count the same rows.
+  const inside = new Set<string>([sessionId]);
   const out: Array<{ row: WorkRow; depth: number }> = [];
-  for (let i = at + 1; i < rows.length && rows[i]!.depth > base; i++) out.push({ row: rows[i]!, depth: rows[i]!.depth - base });
+  for (let i = at + 1; i < rows.length && rows[i]!.depth > base; i++) {
+    const row = rows[i]!;
+    if (row.parent === null || !inside.has(row.parent)) continue;
+    inside.add(rowId(row));
+    out.push({ row, depth: row.depth - base });
+  }
   return out;
 }
 

@@ -66,7 +66,7 @@ describe('Works view', () => {
     expect(roomRow?.kind === 'room' && roomRow.members.map((s) => s.id)).toEqual(['s-in-room']);
     const swarmRow = view?.rows.find((r) => r.kind === 'swarm' && r.swarm.id === 'sw-1');
     expect(swarmRow?.kind === 'swarm' && swarmRow.members.map((m) => m.member.sessionId)).toEqual(['s-q', 's-d']);
-    expect(view?.archivedRooms.map((r) => r.id)).toEqual(['r-arch']);
+    expect(view?.archivedRooms.map((r) => r.room.id)).toEqual(['r-arch']);
   });
 
   it('рои прячутся как isSwarmShown: законченный виден, пока не просмотрен', () => {

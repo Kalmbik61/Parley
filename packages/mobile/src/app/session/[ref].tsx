@@ -49,7 +49,7 @@ import { ClosedLinks } from '../../works/ClosedLinks';
 import { useExpansion } from '../../works/closed-store';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
-import { subtreeOf, teamLine } from '../../works/teams';
+import { closedIn, countRows, subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
@@ -312,7 +312,10 @@ export default function SessionScreen() {
     },
   };
   const team = subtreeOf(view.rows, session.id);
-  const counts = { agents: 1 + team.filter((x) => x.row.kind === 'session').length + team.reduce((n, x) => n + (x.row.kind === 'room' ? x.row.members.length : x.row.kind === 'swarm' ? x.row.members.length : 0), 0), rooms: team.filter((x) => x.row.kind === 'room').length, swarms: team.filter((x) => x.row.kind === 'swarm').length };
+  const counts = countRows(team.map((x) => x.row), session.id);
+  // "N more closed" in the sheet: closed sessions under this session only (what expanding adds here), from the full tree.
+  const closedUnder = closedIn(subtreeOf(selectWork(state, ref, { showClosed: true })?.rows ?? [], session.id).map((x) => x.row));
+
   const sleeping = session.lifecycle === 'sleeping';
   const blockedNoCard = first === undefined && attention === 'needs-you' && need?.kind !== 'limit' && need?.kind !== 'sign-in' && !loading;
   const mode = composerMode({
@@ -585,7 +588,7 @@ export default function SessionScreen() {
             <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
               <TreeRows rows={team} env={{ ...env, actions: { openSession: (id) => { setTeamOpen(false); env.actions.openSession(id); }, openDecision: (r, p) => { setTeamOpen(false); env.actions.openDecision(r, p); }, openRoom: (r) => { setTeamOpen(false); env.actions.openRoom(r); } } }} />
             </View>
-            <ClosedLinks view={view} storeKey={expandKey} expansion={expansion} onOpenRoom={() => undefined} only="closed" />
+            <ClosedLinks closedCount={closedUnder} archivedRooms={[]} storeKey={expandKey} expansion={expansion} onOpenRoom={() => undefined} />
           </ScrollView>
         </View>
       </Modal>

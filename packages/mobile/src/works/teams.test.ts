@@ -10,7 +10,7 @@ const sess = (id: string): RemoteSession => ({
 const row = (id: string, depth: number, parent: string | null): WorkRow => ({ kind: 'session', session: sess(id), depth, parent, attention: 'idle', live: null });
 const room = (id: string, depth: number, parent: string | null, members: string[]): WorkRow => ({
   kind: 'room', room: { id, title: id, members, lead: null, ownerId: parent, mode: 'free', archived: false, proposal: null, messages: null } as RemoteRoom,
-  depth, parent, members: members.map(sess), archived: false,
+  depth, parent, members: members.map(sess), sessions: members.map(sess), archived: false,
 });
 const needs = { session: (s: RemoteSession) => s.id === 'w', room: () => false };
 

@@ -1,0 +1,509 @@
+{
+  "comment": "One map (window WindowWorkMap shape) and what the window (cardRows/archivedRows/closedCount) gives on it. Checked by desktop sidebar/card-parity.test.ts, remote-client test/window-parity.test.ts and mobile works/closed-rows.test.ts. rows: kind:id[members]@depth^parent. teamCounts are the phone team headers (agents a, rooms r, swarms w).",
+  "map": {
+    "work": {
+      "id": "w-1",
+      "title": "Parity",
+      "status": "active"
+    },
+    "sessions": [
+      {
+        "id": "lead",
+        "label": "lead",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "result": null
+      },
+      {
+        "id": "worker",
+        "label": "worker",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": "lead",
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:01:00.000Z",
+        "result": null
+      },
+      {
+        "id": "old",
+        "label": "old",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": "lead",
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:02:00.000Z",
+        "result": null
+      },
+      {
+        "id": "under-closed-parent",
+        "label": "under-closed-parent",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": "old",
+        "createdBy": null,
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:03:00.000Z",
+        "result": null
+      },
+      {
+        "id": "anchor",
+        "label": "anchor",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": "lead",
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:04:00.000Z",
+        "result": null
+      },
+      {
+        "id": "m-closed",
+        "label": "m-closed",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:05:00.000Z",
+        "result": null
+      },
+      {
+        "id": "m-open",
+        "label": "m-open",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:06:00.000Z",
+        "result": null
+      },
+      {
+        "id": "cc",
+        "label": "cc",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": "lead",
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:07:00.000Z",
+        "result": null
+      },
+      {
+        "id": "cc-kid",
+        "label": "cc-kid",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": "cc",
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:08:00.000Z",
+        "result": null
+      },
+      {
+        "id": "a-active",
+        "label": "a-active",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:09:00.000Z",
+        "result": null
+      },
+      {
+        "id": "a-pending",
+        "label": "a-pending",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "pending",
+        "history": [],
+        "startedAt": "2026-11-01T00:10:00.000Z",
+        "result": null
+      },
+      {
+        "id": "a-sleeping",
+        "label": "a-sleeping",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "sleeping",
+        "history": [],
+        "startedAt": "2026-11-01T00:11:00.000Z",
+        "result": null
+      },
+      {
+        "id": "a-closed",
+        "label": "a-closed",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:12:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-cancelled",
+        "label": "sq-cancelled",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:13:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-seen",
+        "label": "sq-seen",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:14:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-unseen-done",
+        "label": "sq-unseen-done",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "sleeping",
+        "history": [],
+        "startedAt": "2026-11-01T00:15:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-unseen-failed",
+        "label": "sq-unseen-failed",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "sleeping",
+        "history": [],
+        "startedAt": "2026-11-01T00:16:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-run",
+        "label": "sq-run",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "active",
+        "history": [],
+        "startedAt": "2026-11-01T00:17:00.000Z",
+        "result": null
+      },
+      {
+        "id": "sq-cc",
+        "label": "sq-cc",
+        "provider": "claude",
+        "model": null,
+        "role": null,
+        "parent": null,
+        "createdBy": null,
+        "lifecycle": "closed",
+        "history": [],
+        "startedAt": "2026-11-01T00:18:00.000Z",
+        "result": null
+      }
+    ],
+    "rooms": [
+      {
+        "id": "r-open",
+        "title": "r-open",
+        "creator": "human",
+        "ownerId": "anchor",
+        "members": [
+          "anchor",
+          "m-closed",
+          "m-open"
+        ],
+        "createdAt": "2026-11-01T01:59:00.000Z",
+        "lead": null,
+        "proposal": null,
+        "archivedAt": null,
+        "mode": "free"
+      },
+      {
+        "id": "r-arch",
+        "title": "r-arch",
+        "creator": "human",
+        "ownerId": null,
+        "members": [
+          "a-active",
+          "a-pending",
+          "a-sleeping",
+          "a-closed",
+          "ghost-member"
+        ],
+        "createdAt": "2026-11-01T02:00:00.000Z",
+        "lead": null,
+        "proposal": null,
+        "archivedAt": "2026-11-01T03:20:00.000Z",
+        "mode": "free"
+      }
+    ],
+    "swarms": [
+      {
+        "id": "sw-cancelled",
+        "tag": "sw-cancelled",
+        "creator": {
+          "kind": "session",
+          "sessionId": "lead"
+        },
+        "objective": "",
+        "queen": "sq-cancelled",
+        "members": [
+          {
+            "sessionId": "sq-cancelled",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "cancelled",
+        "createdAt": "2026-11-01T05:21:00.000Z",
+        "endedAt": "2026-11-01T06:40:00.000Z",
+        "result": null,
+        "seenAt": null
+      },
+      {
+        "id": "sw-seen",
+        "tag": "sw-seen",
+        "creator": {
+          "kind": "session",
+          "sessionId": "lead"
+        },
+        "objective": "",
+        "queen": "sq-seen",
+        "members": [
+          {
+            "sessionId": "sq-seen",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "done",
+        "createdAt": "2026-11-01T05:22:00.000Z",
+        "endedAt": "2026-11-01T06:40:00.000Z",
+        "result": null,
+        "seenAt": "2026-11-01T08:20:00.000Z"
+      },
+      {
+        "id": "sw-unseen-done",
+        "tag": "sw-unseen-done",
+        "creator": {
+          "kind": "session",
+          "sessionId": "lead"
+        },
+        "objective": "",
+        "queen": "sq-unseen-done",
+        "members": [
+          {
+            "sessionId": "sq-unseen-done",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "done",
+        "createdAt": "2026-11-01T05:23:00.000Z",
+        "endedAt": "2026-11-01T06:40:00.000Z",
+        "result": null,
+        "seenAt": null
+      },
+      {
+        "id": "sw-unseen-failed",
+        "tag": "sw-unseen-failed",
+        "creator": {
+          "kind": "session",
+          "sessionId": "lead"
+        },
+        "objective": "",
+        "queen": "sq-unseen-failed",
+        "members": [
+          {
+            "sessionId": "sq-unseen-failed",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "failed",
+        "createdAt": "2026-11-01T05:24:00.000Z",
+        "endedAt": "2026-11-01T06:40:00.000Z",
+        "result": null,
+        "seenAt": null
+      },
+      {
+        "id": "sw-run",
+        "tag": "sw-run",
+        "creator": {
+          "kind": "session",
+          "sessionId": "lead"
+        },
+        "objective": "",
+        "queen": "sq-run",
+        "members": [
+          {
+            "sessionId": "sq-run",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          },
+          {
+            "sessionId": "deleted-drone",
+            "role": "drone",
+            "n": 1,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "running",
+        "createdAt": "2026-11-01T05:25:00.000Z",
+        "endedAt": null,
+        "result": null,
+        "seenAt": null
+      },
+      {
+        "id": "sw-cc",
+        "tag": "sw-cc",
+        "creator": {
+          "kind": "session",
+          "sessionId": "cc"
+        },
+        "objective": "",
+        "queen": "sq-cc",
+        "members": [
+          {
+            "sessionId": "sq-cc",
+            "role": "queen",
+            "n": 0,
+            "addedAt": "2026-11-01T00:01:00.000Z",
+            "handedAt": null
+          }
+        ],
+        "status": "running",
+        "createdAt": "2026-11-01T05:26:00.000Z",
+        "endedAt": null,
+        "result": null,
+        "seenAt": null
+      }
+    ],
+    "messages": []
+  },
+  "expected": {
+    "closedCount": 8,
+    "teamCounts": {
+      "false": [
+        "lead:7a1r3w",
+        "under-closed-parent:1a0r0w",
+        "cc-kid:1a0r0w",
+        "a-active:1a0r0w",
+        "a-pending:1a0r0w",
+        "sw-cc:1a0r1w"
+      ],
+      "true": [
+        "lead:15a1r6w",
+        "a-active:1a0r0w",
+        "a-pending:1a0r0w"
+      ]
+    },
+    "false": {
+      "rows": [
+        "session:lead@0^null",
+        "swarm:sw-unseen-done@1^lead",
+        "swarm:sw-unseen-failed@1^lead",
+        "swarm:sw-run@1^lead",
+        "session:worker@1^lead",
+        "session:anchor@1^lead",
+        "room:r-open[m-open]@2^anchor",
+        "session:under-closed-parent@1^old",
+        "session:cc-kid@0^null",
+        "session:a-active@0^null",
+        "session:a-pending@0^null",
+        "swarm:sw-cc@0^null"
+      ],
+      "archived": [
+        "r-arch[a-sleeping,a-closed]"
+      ]
+    },
+    "true": {
+      "rows": [
+        "session:lead@0^null",
+        "swarm:sw-cancelled@1^lead",
+        "swarm:sw-seen@1^lead",
+        "swarm:sw-unseen-done@1^lead",
+        "swarm:sw-unseen-failed@1^lead",
+        "swarm:sw-run@1^lead",
+        "session:worker@1^lead",
+        "session:old@1^lead",
+        "session:anchor@1^lead",
+        "room:r-open[anchor,m-closed,m-open]@2^anchor",
+        "session:cc@1^lead",
+        "swarm:sw-cc@2^cc",
+        "session:cc-kid@2^cc",
+        "session:under-closed-parent@1^old",
+        "session:a-active@0^null",
+        "session:a-pending@0^null"
+      ],
+      "archived": [
+        "r-arch[a-sleeping,a-closed]"
+      ]
+    }
+  }
+}
