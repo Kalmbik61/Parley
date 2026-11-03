@@ -31,7 +31,7 @@ import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-re
 import { parseSessionParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { spacing, typography, useColors } from '../../theme';
-import { barBack, BarSymbol, barRight } from '../../ui/bar';
+import { BAR_STRIP_HEIGHT, barBack, BarStrip, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
 import { Button } from '../../ui/Button';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
@@ -56,7 +56,7 @@ function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule |
       {status !== '' && (
         <View style={styles.statusLine}>
           <View style={[styles.dot, { backgroundColor: tone }]} />
-          <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: capsule?.tone === 'needsYou' ? c.needsYou : c.label2 }]}>
+          <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.barSubtitle }]}>
             {status}
           </Text>
         </View>
@@ -67,6 +67,7 @@ function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule |
 
 export default function SessionScreen() {
   const c = useColors();
+  const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { ref: param, fresh } = useLocalSearchParams<{ ref: string; fresh?: string }>();
@@ -285,17 +286,7 @@ export default function SessionScreen() {
   const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
       {strip !== null && (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={strip.text}
-          onPress={() => list.current?.scrollToEnd({ animated: true })}
-          style={[styles.strip, { top: insets.top + 44, backgroundColor: c.warningBg }]}
-        >
-          <SymbolView name={strip.icon} size={16} tintColor={c.needsYou} />
-          <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
-            {strip.text}
-          </Text>
-        </Pressable>
+        <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} top={insets.top + 44} onPress={() => list.current?.scrollToEnd({ animated: true })} />
       )}
       <FlatList
         ref={list}
@@ -307,7 +298,7 @@ export default function SessionScreen() {
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[styles.list, strip !== null && { paddingTop: 44 }]}
+        contentContainerStyle={[styles.list, strip !== null && { paddingTop: BAR_STRIP_HEIGHT + 4 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
@@ -395,8 +386,7 @@ export default function SessionScreen() {
           title: session.label,
           headerTitle: () => <HeaderTitle name={session.label} capsule={capsule} meta={subtitle} />,
           ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={menu} />),
-          headerTransparent: Platform.OS === 'ios',
-          headerBlurEffect: 'systemChromeMaterial',
+          ...material,
         }}
       />
       <Modal visible={teamOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTeamOpen(false)}>
@@ -460,7 +450,6 @@ const styles = StyleSheet.create({
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   jump: { position: 'absolute', alignSelf: 'center', bottom: 90, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
-  strip: { position: 'absolute', left: 0, right: 0, zIndex: 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 36 },
   bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12 },
   teamRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 28 },

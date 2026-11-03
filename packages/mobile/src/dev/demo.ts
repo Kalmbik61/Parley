@@ -66,6 +66,8 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   act(ref('d1'), 'blocked', { kind: 'approval', since: ago(2), detail: null, resetsAt: null, window: null, account: null });
   act(ref('a13'), 'blocked', { kind: 'question', since: ago(5), detail: null, resetsAt: null, window: null, account: null });
   act(ref('greta'), 'unseen');
+  // A35d: needs you with no card on screen — the "Answer at your Mac" strip under the bar.
+  act(ref('solo'), 'blocked', { kind: 'approval', since: ago(3), detail: null, resetsAt: null, window: null, account: null });
   act(ref('drone1'), 'working');
   const letter = (id: string, from: string, text: string, min: number, read: boolean) =>
     ({ id, roomId: null, from, to: ['human'], at: ago(min), text, kind: 'note', readBy: read ? { human: ago(min - 1) } : {} }) as never;
@@ -104,7 +106,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
     { kind: 'text', id: 'f8', at: at(3), messageId: 'm2', streaming: true, text: "I'll run the linter first, then the build." },
   ] as never[];
-  for (const id of ['greta', 'drone1']) {
+  for (const id of ['greta', 'drone1', 'solo']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
   }
@@ -184,6 +186,8 @@ export function demoRoute(name: unknown): string | null {
       return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':
       return s('greta');
+    case 'session-strip':
+      return s('solo');
     case 'chat':
       return s('drone1');
     case 'room':
