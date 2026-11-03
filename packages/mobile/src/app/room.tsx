@@ -21,9 +21,11 @@ import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
 import { ResultSheet } from '../room/ResultSheet';
 import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
-import { roomRuns } from '../room/room-runs';
+import { roomRuns, runKeyOf } from '../room/room-runs';
+import { useRuntimeState } from '../runtime/use-runtime';
 import { useRoomChat } from '../room/use-room-chat';
 import { haptic } from '../haptics';
+import { RECONNECTING } from '../feed/session-menu';
 import { typography, useColors } from '../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
 import { Button } from '../ui/Button';
@@ -52,7 +54,8 @@ export default function RoomScreen() {
   const [away, setAway] = useState(0);
   const chat = useRoomChat(target, toast.show);
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
-  const runKey = target === null ? '' : roomKey(target);
+  const hostId = useRuntimeState().host?.hostId ?? null;
+  const runKey = target === null ? '' : runKeyOf(hostId, target);
   const run = useSyncExternalStore(roomRuns.subscribe, () => roomRuns.get(runKey), () => roomRuns.get(runKey));
   const covered = useCovered();
   const focused = useIsFocused();
@@ -156,7 +159,12 @@ export default function RoomScreen() {
   };
   // Face ID first, then the call, in the room's single slot. Cancelled: nothing is sent and nothing is said.
   const ownerThen = async (kind: 'archive' | 'delete', send: () => Promise<SessionCommandOutcome>): Promise<void> => {
-    const res = await roomRuns.hold(runKey, kind, () => ownerGate(() => confirmByOwner(FACE_ID_PROMPT[kind]), send));
+    // Offline now (the connection dropped while a sheet was up): no slot, no Face ID.
+    if (factsRef.current?.online !== true) {
+      toast.show(RECONNECTING);
+      return;
+    }
+    const res = await roomRuns.hold(runKey, kind, () => ownerGate(async () => (factsRef.current?.online === true ? confirmByOwner(FACE_ID_PROMPT[kind]) : 'cancelled'), send));
     if (!res.started || res.value.kind === 'silent') return;
     if (res.value.kind === 'toast') {
       toast.show(res.value.text);
@@ -446,7 +454,7 @@ export default function RoomScreen() {
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
       {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
-      <Modal visible={run.unseen !== null && !covered} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+      <Modal visible={run.unseen !== null && !covered && focused} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
         {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
       </Modal>
     </View>

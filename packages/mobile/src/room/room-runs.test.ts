@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createRoomRuns } from './room-runs';
+import { createRoomRuns, runKeyOf } from './room-runs';
 
 const T = [
   { id: 'a', label: 'Alpha' },
@@ -51,6 +51,23 @@ describe('room runs', () => {
     const runs = createRoomRuns();
     await expect(runs.hold('r', 'delete', async () => Promise.reject(new Error('x')))).rejects.toThrow('x');
     expect(runs.get('r').pending).toBeNull();
+  });
+});
+
+describe('two Macs', () => {
+  const room = { projectPath: '/Users/me/parley', workId: 'w-0001', roomId: 'r-01' };
+  it('the same room id on two hosts shares neither the slot nor the result', async () => {
+    const runs = createRoomRuns();
+    const a = runKeyOf('host-a', room);
+    const b = runKeyOf('host-b', room);
+    expect(a).not.toBe(b);
+    runs.seedPending(a, { kind: 'wake', done: 1, total: 4 });
+    expect(runs.get(b).pending).toBeNull();
+    expect(await runs.hold(b, 'archive', async () => 1)).toEqual({ started: true, value: 1 });
+    await runs.run(a.replace('host-a', 'host-c'), 'sleep', T, async () => ({ outcome: 'lost' }));
+    expect(runs.get(runKeyOf('host-c', room)).unseen).not.toBeNull();
+    expect(runs.get(a).unseen).toBeNull();
+    expect(runs.get(b).unseen).toBeNull();
   });
 });
 

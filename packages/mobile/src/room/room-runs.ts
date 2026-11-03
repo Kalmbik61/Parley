@@ -2,7 +2,7 @@
 // Wake all, Archive, Delete — including the Face ID wait), the progress of a run, and its result until somebody has seen it.
 // Leaving the screen does not stop a run; coming back shows the progress, and an unseen result with failures opens its sheet.
 // No React: the screen reads it with `useSyncExternalStore`.
-import type { SessionCommandOutcome } from '@parley/remote-client';
+import { roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
 import { runAll, runSummary, type Pending, type PendingKind, type RunResult } from './room-menu';
 
 export interface Unseen {
@@ -15,6 +15,12 @@ export interface RoomRunState {
   /** A finished run with failures, not yet closed by the person. */
   unseen: Unseen | null;
 }
+
+/**
+ * The store key: the Mac too. Work and room ids are sequential and `projectPath` can be the same on two Macs, so a room
+ * key alone would show one Mac's run and result in the other Mac's room (critic A41b M5).
+ */
+export const runKeyOf = (hostId: string | null, room: RoomRef): string => `${hostId ?? ''}\u0000${roomKey(room)}`;
 
 const EMPTY: RoomRunState = { pending: null, unseen: null };
 
