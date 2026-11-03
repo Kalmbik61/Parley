@@ -468,8 +468,16 @@ export default function SessionScreen() {
           <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
+      <View style={styles.flex}>
+        {!follow.revealed && rows.length > 0 && (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+            <Skeleton rows={3} />
+          </View>
+        )}
       <FlatList
         ref={list}
+        style={{ opacity: follow.revealed || rows.length === 0 ? 1 : 0 }}
+        accessibilityElementsHidden={!follow.revealed && rows.length > 0}
         data={rows}
         keyExtractor={rowKey}
         {...follow.handlers}
@@ -528,6 +536,7 @@ export default function SessionScreen() {
           </View>
         }
       />
+      </View>
       {follow.away > 0 && (
         <View pointerEvents="box-none" style={styles.jumpAnchor}>
         <Pressable

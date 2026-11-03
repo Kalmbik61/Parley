@@ -12,6 +12,9 @@
 
 export const PIN_QUIET_MS = 500;
 export const PIN_MAX_MS = 3000;
+/** A44b: the feed stays invisible while the pin works; it shows after one frame without growth, at the latest after this. */
+export const REVEAL_FRAME_MS = 32;
+export const REVEAL_CAP_MS = 600;
 export const NEAR_BOTTOM = 80;
 /** A scroll event this soon after a size change is the echo of that change. */
 export const GROWTH_ECHO_MS = 150;
@@ -27,6 +30,8 @@ export interface ScrollMetrics {
 export interface FollowState {
   /** Following the end without looking at the position, until the first render settles. */
   readonly pinned: boolean;
+  /** A44b: the list is visible. False from the open until the pin has brought it to the end and the height settled. */
+  readonly revealed: boolean;
   readonly atBottom: boolean;
   /** A finger is on the feed (drag begin … drag end). */
   readonly touching: boolean;
@@ -70,7 +75,7 @@ export function countAfter(keys: readonly string[], seenKey: string | null, prev
 
 export function open(): FollowState {
   return {
-    pinned: true, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
+    pinned: true, revealed: false, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
     echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, pendingGrowth: false, seenKey: null, away: 0,
   };
 }
@@ -83,20 +88,38 @@ function evaluate(s: FollowState, m: ScrollMetrics, keys: readonly string[]): Fo
   return nearBottom(m) ? { ...s, atBottom: true, seenKey: last(keys), away: 0 } : { ...s, atBottom: false };
 }
 
-/** The content height changed or items were added. */
-export function contentChanged(s: FollowState, now: number, keys: readonly string[]): Step {
+/** The content height changed or items were added. `content`: the new content height, when known (a feed that fits the window needs no scroll and shows at once). */
+export function contentChanged(s: FollowState, now: number, keys: readonly string[], content?: number): Step {
   if (keys.length === 0) return { state: { ...s, hadRows: false }, scroll: 'none' };
   // The pin starts (or restarts) at the first change that has real rows, not at mount: a skeleton does not count.
   const first = !s.hadRows;
   const base: FollowState = first
     ? { ...s, hadRows: true, pinned: !s.touching, openedAt: now, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS }
     : { ...s, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS };
+  const fits = content !== undefined && base.layoutHeight !== null && content <= base.layoutHeight;
+  const shown: FollowState = fits ? { ...base, revealed: true } : base;
+  return follow(shown, now, keys, first);
+}
+
+function follow(base: FollowState, now: number, keys: readonly string[], first: boolean): Step {
   if (base.pinned || base.atBottom) {
     const following: FollowState = { ...base, seenKey: last(keys), away: 0 };
     if (humanBusy(following)) return { state: { ...following, pendingGrowth: true }, scroll: 'none' };
     return issue(following, now, first || following.pinned ? 'instant' : 'animated');
   }
   return { state: { ...base, away: countAfter(keys, base.seenKey, base.away) }, scroll: 'none' };
+}
+
+/** Time passed: the feed shows after one frame without growth, or at the cap since the first real data. A skeleton-only phase has no `openedAt`, so it starts nothing. */
+export function revealCheck(s: FollowState, now: number): FollowState {
+  if (s.revealed || !s.hadRows || s.openedAt === null) return s;
+  return now - s.lastGrowthAt >= REVEAL_FRAME_MS || now - s.openedAt >= REVEAL_CAP_MS ? { ...s, revealed: true } : s;
+}
+
+/** Milliseconds until the feed may be revealed; null when it is shown or has no rows yet. */
+export function revealDeadline(s: FollowState, now: number): number | null {
+  if (s.revealed || !s.hadRows || s.openedAt === null) return null;
+  return Math.max(0, Math.min(s.lastGrowthAt + REVEAL_FRAME_MS, s.openedAt + REVEAL_CAP_MS) - now);
 }
 
 /** Time passed: the pin ends after a quiet spell or at the cap. */
@@ -127,7 +150,7 @@ export function scrolled(s: FollowState, m: ScrollMetrics, now: number, keys: re
 
 /** A finger went down: the pin ends and nothing scrolls the feed until it lifts. */
 export function dragBegan(s: FollowState): FollowState {
-  return { ...s, pinned: false, touching: true, momentum: false };
+  return { ...s, pinned: false, revealed: true, touching: true, momentum: false };
 }
 
 /** The finger lifted. With momentum the human's scroll goes on until `momentumEnded`. */

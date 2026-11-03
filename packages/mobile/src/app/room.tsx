@@ -344,8 +344,16 @@ export default function RoomScreen() {
             )}
           </BarStripStack>
         )}
+        <View style={styles.flex}>
+          {!follow.revealed && data.length > 0 && (
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+              <Skeleton rows={4} />
+            </View>
+          )}
         <FlatList
           ref={list}
+          style={{ opacity: follow.revealed || data.length === 0 ? 1 : 0 }}
+          accessibilityElementsHidden={!follow.revealed && data.length > 0}
           data={data}
           keyExtractor={rowKey}
           {...follow.handlers}
@@ -413,6 +421,7 @@ export default function RoomScreen() {
           }
           onScrollToIndexFailed={() => undefined}
         />
+        </View>
         {follow.away > 0 && (
           <View pointerEvents="box-none" style={styles.jumpAnchor}>
           <Pressable

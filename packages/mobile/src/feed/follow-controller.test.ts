@@ -9,9 +9,10 @@ const middle: ScrollMetrics = { offset: 300, content: 1000, viewport: 100 };
 function setup() {
   const calls: boolean[] = [];
   const away: number[] = [];
-  const c = createFollowController({ scrollToEnd: (a) => calls.push(a), onAway: (n) => away.push(n), now: Date.now });
+  const reveals: number[] = [];
+  const c = createFollowController({ scrollToEnd: (a) => calls.push(a), onAway: (n) => away.push(n), onReveal: () => reveals.push(Date.now()), now: Date.now });
   c.setKeys(K);
-  return { c, calls, away };
+  return { c, calls, away, reveals };
 }
 
 describe('follow controller (A44)', () => {
@@ -129,6 +130,53 @@ describe('follow controller (A44)', () => {
     c.momentumBegin();
     c.momentumEnd(middle);
     expect(c.state().atBottom).toBe(false);
+    c.dispose();
+  });
+
+  it('A44b: the list shows one frame after the last growth, once', () => {
+    const { c, reveals } = setup();
+    c.contentSizeChanged(3000);
+    expect(reveals).toEqual([]);
+    vi.advanceTimersByTime(20);
+    c.contentSizeChanged(3200);
+    vi.advanceTimersByTime(20);
+    expect(reveals).toEqual([]);
+    vi.advanceTimersByTime(20);
+    expect(reveals.length).toBe(1);
+    c.contentSizeChanged(3400);
+    vi.advanceTimersByTime(1000);
+    expect(reveals.length).toBe(1);
+    c.dispose();
+  });
+
+  it('A44b: growth every 20 ms still reveals at the 600 ms cap', () => {
+    const { c, reveals } = setup();
+    for (let t = 0; t < 700; t += 20) {
+      c.contentSizeChanged(3000 + t);
+      vi.advanceTimersByTime(20);
+    }
+    expect(reveals.length).toBe(1);
+    c.dispose();
+  });
+
+  it('A44b: a skeleton-only phase starts no cap; the cap runs from the first real rows', () => {
+    const { c, reveals } = setup();
+    c.setKeys([]);
+    c.contentSizeChanged(200);
+    vi.advanceTimersByTime(5000);
+    expect(reveals).toEqual([]);
+    c.setKeys(K);
+    c.contentSizeChanged(3000);
+    vi.advanceTimersByTime(40);
+    expect(reveals.length).toBe(1);
+    c.dispose();
+  });
+
+  it('A44b: a short feed shows at once, with no wait', () => {
+    const { c, reveals } = setup();
+    c.layout(800);
+    c.contentSizeChanged(500);
+    expect(reveals.length).toBe(1);
     c.dispose();
   });
 });
