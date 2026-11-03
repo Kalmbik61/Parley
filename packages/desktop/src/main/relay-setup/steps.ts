@@ -116,8 +116,11 @@ export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents,
         }
       }
       // Nothing was killed: the command ends on its own and the run stops after it, as for a step that cannot be interrupted.
-      live.interrupted = false;
-      events.cancelling?.();
+      // Only while that command is still the one on the server: not after it ended, not after the final phase.
+      if (live.command === id) {
+        live.interrupted = false;
+        events.cancelling?.();
+      }
     } else if (live.step?.interruptible !== true) events.cancelling?.();
     // An interruptible step between its commands (or in its check) stops by itself at the next check.
   };

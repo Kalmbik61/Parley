@@ -166,6 +166,22 @@ describe('runPlan: cancel', () => {
     expect(outcome.interrupted).toBeUndefined();
   });
 
+  it('«cancelling» is not announced for a command that has already ended when the interrupt reports failure', async () => {
+    const g = gated('pull-1', () => 143);
+    g.s.interrupt = async () => {
+      g.release();
+      await new Promise((r) => setTimeout(r, 5));
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    const cancelling = vi.fn();
+    const handle = createCancelHandle();
+    const running = runPlan(imagePlan, g.s, { step: () => undefined, line: () => undefined, cancelling }, handle);
+    await g.inside;
+    await requestCancel(handle);
+    await running;
+    expect(cancelling).not.toHaveBeenCalled();
+  });
+
   it('a cancel during a check starts no commands', async () => {
     const handle = createCancelHandle();
     const ran: string[] = [];
