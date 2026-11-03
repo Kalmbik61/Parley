@@ -17,7 +17,17 @@ export interface SwarmMemberView {
 
 export type WorkRow =
   | { kind: 'session'; session: RemoteSession; depth: number; parent: string | null; attention: Attention; live: ActivityEntry | null }
-  | { kind: 'room'; room: RemoteRoom; depth: number; parent: string | null; members: RemoteSession[]; archived: boolean }
+  | {
+      kind: 'room';
+      room: RemoteRoom;
+      depth: number;
+      parent: string | null;
+      /** Показанные участники: те, кого сайдбар ставит в эту комнату, без закрытых (при `showClosed` и они). */
+      members: RemoteSession[];
+      /** Все, кого сайдбар ставит в эту комнату, закрытые тоже (`sessions` строки окна): число у архивной строки. */
+      sessions: RemoteSession[];
+      archived: boolean;
+    }
   | { kind: 'swarm'; swarm: RemoteSwarm; depth: number; parent: string | null; members: SwarmMemberView[] };
 
 export interface WorkView {
@@ -28,8 +38,10 @@ export interface WorkView {
   needsYou: number;
   lastEventAt: string;
   rows: WorkRow[];
-  /** Архивные комнаты — под ссылкой «N archived rooms». */
-  archivedRooms: RemoteRoom[];
+  /** Все закрытые сессии работы (число в «N more closed», как `closedCount` карточки окна), не зависит от `showClosed`. */
+  closedCount: number;
+  /** Архивные комнаты строками (как `archivedRows` окна) — под ссылкой «N archived rooms». */
+  archivedRooms: Array<Extract<WorkRow, { kind: 'room' }>>;
 }
 
 export interface ProjectGroup {
@@ -120,12 +132,12 @@ function homeRooms(work: RemoteWork): Map<string, RemoteRoom> {
   const archived = work.rooms.filter((r) => r.archived);
   const known = new Set(work.sessions.map((s) => s.id));
   for (const room of [...open, ...archived]) {
-    for (const id of room.members) if (known.has(id) && !home.has(id)) home.set(id, room);
+    for (const id of new Set(room.members)) if (known.has(id) && !home.has(id)) home.set(id, room);
   }
   return home;
 }
 
-function workRows(state: RemoteState, work: RemoteWork, showClosed: boolean): { rows: WorkRow[]; archivedRooms: RemoteRoom[] } {
+function workRows(state: RemoteState, work: RemoteWork, showClosed: boolean): { rows: WorkRow[]; archivedRooms: Array<Extract<WorkRow, { kind: 'room' }>> } {
   const home = homeRooms(work);
   const byId = new Map(work.sessions.map((s) => [s.id, s]));
   const activeRooms = work.rooms.filter((r) => !r.archived);
@@ -163,7 +175,7 @@ function workRows(state: RemoteState, work: RemoteWork, showClosed: boolean): { 
     }
   };
   const roomRow = (room: RemoteRoom, depth: number, parent: string | null): WorkRow => {
-    const sessions = room.members
+    const sessions = [...new Set(room.members)]
       .map((id) => byId.get(id))
       .filter((s): s is RemoteSession => s !== undefined && home.get(s.id) === room && !(room.archived && staysOnCard(s)));
     return {
@@ -172,6 +184,7 @@ function workRows(state: RemoteState, work: RemoteWork, showClosed: boolean): { 
       depth,
       parent,
       members: sessions.filter((s) => showClosed || s.lifecycle !== 'closed'),
+      sessions,
       archived: room.archived,
     };
   };
@@ -189,7 +202,7 @@ function workRows(state: RemoteState, work: RemoteWork, showClosed: boolean): { 
   for (const room of activeRooms) if (room.ownerId === null || !byId.has(room.ownerId)) pushRoom(room, 0, null);
   pushSwarms(() => true, 0, null);
 
-  const archivedRooms = work.rooms.filter((r) => r.archived);
+  const archivedRooms = work.rooms.filter((r) => r.archived).map((r) => roomRow(r, 0, null) as Extract<WorkRow, { kind: 'room' }>);
   return { rows, archivedRooms };
 }
 
@@ -215,7 +228,9 @@ function workView(state: RemoteState, work: RemoteWork, showClosed: boolean): Wo
     level = 'needs-you';
   }
   const { rows, archivedRooms } = workRows(state, work, showClosed);
-  return { key: workKeyOf(work.projectPath, work.id), work, level, needsYou, lastEventAt, rows, archivedRooms };
+  // Как окно: по `treeOrder` (сессия с замкнутой цепочкой `parent` в дерево не входит и не считается).
+  const closedCount = treeOrder(work.sessions).filter(({ session }) => session.lifecycle === 'closed').length;
+  return { key: workKeyOf(work.projectPath, work.id), work, level, needsYou, lastEventAt, rows, closedCount, archivedRooms };
 }
 
 const tail = (w: RemoteWork): number => (w.status === 'archived' ? 2 : w.status === 'done' ? 1 : 0);
@@ -246,4 +261,13 @@ export function selectWorks(state: RemoteState, options: WorksViewOptions = {}):
     else g.works.push(v);
   }
   return [...groups.values()];
+}
+
+/**
+ * Одна работа по ссылке, в том числе архивная (ссылка из Works открывается всегда). `showClosed` касается только строк
+ * дерева, не выбора работы: по умолчанию закрытые сессии спрятаны, как на карточке окна.
+ */
+export function selectWork(state: RemoteState, ref: { projectPath: string; workId: string }, options: WorksViewOptions = {}): WorkView | null {
+  const work = state.snapshot?.works.find((w) => w.projectPath === ref.projectPath && w.id === ref.workId);
+  return work === undefined ? null : workView(state, work, options.showClosed ?? false);
 }

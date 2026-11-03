@@ -9,7 +9,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FeedItem } from '@parley/core';
-import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
+import { attentionOfSession, selectWork, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
 import { PendingCardActions, PendingCardBody } from '../../cards/CardViews';
@@ -53,9 +53,11 @@ import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial }
 import { Button } from '../../ui/Button';
 import { ReplyPlate } from '../../ui/ReplyPlate';
 import { EmptyState, Skeleton, toneColor } from '../../ui/parts';
+import { ClosedLinks } from '../../works/ClosedLinks';
+import { useExpansion } from '../../works/closed-store';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
-import { subtreeOf, teamLine } from '../../works/teams';
+import { countRows, sheetClosedCount, subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
@@ -153,14 +155,9 @@ export default function SessionScreen() {
     return work !== undefined && session !== undefined ? { work, session } : null;
   }, [state, ref?.projectPath, ref?.workId, ref?.sessionId]);
 
-  const view = useMemo(() => {
-    if (state === null || ref === null) return null;
-    for (const g of selectWorks(state, { showClosed: true })) {
-      const v = g.works.find((w) => w.work.projectPath === ref.projectPath && w.work.id === ref.workId);
-      if (v !== undefined) return v;
-    }
-    return null;
-  }, [state, ref?.projectPath, ref?.workId]);
+  // The same set and the same per-work toggle as the Work screen (A43).
+  const { key: expandKey, expansion } = useExpansion(ref);
+  const view = useMemo(() => (state === null || ref === null ? null : selectWork(state, ref, { showClosed: expansion.closed })), [state, ref?.projectPath, ref?.workId, expansion.closed]);
 
   const feed = state !== null && ref !== null ? state.feeds[sessionKey(ref)] : undefined;
   const items = feed?.items;
@@ -338,7 +335,14 @@ export default function SessionScreen() {
     },
   };
   const team = subtreeOf(view.rows, session.id);
-  const counts = { agents: 1 + team.filter((x) => x.row.kind === 'session').length + team.reduce((n, x) => n + (x.row.kind === 'room' ? x.row.members.length : x.row.kind === 'swarm' ? x.row.members.length : 0), 0), rooms: team.filter((x) => x.row.kind === 'room').length, swarms: team.filter((x) => x.row.kind === 'swarm').length };
+  const counts = countRows(team.map((x) => x.row), session.id);
+  // "N more closed" in the sheet: closed sessions under this session that expanding would add (the full tree minus what is shown).
+  const closedUnder = sheetClosedCount(
+    selectWork(state, ref, { showClosed: false })?.rows ?? [],
+    selectWork(state, ref, { showClosed: true })?.rows ?? [],
+    session.id,
+  );
+
   const sleeping = session.lifecycle === 'sleeping';
   const blockedNoCard = first === undefined && attention === 'needs-you' && need?.kind !== 'limit' && need?.kind !== 'sign-in' && !loading;
   const mode = composerMode({
@@ -629,6 +633,7 @@ export default function SessionScreen() {
             <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
               <TreeRows rows={team} env={{ ...env, actions: { openSession: (id) => { setTeamOpen(false); env.actions.openSession(id); }, openDecision: (r, p) => { setTeamOpen(false); env.actions.openDecision(r, p); }, openRoom: (r) => { setTeamOpen(false); env.actions.openRoom(r); } } }} />
             </View>
+            <ClosedLinks closedCount={closedUnder} archivedRooms={[]} storeKey={expandKey} expansion={expansion} onOpenRoom={() => undefined} />
           </ScrollView>
         </View>
       </Modal>

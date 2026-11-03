@@ -57,6 +57,32 @@ export const demoSnapshot: RemoteWorksSnapshot = {
           members: [{ sessionId: 'queen', role: 'queen', n: 0, handedAt: null }, { sessionId: 'drone1', role: 'drone', n: 1, handedAt: ago(2) }] },
       ],
     },
+    // A43: a work with closed sessions (one owns an open room), a cancelled and a seen done swarm, an archived room with an
+    // active and a sleeping member.
+    {
+      projectPath: P, id: 'w4', title: 'Release audit', status: 'active', messages: { direct: null, inline: 0 },
+      sessions: [
+        sess('au-lead', 'Audit-lead', { role: 'feature-lead' }),
+        sess('au-a', 'Audit-worker 1', { role: 'executor', createdBy: 'au-lead' }),
+        sess('au-old', 'Audit-planner', { role: 'planner', createdBy: 'au-lead', lifecycle: 'closed' as never }),
+        sess('au-own', 'Audit-room-owner', { role: 'architect', createdBy: 'au-lead', lifecycle: 'closed' as never }),
+        sess('au-m1', 'Audit-reviewer', { role: 'reviewer', lifecycle: 'closed' as never }),
+        sess('au-m2', 'Audit-verifier', { role: 'verifier' }),
+        sess('au-act', 'Audit-live-in-archive', { role: 'executor' }),
+        sess('au-sleep', 'Audit-sleeping-in-archive', { role: 'writer', lifecycle: 'sleeping' as never }),
+        sess('au-q1', 'Audit-queen', { lifecycle: 'closed' as never }),
+        sess('au-q2', 'Audit-drone', { lifecycle: 'closed' as never }),
+      ],
+      rooms: [
+        { id: 'ar1', title: 'Audit review', members: ['au-own', 'au-m1', 'au-m2'], lead: 'au-own', ownerId: 'au-own', mode: 'free', archived: false, proposal: null, messages: null },
+        { id: 'ar2', title: 'Old audit round', members: ['au-act', 'au-sleep'], lead: null, ownerId: null, mode: 'free', archived: true, proposal: null, messages: null },
+      ],
+      swarms: [
+        { id: 'sw-c', tag: 'Cancelled sweep', creator: { kind: 'session', sessionId: 'au-lead' }, queen: 'au-q1', status: 'cancelled', createdAt: ago(300), endedAt: ago(250), seenAt: null,
+          members: [{ sessionId: 'au-q1', role: 'queen', n: 0, handedAt: null }, { sessionId: 'au-q2', role: 'drone', n: 1, handedAt: null }] },
+        { id: 'sw-d', tag: 'Done sweep', creator: { kind: 'session', sessionId: 'au-lead' }, queen: 'au-q1', status: 'done', createdAt: ago(200), endedAt: ago(150), seenAt: ago(100), members: [] },
+      ],
+    },
     {
       // A46: one work with a team head in each state word — a sleeping lead with a working and a finished member, a not-started lead.
       projectPath: P, id: 'w3', title: 'Status words', status: 'active', messages: { direct: null, inline: 0 },
@@ -123,6 +149,8 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   act(ref('drone1'), 'working');
   act({ projectPath: P, workId: 'w3', sessionId: 'rk1' }, 'working');
   act({ projectPath: P, workId: 'w3', sessionId: 'rk2' }, 'unseen');
+  // A43: the Release audit work (w4 below) opens its team by default: somebody works.
+  act({ projectPath: P, workId: 'w4', sessionId: 'au-a' }, 'working');
   const letter = (id: string, from: string, text: string, min: number, read: boolean) =>
     ({ id, roomId: null, from, to: ['human'], at: ago(min), text, kind: 'note', readBy: read ? { human: ago(min - 1) } : {} }) as never;
   store.dispatch({
@@ -311,7 +339,7 @@ export function devLateCard(client: RemoteClient, ref: SessionRef): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=question-1|question-2|question-3|a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=question-1|question-2|question-3|a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|work-closed|work-closed-open|work-archived-open|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(raw: unknown): string | null {
   // `a44-session:focus,draft` — the part after the colon is the dev script of dev-script.ts.
   const [name, script] = typeof raw === 'string' ? raw.split(':') : [raw, undefined];
@@ -323,6 +351,10 @@ export function demoRoute(raw: unknown): string | null {
       return '/works';
     case 'work':
       return `/work/${w}`;
+    case 'work-closed':
+    case 'work-closed-open':
+    case 'work-archived-open':
+      return `/work/${workParam({ projectPath: P, workId: 'w4' })}?preview=${name.slice('work-'.length)}`;
     case 'session':
       return s('d1');
     case 'question':
