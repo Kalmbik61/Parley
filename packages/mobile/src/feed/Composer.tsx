@@ -1,7 +1,9 @@
 // The message field of the session screen (D1 §9.5): multiline, Return is a newline, ⬆ sends through `useChat`.
+import { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { DEV_FOCUS } from '../dev/flags';
+import { devFocus } from '../dev/dev-script';
 import { typography, useColors } from '../theme';
 import { messageProblem, sizeCounter, type ComposerMode } from './send';
 
@@ -24,6 +26,8 @@ export function Composer({
   measured?: string;
 }) {
   const c = useColors();
+  const input = useRef<React.ComponentRef<typeof TextInput>>(null);
+  useEffect(() => devFocus.listen(() => input.current?.focus()), []);
   if (mode.kind === 'hidden') {
     return mode.text === '' ? null : (
       <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.line, { color: c.label2 }]}>
@@ -44,6 +48,7 @@ export function Composer({
       )}
       <View style={styles.row}>
         <TextInput
+          ref={input}
           autoFocus={DEV_FOCUS}
           accessibilityLabel={`Message ${label}`}
           multiline

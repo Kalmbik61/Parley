@@ -2,8 +2,9 @@
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,7 +12,7 @@ import type { FeedItem } from '@parley/core';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
-import { ActiveCard } from '../../cards/CardViews';
+import { PendingCardActions, PendingCardBody } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
 import { pruneQuestionDrafts } from '../../cards/question-drafts';
@@ -19,6 +20,8 @@ import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
+import { devLateCard, devMoreSession } from '../../dev/demo';
+import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
 import { demoQuestionDraft } from '../../dev/demo';
 import { touchAppLock } from '../../auth/lock-instance';
@@ -26,6 +29,7 @@ import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
+import { useFollowEnd } from '../../feed/use-follow-end';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -53,7 +57,6 @@ import { subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
-const NEAR_BOTTOM = 80;
 
 function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule | null; meta: string }) {
   const c = useColors();
@@ -83,8 +86,9 @@ export default function SessionScreen() {
   const c = useColors();
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
-  const { ref: param, fresh, preview } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string }>();
+  const { ref: param, fresh, preview, dev: devSpec } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; dev?: string }>();
   const ref = parseSessionParam(param);
   const client = useClient();
   const state = useRemoteState();
@@ -95,8 +99,6 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
-  const atBottom = useRef(true);
-  const [away, setAway] = useState(0);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -104,7 +106,6 @@ export default function SessionScreen() {
   // Select Text (D1 §9.2): the message source in a read-only field; `initial` is a developer-preview selection.
   const [selectFor, setSelectFor] = useState<{ text: string; initial?: Selection } | null>(null);
   useCloseOnLock(selectFor !== null, () => setSelectFor(null));
-  const seen = useRef(0);
 
   const load = (r: SessionRef): void => {
     setLoadFailed(false);
@@ -197,6 +198,19 @@ export default function SessionScreen() {
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
+  const follow = useFollowEnd(list, rowKeys);
+  // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
+  useEffect(() => {
+    if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
+    return runDevScript(devSpec, {
+      focus: devFocus.fire,
+      draft: () => chat.setDraft(LONG_DRAFT),
+      up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      more: () => devMoreSession(client, ref),
+      card: () => devLateCard(client, ref),
+    });
+  }, [found !== null]);
   // Developer preview of the message pieces (A42): set during render once the session is found.
   // The message actions, read through a ref so the feed rows keep a stable prop and `memo` works (critic A42 m8).
   const msgRef = useRef<MessageApi | null>(null);
@@ -236,7 +250,11 @@ export default function SessionScreen() {
   }, [preview]);
 
 
-  const toggleGroup = useCallback((key: string) => setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key]))), []);
+  // Expanding a group leaves the end (its start stays in view); collapsing keeps following (A44 m3, N4).
+  const toggleGroup = useCallback((key: string) => {
+    if (!openGroups.has(key)) follow.leave();
+    setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])));
+  }, [follow.leave, openGroups]);
   // The status line of a turn opens or closes every work group of that turn.
   const toggleTurn = useCallback(
     (controlKey: string) => {
@@ -247,31 +265,11 @@ export default function SessionScreen() {
         if (r.kind === 'item' && r.item.kind === 'prompt') break;
         if (r.kind === 'group') keys.push(r.key);
       }
+      if (!keys.every((k) => openGroups.has(k))) follow.leave();
       setOpenGroups((s) => (keys.every((k) => s.has(k)) ? new Set([...s].filter((k) => !keys.includes(k))) : new Set([...s, ...keys])));
     },
-    [folded],
+    [folded, follow.leave, openGroups],
   );
-
-  // New items: follow the end while the person is at the bottom; otherwise count them for "Jump to latest".
-  const onContentSizeChange = (): void => {
-    if (atBottom.current) {
-      const animated = seen.current !== 0;
-      // Row heights are estimated until drawn: scroll once now and once after layout settles.
-      list.current?.scrollToEnd({ animated });
-      setTimeout(() => atBottom.current && list.current?.scrollToEnd({ animated: false }), 120);
-    }
-    else setAway(Math.max(0, rows.length - seen.current));
-    if (atBottom.current) seen.current = rows.length;
-  };
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const bottom = contentSize.height - layoutMeasurement.height - contentOffset.y < NEAR_BOTTOM;
-    atBottom.current = bottom;
-    if (bottom && away !== 0) {
-      seen.current = rows.length;
-      setAway(0);
-    }
-  };
 
   const shell = (title: string, body: React.ReactNode) => (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
@@ -463,24 +461,23 @@ export default function SessionScreen() {
           : { icon: 'desktopcomputer' as const, text: 'Answer at your Mac — in its terminal' }
       : null;
 
-  const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
+  const content = () => (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
       {strip !== null && (
-        <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
-          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={() => list.current?.scrollToEnd({ animated: true })} />
+        <BarStripStack onChange={follow.keepEnd}>
+          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
       <FlatList
         ref={list}
         data={rows}
         keyExtractor={rowKey}
-        onContentSizeChange={onContentSizeChange}
-        onScroll={onScroll}
+        {...follow.handlers}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={styles.list}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[styles.list, { paddingTop: strip !== null ? 8 : headerHeight + 8 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
@@ -515,7 +512,7 @@ export default function SessionScreen() {
             )}
             {first !== undefined && (
               <>
-                {parts?.body}
+                <PendingCardBody card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} {...(DEMO && demoQuestionDraft(preview) !== null ? { initialDraft: demoQuestionDraft(preview)! } : {})} />
                 {rest.length > 0 && (
                   <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
                     {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
@@ -531,27 +528,24 @@ export default function SessionScreen() {
           </View>
         }
       />
-      {away > 0 && (
+      {follow.away > 0 && (
+        <View pointerEvents="box-none" style={styles.jumpAnchor}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Jump to latest, ${away} new`}
-          onPress={() => {
-            list.current?.scrollToEnd({ animated: true });
-            atBottom.current = true;
-            seen.current = rows.length;
-            setAway(0);
-          }}
+          accessibilityLabel={`Jump to latest, ${follow.away} new`}
+          onPress={follow.jump}
           style={[styles.jump, { backgroundColor: c.surface, borderColor: c.separator }]}
         >
           <SymbolView name="arrow.down" size={14} tintColor={c.tint} />
-          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {away}</Text>
+          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {follow.away}</Text>
         </Pressable>
+        </View>
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
-        {first !== undefined && parts !== null ? (
-          parts.actions
+        {first !== undefined ? (
+          <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
@@ -630,13 +624,7 @@ export default function SessionScreen() {
           />
         )}
       </Modal>
-      {first !== undefined ? (
-        <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} {...(DEMO && demoQuestionDraft(preview) !== null ? { initialDraft: demoQuestionDraft(preview)! } : {})}>
-          {(parts) => content(parts)}
-        </ActiveCard>
-      ) : (
-        content(null)
-      )}
+      {content()}
     </View>
   );
 }
@@ -659,6 +647,9 @@ function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
 
 export { attentionOf };
 
+// The capsule's slot: in flow right above the composer area, overlapping the list by its own height (net layout height 0),
+// so it follows the composer through the keyboard, a taller draft, the reply plate, the Resume row and cards.
+const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
@@ -672,7 +663,8 @@ const styles = StyleSheet.create({
   headerTitle: { alignItems: 'center', maxWidth: 240 },
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  jump: { position: 'absolute', alignSelf: 'center', bottom: 90, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  jumpAnchor: { height: JUMP_H, marginTop: -JUMP_H, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 8 },
+  jump: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
   bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12 },
   teamRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 28 },

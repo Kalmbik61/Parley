@@ -53,22 +53,34 @@ export interface CardParts {
   actions: ReactNode;
 }
 
-export interface CardProps<C> {
-  card: C;
+/**
+ * A pending card is two plain components over the same stores (A44): the body scrolls with the screen, the actions go to
+ * the bottom panel. Neither passes elements through state, and the feed above them never remounts when a card comes or goes.
+ */
+export interface PendingCardProps {
+  card: FeedCard;
   sessionRef: SessionRef;
   projectPath: string;
   canAct: boolean;
-  children: (parts: CardParts) => ReactNode;
+  /** Developer preview: seeds the question draft once. */
+  initialDraft?: QuestionDraft;
 }
 
-/** Permission card with Deny / Allow and, only when the CLI suggested a rule, "Allow and don't ask again". */
-export function PermissionCardView({ card, sessionRef, projectPath, canAct, children }: CardProps<FeedPermissionCard>) {
+function useQuestionCard(card: FeedQuestionCard, sessionRef: SessionRef, initialDraft: QuestionDraft | undefined) {
+  const key = draftKey(sessionKey(sessionRef), card.cardId);
+  if (initialDraft !== undefined) seedQuestionDraft(key, initialDraft);
+  const draft = useSyncExternalStore(subscribeQuestionDrafts, () => readQuestionDraft(key));
+  const setDraft = (f: (x: QuestionDraft) => QuestionDraft): void => updateQuestionDraft(key, f);
+  return { key, draft, setDraft };
+}
+
+// When the step last changed, per card: the body announces it, the actions ignore a Next/Send tap right after it.
+const stepChangedAt = new Map<string, number>();
+
+function PermissionBody({ card, projectPath }: { card: FeedPermissionCard; projectPath: string }) {
   const c = useColors();
-  const d = useDecision(sessionRef, card.cardId);
   const view = gistView(cardGist(card, projectPath));
-  const rules = alwaysRules(card.suggestions);
-  const off = !canAct || d.busy;
-  const body = (
+  return (
     <View style={cardBox(c)}>
       <View style={styles.head}>
         <SymbolView name={view.icon} size={22} tintColor={c.tint} />
@@ -84,7 +96,15 @@ export function PermissionCardView({ card, sessionRef, projectPath, canAct, chil
       )}
     </View>
   );
-  const actions = (
+}
+
+/** Permission card with Deny / Allow and, only when the CLI suggested a rule, "Allow and don't ask again". */
+function PermissionActions({ card, sessionRef, canAct }: { card: FeedPermissionCard; sessionRef: SessionRef; canAct: boolean }) {
+  const c = useColors();
+  const d = useDecision(sessionRef, card.cardId);
+  const rules = alwaysRules(card.suggestions);
+  const off = !canAct || d.busy;
+  return (
     <View style={{ gap: 12 }}>
       {canAlways(card) && (
         <View style={{ gap: 4 }}>
@@ -105,20 +125,14 @@ export function PermissionCardView({ card, sessionRef, projectPath, canAct, chil
       <Note text={!canAct ? PAUSED : d.message} />
     </View>
   );
-  return <>{children({ body, actions })}</>;
 }
 
 /** Several questions go one at a time, as in the window; the draft (picks and step) outlives the screen (A45). */
-export function QuestionCardView({ card, sessionRef, canAct, children, initialDraft }: CardProps<FeedQuestionCard> & { initialDraft?: QuestionDraft }) {
+function QuestionBody({ card, sessionRef, canAct, initialDraft }: { card: FeedQuestionCard; sessionRef: SessionRef; canAct: boolean; initialDraft?: QuestionDraft }) {
   const c = useColors();
   const d = useDecision(sessionRef, card.cardId);
-  const key = draftKey(sessionKey(sessionRef), card.cardId);
-  if (initialDraft !== undefined) seedQuestionDraft(key, initialDraft);
-  const draft = useSyncExternalStore(subscribeQuestionDrafts, () => readQuestionDraft(key));
-  const setDraft = (f: (x: QuestionDraft) => QuestionDraft): void => updateQuestionDraft(key, f);
+  const { key, draft, setDraft } = useQuestionCard(card, sessionRef, initialDraft);
   const heading = useRef<ComponentRef<typeof Text>>(null);
-  const stepChangedAt = useRef(0);
-  const decision = questionDecision(card, draft);
   const off = !canAct || d.busy;
   const count = card.questions.length;
   const current = stepOf(draft, count);
@@ -128,11 +142,10 @@ export function QuestionCardView({ card, sessionRef, canAct, children, initialDr
   useEffect(() => {
     if (shownStep.current === current) return;
     shownStep.current = current;
-    stepChangedAt.current = Date.now();
+    stepChangedAt.set(key, Date.now());
     if (heading.current !== null) AccessibilityInfo.sendAccessibilityEvent(heading.current, 'focus');
-  }, [current]);
-  const settling = (): boolean => Date.now() - stepChangedAt.current < STEP_TAP_GUARD_MS;
-  const body = (
+  }, [current, key]);
+  return (
     <View style={{ gap: 8 }}>
       {label !== null && (
         <Text ref={heading} accessible accessibilityRole="header" accessibilityLabel={stepAnnouncement(card, draft)} allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
@@ -202,12 +215,21 @@ export function QuestionCardView({ card, sessionRef, canAct, children, initialDr
       })}
     </View>
   );
+}
+
+function QuestionActions({ card, sessionRef, canAct }: { card: FeedQuestionCard; sessionRef: SessionRef; canAct: boolean }) {
+  const d = useDecision(sessionRef, card.cardId);
+  const { key, draft, setDraft } = useQuestionCard(card, sessionRef, undefined);
+  const decision = questionDecision(card, draft);
+  const off = !canAct || d.busy;
+  const count = card.questions.length;
+  const settling = (): boolean => Date.now() - (stepChangedAt.get(key) ?? 0) < STEP_TAP_GUARD_MS;
   const send = async (): Promise<void> => {
     if (decision === null || settling()) return;
     const ui = await d.submit(decision);
     if (ui?.kind === 'done') dropQuestionDraft(key);
   };
-  const actions = (
+  return (
     <View style={{ gap: 8 }}>
       <View style={styles.pair}>
         {hasBack(draft, count) && <Button title="Back" flex disabled={off} onPress={() => setDraft((x) => backStep(card, x))} />}
@@ -220,19 +242,22 @@ export function QuestionCardView({ card, sessionRef, canAct, children, initialDr
       <Note text={!canAct ? PAUSED : (d.message ?? stepNote(card, draft))} />
     </View>
   );
-  return <>{children({ body, actions })}</>;
 }
 
-export function PlanCardView({ card, sessionRef, canAct, children }: CardProps<FeedPlanCard>) {
+function PlanBody({ card }: { card: FeedPlanCard }) {
   const c = useColors();
-  const d = useDecision(sessionRef, card.cardId);
-  const off = !canAct || d.busy;
-  const body = (
+  return (
     <View style={cardBox(c)}>
       <Markdown text={card.plan} />
     </View>
   );
-  const actions = (
+}
+
+function PlanActions({ card, sessionRef, canAct }: { card: FeedPlanCard; sessionRef: SessionRef; canAct: boolean }) {
+  const c = useColors();
+  const d = useDecision(sessionRef, card.cardId);
+  const off = !canAct || d.busy;
+  return (
     <View style={{ gap: 12 }}>
       <Button title="Approve, auto-accept edits" variant="prominent" loading={d.busy} disabled={!canAct} onPress={() => void d.submit({ kind: 'plan', choice: 'auto-accept' })} />
       <Button title="Approve, approve each edit" disabled={off} onPress={() => void d.submit({ kind: 'plan', choice: 'manual' })} />
@@ -242,15 +267,25 @@ export function PlanCardView({ card, sessionRef, canAct, children }: CardProps<F
       <Note text={!canAct ? PAUSED : d.message} />
     </View>
   );
-  return <>{children({ body, actions })}</>;
 }
 
-/** Picks the view for a card's kind. */
-export function ActiveCard(props: Omit<CardProps<FeedCard>, 'card'> & { card: FeedCard; initialDraft?: QuestionDraft }) {
-  const { card, initialDraft, ...rest } = props;
-  if (card.kind === 'permission') return <PermissionCardView {...rest} card={card} />;
-  if (card.kind === 'question') return <QuestionCardView {...rest} card={card} {...(initialDraft === undefined ? {} : { initialDraft })} />;
-  return <PlanCardView {...rest} card={card} />;
+/** The card's body: rendered in the list's footer. */
+export function PendingCardBody({ card, sessionRef, projectPath, canAct, initialDraft }: PendingCardProps) {
+  if (card.kind === 'permission') return <PermissionBody card={card} projectPath={projectPath} />;
+  if (card.kind === 'question') return <QuestionBody card={card} sessionRef={sessionRef} canAct={canAct} {...(initialDraft === undefined ? {} : { initialDraft })} />;
+  return <PlanBody card={card} />;
+}
+
+/** The card's actions: rendered in the screen's footer. */
+export function PendingCardActions({ card, sessionRef, canAct }: PendingCardProps) {
+  if (card.kind === 'permission') return <PermissionActions card={card} sessionRef={sessionRef} canAct={canAct} />;
+  if (card.kind === 'question') return <QuestionActions card={card} sessionRef={sessionRef} canAct={canAct} />;
+  return <PlanActions card={card} sessionRef={sessionRef} canAct={canAct} />;
+}
+
+/** Both pieces for a caller that lays them out itself. */
+export function ActiveCard({ children, ...props }: PendingCardProps & { children: (parts: CardParts) => ReactNode }) {
+  return <>{children({ body: <PendingCardBody {...props} />, actions: <PendingCardActions {...props} /> })}</>;
 }
 
 /** Information-only card: nothing the phone can answer (Codex without an event, a limit, a sign-in). */
