@@ -73,6 +73,7 @@ import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDi
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { BoardSync } from '../board/BoardSync.js';
+import { putCardDraft } from '../board/board-drafts.js';
 import { scheduleSend } from '../board/board-send.js';
 import { boardProjects, findBacklogCard } from '../board/board-model.js';
 import { useBoardStore } from '../board/board-store.js';
@@ -414,7 +415,11 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       const card = findBacklogCard(boardProjects(slots, inboxPath), onCard.card.projectPath, onCard.card.id, onCard.card.index, onCard.card.title);
       if (card === null) return;
       const target = resolveCardDrop(card, onCard.target, onCard.workKey, useWorksStore.getState().entries);
-      if (target !== null) scheduleSend(bridge, card, target);
+      // Поле ввода не отправляет, а кладёт письмо карточки черновиком.
+      if (target !== null) {
+        if (onCard.target.kind === 'composer') void putCardDraft(bridge, card, target);
+        else scheduleSend(bridge, card, target);
+      }
       return;
     }
     const onSidebar = sidebarDropFromDragEnd(event);

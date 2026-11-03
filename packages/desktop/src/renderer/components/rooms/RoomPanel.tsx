@@ -66,6 +66,7 @@ import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
 import { useOutboxFlying, useOutboxItems } from '../../lib/outbox.js';
 import { workKey } from '../../lib/tree-order.js';
+import { claimCardDraft } from '../../board/board-drafts.js';
 import { useFeedDropTarget } from '../../sidebar/use-drop-target.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
@@ -433,16 +434,19 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const replyReachable = reply !== null && members.some((member) => member.id === reply.authorId);
 
   const handleSend = (submission: ComposerSubmission): void => {
+    const text = quote === null ? submission.text : withQuote(quote, submission.text);
     roomOutbox.enqueue(draftKey, {
       bridge,
       projectPath: entry.projectPath,
       workId: entry.map.work.id,
       roomId,
       to: reply !== null && replyReachable && !submission.to.includes(reply.authorId) ? [...submission.to, reply.authorId] : submission.to,
-      text: quote === null ? submission.text : withQuote(quote, submission.text),
+      text,
       ...(reply === null ? {} : { replyTo: reply.messageId }),
       requestedAt: Date.now(),
     });
+    // Карточка доски, лежавшая в поле черновиком, уходит в работу, если её номер остался в тексте.
+    void claimCardDraft(bridge, draftKey, text, { projectPath: entry.projectPath, workId: entry.map.work.id, roomId });
     if (reply !== null) setReplyTo(null);
   };
 

@@ -10,6 +10,7 @@
  * над лентами и терминалами узнают по нему, а не по `useDndContext()`.
  */
 
+import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { DndContext, PointerSensor, useDraggable, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import type { BacklogSnapshot } from '@parley/protocol';
@@ -30,7 +31,7 @@ import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js'
 import { RoomRow } from './RoomRow.js';
 import { SessionRow } from './SessionRow.js';
 import { cardRows } from './sort.js';
-import { useFeedDropTarget } from './use-drop-target.js';
+import { useComposerDropTarget, useFeedDropTarget } from './use-drop-target.js';
 
 const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
@@ -415,5 +416,82 @@ describe('лента — цель броска карточки доски (за
     expect(feedsOver()).toEqual([]);
     await release();
     expect(droppedOn(ended)).toBeNull();
+  });
+});
+
+type ComposerOwner = { roomId: string } | { sessionId: string };
+
+/** Поле ввода комнаты или Chat как цель броска карточки: в окне это `Composer`, здесь — пустой блок с тем же хуком. */
+function ComposerBox({ owner }: { owner: ComposerOwner }): JSX.Element {
+  const { setNodeRef, over } = useComposerDropTarget(KEY, owner);
+  return <div ref={setNodeRef} data-composer={'roomId' in owner ? owner.roomId : owner.sessionId} {...(over ? { 'data-composer-over': '' } : {})} />;
+}
+
+function Composers({ owners, onEnd }: { owners: readonly ComposerOwner[]; onEnd: (event: DragEndEvent) => void }): JSX.Element {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      onDragStart={dragToStore.onDragStart}
+      onDragEnd={(event) => {
+        dragToStore.onDragEnd();
+        onEnd(event);
+      }}
+      onDragCancel={dragToStore.onDragCancel}
+    >
+      <CardSource />
+      {owners.map((owner) => (
+        <ComposerBox key={'roomId' in owner ? owner.roomId : owner.sessionId} owner={owner} />
+      ))}
+    </DndContext>
+  );
+}
+
+const composersOver = (): string[] => [...document.querySelectorAll('[data-composer-over]')].map((node) => node.getAttribute('data-composer') ?? '');
+
+describe('поле ввода — цель броска карточки доски (задача 9)', () => {
+  const owners: ComposerOwner[] = [{ roomId: 'r-01' }, { sessionId: 's-04' }, { sessionId: 's-05' }];
+  const droppedOn = (ended: ReturnType<typeof vi.fn>): unknown => (ended.mock.calls.at(-1)?.[0] as DragEndEvent | undefined)?.over?.id ?? null;
+
+  it('поле включено, когда бросок возможен, и выключено для закрытой сессии и без карточки в сторе', async () => {
+    const ended = vi.fn();
+    render(<Composers owners={owners} onEnd={ended} />);
+    await dragCardOver(dndId.composer(KEY, 'r-01'));
+    expect(composersOver()).toEqual(['r-01']);
+    await release();
+    expect(droppedOn(ended)).toBe(dndId.composer(KEY, 'r-01'));
+    await dragCardOver(dndId.composer(KEY, 's-04'));
+    expect(composersOver()).toEqual(['s-04']);
+    await release();
+    await dragCardOver(dndId.composer(KEY, 's-05'));
+    expect(composersOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+    act(() => useBoardStore.setState({ slots: new Map() }));
+    await dragCardOver(dndId.composer(KEY, 'r-01'));
+    expect(composersOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+  });
+
+  it('обновление снимка доски без перетаскивания не перерисовывает ленту и поле', async () => {
+    let commits = 0;
+    const view = render(
+      <DndContext>
+        <Profiler id="targets" onRender={() => { commits += 1; }}>
+          <Feed owner={{ roomId: 'r-01' }} />
+          <ComposerBox owner={{ roomId: 'r-01' }} />
+        </Profiler>
+      </DndContext>,
+    );
+    const before = commits;
+    expect(before).toBeGreaterThan(0);
+    act(() => {
+      const { slots } = useBoardStore.getState();
+      useBoardStore.setState({ slots: new Map(slots), inboxPath: '/tmp/inbox' });
+    });
+    expect(commits).toBe(before);
+    view.unmount();
   });
 });

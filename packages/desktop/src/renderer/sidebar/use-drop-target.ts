@@ -14,7 +14,7 @@ import { useMemo } from 'react';
 import { useDndContext, useDroppable } from '@dnd-kit/core';
 import { boardProjects, findBacklogCard, type BoardCard } from '../board/board-model.js';
 import { useBoardStore } from '../board/board-store.js';
-import { dndId, dragItemOf, type CardDropTarget, type DropTargetData, type FeedTarget, type SidebarTarget } from '../layout/dnd.js';
+import { dndId, dragItemOf, type CardDropTarget, type ComposerTarget, type DropTargetData, type FeedTarget, type SidebarTarget } from '../layout/dnd.js';
 import { resolveCardDrop, resolveSidebarDrop } from '../layout/dnd-sidebar.js';
 import { useDragStore } from '../layout/drag-store.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -29,16 +29,19 @@ import { useWorksStore } from '../store/works.js';
  * Предмет берётся из стора жеста (`layout/drag-store.ts`), а не из `useDndContext()`: тот меняется на каждое движение
  * указателя и перерисовывал бы ленты и терминалы на любое перетаскивание. Селектор отдаёт только карточку: вкладка,
  * сессия и файл в руке читателя не будят.
+ *
+ * Снимки доски читаются, только пока тащат карточку: без неё селекторы отдают стабильное `null`, и обновление бэклога
+ * не перерисовывает ни ленты, ни терминалы, ни строки.
  */
 function useDraggedCard(): { dragging: boolean; card: BoardCard | null } {
   const dragged = useDragStore((state) => {
     const item = state.item;
     return item?.kind === 'card' ? item : null;
   });
-  const slots = useBoardStore((state) => state.slots);
-  const inboxPath = useBoardStore((state) => state.inboxPath);
+  const slots = useBoardStore((state) => (dragged === null ? null : state.slots));
+  const inboxPath = useBoardStore((state) => (dragged === null ? null : state.inboxPath));
   const card = useMemo(
-    () => (dragged === null ? null : findBacklogCard(boardProjects(slots, inboxPath), dragged.projectPath, dragged.id, dragged.index, dragged.title)),
+    () => (dragged === null || slots === null ? null : findBacklogCard(boardProjects(slots, inboxPath), dragged.projectPath, dragged.id, dragged.index, dragged.title)),
     [dragged, slots, inboxPath],
   );
   return { dragging: dragged !== null, card };
@@ -71,6 +74,23 @@ export function useFeedDropTarget(workKey: string, owner: { roomId: string } | {
   const possible = useCardDropPossible(workKey, target, true);
   const data: DropTargetData = { workKey, ...target };
   const { setNodeRef, isOver } = useDroppable({ id: dndId.feed(workKey, 'roomId' in owner ? owner.roomId : owner.sessionId), data, disabled: !possible });
+  return { setNodeRef, over: possible && isOver };
+}
+
+/**
+ * Поле ввода комнаты или Chat как цель броска карточки доски: карточка становится в нём черновиком. Включено, только
+ * пока бросок возможен (тот же `resolveCardDrop`, что у ленты). `owner` — `null`, когда владельца поля не определить:
+ * цель выключена. Нативный drop текста и файлов в поле не затронут.
+ */
+export function useComposerDropTarget(
+  workKey: string,
+  owner: { roomId: string } | { sessionId: string } | null,
+): { setNodeRef: (node: HTMLElement | null) => void; over: boolean } {
+  const target: ComposerTarget | null = owner === null ? null : 'roomId' in owner ? { kind: 'composer', roomId: owner.roomId } : { kind: 'composer', sessionId: owner.sessionId };
+  const possible = useCardDropPossible(workKey, target ?? { kind: 'composer', roomId: '' }, target !== null);
+  const ownerId = owner === null ? '' : 'roomId' in owner ? owner.roomId : owner.sessionId;
+  const data: DropTargetData = { workKey, ...(target ?? { kind: 'composer', roomId: '' }) };
+  const { setNodeRef, isOver } = useDroppable({ id: dndId.composer(workKey, ownerId), data, disabled: !possible });
   return { setNodeRef, over: possible && isOver };
 }
 

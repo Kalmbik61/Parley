@@ -65,8 +65,11 @@ export type SidebarTarget = { kind: 'session-row'; sessionId: string } | { kind:
 /** Лента открытой комнаты или Chat сессии: цель броска карточки доски. */
 export type FeedTarget = { kind: 'feed'; roomId: string } | { kind: 'feed'; sessionId: string };
 
-/** Куда можно бросить карточку доски: строка сайдбара, лента или терминал сессии. */
-export type CardDropTarget = SidebarTarget | FeedTarget | { kind: 'terminal'; sessionId: string };
+/** Поле ввода комнаты или Chat: карточка доски становится в нём черновиком. */
+export type ComposerTarget = { kind: 'composer'; roomId: string } | { kind: 'composer'; sessionId: string };
+
+/** Куда можно бросить карточку доски: строка сайдбара, лента, поле ввода или терминал сессии. */
+export type CardDropTarget = SidebarTarget | FeedTarget | ComposerTarget | { kind: 'terminal'; sessionId: string };
 
 /** `data` каждого droppable и sortable раскладки и сайдбара; `workKey` — работа-владелец. */
 export type DropTargetData = { workKey: string } & (
@@ -75,6 +78,7 @@ export type DropTargetData = { workKey: string } & (
   | { kind: 'terminal'; sessionId: string } // поверхность терминала
   | SidebarTarget // строка сессии или комнаты в сайдбаре
   | FeedTarget // лента комнаты или Chat
+  | ComposerTarget // поле ввода комнаты или Chat
 );
 
 /**
@@ -96,6 +100,7 @@ export const dndId = {
   // Карточка доски: ключ — `cardKey` (проект и номер), работы у неё нет. Лента — владелец комнаты или сессии.
   card: (key: string): string => `card\u0000${key}`,
   feed: (workKey: string, ownerId: string): string => `feed\u0000${workKey}\u0000${ownerId}`,
+  composer: (workKey: string, ownerId: string): string => `composer\u0000${workKey}\u0000${ownerId}`,
   // Ключ корня, а не работы: у проекта и worktree сессий одни и те же относительные пути.
   file: (rootKey: string, path: string): string => `file\u0000${rootKey}\u0000${path}`,
 };
@@ -179,6 +184,7 @@ function isDropTarget(data: unknown): data is DropTargetData {
       value.kind === 'body' ||
       value.kind === 'terminal' ||
       value.kind === 'feed' ||
+      value.kind === 'composer' ||
       value.kind === 'session-row' ||
       value.kind === 'room-row')
   );
@@ -236,8 +242,8 @@ export function layoutCollision(
       if (data.workKey !== activeWorkKey && !(isCard && sidebarRow)) continue;
       if (data.kind === 'terminal' && !takesTerminal) continue;
       if (sidebarRow && !takesSidebar) continue;
-      if (data.kind === 'feed' && !isCard) continue;
-      if (isCard && !sidebarRow && data.kind !== 'terminal' && data.kind !== 'feed') continue;
+      if ((data.kind === 'feed' || data.kind === 'composer') && !isCard) continue;
+      if (isCard && !sidebarRow && data.kind !== 'terminal' && data.kind !== 'feed' && data.kind !== 'composer') continue;
       const rect = droppableRects.get(container.id);
       if (rect === undefined || !contains(rect, point)) continue;
       hits.push({ container, data, area: rect.width * rect.height });
@@ -383,7 +389,8 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
     case 'session-row':
     case 'room-row':
     case 'feed':
-      // Бросок в сайдбар и в ленту — не в раскладку: его разбирают `sidebarDropFromDragEnd` и `cardDropFromDragEnd`.
+    case 'composer':
+      // Бросок в сайдбар, ленту и поле ввода — не в раскладку: его разбирают `sidebarDropFromDragEnd` и `cardDropFromDragEnd`.
       return null;
     case 'terminal':
       return { item, zone: { kind: 'terminal', sessionId: data.sessionId } };
@@ -430,7 +437,7 @@ export function sidebarDropFromDragEnd(
 }
 
 /**
- * Бросок карточки доски на строку сайдбара, ленту или терминал: какая карточка, на какую цель и в какой работе
+ * Бросок карточки доски на строку сайдбара, ленту, поле ввода или терминал: какая карточка, на какую цель и в какой работе
  * (`workKey` цели). `null` — бросок не карточки или мимо этих целей. Можно ли бросить и кому уйдёт письмо, решает
  * `resolveCardDrop` (`dnd-sidebar.ts`).
  */
@@ -449,6 +456,8 @@ export function cardDropFromDragEnd(
       return { workKey: over.workKey, card: item, target: { kind: 'terminal', sessionId: over.sessionId } };
     case 'feed':
       return { workKey: over.workKey, card: item, target: 'roomId' in over ? { kind: 'feed', roomId: over.roomId } : { kind: 'feed', sessionId: over.sessionId } };
+    case 'composer':
+      return { workKey: over.workKey, card: item, target: 'roomId' in over ? { kind: 'composer', roomId: over.roomId } : { kind: 'composer', sessionId: over.sessionId } };
     default:
       return null;
   }

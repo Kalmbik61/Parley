@@ -75,6 +75,7 @@ import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { useLayoutStore } from '../layout/store.js';
 import { updateTab } from '../layout/tree.js';
+import { claimCardDraft } from '../board/board-drafts.js';
 import { useFeedDropTarget } from '../sidebar/use-drop-target.js';
 import { Button } from '../ui/button.js';
 import { defaultRoot } from '../files/store.js';
@@ -351,6 +352,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     if (paths.length > 0) setAttachments(sessionKey, []);
     if (quoting) setReplyTo(null);
     chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
+    // Карточка доски, лежавшая в поле черновиком, уходит в работу, если её номер остался в тексте.
+    void claimCardDraft(bridge, sessionKey, text, { projectPath: sessionRef.projectPath, workId: sessionRef.workId, sessionId: sessionRef.sessionId });
   };
 
   const setMode = (mode: ModeChoice): void => {
@@ -595,6 +598,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}
+          dropSession={sessionRef}
           bridge={bridge}
           busy={active || outboxItems.length > 0}
           visible={visible}

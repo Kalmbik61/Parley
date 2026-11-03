@@ -824,3 +824,34 @@ describe('карточка доски (задача 8)', () => {
     }
   });
 });
+
+describe('поле ввода — цель броска карточки (задача 9)', () => {
+  const card: DragItem = { kind: 'card', projectPath: '/p', id: 'b-001', index: 0, title: 'Task' };
+  const feed = container(dndId.feed('A', 'r-1'), { workKey: 'A', kind: 'feed', roomId: 'r-1' });
+  const composer = container(dndId.composer('A', 'r-1'), { workKey: 'A', kind: 'composer', roomId: 'r-1' });
+  const otherWork = container(dndId.composer('B', 'r-1'), { workKey: 'B', kind: 'composer', roomId: 'r-1' });
+  const FEED: ClientRect = { left: 300, top: 50, width: 400, height: 300, right: 700, bottom: 350 };
+  const COMPOSER: ClientRect = { left: 300, top: 300, width: 400, height: 50, right: 700, bottom: 350 };
+  const rects = { [feed.id]: FEED, [composer.id]: COMPOSER, [otherWork.id]: COMPOSER };
+
+  it('поле меньше ленты и выигрывает у неё; вне поля остаётся лента', () => {
+    expect(collide('A', card, [feed, composer], rects, { x: 400, y: 320 }).map((hit) => hit.id)).toEqual([composer.id, feed.id]);
+    expect(collide('A', card, [feed, composer], rects, { x: 400, y: 100 }).map((hit) => hit.id)).toEqual([feed.id]);
+  });
+
+  it('поле видит только карточка и только активной работы', () => {
+    expect(collide('A', { kind: 'session', sessionId: 's-1' }, [composer], rects, { x: 400, y: 320 })).toEqual([]);
+    expect(collide('A', { kind: 'tab', tabId: 'mail' }, [composer], rects, { x: 400, y: 320 })).toEqual([]);
+    expect(collide('A', card, [otherWork], rects, { x: 400, y: 320 })).toEqual([]);
+  });
+
+  it('cardDropFromDragEnd разбирает поле комнаты и Chat; dropFromDragEnd поле в раскладку не берёт', () => {
+    const room = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'composer', roomId: 'r-1' }), { x: 1, y: 1 }));
+    expect(room).toEqual({ workKey: 'A', card, target: { kind: 'composer', roomId: 'r-1' } });
+    const chat = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'composer', sessionId: 's-1' }), { x: 1, y: 1 }));
+    expect(chat?.target).toEqual({ kind: 'composer', sessionId: 's-1' });
+    expect(cardDropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'composer', roomId: 'r-1' }), { x: 1, y: 1 }))).toBeNull();
+    expect(dropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'composer', roomId: 'r-1' }), { x: 1, y: 1 }))).toBeNull();
+    expect(dropFromDragEnd(endEvent({ kind: 'file', root: { workKey: 'A', spec: { kind: 'project' } }, path: 'a.ts' }, overOf({ workKey: 'A', kind: 'composer', roomId: 'r-1' }), { x: 1, y: 1 }))).toBeNull();
+  });
+});
