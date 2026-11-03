@@ -1757,6 +1757,10 @@ export const S = {
     discardWorktreeEllipsis: 'Discard worktree…',
     discardWorktreeTitle: (session: string): string => `Discard the worktree of ${session}?`,
     discardWorktreeDescription: 'The session will be stopped and closed. Its worktree folder and branch will be deleted.',
+    /** Копию убрала уборка хоста (`removedAt`): папки нет, ветка жива. */
+    copyRemoved: (branch: string): string => `The worktree folder was removed. Its branch ${branch} is kept.`,
+    branchMergedDeleted: 'The branch was merged, and Parley deleted it together with the worktree folder.',
+    discardBranchDescription: 'The session will be closed. Its branch will be deleted.',
     /**
      * Вкладка диффа (кусок 8.3, спека 11.3) — `review/DiffTab.tsx` и соседи. Двоичный файл —
      * `S.files.binary`, сбой Monaco — `S.files.editorFailed`, заголовок вкладки — `S.tabs.diffTitle`.
