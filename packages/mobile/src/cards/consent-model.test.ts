@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConsentCard } from '@parley/protocol';
 import type { DecideConsentOutcome, RemoteClient } from '@parley/remote-client';
-import { canDecideConsent, pendingConsents, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
+import type { ProjectMcpCard } from '@parley/protocol';
+import { MCP_CHANGED, canDecideConsent, enabledPairs, mcpShapeKey, mcpTitle, pendingConsents, projectMcpDrawable, runConsent, switchText, trustRequestedBy, trustTitle } from './consent-model';
 
 const trust: ConsentCard = { id: 'c-1', kind: 'folder-trust', projectPath: '/p', folder: '/Users/me/parley', at: '2026-11-01T10:00:00.000Z', state: 'pending', requestedBy: { source: 'agent', label: 'Task1-types' } };
 const swit: ConsentCard = { id: 'c-2', kind: 'agent-switch', projectPath: '/p', at: '2026-11-01T11:00:00.000Z', state: 'pending', ref: { projectPath: '/p', workId: 'w', sessionId: 's' }, provider: 'codex', providerLabel: 'Codex', model: null, reason: 'Usage limit', requestedBy: { sessionId: 's', label: 'Greta' } };
@@ -39,5 +40,44 @@ describe('the Mac switch (M2)', () => {
     expect(canDecideConsent(['consents.list', 'consents.decide'])).toBe(true);
     expect(canDecideConsent(['consents.list'])).toBe(false);
     expect(canDecideConsent(null)).toBe(true);
+  });
+});
+
+const mcp = {
+  id: 'c-5', kind: 'project-mcp', version: 1, revision: 3, projectPath: '/p', repo: '/Users/me/parley', at: '2026-11-01T12:00:00.000Z', state: 'pending',
+  servers: [{ name: 'fs', fingerprint: 'f1', command: 'npx fs-mcp /tmp' }, { name: 'web', fingerprint: 'f2', command: 'https://x.example/mcp' }],
+  requestedBy: { source: 'launch' },
+} as ProjectMcpCard;
+
+describe('project-mcp card (A36b)', () => {
+  it('title, shape key and the enabled pairs follow the card order', () => {
+    expect(mcpTitle(mcp)).toBe('Enable MCP servers for parley?');
+    expect(enabledPairs(mcp, new Set())).toEqual([]);
+    expect(enabledPairs(mcp, new Set(['web', 'fs', 'ghost']))).toEqual([{ name: 'fs', fingerprint: 'f1' }, { name: 'web', fingerprint: 'f2' }]);
+    expect(mcpShapeKey(mcp)).not.toBe(mcpShapeKey({ ...mcp, servers: [{ ...mcp.servers[0]!, fingerprint: 'f9' }, mcp.servers[1]!] }));
+  });
+
+  it('Enable selected sends the pairs; Reject all sends a bare deny', async () => {
+    const c = client();
+    const pairs = enabledPairs(mcp, new Set(['fs']));
+    expect(await runConsent(as(c), mcp, 'allow', pairs)).toEqual({ kind: 'allowed', text: 'Enabled 1 server — the agent starts now' });
+    expect(c.decideConsent).toHaveBeenCalledWith('c-5', 'allow', { enabled: [{ name: 'fs', fingerprint: 'f1' }], revision: 3 });
+    const d = client();
+    expect(await runConsent(as(d), mcp, 'deny', pairs)).toEqual({ kind: 'denied', text: 'Rejected — no servers enabled' });
+    expect(d.decideConsent).toHaveBeenCalledWith('c-5', 'deny', { revision: 3 });
+  });
+
+  it('bad_request says the list changed; other refusals keep the host text', async () => {
+    expect(await runConsent(as(client({ outcome: 'rejected', code: 'bad_request', message: 'pair mismatch' })), mcp, 'allow', [])).toEqual({ kind: 'error', text: MCP_CHANGED });
+    expect(MCP_CHANGED).toBe('The server list changed — review again');
+    expect(await runConsent(as(client({ outcome: 'rejected', code: 'unknown_method', message: 'off' })), mcp, 'allow', [])).toEqual({ kind: 'error', text: 'off' });
+  });
+
+  it('a card without version or with an unknown one is not drawn', () => {
+    expect(projectMcpDrawable(mcp)).toBe(true);
+    expect(projectMcpDrawable({ ...mcp, version: 2 } as never)).toBe(false);
+    const bare: Partial<ProjectMcpCard> = { ...mcp };
+    delete bare.version;
+    expect(projectMcpDrawable(bare as never)).toBe(false);
   });
 });
