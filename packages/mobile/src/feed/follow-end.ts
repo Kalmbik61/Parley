@@ -1,3 +1,5 @@
+import { WINDOW_ROWS } from './window';
+
 // "Follow the end" of a feed (A44), shared by the session feed and the room feed. No React.
 //
 // Why it exists: rows below the window are drawn with estimated heights and their real heights (Markdown, tables, code,
@@ -12,6 +14,10 @@
 
 export const PIN_QUIET_MS = 500;
 export const PIN_MAX_MS = 3000;
+/** A44b: the feed stays invisible while the pin works; it shows once the last scroll has landed at the end and REVEAL_FRAME_MS passed without growth, at the latest after this. */
+/** Longer than the controller's repeat scroll (80 ms): the virtualized list grows in steps ~66 ms apart, one frame of quiet showed it between the steps. */
+export const REVEAL_FRAME_MS = 130;
+export const REVEAL_CAP_MS = 600;
 export const NEAR_BOTTOM = 80;
 /** A scroll event this soon after a size change is the echo of that change. */
 export const GROWTH_ECHO_MS = 150;
@@ -27,6 +33,8 @@ export interface ScrollMetrics {
 export interface FollowState {
   /** Following the end without looking at the position, until the first render settles. */
   readonly pinned: boolean;
+  /** A44b: the list is visible. False from the open until the pin has brought it to the end and the height settled. */
+  readonly revealed: boolean;
   readonly atBottom: boolean;
   /** A finger is on the feed (drag begin … drag end). */
   readonly touching: boolean;
@@ -42,6 +50,10 @@ export interface FollowState {
   readonly scrollViewport: number | null;
   readonly scrollOffset: number | null;
   readonly layoutHeight: number | null;
+  /** The latest content height reported by the size callback. */
+  readonly contentHeight: number | null;
+  /** Rows in the list at that callback. A list draws only its first rows before it has measured the rest. */
+  readonly rowCount: number;
   /** Growth that arrived while a finger was down: one scroll on release, if still at the bottom. */
   readonly pendingGrowth: boolean;
   /** The last item the human has seen; "new" is what comes after it. */
@@ -70,8 +82,8 @@ export function countAfter(keys: readonly string[], seenKey: string | null, prev
 
 export function open(): FollowState {
   return {
-    pinned: true, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
-    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, pendingGrowth: false, seenKey: null, away: 0,
+    pinned: true, revealed: false, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
+    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, contentHeight: null, rowCount: 0, pendingGrowth: false, seenKey: null, away: 0,
   };
 }
 
@@ -83,20 +95,55 @@ function evaluate(s: FollowState, m: ScrollMetrics, keys: readonly string[]): Fo
   return nearBottom(m) ? { ...s, atBottom: true, seenKey: last(keys), away: 0 } : { ...s, atBottom: false };
 }
 
-/** The content height changed or items were added. */
-export function contentChanged(s: FollowState, now: number, keys: readonly string[]): Step {
+/** The content height changed or items were added. `content`: the new content height, when known (a feed that fits the window needs no scroll and shows at once). */
+export function contentChanged(s: FollowState, now: number, keys: readonly string[], content?: number): Step {
   if (keys.length === 0) return { state: { ...s, hadRows: false }, scroll: 'none' };
   // The pin starts (or restarts) at the first change that has real rows, not at mount: a skeleton does not count.
   const first = !s.hadRows;
   const base: FollowState = first
     ? { ...s, hadRows: true, pinned: !s.touching, openedAt: now, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS }
     : { ...s, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS };
+  const sized: FollowState = { ...base, rowCount: keys.length, ...(content === undefined ? {} : { contentHeight: content }) };
+  const shown: FollowState = content !== undefined && fitsWindow(sized) ? { ...sized, revealed: true } : sized;
+  return follow(shown, now, keys, first);
+}
+
+function follow(base: FollowState, now: number, keys: readonly string[], first: boolean): Step {
   if (base.pinned || base.atBottom) {
     const following: FollowState = { ...base, seenKey: last(keys), away: 0 };
     if (humanBusy(following)) return { state: { ...following, pendingGrowth: true }, scroll: 'none' };
     return issue(following, now, first || following.pinned ? 'instant' : 'animated');
   }
   return { state: { ...base, away: countAfter(keys, base.seenKey, base.away) }, scroll: 'none' };
+}
+
+/** The content fits the window: nothing to scroll, whatever order the size and layout events came in. */
+function fitsWindow(s: FollowState): boolean {
+  // Only a window that was drawn whole in the first pass has measured all its rows (A44b, critic ПB1).
+  return s.rowCount <= WINDOW_ROWS && s.contentHeight !== null && s.layoutHeight !== null && s.contentHeight <= s.layoutHeight;
+}
+
+/** The last scroll event saw the latest content height and was at its end: the pin's scroll has landed. */
+function landed(s: FollowState): boolean {
+  if (s.scrollContent === null || s.scrollViewport === null || s.scrollOffset === null) return false;
+  if (s.contentHeight !== null && s.scrollContent < s.contentHeight - 1) return false;
+  return nearBottom({ offset: s.scrollOffset, content: s.scrollContent, viewport: s.scrollViewport });
+}
+
+/** Time passed: the feed shows once the pin's scroll has landed at the end and one frame passed without growth, or at the cap since the first real rows. A skeleton-only phase has no `openedAt`, so it starts nothing. */
+export function revealCheck(s: FollowState, now: number): FollowState {
+  if (s.revealed || !s.hadRows || s.openedAt === null) return s;
+  if (fitsWindow(s)) return { ...s, revealed: true };
+  const quiet = now - s.lastGrowthAt >= REVEAL_FRAME_MS && landed(s);
+  return quiet || now - s.openedAt >= REVEAL_CAP_MS ? { ...s, revealed: true } : s;
+}
+
+/** Milliseconds until the feed may be revealed; null when it is shown or has no rows yet. A scroll event re-checks sooner. */
+export function revealDeadline(s: FollowState, now: number): number | null {
+  if (s.revealed || !s.hadRows || s.openedAt === null) return null;
+  const cap = s.openedAt + REVEAL_CAP_MS;
+  const quietAt = s.lastGrowthAt + REVEAL_FRAME_MS;
+  return Math.max(0, (now >= quietAt && !landed(s) ? cap : Math.min(quietAt, cap)) - now);
 }
 
 /** Time passed: the pin ends after a quiet spell or at the cap. */
@@ -127,7 +174,7 @@ export function scrolled(s: FollowState, m: ScrollMetrics, now: number, keys: re
 
 /** A finger went down: the pin ends and nothing scrolls the feed until it lifts. */
 export function dragBegan(s: FollowState): FollowState {
-  return { ...s, pinned: false, touching: true, momentum: false };
+  return { ...s, pinned: false, revealed: true, touching: true, momentum: false };
 }
 
 /** The finger lifted. With momentum the human's scroll goes on until `momentumEnded`. */
@@ -156,7 +203,8 @@ export function momentumEnded(s: FollowState, m: ScrollMetrics, now: number, key
 /** The window of the list changed height (keyboard, multi-line draft, reply plate, Sleeping row, cards, mention menu). */
 export function viewportChanged(s: FollowState, height: number, now: number): Step {
   const shrunk = s.layoutHeight !== null && height < s.layoutHeight;
-  const next = { ...s, layoutHeight: height, echoUntil: now + GROWTH_ECHO_MS };
+  const sized = { ...s, layoutHeight: height, echoUntil: now + GROWTH_ECHO_MS };
+  const next = s.hadRows && fitsWindow(sized) ? { ...sized, revealed: true } : sized;
   if (shrunk && next.atBottom && !humanBusy(next)) return issue(next, now, 'instant');
   return { state: next, scroll: 'none' };
 }

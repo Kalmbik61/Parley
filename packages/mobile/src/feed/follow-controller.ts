@@ -8,6 +8,8 @@ export const SETTLE_MS = 80;
 export interface FollowIo {
   scrollToEnd(animated: boolean): void;
   onAway(away: number): void;
+  /** A44b: the list became visible (once per open). */
+  onReveal(): void;
   now(): number;
 }
 
@@ -15,12 +17,15 @@ export function createFollowController(io: FollowIo) {
   let state = fe.open();
   let keys: readonly string[] = [];
   let pinTimer: ReturnType<typeof setTimeout> | null = null;
+  let revealTimer: ReturnType<typeof setTimeout> | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const commit = (next: fe.FollowState): void => {
     const away = state.away;
+    const shown = state.revealed;
     state = next;
     if (next.away !== away) io.onAway(next.away);
+    if (next.revealed && !shown) io.onReveal();
   };
   const run = (step: fe.Step): void => {
     commit(step.state);
@@ -51,20 +56,41 @@ export function createFollowController(io: FollowIo) {
     }, wait + 1);
   };
 
+  /** Not while the repeat scroll is still due: it would move the list a few points right after it is shown (critic Пm1). */
+  const tryReveal = (): void => {
+    const capped = state.openedAt !== null && io.now() - state.openedAt >= fe.REVEAL_CAP_MS;
+    if (settleTimer === null || capped) commit(fe.revealCheck(state, io.now()));
+  };
+  /** The reveal check: one frame after the last growth, or at the cap since the first rows. */
+  const armReveal = (): void => {
+    if (revealTimer !== null) clearTimeout(revealTimer);
+    revealTimer = null;
+    const wait = fe.revealDeadline(state, io.now());
+    if (wait === null) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      tryReveal();
+      armReveal();
+    }, Math.max(wait + 1, settleTimer === null ? 0 : 20));
+  };
+
   return {
     /** Called on every render with the current item keys (the order of the list). */
     setKeys(next: readonly string[]): void {
       keys = next;
     },
-    contentSizeChanged(): void {
-      run(fe.contentChanged(state, io.now(), keys));
+    contentSizeChanged(content?: number): void {
+      run(fe.contentChanged(state, io.now(), keys, content));
       armPin();
+      armReveal();
     },
     layout(height: number): void {
       run(fe.viewportChanged(state, height, io.now()));
     },
     scroll(m: fe.ScrollMetrics): void {
       commit(fe.scrolled(state, m, io.now(), keys));
+      tryReveal();
+      armReveal();
     },
     beginDrag(): void {
       commit(fe.dragBegan(state));
@@ -96,8 +122,9 @@ export function createFollowController(io: FollowIo) {
     },
     dispose(): void {
       if (pinTimer !== null) clearTimeout(pinTimer);
+      if (revealTimer !== null) clearTimeout(revealTimer);
       if (settleTimer !== null) clearTimeout(settleTimer);
-      pinTimer = settleTimer = null;
+      pinTimer = settleTimer = revealTimer = null;
     },
   };
 }
