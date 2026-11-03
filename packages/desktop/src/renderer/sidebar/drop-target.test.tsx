@@ -6,14 +6,19 @@
  *
  * Настоящий `DndContext` с порогом 4 px, как в окне; «под указателем» задаёт `collisionDetection` теста — jsdom
  * прямоугольников не считает. Выключенные droppable dnd-kit в него не передаёт: цель, которой нет в списке, не
- * подсветится.
+ * подсветится. Что тащат, тест кладёт в стор жеста (`layout/drag-store.ts`) своими обработчиками, как `AppShell`: карточку
+ * над лентами и терминалами узнают по нему, а не по `useDndContext()`.
  */
 
+import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { DndContext, PointerSensor, useSensor, useSensors, type CollisionDetection } from '@dnd-kit/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DndContext, PointerSensor, useDraggable, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
+import type { BacklogSnapshot } from '@parley/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WindowWorkEntry } from '@parley/core';
-import { dndId } from '../layout/dnd.js';
+import { useBoardStore } from '../board/board-store.js';
+import { dndId, dragItemOf, type DragSourceData } from '../layout/dnd.js';
+import { useDragStore } from '../layout/drag-store.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
@@ -26,6 +31,7 @@ import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js'
 import { RoomRow } from './RoomRow.js';
 import { SessionRow } from './SessionRow.js';
 import { cardRows } from './sort.js';
+import { useComposerDropTarget, useFeedDropTarget } from './use-drop-target.js';
 
 const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
@@ -41,10 +47,31 @@ const collisionDetection: CollisionDetection = ({ droppableContainers }) => {
   return hit === undefined ? [] : [{ id: hit.id, data: { droppableContainer: hit, value: 1 } }];
 };
 
+/** Обработчики жеста, как в `AppShell`: предмет кладётся в стор на старте и убирается на конце и отмене. */
+const dragToStore = {
+  onDragStart: (event: DragStartEvent): void => {
+    useDragStore.getState().setItem(dragItemOf(event.active.data.current));
+  },
+  onDragEnd: (): void => {
+    useDragStore.getState().setItem(null);
+  },
+  onDragCancel: (): void => {
+    useDragStore.getState().setItem(null);
+  },
+};
+
+/** Карточка Backlog доски, которую можно тащить (в окне — `BoardCardView`); по умолчанию — из проекта работы. */
+function CardSource({ projectPath = PROJECT }: { projectPath?: string }): JSX.Element {
+  const data: DragSourceData = { item: { kind: 'card', projectPath, id: 'b-001', index: 0, title: 'Task' } };
+  const { setNodeRef, listeners } = useDraggable({ id: dndId.card(`${projectPath}#b-001`), data });
+  return <div ref={setNodeRef} {...listeners} data-card-source="" />;
+}
+
 function Card({ entry, showClosed = false }: { entry: WindowWorkEntry; showClosed?: boolean }): JSX.Element {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   return (
-    <DndContext sensors={sensors} collisionDetection={collisionDetection}>
+    <DndContext sensors={sensors} collisionDetection={collisionDetection} {...dragToStore}>
+      <CardSource />
       {cardRows(entry.map, showClosed).map((row) =>
         row.kind === 'session' ? (
           <SessionRow
@@ -83,6 +110,35 @@ function Card({ entry, showClosed = false }: { entry: WindowWorkEntry; showClose
   );
 }
 
+type FeedOwner = { roomId: string } | { sessionId: string };
+
+/** Лента комнаты или Chat как цель броска карточки: в окне это `RoomPanel` и `ChatView`, здесь — пустой блок с тем же хуком. */
+function Feed({ owner }: { owner: FeedOwner }): JSX.Element {
+  const { setNodeRef, over } = useFeedDropTarget(KEY, owner);
+  return <div ref={setNodeRef} data-feed={'roomId' in owner ? owner.roomId : owner.sessionId} {...(over ? { 'data-feed-over': '' } : {})} />;
+}
+
+function Feeds({ owners, onEnd, cardProject = PROJECT }: { owners: readonly FeedOwner[]; onEnd: (event: DragEndEvent) => void; cardProject?: string }): JSX.Element {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      onDragStart={dragToStore.onDragStart}
+      onDragEnd={(event) => {
+        dragToStore.onDragEnd();
+        onEnd(event);
+      }}
+      onDragCancel={dragToStore.onDragCancel}
+    >
+      <CardSource projectPath={cardProject} />
+      {owners.map((owner) => (
+        <Feed key={'roomId' in owner ? owner.roomId : owner.sessionId} owner={owner} />
+      ))}
+    </DndContext>
+  );
+}
+
 const sessionRowEl = (id: string): HTMLElement => {
   const found = [...document.querySelectorAll<HTMLElement>(`[data-session-id="${id}"]`)];
   if (found[0] === undefined) throw new Error(`строки ${id} нет`);
@@ -95,6 +151,8 @@ const roomRowEl = (id: string): HTMLElement => {
 };
 const highlighted = (): string[] =>
   [...document.querySelectorAll('[data-drop-over]')].map((node) => node.getAttribute('data-session-id') ?? `room ${node.getAttribute('data-room-row')}`);
+
+const feedsOver = (): string[] => [...document.querySelectorAll('[data-feed-over]')].map((node) => node.getAttribute('data-feed') ?? '');
 
 /** Тащит строку сессии `from` за порог и держит указатель над целью `over` (id droppable). Бросок — `release()`. */
 async function dragOver(from: string, over: string): Promise<void> {
@@ -109,6 +167,25 @@ async function dragOver(from: string, over: string): Promise<void> {
 
 async function release(): Promise<void> {
   fireEvent.pointerUp(document, { isPrimary: true, clientX: 32, clientY: 10 });
+  await act(async () => {});
+}
+
+/** Доска знает проект `path` с одной карточкой Backlog b-001. */
+function setBoard(path: string): void {
+  const item = { id: 'b-001', title: 'Task', details: '', checked: false, section: null };
+  const snapshot = { projectPath: path, sharedProjectPath: path, version: 'v1', items: [item] } as unknown as BacklogSnapshot;
+  useBoardStore.setState({ slots: new Map([[path, { snapshot, live: true }]]), inboxPath: null });
+}
+
+/** Тащит карточку Backlog и держит указатель над целью `over`. */
+async function dragCardOver(over: string): Promise<void> {
+  pointer.over = over;
+  const source = document.querySelector<HTMLElement>('[data-card-source]');
+  if (source === null) throw new Error('карточки нет');
+  fireEvent.pointerDown(source, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+  fireEvent.pointerMove(document, { isPrimary: true, clientX: 30, clientY: 10 });
+  await act(async () => {});
+  fireEvent.pointerMove(document, { isPrimary: true, clientX: 32, clientY: 10 });
   await act(async () => {});
 }
 
@@ -137,11 +214,13 @@ function entryOf(): WindowWorkEntry {
 
 beforeEach(() => {
   pointer.over = '';
+  useDragStore.setState({ item: null });
   connect();
   useProvidersStore.setState({ providers: [] });
   useUiStore.setState({ roomExpanded: {}, dark: false });
   useLayoutStore.setState({ activeWorkKey: KEY, layouts: {} });
   useWorksStore.setState({ entries: [entryOf()], branches: {}, loading: false, error: null });
+  setBoard(PROJECT);
 });
 
 afterEach(cleanup);
@@ -267,5 +346,152 @@ describe('строка комнаты — цель броска сессии (ro
     await release();
     await dragOver('s-02', dndId.roomRow(KEY, 'r-02'));
     expect(highlighted()).toEqual(['room r-02']);
+  });
+});
+
+describe('строки сайдбара — цели броска карточки доски (задача 8)', () => {
+  it('строка своего проекта подсвечивается под карточкой: и сессия, и комната', async () => {
+    render(<Card entry={entryOf()} />);
+    await dragCardOver(dndId.sessionRow(KEY, 's-04'));
+    expect(highlighted()).toEqual(['s-04']);
+    await release();
+    await dragCardOver(dndId.roomRow(KEY, 'r-02'));
+    expect(highlighted()).toEqual(['room r-02']);
+  });
+
+  it('работа не активная — строка всё равно цель; закрытая сессия и чужой проект — нет', async () => {
+    act(() => useLayoutStore.setState({ activeWorkKey: workKey('/tmp/other', 'w-99') }));
+    render(<Card entry={entryOf()} showClosed />);
+    await dragCardOver(dndId.sessionRow(KEY, 's-04'));
+    expect(highlighted()).toEqual(['s-04']);
+    await release();
+    await dragCardOver(dndId.sessionRow(KEY, 's-05'));
+    expect(highlighted()).toEqual([]);
+    await release();
+    setBoard('/tmp/elsewhere');
+    await dragCardOver(dndId.sessionRow(KEY, 's-04'));
+    expect(highlighted()).toEqual([]);
+  });
+});
+
+describe('лента — цель броска карточки доски (задача 8)', () => {
+  const owners: FeedOwner[] = [{ roomId: 'r-01' }, { sessionId: 's-04' }, { sessionId: 's-05' }];
+  /** id droppable, на котором кончился бросок; `null` — мимо целей (выключенную цель dnd-kit в коллизии не берёт). */
+  const droppedOn = (ended: ReturnType<typeof vi.fn>): unknown => (ended.mock.calls.at(-1)?.[0] as DragEndEvent | undefined)?.over?.id ?? null;
+
+  it('лента выключена, когда resolveCardDrop даёт null, и включена, когда цель есть', async () => {
+    const ended = vi.fn();
+    render(<Feeds owners={owners} onEnd={ended} />);
+    // Живая комната и живая сессия своего проекта: цель есть — лента подсвечена и принимает бросок.
+    await dragCardOver(dndId.feed(KEY, 'r-01'));
+    expect(feedsOver()).toEqual(['r-01']);
+    await release();
+    expect(droppedOn(ended)).toBe(dndId.feed(KEY, 'r-01'));
+    await dragCardOver(dndId.feed(KEY, 's-04'));
+    expect(feedsOver()).toEqual(['s-04']);
+    await release();
+    expect(droppedOn(ended)).toBe(dndId.feed(KEY, 's-04'));
+    // Закрытая сессия: цели нет — лента выключена, бросок мимо.
+    await dragCardOver(dndId.feed(KEY, 's-05'));
+    expect(feedsOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+    // Карточки в сторе доски больше нет: бросать нечего — и живые ленты выключены.
+    act(() => useBoardStore.setState({ slots: new Map() }));
+    await dragCardOver(dndId.feed(KEY, 'r-01'));
+    expect(feedsOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+  });
+
+  it('карточка другого проекта — у живых лент цели нет, лента выключена', async () => {
+    const ended = vi.fn();
+    setBoard('/tmp/elsewhere');
+    render(<Feeds owners={owners} onEnd={ended} cardProject="/tmp/elsewhere" />);
+    await dragCardOver(dndId.feed(KEY, 'r-01'));
+    expect(feedsOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+    await dragCardOver(dndId.feed(KEY, 's-04'));
+    expect(feedsOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+  });
+});
+
+type ComposerOwner = { roomId: string } | { sessionId: string };
+
+/** Поле ввода комнаты или Chat как цель броска карточки: в окне это `Composer`, здесь — пустой блок с тем же хуком. */
+function ComposerBox({ owner }: { owner: ComposerOwner }): JSX.Element {
+  const { setNodeRef, over } = useComposerDropTarget(KEY, owner);
+  return <div ref={setNodeRef} data-composer={'roomId' in owner ? owner.roomId : owner.sessionId} {...(over ? { 'data-composer-over': '' } : {})} />;
+}
+
+function Composers({ owners, onEnd }: { owners: readonly ComposerOwner[]; onEnd: (event: DragEndEvent) => void }): JSX.Element {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      onDragStart={dragToStore.onDragStart}
+      onDragEnd={(event) => {
+        dragToStore.onDragEnd();
+        onEnd(event);
+      }}
+      onDragCancel={dragToStore.onDragCancel}
+    >
+      <CardSource />
+      {owners.map((owner) => (
+        <ComposerBox key={'roomId' in owner ? owner.roomId : owner.sessionId} owner={owner} />
+      ))}
+    </DndContext>
+  );
+}
+
+const composersOver = (): string[] => [...document.querySelectorAll('[data-composer-over]')].map((node) => node.getAttribute('data-composer') ?? '');
+
+describe('поле ввода — цель броска карточки доски (задача 9)', () => {
+  const owners: ComposerOwner[] = [{ roomId: 'r-01' }, { sessionId: 's-04' }, { sessionId: 's-05' }];
+  const droppedOn = (ended: ReturnType<typeof vi.fn>): unknown => (ended.mock.calls.at(-1)?.[0] as DragEndEvent | undefined)?.over?.id ?? null;
+
+  it('поле включено, когда бросок возможен, и выключено для закрытой сессии и без карточки в сторе', async () => {
+    const ended = vi.fn();
+    render(<Composers owners={owners} onEnd={ended} />);
+    await dragCardOver(dndId.composer(KEY, 'r-01'));
+    expect(composersOver()).toEqual(['r-01']);
+    await release();
+    expect(droppedOn(ended)).toBe(dndId.composer(KEY, 'r-01'));
+    await dragCardOver(dndId.composer(KEY, 's-04'));
+    expect(composersOver()).toEqual(['s-04']);
+    await release();
+    await dragCardOver(dndId.composer(KEY, 's-05'));
+    expect(composersOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+    act(() => useBoardStore.setState({ slots: new Map() }));
+    await dragCardOver(dndId.composer(KEY, 'r-01'));
+    expect(composersOver()).toEqual([]);
+    await release();
+    expect(droppedOn(ended)).toBeNull();
+  });
+
+  it('обновление снимка доски без перетаскивания не перерисовывает ленту и поле', async () => {
+    let commits = 0;
+    const view = render(
+      <DndContext>
+        <Profiler id="targets" onRender={() => { commits += 1; }}>
+          <Feed owner={{ roomId: 'r-01' }} />
+          <ComposerBox owner={{ roomId: 'r-01' }} />
+        </Profiler>
+      </DndContext>,
+    );
+    const before = commits;
+    expect(before).toBeGreaterThan(0);
+    act(() => {
+      const { slots } = useBoardStore.getState();
+      useBoardStore.setState({ slots: new Map(slots), inboxPath: '/tmp/inbox' });
+    });
+    expect(commits).toBe(before);
+    view.unmount();
   });
 });

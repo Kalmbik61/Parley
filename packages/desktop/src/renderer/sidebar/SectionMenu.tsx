@@ -37,6 +37,8 @@ import { useSidebarHold } from './use-sidebar-hold.js';
 export interface SectionMenuProps {
   /** Ключ секции — `pinned` или `projectPath`: у каждого меню свой держатель порядка. */
   sectionKey: string;
+  /** Пункт Board для секций проекта: ставит фильтр проекта и открывает доску. */
+  onOpenBoard?(projectPath?: string): void;
 }
 
 /** Use the existing project editor and its root authorization, including for notice actions. */
@@ -51,7 +53,7 @@ export function openParleyEditor(projectPath: string, workId?: string): void {
   openFile({ workKey: key, spec: { kind: 'project' } }, 'PARLEY.md', false);
 }
 
-export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
+export function SectionMenu({ sectionKey, onOpenBoard }: SectionMenuProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   useSidebarHold(`section-menu ${sectionKey}`, open || confirmRemove);
@@ -110,6 +112,8 @@ export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
       <DropdownMenuContent align="end">
         {sectionKey !== 'pinned' && <DropdownMenuItem onSelect={() => useUiStore.getState().openProjectPanel(sectionKey)}
           data-section-action="capabilities">{S.actions.capabilities}</DropdownMenuItem>}
+        {sectionKey !== 'pinned' && onOpenBoard !== undefined && <DropdownMenuItem onSelect={() => onOpenBoard(sectionKey)}
+          data-section-action="board">{S.board.title}</DropdownMenuItem>}
         {sectionKey !== 'pinned' && <DropdownMenuItem disabled={exists === null}
           onSelect={() => { void openParley(); }} data-section-action="parley-md">
           {exists === false ? S.sidebar.createParleyMd : S.sidebar.openParleyMd}

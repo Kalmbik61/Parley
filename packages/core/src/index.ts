@@ -710,6 +710,10 @@ export { sharedProjectPaths, SharedStateError, inspectSharedIgnore, prepareShare
 export type { BacklogFileChoice, SharedProjectPaths, SharedDiagnostic, SharedWriteOptions, SharedStateErrorCode, SharedFileSnapshot } from './work/store.js';
 export { parseBacklog, readBacklog, addBacklogItem, updateBacklogItem, removeBacklogItem, takeBacklogItem, completeBacklogItem } from './work/backlog.js';
 export type { BacklogItem, BacklogDocument, BacklogInput, BacklogPatch, BacklogWriteResult, BacklogSuggestion, SuggestionKind } from './work/backlog.js';
+export { backlogState, boardMetaPath, readBoardMeta, updateBoardMeta, boardItems } from './work/board-meta.js';
+export type { BacklogState, BoardItemMeta, BoardMeta, BoardItem } from './work/board-meta.js';
+export { boardInboxPath, ensureBoardInbox, readBoardItems, boardTake, boardMove, markBoardReview, boardTransfer, planBacklogIds, boardCardMessage } from './work/board.js';
+export type { BoardSkipReason } from './work/board.js';
 export { listBacklogSuggestions, suggestBacklog, acceptBacklogSuggestion, dismissBacklogSuggestion } from './work/backlog-suggestions.js';
 export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions } from './work/backlog-suggestions.js';
 export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';

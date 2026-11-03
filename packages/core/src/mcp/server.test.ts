@@ -28,6 +28,7 @@ import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, workPa
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
 import { HUMAN, type PlanDraft, type RoomPlan, type WindowWorkMap, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
+import { boardTake, readBoardItems } from '../work/board.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
 import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
 import { undoProjectMemory } from '../work/project-memory.js';
@@ -228,6 +229,7 @@ describe('список инструментов', () => {
       'attempt_verify',
       'backlog_list',
       'backlog_suggest',
+      'backlog_take',
       'check_inbox',
       'close_session',
       'create_room',
@@ -3295,7 +3297,7 @@ describe('trusted caller backlog MCP tools', () => {
     expect(listed.items).toEqual([]); expect(listed.rule).toBe('problems');
     expect(await readMapFile()).toEqual(before);
     expect(await readFile(path.join(project, '.parley', 'backlog.md')).catch(() => null)).toBeNull();
-    for (const name of ['backlog_list', 'backlog_suggest']) {
+    for (const name of ['backlog_list', 'backlog_suggest', 'backlog_take']) {
       const response = await call(client, name, { projectPath: '/private/secret', workId: 'w-99', sessionId: 's-99', kind: 'bug', title: 'Spoof', why: 'Reason' });
       expect(response.isError).toBe(true); expect(response.text).not.toContain('/private/secret');
     }
@@ -3320,13 +3322,13 @@ describe('trusted caller backlog MCP tools', () => {
     await setBacklogRule(project, 'everything');
     expect((await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'Later feature', why: 'Useful' })).message).toBe('added: b-002');
   });
-  it('supports bounded status/text reads while exposing no manual mutation tool', async () => {
+  it('supports bounded status/text reads while exposing no manual edit or close tool', async () => {
     await addBacklogItem(project, { title: 'Human item', details: 'Needle detail' });
     const client = await connect('s-01');
     expect((await callOk(client, 'backlog_list', { filter: 'open', text: 'needle' })).items).toHaveLength(1);
     expect((await callOk(client, 'backlog_list', { filter: 'done' })).items).toEqual([]);
     const names = (await client.listTools()).tools.map(row => row.name);
-    expect(names.filter(name => name.startsWith('backlog'))).toEqual(['backlog_list', 'backlog_suggest']);
+    expect(names.filter(name => name.startsWith('backlog'))).toEqual(['backlog_list', 'backlog_suggest', 'backlog_take']);
     for (const args of [{ filter: 'private' }, { text: 'x'.repeat(4097) }, { text: '\0' }, { taken: 'w-01/r-01' }])
       expect((await call(client, 'backlog_list', args)).isError).toBe(true);
     expect((await readBacklog(project)).items[0]).toMatchObject({ checked: false });
@@ -3536,6 +3538,115 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
     const after = readStoredMap(project, workId);
     expect(after.messages).toHaveLength(before);
     expect(after.messages.filter((m) => m.roomId === 'r-01' && m.from === 'system').map((m) => m.text)).toEqual(['Room archived by the human.']);
+  });
+});
+
+describe('карточки доски в MCP', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  const AT = '2026-11-03T12:00:00.000Z';
+  const stateOf = async (id: string) => (await readBoardItems(project)).items.find(row => row.id === id)?.state;
+
+  it('backlog_take отмечает карточку вызвавшей сессией', async () => {
+    await addBacklogItem(project, { title: 'Card' });
+    const client = await connect('s-01');
+    expect(await callOk(client, 'backlog_take', { id: 'b-001' })).toEqual({ message: 'taken: b-001', id: 'b-001' });
+    const item = (await readBoardItems(project)).items[0]!;
+    expect(item).toMatchObject({ taken: `${workId}/s-01`, state: 'in-progress' });
+    expect(item.sent).toBeDefined();
+  });
+
+  it('backlog_take чужой взятой карточки — backlog-conflict', async () => {
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/s-02`);
+    const response = await call(await connect('s-01'), 'backlog_take', { id: 'b-001' });
+    expect(response.isError).toBe(true);
+    expect(response.text).toBe('Backlog operation failed (backlog-conflict).');
+  });
+
+  it('backlog_take от закрытой сессии отказывает фиксированным текстом', async () => {
+    await addBacklogItem(project, { title: 'Card' });
+    await updateMap(project, workId, map => { map.sessions.find(row => row.id === 's-01')!.lifecycle = 'closed'; });
+    const response = await call(await connect('s-01'), 'backlog_take', { id: 'b-001' });
+    expect(response).toEqual({ isError: true, text: 'A live launched session is required to take backlog work.' });
+  });
+
+  it('backlog_list отдаёт state', async () => {
+    await addBacklogItem(project, { title: 'Open' });
+    await addBacklogItem(project, { title: 'Mine' });
+    await boardTake(project, 'b-002', `${workId}/s-01`);
+    const listed = await callOk(await connect('s-01'), 'backlog_list', { filter: 'all' });
+    expect((listed.items as { id: string; state: string }[]).map(row => [row.id, row.state])).toEqual([['b-001', 'backlog'], ['b-002', 'in-progress']]);
+  });
+
+  it('report done с backlog переводит в Review карточку, взятую этой сессией', async () => {
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/s-01`);
+    const reply = await callOk(await connect('s-01'), 'report', { status: 'done', summary: 'готово', backlog: ['b-001'] });
+    expect(reply.backlog).toEqual({ review: ['b-001'], skipped: [] });
+    expect(reply).not.toHaveProperty('backlogHint');
+    expect(await stateOf('b-001')).toBe('review');
+  });
+
+  it('report done от участника комнаты, взявшей карточку, тоже переводит её', async () => {
+    await updateMap(project, workId, current => {
+      addSession(current, { provider: 'claude', label: 'второй', task: 'делать' });
+      addRoom(current, { title: 'комната', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
+    });
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/r-01`);
+    const reply = await callOk(await connect('s-02'), 'report', { status: 'done', summary: 'готово', backlog: ['b-001'] });
+    expect(reply.backlog).toEqual({ review: ['b-001'], skipped: [] });
+    expect(await stateOf('b-001')).toBe('review');
+  });
+
+  it('report done от участника архивной комнаты карточку не двигает', async () => {
+    await updateMap(project, workId, (current, letters) => {
+      addSession(current, { provider: 'claude', label: 'второй', task: 'делать' });
+      addRoom(current, { title: 'комната', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
+      archiveRoom(current, letters, 'r-01', AT);
+    });
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/r-01`);
+    const reply = await callOk(await connect('s-02'), 'report', { status: 'done', summary: 'готово', backlog: ['b-001'] });
+    expect(reply.backlog).toEqual({ review: [], skipped: [{ id: 'b-001', reason: 'not-yours' }] });
+    expect(await stateOf('b-001')).toBe('in-progress');
+  });
+
+  it('report done с карточкой из плана комнаты — skipped plan', async () => {
+    await updateMap(project, workId, current => {
+      addRoom(current, { title: 'комната', creator: 's-01', members: ['s-01'], lead: 's-01' });
+      current.plans!.push({ id: 'pl-01', roomId: 'r-01', mode: 'checklist', status: 'active', rev: 1, goal: 'g',
+        items: [{ id: 1, title: 'Step', owner: '', scope: 'Scope', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] }],
+        backlog: ['b-001'], acceptedAt: AT, completedAt: null, cancelledAt: null, completionSummary: null } as RoomPlan);
+    });
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/s-01`);
+    const reply = await callOk(await connect('s-01'), 'report', { status: 'done', summary: 'готово', backlog: ['b-001'] });
+    expect(reply.backlog).toEqual({ review: [], skipped: [{ id: 'b-001', reason: 'plan' }] });
+    expect(await stateOf('b-001')).toBe('in-progress');
+  });
+
+  it('report progress с backlog ничего не двигает', async () => {
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/s-01`);
+    const reply = await callOk(await connect('s-01'), 'report', { status: 'progress', summary: 'середина', backlog: ['b-001'] });
+    expect(reply).not.toHaveProperty('backlog');
+    expect(await stateOf('b-001')).toBe('in-progress');
+  });
+
+  it('report с неверным backlog — ошибка аргумента', async () => {
+    const response = await call(await connect('s-01'), 'report', { status: 'done', summary: 'x', backlog: ['oops'] });
+    expect(response.isError).toBe(true);
+    expect(response.text).toContain('argument backlog');
+  });
+
+  it('report done без backlog при взятой карточке даёт backlogHint', async () => {
+    const client = await connect('s-01');
+    expect(await callOk(client, 'report', { status: 'done', summary: 'готово' })).not.toHaveProperty('backlogHint');
+    await addBacklogItem(project, { title: 'Card' });
+    await boardTake(project, 'b-001', `${workId}/s-01`);
+    const reply = await callOk(client, 'report', { status: 'done', summary: 'готово' });
+    expect(reply.backlogHint).toBe('Board cards b-001 are in progress for you. If this result finishes them, call report again with status done and backlog ["b-001"].');
   });
 });
 

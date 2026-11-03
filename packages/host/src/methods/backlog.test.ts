@@ -244,3 +244,77 @@ it('uses explicit working membership for room liveness and refuses owner-only or
   await expect(handlers['backlog.take']({ projectPath: project, id: item.id!, version: next.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
   expect((await get()).items[1]!.taken).toBeUndefined();
 });
+
+describe('board handlers', () => {
+  async function taken(): Promise<{ id: string; version: string; created: Awaited<ReturnType<typeof target>> }> {
+    const created = await target(); const added = await add(); const id = added.items[0]!.id!;
+    const snapshot = await handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created });
+    return { id, version: snapshot.version, created };
+  }
+  it('snapshot shows in-progress state and sent after take', async () => {
+    const { id } = await taken();
+    const snapshot = await get();
+    expect(snapshot.items[0]).toMatchObject({ id, state: 'in-progress' });
+    expect(snapshot.items[0]!.sent).toBeDefined();
+    expect(snapshot.boardVersion).toBeDefined();
+  });
+  it('backlog.move goes in-progress → review → in-progress', async () => {
+    const { id, version } = await taken();
+    const review = await handlers['backlog.move']({ projectPath: project, id, version, to: 'review' });
+    expect(review.items[0]).toMatchObject({ state: 'review' }); expect(review.items[0]!.review).toBeDefined();
+    const back = await handlers['backlog.move']({ projectPath: project, id, version: review.version, to: 'in-progress' });
+    expect(back.items[0]!.state).toBe('in-progress'); expect(back.items[0]!.review).toBeUndefined();
+  });
+  it('backlog.move from backlog to review is a backlog-conflict', async () => {
+    const added = await add(); const id = added.items[0]!.id!;
+    await expect(handlers['backlog.move']({ projectPath: project, id, version: added.version, to: 'review' })).rejects.toMatchObject({ code: 'conflict', data: { code: 'backlog-conflict' } });
+  });
+  it('backlog.inbox creates the folder under PARLEY_HOME and returns its path', async () => {
+    const result = await handlers['backlog.inbox']({});
+    expect(result.projectPath).toBe(await realpath(path.join(root, 'home', 'board', 'inbox')));
+  });
+  it('backlog.transfer moves a card from the inbox to a project', async () => {
+    const { projectPath: inbox } = await handlers['backlog.inbox']({});
+    const added = await handlers['backlog.add']({ projectPath: inbox, title: 'From inbox' });
+    const moved = await handlers['backlog.transfer']({ projectPath: inbox, id: added.items[0]!.id!, version: added.version, toProjectPath: project });
+    expect(moved.id).toBe('b-001');
+    expect(moved.snapshot.projectPath).toBe(project);
+    expect(moved.snapshot.items.map(item => item.title)).toEqual(['From inbox']);
+    expect((await handlers['backlog.get']({ projectPath: inbox })).items).toEqual([]);
+  });
+  it('backlog.transfer of a card in a plan is a backlog-conflict', async () => {
+    const created = await target(); const added = await add(); const id = added.items[0]!.id!;
+    await updateMap(project, created.workId, map => {
+      map.plans = [{ id: 'pl-1', roomId: created.roomId, mode: 'checklist', status: 'active', rev: 0, goal: 'Goal',
+        items: [{ id: 1, title: 'Step', owner: '', scope: 'Scope', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] }],
+        backlog: [id], acceptedAt: new Date().toISOString(), completedAt: null, cancelledAt: null, completionSummary: null }];
+    });
+    const other = path.join(root, 'other'); await mkdir(other);
+    await expect(handlers['backlog.transfer']({ projectPath: project, id, version: added.version, toProjectPath: other })).rejects.toMatchObject({ code: 'conflict', data: { code: 'backlog-conflict' } });
+  });
+  it('backlog.transfer of a card in a plan of a worktree work is a backlog-conflict', async () => {
+    const run = (await import('node:util')).promisify((await import('node:child_process')).execFile);
+    const main = path.join(root, 'main'), worktree = path.join(root, 'worktree'); await mkdir(main);
+    await run('git', ['init', '-b', 'main', main]); await run('git', ['-C', main, 'config', 'user.name', 'Fixture']); await run('git', ['-C', main, 'config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await run('git', ['-C', main, 'add', 'README.md']); await run('git', ['-C', main, 'commit', '-m', 'fixture']);
+    await run('git', ['-C', main, 'worktree', 'add', '-b', 'feature', worktree]);
+    project = main;
+    const added = await add(); const id = added.items[0]!.id!;
+    // The worktree shares the backlog of the main checkout, so a plan of a work started in the worktree protects the card too.
+    const work = await createWork(worktree, { title: 'Worktree work' });
+    await updateMap(worktree, work.work.id, map => {
+      const session = addSession(map, { provider: 'claude', label: 'Reviewer', task: '' });
+      transitionSession(map, session.id, 'active');
+      const roomId = addRoom(map, { title: 'Room', creator: 'human', members: [session.id] }).id;
+      map.plans = [{ id: 'pl-1', roomId, mode: 'checklist', status: 'active', rev: 0, goal: 'Goal',
+        items: [{ id: 1, title: 'Step', owner: '', scope: 'Scope', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] }],
+        backlog: [id], acceptedAt: new Date().toISOString(), completedAt: null, cancelledAt: null, completionSummary: null }];
+    });
+    const other = path.join(root, 'other'); await mkdir(other);
+    await expect(handlers['backlog.transfer']({ projectPath: main, id, version: added.version, toProjectPath: other })).rejects.toMatchObject({ code: 'conflict', data: { code: 'backlog-conflict' } });
+  });
+  it('backlog.transfer to the same project is a bad_request', async () => {
+    const added = await add();
+    await expect(handlers['backlog.transfer']({ projectPath: project, id: added.items[0]!.id!, version: added.version, toProjectPath: project })).rejects.toMatchObject({ code: 'bad_request' });
+  });
+});

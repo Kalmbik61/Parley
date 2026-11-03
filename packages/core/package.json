@@ -15,6 +15,7 @@
     "./attention": "./dist/work/attention.js",
     "./session-state": "./dist/work/session-state.js",
     "./plan-state": "./dist/work/plan-state.js",
+    "./board-card": "./dist/work/board-card.js",
     "./role-choice": "./dist/work/role-choice.js",
     "./stuck": "./dist/work/stuck.js",
     "./session-names": "./dist/work/names.js",

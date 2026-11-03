@@ -34,6 +34,7 @@ import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserBody } from './bodies/BrowserBody.js';
 import { DiffBody } from './bodies/DiffBody.js';
+import { BoardBody } from './bodies/BoardBody.js';
 import { MailBody } from './bodies/MailBody.js';
 import { MissingBody } from './bodies/MissingBody.js';
 import { RoomBody } from './bodies/RoomBody.js';
@@ -94,6 +95,8 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
     }
     case 'mail':
       return <MailBody bridge={host.bridge} entry={entry} active={host.active} />;
+    case 'board':
+      return <BoardBody bridge={host.bridge} active={host.active} />;
     case 'room': {
       const room = entry.map.rooms.find((candidate) => candidate.id === tab.roomId);
       if (room === undefined) return <MissingBody kind="room" onClose={onMissing} />;

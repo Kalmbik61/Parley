@@ -1,8 +1,8 @@
 import path from 'node:path';
 import {
-  SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
-  parseBacklog, readBacklog, readMap, readProjectPreferences, readSharedFile, readWorksIndex, setBacklogFile, setBacklogRule, sharedProjectPaths,
-  takeBacklogItem, updateBacklogItem, removeBacklogItem, workVersion,
+  SharedStateError, boardMove, boardTake, boardTransfer, ensureBoardInbox, planBacklogIds, readBoardItems, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
+  readBacklog, readMap, readProjectPreferences, readSharedFile, readWorksIndex, setBacklogFile, setBacklogRule, sharedProjectPaths,
+  updateBacklogItem, removeBacklogItem, workVersion,
 } from '@parley/core';
 import type { SharedDiagnostic } from '@parley/core';
 import { BACKLOG_SNAPSHOT_MAX_BYTES, backlogMethodSchemas, backlogSnapshot } from '@parley/protocol';
@@ -78,15 +78,16 @@ export async function readBacklogSnapshot(projectPath: string, diagnostics: Shar
   const paths = await sharedProjectPaths(projectPath);
   for (let attempt = 0; attempt < 3; attempt++) {
     const before = await Promise.all([readSharedFile(paths.backlog), readSharedFile(paths.suggestions), readSharedFile(paths.preferences)]);
+    const board = await readBoardItems(projectPath);
     const suggestions = await listBacklogSuggestions(projectPath);
     const preferences = await readProjectPreferences(projectPath);
     const authorById = await authors(paths.context.projectPath, suggestions);
     const after = await Promise.all([readSharedFile(paths.backlog), readSharedFile(paths.suggestions), readSharedFile(paths.preferences)]);
-    if (before.some((file, index) => file.version !== after[index]!.version)) continue;
+    if (before.some((file, index) => file.version !== after[index]!.version) || board.version !== before[0]!.version) continue;
     const assembled = { projectPath, sharedProjectPath: paths.context.projectPath,
       file: { relativePath: paths.backlogChoice === 'todos' ? path.basename(paths.backlog) : path.basename(paths.dir) === '.harnas' ? '.harnas/backlog.md' : '.parley/backlog.md',
         exists: before[0]!.version !== 'missing', choice: paths.backlogChoice, todos: paths.todosFile },
-      version: before[0]!.version, items: parseBacklog(before[0]!.text),
+      version: before[0]!.version, items: board.items, boardVersion: board.boardVersion,
       suggestions: suggestions.map(row => ({ id: row.id, kind: row.kind, title: row.title, details: row.details,
         why: row.why, workId: row.workId, sessionId: row.sessionId, createdAt: row.createdAt, status: 'pending' as const,
         ...(authorById.has(row.id) ? { author: authorById.get(row.id)! } : {}) })),
@@ -127,7 +128,25 @@ async function take(params: BacklogMethodParams<'backlog.take'>): Promise<Shared
   if (item.checked || (item.taken !== undefined && item.taken !== taken)) throw new SharedStateError('backlog-conflict');
   // A lost successful response may be retried for the same existing target without recreating a room.
   if (item.taken === taken) return [];
-  return (await takeBacklogItem(params.projectPath, params.id ?? params.index!, taken, { expectedVersion: params.version })).diagnostics;
+  return (await boardTake(params.projectPath, params.id ?? params.index!, taken, { expectedVersion: params.version })).diagnostics;
+}
+
+/** Card ids that belong to plans of works sharing this project's state directory; such cards are not transferred. */
+async function planIdsOf(sharedDir: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const { works } = await readWorksIndex();
+  const sameDir = new Map<string, boolean>();
+  for (const row of works) {
+    if (!sameDir.has(row.projectPath)) {
+      sameDir.set(row.projectPath, await sharedProjectPaths(row.projectPath).then(paths => paths.dir === sharedDir, () => false));
+    }
+    if (!sameDir.get(row.projectPath)) continue;
+    // A work whose map cannot be read cannot run its plan and must not block the board.
+    try {
+      for (const id of planBacklogIds(await readMap(row.projectPath, row.id))) ids.add(id);
+    } catch { continue; }
+  }
+  return ids;
 }
 
 export function createBacklogHandlers(service?: BacklogService): BacklogHandlers {
@@ -178,6 +197,25 @@ export function createBacklogHandlers(service?: BacklogService): BacklogHandlers
       { expectedVersion: input.version })).diagnostics),
     'backlog.remove': params => run('backlog.remove', params, async input =>
       (await removeBacklogItem(input.projectPath, input.id ?? input.index!, { expectedVersion: input.version })).diagnostics),
+    'backlog.move': params => run('backlog.move', params, async input =>
+      (await boardMove(input.projectPath, input.id, input.to, { expectedVersion: input.version })).diagnostics),
+    'backlog.transfer': async params => {
+      try {
+        const input = validate('backlog.transfer', params);
+        absolute(input.toProjectPath);
+        const [from, to] = await Promise.all([sharedProjectPaths(input.projectPath), sharedProjectPaths(input.toProjectPath)]);
+        if (from.dir === to.dir) throw new HostError('bad_request', 'The target project is the same.');
+        const moved = await boardTransfer(input.projectPath, input.id, input.toProjectPath, { version: input.version, planIds: await planIdsOf(from.dir) });
+        return { id: moved.id, snapshot: await readBacklogSnapshot(input.toProjectPath) };
+      } catch (error) { throw safeError(error); }
+    },
+    'backlog.inbox': async params => {
+      try {
+        const parsed = backlogMethodSchemas['backlog.inbox'].safeParse(params);
+        if (!parsed.success) throw new HostError('bad_request', 'Invalid backlog request.');
+        return { projectPath: await ensureBoardInbox() };
+      } catch (error) { throw safeError(error); }
+    },
     'backlog.take': params => run('backlog.take', params, take),
     'backlog.suggestions.accept': params => run('backlog.suggestions.accept', params, async input =>
       (await acceptBacklogSuggestion(input.projectPath, input.id, {

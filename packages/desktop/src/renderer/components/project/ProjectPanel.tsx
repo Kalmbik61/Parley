@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ComponentProps } from 'react';
 import { capabilityActionResult, capabilitySnapshot } from '@parley/protocol';
 import type { CapabilityActionResult, CapabilityMcpAdd, CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -14,9 +13,6 @@ import { workKey } from '../../lib/tree-order.js';
 import { openParleyEditor } from '../../sidebar/SectionMenu.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
-import { RoleChip } from '../../lib/role-summary.js';
-import { sessionLabelText } from '../../lib/participant.js';
-import { BacklogPanel } from './BacklogPanel.js';
 import { DecisionsPanel } from './DecisionsPanel.js';
 import { MemoryPanel } from './MemoryPanel.js';
 import { ProjectSearch } from './ProjectSearch.js';
@@ -41,16 +37,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   const methods = hostMethods(status);
   const supported = methods.has('capabilities.get') && methods.has('capabilities.refresh');
   const entries = useWorksStore(state => state.entries);
-  /** Плашка роли автора предложения: каталог берётся из его сессии в снимке работ; сессии нет — без `cwd`, ключ стора — проект. */
-  const authorChip = (author: NonNullable<Parameters<NonNullable<ComponentProps<typeof BacklogPanel>['renderAuthor']>>[0]['author']>): JSX.Element => {
-    const session = entries.find(entry => entry.projectPath === author.projectPath && entry.map.work.id === author.workId)?.map.sessions.find(item => item.id === author.sessionId);
-    return <RoleChip role={author.role} sessionRef={{ projectPath: author.projectPath, workId: author.workId, sessionId: author.sessionId }} bridge={bridge} revision={author.revision}
-      {...(session ? { cwd: session.worktree?.path ?? author.projectPath } : {})} />;
-  };
-  const [pendingSuggestions, setPendingSuggestions] = useState(0);
   const [pendingMemory, setPendingMemory] = useState(0);
-  const backlogSupported = ['backlog.get', 'backlog.subscribe', 'backlog.unsubscribe', 'backlog.prepareTake', 'backlog.take'].every(method => methods.has(method));
-  const backlogWork = entries.find(entry => entry.projectPath === projectPath && entry.map.work.status === 'active');
   const [snapshot, setSnapshot] = useState<CapabilitySnapshot | null>(null);
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -229,7 +216,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           </Button>
         </section>
         <Tabs defaultValue="capabilities" className="flex min-h-0 flex-1 flex-col">
-          <TabsList aria-label={S.projectPanel.title} className="self-start"><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger><TabsTrigger value="memory">{S.memory.title}{pendingMemory > 0 ? ` (${pendingMemory})` : ''}</TabsTrigger><TabsTrigger value="search">{S.projectSearch.title}</TabsTrigger></TabsList>
+          <TabsList aria-label={S.projectPanel.title} className="self-start"><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger><TabsTrigger value="memory">{S.memory.title}{pendingMemory > 0 ? ` (${pendingMemory})` : ''}</TabsTrigger><TabsTrigger value="search">{S.projectSearch.title}</TabsTrigger></TabsList>
           <TabsContent value="capabilities" className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-xs text-muted-foreground">{S.projectPanel.appliesToNew}</p>
@@ -255,19 +242,6 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                 } } : {})} />
               {actionAttempted || formOpen ? <p className="text-xs text-muted-foreground">{runningSessions === null ? S.mcpActions.appliesToNew : S.mcpActions.runningSessions(runningSessions)}</p> : null}
             </>}
-          </TabsContent>
-          <TabsContent value="backlog" forceMount className="data-[state=inactive]:hidden space-y-3">
-            <BacklogPanel bridge={bridge} projectPath={projectPath} supported={backlogSupported} connection={connection}
-              canTake={backlogWork !== undefined} onCount={setPendingSuggestions}
-              onOpenFile={async project => { await bridge.app.openBacklog(project); }}
-              onTake={(project, item, version) => {
-                if (!backlogWork || item.id === null) throw new Error('An active workspace is required.');
-                onOpenChange(false);
-                useUiStore.getState().openNewSessionDialog({ projectPath: project, workId: backlogWork.map.work.id }, {
-                  room: true, backlog: { projectPath: project, id: item.id, version,
-                    task: [item.title, item.details].filter(Boolean).join('\n\n') } });
-              }} renderAuthor={suggestion => suggestion.author ? <span>{sessionLabelText(suggestion.author.label, suggestion.author.sessionId)} {authorChip(suggestion.author)}</span>
-                : `${suggestion.workId}/${suggestion.sessionId}`} />
           </TabsContent>
           {/* Список решений прокручивается внутри диалога: общий верх (путь, PARLEY.md) его не вытесняет.
               min-h-48 — запас, чтобы в низком окне список не сжимался в одну строку: тогда прокручивается вся колонка. */}

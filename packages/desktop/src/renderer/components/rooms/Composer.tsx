@@ -36,9 +36,11 @@ import { S } from '../../../shared/strings.js';
 import { AttachmentChip } from '../../chat/AttachmentChip.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { pasteClipboardImage } from '../../chat/paste-image.js';
+import { useDraftInserts } from '../../board/board-drafts.js';
 import { registerComposer } from '../../keys/type-to-focus.js';
 import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
 import { sessionTag } from '../../lib/participant.js';
+import { useComposerDropTarget } from '../../sidebar/use-drop-target.js';
 import { useUiStore } from '../../store/ui.js';
 import { dragHasFiles, pasteHasOnlyImage } from '../../terminal/drop.js';
 import { Button } from '../../ui/button.js';
@@ -112,6 +114,12 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
   const editorRef = useRef<HTMLDivElement | null>(null);
   // Поле открыто для набора с любого места окна (`keys/type-to-focus.ts`).
   useEffect(() => (editorRef.current === null ? undefined : registerComposer(editorRef.current)), []);
+  // Карточка доски, брошенная на поле, становится черновиком. Ключ — `roomKey`: `{workKey}/{roomId}`, id комнаты без `/`.
+  const slash = draftKey.lastIndexOf('/');
+  const { setNodeRef: setDropRef, over: cardOver } = useComposerDropTarget(
+    slash < 0 ? '' : draftKey.slice(0, slash),
+    slash < 0 ? null : { roomId: draftKey.slice(slash + 1) },
+  );
   const attachments = useUiStore((state) => state.composerAttachments[draftKey] ?? NO_ATTACHMENTS);
   const setAttachments = (paths: readonly string[]): void => useUiStore.getState().setComposerAttachments(draftKey, paths);
   const [blank, setBlank] = useState(true);
@@ -161,6 +169,24 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     fillEditor(editor, useUiStore.getState().composerDrafts[draftKey] ?? '', chipLabel);
     refresh();
   }, [draftKey, chipLabel, refresh]);
+
+  // Запрос вставки от `board/board-drafts.ts`: смонтированное поле читает стор черновиков только при монтировании, поэтому
+  // брошенная на него карточка приходит запросом. Текст встаёт в конец поля, как диктовка, и через ту же команду браузера.
+  const insertRequest = useDraftInserts((state) => state.inserts[draftKey]);
+  useEffect(() => useDraftInserts.getState().register(draftKey), [draftKey]);
+  useEffect(() => {
+    if (insertRequest === undefined) return;
+    const editor = editorRef.current;
+    const text = useDraftInserts.getState().take(draftKey);
+    if (editor === null || text === null) return;
+    editor.focus();
+    const selection = editor.ownerDocument.getSelection();
+    selection?.selectAllChildren(editor);
+    selection?.collapseToEnd();
+    insertPlainText(editor.ownerDocument, isBlank(readEditor(editor)) ? text : `\n\n${text}`);
+    refresh();
+    keepCaretVisible(editor);
+  }, [insertRequest, draftKey, refresh]);
 
   /** Поле, выросшее выше `max-height`, держит каретку и нижний отступ на виду (`keepCaretVisible`) после каждой правки. */
   const revealCaret = (): void => {
@@ -276,7 +302,11 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
   };
 
   return (
-    <div className="relative flex shrink-0 flex-col gap-1.5 border-t border-[color-mix(in_srgb,currentColor_12%,transparent)] px-9 pb-[18px] pt-2.5">
+    <div
+      ref={setDropRef}
+      {...(cardOver ? { 'data-card-over': '' } : {})}
+      className={`relative flex shrink-0 flex-col gap-1.5 border-t border-[color-mix(in_srgb,currentColor_12%,transparent)] px-9 pb-[18px] pt-2.5${cardOver ? ' ring-2 ring-inset ring-ring' : ''}`}
+    >
       {menu === null ? null : (
         <MentionMenu
           items={items}
