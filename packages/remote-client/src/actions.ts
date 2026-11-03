@@ -1,6 +1,7 @@
 // Действия человека (спека §10.1, §11.4): итог — `applied | conflict | stale | lost`. Изменяющий вызов после потери
 // соединения не повторяется: клиент перечитывает состояние и называет итог по его данным.
 import type { FeedDecision, Message, RoleList } from '@parley/core';
+import type { Result } from '@parley/protocol';
 import { BRIDGE_CALL_DEADLINE_MS } from './rpc.js';
 import { remoteWorksSnapshotSchema, type RemoteRoom } from '@parley/protocol/remote';
 import type { RemoteStore } from './store.js';
@@ -465,6 +466,55 @@ export async function resumeSession(rpc: Rpc, ref: SessionRef): Promise<ResumeSe
   try {
     await rpc.call('sessions.resume', { ref });
     return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+// ---- Действия меню сессии (A38b): Stop, Put to sleep, Close, замена провайдера ----
+
+/** Команда по `ref` без результата: `feed.interrupt`, `sessions.stop`, `sessions.close`. */
+export type SessionCommandOutcome = { outcome: 'ok' } | { outcome: 'lost' } | Rejected;
+export type SessionCommand = 'feed.interrupt' | 'sessions.stop' | 'sessions.close';
+
+/** Изменяющий вызов: клиент его не повторяет, `connection_lost` — «не подтверждено». */
+export async function sessionCommand(rpc: Rpc, method: SessionCommand, ref: SessionRef): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call(method, { ref });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+export type SwitchOptions = Result<'sessions.switchOptions'>;
+export type SwitchOptionsOutcome = { outcome: 'ok'; options: SwitchOptions } | { outcome: 'lost' } | Rejected;
+
+/** Цели замены агента (чтение, `sessions.switchOptions`). */
+export async function loadSwitchOptions(rpc: Rpc, ref: SessionRef): Promise<SwitchOptionsOutcome> {
+  try {
+    const options = (await rpc.call('sessions.switchOptions', { ref })) as SwitchOptions;
+    return { outcome: 'ok', options };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+export interface SwitchAgentParams {
+  ref: SessionRef;
+  /** uuid: один на открытие листа; повтор того же запроса хост отдаёт тем же ответом. Без `force` (только окно). */
+  requestId: string;
+  provider: string;
+  carry: 'handover' | 'transcript';
+}
+export type SwitchAgentOutcome = { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' } | { outcome: 'lost' } | Rejected;
+
+/** Заменить агента сессии (`sessions.switchAgent`). Не повторяется; модель и effort — умолчание роли. */
+export async function switchAgent(rpc: Rpc, params: SwitchAgentParams): Promise<SwitchAgentOutcome> {
+  try {
+    const res = (await rpc.call('sessions.switchAgent', params)) as { outcome?: string; carried?: string } | null;
+    const outcome = res?.outcome === 'held' || res?.outcome === 'queued' ? res.outcome : 'started';
+    return { outcome, carried: res?.carried === 'transcript' ? 'transcript' : 'handover' };
   } catch (error) {
     return rejection(error) ?? { outcome: 'lost' };
   }
