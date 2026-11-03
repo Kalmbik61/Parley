@@ -1235,6 +1235,58 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(actions).toEqual([{ deviceId: D, kind: 'trust-folder', target: '/private/r' }]);
   });
 
+  it('A36a: consents.decide allow on a project-mcp card emits mcp-enable with the repo and names only; deny, empty allow and a stale pair emit nothing', async () => {
+    const fp = (c: string) => c.repeat(64);
+    const mcpCard = (id: string) => ({
+      id,
+      kind: 'project-mcp',
+      version: 1,
+      projectPath: '/p',
+      repo: '/private/repo',
+      servers: [
+        { name: 'github', fingerprint: fp('a'), command: 'npx SECRET-CMD' },
+        { name: 'files', fingerprint: fp('b'), command: 'node files.js' },
+      ],
+      at: 'a',
+      state: 'pending',
+      requestedBy: { source: 'launch' },
+    });
+    host.event('consents.changed', { upsert: ['c-1', 'c-2', 'c-3', 'c-4', 'c-5'].map(mcpCard), removed: [] });
+    host.handler = async (method, params) => {
+      const enabled = (params as { enabled?: { fingerprint: string }[] }).enabled ?? [];
+      if (enabled.some((pair) => pair.fingerprint === fp('c'))) throw new HostCallError('bad_request', 'Unknown or changed MCP server in the decision');
+      return { applied: true, state: (params as { decision: string }).decision === 'allow' ? 'allowed' : 'denied' };
+    };
+    call(D, 'a', 'consents.decide', { id: 'c-1', decision: 'allow', revision: 2, enabled: [{ name: 'github', fingerprint: fp('a') }, { name: 'files', fingerprint: fp('b') }] });
+    call(D, 'b', 'consents.decide', { id: 'c-2', decision: 'allow', enabled: [] });
+    call(D, 'c', 'consents.decide', { id: 'c-3', decision: 'allow' });
+    call(D, 'd', 'consents.decide', { id: 'c-4', decision: 'deny', revision: 1 });
+    call(D, 'e', 'consents.decide', { id: 'c-5', decision: 'allow', enabled: [{ name: 'github', fingerprint: fp('c') }] });
+    await flush();
+    expect(actions).toEqual([{ deviceId: D, kind: 'mcp-enable', target: { repo: '/private/repo', servers: ['github', 'files'] } }]);
+    expect(JSON.stringify(actions)).not.toMatch(/SECRET|aaaa|node/);
+    // The host passes `enabled` through and its bad_request on a stale pair reaches the phone unchanged.
+    expect(host.calls.find((c) => (c.params as { id: string }).id === 'c-1')?.params).toEqual({
+      id: 'c-1',
+      decision: 'allow',
+      revision: 2,
+      enabled: [{ name: 'github', fingerprint: fp('a') }, { name: 'files', fingerprint: fp('b') }],
+    });
+    expect(answer('e')).toEqual({ id: 'e', error: { code: 'bad_request', message: 'Unknown or changed MCP server in the decision' } });
+  });
+
+  it('A36a: malformed enabled pairs are bad_request before the host', async () => {
+    const fp = 'a'.repeat(64);
+    call(D, 'a', 'consents.decide', { id: 'c-1', decision: 'deny', enabled: [{ name: 'github', fingerprint: fp }] });
+    call(D, 'b', 'consents.decide', { id: 'c-1', decision: 'allow', enabled: [{ name: 'github', fingerprint: fp, command: 'x' }] });
+    call(D, 'c', 'consents.decide', { id: 'c-1', decision: 'allow', enabled: [{ name: 'github', fingerprint: 'not-hex' }] });
+    call(D, 'd', 'consents.decide', { id: 'c-1', decision: 'allow', enabled: Array.from({ length: 201 }, (_, i) => ({ name: `s${i}`, fingerprint: fp })) });
+    await flush();
+    for (const id of ['a', 'b', 'c', 'd']) expect(answer(id)).toMatchObject({ error: { code: 'bad_request' } });
+    expect(host.calls).toEqual([]);
+    expect(actions).toEqual([]);
+  });
+
   it('feed.decide: allow-always and plan auto-accept are weighty; plain Allow, deny, manual plan and answers are not', async () => {
     host.handler = async () => ({ applied: true, state: 'allowed' });
     const decide = (id: string, decision: unknown) => call(D, id, 'feed.decide', { ref: ref('s-1'), cardId: 'k', decision });

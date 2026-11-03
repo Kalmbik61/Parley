@@ -1110,6 +1110,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       for (const decision of ['allow', 'deny']) {
         expect((await answer(remote.client, 602, 'consents.decide', { id: 'c-01', decision })).error, decision).toMatchObject({ code: 'unknown_method' });
       }
+      expect((await answer(remote.client, 609, 'consents.decide', { id: 'c-01', decision: 'allow', enabled: [{ name: 'github', fingerprint: 'a'.repeat(64) }] })).error).toMatchObject({ code: 'unknown_method' });
       expect(s.spies['pty.send']).not.toHaveBeenCalled();
       expect(s.spies['sessions.create']).not.toHaveBeenCalled();
       expect(s.spies['consents.decide']).not.toHaveBeenCalled();
@@ -1257,6 +1258,24 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect((await answer(remote.client, 687, 'consents.decide', { id: 'x-1', decision: 'allow' })).error).toMatchObject({ code: 'bad_request' });
       expect((await answer(remote.client, 688, 'consents.decide', { id: 'c-04', decision: 'allow', by: 'window' })).error).toMatchObject({ code: 'bad_request' });
       expect(s.spies['consents.decide']).toHaveBeenCalledTimes(2);
+      // A36a: `enabled` — только с `allow`, не больше 200 пар, у пары строго `name` и sha256-hex `fingerprint`.
+      const fp = 'a'.repeat(64);
+      const enabled = [{ name: 'github', fingerprint: fp }];
+      expect((await answer(remote.client, 690, 'consents.decide', { id: 'c-05', decision: 'allow', enabled })).error).toBeUndefined();
+      expect(s.spies['consents.decide']).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'c-05', decision: 'allow', enabled }), expect.anything());
+      for (const [n, params] of [
+        [691, { id: 'c-06', decision: 'deny', enabled }],
+        [692, { id: 'c-06', decision: 'allow', enabled: [{ ...enabled[0], command: 'npx x' }] }],
+        [693, { id: 'c-06', decision: 'allow', enabled: [{ name: 'github', fingerprint: 'F'.repeat(64) }] }],
+        [694, { id: 'c-06', decision: 'allow', enabled: Array.from({ length: 201 }, (_, i) => ({ name: `s${i}`, fingerprint: fp })) }],
+      ] as const) {
+        expect((await answer(remote.client, n, 'consents.decide', params)).error, String(n)).toMatchObject({ code: 'bad_request' });
+      }
+      expect(s.spies['consents.decide']).toHaveBeenCalledTimes(3);
+      // Ревизия карточки — с `allow` и с `deny`; дробная или отрицательная — bad_request.
+      expect((await answer(remote.client, 695, 'consents.decide', { id: 'c-07', decision: 'deny', revision: 3 })).error).toBeUndefined();
+      expect((await answer(remote.client, 696, 'consents.decide', { id: 'c-07', decision: 'deny', revision: 0 })).error).toMatchObject({ code: 'bad_request' });
+      expect(s.spies['consents.decide']).toHaveBeenCalledTimes(4);
       // Лента субагента с телефона не читается (критик m5): правило отказывает до обработчика.
       expect((await answer(remote.client, 689, 'feed.snapshot', { ref, agentId: 'a1' })).error).toMatchObject({ code: 'bad_request' });
       s.close();

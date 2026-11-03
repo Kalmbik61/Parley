@@ -163,6 +163,8 @@ interface ConsentCardInfo {
   folder: string | null;
   /** Имя провайдера для людей у `agent-switch`. */
   provider: string | null;
+  /** realpath репозитория у `project-mcp` (A36a). */
+  repo: string | null;
 }
 
 /** `ref` из трёх строк без лишних ключей — цель `phone.action`. */
@@ -247,11 +249,16 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   function learnCards(items: unknown): void {
     if (!Array.isArray(items)) return;
     for (const item of items as unknown[]) {
-      const card = item as { id?: unknown; kind?: unknown; folder?: unknown; providerLabel?: unknown; provider?: unknown } | null;
+      const card = item as { id?: unknown; kind?: unknown; folder?: unknown; providerLabel?: unknown; provider?: unknown; repo?: unknown } | null;
       if (typeof card?.id !== 'string' || typeof card.kind !== 'string') continue;
       consentCards.delete(card.id);
       const provider = [card.providerLabel, card.provider].find((value): value is string => typeof value === 'string' && value !== '') ?? null;
-      consentCards.set(card.id, { kind: card.kind, folder: typeof card.folder === 'string' ? card.folder : null, provider });
+      consentCards.set(card.id, {
+        kind: card.kind,
+        folder: typeof card.folder === 'string' ? card.folder : null,
+        provider,
+        repo: typeof card.repo === 'string' ? card.repo : null,
+      });
       if (consentCards.size > MAX_CONSENT_CARDS) consentCards.delete(consentCards.keys().next().value as string);
     }
   }
@@ -281,7 +288,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
 
   /**
    * Весомые действия удавшегося вызова (спека 12, A34): запуск сессии, доверие к папке, смена провайдера, Allow «Always»,
-   * план с `auto-accept`. Обычный Allow, сообщения агентам и письма в комнаты — не весомые.
+   * план с `auto-accept`, включение серверов MCP (A36a). Обычный Allow, сообщения агентам и письма в комнаты — не весомые.
    */
   async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
@@ -296,6 +303,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       if (card.kind === 'folder-trust' && card.folder) actions.push({ kind: 'trust-folder', target: card.folder });
       // Имя провайдера, не `id` карточки; если карточка его не назвала — нейтральный текст.
       else if (card.kind === 'agent-switch') actions.push({ kind: 'provider-switch', target: card.provider ?? 'another provider' });
+      // A36a: включён хотя бы один сервер MCP — realpath репозитория и имена; пары хост уже сверил с карточкой.
+      // Команды, `env` и отпечатки в событие не идут.
+      else if (card.kind === 'project-mcp' && card.repo && Array.isArray(p.enabled)) {
+        const servers = [...new Set((p.enabled as { name: string }[]).map((pair) => pair.name))];
+        if (servers.length > 0) actions.push({ kind: 'mcp-enable', target: { repo: card.repo, servers } });
+      }
     } else if (method === 'feed.decide') {
       const ref = cleanRef(p.ref);
       const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
