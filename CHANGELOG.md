@@ -8,7 +8,8 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
-- **Board groundwork.** Backlog cards get a Review state and timestamps, kept in `.parley/board.json` next to the backlog. Agents can take a card when you ask (`backlog_take`) and hand it into Review with `report(..., backlog)`. The host serves card states and moves cards between columns and projects. The window has no Board tab yet.
+- **Board.** One board for all projects: Backlog, In progress, Review and Done. Write a task by text or voice, send a card to a session or room with a button or by dragging it (Undo for 5 seconds), accept or return the result. The Backlog tab of the project panel moved to the board.
+- **Board groundwork.** Backlog cards get a Review state and timestamps, kept in `.parley/board.json` next to the backlog. Agents can take a card when you ask (`backlog_take`) and hand it into Review with `report(..., backlog)`. The host serves card states and moves cards between columns and projects.
 
 ## 0.27.0
 
