@@ -5,6 +5,7 @@
  * the log; they are turned into a few progress events and a short summary.
  */
 
+import { describePullProgress } from '../../shared/relay-run-view.js';
 import type { RelayPullProgress } from '../../shared/relay-setup-types.js';
 
 /**
@@ -58,13 +59,7 @@ const LAYER_ID = /^[0-9a-f]{12,64}$/;
 const PLAIN_LAYER = /^([0-9a-f]{12,64}): (.+)$/;
 const REGISTERING = new Set(['Pulling fs layer', 'Waiting', 'Downloading', 'Extracting', 'Pull complete', 'Already exists']);
 
-const megabytes = (bytes: number): string => (bytes / 1_000_000).toFixed(1);
-
-/** «41.2 of 82.0 MB · 3 of 8 layers»; only layers when the sizes are unknown. */
-export function describeProgress(p: RelayPullProgress): string {
-  const layers = `${p.layersDone} of ${p.layersTotal} layers`;
-  return p.bytesTotal === null || p.bytesDone === null ? layers : `${megabytes(p.bytesDone)} of ${megabytes(p.bytesTotal)} MB · ${layers}`;
-}
+export const describeProgress = describePullProgress;
 
 export function createPullProgress(sink: PullProgressSink): PullProgress {
   const now = sink.now ?? Date.now;
