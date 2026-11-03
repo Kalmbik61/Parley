@@ -29,6 +29,7 @@ import {
   plannedWorktree,
   prepareWorktreeGitWrites,
   projectChanges,
+  removeWorktreeCopy,
   worktreeDiff,
 } from './worktree.js';
 
@@ -472,6 +473,97 @@ describe('discardWorktree', () => {
     await discardWorktree(project, info, { force: true });
 
     await expect(readFile(path.join(info.path, 'draft.md'), 'utf8')).rejects.toThrow();
+    expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
+  });
+});
+
+describe('removeWorktreeCopy', () => {
+  async function fresh() {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    return info;
+  }
+  async function ownCommit(info: { path: string }): Promise<void> {
+    await setIdentity(info.path);
+    await writeFile(path.join(info.path, 'a.txt'), 'своё\n', 'utf8');
+    await git(info.path, ['add', 'a.txt']);
+    await git(info.path, ['commit', '-m', 'свой']);
+  }
+
+  it('чистая влитая — каталог и ветка удалены', async () => {
+    const info = await fresh();
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: true, branchDeleted: true });
+
+    await expect(stat(info.path)).rejects.toThrow();
+    expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
+  });
+
+  it('чистая с невлитым коммитом — каталог удалён, ветка осталась', async () => {
+    const info = await fresh();
+    await ownCommit(info);
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: true, branchDeleted: false });
+
+    await expect(stat(info.path)).rejects.toThrow();
+    await git(project, ['rev-parse', '--verify', info.branch]);
+  });
+
+  it('изменённый отслеживаемый файл — dirty', async () => {
+    const info = await fresh();
+    await writeFile(path.join(info.path, 'README.md'), 'правка\n', 'utf8');
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: false, reason: 'dirty', files: 1 });
+
+    await expect(stat(info.path)).resolves.toBeTruthy();
+  });
+
+  it('неотслеживаемый файл — dirty', async () => {
+    const info = await fresh();
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: false, reason: 'dirty', files: 1 });
+  });
+
+  it('force убирает грязную, невлитую ветку оставляет', async () => {
+    const info = await fresh();
+    await ownCommit(info);
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+
+    await expect(removeWorktreeCopy(project, info, { force: true })).resolves.toEqual({
+      removed: true,
+      branchDeleted: false,
+    });
+
+    await expect(stat(info.path)).rejects.toThrow();
+  });
+
+  it('база — SHA: влитая ветка удаляется', async () => {
+    await initProject();
+    const sha = (await git(project, ['rev-parse', 'HEAD'])).stdout.trim();
+    const info = plannedWorktree(project, 'w-0001', 's-02', sha, worktreeRoot);
+    await createWorktree(project, info);
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: true, branchDeleted: true });
+  });
+
+  it('подменённый .git — refused, каталог на месте', async () => {
+    const info = await fresh();
+    await writeFile(path.join(info.path, '.git'), `gitdir: ${path.join(root, 'чужой')}\n`);
+
+    const result = await removeWorktreeCopy(project, info);
+
+    expect(result).toMatchObject({ removed: false, reason: 'refused' });
+    await expect(stat(info.path)).resolves.toBeTruthy();
+  });
+
+  it('каталога уже нет — правило ветки всё равно применено', async () => {
+    const info = await fresh();
+    await rm(info.path, { recursive: true, force: true });
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: true, branchDeleted: true });
+
     expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
   });
 });

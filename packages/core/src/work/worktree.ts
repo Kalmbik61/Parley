@@ -1120,3 +1120,79 @@ export async function discardWorktree(
   await run('git', [...NO_FSMONITOR, ...removeArgs]);
   await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
 }
+
+/** Влита ли ветка в базу: `branch` — предок `base`. Код 0 — да, 1 — нет, прочее — сбой git. */
+export async function isBranchMerged(projectPath: string, branch: string, base: string): Promise<boolean> {
+  const { code } = await exitCode(['-C', projectPath, 'merge-base', '--is-ancestor', '--end-of-options', branch, base]);
+  if (code === 0) return true;
+  if (code === 1) return false;
+  throw new Error(`git merge-base --is-ancestor: exit code ${code}`);
+}
+
+export type RemoveCopyResult =
+  | { removed: true; branchDeleted: boolean }
+  | { removed: false; reason: 'dirty'; files: number }
+  | { removed: false; reason: 'refused'; message: string };
+
+/**
+ * Убирает каталог копии сессии, ветку удаляет только влитую в базу. Грязная копия без
+ * `force` не трогается (`dirty` с числом записей; каталог состояния проекта не в счёт).
+ * Каталога уже нет — шаг удаления пропускается, но правило ветки применяется.
+ */
+export async function removeWorktreeCopy(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { force?: boolean } = {},
+): Promise<RemoveCopyResult> {
+  await assertRevisions(projectPath, [info.base, info.branch]);
+  const exists = await stat(info.path).then(
+    () => true,
+    () => false,
+  );
+  if (exists) {
+    let own: { cwd: string; pin: string[] };
+    try {
+      own = await pinnedCheckout(projectPath, info.path);
+    } catch (error) {
+      if (error instanceof GitStateError) return { removed: false, reason: 'refused', message: error.message };
+      throw error;
+    }
+    if (options.force !== true) {
+      const prefix = await projectPrefix(await readerAt(projectPath));
+      const entries = parsePorcelainPaths(
+        await readGitBuffer(await readerAt(own.cwd, own.pin), [
+          'status',
+          '--porcelain',
+          '-z',
+          '--untracked-files=all',
+          NO_SUBMODULE_WALK,
+          '--',
+          '.',
+          ...STATE_DIRS.map((dir) => `:(exclude)${prefix}${dir}`),
+        ]),
+      );
+      if (entries.length > 0) return { removed: false, reason: 'dirty', files: entries.length };
+    }
+    const removeArgs = ['-C', projectPath, 'worktree', 'remove'];
+    if (options.force === true) removeArgs.push('--force');
+    removeArgs.push('--', info.path);
+    try {
+      await run('git', [...NO_FSMONITOR, ...removeArgs]);
+    } catch (error) {
+      const stderr = (error as { stderr?: unknown }).stderr;
+      const first = typeof stderr === 'string' ? (stderr.split('\n').find((line) => line.trim() !== '') ?? '') : '';
+      return { removed: false, reason: 'refused', message: first !== '' ? first : String(error) };
+    }
+  } else {
+    // Регистрация могла остаться после ручного удаления: с ней git не даст снять ветку.
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
+  }
+
+  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+  let branchDeleted = false;
+  if (code === 0 && info.branch !== info.base && (await isBranchMerged(projectPath, info.branch, info.base))) {
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+    branchDeleted = true;
+  }
+  return { removed: true, branchDeleted };
+}

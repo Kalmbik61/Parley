@@ -301,6 +301,8 @@ export {
   DirtyWorktreeError,
   isGitRepo,
   isGitRoot,
+  isBranchMerged,
+  removeWorktreeCopy,
   baseBranchOf,
   checkoutGitDir,
   checkProjectConnectivity,
@@ -328,6 +330,7 @@ export type {
   MergeCheck,
   MergeResult,
   ProjectChanges,
+  RemoveCopyResult,
   WorktreeDiff,
 } from './work/worktree.js';
 export {
