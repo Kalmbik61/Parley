@@ -13,6 +13,7 @@ import { turnStatusText } from './fold';
 import { CARD_STATE_TEXT, errorText, noticeText, toolName, toolSummary } from './summary';
 import type { OutMessage } from './outbox';
 import { HELD_BUBBLE, WAITING_BUBBLE } from './resume';
+import { splitQuote } from './reply';
 
 export const soft = (color: string, alpha = '26'): string => (/^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color);
 
@@ -28,15 +29,38 @@ const KIND_ICON: Record<WorkKind, SFSymbol> = {
   tools: 'wrench.and.screwdriver',
 };
 
-function Bubble({ text, dim, children }: { text: string; dim?: boolean; children?: React.ReactNode }) {
+/** The prompt's leading `>` lines as a folded quote (D1 §9.2): a `tint` bar, up to three lines. */
+function QuoteBlock({ quote }: { quote: string }) {
   const c = useColors();
   return (
+    <View style={[styles.quote, { borderLeftColor: c.tint }]}>
+      <Text numberOfLines={3} allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+        {quote}
+      </Text>
+    </View>
+  );
+}
+
+function Bubble({ text, dim, onLongPress, children }: { text: string; dim?: boolean; onLongPress?(): void; children?: React.ReactNode }) {
+  const c = useColors();
+  const { quote, text: body } = splitQuote(text);
+  return (
     <View style={styles.bubbleWrap}>
-      <View accessible accessibilityLabel={`You: ${text}`} style={[styles.bubble, { backgroundColor: soft(c.tint), opacity: dim === true ? 0.6 : 1 }]}>
-        <Text selectable allowFontScaling style={[typography.body, { color: c.label }]}>
-          {text}
-        </Text>
-      </View>
+      <Pressable
+        disabled={onLongPress === undefined}
+        onLongPress={onLongPress}
+        accessible
+        accessibilityLabel={`You: ${text}`}
+        accessibilityHint={onLongPress === undefined ? undefined : 'Long press for actions'}
+        style={[styles.bubble, { backgroundColor: soft(c.tint), opacity: dim === true ? 0.6 : 1 }]}
+      >
+        {quote !== null && <QuoteBlock quote={quote} />}
+        {body !== '' && (
+          <Text allowFontScaling style={[typography.body, { color: c.label }]}>
+            {body}
+          </Text>
+        )}
+      </Pressable>
       {children}
     </View>
   );
@@ -134,14 +158,14 @@ function Centered({ text, icon, tone }: { text: string; icon?: SFSymbol; tone?: 
 }
 
 /** Items of the feed. Pending cards are not drawn here: the screen shows the live card body at the end (D1 §9.4). */
-export const FeedItemView = memo(function FeedItemView({ item }: { item: FeedItem }) {
+export const FeedItemView = memo(function FeedItemView({ item, onLongPress }: { item: FeedItem; /** Long press on an agent reply or an own prompt (the action sheet, D1 §9.2). */ onLongPress?(item: FeedItem): void }) {
   const c = useColors();
   switch (item.kind) {
     case 'prompt':
-      return <Bubble text={item.images > 0 && item.text === '' ? `${item.images} images` : item.text} />;
+      return <Bubble text={item.images > 0 && item.text === '' ? `${item.images} images` : item.text} {...(onLongPress === undefined || item.text.trim() === '' ? {} : { onLongPress: () => onLongPress(item) })} />;
     case 'text':
       return (
-        <View accessible={false} style={styles.reply}>
+        <Pressable disabled={onLongPress === undefined || item.streaming} onLongPress={() => onLongPress?.(item)} accessible={false} style={styles.reply}>
           <Markdown text={item.text} streaming={item.streaming} />
           {item.streaming && (
             <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
@@ -153,7 +177,7 @@ export const FeedItemView = memo(function FeedItemView({ item }: { item: FeedIte
               Text truncated — open the terminal for the rest
             </Text>
           )}
-        </View>
+        </Pressable>
       );
     case 'tool':
       return <ToolRow item={item} />;
@@ -172,9 +196,9 @@ export const FeedItemView = memo(function FeedItemView({ item }: { item: FeedIte
   }
 });
 
-export function FoldRowView({ row, onToggleGroup, onToggleTurn }: { row: FoldRow; onToggleGroup(key: string): void; onToggleTurn(key: string): void }) {
+export function FoldRowView({ row, onToggleGroup, onToggleTurn, onLongPress }: { row: FoldRow; onToggleGroup(key: string): void; onToggleTurn(key: string): void; onLongPress?(item: FeedItem): void }) {
   const c = useColors();
-  if (row.kind === 'item') return <FeedItemView item={row.item} />;
+  if (row.kind === 'item') return <FeedItemView item={row.item} {...(onLongPress === undefined ? {} : { onLongPress })} />;
   if (row.kind === 'control') {
     const tone = row.status === 'failed' ? c.danger : row.status === 'stopped' ? c.needsYou : c.label2;
     const text = turnStatusText(row.status, row.durationMs);
@@ -255,7 +279,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   flexShrink: { flexShrink: 1 },
   bubbleWrap: { alignItems: 'flex-end', gap: 4 },
-  bubble: { maxWidth: '80%', borderRadius: spacing.cardRadius, paddingHorizontal: 14, paddingVertical: 10 },
+  bubble: { maxWidth: '80%', borderRadius: spacing.cardRadius, paddingHorizontal: 14, paddingVertical: 10, gap: 6 },
+  quote: { borderLeftWidth: 3, paddingLeft: 8 },
   reply: { gap: 4 },
   toolRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 },
   detail: { borderRadius: 10, padding: 10, gap: 8 },

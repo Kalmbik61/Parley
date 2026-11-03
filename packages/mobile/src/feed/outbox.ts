@@ -27,13 +27,18 @@ export function visibleOut(out: readonly OutMessage[], items: readonly FeedItem[
 
 const store = new Map<string, OutMessage[]>();
 const drafts = new Map<string, string>();
+/** The reply plate lives with the session's draft (D1 §9.2). */
+const quotes = new Map<string, string>();
 
 export const outboxOf = (key: string): OutMessage[] => store.get(key) ?? [];
 export const setOutbox = (key: string, list: OutMessage[]): void => void store.set(key, list);
 export const draftOf = (key: string): string => drafts.get(key) ?? '';
 export const setDraft = (key: string, text: string): void => void (text === '' ? drafts.delete(key) : drafts.set(key, text));
+export const quoteOf = (key: string): string | null => quotes.get(key) ?? null;
+export const setQuote = (key: string, quote: string | null): void => void (quote === null ? quotes.delete(key) : quotes.set(key, quote));
 /** Tests. */
 export const clearOutbox = (): void => {
   store.clear();
   drafts.clear();
+  quotes.clear();
 };

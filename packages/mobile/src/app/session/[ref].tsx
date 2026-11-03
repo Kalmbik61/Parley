@@ -7,6 +7,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { FeedItem } from '@parley/core';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
@@ -21,6 +22,9 @@ import { DEMO } from '../../dev/flags';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
+import { copyText, messageActions, type ActionId } from '../../feed/message-actions';
+import { replyQuote } from '../../feed/reply';
+import { SelectTextSheet, type Selection } from '../../feed/SelectTextSheet';
 import { FoldRowView, OutBubble } from '../../feed/FeedViews';
 import { foldFeed, type FoldRow } from '../../feed/fold';
 import { visibleOut, type OutMessage } from '../../feed/outbox';
@@ -38,6 +42,7 @@ import { runtime } from '../../runtime/instance';
 import { spacing, typography, useColors } from '../../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
 import { Button } from '../../ui/Button';
+import { ReplyPlate } from '../../ui/ReplyPlate';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
@@ -92,6 +97,9 @@ export default function SessionScreen() {
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
   useCloseOnLock(switchOpen, () => setSwitchOpen(false));
+  // Select Text (D1 §9.2): the message source in a read-only field; `initial` is a developer-preview selection.
+  const [selectFor, setSelectFor] = useState<{ text: string; initial?: Selection } | null>(null);
+  useCloseOnLock(selectFor !== null, () => setSelectFor(null));
   const seen = useRef(0);
 
   const load = (r: SessionRef): void => {
@@ -168,9 +176,9 @@ export default function SessionScreen() {
   const resume = useResume(client, ref, resumeFacts, { send: chat.sendText, textBack: chat.setDraft, notify: toast.show });
   const hasResume = DEMO || (state?.methods?.includes('sessions.resume') ?? false);
   // ⬆ on a sleeping session asks first; the text stays in the field until the person agrees.
-  const askResumeAndSend = (text: string): void =>
+  const askResumeAndSend = (text: string, fromField = true): void =>
     Alert.alert(`${found?.session.label ?? 'This session'} is sleeping`, undefined, [
-      { text: 'Resume and send', onPress: () => { if (resume.start(text)) chat.setDraft(''); } },
+      { text: 'Resume and send', onPress: () => { if (resume.start(text) && fromField) chat.setDraft(''); } },
       { text: 'Cancel', style: 'cancel' },
     ]);
   const pendingRow = resume.view.pending;
@@ -179,6 +187,18 @@ export default function SessionScreen() {
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  // Developer preview of the message pieces (A42): set during render once the session is found.
+  const previewMsg = useRef<{ reply(): void; prompt(): void; select(): void; plate(): void } | null>(null);
+  useEffect(() => {
+    if (!DEMO || found === null || preview === undefined) return;
+    const t = setTimeout(() => {
+      if (preview === 'actions-reply') previewMsg.current?.reply();
+      else if (preview === 'actions-prompt') previewMsg.current?.prompt();
+      else if (preview === 'select') previewMsg.current?.select();
+      else if (preview === 'plate') previewMsg.current?.plate();
+    }, 900);
+    return () => clearTimeout(t);
+  }, [preview, found !== null]);
   // Developer preview of the ⋯ menu pieces: the functions exist only once the session is found (set during render).
   const previewActs = useRef<{ menu(): void; close(): void; switchSheet(): void } | null>(null);
   useEffect(() => {
@@ -361,6 +381,32 @@ export default function SessionScreen() {
     );
   };
   previewActs.current = { menu, close: () => confirmThen('close'), switchSheet: () => setSwitchOpen(true) };
+  // Long press on an agent reply or an own prompt (D1 §9.2): Copy, Reply, Send again, Select Text.
+  const onItemLongPress = (item: FeedItem): void => {
+    if (item.kind !== 'text' && item.kind !== 'prompt') return;
+    const kind = item.kind === 'prompt' ? 'prompt' : 'agent';
+    const actions = messageActions({ kind, hasPtySend: DEMO || (state.methods?.includes('pty.send') ?? false), closed: session.lifecycle === 'closed' });
+    haptic.selection();
+    ActionSheetIOS.showActionSheetWithOptions({ options: [...actions.map((a) => a.title), 'Cancel'], cancelButtonIndex: actions.length }, (i) => {
+      const id: ActionId | undefined = actions[i]?.id;
+      if (id === 'copy') {
+        void Clipboard.setStringAsync(copyText(kind, item.text));
+        toast.show('Copied');
+      } else if (id === 'reply') chat.setQuote(replyQuote(item.text, ''));
+      else if (id === 'again') {
+        const text = item.text.trim();
+        if (sleeping) askResumeAndSend(text, false);
+        else void chat.again(text);
+      } else if (id === 'select') setSelectFor({ text: kind === 'prompt' ? item.text.trim() : item.text });
+    });
+  };
+  // Developer preview of the message pieces (screenshots, A42): `?preview=actions-reply|actions-prompt|select|plate`.
+  previewMsg.current = {
+    reply: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i !== undefined) onItemLongPress(i); },
+    prompt: () => { const i = (items ?? []).find((x) => x.kind === 'prompt'); if (i !== undefined) onItemLongPress(i); },
+    select: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i?.kind === 'text') setSelectFor({ text: i.text, initial: { start: 0, end: i.text.indexOf('.') + 1 } }); },
+    plate: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i?.kind === 'text') chat.setQuote(replyQuote(i.text, '')); },
+  };
   // "Needs you" without a card on screen is one pinned line under the bar (D1 §9.1); with a card the card says it.
   const strip =
     attention === 'needs-you' && first === undefined && !loading
@@ -392,7 +438,7 @@ export default function SessionScreen() {
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
-        renderItem={({ item: r }) => (r.t === 'fold' ? <FoldRowView row={r.row} onToggleGroup={toggleGroup} onToggleTurn={toggleTurn} /> : <OutBubble message={r.message} onRetry={(m) => void chat.retry(m)} onEdit={chat.edit} />)}
+        renderItem={({ item: r }) => (r.t === 'fold' ? <FoldRowView row={r.row} onToggleGroup={toggleGroup} onToggleTurn={toggleTurn} onLongPress={onItemLongPress} /> : <OutBubble message={r.message} onRetry={(m) => void chat.retry(m)} onEdit={chat.edit} />)}
         ListEmptyComponent={
           feed === undefined || feed.status === 'loading' ? (
             <Skeleton rows={3} />
@@ -461,14 +507,17 @@ export default function SessionScreen() {
         {first !== undefined && parts !== null ? (
           parts.actions
         ) : (
+          <>
+            {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
           <Composer
             label={session.label}
             mode={hidden}
             draft={chat.draft}
             onChange={chat.setDraft}
-            onSend={() => (sleeping ? messageProblem(chat.draft) === null && askResumeAndSend(chat.draft) : void chat.send())}
+            onSend={() => (sleeping ? messageProblem(chat.draft) === null && messageProblem(chat.composed) === null && askResumeAndSend(chat.composed) : void chat.send())}
             busy={chat.busy || resume.view.pending !== null}
           />
+          </>
         )}
       </View>
       <Toast message={toast.message} />
@@ -520,6 +569,19 @@ export default function SessionScreen() {
             toast.show(text);
           }}
         />
+      </Modal>
+      <Modal visible={selectFor !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectFor(null)}>
+        {selectFor !== null && (
+          <SelectTextSheet
+            text={selectFor.text}
+            {...(selectFor.initial === undefined ? {} : { initial: selectFor.initial })}
+            onClose={() => setSelectFor(null)}
+            onReply={(selected) => {
+              chat.setQuote(replyQuote(selectFor.text, selected));
+              setSelectFor(null);
+            }}
+          />
+        )}
       </Modal>
       {first !== undefined ? (
         <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>

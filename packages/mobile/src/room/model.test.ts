@@ -12,6 +12,7 @@ import {
   recipientsOf,
   roomComposer,
   roomHeader,
+  roomOutgoing,
   sendLetter,
   toLine,
   uiOfRoomSend,
@@ -131,5 +132,18 @@ describe('visibleOutLetters', () => {
     expect(visibleOutLetters([out({ state: 'sending' }), out({ id: 'o2', state: 'failed' })], [])).toHaveLength(2);
     expect(visibleOutLetters([out()], [])).toHaveLength(1);
     expect(visibleOutLetters([out({ messageId: null })], [msg('m-1', 'human', '2026-11-01T08:00:00.000Z', { text: 'go' })])).toHaveLength(1);
+  });
+});
+
+describe('roomOutgoing (Reply with selection, D1 §9.7)', () => {
+  const m = { id: 'm-9', roomId: 'r-1', from: 's-1', to: [], at: '2026-11-03T10:00:00.000Z', text: 'Wave 3 is merged; next A27 goes in parallel.', kind: 'note', readBy: {} } as Message;
+  it('no reply: the text as typed, no replyTo', () => {
+    expect(roomOutgoing('hello', null)).toEqual({ text: 'hello', replyTo: null });
+  });
+  it('a plain Reply: replyTo, the text as typed', () => {
+    expect(roomOutgoing('ok', { message: m, selected: '' })).toEqual({ text: 'ok', replyTo: 'm-9' });
+  });
+  it('Reply with selection: replyTo and the fragment as a quote block', () => {
+    expect(roomOutgoing('why?', { message: m, selected: ' A27 goes in parallel ' })).toEqual({ text: '> A27 goes in parallel\n\nwhy?', replyTo: 'm-9' });
   });
 });
