@@ -16,6 +16,8 @@ export const PROBE = {
   ufw: 'ufw status',
   docker: 'docker --version',
   compose: 'docker compose version',
+  // One JSON line per running container; no containers or no Docker → empty output (`xargs -r` runs nothing).
+  containers: `docker ps -q | xargs -r docker inspect --format '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"path":{{json .Path}},"args":{{json .Args}},"workdir":{{json .Config.WorkingDir}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}},"networkMode":{{json .HostConfig.NetworkMode}}}'`,
   env: `cat ${INSTALL_DIR}/.env`,
   previousEnv: `cat ${INSTALL_DIR}/previous/.env`,
 } as const;
@@ -37,6 +39,29 @@ export interface Listener {
   processes: string[];
 }
 
+export interface ContainerMount {
+  type: string;
+  source: string;
+  destination: string;
+  rw: boolean;
+}
+
+export interface ContainerInfo {
+  id: string;
+  /** Without the leading `/` Docker adds. */
+  name: string;
+  image: string;
+  labels: Record<string, string>;
+  path: string;
+  args: string[];
+  workdir: string;
+  mounts: ContainerMount[];
+  /** Published TCP ports (`HostPort` on the host side), one entry per host address. */
+  published: Array<{ hostPort: number; hostIp: string }>;
+  networks: string[];
+  networkMode: string;
+}
+
 export interface ProbeResult {
   os: OsInfo;
   arch: 'amd64' | 'arm64' | null;
@@ -45,6 +70,8 @@ export interface ProbeResult {
   docker: boolean;
   compose: boolean;
   listeners: Listener[];
+  /** Running containers; empty without Docker or when the command failed. */
+  containers: ContainerInfo[];
   ufwActive: boolean;
   /** `.env` of the earlier install (the wizard writes it), `null` — none. */
   install: Record<string, string> | null;
@@ -108,9 +135,64 @@ export function parseListeners(text: string): Listener[] {
   return [...found].map(([port, names]) => ({ port, processes: [...names] })).sort((a, b) => a.port - b.port);
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const str = (value: unknown): string => (typeof value === 'string' ? value : '');
+const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+
+function parseContainer(value: unknown): ContainerInfo | null {
+  if (!isRecord(value) || str(value.id) === '') return null;
+  const labels: Record<string, string> = {};
+  if (isRecord(value.labels)) for (const [key, label] of Object.entries(value.labels)) if (typeof label === 'string') labels[key] = label;
+  const mounts: ContainerMount[] = [];
+  if (Array.isArray(value.mounts)) {
+    for (const m of value.mounts) {
+      if (isRecord(m)) mounts.push({ type: str(m.Type), source: str(m.Source), destination: str(m.Destination), rw: m.RW === true });
+    }
+  }
+  const published: ContainerInfo['published'] = [];
+  if (isRecord(value.ports)) {
+    for (const [key, bindings] of Object.entries(value.ports)) {
+      if (!key.endsWith('/tcp') || !Array.isArray(bindings)) continue;
+      for (const b of bindings) {
+        const hostPort = isRecord(b) ? Number(b.HostPort) : NaN;
+        if (isRecord(b) && Number.isInteger(hostPort) && hostPort >= 1 && hostPort <= 65535) published.push({ hostPort, hostIp: str(b.HostIp) });
+      }
+    }
+  }
+  return {
+    id: str(value.id),
+    name: str(value.name).replace(/^\//, ''),
+    image: str(value.image),
+    labels,
+    path: str(value.path),
+    args: strings(value.args),
+    workdir: str(value.workdir),
+    mounts,
+    published,
+    networks: isRecord(value.networks) ? Object.keys(value.networks) : [],
+    networkMode: str(value.networkMode),
+  };
+}
+
+/** Output of `PROBE.containers`: one JSON object per line. Empty output is fine; broken lines are skipped. */
+export function parseContainers(text: string): ContainerInfo[] {
+  const found: ContainerInfo[] = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    try {
+      const container = parseContainer(JSON.parse(trimmed));
+      if (container !== null) found.push(container);
+    } catch {
+      // not JSON: skip the line
+    }
+  }
+  return found;
+}
+
 export const parseUfwActive = (text: string): boolean => /^Status:\s+active/m.test(text);
 
-/** Is this process the Docker port proxy (our own earlier install holds the port)? */
+/** Is this process the Docker port proxy? */
 export const isDockerProcess = (name: string): boolean => name === 'docker-proxy' || name === 'dockerd';
 
 export interface ProbeBase {
@@ -131,11 +213,12 @@ export async function probeBase(shell: RemoteShell): Promise<ProbeBase> {
 /** Stage 2: reads that need root (`ss -p`, `ufw`, Docker, the install directory). `shell` already elevates. */
 export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<ProbeResult> {
   const as = { sudo: true };
-  const [listen, ufw, docker, compose, env, previous] = await Promise.all([
+  const [listen, ufw, docker, compose, containers, env, previous] = await Promise.all([
     shell.run(PROBE.listen, as),
     shell.run(PROBE.ufw, as),
     shell.run(PROBE.docker, as),
     shell.run(PROBE.compose, as),
+    shell.run(PROBE.containers, as),
     shell.run(PROBE.env, as),
     shell.run(PROBE.previousEnv, as),
   ]);
@@ -144,8 +227,45 @@ export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<Pr
     docker: docker.code === 0,
     compose: compose.code === 0,
     listeners: listen.code === 0 ? parseListeners(listen.stdout) : [],
+    containers: containers.code === 0 ? parseContainers(containers.stdout) : [],
     ufwActive: ufw.code === 0 && parseUfwActive(ufw.stdout),
     install: env.code === 0 ? parseEnv(env.stdout) : null,
     previous: previous.code === 0 ? parseEnv(previous.stdout) : null,
   };
 }
+
+/** The compose project label of the containers the wizard installs. */
+export const OUR_PROJECT = 'parley-relay';
+export const isOurs = (container: ContainerInfo): boolean => container.labels['com.docker.compose.project'] === OUR_PROJECT;
+
+export type PortHolder =
+  | { kind: 'container'; container: ContainerInfo }
+  | { kind: 'process'; names: string[] }
+  | { kind: 'unknown-docker' };
+
+/**
+ * Who holds each busy port (spec 3.2). Busy = a listener from `ss` or a port published by a running container
+ * (Docker without userland-proxy shows no listener). Our own containers (`parley-relay` project) hold nothing,
+ * and neither does the Docker proxy that serves them. `.env` is not consulted.
+ */
+export function portHolders(probe: ProbeResult): Map<number, PortHolder> {
+  const holders = new Map<number, PortHolder>();
+  const ports = new Set<number>(probe.listeners.map((l) => l.port));
+  for (const c of probe.containers) for (const p of c.published) ports.add(p.hostPort);
+  for (const port of ports) {
+    const publishers = probe.containers.filter((c) => c.published.some((p) => p.hostPort === port));
+    const foreign = publishers.find((c) => !isOurs(c));
+    if (foreign !== undefined) {
+      holders.set(port, { kind: 'container', container: foreign });
+      continue;
+    }
+    const names = probe.listeners.find((l) => l.port === port)?.processes ?? null;
+    if (names === null) continue; // published by our container only, no listener
+    const dockerOnly = names.length > 0 && names.every(isDockerProcess);
+    if (publishers.length > 0 && (dockerOnly || names.length === 0)) continue;
+    holders.set(port, dockerOnly ? { kind: 'unknown-docker' } : { kind: 'process', names });
+  }
+  return holders;
+}
+
+export const holderOf = (probe: ProbeResult, port: number): PortHolder | null => portHolders(probe).get(port) ?? null;

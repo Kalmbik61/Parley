@@ -36,7 +36,7 @@ interface FakeServer {
   stdins: string[];
 }
 
-const READS = /^(cat \/etc\/os-release|uname -m|id -u|sudo -n true|ss -ltnp|ufw status|docker --version|docker compose version|cat \/opt\/parley-relay\/(previous\/)?\.env)$/;
+const READS = /^(cat \/etc\/os-release|uname -m|id -u|sudo -n true|ss -ltnp|ufw status|docker --version|docker compose version|docker ps -q \| xargs -r docker inspect --format '[^']*'|cat \/opt\/parley-relay\/(previous\/)?\.env)$/;
 
 function connection(server: FakeServer): SshConnection {
   return {

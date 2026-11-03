@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { shQuote, type SetupIntent } from './input.js';
-import { INSTALL_DIR, isDockerProcess, type Listener, type ProbeResult } from './probe.js';
+import { INSTALL_DIR, holderOf, type PortHolder, type ProbeResult } from './probe.js';
 import { managedFiles, proxySnippet, sha256, type EnvValues, type ProxyServer, type SetupMode } from './templates.js';
 
 /**
@@ -34,14 +34,8 @@ export type PortDecision =
 
 const PROXY_PORT_CANDIDATES = [8787, 18787, 28787];
 
-/** Listeners that are not ours: our own earlier install (Docker's port proxy, with `.env` present) does not count. */
-function foreign(probe: ProbeResult): Listener[] {
-  if (probe.install === null) return probe.listeners;
-  return probe.listeners.filter((l) => l.processes.length === 0 || !l.processes.every(isDockerProcess));
-}
-
-function serverKind(listener: Listener | undefined): ProxyServer {
-  const names = listener?.processes ?? [];
+function serverKind(holder: PortHolder | null): ProxyServer {
+  const names = holder?.kind === 'process' ? holder.names : [];
   if (names.includes('nginx')) return 'nginx';
   if (names.some((n) => n === 'apache2' || n === 'httpd')) return 'apache';
   return 'other';
@@ -49,15 +43,14 @@ function serverKind(listener: Listener | undefined): ProxyServer {
 
 /** Busy ports (spec 6.7): both free → Caddy on 80/443; only 443 busy → Caddy on 8443; 80 busy → loopback + snippet. */
 export function decidePorts(probe: ProbeResult): PortDecision {
-  const busy = foreign(probe);
-  const at = (port: number): Listener | undefined => busy.find((l) => l.port === port);
-  if (at(80) !== undefined) {
-    const relayPort = PROXY_PORT_CANDIDATES.find((port) => at(port) === undefined);
+  const at = (port: number): PortHolder | null => holderOf(probe, port);
+  if (at(80) !== null) {
+    const relayPort = PROXY_PORT_CANDIDATES.find((port) => at(port) === null);
     if (relayPort === undefined) return { mode: 'blocked', reason: 'Port 80 is taken and no local port is free for the relay' };
     return { mode: 'proxy', relayPort, server: serverKind(at(80)) };
   }
-  if (at(443) === undefined) return { mode: 'caddy', httpPort: 80, httpsPort: 443 };
-  if (at(8443) !== undefined) return { mode: 'blocked', reason: 'Ports 443 and 8443 are both taken' };
+  if (at(443) === null) return { mode: 'caddy', httpPort: 80, httpsPort: 443 };
+  if (at(8443) !== null) return { mode: 'blocked', reason: 'Ports 443 and 8443 are both taken' };
   return { mode: 'caddy', httpPort: 80, httpsPort: 8443 };
 }
 

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlan, decidePorts, relayAddress, sslipName } from './plan.js';
-import { parseOsRelease, type Listener, type ProbeResult } from './probe.js';
+import { holderOf, parseContainers, parseEnv, parseListeners, parseOsRelease, type ContainerInfo, type Listener, type ProbeResult } from './probe.js';
 import { CADDYFILE, COMPOSE_CADDY, proxySnippet } from './templates.js';
 
 const IMAGE = 'ghcr.io/kalmbik61/parley-relay@sha256:' + 'a'.repeat(64);
@@ -16,10 +16,26 @@ function probe(over: Partial<ProbeResult> = {}, listeners: Listener[] = []): Pro
     docker: false,
     compose: false,
     listeners,
+    containers: [],
     ufwActive: false,
     install: null,
     previous: null,
     ...over,
+  };
+}
+function container(name: string, project: string, ports: number[]): ContainerInfo {
+  return {
+    id: name,
+    name,
+    image: 'img',
+    labels: { 'com.docker.compose.project': project },
+    path: 'x',
+    args: [],
+    workdir: '',
+    mounts: [],
+    published: ports.map((hostPort) => ({ hostPort, hostIp: '0.0.0.0' })),
+    networks: [],
+    networkMode: 'default',
   };
 }
 const nginx: Listener[] = [{ port: 80, processes: ['nginx'] }, { port: 443, processes: ['nginx'] }];
@@ -40,10 +56,46 @@ describe('decidePorts (spec 6.7)', () => {
     expect(decidePorts(probe({}, [{ port: 80, processes: ['apache2'] }]))).toMatchObject({ mode: 'proxy', server: 'apache' });
     expect(decidePorts(probe({}, [{ port: 80, processes: ['lighttpd'] }, { port: 8787, processes: [] }]))).toEqual({ mode: 'proxy', relayPort: 18787, server: 'other' });
   });
-  it('our own earlier install (Docker proxy, .env present) does not count as busy', () => {
+  it('docker-proxy on 80 and 443 with no container in the list → busy by an unknown container', () => {
     const own: Listener[] = [{ port: 80, processes: ['docker-proxy'] }, { port: 443, processes: ['docker-proxy'] }];
-    expect(decidePorts(probe({ install: { RELAY_DOMAIN: 'x.example.com' } }, own))).toMatchObject({ mode: 'caddy', httpsPort: 443 });
-    expect(decidePorts(probe({}, own)).mode).toBe('proxy');
+    expect(decidePorts(probe({ install: { RELAY_DOMAIN: 'x.example.com' } }, own)).mode).toBe('proxy');
+    expect(holderOf(probe({}, own), 80)).toEqual({ kind: 'unknown-docker' });
+  });
+  it('our own container (parley-relay project) publishing 80/443 does not hold them: repeat of our install', () => {
+    const own: Listener[] = [{ port: 80, processes: ['docker-proxy'] }, { port: 443, processes: ['docker-proxy'] }];
+    const ours = container('parley-relay-relay-1', 'parley-relay', [80, 443]);
+    expect(decidePorts(probe({ containers: [ours] }, own))).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 443 });
+    expect(decidePorts(probe({ containers: [ours] }, own))).toEqual(decidePorts(probe({ install: { A: '1' }, containers: [ours] }, own)));
+  });
+  it('userland-proxy off: no listener in ss, a foreign container publishes 80 → 80 is busy', () => {
+    const other = container('web-1', 'site', [80]);
+    expect(holderOf(probe({ containers: [other] }), 80)).toEqual({ kind: 'container', container: other });
+    expect(decidePorts(probe({ containers: [other] }))).toMatchObject({ mode: 'proxy', server: 'other' });
+  });
+});
+
+describe('course VPS (run 2 of 2026-11-03)', () => {
+  const dir = path.join(__dirname, 'fixtures', 'course-vps');
+  const read = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+  const course = (extra: Partial<ProbeResult> = {}): ProbeResult =>
+    probe({ listeners: parseListeners(read('ss-ltnp.txt')), containers: parseContainers(read('containers.jsonl')), install: parseEnv(read('env.txt')), previous: parseEnv(read('previous-env.txt')), docker: true, compose: true, ...extra });
+  it('parses the fixtures', () => {
+    const [caddy, relay] = parseContainers(read('containers.jsonl'));
+    expect(caddy).toMatchObject({ name: 'course-platform-prod-caddy-1', image: 'caddy:2', path: 'caddy', networks: ['course-platform-prod_default'] });
+    expect(caddy?.published.map((p) => p.hostPort).sort()).toEqual([443, 443, 80, 80].sort());
+    expect(caddy?.mounts.map((m) => `${m.source} → ${m.destination}`)).toEqual([
+      '/opt/course-platform/deploy/Caddyfile → /etc/caddy/Caddyfile',
+      '/opt/evdev-site/caddy → /etc/caddy/sites',
+    ]);
+    expect(relay).toMatchObject({ name: 'parley-relay-relay-1', published: [] });
+    expect(parseEnv(read('previous-env.txt')).RELAY_MODE).toBe('proxy');
+  });
+  it('80 and 443 are held by the course Caddy container; the decision is not caddy', () => {
+    const p = course();
+    for (const port of [80, 443]) expect(holderOf(p, port)).toMatchObject({ kind: 'container', container: { name: 'course-platform-prod-caddy-1' } });
+    expect(holderOf(p, 22)).toEqual({ kind: 'process', names: ['sshd'] });
+    expect(decidePorts(p).mode).not.toBe('caddy');
+    expect(decidePorts(course({ install: null, previous: null })).mode).not.toBe('caddy');
   });
 });
 
