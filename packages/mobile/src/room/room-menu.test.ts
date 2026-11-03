@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionCommandOutcome } from '@parley/remote-client';
-import { archiveSheet, archiveStops, AUTONOMOUS_REASON, deleteConfirm, membersWhere, NO_RUNNING, NO_SLEEPING, roomMenu, roomToast, runAll, runSummary, sleepConfirm, type RoomMenuFacts } from './room-menu';
+import { archiveSheet, archiveStops, AUTONOMOUS_REASON, deleteConfirm, membersWhere, NO_FACE_ID_TOAST, NO_RUNNING, NO_SLEEPING, OFFLINE_REASON, ownerGate, pendingTitle, roomMenu, roomToast, runAll, runSummary, sleepConfirm, startToast, type RoomMenuFacts } from './room-menu';
 
 const ALL = ['sessions.stop', 'sessions.resume', 'rooms.archive', 'rooms.delete'];
 const facts = (over: Partial<RoomMenuFacts> = {}, room: Partial<RoomMenuFacts['room']> = {}): RoomMenuFacts => ({
   methods: ALL,
-  room: { id: 'r1', title: 'iOS app', mode: 'verified', hasProposal: false, members: ['a', 'b', 'c', 'human', 'ghost'], ...room },
+  room: { id: 'r1', title: 'iOS app', mode: 'verified', hasProposal: false, members: ['a', 'b', 'c', 'human', 'ghost'], archived: false, ...room },
   sessions: [
     { id: 'a', label: 'Alpha', lifecycle: 'active' },
     { id: 'b', label: 'Beta', lifecycle: 'active' },
     { id: 'c', label: 'Gamma', lifecycle: 'sleeping' },
   ],
   otherRooms: [],
+  online: true,
+  pending: null,
   ...over,
 });
 const ids = (m: ReturnType<typeof roomMenu>): string[] => m.items.map((i) => i.id);
@@ -92,8 +94,76 @@ describe('confirm texts', () => {
     expect(sleepConfirm(1).title).toBe('Put 1 agent to sleep?');
     const d = deleteConfirm(facts());
     expect(d.title).toBe('Delete “iOS app”?');
-    expect(d.message).toBe('The feed, decision and plans of this room are deleted. Its 4 sessions stay in the work.');
+    // 'ghost' is not a session of the work and the human is not one either: three sessions.
+    expect(d.message).toBe('The feed, decision and plans of this room are deleted. Its 3 sessions stay in the work.');
     expect(d.button).toBe('Delete');
+  });
+});
+
+describe('delete text', () => {
+  it('singular, duplicates and unknown ids not counted, no second sentence at zero', () => {
+    expect(deleteConfirm(facts({}, { members: ['a', 'a', 'ghost'] })).message).toBe('The feed, decision and plans of this room are deleted. Its 1 session stays in the work.');
+    expect(deleteConfirm(facts({}, { members: ['ghost', 'human'] })).message).toBe('The feed, decision and plans of this room are deleted.');
+  });
+});
+
+describe('archived room', () => {
+  it('has no Archive item, keeps Delete, and archiveStops is empty', () => {
+    const f = facts({}, { archived: true });
+    expect(ids(roomMenu(f))).toEqual(['sleepAll', 'wakeAll', 'copy', 'delete']);
+    expect(archiveStops(f)).toEqual([]);
+  });
+});
+
+describe('offline and pending', () => {
+  it('offline: items with calls are disabled, the title says why, Copy stays', () => {
+    const m = roomMenu(facts({ online: false }));
+    expect(m.items.filter((i) => i.disabled).map((i) => i.id)).toEqual(['sleepAll', 'wakeAll', 'archive', 'delete']);
+    expect(m.title).toBe(OFFLINE_REASON);
+  });
+  it('an action in flight disables the call items and the title shows the progress', () => {
+    const m = roomMenu(facts({ pending: { kind: 'sleep', done: 2, total: 4 } }));
+    expect(m.items.filter((i) => i.disabled).map((i) => i.id)).toEqual(['sleepAll', 'wakeAll', 'archive', 'delete']);
+    expect(m.title).toBe('Putting agents to sleep… 2 of 4');
+  });
+  it('titles and start toasts', () => {
+    expect(pendingTitle({ kind: 'wake', done: 1, total: 3 })).toBe('Waking agents… 1 of 3');
+    expect(pendingTitle({ kind: 'archive', done: 0, total: null })).toBe('Archiving…');
+    expect(pendingTitle({ kind: 'delete', done: 0, total: null })).toBe('Deleting…');
+    expect(startToast('sleep', 4)).toBe('Putting 4 agents to sleep…');
+    expect(startToast('wake', 1)).toBe('Waking 1 agent…');
+  });
+});
+
+describe('dedupe', () => {
+  it('a repeated member id is one candidate', () => {
+    expect(membersWhere(facts({}, { members: ['a', 'a', 'b'] }), 'active').map((s) => s.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('ownerGate', () => {
+  const sent = { outcome: 'ok' } as const;
+  it.each(['cancelled', 'unavailable'] as const)('%s: send is never called', async (answer) => {
+    let calls = 0;
+    const r = await ownerGate(async () => answer, async () => (calls++, sent));
+    expect(calls).toBe(0);
+    expect(r).toEqual(answer === 'cancelled' ? { kind: 'silent' } : { kind: 'toast', text: NO_FACE_ID_TOAST });
+  });
+  it('a confirm that throws is silent and nothing is sent', async () => {
+    let calls = 0;
+    const r = await ownerGate(async () => {
+      throw new Error('boom');
+    }, async () => (calls++, sent));
+    expect(calls).toBe(0);
+    expect(r).toEqual({ kind: 'silent' });
+  });
+  it('ok: send exactly once, its outcome returned; a throwing send is "lost"', async () => {
+    let calls = 0;
+    expect(await ownerGate(async () => 'ok', async () => (calls++, sent))).toEqual({ kind: 'sent', outcome: sent });
+    expect(calls).toBe(1);
+    expect(await ownerGate(async () => 'ok', async () => {
+      throw new Error('boom');
+    })).toEqual({ kind: 'sent', outcome: { outcome: 'lost' } });
   });
 });
 
@@ -132,6 +202,11 @@ describe('runAll', () => {
     ]);
     expect(runSummary('sleep', results)).toEqual({ allOk: false, title: 'Put to sleep: 1 of 4' });
     expect(runSummary('wake', results).title).toBe('Woke 1 of 4');
+  });
+  it('reports progress after every call', async () => {
+    const seen: Array<[number, number]> = [];
+    await runAll(targets.slice(0, 3), async () => ({ outcome: 'ok' }), (d, t) => seen.push([d, t]));
+    expect(seen).toEqual([[1, 3], [2, 3], [3, 3]]);
   });
   it('all ok is a toast only; a throwing call counts as lost', async () => {
     const ok = await runAll(targets.slice(0, 2), async () => ({ outcome: 'ok' }));

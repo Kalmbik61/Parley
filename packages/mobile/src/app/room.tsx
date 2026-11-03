@@ -1,16 +1,16 @@
 // Room = the chat of a room (D1 §9.7, plan A33): history by `context.messages`, live by `rooms.mail`, members and lead,
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
-import { attentionOfSession, roomKey, type RoomRef } from '@parley/remote-client';
+import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
 import { confirmByOwner } from '../auth/lock-instance';
-import { useCloseOnLock } from '../auth/use-lock-sheet';
+import { useCovered } from '../auth/use-covered';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
@@ -20,7 +20,8 @@ import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQ
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
 import { ResultSheet } from '../room/ResultSheet';
-import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, NO_FACE_ID_TOAST, roomMenu, roomToast, runAll, runSummary, sleepConfirm, type RoomMenuFacts, type RunResult } from '../room/room-menu';
+import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
+import { roomRuns } from '../room/room-runs';
 import { useRoomChat } from '../room/use-room-chat';
 import { haptic } from '../haptics';
 import { typography, useColors } from '../theme';
@@ -50,10 +51,17 @@ export default function RoomScreen() {
   const seen = useRef(0);
   const [away, setAway] = useState(0);
   const chat = useRoomChat(target, toast.show);
-  const [result, setResult] = useState<{ title: string; results: RunResult[] } | null>(null);
-  useCloseOnLock(result !== null, () => setResult(null));
-  const busyMenu = useRef(false);
-  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void } | null>(null);
+  // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
+  const runKey = target === null ? '' : roomKey(target);
+  const run = useSyncExternalStore(roomRuns.subscribe, () => roomRuns.get(runKey), () => roomRuns.get(runKey));
+  const covered = useCovered();
+  const focused = useIsFocused();
+  const [deleted, setDeleted] = useState(false);
+  // Back after a successful delete: only while this screen is in front, and only if there is somewhere to go (critic m1).
+  useEffect(() => {
+    if (deleted && focused && router.canGoBack()) router.back();
+  }, [deleted, focused]);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -121,44 +129,43 @@ export default function RoomScreen() {
       ? null
       : {
           methods: menuMethods,
-          room: { id: found.room.id, title: found.room.title, mode: found.room.mode, hasProposal: found.room.proposal !== null, members: found.room.members },
+          room: { id: found.room.id, title: found.room.title, mode: found.room.mode, hasProposal: found.room.proposal !== null, members: found.room.members, archived: found.room.archived },
           sessions: found.work.sessions,
           otherRooms: found.work.rooms,
+          online: canAct && !(DEMO && params.preview === 'offline'),
+          pending: run.pending,
         };
-  const runSession = async (kind: 'sleep' | 'wake'): Promise<void> => {
-    const f = menuFacts();
-    if (f === null || target === null || client === null || busyMenu.current) return;
+  // The latest facts, read when a run starts: the snapshot may have changed while a confirm was on screen (critic m2).
+  const factsRef = useRef<RoomMenuFacts | null>(null);
+  factsRef.current = menuFacts();
+  const runSession = async (kind: 'sleep' | 'wake', call?: (id: string) => Promise<SessionCommandOutcome>): Promise<void> => {
+    const f = factsRef.current;
+    if (f === null || target === null || (client === null && call === undefined)) return;
     const who = membersWhere(f, kind === 'sleep' ? 'active' : 'sleeping');
-    busyMenu.current = true;
-    try {
-      const results = await runAll(who, (id) => {
-        const r = { projectPath: target.projectPath, workId: target.workId, sessionId: id };
-        return kind === 'sleep' ? client.sessionCommand('sessions.stop', r) : client.resumeSession(r);
-      });
-      const sum = runSummary(kind, results);
-      if (sum.allOk) {
-        haptic.success();
-        toast.show(sum.title);
-      } else {
-        haptic.error();
-        setResult({ title: sum.title, results });
-      }
-    } finally {
-      busyMenu.current = false;
-    }
+    if (who.length === 0) return;
+    toast.show(startToast(kind, who.length));
+    const sum = await roomRuns.run(runKey, kind, who, call ?? ((id) => {
+      const r = { projectPath: target.projectPath, workId: target.workId, sessionId: id };
+      return kind === 'sleep' ? client!.sessionCommand('sessions.stop', r) : client!.resumeSession(r);
+    }));
+    if (sum === null) return;
+    if (sum.allOk) {
+      haptic.success();
+      toast.show(sum.title);
+    } else haptic.error();
   };
-  // Face ID first, then the call. Cancelled: nothing is sent and nothing is said.
-  const ownerThen = async (kind: 'archive' | 'delete', send: () => Promise<Parameters<typeof roomToast>[1]>): Promise<void> => {
-    const owner = await confirmByOwner(FACE_ID_PROMPT[kind]);
-    if (owner === 'cancelled') return;
-    if (owner === 'unavailable') {
-      toast.show(NO_FACE_ID_TOAST);
+  // Face ID first, then the call, in the room's single slot. Cancelled: nothing is sent and nothing is said.
+  const ownerThen = async (kind: 'archive' | 'delete', send: () => Promise<SessionCommandOutcome>): Promise<void> => {
+    const res = await roomRuns.hold(runKey, kind, () => ownerGate(() => confirmByOwner(FACE_ID_PROMPT[kind]), send));
+    if (!res.started || res.value.kind === 'silent') return;
+    if (res.value.kind === 'toast') {
+      toast.show(res.value.text);
       return;
     }
-    const outcome = await send();
+    const outcome = res.value.outcome;
     if (outcome.outcome === 'ok') {
       haptic.success();
-      if (kind === 'delete') router.back();
+      if (kind === 'delete') setDeleted(true);
       else toast.show(roomToast(kind, outcome));
     } else {
       haptic.error();
@@ -166,7 +173,7 @@ export default function RoomScreen() {
     }
   };
   const archive = (): void => {
-    const f = menuFacts();
+    const f = factsRef.current;
     if (f === null || target === null || client === null) return;
     const sheet = archiveSheet(f);
     ActionSheetIOS.showActionSheetWithOptions(
@@ -178,7 +185,7 @@ export default function RoomScreen() {
     );
   };
   const remove = (): void => {
-    const f = menuFacts();
+    const f = factsRef.current;
     if (f === null || target === null || client === null) return;
     const q = deleteConfirm(f);
     Alert.alert(q.title, q.message, [
@@ -187,10 +194,10 @@ export default function RoomScreen() {
     ]);
   };
   const openMenu = (): void => {
-    const f = menuFacts();
+    const f = factsRef.current;
     if (f === null) return;
     const m = roomMenu(f);
-    const run: Record<string, () => void> = {
+    const acts: Record<string, () => void> = {
       sleepAll: () => {
         const q = sleepConfirm(membersWhere(f, 'active').length);
         Alert.alert(q.title, q.message, [{ text: 'Cancel', style: 'cancel' }, { text: q.button, onPress: () => void runSession('sleep') }]);
@@ -215,33 +222,37 @@ export default function RoomScreen() {
       },
       (i) => {
         const it = m.items[i];
-        if (it !== undefined) run[it.id]?.();
+        if (it !== undefined) acts[it.id]?.();
       },
     );
+  };
+  // Developer preview: the result sheet comes out of the real runner with a fake call that answers what the bridge and host say.
+  const previewCall = (id: string): Promise<SessionCommandOutcome> => {
+    const nth = factsRef.current === null ? 0 : membersWhere(factsRef.current, 'active').findIndex((x) => x.id === id);
+    if (nth === 2) return Promise.resolve({ outcome: 'rejected', code: 'rate_limited', message: 'too many changes per minute' });
+    if (nth === 3) return Promise.resolve({ outcome: 'rejected', code: 'not_connected', message: 'not connected' });
+    return Promise.resolve({ outcome: 'ok' });
   };
   previewActs.current = {
     menu: openMenu,
     archive,
     remove,
-    result: () =>
-      setResult({
-        title: 'Put to sleep: 2 of 4',
-        results: [
-          { id: 'a', label: 'Research drone 1', status: 'ok', text: null },
-          { id: 'b', label: 'Research queen', status: 'ok', text: null },
-          { id: 'c', label: 'Changelog-writer', status: 'refused', text: 'Too many changes from the phone — try again in a minute' },
-          { id: 'd', label: 'Docs-editor', status: 'not-sent', text: 'Not sent — reconnecting' },
-        ],
-      }),
+    result: () => void runSession('sleep', previewCall),
+    busy: () => {
+      roomRuns.seedPending(runKey, { kind: 'sleep', done: 2, total: 4 });
+      // The menu reads the facts of the last render: let the screen see the progress first.
+      setTimeout(() => previewActs.current?.menu(), 300);
+    },
   };
   useEffect(() => {
     if (!DEMO || found === null || params.preview === undefined) return;
     const t = setTimeout(() => {
       const p = previewActs.current;
-      if (params.preview === 'menu') p?.menu();
+      if (params.preview === 'menu' || params.preview === 'offline') p?.menu();
       else if (params.preview === 'archive') p?.archive();
       else if (params.preview === 'delete') p?.remove();
       else if (params.preview === 'result') p?.result();
+      else if (params.preview === 'busy') p?.busy();
     }, 700);
     return () => clearTimeout(t);
   }, [params.preview, found !== null]);
@@ -434,8 +445,9 @@ export default function RoomScreen() {
         </View>
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
-      <Modal visible={result !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setResult(null)}>
-        {result !== null && <ResultSheet title={result.title} results={result.results} onClose={() => setResult(null)} />}
+      {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
+      <Modal visible={run.unseen !== null && !covered} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+        {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
       </Modal>
     </View>
   );

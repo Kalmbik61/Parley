@@ -2,6 +2,7 @@
 // them are disabled, the archive count, the confirm texts and the sequential runner for Put all to sleep / Wake all.
 // No React. An item whose method is missing from the bridge hello (the Mac switch is off) is not in the menu.
 import type { SessionCommandOutcome } from '@parley/remote-client';
+import type { OwnerConfirm } from '../auth/confirm-owner';
 import { hostLine, NOT_CONFIRMED_TOAST } from '../feed/session-menu';
 
 export type RoomMenuId = 'sleepAll' | 'wakeAll' | 'copy' | 'archive' | 'delete';
@@ -19,6 +20,8 @@ export interface RoomFacts {
   /** The room's open decision, if any. */
   hasProposal: boolean;
   members: readonly string[];
+  /** `archivedAt != null`: the window offers Reopen there, the phone only Delete. */
+  archived: boolean;
 }
 
 export interface RoomMenuFacts {
@@ -29,6 +32,18 @@ export interface RoomMenuFacts {
   sessions: readonly RoomMember[];
   /** The other rooms of the work (any state): `archived` ones do not keep an agent busy. */
   otherRooms: ReadonlyArray<{ id: string; members: readonly string[]; archived: boolean }>;
+  /** The bridge connection is ready (demo: always). Offline, items with calls are disabled and Face ID is not asked. */
+  online: boolean;
+  /** An action of this menu is in flight (including the Face ID wait): one action at a time. */
+  pending: Pending | null;
+}
+
+export type PendingKind = 'sleep' | 'wake' | 'archive' | 'delete';
+export interface Pending {
+  kind: PendingKind;
+  /** Sessions done so far in a run; `null` total — not a run (archive, delete). */
+  done: number;
+  total: number | null;
 }
 
 export interface RoomMenuItem {
@@ -41,13 +56,14 @@ export interface RoomMenuItem {
 export const AUTONOMOUS_REASON = 'Run by the autonomous engine — manage it on your Mac';
 export const NO_RUNNING = 'No running agents';
 export const NO_SLEEPING = 'No sleeping agents';
+export const OFFLINE_REASON = 'Not connected — reconnecting';
 
 const HUMAN = 'human';
 
 /** Members of the room with this lifecycle, in the room's order; unknown ids and the human are skipped. */
 export function membersWhere(f: Pick<RoomMenuFacts, 'room' | 'sessions'>, lifecycle: 'active' | 'sleeping'): RoomMember[] {
   const byId = new Map(f.sessions.map((s) => [s.id, s]));
-  return f.room.members.flatMap((id) => {
+  return [...new Set(f.room.members)].flatMap((id) => {
     const s = id === HUMAN ? undefined : byId.get(id);
     return s !== undefined && s.lifecycle === lifecycle ? [s] : [];
   });
@@ -58,6 +74,7 @@ export function membersWhere(f: Pick<RoomMenuFacts, 'room' | 'sessions'>, lifecy
  * (the core `archiveRoom` rule, the window's `archiveStops`).
  */
 export function archiveStops(f: RoomMenuFacts): RoomMember[] {
+  if (f.room.archived) return [];
   const busyElsewhere = new Set(f.otherRooms.filter((r) => r.id !== f.room.id && !r.archived).flatMap((r) => r.members));
   return membersWhere(f, 'active').filter((s) => !busyElsewhere.has(s.id));
 }
@@ -68,28 +85,49 @@ export interface RoomMenu {
   items: RoomMenuItem[];
 }
 
+/** The sheet title while an action runs (D1 §9.7): "Putting agents to sleep… 2 of 4", "Archiving…". */
+export function pendingTitle(p: Pending): string {
+  const of = p.total === null ? '' : ` ${p.done} of ${p.total}`;
+  return { sleep: 'Putting agents to sleep…', wake: 'Waking agents…', archive: 'Archiving…', delete: 'Deleting…' }[p.kind] + of;
+}
+
+/** The toast when a run starts. */
+export const startToast = (kind: 'sleep' | 'wake', n: number): string => (kind === 'sleep' ? `Putting ${plural(n, 'agent', 'agents')} to sleep…` : `Waking ${plural(n, 'agent', 'agents')}…`);
+
 /** D1 order: Put all to sleep, Wake all, Copy room ID, Archive room…, Delete room…. */
 export function roomMenu(f: RoomMenuFacts): RoomMenu {
   const has = (m: string): boolean => f.methods?.includes(m) ?? false;
   const autonomous = f.room.mode === 'autonomous';
   const running = membersWhere(f, 'active').length;
   const sleeping = membersWhere(f, 'sleeping').length;
+  // Calls are off while another action runs, offline and in the engine's room; the reasons below only add candidates.
+  const off = autonomous || !f.online || f.pending !== null;
   const items: RoomMenuItem[] = [];
   const reasons: string[] = [];
   if (has('sessions.stop')) {
-    const disabled = autonomous || running === 0;
+    const disabled = off || running === 0;
     items.push({ id: 'sleepAll', title: 'Put all to sleep', ...(disabled ? { disabled } : {}) });
-    if (!autonomous && running === 0) reasons.push(NO_RUNNING);
+    if (!off && running === 0) reasons.push(NO_RUNNING);
   }
   if (has('sessions.resume')) {
-    const disabled = autonomous || sleeping === 0;
+    const disabled = off || sleeping === 0;
     items.push({ id: 'wakeAll', title: 'Wake all', ...(disabled ? { disabled } : {}) });
-    if (!autonomous && sleeping === 0) reasons.push(NO_SLEEPING);
+    if (!off && sleeping === 0) reasons.push(NO_SLEEPING);
   }
   items.push({ id: 'copy', title: 'Copy room ID' });
-  if (has('rooms.archive')) items.push({ id: 'archive', title: 'Archive room…', ...(autonomous ? { disabled: true } : {}) });
-  if (has('rooms.delete')) items.push({ id: 'delete', title: 'Delete room…', destructive: true, ...(autonomous ? { disabled: true } : {}) });
-  const title = autonomous && items.some((i) => i.disabled === true) ? AUTONOMOUS_REASON : reasons.length > 0 ? reasons.join(' · ') : undefined;
+  if (has('rooms.archive') && !f.room.archived) items.push({ id: 'archive', title: 'Archive room…', ...(off ? { disabled: true } : {}) });
+  if (has('rooms.delete')) items.push({ id: 'delete', title: 'Delete room…', destructive: true, ...(off ? { disabled: true } : {}) });
+  const anyDisabled = items.some((i) => i.disabled === true);
+  const title =
+    f.pending !== null && anyDisabled
+      ? pendingTitle(f.pending)
+      : !f.online && anyDisabled
+        ? OFFLINE_REASON
+        : autonomous && anyDisabled
+          ? AUTONOMOUS_REASON
+          : reasons.length > 0
+            ? reasons.join(' · ')
+            : undefined;
   return { title, items };
 }
 
@@ -131,8 +169,11 @@ export function archiveSheet(f: RoomMenuFacts): ArchiveSheet {
 }
 
 export function deleteConfirm(f: RoomMenuFacts): Confirm {
-  const n = f.room.members.filter((id) => id !== HUMAN).length;
-  return { title: `Delete “${f.room.title}”?`, message: `The feed, decision and plans of this room are deleted. Its ${plural(n, 'session', 'sessions')} stay in the work.`, button: 'Delete' };
+  // Sessions that really are in the work, once each (the window counts the sessions standing in the room).
+  const known = new Set(f.sessions.map((x) => x.id));
+  const n = new Set(f.room.members.filter((id) => known.has(id))).size;
+  const base = 'The feed, decision and plans of this room are deleted.';
+  return { title: `Delete “${f.room.title}”?`, message: n === 0 ? base : `${base} Its ${n === 1 ? '1 session stays' : `${n} sessions stay`} in the work.`, button: 'Delete' };
 }
 
 export const FACE_ID_PROMPT = { archive: 'Archive this room', delete: 'Delete this room' } as const;
@@ -151,7 +192,7 @@ export interface RunResult {
  * One call at a time, in order (the host's rate limit and its log see a calm sequence). A call that fails does not stop
  * the rest. `not_connected` means the call never left the phone.
  */
-export async function runAll(targets: ReadonlyArray<{ id: string; label: string }>, call: (id: string) => Promise<SessionCommandOutcome>): Promise<RunResult[]> {
+export async function runAll(targets: ReadonlyArray<{ id: string; label: string }>, call: (id: string) => Promise<SessionCommandOutcome>, onProgress?: (done: number, total: number) => void): Promise<RunResult[]> {
   const results: RunResult[] = [];
   for (const t of targets) {
     let outcome: SessionCommandOutcome;
@@ -163,6 +204,7 @@ export async function runAll(targets: ReadonlyArray<{ id: string; label: string 
     if (outcome.outcome === 'ok') results.push({ ...t, status: 'ok', text: null });
     else if (outcome.outcome === 'lost') results.push({ ...t, status: 'lost', text: NOT_CONFIRMED_TOAST });
     else results.push({ ...t, status: outcome.code === 'not_connected' ? 'not-sent' : 'refused', text: hostLine(outcome) });
+    onProgress?.(results.length, targets.length);
   }
   return results;
 }
@@ -185,4 +227,26 @@ export function runSummary(kind: 'sleep' | 'wake', results: readonly RunResult[]
 export function roomToast(kind: 'archive' | 'delete', outcome: SessionCommandOutcome): string {
   if (outcome.outcome === 'ok') return kind === 'archive' ? 'Archived' : 'Deleted';
   return outcome.outcome === 'lost' ? NOT_CONFIRMED_TOAST : hostLine(outcome);
+}
+
+export type GateResult = { kind: 'silent' } | { kind: 'toast'; text: string } | { kind: 'sent'; outcome: SessionCommandOutcome };
+
+/**
+ * Face ID before a call (spec §11.4): `send` runs exactly once and only after 'ok'. Cancelled (or a prompt that throws) is
+ * silent, 'unavailable' is a toast; a throwing `send` is "not confirmed" — nothing is known about the call.
+ */
+export async function ownerGate(confirm: () => Promise<OwnerConfirm>, send: () => Promise<SessionCommandOutcome>): Promise<GateResult> {
+  let owner: OwnerConfirm;
+  try {
+    owner = await confirm();
+  } catch {
+    return { kind: 'silent' };
+  }
+  if (owner === 'unavailable') return { kind: 'toast', text: NO_FACE_ID_TOAST };
+  if (owner !== 'ok') return { kind: 'silent' };
+  try {
+    return { kind: 'sent', outcome: await send() };
+  } catch {
+    return { kind: 'sent', outcome: { outcome: 'lost' } };
+  }
 }
