@@ -19,10 +19,16 @@ export const backlogErrorCode = z.enum([
   'backlog-merge-conflict', 'backlog-invalid', 'preferences-invalid', 'suggestions-invalid', 'backlog-operation-failed', 'backlog-watch-unavailable', 'backlog-snapshot-too-large',
 ]);
 
+export const backlogState = z.enum(['backlog', 'in-progress', 'review', 'done']);
+export type BacklogState = z.infer<typeof backlogState>;
+
 /** Existing human Markdown can contain longer/unknown metadata: reads preserve it, new inputs are bounded separately. */
 export const backlogItem = z.strictObject({
   id: itemId.nullable(), title: text, details: text, checked: z.boolean(), section: text.nullable(),
   taken: text.optional(), done: text.optional(), by: text.optional(),
+  /** Board metadata from board.json (ISO 8601 UTC); absent from an older host. */
+  created: z.string().max(128).optional(), sent: z.string().max(128).optional(), review: z.string().max(128).optional(),
+  state: backlogState.optional(),
 });
 export const backlogAuthor = z.strictObject({ projectPath: project, workId, sessionId, label: text, revision: version,
   role: z.strictObject({ source: z.enum(['builtin', 'claude', 'codex']), name: text }).nullable() });
@@ -44,8 +50,12 @@ export const backlogSnapshot = z.strictObject({
   }),
   version, items: z.array(backlogItem).max(10000), suggestions: z.array(backlogSuggestion).max(10000),
   rule: backlogRule, diagnostics: z.array(backlogDiagnostic).max(2),
+  /** Version of board.json, or 'missing'. */
+  boardVersion: version.optional(),
 }).refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= BACKLOG_SNAPSHOT_MAX_BYTES, { message: 'Backlog snapshot exceeds the transport budget.' });
 export const backlogPrepareTakeResult = z.strictObject({ id: itemId, snapshot: backlogSnapshot });
+export const backlogTransferResult = z.strictObject({ id: itemId, snapshot: backlogSnapshot });
+export const backlogInboxResult = z.strictObject({ projectPath: project });
 export type BacklogSnapshot = z.infer<typeof backlogSnapshot>;
 export type BacklogDiagnostic = z.infer<typeof backlogDiagnostic>;
 export type BacklogErrorCode = z.infer<typeof backlogErrorCode>;
@@ -71,6 +81,9 @@ export const backlogMethodSchemas = {
   'backlog.remove': z.strictObject({ projectPath: project, ...locator, version }).refine(exactlyOneLocator),
   'backlog.prepareTake': z.strictObject({ projectPath: project, ...locator, version }).refine(exactlyOneLocator),
   'backlog.take': z.strictObject({ projectPath: project, ...locator, version, target }).refine(exactlyOneLocator),
+  'backlog.move': z.strictObject({ projectPath: project, id: itemId, version, to: backlogState }),
+  'backlog.transfer': z.strictObject({ projectPath: project, id: itemId, version, toProjectPath: project }),
+  'backlog.inbox': z.strictObject({}),
   'backlog.suggestions.accept': z.strictObject({ projectPath: project, id: suggestionId, title: title.optional(), details: details.optional() }),
   'backlog.suggestions.dismiss': z.strictObject({ projectPath: project, id: suggestionId }),
   'backlog.preferences.set': z.strictObject({ projectPath: project, rule: backlogRule }),
@@ -78,6 +91,6 @@ export const backlogMethodSchemas = {
 };
 export type BacklogMethodName = keyof typeof backlogMethodSchemas;
 export type BacklogMethodParams<M extends BacklogMethodName> = z.infer<(typeof backlogMethodSchemas)[M]>;
-export type BacklogMethodResults = { [M in Exclude<BacklogMethodName, 'backlog.unsubscribe' | 'backlog.prepareTake'>]: BacklogSnapshot } & { 'backlog.unsubscribe': { ok: true }; 'backlog.prepareTake': { id: string; snapshot: BacklogSnapshot } };
+export type BacklogMethodResults = { [M in Exclude<BacklogMethodName, 'backlog.unsubscribe' | 'backlog.prepareTake' | 'backlog.transfer' | 'backlog.inbox'>]: BacklogSnapshot } & { 'backlog.unsubscribe': { ok: true }; 'backlog.prepareTake': { id: string; snapshot: BacklogSnapshot }; 'backlog.transfer': { id: string; snapshot: BacklogSnapshot }; 'backlog.inbox': { projectPath: string } };
 export const backlogChanged = z.strictObject({ projectPath: project, unavailable: z.literal(true).optional() });
 export type BacklogChanged = z.infer<typeof backlogChanged>;
