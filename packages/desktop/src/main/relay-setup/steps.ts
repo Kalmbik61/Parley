@@ -1,7 +1,7 @@
 import type { RelayPullProgress } from '../../shared/relay-setup-types.js';
 import type { Plan, PlanStep } from './plan.js';
 import { createPullProgress } from './pull-progress.js';
-import type { RemoteShell } from './shell.js';
+import { ConnectionLostError, type RemoteShell } from './shell.js';
 
 export type StepStatus = 'running' | 'skipped' | 'done' | 'failed' | 'stopped';
 
@@ -42,8 +42,10 @@ export async function requestCancel(handle: CancelHandle): Promise<void> {
 }
 
 interface Live {
-  /** A command (not a check) of an interruptible step is on the server now. */
-  interruptible: boolean;
+  /** The step being run. */
+  step: PlanStep | null;
+  /** Id of the command of an interruptible step that is on the server now (not a check); `null` otherwise. */
+  command: string | null;
   interrupted: boolean;
 }
 
@@ -73,16 +75,17 @@ async function runStep(
             onLog: (text) => events.line(step.id, text),
           })
         : null;
-    live.interruptible = step.interruptible === true;
+    const id = `${step.id}-${index + 1}`;
+    live.command = step.interruptible === true ? id : null;
     let result;
     try {
       result = await shell.run(command.run, {
         sudo: true,
         onLine: pull !== null ? pull.feed : (text) => events.line(step.id, text),
-        detach: `${step.id}-${index + 1}`,
+        detach: id,
       });
     } finally {
-      live.interruptible = false;
+      live.command = null;
       pull?.finish();
     }
     if (result.code !== 0) {
@@ -98,16 +101,22 @@ async function runStep(
 
 export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents, cancel: CancelHandle = createCancelHandle()): Promise<RunOutcome> {
   let changed = false;
-  const live: Live = { interruptible: false, interrupted: false };
+  const live: Live = { step: null, command: null, interrupted: false };
   cancel.trigger = async () => {
-    if (live.interruptible) {
+    const id = live.command;
+    if (id !== null) {
       live.interrupted = true;
-      try {
-        await shell.interrupt?.();
-      } catch {
-        // the second channel failed: the command ends on its own and the run stops after it
+      // The command may just be starting (the interrupt itself waits for it for a few seconds); one more try if the
+      // second channel failed while the command is still there.
+      for (let attempt = 0; attempt < 2 && live.command === id; attempt += 1) {
+        try {
+          if ((await shell.interrupt?.(id))?.code === 0) return;
+        } catch {
+          // the second channel failed: the command ends on its own and the run stops after it
+        }
       }
-    } else events.cancelling?.();
+    } else if (live.step?.interruptible !== true) events.cancelling?.();
+    // An interruptible step between its commands (or in its check) stops by itself at the next check.
   };
 
   const stopFrom = (index: number): RunOutcome => {
@@ -119,11 +128,19 @@ export async function runPlan(plan: Plan, shell: RemoteShell, events: RunEvents,
     for (const [index, step] of plan.steps.entries()) {
       if (cancel.requested) return stopFrom(index);
       events.step(step.id, step.title, 'running');
+      live.step = step;
       let status: 'skipped' | 'done' | 'failed' | 'stopped';
       try {
         status = await runStep(step, shell, events, changed, cancel, live);
-      } catch {
-        events.step(step.id, step.title, 'failed');
+      } catch (error) {
+        if (!(error instanceof ConnectionLostError)) {
+          // The command did not start (the channel could not be opened, ...): a plain failure.
+          events.line(step.id, 'the command could not be started on the server');
+          events.step(step.id, step.title, 'failed');
+          return { ok: false, failedStep: step.id, changed };
+        }
+        // The command goes on on the server: the row is not red.
+        events.step(step.id, step.title, 'stopped');
         return { ok: false, failedStep: step.id, changed, lost: true };
       }
       if (status === 'stopped') {

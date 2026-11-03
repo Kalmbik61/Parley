@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Plan } from './plan.js';
-import type { RemoteShell, RunResult } from './shell.js';
+import { ConnectionLostError, type RemoteShell, type RunResult } from './shell.js';
 import { createCancelHandle, requestCancel, runPlan } from './steps.js';
 
 const cmd = (run: string) => ({ run, show: run });
@@ -105,8 +105,8 @@ describe('runPlan: cancel', () => {
         }
         return { code: 0, stdout: '', stderr: '' };
       },
-      async interrupt(): Promise<RunResult> {
-        ran.push('<interrupt>');
+      async interrupt(id): Promise<RunResult> {
+        ran.push(`<interrupt ${id}>`);
         release();
         return { code: 0, stdout: '', stderr: '' };
       },
@@ -123,7 +123,7 @@ describe('runPlan: cancel', () => {
     await requestCancel(handle);
     const outcome = await running;
     expect(outcome).toMatchObject({ ok: false, stopped: true, interrupted: true, failedStep: 'image' });
-    expect(g.ran).toEqual(['mkdir', 'pull-1', '<interrupt>']);
+    expect(g.ran).toEqual(['mkdir', 'pull-1', '<interrupt image-1>']);
     expect(log).toContain('image:stopped');
     expect(log).toContain('start:stopped');
     expect(log).not.toContain('image:failed');
@@ -161,9 +161,38 @@ describe('runPlan: cancel', () => {
     expect(ran).toEqual(['check-a']);
   });
 
-  it('a lost connection is reported as lost, not as a failed command', async () => {
-    const lost: RemoteShell = { run: () => Promise.reject(new Error('gone')) };
-    expect(await runPlan(plan, lost, events)).toMatchObject({ ok: false, lost: true, failedStep: 'a' });
+  it('a lost connection is reported as lost, the step row is not red; the command goes on on the server', async () => {
+    const lost: RemoteShell = { run: () => Promise.reject(new ConnectionLostError()) };
+    const log: string[] = [];
+    expect(await runPlan(plan, lost, { step: (id, _t, status) => log.push(`${id}:${status}`), line: () => undefined })).toMatchObject({ ok: false, lost: true, failedStep: 'a' });
+    expect(log).toEqual(['a:running', 'a:stopped']);
+  });
+
+  it('any other error (the command could not even be started) is an ordinary failure, not «lost»', async () => {
+    const broken: RemoteShell = { run: () => Promise.reject(new Error('channel open failure')) };
+    const log: string[] = [];
+    const outcome = await runPlan(plan, broken, { step: (id, _t, status) => log.push(`${id}:${status}`), line: () => undefined });
+    expect(outcome).toEqual({ ok: false, failedStep: 'a', changed: false });
+    expect(log).toEqual(['a:running', 'a:failed']);
+  });
+
+  it('cancel during the check or between the commands of an interruptible step announces nothing: the step stops by itself', async () => {
+    const cancelling = vi.fn();
+    const handle = createCancelHandle();
+    const s: RemoteShell = {
+      async run(command) {
+        if (command === 'pull-1') await requestCancel(handle);
+        return { code: command === 'chk' ? 1 : 0, stdout: '', stderr: '' };
+      },
+      interrupt: async () => ({ code: 1, stdout: '', stderr: '' }),
+    };
+    const imagePlan: Plan = {
+      ...plan,
+      steps: [{ id: 'image', title: 'Image', check: 'chk', checkShow: 'chk', commands: [cmd('pull-1'), cmd('pull-2')], interruptible: true }],
+    };
+    const outcome = await runPlan(imagePlan, s, { step: () => undefined, line: () => undefined, cancelling }, handle);
+    expect(outcome).toMatchObject({ stopped: true, failedStep: 'image' });
+    expect(cancelling).not.toHaveBeenCalled();
   });
 });
 

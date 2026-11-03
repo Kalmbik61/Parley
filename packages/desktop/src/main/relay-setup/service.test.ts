@@ -7,6 +7,7 @@ import { ControlCallError } from '../remote-control.js';
 import { createKnownHosts, type HostKeyInfo } from './known-hosts.js';
 import { createRunLog } from './log.js';
 import { createRelaySetup, type RelaySetupDeps } from './service.js';
+import { ConnectionLostError } from './shell.js';
 import type { ConnectFn, ConnectOutcome, ConnectRequest, SshConnection } from './ssh.js';
 
 const KEY: HostKeyInfo = { type: 'ssh-ed25519', fingerprint: 'SHA256:' + 'k'.repeat(43) };
@@ -80,7 +81,7 @@ function connection(server: FakeServer): SshConnection {
       }
       if (server.output?.match.test(command)) for (const line of server.output.lines) options.onLine?.(line);
       if (server.killed === true) return reply(143);
-      if (server.dropOn?.test(command)) throw new Error('connection lost');
+      if (server.dropOn?.test(command)) throw new ConnectionLostError();
       if (server.failCommand?.test(command)) {
         options.onLine?.(`error: authentication with ${server.echoSecretOnFailure ?? ''} failed`);
         return reply(100);
@@ -452,7 +453,8 @@ describe('a cancel never cuts a run in half (R4)', () => {
     await trusted(h);
     const phase = await runToEnd(h);
     expect(phase).toMatchObject({ phase: 'failed', step: 'image', message: expect.stringContaining('Commands keep running on the server and finish on their own') });
-    expect(stepEvents(h)).toContain('image:failed');
+    expect(stepEvents(h)).toContain('image:stopped');
+    expect(stepEvents(h)).not.toContain('image:failed');
   });
 });
 

@@ -5,7 +5,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { Client } from 'ssh2';
 import { describeHostKey, type HostKeyInfo, type HostKeyVerdict, type KnownHosts } from './known-hosts.js';
 import { shQuote, type SetupAuth, type SetupSecrets } from './input.js';
-import { detachedCommand, interruptCommand, type RemoteShell, type RunOptions, type RunResult } from './shell.js';
+import { ConnectionLostError, detachedCommand, interruptCommand, type RemoteShell, type RunOptions, type RunResult } from './shell.js';
 
 /**
  * SSH with `ssh2` (pure JS), main process only. Credentials arrive here in memory, are used for one connection and
@@ -66,11 +66,12 @@ export async function listPrivateKeys(sshDir: string = path.join(os.homedir(), '
   return keys;
 }
 
-function wrap(connection: Client): SshConnection {
+/** Exported for tests (a fake `Client`). */
+export function wrapClient(connection: Pick<Client, 'exec' | 'end' | 'on'>): SshConnection {
   // A command in flight when the connection drops must end as an error («connection lost»), not as exit code 255.
   const lost = new Set<(error: Error) => void>();
   connection.on('close', () => {
-    for (const reject of lost) reject(new Error('the connection to the server was lost'));
+    for (const reject of lost) reject(new ConnectionLostError());
     lost.clear();
   });
   return {
@@ -87,7 +88,7 @@ function wrap(connection: Client): SshConnection {
         lost.add(rejectRaw);
         connection.exec(command, (error, stream) => {
           if (error) {
-            reject(error);
+            reject(/not connected|no response|closed/i.test(error.message) ? new ConnectionLostError() : error);
             return;
           }
           let stdout = '';
@@ -95,7 +96,11 @@ function wrap(connection: Client): SshConnection {
           const pending = { out: '', err: '' };
           // A multibyte character may be split between two chunks: one streaming decoder per stream.
           const decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
-          const timer = setTimeout(() => stream.close(), options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+          let timedOut = false;
+          const timer = setTimeout(() => {
+            timedOut = true;
+            stream.close();
+          }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
           const feed = (kind: 'out' | 'err', chunk: Buffer): void => {
             const text = decoders[kind].write(chunk);
             if (kind === 'out' && stdout.length < OUTPUT_CAP) stdout += text;
@@ -112,7 +117,9 @@ function wrap(connection: Client): SshConnection {
             pending.out += decoders.out.end();
             pending.err += decoders.err.end();
             for (const rest of [pending.out, pending.err]) if (rest !== '') options.onLine?.(rest);
-            resolve({ code: code ?? 255, stdout, stderr });
+            // The view timed out: the command may well be running still, so this is «lost», not an exit code.
+            if (timedOut) reject(new ConnectionLostError());
+            else resolve({ code: code ?? 255, stdout, stderr });
           });
           stream.on('error', reject);
           if (options.stdin !== undefined) stream.write(options.stdin);
@@ -159,7 +166,7 @@ const connectWith = async (sshDir: string, request: ConnectRequest, knownHosts: 
       resolve(outcome);
     };
 
-    client.on('ready', () => settle({ kind: 'ok', connection: wrap(client) }));
+    client.on('ready', () => settle({ kind: 'ok', connection: wrapClient(client) }));
     client.on('error', (error: Error & { level?: string }) => {
       if (presented !== null && verdict?.kind === 'changed') return settle({ kind: 'hostkey-changed', key: presented, known: verdict.known });
       if (presented !== null && verdict?.kind === 'unknown' && request.trusted !== presented.fingerprint) {
@@ -224,8 +231,8 @@ export function createShell(connection: SshConnection, sudo: SudoMode): RemoteSh
       if (options.detach === undefined) return execute(command, options);
       return execute(detachedCommand(command, options.detach), options, DETACHED_TIMEOUT_MS);
     },
-    interrupt(): Promise<RunResult> {
-      return execute(interruptCommand(), { sudo: true });
+    interrupt(id: string): Promise<RunResult> {
+      return execute(interruptCommand(id), { sudo: true });
     },
   };
 }
