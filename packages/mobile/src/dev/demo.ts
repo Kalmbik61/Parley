@@ -4,6 +4,8 @@ import type { FeedCard } from '@parley/core';
 import type { RemoteClient, SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
+import { EMPTY_QUESTION_DRAFT, type QuestionDraft } from '../cards/model';
+import { longFeedItems, longRoomLetters } from './long-feed';
 import { HUMAN_TABLE } from './md-demo';
 
 const P = '/Users/me/parley';
@@ -95,7 +97,8 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo')], rooms: [], swarms: [],
+      rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
     },
   ],
 };
@@ -106,8 +109,28 @@ const permission: FeedCard = {
 } as unknown as FeedCard;
 const question: FeedCard = {
   kind: 'question', id: 'card-2', cardId: 'card-2', at: ago(5), state: 'pending', toolUseId: null, toolName: 'AskUserQuestion', toolInput: {},
-  questions: [{ question: 'Which branch should I rebase onto?', header: 'Branch', multiSelect: false, options: [{ label: 'main', description: 'The default branch' }, { label: 'feat/mobile-stage-a', description: null }] }],
+  // A45: three questions — single, multiSelect, and one answered with a typed "Other".
+  questions: [
+    { question: 'Which branch should I rebase onto?', header: 'Branch', multiSelect: false, options: [{ label: 'main', description: 'The default branch' }, { label: 'feat/mobile-stage-a', description: null }] },
+    { question: 'Which checks should run before the push?', header: 'Checks', multiSelect: true, options: [{ label: 'Lint', description: 'pnpm lint' }, { label: 'Typecheck', description: null }, { label: 'Tests', description: 'pnpm test' }] },
+    { question: 'What should the commit message say?', header: 'Message', multiSelect: false, options: [{ label: 'Rebase onto main', description: null }] },
+  ],
 } as unknown as FeedCard;
+
+/** A45 screenshots: `?preview=q1|q2|q3` on the session screen opens the demo question card at that step with answers picked. */
+export function demoQuestionDraft(preview: unknown): QuestionDraft | null {
+  const base = { picked: { 0: ['main'] }, otherOn: {}, otherText: {} };
+  switch (preview) {
+    case 'q1':
+      return { ...EMPTY_QUESTION_DRAFT, picked: { 0: ['main'] }, step: 0 };
+    case 'q2':
+      return { ...base, picked: { 0: ['main'], 1: ['Lint', 'Tests'] }, step: 1 };
+    case 'q3':
+      return { picked: { 0: ['main'], 1: ['Lint', 'Tests'], 2: [] }, otherOn: { 2: true }, otherText: { 2: 'Rebase feat/mobile-stage-a onto main' }, step: 2 };
+    default:
+      return null;
+  }
+}
 
 /** `onlyConsent`: show only that consent card (screenshots, PARLEY_MOBILE_DEV_CONSENT). */
 export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
@@ -191,6 +214,24 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
     ] as never[],
   });
+  // A44: a long mixed feed and a long room history (routes a44-session, a44-room; add `dev=focus,draft,up,more,card` to the path, see dev-script.ts).
+  const longRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' };
+  store.dispatch({ t: 'feed.open', ref: longRef });
+  store.dispatch({ t: 'feed.loaded', ref: longRef, epoch: 'demo', items: longFeedItems(14), revision: 3, mode: null, decisions: null });
+  // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
+  const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
+  store.dispatch({ t: 'feed.open', ref: tinyRef });
+  store.dispatch({
+    t: 'feed.loaded', ref: tinyRef, epoch: 'demo', revision: 3, mode: null, decisions: null,
+    items: [
+      { kind: 'prompt', id: 't1', at: at(3), text: 'Say hello.', images: 0 },
+      { kind: 'text', id: 't2', at: at(2), messageId: 'mt2', streaming: false, text: 'Hello! This feed has three rows only.' },
+      { kind: 'turn', id: 't3', at: at(1), durationMs: 4000 },
+    ] as never[],
+  });
+  const longRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rlong' };
+  store.dispatch({ t: 'room.open', ref: longRoom });
+  store.dispatch({ t: 'room.loaded', ref: longRoom, epoch: 'demo', next: null, messages: longRoomLetters('rlong', 60) });
   // A46: a finished chat (the turn ended) for the sessions that read "Finished a turn", "Sleeping" and "Starting".
   const finishedItems = feedItems.slice(0, 6);
   for (const [wid, id] of [['w3', 'rk2'], ['w3', 'rl'], ['w3', 'fresh']] as const) {
@@ -202,6 +243,14 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
   }
+  // A45: a short chat above the demo question card, so the card shows in full without the loading placeholder.
+  store.dispatch({ t: 'feed.open', ref: ref('a13') });
+  store.dispatch({
+    t: 'feed.loaded', ref: ref('a13'), epoch: 'demo', revision: 2, mode: null, decisions: null,
+    items: [
+      { kind: 'text', id: 'q2', at: ago(6), messageId: 'mq2', streaming: false, text: 'I have a few questions before I touch the branch.' },
+    ] as never[],
+  });
   // A32/A33: a room chat for the room screen.
   const rref = { projectPath: P, workId: 'w1', roomId: 'r1' };
   const letter2 = (id: string, from: string, min: number, text: string, extra: Record<string, unknown> = {}) =>
@@ -263,12 +312,26 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'cards.loaded', ref: ref('a13'), epoch: 'demo', items: [question], at: Date.now() });
 }
 
+/** A44 evidence (developer build): items arrive, a card arrives — real state changes of an open feed. */
+export function devMoreSession(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch: 'demo', items: longFeedItems(14, 2), revision: 4, mode: null, decisions: null });
+}
+export function devMoreRoom(client: RemoteClient, ref: { projectPath: string; workId: string; roomId: string }): void {
+  client.store.dispatch({ t: 'room.loaded', ref, epoch: 'demo', next: null, messages: longRoomLetters(ref.roomId, 62) });
+}
+export function devLateCard(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'cards.loaded', ref, epoch: 'demo', items: [permission], at: Date.now() });
+}
+
 /** Screenshots only (developer build): a partly switched-on project-mcp card and the "list changed" line under another. */
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|work-closed|work-closed-open|work-archived-open|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
-export function demoRoute(name: unknown): string | null {
+/** `PARLEY_MOBILE_DEV_ROUTE=question-1|question-2|question-3|a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|work-closed|work-closed-open|work-archived-open|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+export function demoRoute(raw: unknown): string | null {
+  // `a44-session:focus,draft` — the part after the colon is the dev script of dev-script.ts.
+  const [name, script] = typeof raw === 'string' ? raw.split(':') : [raw, undefined];
+  const dev = script === undefined ? '' : `dev=${script}`;
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
   switch (name) {
@@ -284,6 +347,12 @@ export function demoRoute(name: unknown): string | null {
       return s('d1');
     case 'question':
       return s('a13');
+    case 'question-1':
+      return `${s('a13')}?preview=q1`;
+    case 'question-2':
+      return `${s('a13')}?preview=q2`;
+    case 'question-3':
+      return `${s('a13')}?preview=q3`;
     case 'decision':
       return `/decision?ref=${encodeURIComponent(w)}&room=r1&proposal=p-03`;
     case 'decision-sheet':
@@ -336,6 +405,13 @@ export function demoRoute(name: unknown): string | null {
     // A40: the session feed (a FlatList) with the human's table as the agent's reply.
     case 'md-feed':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' })}`;
+    // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
+    case 'a44-session':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}?${dev}`;
+    case 'a44-tiny':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
+    case 'a44-room':
+      return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong&${dev}`;
     case 'chat':
       return s('drone1');
     case 'room':
