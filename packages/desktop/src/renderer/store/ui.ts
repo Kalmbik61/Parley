@@ -20,7 +20,11 @@ export interface DialogWork {
 }
 
 /** Ephemeral prepared backlog context. The shared row already has a stable ID before creation. */
-export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
+export interface BacklogTakeContext {
+  projectPath: string; id: string; version: string; task: string;
+  /** Текст пункта (заголовок и детали), если Task — не он, а письмо карточки доски; по умолчанию сверяется Task. */
+  itemText?: string;
+}
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
 export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant' | 'providers' | 'projects' | 'remote';

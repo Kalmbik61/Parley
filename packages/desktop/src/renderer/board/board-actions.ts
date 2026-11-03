@@ -85,11 +85,21 @@ export async function deleteCard(bridge: BoardBridge, card: BoardCard): Promise<
   });
 }
 
+/**
+ * Переносит карточку в другой проект. Ответ хоста несёт снимок только проекта-цели, поэтому проект-источник
+ * перечитывается отдельно. Возвращает номер и версию в проекте-цели.
+ */
+export async function transferCard(bridge: BoardBridge, card: BoardCard, toProjectPath: string): Promise<{ id: string; version: string }> {
+  const { id, version } = await ensureId(bridge, card);
+  const result = await bridge.call('backlog.transfer', { projectPath: card.project.projectPath, id, version, toProjectPath });
+  useBoardStore.getState().apply(result.snapshot);
+  await useBoardStore.getState().refresh(bridge, card.project.projectPath);
+  return { id: result.id, version: result.snapshot.version };
+}
+
 /** Перенос в другой проект или во «Входящие». Отказ хоста (карточка из плана — `conflict`, версия, прочее) — `cantMove`. */
 export async function moveCardToProject(bridge: BoardBridge, card: BoardCard, toProjectPath: string): Promise<void> {
   await guard(bridge, card, async () => {
-    const { id, version } = await ensureId(bridge, card);
-    const result = await bridge.call('backlog.transfer', { projectPath: card.project.projectPath, id, version, toProjectPath });
-    useBoardStore.getState().apply(result.snapshot);
+    await transferCard(bridge, card, toProjectPath);
   }, { conflict: S.board.cantMove, failed: S.board.cantMove });
 }

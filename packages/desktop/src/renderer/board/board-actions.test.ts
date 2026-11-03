@@ -108,7 +108,9 @@ describe('board-actions', () => {
     expect(call).toHaveBeenLastCalledWith('backlog.update', { projectPath: '/p', id: 'b-002', version: 'v2', patch: { title: 'New' } });
     call.mockResolvedValue({ id: 'b-002', snapshot: snap('v4', []) });
     await moveCardToProject(bridge, cardOf(s, 1), '/q');
-    expect(call).toHaveBeenLastCalledWith('backlog.transfer', { projectPath: '/p', id: 'b-002', version: 'v3', toProjectPath: '/q' });
+    expect(call).toHaveBeenCalledWith('backlog.transfer', { projectPath: '/p', id: 'b-002', version: 'v3', toProjectPath: '/q' });
+    // Ответ переноса несёт снимок цели, поэтому сразу после него проект-источник перечитывается.
+    expect(call).toHaveBeenLastCalledWith('backlog.get', { projectPath: '/p' });
   });
 
   it('отказ переноса карточки из плана приходит конфликтом — cantMove, а не changed; проект перечитывается', async () => {
@@ -128,5 +130,14 @@ describe('board-actions', () => {
     await moveCardToProject(bridge, cardOf(s), '/q');
     expect(toast).toHaveBeenCalledWith(S.board.cantMove);
     expect(toast).not.toHaveBeenCalledWith(S.board.failed);
+  });
+
+  it('перенос перечитывает проект-источник: ответ несёт снимок только цели', async () => {
+    const s = snap('v1', [{}]);
+    seed(s);
+    call.mockImplementation(async (method: string) => (method === 'backlog.transfer' ? { id: 'b-009', snapshot: { ...snap('t1', []), projectPath: '/q', sharedProjectPath: '/q' } } : snap('v2', [])));
+    await moveCardToProject(bridge, cardOf(s), '/q');
+    expect(call).toHaveBeenLastCalledWith('backlog.get', { projectPath: '/p' });
+    expect(useBoardStore.getState().slots.get('/p')!.snapshot!.version).toBe('v2');
   });
 });

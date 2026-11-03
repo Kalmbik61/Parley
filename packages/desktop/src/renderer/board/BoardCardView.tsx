@@ -10,9 +10,11 @@ import { useWorksStore } from '../store/works.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { relativeTimeAgo } from '../lib/relative-time.js';
 import { moveCard, returnCard } from './board-actions.js';
-import { resolveTaken } from './board-model.js';
+import { cardKey, resolveTaken } from './board-model.js';
 import type { BoardCard } from './board-model.js';
+import { useBoardStore } from './board-store.js';
 import type { BoardBridge } from './board-store.js';
+import { SendToMenu } from './SendToMenu.js';
 import type { TargetInfo } from './target-info.js';
 
 export interface BoardCardViewProps { bridge: BoardBridge; card: BoardCard; target: TargetInfo | null; onOpen(card: BoardCard): void }
@@ -22,6 +24,7 @@ export function BoardCardView({ bridge, card, target, onOpen }: BoardCardViewPro
   const now = new Date();
   const showTarget = state === 'in-progress' || state === 'review';
   const entries = useWorksStore(s => s.entries);
+  const sendingTo = useBoardStore(s => s.sending.get(cardKey(card)));
   const [returning, setReturning] = useState(false);
   const [note, setNote] = useState('');
   const taken = resolveTaken(item.taken, project, entries);
@@ -71,6 +74,8 @@ export function BoardCardView({ bridge, card, target, onOpen }: BoardCardViewPro
           )}
         </div>
       )}
+      {state === 'backlog' && sendingTo !== undefined && <div className="min-w-0 truncate text-xs text-muted-foreground" data-board-sending="">{S.board.sending(sendingTo)}</div>}
+      {state === 'backlog' && <div><SendToMenu bridge={bridge} card={card} /></div>}
       {state === 'in-progress' && targetLost && (
         <div><Button type="button" size="sm" variant="outline" data-card-action="back-visible" onClick={toBacklog}>{S.board.backToBacklog}</Button></div>
       )}

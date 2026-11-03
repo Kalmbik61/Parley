@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WindowWorkEntry } from '@parley/core';
 import type { BacklogSnapshot } from '@parley/protocol';
 import { BoardSync } from './BoardSync.js';
-import { useBoardStore } from './board-store.js';
+import { dropSlot, ensureSlot, loadSlot, useBoardStore } from './board-store.js';
 import type { BoardBridge } from './board-store.js';
 import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
@@ -207,5 +207,34 @@ describe('BoardSync', () => {
     const slot = useBoardStore.getState().slots.get('/a');
     expect(slot?.live).toBe(true);
     expect(slot?.snapshot?.items[0]?.title).toBe('fresh');
+  });
+
+  it('dropSlot не сбрасывает счётчик запросов: запоздавший ответ не совпадает с новым', async () => {
+    const { bridge, call } = fixture();
+    const late = deferred<BacklogSnapshot>();
+    const base = call.getMockImplementation()!;
+    let gets = 0;
+    call.mockImplementation(async (method, params) => {
+      if (method === 'backlog.get' && params.projectPath === '/a' && ++gets === 1) return late.promise;
+      if (method === 'backlog.get' && params.projectPath === '/a') return snap('/a', 'new', 'v2');
+      return base(method, params);
+    });
+    ensureSlot('/a');
+    const first = loadSlot(bridge, '/a', false);
+    dropSlot('/a');
+    ensureSlot('/a');
+    await loadSlot(bridge, '/a', false);
+    expect(useBoardStore.getState().slots.get('/a')?.snapshot?.items[0]?.title).toBe('new');
+    late.resolve(snap('/a', 'stale', 'v1'));
+    await first;
+    expect(useBoardStore.getState().slots.get('/a')?.snapshot?.items[0]?.title).toBe('new');
+  });
+
+  it('setSending ставит и снимает пометку с подписью цели', () => {
+    useBoardStore.setState({ sending: new Map() });
+    useBoardStore.getState().setSending('/a#b-001', 'S01');
+    expect(useBoardStore.getState().sending.get('/a#b-001')).toBe('S01');
+    useBoardStore.getState().setSending('/a#b-001', null);
+    expect(useBoardStore.getState().sending.size).toBe(0);
   });
 });

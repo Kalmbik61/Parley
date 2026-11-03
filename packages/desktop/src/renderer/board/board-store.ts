@@ -15,7 +15,11 @@ export type BoardBridge = Pick<ParleyBridge, 'call' | 'on'>;
 export interface BoardSlot { snapshot: BacklogSnapshot | null; live: boolean }
 export interface BoardState {
   supported: boolean; slots: Map<string, BoardSlot>; inboxPath: string | null; filter: BoardFilter;
+  /** Карточки, ждущие отправки: `cardKey` → подпись цели. */
+  sending: ReadonlyMap<string, string>;
   setFilter(filter: BoardFilter): void;
+  /** `label` — поставить пометку «отправляется», `null` — снять. */
+  setSending(key: string, label: string | null): void;
   apply(snapshot: BacklogSnapshot): void;
   refresh(bridge: BoardBridge, projectPath: string): Promise<void>;
 }
@@ -28,7 +32,13 @@ export const useBoardStore: UseBoundStore<StoreApi<BoardState>> = create<BoardSt
   slots: new Map(),
   inboxPath: null,
   filter: { kind: 'all' },
+  sending: new Map(),
   setFilter: (filter) => set({ filter }),
+  setSending: (key, label) => {
+    const next = new Map(get().sending);
+    if (label === null) next.delete(key); else next.set(key, label);
+    set({ sending: next });
+  },
   apply: (snapshot) => putSnapshot(snapshot, null),
   refresh: async (bridge, projectPath) => {
     const slot = get().slots.get(projectPath);
@@ -65,8 +75,8 @@ export function ensureSlot(projectPath: string): void {
   useBoardStore.setState({ slots: next });
 }
 
+/** Счётчик запросов пути не сбрасывается: нумерация монотонна, иначе запоздавший ответ совпал бы с номером нового запроса. */
 export function dropSlot(projectPath: string): void {
-  requests.delete(projectPath);
   const { slots } = useBoardStore.getState();
   if (!slots.has(projectPath)) return;
   const next = new Map(slots);

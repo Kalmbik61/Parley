@@ -2469,3 +2469,26 @@ it.each(['before marker', 'after marker lost reply'])('prepared backlog refuses 
   expect(taken).toBe(when === 'before marker' ? undefined : 'w-01/r-01');
   expect(document.body.textContent).not.toContain('PRIVATE_MARK_FAILURE');
 });
+
+it('take по itemText, когда Task — письмо карточки', async () => {
+  const entry = work('w-01', '2026-01-01', 'Prepared backlog', []);
+  useWorksStore.setState({ entries: [entry], branches: {}, loading: false, error: null });
+  bridge.setHandler('providers.list', () => ({ providers: [{ id: 'claude', label: 'Claude', available: true, models: null, effort: false }] }));
+  bridge.setHandler('roles.list', () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('worktrees.available', () => ({ available: false }));
+  let next = 1;
+  bridge.setHandler('sessions.create', params => ({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${next++}` } }));
+  bridge.setHandler('rooms.create', () => ({ roomId: 'r-01' }));
+  bridge.setHandler('backlog.get', () => ({ projectPath: entry.projectPath, sharedProjectPath: entry.projectPath,
+    version: 'fresh-1', file: { relativePath: '.parley/backlog.md', exists: true }, items: [{ id: 'b-001', title: 'Fix typo', details: 'More', checked: false, section: null }], suggestions: [], rule: 'problems', diagnostics: [] }));
+  bridge.setHandler('backlog.take', () => ({}) as never);
+  render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />); await flush();
+  act(() => useUiStore.getState().openNewSessionDialog({ projectPath: entry.projectPath, workId: 'w-01' }, {
+    room: true, backlog: { projectPath: entry.projectPath, id: 'b-001', version: 'prepared-old', task: 'Board card b-001 (proj): Fix typo', itemText: 'Fix typo\n\nMore' } }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Create room' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Create room' }));
+  await waitFor(() => expect(useUiStore.getState().dialogs.newSession.open).toBe(false));
+  expect(bridge.calls.filter(row => row.method === 'backlog.take').map(row => row.params)).toEqual([
+    { projectPath: entry.projectPath, id: 'b-001', version: 'fresh-1', target: { projectPath: entry.projectPath, workId: 'w-01', roomId: 'r-01' } },
+  ]);
+});

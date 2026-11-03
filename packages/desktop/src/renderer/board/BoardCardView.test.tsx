@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogSnapshot } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { useWorksStore } from '../store/works.js';
+import { useBoardStore } from './board-store.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { BoardCardView } from './BoardCardView.js';
 import type { BoardCard, BoardProject, BacklogRow } from './board-model.js';
@@ -30,6 +31,7 @@ beforeEach(() => {
   useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/p', sessions: [makeSession('s-01', 'Claude')] })] });
   actions.moveCard.mockClear();
   actions.returnCard.mockClear();
+  useBoardStore.setState({ sending: new Map() });
 });
 afterEach(cleanup);
 
@@ -39,9 +41,9 @@ describe('BoardCardView', () => {
     expect(names()).toEqual(['accept', 'return']);
     cleanup();
     render(<ul><BoardCardView bridge={bridge} card={make('backlog')} target={null} onOpen={vi.fn()} /></ul>);
-    expect(names()).toEqual([]);
+    expect(names()).toEqual(['send-to']);
     openMenu();
-    expect(names()).toEqual(['done']);
+    expect(names()).toEqual(['send-to', 'done']);
   });
 
   it('Accept переводит в done, Return открывает поле и шлёт замечание', () => {
@@ -81,5 +83,13 @@ describe('BoardCardView', () => {
     act(() => { useWorksStore.setState({ entries: works }); });
     fireEvent.click(screen.getByText(S.board.return));
     expect((screen.getByLabelText(S.board.returnNote) as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('карточка Backlog в очереди отправки показывает цель, а Send to… выключен', () => {
+    const card = make('backlog');
+    act(() => { useBoardStore.getState().setSending('/p#b-001', 'S01'); });
+    render(<ul><BoardCardView bridge={bridge} card={card} target={null} onOpen={vi.fn()} /></ul>);
+    expect(screen.getByText(S.board.sending('S01'))).toBeTruthy();
+    expect(screen.getByText(S.board.sendTo).closest('button')!.hasAttribute('disabled')).toBe(true);
   });
 });
