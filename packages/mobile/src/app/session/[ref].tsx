@@ -286,7 +286,7 @@ export default function SessionScreen() {
   const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
       {strip !== null && (
-        <BarStripStack top={insets.top + 44}>
+        <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
           <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={() => list.current?.scrollToEnd({ animated: true })} />
         </BarStripStack>
       )}

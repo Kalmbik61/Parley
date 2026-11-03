@@ -11,3 +11,6 @@ one let feed text show through), sits in the layout flow above the list (so "Loa
 large text grows it), minHeight 44, both strips in a room (decision row first, "needs you" under it).
 `room-*` = top of the list with both strips; `room-scrolled-*` = content scrolled under the strip; `session-needs-you-*` =
 session strip with the feed scrolled under it.
+
+Second rework: the whole strip stack, the area under the bar included, has `barBgSolid`, so bar and strips are one tone;
+the spacer height is `useHeaderHeight()`; a strip appearing while the list is at the bottom scrolls to the end.
