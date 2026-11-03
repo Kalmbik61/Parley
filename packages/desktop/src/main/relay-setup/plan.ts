@@ -586,6 +586,8 @@ function removeSteps(ctx: PlanContext, undo: PlanStep | null): PlanStep[] {
   const rules = `if [ -f ${D}/ufw-rules ]; then grep -E '^[0-9]{1,5}/tcp$' ${D}/ufw-rules | while read -r rule; do ufw delete allow "$rule"; done; fi`;
   // Volumes left over from an earlier layout (compose no longer knows them) go with the data, found by the project label.
   const leftovers = 'docker volume ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker volume rm';
+  // The default network of an earlier layout (compose no longer knows it) is ours by its project label and empty after `down`.
+  const networks = 'docker network ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker network rm || true';
   return [
     // Our site goes first: when the check or the reload after its removal fails the file comes back and the run stops,
     // so the person's server never points at a relay that is gone.
@@ -595,7 +597,7 @@ function removeSteps(ctx: PlanContext, undo: PlanStep | null): PlanStep[] {
       title: ctx.removeData === true ? 'Stop the relay and delete its data (routes, device trust, certificates)' : 'Stop the relay (its data is kept)',
       check: `test ! -d ${D}`,
       checkShow: `test ! -d ${D}`,
-      commands: [plain(down), ...(ctx.removeData === true ? [plain(leftovers)] : [])],
+      commands: [plain(down), plain(networks), ...(ctx.removeData === true ? [plain(leftovers)] : [])],
     },
     { id: 'ufw', title: 'Remove the firewall rules this wizard added', check: `test ! -d ${D}`, checkShow: `test ! -d ${D}`, commands: [plain(rules)] },
     { id: 'files', title: `Delete ${D}`, check: `test ! -d ${D}`, checkShow: `test ! -d ${D}`, commands: [plain(`rm -rf ${D}`)] },

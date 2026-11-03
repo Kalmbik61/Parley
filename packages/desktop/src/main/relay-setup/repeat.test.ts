@@ -172,6 +172,8 @@ describe('remove (spec 6.4)', () => {
     // A leftover container of an earlier layout must not keep its volume in use (found by the stand).
     expect(runs(plan(quiet, 'remove', true))).toContain('down -v --remove-orphans');
     expect(runs(plan(quiet, 'remove', false))).toContain('down --remove-orphans');
+    // The empty default network of an earlier layout goes by the project label, with or without the data.
+    for (const data of [false, true]) expect(runs(plan(quiet, 'remove', data))).toContain('docker network ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker network rm || true');
     expect(runs(plan(quiet, 'remove', true))).not.toContain('/var/backups');
   });
   it('the server changed and our site cannot be undone through it → blocked, nothing is torn down', async () => {

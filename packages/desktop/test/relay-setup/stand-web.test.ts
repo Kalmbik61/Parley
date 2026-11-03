@@ -66,6 +66,9 @@ function startManualRelay(server: Server): void {
   exec(server.name, 'docker compose -p parley-relay -f /root/run2-caddy.yml create caddy');
 }
 
+/** Networks the compose project of our relay left (it is ours: label `com.docker.compose.project=parley-relay`). */
+const projectNetworks = (server: Server): string[] => exec(server.name, 'docker network ls -q --filter label=com.docker.compose.project=parley-relay').split('\n').filter((n) => n !== '');
+
 const names = (server: Server): string[] => exec(server.name, 'docker ps -a --format {{.Names}}').split('\n').filter((n) => n !== '').sort();
 
 describe.skipIf(!ENABLED)('relay setup stand: the web server of the person', () => {
@@ -195,6 +198,7 @@ describe.skipIf(!ENABLED)('relay setup stand: the web server of the person', () 
     expect(sha256Of(server.name, COURSE_CADDYFILE)).toBe(caddyfile);
     expect(names(server)).toEqual([CADDY, 'course-platform-prod-web-1'].sort());
     expect(docker(['exec', server.name, 'docker', 'volume', 'ls', '-q'])).not.toMatch(/parley-relay_/);
+    expect(projectNetworks(server)).toEqual([]);
     expect(vhost(server, 'course.localhost')).toBe('course-platform');
     expect(exec(server.name, 'ls /var/backups/parley-relay')).toMatch(/parley-relay\.caddy$/);
   }, 1_200_000);
@@ -212,6 +216,7 @@ describe.skipIf(!ENABLED)('relay setup stand: the web server of the person', () 
     expect(sha256Of(server.name, COURSE_CADDYFILE)).toBe(caddyfile);
     expect(names(server)).toEqual([CADDY, 'course-platform-prod-web-1'].sort());
     expect(docker(['exec', server.name, 'docker', 'volume', 'ls', '-q'])).not.toMatch(/parley-relay_/);
+    expect(projectNetworks(server)).toEqual([]);
     expect(vhost(server, 'course.localhost')).toBe('course-platform');
   }, 1_200_000);
 
