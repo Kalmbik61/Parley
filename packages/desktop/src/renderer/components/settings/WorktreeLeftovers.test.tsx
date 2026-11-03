@@ -89,6 +89,43 @@ describe('WorktreeLeftovers', () => {
     ]);
   });
 
+  it('отказ Remove copy показывает причину', async () => {
+    const bridge = bridgeWith([leftover({ sessionId: 'S01' })]);
+    bridge.setHandler('worktrees.removeCopy', () => ({ removed: false, reason: 'refused', message: 'locked' }));
+    render(<WorktreeLeftovers bridge={bridge} />);
+
+    const row = (await screen.findByText('Task S01')).closest('li') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /Remove copy/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove copy' }));
+
+    await waitFor(() => expect(within(row).getByText('Git refused: locked')).toBeTruthy());
+    expect(screen.getByText('Task S01')).toBeTruthy();
+  });
+
+  it('Remove all пропускает unsaved', async () => {
+    const bridge = bridgeWith([
+      leftover({ sessionId: 'S01' }),
+      leftover({ sessionId: 'S02' }),
+      leftover({ sessionId: 'S03', reason: 'unsaved', files: null }),
+    ]);
+    render(<WorktreeLeftovers bridge={bridge} />);
+
+    await screen.findByText('Task S01');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Remove 2 copies?')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove all' }));
+
+    await waitFor(() => expect(screen.queryByText('Task S01')).toBeNull());
+    const removed = bridge.calls.filter((call) => call.method === 'worktrees.removeCopy').map((call) => call.params);
+    expect(removed).toEqual([
+      { ref: { projectPath: '/Users/me/app', workId: 'w1', sessionId: 'S01' } },
+      { ref: { projectPath: '/Users/me/app', workId: 'w1', sessionId: 'S02' } },
+    ]);
+    expect(screen.getByText('Task S03')).toBeTruthy();
+  });
+
   it('длинный путь виден целиком в title', async () => {
     const long = '/Users/me/.parley/worktrees/a-very-long-project-name/the-room-with-a-really-long-directory-name/session-copy';
     const bridge = bridgeWith([leftover({ sessionId: 'S01', path: long })]);

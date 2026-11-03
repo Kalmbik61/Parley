@@ -27,7 +27,7 @@ export function rootOptions(entry: WindowWorkEntry): RootOption[] {
   const options: RootOption[] = [{ value: 'project', label: S.files.project, spec: { kind: 'project' } }];
   for (const session of entry.map.sessions) {
     const worktree = session.worktree;
-    if (worktree === null || worktree.createdAt === null) continue;
+    if (worktree === null || worktree.createdAt === null || worktree.removedAt) continue;
     const spec: FileRootSpec = { kind: 'worktree', sessionId: session.id };
     options.push({ value: valueOf(spec), label: S.files.worktreeRoot(sessionTag(session.id), worktree.branch), spec });
   }

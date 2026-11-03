@@ -388,8 +388,8 @@ export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
 /** Корень по умолчанию: worktree сессии в фокусе (worktree.createdAt !== null), иначе проект. */
 export function defaultRoot(entry: WindowWorkEntry, focusedSessionId: string | null): FileRootSpec {
   const session = focusedSessionId === null ? undefined : entry.map.sessions.find((item) => item.id === focusedSessionId);
-  // `createdAt: null` — worktree только запланирован, папки на диске ещё нет.
-  if (session?.worktree !== null && session?.worktree !== undefined && session.worktree.createdAt !== null) {
+  // `createdAt: null` — worktree только запланирован, папки на диске ещё нет; `removedAt` — папку убрала уборка хоста.
+  if (session?.worktree !== null && session?.worktree !== undefined && session.worktree.createdAt !== null && !session.worktree.removedAt) {
     return { kind: 'worktree', sessionId: session.id };
   }
   return { kind: 'project' };
@@ -413,7 +413,7 @@ export function rootDirOf(entry: WindowWorkEntry, spec: FileRootSpec): string | 
   // Внешний файл (2026-10-31) — не папка работы: корня-папки нет.
   if (spec.kind === 'external') return null;
   const worktree = entry.map.sessions.find((item) => item.id === spec.sessionId)?.worktree ?? null;
-  return worktree === null || worktree.createdAt === null ? null : worktree.path;
+  return worktree === null || worktree.createdAt === null || worktree.removedAt ? null : worktree.path;
 }
 
 /** Абсолютный путь файла корня: папка корня плюс относительный путь ('' — сама папка). */

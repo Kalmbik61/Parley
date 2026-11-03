@@ -12,6 +12,7 @@ import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { moveTab, pruneLayout } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { useHostStore } from '../store/host.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { bufferKey, initialBuffer } from './buffer.js';
 import { useNotesStore } from '../review/notes/store.js';
@@ -345,6 +346,50 @@ describe('heldWorktreeRefs — копии с несохранёнными пра
       k2: buffer('/my proj/app w-02', { kind: 'worktree', sessionId: 's-3' }, true),
     };
     expect(heldWorktreeRefs(buffers)).toEqual([{ projectPath: '/my proj/app', workId: 'w-02', sessionId: 's-3' }]);
+  });
+});
+
+describe('bindBuffersToLayouts — worktrees.hold уходит хосту', () => {
+  const W = '/tmp/proj w-01';
+  const spec: FileRootSpec = { kind: 'worktree', sessionId: 's-1' };
+  const tab: TabSpec = { kind: 'file', id: tabId.file(spec, 'a.ts'), root: spec, path: 'a.ts' };
+  const connected = (connections: number) =>
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['worktrees.hold'] }, connections });
+  const holdCalls = (bridge: FakeBridge) => bridge.calls.filter((call) => call.method === 'worktrees.hold').map((call) => call.params);
+  let unbind: (() => void) | null = null;
+
+  beforeEach(() => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab], activeTabId: tab.id };
+    useLayoutStore.setState({ activeWorkKey: W, layouts: { [W]: { root: group, activeGroupId: 'g1', closedTabs: [] } }, hydrated: { [W]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    useFilesStore.setState({ buffers: {}, reveals: {} });
+    connected(1);
+  });
+
+  afterEach(() => {
+    unbind?.();
+    unbind = null;
+    useHostStore.setState({ status: { state: 'connecting' }, connections: 0 });
+  });
+
+  it('привязка шлёт пустой список один раз, грязный буфер — одну ссылку, переподключение — снова', async () => {
+    const bridge = createFakeBridge();
+    unbind = bindBuffersToLayouts(bridge);
+    await act(async () => {});
+    expect(holdCalls(bridge)).toEqual([{ refs: [] }]);
+
+    act(() => {
+      useFilesStore.setState({
+        buffers: { [bufferKey(W, tab.id)]: { root: { workKey: W, spec }, path: 'a.ts', watchId: null, model: { ...initialBuffer(), status: 'clean', text: 'x', savedText: 'a' } } },
+      });
+    });
+    await act(async () => {});
+    expect(holdCalls(bridge)).toEqual([{ refs: [] }, { refs: [{ projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-1' }] }]);
+
+    act(() => {
+      connected(2);
+    });
+    await act(async () => {});
+    expect(holdCalls(bridge)).toHaveLength(3);
   });
 });
 

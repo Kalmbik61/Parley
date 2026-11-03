@@ -33,6 +33,11 @@ function reasonText(item: WorktreeLeftover): string {
   }
 }
 
+/** «Remove all» не трогает копии с несохранёнными правками и с работающей сессией: они уйдут сами, когда отпустит причина. */
+function removable(item: WorktreeLeftover): boolean {
+  return item.reason !== 'unsaved' && item.reason !== 'in-use';
+}
+
 function itemKey(item: WorktreeLeftover): string {
   return `${item.ref.projectPath}\u0000${item.ref.workId}\u0000${item.ref.sessionId}`;
 }
@@ -42,6 +47,8 @@ export function WorktreeLeftovers({ bridge }: WorktreeLeftoversProps): JSX.Eleme
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Почему «Remove copy» не убрал строку: ответ хоста `removed: false`, ключ — строка. */
+  const [refusals, setRefusals] = useState<Record<string, string>>({});
 
   const load = useCallback(async (): Promise<void> => {
     const result = await bridge.call('worktrees.leftovers', {});
@@ -67,10 +74,15 @@ export function WorktreeLeftovers({ bridge }: WorktreeLeftoversProps): JSX.Eleme
   const remove = async (targets: WorktreeLeftover[]): Promise<void> => {
     setBusy(true);
     setError(null);
+    setRefusals({});
     try {
       for (const item of targets) {
         try {
-          await bridge.call('worktrees.removeCopy', { ref: item.ref });
+          const result = await bridge.call('worktrees.removeCopy', { ref: item.ref });
+          if (!result.removed) {
+            const why = result.reason === 'dirty' ? S.settings.worktrees.reason.dirty(result.files) : S.settings.worktrees.reason.refused(result.message);
+            setRefusals((current) => ({ ...current, [itemKey(item)]: why }));
+          }
         } catch (err) {
           console.warn('[parley] worktrees.removeCopy', 'failed');
           setError(errorText(decodeIpcError(err).code, S.errors.actions.removeWorktree));
@@ -86,11 +98,12 @@ export function WorktreeLeftovers({ bridge }: WorktreeLeftoversProps): JSX.Eleme
 
   const text = S.settings.worktrees;
   const list = items ?? [];
+  const removableList = list.filter(removable);
   return (
     <section className="flex flex-col gap-2" aria-label={text.heading}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="m-0 text-sm font-medium">{text.heading}</h3>
-        {list.length >= 2 ? (
+        {removableList.length >= 2 ? (
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setPending({ kind: 'all' })}>
             {text.removeAll}
           </Button>
@@ -120,6 +133,9 @@ export function WorktreeLeftovers({ bridge }: WorktreeLeftoversProps): JSX.Eleme
                     {reasonText(item)}
                   </span>
                 </span>
+                {refusals[itemKey(item)] === undefined ? null : (
+                  <span className="text-xs text-destructive">{refusals[itemKey(item)]}</span>
+                )}
               </div>
               <Button
                 type="button"
@@ -138,13 +154,13 @@ export function WorktreeLeftovers({ bridge }: WorktreeLeftoversProps): JSX.Eleme
       ) : null}
       <ConfirmDialog
         open={pending !== null}
-        title={pending?.kind === 'all' ? text.confirmAllTitle(list.length) : text.confirmTitle}
+        title={pending?.kind === 'all' ? text.confirmAllTitle(removableList.length) : text.confirmTitle}
         description={text.confirmBody}
         confirmLabel={pending?.kind === 'all' ? text.removeAll : text.removeCopy}
         onConfirm={() => {
           const current = pending;
           if (current === null) return;
-          void remove(current.kind === 'all' ? list : [current.item]);
+          void remove(current.kind === 'all' ? removableList : [current.item]);
         }}
         onOpenChange={(open) => {
           if (!open) setPending(null);

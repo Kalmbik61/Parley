@@ -49,7 +49,7 @@ export function isTabAlive(entry: WindowWorkEntry, tab: TabSpec): boolean {
       if (root.kind === 'project' || root.kind === 'external') return true;
       const session = entry.map.sessions.find((candidate) => candidate.id === root.sessionId);
       if (session === undefined || session.worktree === null) return false;
-      return session.worktree.createdAt !== null;
+      return session.worktree.createdAt !== null && !session.worktree.removedAt;
     }
   }
 }

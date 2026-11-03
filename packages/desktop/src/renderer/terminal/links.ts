@@ -204,7 +204,7 @@ export function createStatCache(
 
 /** worktree.path, если worktree.createdAt !== null; иначе projectPath. */
 export function sessionCwd(session: WorkSession, projectPath: string): string {
-  return session.worktree !== null && session.worktree.createdAt !== null ? session.worktree.path : projectPath;
+  return session.worktree !== null && session.worktree.createdAt !== null && !session.worktree.removedAt ? session.worktree.path : projectPath;
 }
 
 /** Что провайдеру нужно от xterm: ширина строки и строки буфера. */
