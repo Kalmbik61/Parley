@@ -40,6 +40,7 @@ export interface FollowState {
   readonly echoUntil: number;
   readonly scrollContent: number | null;
   readonly scrollViewport: number | null;
+  readonly scrollOffset: number | null;
   readonly layoutHeight: number | null;
   /** Growth that arrived while a finger was down: one scroll on release, if still at the bottom. */
   readonly pendingGrowth: boolean;
@@ -70,7 +71,7 @@ export function countAfter(keys: readonly string[], seenKey: string | null, prev
 export function open(): FollowState {
   return {
     pinned: true, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
-    echoUntil: 0, scrollContent: null, scrollViewport: null, layoutHeight: null, pendingGrowth: false, seenKey: null, away: 0,
+    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, pendingGrowth: false, seenKey: null, away: 0,
   };
 }
 
@@ -114,8 +115,12 @@ export function pinDeadline(s: FollowState, now: number): number | null {
 /** A scroll event. Growth, a window resize and our own scroll do not move `atBottom`; the human's scrolling and any other position change do. */
 export function scrolled(s: FollowState, m: ScrollMetrics, now: number, keys: readonly string[]): FollowState {
   const grown = s.scrollContent === null || m.content !== s.scrollContent || m.viewport !== s.scrollViewport;
-  const next = { ...s, scrollContent: m.content, scrollViewport: m.viewport };
+  const movedUp = s.scrollOffset !== null && m.offset < s.scrollOffset - 1;
+  const next = { ...s, scrollContent: m.content, scrollViewport: m.viewport, scrollOffset: m.offset };
   if (humanBusy(next)) return evaluate(next, m, keys);
+  // Our own scrolls and the echo of growth never move the feed UP: an upward move far from the end with the same
+  // content height is someone else's (VoiceOver, a status-bar tap), even inside the echo window (critic A44 N6).
+  if (!grown && movedUp && !nearBottom(m) && !next.pinned) return evaluate(next, m, keys);
   if (next.pinned || grown || now < next.echoUntil || own(next, now)) return next;
   return evaluate(next, m, keys);
 }

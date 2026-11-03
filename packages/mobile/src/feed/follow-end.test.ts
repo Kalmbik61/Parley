@@ -88,7 +88,8 @@ describe('follow the end: position, growth and our own scroll (M1)', () => {
   it('a scroll event after our own scroll does not leave the bottom', () => {
     let s = settled();
     s = fe.keepEnd(s, 3000).state;
-    s = fe.scrolled(s, middle, 3300, K);
+    // Our scroll lands while the size changes under it: the offset is far from the new end, the event is not the human's.
+    s = fe.scrolled(s, { offset: 900, content: 1400, viewport: 100 }, 3300, K);
     expect(s.atBottom).toBe(true);
   });
 
@@ -126,6 +127,24 @@ describe('follow the end: position, growth and our own scroll (M1)', () => {
   it('while pinned, a position change without a touch is ignored', () => {
     const s = fe.contentChanged(fe.open(), 0, K).state;
     expect(fe.scrolled(s, middle, 400, K).atBottom).toBe(true);
+  });
+});
+
+describe('follow the end: VoiceOver inside the echo window (N6)', () => {
+  it('an upward move far from the end with the same height leaves the bottom even right after growth', () => {
+    let s = settled();
+    s = fe.scrolled(s, atEnd(), 2500, K);
+    s = fe.contentChanged(s, 3000, K).state;
+    // 20 ms after the growth: inside the echo window.
+    s = fe.scrolled(s, { offset: 300, content: 1000, viewport: 100 }, 3020, K);
+    expect(s.atBottom).toBe(false);
+  });
+
+  it('a downward move inside the window (our own scroll, growth echo) stays at the bottom', () => {
+    let s = fe.scrolled(settled(), { offset: 700, content: 1000, viewport: 100 }, 2500, K);
+    s = fe.jumped(s, 3000, K).state;
+    s = fe.scrolled(s, { offset: 800, content: 1000, viewport: 100 }, 3020, K);
+    expect(s.atBottom).toBe(true);
   });
 });
 

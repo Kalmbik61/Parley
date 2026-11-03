@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -47,6 +48,7 @@ export default function RoomScreen() {
   const c = useColors();
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
   const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string; dev?: string }>();
   const work = parseWorkParam(str(params.ref));
@@ -331,7 +333,7 @@ export default function RoomScreen() {
           ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={openMenu} />),
         }}
       />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
         {(room.proposal !== null || waiting[0] !== undefined) && (
           <BarStripStack onChange={follow.keepEnd}>
             {room.proposal !== null && (
@@ -356,8 +358,8 @@ export default function RoomScreen() {
           scrollEventThrottle={64}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={styles.list}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={[styles.list, { paddingTop: room.proposal !== null || waiting[0] !== undefined ? 8 : headerHeight + 8 }]}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>

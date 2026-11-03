@@ -1,17 +1,18 @@
 // Session = the chat of a session (D1 §9, plan A32): a pinned two-line header, the feed with folded finished turns,
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { FeedCard, FeedItem } from '@parley/core';
+import type { FeedItem } from '@parley/core';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
-import { ActiveCard, type CardParts } from '../../cards/CardViews';
+import { ActiveCard } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
 import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
@@ -83,10 +84,10 @@ export default function SessionScreen() {
   const c = useColors();
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
   const { ref: param, fresh, preview, dev: devSpec } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; dev?: string }>();
   const ref = parseSessionParam(param);
-  const stableRef = useMemo(() => ref, [param]) as SessionRef;
   const client = useClient();
   const state = useRemoteState();
   const canAct = useCanAct();
@@ -96,7 +97,8 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
-  const [cardParts, setCardParts] = useState<CardParts | null>(null);
+  // Only the card's buttons pass through state (set in an effect); its text fields are rendered in the same render as their state (A44 N2).
+  const [cardActions, setCardActions] = useState<React.ReactNode>(null);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -242,11 +244,14 @@ export default function SessionScreen() {
   }, [preview]);
 
 
-  const toggleGroup = useCallback((key: string) => (follow.leave(), setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])))), [follow.leave]);
+  // Expanding a group leaves the end (its start stays in view); collapsing keeps following (A44 m3, N4).
+  const toggleGroup = useCallback((key: string) => {
+    if (!openGroups.has(key)) follow.leave();
+    setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])));
+  }, [follow.leave, openGroups]);
   // The status line of a turn opens or closes every work group of that turn.
   const toggleTurn = useCallback(
     (controlKey: string) => {
-      follow.leave();
       const at = folded.findIndex((r) => r.key === controlKey);
       const keys: string[] = [];
       for (let i = at - 1; i >= 0 && folded[i]!.kind !== 'control'; i--) {
@@ -254,9 +259,10 @@ export default function SessionScreen() {
         if (r.kind === 'item' && r.item.kind === 'prompt') break;
         if (r.kind === 'group') keys.push(r.key);
       }
+      if (!keys.every((k) => openGroups.has(k))) follow.leave();
       setOpenGroups((s) => (keys.every((k) => s.has(k)) ? new Set([...s].filter((k) => !keys.includes(k))) : new Set([...s, ...keys])));
     },
-    [folded, follow.leave],
+    [folded, follow.leave, openGroups],
   );
 
   const shell = (title: string, body: React.ReactNode) => (
@@ -449,8 +455,8 @@ export default function SessionScreen() {
           : { icon: 'desktopcomputer' as const, text: 'Answer at your Mac — in its terminal' }
       : null;
 
-  const content = (parts: CardParts | null) => (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
+  const content = () => (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
       {strip !== null && (
         <BarStripStack onChange={follow.keepEnd}>
           <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
@@ -464,8 +470,8 @@ export default function SessionScreen() {
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={styles.list}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[styles.list, { paddingTop: strip !== null ? 8 : headerHeight + 8 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
@@ -499,14 +505,19 @@ export default function SessionScreen() {
               </View>
             )}
             {first !== undefined && (
-              <>
-                {parts?.body}
-                {rest.length > 0 && (
-                  <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
-                    {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
-                  </Text>
+              <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
+                {(parts) => (
+                  <>
+                    <ActionsPublisher actions={parts.actions} onActions={setCardActions} />
+                    {parts.body}
+                    {rest.length > 0 && (
+                      <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+                        {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
+                      </Text>
+                    )}
+                  </>
                 )}
-              </>
+              </ActiveCard>
             )}
             {turnRunning && first === undefined && (
               <Text allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
@@ -533,7 +544,7 @@ export default function SessionScreen() {
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined ? (
-          parts?.actions ?? null
+          cardActions
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
@@ -612,30 +623,19 @@ export default function SessionScreen() {
           />
         )}
       </Modal>
-      {content(cardParts)}
-      {/* The card's views live in a probe beside the list, so a card coming, changing or going never remounts the feed (A44, M5). */}
-      {first !== undefined && <CardProbe key={first.cardId} card={first} sessionRef={stableRef} projectPath={work.projectPath} canAct={canAct} onParts={setCardParts} />}
+      {content()}
     </View>
   );
 }
 
-/** Hands the card's body and actions to the screen and takes them back when the card goes. */
-function PartsPublisher({ parts, onParts }: { parts: CardParts; onParts: (parts: CardParts | null) => void }) {
+/** Hands the card's buttons to the footer and takes them back when the card goes. */
+function ActionsPublisher({ actions, onActions }: { actions: React.ReactNode; onActions: (actions: React.ReactNode) => void }) {
   useEffect(() => {
-    onParts(parts);
+    onActions(actions);
   });
-  useEffect(() => () => onParts(null), [onParts]);
+  useEffect(() => () => onActions(null), [onActions]);
   return null;
 }
-
-/** Renders the card's own views (they hold their state) and publishes what they draw; memoized, so it re-renders only for its own state. */
-const CardProbe = memo(function CardProbe({ card, sessionRef, projectPath, canAct, onParts }: { card: FeedCard; sessionRef: SessionRef; projectPath: string; canAct: boolean; onParts: (parts: CardParts | null) => void }) {
-  return (
-    <ActiveCard card={card} sessionRef={sessionRef} projectPath={projectPath} canAct={canAct}>
-      {(parts) => <PartsPublisher parts={parts} onParts={onParts} />}
-    </ActiveCard>
-  );
-});
 
 /** A provider-switch or project-MCP request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */
 function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
