@@ -1424,6 +1424,58 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(audits.some((a) => a.method === 'sessions.switchOptions')).toBe(false);
   });
 
+  it('A41a: room-archive and room-delete only after a successful call, with the room title from the snapshot taken before it', async () => {
+    (host.snapshot!.entries[0]!.map as any).rooms = [{ id: 'r-1', title: 'Design review' }];
+    host.handler = async (method, params) => {
+      const p = params as { roomId?: string };
+      if (p.roomId === 'r-8') throw new HostCallError('conflict', 'the work is archived');
+      // The room disappears with the call: the label must come from the snapshot read before it.
+      if (method === 'rooms.delete') (host.snapshot!.entries[0]!.map as any).rooms = [];
+      return { ok: true };
+    };
+    const room = (roomId: string) => ({ projectPath: '/p', workId: 'w-1', roomId });
+    call(D, 'a', 'rooms.archive', { ...room('r-1'), stopSessions: true });
+    call(D, 'b', 'rooms.archive', { ...room('r-9'), stopSessions: false });
+    call(D, 'c', 'rooms.archive', { ...room('r-8'), stopSessions: false });
+    await flush();
+    call(D, 'd', 'rooms.delete', room('r-1'));
+    call(D, 'e', 'rooms.delete', room('r-8'));
+    // Refused by the rule, never reaches the host: no event, no host call.
+    call(D, 'f', 'rooms.delete', { ...room('r-1'), stopSessions: true });
+    call(D, 'g', 'rooms.archive', room('r-1'));
+    await flush();
+    expect(answer('c')).toMatchObject({ error: { code: 'conflict' } });
+    expect(answer('f')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(answer('g')).toMatchObject({ error: { code: 'bad_request' } });
+    const target = (roomId: string, label: string) => ({ ...room(roomId), label });
+    expect(actions).toEqual([
+      { deviceId: D, kind: 'room-archive', target: target('r-1', 'Design review') },
+      // Not in the snapshot: its number instead of a title.
+      { deviceId: D, kind: 'room-archive', target: target('r-9', 'r-9') },
+      { deviceId: D, kind: 'room-delete', target: target('r-1', 'Design review') },
+    ]);
+    expect(host.calls.map((c) => c.method)).toEqual(['rooms.archive', 'rooms.archive', 'rooms.archive', 'rooms.delete', 'rooms.delete']);
+    // Mutating: each one is audited as `call`, with the room, work and a project hash; refusals as `call-refused`.
+    const calls = audits.filter((a) => a.kind === 'call');
+    expect(calls.map((a) => `${a.method}:${a.outcome}`)).toEqual([
+      'rooms.archive:ok', 'rooms.archive:ok', 'rooms.archive:conflict', 'rooms.delete:ok', 'rooms.delete:conflict',
+    ]);
+    expect(calls[0]).toMatchObject({ target: 'r-1', detail: expect.stringMatching(/^workId=w-1 project:sha256=[0-9a-f]{12} .*stopSessions=true/) });
+    expect(audits.filter((a) => a.kind === 'call-refused')).toHaveLength(2);
+    expect(JSON.stringify(audits)).not.toContain('Design review');
+  });
+
+  it('A41a: the room menu shares the mutating limit', async () => {
+    for (let i = 0; i < 30; i++) {
+      call(D, `m${i}`, i % 2 === 0 ? 'rooms.delete' : 'rooms.archive', { projectPath: '/p', workId: 'w-1', roomId: 'r-1', ...(i % 2 === 0 ? {} : { stopSessions: false }) });
+      await flush();
+    }
+    call(D, 'over', 'rooms.delete', { projectPath: '/p', workId: 'w-1', roomId: 'r-1' });
+    await flush();
+    expect(answer('over')).toMatchObject({ error: { code: 'rate_limited' } });
+    expect(host.calls.filter((c) => c.method === 'rooms.delete')).toHaveLength(15);
+  });
+
   it('A38a: the session menu shares the mutating limit; switchOptions does not spend it', async () => {
     const menu = ['feed.interrupt', 'sessions.stop', 'sessions.close'];
     for (let i = 0; i < 30; i++) {

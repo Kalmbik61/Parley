@@ -68,6 +68,17 @@ export interface RemoteLaunchPolicy {
    * обработчика вызовов роли `remote` по одной сессии (`REMOTE_SESSION_RULES`).
    */
   sessionState(projectPath: string, workId: string, sessionId: string): Promise<RemoteSessionState | null>;
+  /**
+   * Состояние комнаты по свежей карте работы (меню комнаты, правки 21): `null` — нет такого проекта, работы или
+   * комнаты. Читается до обработчика `rooms.archive` и `rooms.delete` роли `remote`.
+   */
+  roomState(projectPath: string, workId: string, roomId: string): Promise<RemoteRoomState | null>;
+}
+
+export interface RemoteRoomState {
+  workArchived: boolean;
+  /** Комната идущего автономного прогона: телефон её не меняет. */
+  autonomous: boolean;
 }
 
 export interface RemoteSessionState {
@@ -116,6 +127,9 @@ const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
   'sessions.close',
   'sessions.switchOptions',
   'sessions.switchAgent',
+  // Меню комнаты (правки 21): Archive и Delete; цель — известный проект, работа и комната (`remoteRoomGate`).
+  'rooms.archive',
+  'rooms.delete',
 ]);
 
 /**
@@ -154,6 +168,22 @@ async function remoteSessionGate(method: string, params: unknown, policy: Remote
   }
   const refused = rule(state);
   if (refused !== null) throw new HostError('conflict', refused);
+}
+
+/** Методы меню комнаты: проверка комнаты на свежей карте до обработчика. */
+const REMOTE_ROOM_METHODS: ReadonlySet<string> = new Set(['rooms.archive', 'rooms.delete']);
+
+/**
+ * Проверка комнаты до обработчика (правки 21): неизвестная — `bad_request`, архивная работа и автономный прогон —
+ * `conflict`. Архивную комнату удалить можно, повторная архивация — no-op ядра.
+ */
+async function remoteRoomGate(params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
+  // Правило параметров уже проверило три непустые строки.
+  const { projectPath, workId, roomId } = params as { projectPath: string; workId: string; roomId: string };
+  const state = await policy.roomState(projectPath, workId, roomId);
+  if (state === null) throw new HostError('bad_request', 'unknown room');
+  if (state.workArchived) throw new HostError('conflict', 'the work is archived');
+  if (state.autonomous) throw new HostError('conflict', 'the phone does not change rooms of an autonomous run');
 }
 
 /**
@@ -471,11 +501,12 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       ? (parsed.params as { projectPath: string }).projectPath
       : null;
   const policy = options.remoteLaunch;
-  const gated = client.role === 'remote' && policy !== undefined && Object.hasOwn(REMOTE_SESSION_RULES, method);
+  const roomGated = client.role === 'remote' && policy !== undefined && REMOTE_ROOM_METHODS.has(method);
+  const gated = client.role === 'remote' && policy !== undefined && (roomGated || Object.hasOwn(REMOTE_SESSION_RULES, method));
   // Без доверия и проверки сессии обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не
   // меняется.
   const pending = gated
-    ? remoteSessionGate(method, parsed.params, policy).then(() => {
+    ? (roomGated ? remoteRoomGate(parsed.params, policy) : remoteSessionGate(method, parsed.params, policy)).then(() => {
         if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
         if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected');
         return handler(parsed.params as never, request);

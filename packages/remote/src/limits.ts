@@ -31,6 +31,9 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'sessions.stop',
   'sessions.close',
   'sessions.switchAgent',
+  // Меню комнаты (A41a, правки 21): лимит, журнал `call` и `phone.action` после удачного вызова.
+  'rooms.archive',
+  'rooms.delete',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */

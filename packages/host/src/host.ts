@@ -981,6 +981,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         const engine = session.workspace !== undefined && session.workspace !== null;
         return { workArchived: map.work.status === 'archived', lifecycle: session.lifecycle, live, engine };
       },
+      // Свежая карта, не снимок (правки 21): комната могла уйти в автономный прогон или работа — в архив после снимка.
+      roomState: async (projectPath, workId, roomId) => {
+        if (worksService.entry(projectPath, workId) === undefined) return null;
+        const map = await readMap(projectPath, workId).catch(() => null);
+        const room = map?.rooms.find((entry) => entry.id === roomId);
+        if (!map || !room) return null;
+        return { workArchived: map.work.status === 'archived', autonomous: room.mode === 'autonomous' };
+      },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
       trustFolder: async (projectPath) => {

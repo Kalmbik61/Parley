@@ -196,7 +196,7 @@ describe('allowlist: launch from the phone (A1c, spec 4.2)', () => {
     expect([...REMOTE_STAGES.C.methods].sort()).toEqual([...REMOTE_STAGES.B.methods].sort());
     expect(REMOTE_FORBIDDEN).not.toContain('rooms.create');
     expect(isRemoteForbidden('rooms.create')).toBe(false);
-    for (const name of ['rooms.addMember', 'rooms.setLead', 'rooms.setMode', 'rooms.delete']) {
+    for (const name of ['rooms.addMember', 'rooms.setLead', 'rooms.setMode', 'rooms.reopen']) {
       expect(isRemoteForbidden(name), name).toBe(true);
     }
   });
@@ -504,6 +504,17 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: { ...moved, provider: '' } }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: moved }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: moved }).success).toBe(false);
+    // A41a: `room-archive` и `room-delete` — проект, работа, комната и имя; эта цель только у них.
+    const roomTarget = { projectPath: '/p', workId: 'w-1', roomId: 'r-1', label: 'Design' };
+    for (const kind of ['room-archive', 'room-delete']) {
+      expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target: roomTarget }).success, kind).toBe(true);
+      for (const target of [ref, closed, 'Design', { ...roomTarget, label: '' }, { ...roomTarget, label: 'x'.repeat(257) }, { ...roomTarget, text: 'agent text' }, { ...roomTarget, sessionId: 's-1' }]) {
+        expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target }).success, `${kind} ${JSON.stringify(target)}`).toBe(false);
+      }
+    }
+    for (const kind of ['session-close', 'session-create', 'provider-switch', 'allow-always', 'trust-folder', 'mcp-enable']) {
+      expect(phoneActionEvent.safeParse({ deviceId: id16, kind, target: roomTarget }).success, kind).toBe(false);
+    }
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);

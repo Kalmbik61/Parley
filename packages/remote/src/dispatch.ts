@@ -138,7 +138,9 @@ const joinDetail = (parts: Array<string | undefined>): string | undefined => {
  */
 function refDetail(params: unknown): string[] {
   if (typeof params !== 'object' || params === null) return [];
-  const ref = (params as { ref?: unknown }).ref;
+  // Методы комнаты (A41a) несут проект и работу на верхнем уровне, рядом с `roomId`.
+  const p = params as { ref?: unknown; roomId?: unknown };
+  const ref = p.ref ?? (typeof p.roomId === 'string' ? params : undefined);
   if (typeof ref !== 'object' || ref === null) return [];
   const { projectPath, workId } = ref as Record<string, unknown>;
   const parts: string[] = [];
@@ -272,6 +274,13 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     const label = entry?.map.sessions.find((session) => session.id === ref?.sessionId)?.label;
     return typeof label === 'string' && label !== '' ? label.slice(0, 256) : null;
   }
+  /** Имя комнаты из снимка эпохи — цель `room-archive` и `room-delete` (правки 21); снимок берётся до вызова. */
+  function roomLabelOf(params: unknown): string | null {
+    const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    const entry = host.snapshot?.entries.find((e) => e.projectPath === p.projectPath && e.map.work.id === p.workId);
+    const title = entry?.map.rooms.find((room) => room.id === p.roomId)?.title;
+    return typeof title === 'string' && title !== '' ? title.slice(0, 256) : null;
+  }
   /**
    * Имена провайдеров для людей из ответов `sessions.switchOptions` (`targets`) и `providers.list` (`providers`): цель
    * `provider-switch` после `switchAgent`. Сырой параметр `provider` в событие не идёт (критик A38a m3).
@@ -367,6 +376,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       // Цель — `ref` и имя сессии; без имени (сессии нет в снимке) — её номер.
       const ref = cleanRef(p.ref);
       if (ref) actions.push({ kind: 'session-close', target: { ...ref, label: label ?? ref.sessionId } });
+    } else if (method === 'rooms.archive' || method === 'rooms.delete') {
+      // Цель — проект, работа, комната и имя из снимка до вызова; сырые параметры в событие не идут. Без имени — номер.
+      const { projectPath, workId, roomId } = p;
+      if (typeof projectPath === 'string' && typeof workId === 'string' && typeof roomId === 'string') {
+        actions.push({ kind: method === 'rooms.archive' ? 'room-archive' : 'room-delete', target: { projectPath, workId, roomId, label: label ?? roomId } });
+      }
     } else if (method === 'sessions.switchAgent' && provider !== null) {
       // Прямая замена (критик A38a m1): какая сессия и куда; `held` и `queued` — тоже, карта уже переключена.
       const ref = cleanRef(p.ref);
@@ -564,7 +579,12 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       } else {
         const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         const trustAfter = method === 'sessions.create' ? await trustWrittenBy(params) : null;
-        const label = method === 'sessions.close' || method === 'sessions.switchAgent' ? sessionLabelOf(params) : null;
+        const label =
+          method === 'sessions.close' || method === 'sessions.switchAgent'
+            ? sessionLabelOf(params)
+            : method === 'rooms.archive' || method === 'rooms.delete'
+            ? roomLabelOf(params)
+            : null;
         const provider = method === 'sessions.switchAgent' && options.onPhoneAction ? await providerLabelOf(params) : null;
         try {
           raw = await host.call(method, params ?? {});

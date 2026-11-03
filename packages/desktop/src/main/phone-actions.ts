@@ -21,7 +21,7 @@ const baseName = (folder: string): string => path.basename(folder.replace(/\/+$/
 
 /**
  * What the notification names: the work title, then basename(projectPath) only for an unknown work; the repo name for MCP.
- * For `session-close` and a direct `provider-switch` it is the work too; the session label comes from `action.target`.
+ * For `session-close`, `room-archive`, `room-delete` and a direct `provider-switch` it is the work too; the session label comes from `action.target`.
  */
 async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLookup | undefined): Promise<string> {
   if (typeof target === 'string') return target;
@@ -37,8 +37,8 @@ const targetKey = (target: PhoneAction['target']): string =>
     : 'repo' in target
       ? `${target.repo}\0${target.servers.join('\0')}`
       : 'label' in target
-        ? // One key per session: closing or moving the same session twice in 10 s notifies once.
-          `${target.projectPath}\0${target.workId}\0${target.sessionId}`
+        ? // One key per session (or room): closing, moving, archiving or deleting the same one twice in 10 s notifies once.
+          `${target.projectPath}\0${target.workId}\0${'roomId' in target ? target.roomId : target.sessionId}`
         : `${target.projectPath}\0${target.workId}`;
 
 /** `target` is the already resolved text (see `targetText`); `mcp-enable` also lists the server names of `action.target`. */
@@ -63,6 +63,11 @@ export function phoneActionBody(action: Pick<PhoneAction, 'kind'> & { target?: P
     }
     case 'session-create':
       return TEXT.sessionStart(clip(target));
+    case 'room-archive':
+    case 'room-delete': {
+      const label = typeof action.target === 'object' && 'label' in action.target ? action.target.label : '';
+      return (action.kind === 'room-archive' ? TEXT.roomArchive : TEXT.roomDelete)(clip(label), clip(target));
+    }
     case 'session-close': {
       const label = typeof action.target === 'object' && 'label' in action.target ? action.target.label : '';
       return TEXT.sessionClose(clip(label), clip(target));
