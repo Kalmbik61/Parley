@@ -79,6 +79,8 @@ export const MD_LIST_ITEMS_MAX = 300;
 export const MD_EXTRA_MARKERS_MAX = 300;
 export const MD_ITEMS_CELLS_MAX = 2000;
 export const MD_BLOCKS_MAX = 3000;
+/** Every mdast node (inline ones too: a paragraph of 30 000 nested emphasis is 30 000 React nodes). */
+export const MD_NODES_MAX = 12000;
 
 /** A quote or list marker; `>` needs no space after it (CommonMark), a list marker does. */
 const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
@@ -96,8 +98,8 @@ const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
  * quotes and list items are counted like the rest (a rare false positive, the safe side).
  */
 const FENCE_OPEN = /^(?:(`{3,})[^`]*|(~{3,}).*)$/;
-/** Closed strictly as CommonMark: up to 3 spaces, the same character, spaces only (no tab, no `>`). */
-const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,}) *$/;
+/** Closed as CommonMark: up to 3 spaces, the same character, then spaces or tabs only (no `>`, no tab in front). */
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 /** A line that may open an HTML block (up to 3 spaces, then `<`): no fence counts in it up to the next blank line. */
 const HTML_START = /^ {0,3}</;
 /** HTML blocks of types 1–5 run to a closing marker, not to a blank line: no code is skipped from here on. */
@@ -119,6 +121,8 @@ export const tooHeavy = (text: string): boolean => {
   // Counts with the code skipped (limit) and over everything (BACKSTOP × limit).
   const skip = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false, extraMarkers: 0 };
   const all = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
+  // Skipped code: a coarse backstop (4×, no depth limit), so a fence the guard misreads can never hide a bomb (M8).
+  const code = { emphasis: 0, brackets: 0, depth: 0 };
   let fence: string | null = null;
   let html = false;
   let codeSkipOff = false;
@@ -126,8 +130,8 @@ export const tooHeavy = (text: string): boolean => {
     const blank = line.trim() === '';
     const inCode: boolean = fence !== null;
     const opener: RegExpExecArray | null = !inCode && !blank && !html && !codeSkipOff ? FENCE_OPEN.exec(line) : null;
-    // Over everything, nothing skipped (the backstop). Code the column-0 fence rule already skips counts only its
-    // lines (and the 64 KB of the whole text): `*`, `_`, `~` and `[` in real code are legal in any number (m20).
+    // Over everything, nothing skipped (the backstop). Code the column-0 fence rule already skips counts its lines and
+    // `*`, `_`, `~`, `[` only coarsely (4×, no depth): real code has many (m20) but never without bound.
     if (blank) {
       all.inBlock = false;
       all.lazy = 0;
@@ -137,7 +141,9 @@ export const tooHeavy = (text: string): boolean => {
       if (opener !== null) {
         all.inBlock = false;
         all.lazy = 0;
-      } else if (!inCode) {
+      } else if (inCode) {
+        if (count(line, code, BACKSTOP * 2, Infinity)) return true;
+      } else {
         if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
         if (HEADING.test(line)) {
           all.inBlock = false;
@@ -200,20 +206,22 @@ function markersOn(line: string): number {
 }
 
 /**
- * The budget of one message after parsing (M7): list items + table cells, and block nodes, over their limits show raw
- * text. Every limit above is per structure; many structures (16 lists of 300, 14 tables of 2000 cells) are not covered
+ * The budget of one message after parsing (M7): list items + table cells, block nodes, and all nodes (inline too), over their
+ * limits show raw text. Every limit above is per structure; many structures (16 lists of 300, 14 tables of 2000 cells) are not covered
  * by them, and each costs ~5 native views per item, so the sum is bounded here.
  */
 export function overBudget(root: MdNode): boolean {
   let cells = 0;
   let blocks = 0;
+  let nodes = 0;
   const walk = (n: MdNode): void => {
+    nodes++;
     if (n.type === 'listItem' || n.type === 'tableCell') cells++;
     if (BLOCK_TYPES.has(n.type)) blocks++;
     n.children?.forEach(walk);
   };
   walk(root);
-  return cells > MD_ITEMS_CELLS_MAX || blocks > MD_BLOCKS_MAX;
+  return cells > MD_ITEMS_CELLS_MAX || blocks > MD_BLOCKS_MAX || nodes > MD_NODES_MAX;
 }
 const BLOCK_TYPES = new Set(['paragraph', 'heading', 'code', 'blockquote', 'list', 'listItem', 'table', 'thematicBreak', 'definition', 'footnoteDefinition']);
 

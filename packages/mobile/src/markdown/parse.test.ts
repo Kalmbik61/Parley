@@ -481,6 +481,10 @@ describe('the code skip cannot be fooled (A40 critic M6, round 5)', () => {
     listHtmlFence: '- <div>\n  ```\n\n',
     nestedQuoteFence: '> > ```\n> ',
     earlyClose: '```\n\t```\n```\n',
+    // A closing fence followed by a tab or spaces still closes (CommonMark): the bomb after it counts (M8).
+    closeTab: '```\nx\n```\t\n',
+    closeSpaceTab: '```\nx\n``` \t\n',
+    closeTildeTab: '~~~\nx\n~~~\t\n',
     quoteEarlyClose: '```\n> ```\n```\n',
     badInfo: '```a`\n',
     html: '<div>\n```\n\n',
@@ -574,11 +578,28 @@ describe('one budget per message (A40 critic M7)', () => {
 
 describe('real code is not counted by the backstop (A40 critic m20)', () => {
   it('a 1300-line Python block with underscores stays Markdown', () => {
-    const py = `\`\`\`python\n${'self._a_b = __c__ * __d__\n'.repeat(1300)}\`\`\`\n\nok`;
+    const py = `\`\`\`python\n${'self._a_b = __c__\n'.repeat(1300)}\`\`\`\n\nok`;
     expect(types(parseMarkdown(py))).toEqual(['code', 'paragraph']);
   });
   it('a 65-line progress bar with [=====> stays Markdown', () => {
     const bar = `\`\`\`\n${'progress [=====>\n'.repeat(65)}\`\`\`\n\nok`;
     expect(types(parseMarkdown(bar))).toEqual(['code', 'paragraph']);
+  });
+});
+
+describe('inline nodes are in the budget (A40 critic m21)', () => {
+  it('a paragraph of many inline nodes is raw text, a normal long paragraph is not', () => {
+    const many = '`a` '.repeat(8000); // 16 000 nodes
+    expect(plainText(parseMarkdown(many))).toBe(many);
+    const normal = 'word `code` **bold** '.repeat(200);
+    expect(types(parseMarkdown(normal))).toEqual(['paragraph']);
+  });
+});
+
+describe('skipped code keeps a coarse backstop (A40 critic M8)', () => {
+  it('real code with ~7800 underscores or 3000 [ stays Markdown, 9000 is raw', () => {
+    expect(types(parseMarkdown(`\`\`\`\n${'_a_b_c_\n'.repeat(1300)}\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+    const heavy = `\`\`\`\n${'_'.repeat(9000)}\n\`\`\`\n\nok`;
+    expect(plainText(parseMarkdown(heavy))).toBe(heavy);
   });
 });
