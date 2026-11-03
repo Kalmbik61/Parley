@@ -24,6 +24,8 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         sess('drone1', 'Research drone 1', { createdBy: 'greta' }),
         sess('queen', 'Research queen', { createdBy: 'greta' }),
         sess('solo', 'Changelog-writer', { role: 'writer' }),
+        // A37b: a sleeping session — the Resume row.
+        sess('zzz', 'Docs-editor', { role: 'writer', model: 'sonnet', lifecycle: 'sleeping' as never, lastEvent: { event: 'Stop', at: ago(180) } }),
         // A35a: the human's case — a room a person made (no owning session), its two members top-level.
         sess('s-01', 'Аналитик', { role: 'analyst' }),
         sess('s-02', 'Редактор', { role: 'editor' }),
@@ -82,7 +84,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     ],
   });
   // The "+" and the New session / New room sheet (A26): launch methods in the hello, a made-up provider and role list.
-  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping', 'pty.send', 'consents.list', 'consents.decide', 'trust.check']);
+  client.setBridgeMethods(['works.list', 'feed.decide', 'sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list', 'ping', 'pty.send', 'consents.list', 'consents.decide', 'trust.check', 'sessions.resume']);
   store.dispatch({
     t: 'catalog.providers', epoch: 'demo',
     providers: { providers: [
@@ -109,7 +111,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
     { kind: 'text', id: 'f8', at: at(3), messageId: 'm2', streaming: true, text: "I'll run the linter first, then the build." },
   ] as never[];
-  for (const id of ['greta', 'drone1', 'solo']) {
+  for (const id of ['greta', 'drone1', 'solo', 'zzz']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
   }
@@ -170,7 +172,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -195,6 +197,14 @@ export function demoRoute(name: unknown): string | null {
       return `/letter?ref=${encodeURIComponent(w)}&id=m1`;
     case 'plain':
       return s('greta');
+    case 'sleeping':
+      return s('zzz');
+    // A37b screenshots: the state comes from the `preview` param (waking, failed, pending, alert), not from taps.
+    case 'sleeping-waking':
+    case 'sleeping-failed':
+    case 'sleeping-pending':
+    case 'sleeping-alert':
+      return `${s('zzz')}?preview=${name.slice('sleeping-'.length)}`;
     case 'session-strip':
       return s('solo');
     case 'chat':

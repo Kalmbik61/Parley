@@ -31,14 +31,14 @@ describe('text rules', () => {
 });
 
 describe('composerMode', () => {
-  const base: ComposerFacts = { hasMethod: true, closed: false, sleeping: false, hasCard: false, blockedNoCard: false, working: false, online: true, limitNote: null, feedReady: true };
+  const base: ComposerFacts = { hasMethod: true, closed: false, sleeping: false, hasResume: true, hasCard: false, blockedNoCard: false, working: false, online: true, limitNote: null, feedReady: true };
   it('table of D1 §9.5', () => {
     expect(composerMode(base)).toEqual({ kind: 'input', sendEnabled: true, note: null });
     expect(composerMode({ ...base, working: true })).toMatchObject({ sendEnabled: true, note: expect.stringContaining('working') });
     expect(composerMode({ ...base, online: false })).toMatchObject({ sendEnabled: false, note: 'Reconnecting — actions are paused' });
     expect(composerMode({ ...base, hasMethod: false }).kind).toBe('hidden');
     expect(composerMode({ ...base, closed: true })).toEqual({ kind: 'hidden', text: 'This session is closed' });
-    expect(composerMode({ ...base, sleeping: true }).kind).toBe('hidden');
+    expect(composerMode({ ...base, sleeping: true, hasResume: false }).kind).toBe('hidden');
     expect(composerMode({ ...base, hasCard: true })).toEqual({ kind: 'hidden', text: '' });
     expect(composerMode({ ...base, blockedNoCard: true })).toMatchObject({ sendEnabled: false, note: 'Answer at your Mac first' });
     expect(composerMode({ ...base, feedReady: false })).toMatchObject({ sendEnabled: false });

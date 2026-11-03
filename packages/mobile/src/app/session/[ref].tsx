@@ -2,7 +2,7 @@
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -24,7 +24,10 @@ import { Composer } from '../../feed/Composer';
 import { FoldRowView, OutBubble } from '../../feed/FeedViews';
 import { foldFeed, type FoldRow } from '../../feed/fold';
 import { visibleOut, type OutMessage } from '../../feed/outbox';
-import { composerMode } from '../../feed/send';
+import { SleepingRow } from '../../feed/ResumeViews';
+import { composerMode, messageProblem } from '../../feed/send';
+import type { ResumeFacts } from '../../feed/resume';
+import { useResume } from '../../feed/use-resume';
 import { useChat } from '../../feed/use-chat';
 import { haptic } from '../../haptics';
 import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-remote';
@@ -70,7 +73,7 @@ export default function SessionScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { ref: param, fresh } = useLocalSearchParams<{ ref: string; fresh?: string }>();
+  const { ref: param, fresh, preview } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string }>();
   const ref = parseSessionParam(param);
   const client = useClient();
   const state = useRemoteState();
@@ -143,7 +146,45 @@ export default function SessionScreen() {
   }, [items]);
   const chat = useChat(ref, turnRunning, toast.show);
   const out = useMemo(() => visibleOut(chat.out, items ?? []), [chat.out, items]);
-  const rows = useMemo<Row[]>(() => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message }))], [folded, out]);
+  // A37b: waking a sleeping session; "Resume and send" holds the text here until the agent is ready.
+  const consents = useConsents();
+  const resumeFacts = useMemo<ResumeFacts | null>(() => {
+    if (found === null || state === null || ref === null) return null;
+    const { session: sn } = found;
+    const attn = attentionOfSession(state, ref, sn);
+    return {
+      lifecycle: sn.lifecycle === 'sleeping' ? 'sleeping' : sn.lifecycle === 'closed' ? 'closed' : 'other',
+      held: consents.rows.some(({ card }) => cardBelongsToSession(card, ref)),
+      idle: attn === 'idle' || attn === 'unseen',
+      lastEventAt: state.activity[sessionKey(ref)]?.activity.lastEventAt ?? sn.lastEvent?.at ?? null,
+    };
+  }, [found, state, consents.rows, ref?.projectPath, ref?.workId, ref?.sessionId]);
+  const resume = useResume(client, ref, resumeFacts, { send: (text) => void chat.sendText(text), textBack: chat.setDraft });
+  const hasResume = DEMO || (state?.methods?.includes('sessions.resume') ?? false);
+  // ⬆ on a sleeping session asks first; the text stays in the field until the person agrees.
+  const askResumeAndSend = (text: string): void =>
+    Alert.alert(`${found?.session.label ?? 'This session'} is sleeping`, undefined, [
+      { text: 'Resume and send', onPress: () => { chat.setDraft(''); resume.start(text); } },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  const pendingRow = resume.view.pending;
+  const pendingMessage: OutMessage | null = pendingRow === null ? null : { id: 'resume-pending', text: pendingRow.text, at: 0, state: { kind: pendingRow.held ? 'held' : 'waking' } };
+  const rows = useMemo<Row[]>(
+    () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
+    [folded, out, pendingRow?.text, pendingRow?.held],
+  );
+  // Developer preview (screenshots): `?preview=waking|failed|pending|alert` sets the state without taps.
+  useEffect(() => {
+    if (!DEMO || preview === undefined) return;
+    if (preview === 'waking') resume.seed({ line: { kind: 'waking' }, pending: null });
+    else if (preview === 'failed') resume.seed({ line: { kind: 'failed', message: "Couldn't wake it — no free slot on your Mac" }, pending: null });
+    else if (preview === 'pending') resume.seed({ line: { kind: 'waking' }, pending: { text: 'Please run the linter once more', held: false } });
+    else if (preview === 'alert') {
+      chat.setDraft('Please run the linter once more');
+      askResumeAndSend('Please run the linter once more');
+    }
+  }, [preview]);
+
 
   const toggleGroup = useCallback((key: string) => setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key]))), []);
   // The status line of a turn opens or closes every work group of that turn.
@@ -234,11 +275,13 @@ export default function SessionScreen() {
   };
   const team = subtreeOf(view.rows, session.id);
   const counts = { agents: 1 + team.filter((x) => x.row.kind === 'session').length + team.reduce((n, x) => n + (x.row.kind === 'room' ? x.row.members.length : x.row.kind === 'swarm' ? x.row.members.length : 0), 0), rooms: team.filter((x) => x.row.kind === 'room').length, swarms: team.filter((x) => x.row.kind === 'swarm').length };
+  const sleeping = session.lifecycle === 'sleeping';
   const blockedNoCard = first === undefined && attention === 'needs-you' && need?.kind !== 'limit' && need?.kind !== 'sign-in' && !loading;
   const mode = composerMode({
     hasMethod: DEMO || (state.methods?.includes('pty.send') ?? false),
     closed: session.lifecycle === 'closed',
     sleeping: session.lifecycle === 'sleeping',
+    hasResume,
     hasCard: first !== undefined,
     blockedNoCard,
     working: attention === 'working' || turnRunning,
@@ -369,10 +412,18 @@ export default function SessionScreen() {
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
+        {sleeping && hasResume && first === undefined && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined && parts !== null ? (
           parts.actions
         ) : (
-          <Composer label={session.label} mode={hidden} draft={chat.draft} onChange={chat.setDraft} onSend={() => void chat.send()} busy={chat.busy} />
+          <Composer
+            label={session.label}
+            mode={hidden}
+            draft={chat.draft}
+            onChange={chat.setDraft}
+            onSend={() => (sleeping ? messageProblem(chat.draft) === null && askResumeAndSend(chat.draft) : void chat.send())}
+            busy={chat.busy || resume.view.pending !== null}
+          />
         )}
       </View>
       <Toast message={toast.message} />

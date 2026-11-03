@@ -9,7 +9,7 @@ export interface OutMessage {
   text: string;
   /** When the call went (`requestedAt`, ms); a feed `prompt` older than this is not ours. */
   at: number;
-  state: { kind: 'sending' } | SentUi;
+  state: { kind: 'sending' } | { kind: 'waking' } | { kind: 'held' } | SentUi;
 }
 
 /** A feed `prompt` with the same text, written at or after the call, is the message itself: the bubble merges into it. */
