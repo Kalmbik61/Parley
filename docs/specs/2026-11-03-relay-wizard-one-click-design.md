@@ -446,7 +446,7 @@ SIGPIPE: `apt-get` погиб бы посреди `dpkg` («dpkg was interrupted
 D=/var/lib/parley-relay-setup; mkdir -p -m 0700 "$D"
 [ "$(stat -c %u:%a "$D")" = "0:700" ] && [ ! -L "$D" ] || { echo "unsafe $D"; exit 254; }
 : > "$D/<id>.log"; rm -f "$D/<id>.code"
-setsid flock -n -o "$D/lock" sh -c 'echo "<id>" > "$D/active"; echo $$ > "$D/<id>.pid"; <команда>; echo $? > "$D/<id>.code"; rm -f "$D/active" "$D/<id>.pid"' \
+setsid flock -n -o "$D/lock" sh -c 'echo "<id>" > "$D/active"; ps -o pgid= -p $$ | tr -d " " > "$D/<id>.pid"; <команда>; echo $? > "$D/<id>.code"; rm -f "$D/active" "$D/<id>.pid"' \
   >> "$D/<id>.log" 2>&1 < /dev/null &
 tail -n +1 -f --pid=$! "$D/<id>.log"
 [ -f "$D/<id>.code" ] && exit "$(cat "$D/<id>.code")"
@@ -460,7 +460,7 @@ flock -n "$D/lock" true || echo "another setup command is still running on the s
 
 **Состоянием владеет фоновая часть:** она держит `flock` на `$D/lock` всё время работы (`-o`: дескриптор
 блокировки не наследуют дети команды — иначе пережившая команду служба держала бы блокировку вечно), сама пишет
-`active`, свой pid (`$$` — лидер группы после `setsid`) в `$D/<id>.pid`, код, и сама их снимает. Передняя часть
+`active`, номер своей группы процессов в `$D/<id>.pid` (`ps -o pgid=`: после `setsid` лидер группы — `flock`, а `sh` — его потомок, поэтому `$$` не годится), код, и сама их снимает. Передняя часть
 только показывает журнал (он создан до запуска фона, чтобы `tail` не стартовал раньше файла): при обрыве канала
 она умирает или доходит до конца, ничего не снимая. Окно получает строки `tail`; обрыв канала убивает только
 `tail`, команда доходит до конца.
