@@ -119,7 +119,7 @@ export function LetterView({
           </Text>
         )}
         {quoteLine}
-        <Markdown text={message.text} />
+        <Markdown text={message.text} labelOf={who.label} />
         {message.textBytes !== undefined && (
           <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
             Text shortened — open the terminal for the rest

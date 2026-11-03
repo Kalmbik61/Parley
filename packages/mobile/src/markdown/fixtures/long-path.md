@@ -1,0 +1,1 @@
+The plugin lives in `/Users/me/.claude/plugins/cache/oh-my-claudecode/oh-my-claudecode/4.13.4/skills/deep-interview/SKILL.md` and the package is `oh-my-claudecode`, started with `npx -y @21st-dev/magic@latest --flag-with-hyphens` today.

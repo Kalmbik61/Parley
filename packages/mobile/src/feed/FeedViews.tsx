@@ -1,6 +1,6 @@
 // Feed rows for the session screen (D1 §9.2–9.3): bubbles, Markdown replies, tool rows, subagents, notices, the folded
 // work row and the turn status line. Raw Markdown is never shown: replies and prompts go through <Markdown>/<Text>.
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import type { FeedItem } from '@parley/core';
@@ -134,7 +134,7 @@ function Centered({ text, icon, tone }: { text: string; icon?: SFSymbol; tone?: 
 }
 
 /** Items of the feed. Pending cards are not drawn here: the screen shows the live card body at the end (D1 §9.4). */
-export function FeedItemView({ item }: { item: FeedItem }) {
+export const FeedItemView = memo(function FeedItemView({ item }: { item: FeedItem }) {
   const c = useColors();
   switch (item.kind) {
     case 'prompt':
@@ -142,7 +142,7 @@ export function FeedItemView({ item }: { item: FeedItem }) {
     case 'text':
       return (
         <View accessible={false} style={styles.reply}>
-          <Markdown text={item.text} />
+          <Markdown text={item.text} streaming={item.streaming} />
           {item.streaming && (
             <Text accessibilityElementsHidden allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
               Writing…
@@ -170,7 +170,7 @@ export function FeedItemView({ item }: { item: FeedItem }) {
     case 'turn':
       return null;
   }
-}
+});
 
 export function FoldRowView({ row, onToggleGroup, onToggleTurn }: { row: FoldRow; onToggleGroup(key: string): void; onToggleTurn(key: string): void }) {
   const c = useColors();

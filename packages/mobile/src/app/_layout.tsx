@@ -37,6 +37,7 @@ export default function RootLayout() {
     {/* Bar buttons: plain, in the Parley accent in both themes (plan A33). */}
     <Stack screenOptions={{ headerTintColor: colors.tint, headerTitleStyle: { color: colors.label } }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="md" options={{ headerShown: false }} />
       <Stack.Screen name="bench" options={{ title: 'Crypto bench' }} />
       <Stack.Screen name="new" options={{ presentation: 'modal', headerBackVisible: false }} />
       <Stack.Screen

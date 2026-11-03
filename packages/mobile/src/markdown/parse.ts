@@ -1,21 +1,38 @@
-// Small Markdown parser for model replies and plans (D1 §9.3). No HTML and no remote images: raw HTML is shown as text
-// with its tags removed, and an image never becomes anything that loads (`image` carries only the host to show).
-export type Inline =
-  | { t: 'text'; text: string }
-  | { t: 'bold'; children: Inline[] }
-  | { t: 'italic'; children: Inline[] }
-  | { t: 'code'; text: string }
-  | { t: 'link'; url: string; children: Inline[] }
-  /** A placeholder line "Image not loaded · example.com". */
-  | { t: 'image'; host: string | null };
+// Markdown of model replies, plans and letters (D1 §9.2, A40). The text is parsed with micromark + GFM (the same
+// grammar as the window's remark-parse 11 / remark-gfm 4) into an mdast tree; pure transforms then port the window's
+// `room-remark.ts` (`remarkReveal`, `remarkMentions`, line breaks) so the phone shows what the Mac window shows.
+// Nothing here loads anything: a raw HTML node stays literal text and an image keeps only its host.
+import type { Root } from 'mdast';
+import { fromMarkdown } from 'mdast-util-from-markdown';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
+import { gfm } from 'micromark-extension-gfm';
 
-export type Block =
-  | { t: 'paragraph'; inline: Inline[] }
-  | { t: 'heading'; level: number; inline: Inline[] }
-  | { t: 'code'; lang: string | null; text: string }
-  | { t: 'quote'; blocks: Block[] }
-  | { t: 'list'; ordered: boolean; items: Inline[][] }
-  | { t: 'rule' };
+/** mdast node as the transforms and the renderer read it (own shape: the transforms add `literal`, `caption`, mentions). */
+export interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+  /** Text inserted as it is (source, title): mentions and line breaks are not parsed in it. */
+  literal?: boolean;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  title?: string | null;
+  alt?: string | null;
+  url?: string;
+  identifier?: string;
+  label?: string | null;
+  lang?: string | null;
+  meta?: string | null;
+  align?: (string | null)[];
+  ordered?: boolean | null;
+  start?: number | null;
+  checked?: boolean | null;
+  depth?: number;
+  /** `code`: the caption above the block (the info string after the fence). */
+  caption?: string;
+  /** `mention`: the session id and the token as written. `humanMention`: the token as written. */
+  sessionId?: string;
+  raw?: string;
+}
 
 /**
  * Strict shape of a link we will open: `http(s)://host[:port][/path…]` with no userinfo, no backslash and no whitespace.
@@ -37,99 +54,176 @@ export function isOpenableUrl(url: string): boolean {
   return SAFE_URL.test(url.trim());
 }
 
-const stripTags = (s: string): string => s.replace(/<\/?[a-zA-Z][^>]*>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+/** More nested quotes than this is not Markdown (window: `lib/markdown-depth.ts`). */
+export const QUOTE_DEPTH_MAX = 100;
+const TOO_DEEP = new RegExp(`^(?:[ \\t]*>){${QUOTE_DEPTH_MAX + 1}}`, 'm');
+export const markdownTooDeep = (text: string): boolean => TOO_DEEP.test(text);
 
-const pushText = (out: Inline[], text: string): void => {
-  if (text === '') return;
-  const last = out[out.length - 1];
-  if (last?.t === 'text') last.text += text;
-  else out.push({ t: 'text', text });
+/** Pathological input limits (A40 critic M2, M3): beyond them the text is shown raw / a table as its source. */
+export const MD_BYTES_MAX = 64 * 1024;
+export const MD_EMPHASIS_MAX = 2000;
+export const MD_TABLE_ROWS_MAX = 200;
+export const MD_TABLE_CELLS_MAX = 2000;
+export const MD_NEST_MAX = 24;
+export const MD_BRACKETS_MAX = 2000;
+export const MD_BRACKET_DEPTH_MAX = 32;
+
+/** Quote and list markers on one line, counted together (`- - - …`, `> - > - …`): they hang the parse itself. */
+const MARKERS_TOO_DEEP = new RegExp(`^(?:[ \\t]*(?:>|[-+*]|\\d{1,9}[.)])(?=[ \\t]|$)){${MD_NEST_MAX + 1}}`, 'm');
+
+const tooLarge = (text: string): boolean => {
+  if (text.length > MD_BYTES_MAX) return true;
+  let emphasis = 0;
+  let brackets = 0;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    if ((ch === 42 || ch === 95 || ch === 126) && ++emphasis > MD_EMPHASIS_MAX) return true;
+    // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
+    if (ch === 91 && (++brackets > MD_BRACKETS_MAX || ++depth > MD_BRACKET_DEPTH_MAX)) return true;
+    if (ch === 93 && depth > 0) depth--;
+  }
+  return MARKERS_TOO_DEEP.test(text);
 };
 
-export function parseInline(src: string): Inline[] {
-  const out: Inline[] = [];
-  // `<img src="…">` and any other tag: an img leaves the placeholder, the rest is dropped.
-  let s = src.replace(/<img\b[^>]*?\bsrc\s*=\s*["']?([^"'\s>]+)[^>]*>/gi, (_m, url: string) => `\uE000IMG:${url}\uE000`);
-  s = stripTags(s);
-  let i = 0;
-  while (i < s.length) {
-    const rest = s.slice(i);
-    let m: RegExpExecArray | null;
-    if ((m = /^\uE000IMG:([^\uE000]*)\uE000/.exec(rest))) {
-      out.push({ t: 'image', host: hostOf(m[1]!) });
-      i += m[0].length;
-    } else if ((m = /^!\[[^\]]*\]\(([^)\s]*)[^)]*\)/.exec(rest))) {
-      out.push({ t: 'image', host: hostOf(m[1]!) });
-      i += m[0].length;
-    } else if ((m = /^\[([^\]]+)\]\(([^)\s]+)[^)]*\)/.exec(rest))) {
-      const children = parseInline(m[1]!);
-      if (isOpenableUrl(m[2]!)) out.push({ t: 'link', url: m[2]!.trim(), children });
-      else out.push(...children);
-      i += m[0].length;
-    } else if ((m = /^`([^`\n]+)`/.exec(rest))) {
-      out.push({ t: 'code', text: m[1]! });
-      i += m[0].length;
-    } else if ((m = /^(\*\*|__)(?=\S)([\s\S]+?)(?<=\S)\1/.exec(rest))) {
-      out.push({ t: 'bold', children: parseInline(m[2]!) });
-      i += m[0].length;
-    } else if ((m = /^([*_])(?=\S)([^*_\n]+?)(?<=\S)\1/.exec(rest))) {
-      out.push({ t: 'italic', children: parseInline(m[2]!) });
-      i += m[0].length;
-    } else if ((m = /^https?:\/\/[^\s<>)]+/i.exec(rest))) {
-      if (isOpenableUrl(m[0])) out.push({ t: 'link', url: m[0], children: [{ t: 'text', text: m[0] }] });
-      else pushText(out, m[0]);
-      i += m[0].length;
-    } else {
-      pushText(out, s[i]!);
-      i += 1;
+/** Lists and quotes nested inside each other, counted together. */
+export const nestDepth = (n: MdNode): number => {
+  const own = n.type === 'list' || n.type === 'blockquote' ? 1 : 0;
+  return own + Math.max(0, ...(n.children ?? []).map(nestDepth));
+};
+
+const LINE_BREAK = /\r\n|\r|\n/;
+
+const literalParagraph = (value: string): MdNode => ({ type: 'paragraph', children: [{ type: 'text', value, literal: true }] });
+
+const sourceOf = (node: MdNode, source: string): string => {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  return start === undefined || end === undefined ? '' : source.slice(start, end);
+};
+
+/** A row with more cells than the header has columns (the extra cells would be dropped silently), or a table too big to lay out. */
+const showTableAsSource = (table: MdNode): boolean => {
+  const rows = table.children ?? [];
+  const columns = table.align?.length;
+  if (columns !== undefined && rows.some((row) => (row.children?.length ?? 0) > columns)) return true;
+  return rows.length > MD_TABLE_ROWS_MAX || rows.reduce((sum, row) => sum + (row.children?.length ?? 0), 0) > MD_TABLE_CELLS_MAX;
+};
+
+/** What Markdown hides while rendering and the agent reads: see `remarkReveal` in the window's `room-remark.ts`. */
+function revealHidden(parent: MdNode, source: string): void {
+  if (parent.children === undefined) return;
+  const next: MdNode[] = [];
+  for (const child of parent.children) {
+    const raw = sourceOf(child, source);
+    if (child.type === 'definition' && raw !== '') {
+      // The node stays: `[text][label]` resolves its address from it.
+      next.push(child, literalParagraph(raw));
+      continue;
+    }
+    if (child.type === 'footnoteDefinition' && raw !== '') {
+      next.push(literalParagraph(raw));
+      continue;
+    }
+    if (child.type === 'table' && raw !== '' && showTableAsSource(child)) {
+      next.push({ type: 'code', value: raw });
+      continue;
+    }
+    if (child.type === 'code') {
+      const info = [child.lang, child.meta].filter((part) => part !== null && part !== undefined && part !== '').join(' ');
+      next.push(info === '' ? child : { ...child, caption: info });
+      continue;
+    }
+    if (child.type === 'footnoteReference') {
+      next.push({ type: 'text', value: `[^${child.label ?? child.identifier ?? ''}]`, literal: true });
+      continue;
+    }
+    revealHidden(child, source);
+    next.push(child);
+    if ((child.type === 'link' || child.type === 'image') && typeof child.title === 'string' && child.title !== '') {
+      next.push({ type: 'text', value: ` (${child.title})`, literal: true });
     }
   }
+  parent.children = next;
+}
+
+const tokenSessionId = (digits: string): string => `s-${digits.padStart(2, '0')}`;
+/** The window's token rule (`mention.ts` FEED_TOKEN): not glued to a letter, digit, `_` or `@` on either side. */
+const FEED_TOKEN = /(?<![\p{L}\p{N}_@])@(?:s-?(\d+)|(human))(?![\p{L}\p{N}_])/giu;
+
+/** A text node → text, mentions and a `break` at every newline (window: every text node does this). */
+function expandText(value: string, literal: boolean): MdNode[] {
+  const out: MdNode[] = [];
+  const pushText = (text: string): void => {
+    text.split(LINE_BREAK).forEach((line, index) => {
+      if (index > 0) out.push({ type: 'break' });
+      if (line !== '') out.push(literal ? { type: 'text', value: line, literal: true } : { type: 'text', value: line });
+    });
+  };
+  if (literal) {
+    pushText(value);
+    return out;
+  }
+  let last = 0;
+  for (const match of value.matchAll(FEED_TOKEN)) {
+    if (match.index > last) pushText(value.slice(last, match.index));
+    const digits = match[1];
+    out.push(
+      digits === undefined
+        ? { type: 'humanMention', raw: match[0] }
+        : { type: 'mention', sessionId: tokenSessionId(digits), raw: match[0] },
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < value.length) pushText(value.slice(last));
   return out;
 }
 
-export function parseMarkdown(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, '\n').split('\n');
-  const blocks: Block[] = [];
-  let i = 0;
-  const startsBlock = (l: string): boolean => /^(```|#{1,6}\s|>\s?|[-*+]\s|\d+[.)]\s|(-{3,}|\*{3,}|_{3,})\s*$)/.test(l);
-  while (i < lines.length) {
-    const line = lines[i]!;
-    if (line.trim() === '') {
-      i++;
+function spaceNewlines(n: MdNode): void {
+  if (n.type === 'text' && n.value !== undefined) n.value = n.value.replace(/\r\n|\r|\n/g, ' ');
+  n.children?.forEach(spaceNewlines);
+}
+
+function expandChildren(parent: MdNode): void {
+  if (parent.children === undefined) return;
+  const next: MdNode[] = [];
+  for (const child of parent.children) {
+    if (child.type === 'text' && child.value !== undefined) {
+      next.push(...expandText(child.value, child.literal === true));
       continue;
     }
-    let m: RegExpExecArray | null;
-    if ((m = /^```\s*([\w+-]*)/.exec(line))) {
-      const body: string[] = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i]!)) body.push(lines[i++]!);
-      i++;
-      blocks.push({ t: 'code', lang: m[1] === '' ? null : m[1]!, text: body.join('\n') });
-    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-      blocks.push({ t: 'heading', level: m[1]!.length, inline: parseInline(m[2]!.replace(/\s#+\s*$/, '')) });
-      i++;
-    } else if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push({ t: 'rule' });
-      i++;
-    } else if (/^>\s?/.test(line)) {
-      const body: string[] = [];
-      while (i < lines.length && /^>\s?/.test(lines[i]!)) body.push(lines[i++]!.replace(/^>\s?/, ''));
-      blocks.push({ t: 'quote', blocks: parseMarkdown(body.join('\n')) });
-    } else if ((m = /^([-*+]|\d+[.)])\s+/.exec(line))) {
-      const ordered = /\d/.test(m[1]!);
-      const items: Inline[][] = [];
-      while (i < lines.length && /^([-*+]|\d+[.)])\s+/.test(lines[i]!)) {
-        let text = lines[i++]!.replace(/^([-*+]|\d+[.)])\s+/, '');
-        while (i < lines.length && /^\s{2,}\S/.test(lines[i]!) && !startsBlock(lines[i]!.trim())) text += ' ' + lines[i++]!.trim();
-        items.push(parseInline(text));
-      }
-      blocks.push({ t: 'list', ordered, items });
-    } else {
-      const body = [line];
-      i++;
-      while (i < lines.length && lines[i]!.trim() !== '' && !startsBlock(lines[i]!)) body.push(lines[i++]!);
-      blocks.push({ t: 'paragraph', inline: parseInline(body.join(' ')) });
-    }
+    // Like the window: a link is not entered (`@s02` is part of its address); a newline in its label reads as a space.
+    if (child.type === 'link' || child.type === 'linkReference') spaceNewlines(child);
+    else expandChildren(child);
+    next.push(child);
   }
-  return blocks;
+  parent.children = next;
+}
+
+/** Text shown as it is (a quote nested deeper than the limit, a parse failure). */
+export function rawRoot(text: string): MdNode {
+  return { type: 'root', children: [{ type: 'paragraph', children: [{ type: 'text', value: text, literal: true }] }] };
+}
+
+/** Text → mdast (GFM, positions) with the window's transforms applied. Never throws on ordinary input. */
+export function parseMarkdown(text: string): MdNode {
+  const src = text.replace(/\r\n?/g, '\n');
+  if (markdownTooDeep(src) || tooLarge(src)) return rawRoot(text);
+  const tree = fromMarkdown(src, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }) satisfies Root;
+  const root = tree as unknown as MdNode;
+  if (nestDepth(root) > MD_NEST_MAX) return rawRoot(text);
+  revealHidden(root, src);
+  expandChildren(root);
+  return root;
+}
+
+/** Address and title of every link definition, by lower-cased identifier (for `[text][label]` and `![alt][label]`). */
+export function definitionsOf(root: MdNode): Map<string, { url: string; title: string | null }> {
+  const defs = new Map<string, { url: string; title: string | null }>();
+  const walk = (n: MdNode): void => {
+    if (n.type === 'definition' && n.identifier !== undefined && !defs.has(n.identifier)) defs.set(n.identifier, { url: n.url ?? '', title: n.title ?? null });
+    n.children?.forEach(walk);
+  };
+  walk(root);
+  return defs;
 }
