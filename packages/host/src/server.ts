@@ -11,7 +11,7 @@ import {
   WORKS_SYNC_FEATURE,
   parseIncoming,
 } from '@parley/protocol';
-import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
+import type { MethodName, NotificationName, ResponseMessage, SessionRef } from '@parley/protocol';
 import {
   REMOTE_METHODS,
   REMOTE_NOTIFICATIONS,
@@ -63,6 +63,16 @@ export interface RemoteLaunchPolicy {
    * затем `trust.grant` с `by: 'phone'`). Зовётся только после всех проверок роли `remote`.
    */
   trustFolder(projectPath: string): Promise<void>;
+  /**
+   * Состояние сессии по свежей карте работы (критик A37a M1): `null` — нет такой работы или сессии. Читается до
+   * обработчика вызовов роли `remote` по одной сессии (`REMOTE_SESSION_RULES`).
+   */
+  sessionState(projectPath: string, workId: string, sessionId: string): Promise<RemoteSessionState | null>;
+}
+
+export interface RemoteSessionState {
+  workArchived: boolean;
+  lifecycle: string;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -97,6 +107,29 @@ const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
   'consents.decide',
   'sessions.resume',
 ]);
+
+/**
+ * Состояние сессии, в котором её метод с телефона имеет смысл (критик A37a): будить — только спящую. Закрытая сессия,
+ * архивная работа и неизвестная сессия отсекаются до правила для всех методов из этого списка.
+ */
+const REMOTE_SESSION_RULES: Readonly<Record<string, (state: RemoteSessionState) => string | null>> = {
+  // `active` без PTY этого хоста — второй `claude --resume`; `pending` — запуск раньше движка или терминала.
+  'sessions.resume': (state) => (state.lifecycle === 'sleeping' ? null : 'session is not asleep'),
+};
+
+/** Проверка сессии до обработчика (критик A37a M1, m1, m2): ошибка с кодом протокола, без рассылки `host.notice`. */
+async function remoteSessionGate(method: string, params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
+  const rule = REMOTE_SESSION_RULES[method];
+  if (rule === undefined) return;
+  // Правило параметров уже проверило `ref`: три непустые строки.
+  const { projectPath, workId, sessionId } = (params as { ref: SessionRef }).ref;
+  const state = await policy.sessionState(projectPath, workId, sessionId);
+  if (state === null) throw new HostError('bad_request', 'unknown session');
+  if (state.workArchived) throw new HostError('conflict', 'the work is archived');
+  if (state.lifecycle === 'closed') throw new HostError('conflict', 'session is closed');
+  const refused = rule(state);
+  if (refused !== null) throw new HostError('conflict', refused);
+}
 
 /**
  * Клиенты, чей сокет уже закрыт: после `await` записи доверия запуск для ушедшего телефона не идёт (критик m9).
@@ -413,8 +446,15 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       ? (parsed.params as { projectPath: string }).projectPath
       : null;
   const policy = options.remoteLaunch;
-  // Без доверия обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не меняется.
-  const pending = trustFirst === null || policy === undefined
+  const gated = client.role === 'remote' && policy !== undefined && REMOTE_SESSION_RULES[method] !== undefined;
+  // Без доверия и проверки сессии обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не
+  // меняется.
+  const pending = gated
+    ? remoteSessionGate(method, parsed.params, policy).then(() => {
+        if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
+        return handler(parsed.params as never, request);
+      })
+    : trustFirst === null || policy === undefined
     ? Promise.resolve(handler(parsed.params as never, request))
     : policy.trustFolder(trustFirst).then(() => {
         // Пока писалось доверие, переключатель могли выключить, а телефон — уйти (критик m9): тогда запуска нет.
