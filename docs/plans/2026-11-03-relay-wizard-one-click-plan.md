@@ -89,7 +89,7 @@ s-238, владелец — s-38. Исполнители — Claude Sonnet (`bui
     `systemctl show -p ExecStart --value caddy`, `systemctl show -p ExecReload --value caddy`,
     `docker exec <id> caddy version`, `docker exec <id> nginx -v`, `docker exec <id> nginx -T`, `nginx -T`,
     `cat <путь на хосте>` для Caddyfile и для возможных наших файлов (`parley-relay<суффикс>`, `parley-relay.conf`),
-    `cat /var/tmp/parley-relay-setup/active` и проверка, жив ли этот процесс (`kill -0`). Значения в командах —
+    `flock -n /var/lib/parley-relay-setup/lock true` и `cat /var/lib/parley-relay-setup/active` (спека 7.3). Значения в командах —
     только после шаблонов и `shQuote`.
   - `WebSurvey`: держатель 80/443, вид (`caddy` | `nginx` | `apache` | `other`), runtime (`docker` | `host` |
     `null`), контейнер (id, имя, сеть — по правилу спеки 3.3: та, где уже наш relay, иначе первая по имени),
@@ -190,7 +190,7 @@ s-238, владелец — s-38. Исполнители — Claude Sonnet (`bui
   обрыве), `relay-setup-types.ts` (фаза `cancelled`, события `progress` и `cancelling`).
 - Состав:
   - Обёртка спеки 7.3 для каждой команды шага (не для проверок): `setsid`, журнал и код в
-    `/var/tmp/parley-relay-setup/`, файл `active`, `tail --pid`. Одна функция строит обёртку; идентификатор
+    `/var/lib/parley-relay-setup/`, файл `active`, `tail --pid`. Одна функция строит обёртку; идентификатор
     команды — из id шага и номера, по шаблону `[a-z0-9-]+`.
   - `PlanStep.interruptible`; отмена прерываемого шага — второй командой `kill -TERM -- -<pid>` по `active`; у
     прочих — событие `cancelling` и остановка после шага; прерванная нами команда → `stopped`, не `failed`.
