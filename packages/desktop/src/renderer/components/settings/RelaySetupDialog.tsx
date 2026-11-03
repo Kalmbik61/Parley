@@ -64,7 +64,10 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
       if (!alive.current) return snapshot;
       if (snapshot !== null) for (const event of buffer.current) if (event.seq > snapshot.seq) snapshot = withRunEvent(snapshot, event);
       setView(snapshot);
-      if (snapshot !== null) setPhase(null);
+      if (snapshot !== null) {
+        setPhase(null);
+        setLostRun(false);
+      }
       return snapshot;
     } finally {
       loading.current = false;
@@ -140,7 +143,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
   };
 
   /** During a run and after it the cross only hides the window: the run goes on and the record stays in main. */
-  const runActive = view !== null || phase?.phase === 'running';
+  const runActive = view !== null || lostRun || phase?.phase === 'running';
   const hide = (): void => {
     wipeSecrets();
     onClose();
@@ -161,6 +164,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
       if (!ok || !alive.current) return;
       setView(null);
       setPhase(null);
+      setLostRun(false);
       onClose();
     });
   };
@@ -169,6 +173,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
       if (!ok || !alive.current) return;
       setView(null);
       setPhase(null);
+      setLostRun(false);
       setError(null);
       setRemoveData(false);
     });
