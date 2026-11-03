@@ -55,14 +55,20 @@ describe('parseContainers', () => {
     expect(parseContainers('')).toEqual([]);
     expect(parseContainers('\n  \n')).toEqual([]);
     expect(parseContainers('not json\n{"id":"a","name":"/x","labels":null,"ports":{"80/tcp":[{"HostIp":"::","HostPort":"80"}],"53/udp":[{"HostPort":"53"}],"1/tcp":null},"mounts":null,"networks":{"n":{}}}\n[]\n{"name":"no id"}')).toEqual([
-      { id: 'a', name: 'x', image: '', labels: {}, path: '', args: [], workdir: '', mounts: [], published: [{ hostPort: 80, hostIp: '::' }], networks: ['n'], networkMode: '' },
+      { id: 'a', name: 'x', image: '', labels: {}, path: '', args: [], workdir: '', mounts: [], published: [{ hostPort: 80, hostIp: '::' }], networks: ['n'], networkAliases: { n: [] }, networkMode: '' },
     ]);
   });
   it('the inspect template is one single-quote-free constant', () => {
     expect(PROBE.containers.match(/'/g)).toHaveLength(2);
     expect(PROBE.containers.startsWith('docker ps -q | xargs -r docker inspect --format ')).toBe(true);
   });
-  it('stage 2: a failed command (no Docker) gives an empty list', async () => {
+  it('stage 2: containers that were printed count even when inspect exits 1 (one vanished)', async () => {
+    const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
+    const line = '{"id":"a","name":"/x","ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}';
+    const probe = await probeFull(base, fakeShell({ [PROBE.containers]: { code: 1, stdout: `${line}\n` } }));
+    expect(probe.containers.map((c) => c.name)).toEqual(['x']);
+  });
+  it('stage 2: no Docker gives an empty list', async () => {
     const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
     expect((await probeFull(base, fakeShell({ [PROBE.containers]: { code: 127, stdout: 'garbage' } }))).containers).toEqual([]);
     expect((await probeFull(base, fakeShell({ [PROBE.containers]: { code: 0, stdout: '' } }))).containers).toEqual([]);

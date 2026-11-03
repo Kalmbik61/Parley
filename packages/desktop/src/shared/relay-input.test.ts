@@ -10,6 +10,7 @@ describe('normalizeRelayInput', () => {
     ['https://82-146-37-224.sslip.io', '82-146-37-224.sslip.io'],
     ['https://relay.example.com:8443/', 'relay.example.com:8443'],
     ['HTTPS://relay.example.com', 'relay.example.com'],
+    ['HTTPS://Relay.example.com', 'Relay.example.com'],
   ])('%s → %s', (input, expected) => expect(normalizeRelayInput(input)).toBe(expected));
 
   it.each(['', 'wss://relay.example.com/path', 'user@relay.example.com', 'relay.example.com:99999', 'relay example.com', 'http://relay.example.com', 'https://relay.example.com/path', 'https://user@relay.example.com'])(

@@ -1,4 +1,5 @@
 import type { RemoteShell } from './shell.js';
+import type { ActiveCommand, WebSurvey } from './web.js';
 
 /**
  * The read-only look at the server (spec 6.7 step 3). Every command here is a fixed string and changes nothing.
@@ -59,6 +60,8 @@ export interface ContainerInfo {
   /** Published TCP ports (`HostPort` on the host side), one entry per host address. */
   published: Array<{ hostPort: number; hostIp: string }>;
   networks: string[];
+  /** Per network: its aliases and DNS names (the container's own short id included by Docker). */
+  networkAliases: Record<string, string[]>;
   networkMode: string;
 }
 
@@ -73,6 +76,10 @@ export interface ProbeResult {
   /** Running containers; empty without Docker or when the command failed. */
   containers: ContainerInfo[];
   ufwActive: boolean;
+  /** The web server on 80/443 and what can be added to it (stage 3, `probeWeb`); `null` — not surveyed or nothing there. */
+  web: WebSurvey | null;
+  /** A command of the previous run still alive on the server (spec 7.3). */
+  activeCommand: ActiveCommand | null;
   /** `.env` of the earlier install (the wizard writes it), `null` — none. */
   install: Record<string, string> | null;
   previous: Record<string, string> | null;
@@ -139,6 +146,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
+function aliasesOf(networks: unknown): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  if (!isRecord(networks)) return result;
+  for (const [name, net] of Object.entries(networks)) {
+    result[name] = isRecord(net) ? [...strings(net.Aliases), ...strings(net.DNSNames)] : [];
+  }
+  return result;
+}
+
 function parseContainer(value: unknown): ContainerInfo | null {
   if (!isRecord(value) || str(value.id) === '') return null;
   const labels: Record<string, string> = {};
@@ -170,6 +186,7 @@ function parseContainer(value: unknown): ContainerInfo | null {
     mounts,
     published,
     networks: isRecord(value.networks) ? Object.keys(value.networks) : [],
+    networkAliases: aliasesOf(value.networks),
     networkMode: str(value.networkMode),
   };
 }
@@ -227,7 +244,10 @@ export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<Pr
     docker: docker.code === 0,
     compose: compose.code === 0,
     listeners: listen.code === 0 ? parseListeners(listen.stdout) : [],
-    containers: containers.code === 0 ? parseContainers(containers.stdout) : [],
+    // Whatever the exit code: a container that vanished between `ps` and `inspect` makes inspect exit 1 but it still prints the rest.
+    containers: parseContainers(containers.stdout),
+    web: null,
+    activeCommand: null,
     ufwActive: ufw.code === 0 && parseUfwActive(ufw.stdout),
     install: env.code === 0 ? parseEnv(env.stdout) : null,
     previous: previous.code === 0 ? parseEnv(previous.stdout) : null,
