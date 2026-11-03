@@ -158,17 +158,19 @@ export default function SessionScreen() {
     const attn = attentionOfSession(state, ref, sn);
     return {
       lifecycle: sn.lifecycle === 'sleeping' ? 'sleeping' : sn.lifecycle === 'closed' ? 'closed' : 'other',
-      held: consents.rows.some(({ card }) => cardBelongsToSession(card, ref)),
+      // A provider switch (agent-switch) does not hold a wake-up; project MCP and folder trust of this work do.
+      held: consents.rows.some(({ card }) => card.kind !== 'agent-switch' && cardBelongsToSession(card, ref)),
       idle: attn === 'idle' || attn === 'unseen',
-      lastEventAt: state.activity[sessionKey(ref)]?.activity.lastEventAt ?? sn.lastEvent?.at ?? null,
+      // Only a hook event counts (the map's history holds lifecycle moves, not hooks).
+      lastEventAt: state.activity[sessionKey(ref)]?.activity.lastEventAt ?? null,
     };
   }, [found, state, consents.rows, ref?.projectPath, ref?.workId, ref?.sessionId]);
-  const resume = useResume(client, ref, resumeFacts, { send: (text) => void chat.sendText(text), textBack: chat.setDraft });
+  const resume = useResume(client, ref, resumeFacts, { send: chat.sendText, textBack: chat.setDraft, notify: toast.show });
   const hasResume = DEMO || (state?.methods?.includes('sessions.resume') ?? false);
   // ⬆ on a sleeping session asks first; the text stays in the field until the person agrees.
   const askResumeAndSend = (text: string): void =>
     Alert.alert(`${found?.session.label ?? 'This session'} is sleeping`, undefined, [
-      { text: 'Resume and send', onPress: () => { chat.setDraft(''); resume.start(text); } },
+      { text: 'Resume and send', onPress: () => { if (resume.start(text)) chat.setDraft(''); } },
       { text: 'Cancel', style: 'cancel' },
     ]);
   const pendingRow = resume.view.pending;

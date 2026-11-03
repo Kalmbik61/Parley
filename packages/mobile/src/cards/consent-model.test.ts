@@ -84,6 +84,13 @@ describe('project-mcp card (A36b)', () => {
 
 describe('cardBelongsToSession (M1)', () => {
   const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+  it('a Codex folder-trust card shows on the session screen by the same project and work rule', () => {
+    const t = (workId: string | undefined, projectPath = '/p') => ({ ...trust, projectPath, requestedBy: { source: 'resume', ...(workId === undefined ? {} : { workId }) } }) as never;
+    expect(cardBelongsToSession(t('w'), ref)).toBe(true);
+    expect(cardBelongsToSession(t('other'), ref)).toBe(false);
+    expect(cardBelongsToSession(t(undefined), ref)).toBe(false);
+    expect(cardBelongsToSession(t('w', '/q'), ref)).toBe(false);
+  });
   const by = (requestedBy: ProjectMcpCard['requestedBy'], projectPath = '/p') => ({ ...mcp, projectPath, requestedBy }) as ProjectMcpCard;
 
   it('a human launch without sessionId shows on the held session of its work', () => {

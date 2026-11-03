@@ -3,14 +3,13 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { typography, useColors } from '../theme';
-import type { ResumeLine } from './resume';
+import { lineText, type ResumeLine } from './resume';
 
 export function SleepingRow({ line, enabled, onResume }: { line: ResumeLine; enabled: boolean; onResume(): void }) {
   const c = useColors();
   const busy = line.kind === 'waking';
   const failed = line.kind === 'failed' || line.kind === 'unconfirmed';
-  const text =
-    line.kind === 'waking' ? 'Waking up…' : line.kind === 'still' ? 'Still waking up — check your Mac' : line.kind === 'failed' ? line.message : line.kind === 'unconfirmed' ? "We couldn't confirm it woke up" : 'Sleeping';
+  const text = lineText(line);
   return (
     <View style={styles.row}>
       {busy ? <ActivityIndicator size="small" color={c.label2} /> : <SymbolView name={failed ? 'exclamationmark.triangle' : 'moon.zzz'} size={16} tintColor={failed ? c.needsYou : c.idle} />}
