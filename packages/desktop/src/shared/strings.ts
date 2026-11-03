@@ -1537,6 +1537,7 @@ export const S = {
         allowAlways: (what: string): string => (what ? `Allowed always: ${what}` : 'Allowed always'),
         planAutoAccept: 'Approved a plan with auto-accept',
         providerSwitch: (provider: string): string => `Approved a switch to ${provider}`,
+        providerMove: (label: string, work: string, provider: string): string => `Moved session ${label} in ${work} to ${provider}`,
         sessionStart: (work: string): string => `Started a session in ${work}`,
         sessionClose: (label: string, work: string): string => `Closed session ${label} in ${work}`,
         mcpEnable: (count: number, repo: string, servers: string): string =>

@@ -812,7 +812,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
                 workKnown: () => true,
                 sessionKnown: () => true,
                 trustFolder: async () => {},
-                sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true }),
+                sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
               },
             }),
       });
@@ -969,7 +969,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
             workKnown: (projectPath, workId) => known.works.includes(`${projectPath}#${workId}`),
             sessionKnown: () => true,
             trustFolder: async () => {},
-            sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true }),
+            sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
           },
         });
         const socketPath = path.join(home, 'reads.sock');
@@ -1075,8 +1075,8 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       const unregistered = vi.fn();
       const state = { enabled: options.enabled };
       // Свежая карта для проверки сессии (критик A37a M1): по умолчанию s-01 спит.
-      const sessionStates = new Map<string, { workArchived: boolean; lifecycle: string; live: boolean }>([
-        ['/p#w-01#s-01', { workArchived: false, lifecycle: 'sleeping', live: false }],
+      const sessionStates = new Map<string, { workArchived: boolean; lifecycle: string; live: boolean; engine: boolean }>([
+        ['/p#w-01#s-01', { workArchived: false, lifecycle: 'sleeping', live: false, engine: false }],
       ]);
       const server = createHostServer({
         context,
@@ -1195,7 +1195,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       }
       s.state.enabled = true;
       const remote = await s.connect('remote');
-      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'active', live: true });
+      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'active', live: true, engine: false });
       for (const m of MENU) {
         expect(remote.methods, m).toContain(m);
         expect((await answer(remote.client, ++id, m, paramsOf(m))).error, m).toBeUndefined();
@@ -1209,16 +1209,16 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       }
       expect((await answer(remote.client, ++id, 'sessions.switchAgent', { ...sw, force: true })).error).toMatchObject({ code: 'bad_request' });
       // Stop и Put to sleep — только идущей в хосте сессии; закрытая — conflict у всех; архивная работа — conflict.
-      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'sleeping', live: false });
+      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'sleeping', live: false, engine: false });
       for (const m of ['feed.interrupt', 'sessions.stop']) {
         expect((await answer(remote.client, ++id, m, { ref })).error, m).toMatchObject({ code: 'conflict', message: 'session is not running' });
       }
       expect((await answer(remote.client, ++id, 'sessions.close', { ref })).error).toBeUndefined();
-      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'closed', live: false });
+      s.sessionStates.set('/p#w-01#s-01', { workArchived: false, lifecycle: 'closed', live: false, engine: false });
       for (const m of MENU) {
         expect((await answer(remote.client, ++id, m, paramsOf(m))).error, m).toMatchObject({ code: 'conflict', message: 'session is closed' });
       }
-      s.sessionStates.set('/p#w-01#s-01', { workArchived: true, lifecycle: 'active', live: true });
+      s.sessionStates.set('/p#w-01#s-01', { workArchived: true, lifecycle: 'active', live: true, engine: false });
       for (const m of MENU) {
         expect((await answer(remote.client, ++id, m, paramsOf(m))).error, m).toMatchObject({ code: 'conflict', message: 'the work is archived' });
       }
@@ -1232,10 +1232,42 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    it('критик A38a m2, m6: switchAgent — спящей или идущей; сессии движка с телефона не меняются, читаются', async () => {
+      const s = await a28Server({ enabled: true });
+      const remote = await s.connect('remote');
+      const sw = { ref, requestId: '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f', provider: 'codex' };
+      const set = (state: { lifecycle: string; live: boolean; engine?: boolean }) =>
+        s.sessionStates.set('/p#w-01#s-01', { workArchived: false, engine: false, ...state });
+      let id = 1000;
+      for (const state of [{ lifecycle: 'pending', live: false }, { lifecycle: 'active', live: false }]) {
+        set(state);
+        expect((await answer(remote.client, ++id, 'sessions.switchAgent', sw)).error, state.lifecycle)
+          .toMatchObject({ code: 'conflict', message: 'session is neither asleep nor running in this host' });
+      }
+      set({ lifecycle: 'sleeping', live: false });
+      expect((await answer(remote.client, ++id, 'sessions.switchAgent', sw)).error).toBeUndefined();
+      set({ lifecycle: 'active', live: true });
+      expect((await answer(remote.client, ++id, 'sessions.switchAgent', { ...sw, requestId: '1b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f' })).error).toBeUndefined();
+      expect(s.spies['sessions.switchAgent']).toHaveBeenCalledTimes(2);
+      // Сессия автономного движка (`workspace`): ни одно изменение, чтение целей замены — можно.
+      for (const lifecycle of ['active', 'sleeping']) {
+        set({ lifecycle, live: lifecycle === 'active', engine: true });
+        for (const m of ['feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.resume', 'sessions.switchAgent']) {
+          const params = m === 'sessions.switchAgent' ? sw : { ref };
+          expect((await answer(remote.client, ++id, m, params)).error, `${lifecycle} ${m}`)
+            .toMatchObject({ code: 'conflict', message: 'the phone does not change sessions of an autonomous run' });
+        }
+        expect((await answer(remote.client, ++id, 'sessions.switchOptions', { ref })).error).toBeUndefined();
+      }
+      for (const m of ['feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.resume']) expect(s.spies[m], m).not.toHaveBeenCalled();
+      expect(s.spies['sessions.switchAgent']).toHaveBeenCalledTimes(2);
+      s.close();
+    });
+
     it('критик A37a M1, m1, m2: будить с телефона — только спящую сессию; иначе ошибка до обработчика, окно не ограничено', async () => {
       const s = await a28Server({ enabled: true });
       const remote = await s.connect('remote');
-      const set = (lifecycle: string, workArchived = false) => s.sessionStates.set('/p#w-01#s-01', { workArchived, lifecycle, live: false });
+      const set = (lifecycle: string, workArchived = false) => s.sessionStates.set('/p#w-01#s-01', { workArchived, lifecycle, live: false, engine: false });
       let id = 940;
       for (const lifecycle of ['active', 'pending']) {
         set(lifecycle);
@@ -1711,6 +1743,36 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         const seen = await collectUntil((remote.client.send({ id: 825, method: 'sessions.resume', params: { ref: refOf(codex) } }), remote.client), 825);
         expect(seen.at(-1)?.error).toMatchObject({ code: 'conflict', message: 'the work is archived' });
         expect(seen.some((message) => message.event === 'host.notice')).toBe(false);
+        remote.client.close();
+      } finally {
+        delete process.env['PARLEY_CLAUDE_BIN'];
+        delete process.env['PARLEY_CODEX_BIN'];
+      }
+    }, 40_000);
+
+    it('критик A38a m7: switchAgent с телефона — Codex без доверия к папке удержан карточкой; force хост отвергает', async () => {
+      process.env['PARLEY_CLAUDE_BIN'] = STUB;
+      process.env['PARLEY_CODEX_BIN'] = STUB;
+      try {
+        const { home, token } = await boot();
+        const p = await project();
+        const sessionId = p.sessions[0]!;
+        await updateMap(p.dir, p.workId, (current) => {
+          const target = current.sessions.find((entry) => entry.id === sessionId);
+          if (target) target.lifecycle = 'sleeping';
+        });
+        const remote = await connectAs(home, token, 'remote');
+        await waitWork(remote.client, p.workId);
+        const ref = { projectPath: p.dir, workId: p.workId, sessionId };
+        const sw = { ref, requestId: '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f', provider: 'codex' };
+        expect((await answer(remote.client, 840, 'sessions.switchAgent', { ...sw, force: true })).error).toMatchObject({ code: 'bad_request' });
+        expect((await answer(remote.client, 841, 'sessions.switchOptions', { ref })).error).toBeUndefined();
+        const switched = await answer(remote.client, 842, 'sessions.switchAgent', sw);
+        expect(switched.error).toBeUndefined();
+        expect(switched.result).toMatchObject({ outcome: 'held' });
+        const cards = ((await answer(remote.client, 843, 'consents.list', {})).result as { items: Array<Record<string, unknown>> }).items;
+        expect(cards).toEqual([expect.objectContaining({ kind: 'folder-trust' })]);
+        expect((await readMap(p.dir, p.workId)).sessions.find((entry) => entry.id === sessionId)?.provider).toBe('codex');
         remote.client.close();
       } finally {
         delete process.env['PARLEY_CLAUDE_BIN'];

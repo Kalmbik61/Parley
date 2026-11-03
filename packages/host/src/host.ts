@@ -978,7 +978,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         const session = map?.sessions.find((entry) => entry.id === sessionId);
         if (!map || !session) return null;
         const live = sessionsService.live({ projectPath, workId, sessionId }) === true;
-        return { workArchived: map.work.status === 'archived', lifecycle: session.lifecycle, live };
+        const engine = session.workspace !== undefined && session.workspace !== null;
+        return { workArchived: map.work.status === 'archived', lifecycle: session.lifecycle, live, engine };
       },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
