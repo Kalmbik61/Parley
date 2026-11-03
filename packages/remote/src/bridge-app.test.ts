@@ -1369,7 +1369,11 @@ describe('A34: phone.action for weighty phone actions', () => {
       if (method === 'sessions.switchOptions') {
         return { current: { provider: 'claude', available: true, reason: null }, targets: [{ id: 'codex', label: 'Codex', family: null, available: true, needs: null, limits: null, transcript: true }], suggested: 'codex', keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] };
       }
-      if (method === 'sessions.switchAgent') return { outcome: 'started', carried: 'handover' };
+      if (method === 'providers.list') return { providers: [{ id: 'gemini', label: 'Gemini CLI', available: true }] };
+      if (method === 'sessions.switchAgent') {
+        const outcome = p.provider === 'held-one' ? 'held' : p.provider === 'queued-one' ? 'queued' : 'started';
+        return { outcome, carried: 'handover' };
+      }
       return { ok: true };
     };
     call(D, 'a', 'feed.interrupt', { ref: ref('s-1') });
@@ -1386,20 +1390,34 @@ describe('A34: phone.action for weighty phone actions', () => {
     call(D, 'i', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'broken' });
     call(D, 'j', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'codex', force: true });
     await flush();
+    call(D, 'k', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'gemini' });
+    await flush();
+    // Критик A38a m7: `held` (согласие) и `queued` (слот машины) — замена уже записана, событие есть.
+    call(D, 'l', 'sessions.switchAgent', { ref: ref('s-1'), requestId: uuid, provider: 'held-one' });
+    call(D, 'm', 'sessions.switchAgent', { ref: ref('s-9'), requestId: uuid, provider: 'queued-one' });
+    await flush();
     expect(answer('j')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(answer('l')).toMatchObject({ result: { outcome: 'held' } });
+    expect(answer('m')).toMatchObject({ result: { outcome: 'queued' } });
+    const moved = (sessionId: string, label: string, provider: string) => ({ ...ref(sessionId), label, provider });
     expect(actions).toEqual([
       { deviceId: D, kind: 'session-close', target: { ...ref('s-1'), label: 'l' } },
       // Сессии нет в снимке — её номер вместо имени.
       { deviceId: D, kind: 'session-close', target: { ...ref('s-9'), label: 's-9' } },
-      // Имя провайдера для людей — из ответа switchOptions; до него — id.
-      { deviceId: D, kind: 'provider-switch', target: 'codex' },
-      { deviceId: D, kind: 'provider-switch', target: 'Codex' },
+      // Имя провайдера — только из известных (switchOptions, providers.list); сырой параметр не идёт (критик A38a m3).
+      { deviceId: D, kind: 'provider-switch', target: moved('s-1', 'l', 'another provider') },
+      { deviceId: D, kind: 'provider-switch', target: moved('s-1', 'l', 'Codex') },
+      { deviceId: D, kind: 'provider-switch', target: moved('s-1', 'l', 'Gemini CLI') },
+      { deviceId: D, kind: 'provider-switch', target: moved('s-1', 'l', 'another provider') },
+      { deviceId: D, kind: 'provider-switch', target: moved('s-9', 's-9', 'another provider') },
     ]);
+    expect(JSON.stringify(actions)).not.toContain('held-one');
     expect(JSON.stringify(actions)).not.toContain('SECRET');
     // Журнал: четыре изменяющих метода — `call`, switchOptions — чтение, без записи.
     const calls = audits.filter((a) => a.kind === 'call');
     expect(calls.map((a) => a.method)).toEqual([
-      'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.close', 'sessions.close', 'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent',
+      'feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.close', 'sessions.close',
+      'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent', 'sessions.switchAgent',
     ]);
     expect(calls[0]).toMatchObject({ target: 's-1', outcome: 'ok' });
     expect(calls[4]).toMatchObject({ target: 's-8', outcome: 'conflict' });
@@ -1418,5 +1436,14 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(answer('read')).toMatchObject({ result: { ok: true } });
     expect(answer('over')).toMatchObject({ error: { code: 'rate_limited' } });
     expect(host.calls.filter((c) => c.method === 'sessions.switchAgent')).toEqual([]);
+  });
+
+  it('critic A38a m5: a refused ref-based call writes workId and a projectPath hash too', async () => {
+    call(D, 'a', 'sessions.close', { ref: { projectPath: '/Users/a/secret-repo', workId: 'w-3', sessionId: '' } });
+    await flush();
+    expect(audits).toEqual([
+      expect.objectContaining({ kind: 'call-refused', method: 'sessions.close', outcome: 'bad_request', detail: expect.stringMatching(/^workId=w-3 project:sha256=[0-9a-f]{12}/) }),
+    ]);
+    expect(JSON.stringify(audits)).not.toContain('secret-repo');
   });
 });

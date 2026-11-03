@@ -334,6 +334,19 @@ describe('switchAgent: замена агента на месте (спека 5.3
     expect(launches.filter((entry) => entry.launch.provider === 'custom-claude-2')).toHaveLength(1);
   });
 
+  it('критик A38a m3: тот же requestId с другим провайдером или другой сессией — conflict, не запомненный успех', async () => {
+    const r = rig();
+    const { ref } = await liveClaude(r);
+    const twin = r.sessions.switchAgent(ref, request('custom-claude-2'));
+    // Пока замена идёт: тот же id, другой провайдер — busy, не тот же исход.
+    await expect(r.sessions.switchAgent(ref, request('codex'))).rejects.toMatchObject({ code: 'conflict' });
+    expect(await twin).toEqual({ outcome: 'started', carried: 'handover' });
+    await expect(r.sessions.switchAgent(ref, request('codex'))).rejects.toMatchObject({ code: 'conflict', message: 'this requestId was used for another switch' });
+    await expect(r.sessions.switchAgent({ ...ref, sessionId: 's-99' }, request('custom-claude-2'))).rejects.toMatchObject({ code: 'conflict', message: 'this requestId was used for another switch' });
+    expect(await r.sessions.switchAgent(ref, request('custom-claude-2'))).toEqual({ outcome: 'started', carried: 'handover' });
+    expect(launches.filter((entry) => entry.launch.provider === 'codex')).toHaveLength(0);
+  });
+
   it('отказ запуска: карта уже с новым провайдером, сессия спит, switching снят, уведомление с Retry и «назад»', async () => {
     const r = rig();
     const { ref } = await liveClaude(r);

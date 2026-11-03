@@ -341,10 +341,19 @@ Parley на Маке из любой сети. Подключение «как �
   модель, режим, сжатие и «Keep awake» с телефона по-прежнему закрыты (4.3).
   Состояние сессии хост читает по свежей карте до обработчика, как у `sessions.resume`: неизвестная сессия —
   `bad_request`, закрытая сессия и архивная работа — `conflict` у всех пяти; Stop и Put to sleep — только сессии, чей
-  процесс идёт в этом хосте, иначе `conflict` «session is not running».
+  процесс идёт в этом хосте, иначе `conflict` «session is not running»; `switchAgent` — только спящей или идущей в
+  этом хосте (`pending` с процессом вне Parley дал бы второго агента в том же worktree), иначе `conflict`.
+  Сессии автономного движка (с `workspace`) телефон не меняет (правки 14: телефон не вмешивается в идущий прогон):
+  `sessions.close`, `sessions.stop`, `feed.interrupt`, `sessions.switchAgent` и `sessions.resume` → `conflict`;
+  `sessions.switchOptions` читается. `requestId` замены привязан к сессии и провайдеру: тот же `requestId` с другими →
+  `conflict`, а не запомненный успех.
 - **Мост.** Все пять — изменяющие (лимит и `call` в журнале), кроме `sessions.switchOptions` (чтение). Весомые
   (12): `sessions.close` → `phone.action` вида `session-close` (target — ref сессии и её имя); `sessions.switchAgent`
-  → вида `provider-switch` (target — имя провайдера). Stop и Put to sleep не весомые, уведомления нет.
+  → вида `provider-switch` (target — ref сессии, её имя и имя провайдера из известных мосту; сырой параметр
+  `provider` не идёт), в том числе при `held` и `queued`: карта уже переключена. Окно пишет «Moved session <label> in
+  <work> to <provider>», склейка — по сессии; «Approved a switch to …» остаётся за Allow карточки `agent-switch`.
+  Если замена применилась, а запуск нового агента упал, `phone.action` нет: окно получает только своё `launch-failed`.
+  Stop и Put to sleep не весомые, уведомления нет.
 - **Телефон.** Face ID на действие нет. Close и Put to sleep — с системным подтверждением.
 
 Почему `feed.decide` и `rooms.resolveProposal` переехали в A. Ради решений человек и берёт телефон. Защиты от
