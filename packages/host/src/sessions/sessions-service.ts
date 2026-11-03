@@ -520,9 +520,10 @@ export function createSessionsService(
 
   // Идущие замены агента (спека замены агента, 5.3, 6.13): по сессии — id запроса и его исход. Живут только в памяти
   // этого хоста: `switching` в карте без записи здесь после перезапуска — оборванная замена (`clearStaleSwitches`).
-  const switches = new Map<string, { id: string; result: Promise<Result<'sessions.switchAgent'>> }>();
-  // Исходы законченных замен по `requestId`: повтор того же запроса — тот же ответ.
-  const switched = new Map<string, Result<'sessions.switchAgent'>>();
+  const switches = new Map<string, { id: string; provider: string; result: Promise<Result<'sessions.switchAgent'>> }>();
+  // Исходы законченных замен по `requestId`: повтор того же запроса — тот же ответ. Сессия и провайдер — при ответе:
+  // тот же `requestId` с другими значит другой запрос (критик A38a m3).
+  const switched = new Map<string, { key: string; provider: string; outcome: Result<'sessions.switchAgent'> }>();
   // Пакет передачи до первого старта нового агента: Codex, удержанный до согласия на папку, стартует позже.
   const pendingHandovers = new Map<string, string>();
 
@@ -1856,16 +1857,19 @@ export function createSessionsService(
     const running = switches.get(key);
     if (running !== undefined) {
       // Двойной клик, два окна, остров и Telegram (6.13): тот же запрос ждёт тот же исход, другой — `busy`.
-      if (running.id === request.requestId) return running.result;
+      if (running.id === request.requestId && running.provider === request.provider) return running.result;
       throw busyError('The session is already continuing on another provider');
     }
     const done = switched.get(request.requestId);
-    if (done !== undefined) return done;
+    if (done !== undefined) {
+      if (done.key === key && done.provider === request.provider) return done.outcome;
+      throw new HostError('conflict', 'this requestId was used for another switch');
+    }
     const result = exclusive(ref, () => runSwitch(ref, request));
-    switches.set(key, { id: request.requestId, result });
+    switches.set(key, { id: request.requestId, provider: request.provider, result });
     try {
       const outcome = await result;
-      switched.set(request.requestId, outcome);
+      switched.set(request.requestId, { key, provider: request.provider, outcome });
       // Память ответов — на повторы одного запроса, а не журнал: старые уходят.
       if (switched.size > SWITCH_RESULTS_KEPT) switched.delete(switched.keys().next().value as string);
       return outcome;
@@ -1883,8 +1887,12 @@ export function createSessionsService(
     if (session === undefined) {
       throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
     }
-    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет.
-    if (session.switching?.id === request.requestId) return { outcome: 'held', carried: carry };
+    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет. Тот же `requestId` к другому
+    // провайдеру — другой запрос (критик A38a m3; сюда доходит, когда память ответов уже забыла запись).
+    if (session.switching?.id === request.requestId) {
+      if (session.switching.to === request.provider) return { outcome: 'held', carried: carry };
+      throw new HostError('conflict', 'this requestId was used for another switch');
+    }
     if (session.switching !== null && session.switching !== undefined) {
       throw busyError('The session is already continuing on another provider');
     }

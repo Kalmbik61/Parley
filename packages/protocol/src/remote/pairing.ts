@@ -59,7 +59,8 @@ export const pairOfferClosedEvent = z.strictObject({ reason: z.enum(PAIR_OFFER_C
  * Весомое действие телефона (спека 12, правки 18): окно показывает уведомление macOS с «Revoke this phone». Без текстов
  * агентов: цель — `ref` сессии (`session-create`, `allow-always`, `plan-auto-accept`), realpath папки (`trust-folder`),
  * имя провайдера (`provider-switch`), realpath репозитория и имена включённых серверов MCP (`mcp-enable`, A36a: без
- * команд, `env` и отпечатков) или `ref` и имя закрытой сессии (`session-close`, правки 20).
+ * команд, `env` и отпечатков), `ref` и имя закрытой сессии (`session-close`, правки 20) или, при прямой замене с
+ * телефона, `ref`, имя сессии и имя провайдера (`provider-switch`, критик A38a m1; строка — путь карточки `agent-switch`).
  */
 export const PHONE_ACTION_KINDS = [
   'session-create',
@@ -77,6 +78,7 @@ const phoneActionRef = z.strictObject({
   sessionId: z.string().min(1).max(256),
 });
 const phoneActionClosed = phoneActionRef.extend({ label: z.string().min(1).max(256) });
+const phoneActionMoved = phoneActionClosed.extend({ provider: z.string().min(1).max(256) });
 const phoneActionMcp = z.strictObject({
   repo: z.string().min(1).max(4096),
   servers: z.array(z.string().min(1).max(200)).min(1).max(200),
@@ -85,16 +87,25 @@ export const phoneActionEvent = z
   .strictObject({
     deviceId: deviceIdSchema,
     kind: z.enum(PHONE_ACTION_KINDS),
-    target: z.union([phoneActionRef, phoneActionClosed, phoneActionMcp, z.string().min(1).max(4096)]),
+    target: z.union([phoneActionRef, phoneActionMoved, phoneActionClosed, phoneActionMcp, z.string().min(1).max(4096)]),
   })
   // Цель `{repo, servers}` — только у `mcp-enable`, и у него только она.
   .refine((event) => (event.kind === 'mcp-enable') === (typeof event.target === 'object' && 'repo' in event.target), {
     message: 'mcp-enable takes {repo, servers} and only it does',
   })
   // Цель `{ref…, label}` — только у `session-close`, и у него только она.
-  .refine((event) => (event.kind === 'session-close') === (typeof event.target === 'object' && 'label' in event.target), {
-    message: 'session-close takes {projectPath, workId, sessionId, label} and only it does',
-  });
+  .refine(
+    (event) => (event.kind === 'session-close') === (typeof event.target === 'object' && 'label' in event.target && !('provider' in event.target)),
+    { message: 'session-close takes {projectPath, workId, sessionId, label} and only it does' },
+  )
+  // Цель `{ref…, label, provider}` — только у `provider-switch`; у него ещё строка (карточка `agent-switch`).
+  .refine(
+    (event) =>
+      typeof event.target === 'object' && 'provider' in event.target
+        ? event.kind === 'provider-switch'
+        : event.kind !== 'provider-switch' || typeof event.target === 'string',
+    { message: 'provider-switch takes a provider name or {projectPath, workId, sessionId, label, provider}' },
+  );
 export type PhoneActionEvent = z.infer<typeof phoneActionEvent>;
 
 export const pairStartResult = z.strictObject({ qr: z.string().max(256), expiresAt: z.number().int().positive() });

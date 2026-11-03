@@ -496,6 +496,14 @@ describe('hardened strings and frames (critic A1)', () => {
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, label: '' } }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: { ...closed, text: 'agent text' } }).success).toBe(false);
     expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: closed }).success).toBe(false);
+    // Критик A38a m1: прямая замена с телефона — `ref`, имя сессии и провайдер; эта цель только у `provider-switch`.
+    const moved = { ...closed, provider: 'Codex' };
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: moved }).success).toBe(true);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: ref }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: closed }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'provider-switch', target: { ...moved, provider: '' } }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-close', target: moved }).success).toBe(false);
+    expect(phoneActionEvent.safeParse({ deviceId: id16, kind: 'session-create', target: moved }).success).toBe(false);
     const cred = { t: 'credentials', hostId: 'h', hostName: 'Mac', deviceId: id16, routeId: id16, relayToken: b64urlEncode(bytes(32, 4)) };
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['r.example.com'] }).success).toBe(true);
     expect(pairCredentialsFrame.safeParse({ ...cred, relays: ['wss://r.example.com'] }).success).toBe(false);

@@ -21,7 +21,7 @@ const baseName = (folder: string): string => path.basename(folder.replace(/\/+$/
 
 /**
  * What the notification names: the work title, then basename(projectPath) only for an unknown work; the repo name for MCP.
- * For `session-close` it is the work too; the session label comes from `action.target`.
+ * For `session-close` and a direct `provider-switch` it is the work too; the session label comes from `action.target`.
  */
 async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLookup | undefined): Promise<string> {
   if (typeof target === 'string') return target;
@@ -37,7 +37,8 @@ const targetKey = (target: PhoneAction['target']): string =>
     : 'repo' in target
       ? `${target.repo}\0${target.servers.join('\0')}`
       : 'label' in target
-        ? `${target.projectPath}\0${target.workId}\0${target.sessionId}`
+        ? // One key per session: closing or moving the same session twice in 10 s notifies once.
+          `${target.projectPath}\0${target.workId}\0${target.sessionId}`
         : `${target.projectPath}\0${target.workId}`;
 
 /** `target` is the already resolved text (see `targetText`); `mcp-enable` also lists the server names of `action.target`. */
@@ -53,8 +54,13 @@ export function phoneActionBody(action: Pick<PhoneAction, 'kind'> & { target?: P
       return TEXT.allowAlways(clip(target));
     case 'plan-auto-accept':
       return TEXT.planAutoAccept;
-    case 'provider-switch':
+    case 'provider-switch': {
+      // A direct switch from the phone names the session, its work and the provider; the agent-switch card only the provider.
+      if (typeof action.target === 'object' && 'provider' in action.target) {
+        return TEXT.providerMove(clip(action.target.label), clip(target), clip(action.target.provider));
+      }
       return TEXT.providerSwitch(clip(target));
+    }
     case 'session-create':
       return TEXT.sessionStart(clip(target));
     case 'session-close': {

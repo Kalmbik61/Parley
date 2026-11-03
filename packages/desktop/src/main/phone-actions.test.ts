@@ -135,4 +135,21 @@ describe('phone action notifications', () => {
     expect(t.shown[0]).toMatchObject({ title: 'Parley — Anna iPhone' });
     expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
   });
+
+  it('critic A38a m1: a direct switch names the session, its work and the provider; coalesced per session; the card path keeps its text', async () => {
+    const t = setup();
+    const moved = (sessionId: string, provider: string) => ({ projectPath: '/Users/a/proj', workId: 'w-1', sessionId, label: `L-${sessionId}`, provider });
+    t.notifier.handle({ deviceId: ID, kind: 'provider-switch', target: moved('s-1', 'Codex') });
+    t.notifier.handle({ deviceId: ID, kind: 'provider-switch', target: moved('s-1', 'Gemini') });
+    t.notifier.handle({ deviceId: ID, kind: 'provider-switch', target: moved('s-2', 'Codex') });
+    t.notifier.handle({ deviceId: ID, kind: 'provider-switch', target: 'Codex' });
+    await flush();
+    // The string target needs no work lookup and may show first.
+    expect(t.shown.map((n) => n.body).sort()).toEqual([
+      'Approved a switch to Codex',
+      'Moved session L-s-1 in Auth rework to Codex',
+      'Moved session L-s-2 in Auth rework to Codex',
+    ]);
+    expect(t.shown[0]?.actions).toEqual([{ type: 'button', text: 'Revoke this phone' }]);
+  });
 });

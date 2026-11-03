@@ -247,7 +247,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     reply(deviceId, state, id, { error: { code, message, ...extra } });
 
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
-    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail });
+    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail: joinDetail([...refDetail(params), detail]) });
   }
 
   /** Методы, которые телефон может звать в эту эпоху: белый список этапа ∩ `hello.methods` хоста. */
@@ -272,14 +272,29 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     const label = entry?.map.sessions.find((session) => session.id === ref?.sessionId)?.label;
     return typeof label === 'string' && label !== '' ? label.slice(0, 256) : null;
   }
-  /** Имена провайдеров для людей из ответов `sessions.switchOptions`: цель `provider-switch` после `switchAgent`. */
+  /**
+   * Имена провайдеров для людей из ответов `sessions.switchOptions` (`targets`) и `providers.list` (`providers`): цель
+   * `provider-switch` после `switchAgent`. Сырой параметр `provider` в событие не идёт (критик A38a m3).
+   */
   const providerLabels = new Map<string, string>();
-  function learnProviders(result: unknown): void {
-    const targets = (result as { targets?: unknown } | null)?.targets;
-    if (!Array.isArray(targets)) return;
-    for (const t of targets as Array<{ id?: unknown; label?: unknown } | null>) {
-      if (typeof t?.id === 'string' && typeof t.label === 'string' && t.label !== '') providerLabels.set(t.id, t.label);
+  function learnProviders(rows: unknown): void {
+    if (!Array.isArray(rows)) return;
+    for (const t of rows as Array<{ id?: unknown; label?: unknown } | null>) {
+      if (typeof t?.id === 'string' && typeof t.label === 'string' && t.label !== '') providerLabels.set(t.id, t.label.slice(0, 256));
     }
+  }
+  /** Имя провайдера замены: из памяти, иначе одним `providers.list` до вызова; неизвестный — нейтральный текст. */
+  async function providerLabelOf(params: unknown): Promise<string> {
+    const provider = (params as { provider?: unknown }).provider;
+    if (typeof provider !== 'string') return 'another provider';
+    if (!providerLabels.has(provider)) {
+      try {
+        learnProviders(((await host.call('providers.list', {})) as { providers?: unknown } | null)?.providers);
+      } catch (error) {
+        log.warn('dispatch.providers_list_failed', { error });
+      }
+    }
+    return providerLabels.get(provider) ?? 'another provider';
   }
 
   /** Карточки согласий из `consents.list` и `consents.changed`; `id` у хоста сквозной, эпоха их не обесценивает. */
@@ -329,7 +344,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
    * план с `auto-accept`, включение серверов MCP (A36a), закрытие сессии и замена провайдера с телефона (правки 20).
    * Обычный Allow, сообщения агентам, письма в комнаты, Stop и Put to sleep — не весомые.
    */
-  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
+  async function phoneActions(method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null, provider: string | null): Promise<Omit<PhoneActionEvent, 'deviceId'>[]> {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
     const r = (typeof result === 'object' && result !== null ? result : {}) as Record<string, unknown>;
     // `applied: false` — карточка уже не ждала, ничего не произошло.
@@ -352,8 +367,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       // Цель — `ref` и имя сессии; без имени (сессии нет в снимке) — её номер.
       const ref = cleanRef(p.ref);
       if (ref) actions.push({ kind: 'session-close', target: { ...ref, label: label ?? ref.sessionId } });
-    } else if (method === 'sessions.switchAgent' && typeof p.provider === 'string') {
-      actions.push({ kind: 'provider-switch', target: providerLabels.get(p.provider) ?? p.provider });
+    } else if (method === 'sessions.switchAgent' && provider !== null) {
+      // Прямая замена (критик A38a m1): какая сессия и куда; `held` и `queued` — тоже, карта уже переключена.
+      const ref = cleanRef(p.ref);
+      if (ref) actions.push({ kind: 'provider-switch', target: { ...ref, label: label ?? ref.sessionId, provider } });
     } else if (method === 'feed.decide') {
       const ref = cleanRef(p.ref);
       const d = (typeof p.decision === 'object' && p.decision !== null ? p.decision : {}) as Record<string, unknown>;
@@ -364,10 +381,10 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   }
 
   /** `phone.action` окну; событие проверяется схемой — лишнее (тексты) не уходит. Сбой не трогает ответ телефону. */
-  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null): Promise<void> {
+  async function emitPhoneActions(deviceId: string, method: string, params: unknown, result: unknown, card: ConsentCardInfo | null, label: string | null, provider: string | null): Promise<void> {
     if (!options.onPhoneAction) return;
     try {
-      for (const action of await phoneActions(method, params, result, card, label)) {
+      for (const action of await phoneActions(method, params, result, card, label, provider)) {
         const event = phoneActionEvent.safeParse({ deviceId, ...action });
         if (event.success) options.onPhoneAction(event.data);
         else log.warn('dispatch.phone_action_invalid', { method, kind: action.kind });
@@ -547,7 +564,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
       } else {
         const card = method === 'consents.decide' && options.onPhoneAction ? await consentCardOf(params) : null;
         const trustAfter = method === 'sessions.create' ? await trustWrittenBy(params) : null;
-        const label = method === 'sessions.close' ? sessionLabelOf(params) : null;
+        const label = method === 'sessions.close' || method === 'sessions.switchAgent' ? sessionLabelOf(params) : null;
+        const provider = method === 'sessions.switchAgent' && options.onPhoneAction ? await providerLabelOf(params) : null;
         try {
           raw = await host.call(method, params ?? {});
         } catch (error) {
@@ -556,8 +574,9 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         }
         if (trustAfter !== null) await trustAfter(deviceId);
         if (method === 'consents.list') learnCards((raw as { items?: unknown } | null)?.items);
-        if (method === 'sessions.switchOptions') learnProviders(raw);
-        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card, label);
+        if (method === 'sessions.switchOptions') learnProviders((raw as { targets?: unknown } | null)?.targets);
+        if (method === 'providers.list') learnProviders((raw as { providers?: unknown } | null)?.providers);
+        if (mutating) void emitPhoneActions(deviceId, method, params, raw, card, label, provider);
       }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;

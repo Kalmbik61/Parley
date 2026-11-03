@@ -75,6 +75,8 @@ export interface RemoteSessionState {
   lifecycle: string;
   /** Процесс агента идёт в этом хосте (его PTY). */
   live: boolean;
+  /** Сессия автономного движка (`workspace`): телефон в идущий прогон не вмешивается (правки 14, критик A38a m6). */
+  engine: boolean;
 }
 
 /** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
@@ -130,19 +132,26 @@ const REMOTE_SESSION_RULES: Readonly<Record<string, (state: RemoteSessionState) 
   'sessions.stop': onlyLive,
   'sessions.close': anyOpen,
   'sessions.switchOptions': anyOpen,
-  'sessions.switchAgent': anyOpen,
+  // `pending` с процессом вне Parley — второй агент в том же worktree (критик A38a m2): как окно, спящая или идущая.
+  'sessions.switchAgent': (state) =>
+    state.lifecycle === 'sleeping' || state.live ? null : 'session is neither asleep nor running in this host',
 };
+/** Чтение: сессию движка можно смотреть, менять — нет. */
+const REMOTE_ENGINE_READS: ReadonlySet<string> = new Set(['sessions.switchOptions']);
 
 /** Проверка сессии до обработчика (критик A37a M1, m1, m2): ошибка с кодом протокола, без рассылки `host.notice`. */
 async function remoteSessionGate(method: string, params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
-  const rule = REMOTE_SESSION_RULES[method];
-  if (rule === undefined) return;
+  if (!Object.hasOwn(REMOTE_SESSION_RULES, method)) return;
+  const rule = REMOTE_SESSION_RULES[method]!;
   // Правило параметров уже проверило `ref`: три непустые строки.
   const { projectPath, workId, sessionId } = (params as { ref: SessionRef }).ref;
   const state = await policy.sessionState(projectPath, workId, sessionId);
   if (state === null) throw new HostError('bad_request', 'unknown session');
   if (state.workArchived) throw new HostError('conflict', 'the work is archived');
   if (state.lifecycle === 'closed') throw new HostError('conflict', 'session is closed');
+  if (state.engine && !REMOTE_ENGINE_READS.has(method)) {
+    throw new HostError('conflict', 'the phone does not change sessions of an autonomous run');
+  }
   const refused = rule(state);
   if (refused !== null) throw new HostError('conflict', refused);
 }
@@ -462,12 +471,13 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       ? (parsed.params as { projectPath: string }).projectPath
       : null;
   const policy = options.remoteLaunch;
-  const gated = client.role === 'remote' && policy !== undefined && REMOTE_SESSION_RULES[method] !== undefined;
+  const gated = client.role === 'remote' && policy !== undefined && Object.hasOwn(REMOTE_SESSION_RULES, method);
   // Без доверия и проверки сессии обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не
   // меняется.
   const pending = gated
     ? remoteSessionGate(method, parsed.params, policy).then(() => {
         if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
+        if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected');
         return handler(parsed.params as never, request);
       })
     : trustFirst === null || policy === undefined
