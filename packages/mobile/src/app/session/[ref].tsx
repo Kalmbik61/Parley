@@ -29,7 +29,8 @@ import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
-import { useFollowEnd } from '../../feed/use-follow-end';
+import { newestFirst } from '../../feed/inverted';
+import { useInvertedFeed } from '../../feed/use-inverted-feed';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -194,12 +195,13 @@ export default function SessionScreen() {
     ]);
   const pendingRow = resume.view.pending;
   const pendingMessage: OutMessage | null = pendingRow === null ? null : { id: 'resume-pending', text: pendingRow.text, at: 0, state: { kind: pendingRow.held ? 'held' : 'waking' } };
+  // The list is inverted (A44b): rows newest first, offset 0 is the latest message.
   const rows = useMemo<Row[]>(
-    () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
+    () => newestFirst([...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])]),
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
-  const follow = useFollowEnd(list, rowKeys);
+  const follow = useInvertedFeed(list, rowKeys);
   // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
@@ -250,11 +252,10 @@ export default function SessionScreen() {
   }, [preview]);
 
 
-  // Expanding a group leaves the end (its start stays in view); collapsing keeps following (A44 m3, N4).
+  // Expanding or collapsing a group changes the height above the bottom edge: the inverted list keeps what is read in place.
   const toggleGroup = useCallback((key: string) => {
-    if (!openGroups.has(key)) follow.leave();
     setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])));
-  }, [follow.leave, openGroups]);
+  }, []);
   // The status line of a turn opens or closes every work group of that turn.
   const toggleTurn = useCallback(
     (controlKey: string) => {
@@ -265,10 +266,9 @@ export default function SessionScreen() {
         if (r.kind === 'item' && r.item.kind === 'prompt') break;
         if (r.kind === 'group') keys.push(r.key);
       }
-      if (!keys.every((k) => openGroups.has(k))) follow.leave();
       setOpenGroups((s) => (keys.every((k) => s.has(k)) ? new Set([...s].filter((k) => !keys.includes(k))) : new Set([...s, ...keys])));
     },
-    [folded, follow.leave, openGroups],
+    [folded],
   );
 
   const shell = (title: string, body: React.ReactNode) => (
@@ -464,7 +464,7 @@ export default function SessionScreen() {
   const content = () => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
       {strip !== null && (
-        <BarStripStack onChange={follow.keepEnd}>
+        <BarStripStack>
           <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
@@ -472,15 +472,17 @@ export default function SessionScreen() {
         ref={list}
         data={rows}
         keyExtractor={rowKey}
-        {...follow.handlers}
+        inverted
+        onScroll={follow.onScroll}
+        maintainVisibleContentPosition={follow.maintainVisibleContentPosition}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[styles.list, { paddingTop: strip !== null ? 8 : headerHeight + 8 }]}
+        contentContainerStyle={[styles.list, { paddingBottom: strip !== null ? 8 : headerHeight + 8 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
-        ListHeaderComponent={header}
+        ListFooterComponent={header}
         renderItem={({ item: r }) => (r.t === 'fold' ? <FoldRowView row={r.row} onToggleGroup={toggleGroup} onToggleTurn={toggleTurn} msg={msgApi} /> : <OutBubble message={r.message} onRetry={(m) => void chat.retry(m)} onEdit={chat.edit} />)}
         ListEmptyComponent={
           feed === undefined || feed.status === 'loading' ? (
@@ -497,7 +499,7 @@ export default function SessionScreen() {
             </View>
           )
         }
-        ListFooterComponent={
+        ListHeaderComponent={
           <View style={{ gap: 12, marginTop: 12 }}>
             {goneHere.length > 0 && (
               <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center' }]}>
@@ -654,7 +656,7 @@ const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
   padded: { flex: 1, padding: 16, gap: 12 },
-  list: { padding: 16, paddingTop: 8, paddingBottom: 12 },
+  list: { padding: 16, paddingTop: 12, paddingBottom: 8 },
   passport: { gap: 8, marginHorizontal: -16, paddingHorizontal: 16, paddingBottom: 12 },
   origin: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   box: { borderRadius: spacing.cardRadius, paddingVertical: 12, paddingHorizontal: 16 },
