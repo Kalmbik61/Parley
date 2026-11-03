@@ -67,23 +67,66 @@ export const MD_TABLE_CELLS_MAX = 2000;
 export const MD_NEST_MAX = 24;
 export const MD_BRACKETS_MAX = 2000;
 export const MD_BRACKET_DEPTH_MAX = 32;
+export const MD_LAZY_RUN_MAX = 500;
+export const MD_LINES_MAX = 5000;
 
-/** Quote and list markers on one line, counted together (`- - - …`, `> - > - …`): they hang the parse itself. */
-const MARKERS_TOO_DEEP = new RegExp(`^(?:[ \\t]*(?:>|[-+*]|\\d{1,9}[.)])(?=[ \\t]|$)){${MD_NEST_MAX + 1}}`, 'm');
+/** A quote or list marker; `>` needs no space after it (CommonMark), a list marker does. */
+const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
+/** Quote and list markers on one line, counted together (`- - - …`, `>- >- …`): they hang the parse itself. */
+const MARKERS_TOO_DEEP = new RegExp(`^(?:[ \\t]*${MARKER}){${MD_NEST_MAX + 1}}`);
+const BLOCK_MARKER = new RegExp(`^[ \\t]*(?:${MARKER}|#{1,6}(?:[ \\t]|$))`);
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
-const tooLarge = (text: string): boolean => {
+/**
+ * Pre-parse guards (A40 critic M2, M3, M5): text that would hang the parser is shown raw. One pass over the lines, with
+ * fenced code skipped (code is not parsed, so its `[`, `*` and markers cost nothing and must not count):
+ *  - more than 64 KB; more than 2000 `*`, `_`, `~`; more than 2000 `[` or `[` nested deeper than 32 (an ESC `[` of an
+ *    ANSI colour does not count);
+ *  - 25 quote/list markers on one line (not a thematic break such as `- - - …`);
+ *  - a run of more than 500 lines without a block marker after a quote/list line (lazy continuation is quadratic), and,
+ *    as a backstop, more than 5000 non-empty lines outside fenced code.
+ */
+export const tooHeavy = (text: string): boolean => {
   if (text.length > MD_BYTES_MAX) return true;
   let emphasis = 0;
   let brackets = 0;
   let depth = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i);
-    if ((ch === 42 || ch === 95 || ch === 126) && ++emphasis > MD_EMPHASIS_MAX) return true;
-    // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
-    if (ch === 91 && (++brackets > MD_BRACKETS_MAX || ++depth > MD_BRACKET_DEPTH_MAX)) return true;
-    if (ch === 93 && depth > 0) depth--;
+  let lines = 0;
+  let lazy = 0;
+  let inBlock = false;
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const open = FENCE.exec(line);
+    if (fence !== null) {
+      if (open !== null && open[1]![0] === fence[0] && open[1]!.length >= fence.length && line.trim().length === open[1]!.length) fence = null;
+      continue;
+    }
+    if (open !== null) {
+      fence = open[1]!;
+      continue;
+    }
+    if (line.trim() === '') {
+      inBlock = false;
+      lazy = 0;
+      continue;
+    }
+    if (++lines > MD_LINES_MAX) return true;
+    if (!THEMATIC_BREAK.test(line) && MARKERS_TOO_DEEP.test(line)) return true;
+    if (BLOCK_MARKER.test(line)) {
+      inBlock = true;
+      lazy = 0;
+    } else if (inBlock && ++lazy > MD_LAZY_RUN_MAX) return true;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line.charCodeAt(i);
+      if ((ch === 42 || ch === 95 || ch === 126) && ++emphasis > MD_EMPHASIS_MAX) return true;
+      // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
+      if (ch === 91 && (i === 0 || line.charCodeAt(i - 1) !== 27)) {
+        if (++brackets > MD_BRACKETS_MAX || ++depth > MD_BRACKET_DEPTH_MAX) return true;
+      } else if (ch === 93 && depth > 0) depth--;
+    }
   }
-  return MARKERS_TOO_DEEP.test(text);
+  return false;
 };
 
 /** Lists and quotes nested inside each other, counted together. */
@@ -208,7 +251,7 @@ export function rawRoot(text: string): MdNode {
 /** Text → mdast (GFM, positions) with the window's transforms applied. Never throws on ordinary input. */
 export function parseMarkdown(text: string): MdNode {
   const src = text.replace(/\r\n?/g, '\n');
-  if (markdownTooDeep(src) || tooLarge(src)) return rawRoot(text);
+  if (markdownTooDeep(src) || tooHeavy(src)) return rawRoot(text);
   const tree = fromMarkdown(src, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }) satisfies Root;
   const root = tree as unknown as MdNode;
   if (nestDepth(root) > MD_NEST_MAX) return rawRoot(text);
