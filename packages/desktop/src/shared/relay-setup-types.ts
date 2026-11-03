@@ -97,14 +97,15 @@ export type RelaySetupEvent = RelaySetupEventBody & { seq: number };
 
 /** The run record (spec 8.1). Lives in main: a reloaded window reads it again. Holds no secrets. */
 export interface RelayRunView {
-  /** Number of the last applied event. */
+  /** Number of the last applied event. One counter for the whole service: it never restarts for a new record. */
   seq: number;
   intent: SetupIntent;
   host: string;
   plan: RelayPlanView;
   /** At most 200 lines per step (the log file keeps all of them). */
   steps: Array<{ id: string; title: string; status: 'pending' | RelayStepStatus; lines: string[] }>;
-  progress: RelayPullProgress | null;
+  /** Of the step that is downloading now; cleared when that step ends. */
+  progress: (RelayPullProgress & { step: string }) | null;
   cancelling: boolean;
   /** `{ phase: 'running' }` during the run, the outcome after it. */
   phase: RelaySetupPhase;

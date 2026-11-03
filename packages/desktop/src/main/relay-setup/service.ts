@@ -71,6 +71,8 @@ function applyEvent(view: RelayRunView, body: RelaySetupEventBody): void {
     case 'step': {
       const row = view.steps.find((step) => step.id === body.id);
       if (row !== undefined) row.status = body.status;
+      // The download bar belongs to its step: it goes with it.
+      if (body.status !== 'running' && view.progress?.step === body.id) view.progress = null;
       return;
     }
     case 'line': {
@@ -81,7 +83,7 @@ function applyEvent(view: RelayRunView, body: RelaySetupEventBody): void {
       return;
     }
     case 'progress':
-      view.progress = body.progress;
+      view.progress = { ...body.progress, step: body.step };
       return;
     case 'cancelling':
       view.cancelling = true;
@@ -125,6 +127,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   let runCancel: CancelHandle | null = null;
   /** The run record (spec 8.1): from Run to the outcome and after it, until `dismiss` or a new `begin`. In memory only. */
   let record: { view: RelayRunView } | null = null;
+  /** Numbers the events of all records in turn, so a window that keeps its last `seq` across «New setup» loses nothing. */
+  let seqCounter = 0;
   /** The health wait in progress (the session is already gone by then): a cancel stops it. */
   let healthWait: { cancelled: boolean; wake: () => void } | null = null;
   const idleMs = deps.idleMs ?? 10 * 60_000;
@@ -327,7 +331,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
 
   /** Numbers the event, applies it to the record and sends it to the window. */
   function publish(rec: { view: RelayRunView }, body: RelaySetupEventBody): void {
-    rec.view.seq += 1;
+    seqCounter += 1;
+    rec.view.seq = seqCounter;
     applyEvent(rec.view, body);
     if (record === rec) deps.emit({ ...body, seq: rec.view.seq });
   }
@@ -348,7 +353,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     if (idle !== null) clearTimeout(idle);
     const rec = {
       view: {
-        seq: 0,
+        seq: seqCounter,
         intent: plan.intent,
         host: s.input.host,
         plan: view(plan),
@@ -361,7 +366,15 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     record = rec;
     execute(s, plan, shell, cancel, rec).then(
       (phase) => publish(rec, { event: 'phase', phase }),
-      () => publish(rec, { event: 'phase', phase: { phase: 'failed', step: null, message: 'The setup run failed unexpectedly' } }),
+      () => {
+        // Whatever threw, the run is over: the connection goes and `begin` / `dismiss` work again.
+        end();
+        try {
+          publish(rec, { event: 'phase', phase: { phase: 'failed', step: null, message: 'The setup run failed unexpectedly' } });
+        } catch {
+          // the window could not be told; the record has the outcome all the same
+        }
+      },
     );
     return { phase: 'running' };
   }
@@ -481,8 +494,13 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       const rec = record;
       if (rec?.view.phase.phase === 'running') throw bad('A setup run is in progress');
       if (rec !== null) publish(rec, { event: 'phase', phase: { phase: 'running' } });
-      const phase = await health(pendingAddress);
-      // The outcome of the check replaces the outcome of the run in the record.
+      let phase: RelaySetupPhase;
+      try {
+        phase = await health(pendingAddress);
+      } catch {
+        phase = { phase: 'failed', step: 'health', message: 'The check failed unexpectedly. Use Check again.' };
+      }
+      // The outcome of the check replaces the outcome of the run in the record, whatever happened.
       if (rec !== null) publish(rec, { event: 'phase', phase });
       return phase;
     },

@@ -73,13 +73,13 @@ function connection(server: FakeServer): SshConnection {
       if (/^(docker --version && |test -d |cd \/opt\/parley-relay && printf|docker image inspect |docker compose --project-directory \/opt\/parley-relay ps )/.test(command)) {
         return reply(server.installed ? 0 : 1);
       }
+      if (server.output?.match.test(command)) for (const line of server.output.lines) options.onLine?.(line);
       if (server.gate?.match.test(command)) {
         const { release, started } = server.gate;
         server.gate = undefined;
         started();
         await release;
       }
-      if (server.output?.match.test(command)) for (const line of server.output.lines) options.onLine?.(line);
       if (server.killed === true) return reply(143);
       if (server.dropOn?.test(command)) throw new ConnectionLostError();
       if (server.failCommand?.test(command)) {
@@ -472,18 +472,25 @@ describe('the run record lives in main (spec 8.1)', () => {
 
   it('run answers at once; state shows steps, lines and progress during the run and the outcome after it', async () => {
     const g = held(/--quiet-pull/);
-    const h = await setup({ gate: g.gate, output: { match: /images\/create\?fromImage=parley-relay/, lines: JSON_LINES } });
+    const img = held(/images\/create\?fromImage=parley-relay/);
+    const h = await setup({ gate: img.gate, output: { match: /images\/create\?fromImage=parley-relay/, lines: JSON_LINES } });
     await trusted(h);
     expect(await h.service.call('state', {})).toBeNull();
     expect(await h.service.call('run', { removeData: false })).toEqual({ phase: 'running' });
+    await img.begun;
+    // During the image step the bar belongs to it ...
+    expect((await h.service.call('state', {}))?.progress).toMatchObject({ step: 'image', layersTotal: 1, bytesDone: 5, bytesTotal: 10 });
+    h.server.gate = g.gate;
+    img.release();
     await g.begun;
 
+    // ... and goes with it when the step ends.
     const mid = (await h.service.call('state', {}))!;
     expect(mid.phase).toEqual({ phase: 'running' });
     expect(mid).toMatchObject({ intent: 'install', host: '203.0.113.7', cancelling: false });
     expect(mid.steps.map((st) => [st.id, st.status])).toEqual([['docker', 'done'], ['dir', 'done'], ['files', 'done'], ['image', 'done'], ['start', 'running']]);
     expect(mid.steps.find((st) => st.id === 'docker')?.lines.length).toBeGreaterThan(0);
-    expect(mid.progress).toMatchObject({ layersTotal: 1, bytesDone: 5, bytesTotal: 10 });
+    expect(mid.progress).toBeNull();
     expect(mid.plan.steps.length).toBe(5);
 
     g.release();
@@ -586,6 +593,54 @@ describe('the run record lives in main (spec 8.1)', () => {
     expect(await h.service.call('check', {})).toMatchObject({ phase: 'done' });
     expect((await h.service.call('state', {}))?.phase).toMatchObject({ phase: 'done', configured: true });
     expect(h.events.slice(from).filter((e) => e.event === 'phase').map((e) => (e.event === 'phase' ? e.phase.phase : ''))).toEqual(['running', 'done']);
+  });
+
+  it('seq is one counter for the whole service: a new record never restarts it', async () => {
+    const h = await setup();
+    await trusted(h);
+    await runToEnd(h);
+    const last = (await h.service.call('state', {}))!.seq;
+    await h.service.call('dismiss', {});
+    // The host key is known by now: the second begin goes straight to the plan.
+    expect((await h.service.call('begin', request())).phase).toBe('plan');
+    const from = h.events.length;
+    await runToEnd(h);
+    expect(h.events[from]!.seq).toBe(last + 1);
+    expect((await h.service.call('state', {}))!.seq).toBeGreaterThan(last);
+  });
+
+  it('a throw inside the run still ends it: the outcome is failed and begin / dismiss work again', async () => {
+    let boom = true;
+    const h = await setup({}, {
+      emit: (event) => {
+        if (boom && event.event === 'step' && event.status === 'running') {
+          boom = false;
+          throw new Error('window gone');
+        }
+      },
+    });
+    await trusted(h);
+    await h.service.call('run', { removeData: false });
+    await vi.waitFor(async () => expect((await h.service.call('state', {}))?.phase.phase).toBe('failed'));
+    expect(h.server.lines.at(-1)).toBe('<closed>');
+    expect(await h.service.call('dismiss', {})).toBeNull();
+    expect((await h.service.call('begin', request())).phase).toBe('plan');
+  });
+
+  it('a throw inside Check leaves a failed outcome, not a record stuck at «running»', async () => {
+    let broken = false;
+    const h = await setup({}, {
+      health: async () => ({ status: 502 }),
+      sleep: async () => {
+        if (broken) throw new Error('timer broke');
+      },
+    });
+    await trusted(h);
+    expect(await runToEnd(h)).toMatchObject({ phase: 'failed', step: 'health' });
+    broken = true;
+    expect(await h.service.call('check', {})).toMatchObject({ phase: 'failed', step: 'health' });
+    expect((await h.service.call('state', {}))?.phase.phase).toBe('failed');
+    expect(await h.service.call('dismiss', {})).toBeNull();
   });
 
   it('dispose drops the record', async () => {
