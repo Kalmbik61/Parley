@@ -69,65 +69,114 @@ export const MD_BRACKETS_MAX = 2000;
 export const MD_BRACKET_DEPTH_MAX = 32;
 export const MD_LAZY_RUN_MAX = 500;
 export const MD_LINES_MAX = 5000;
+/** The counts over the whole text (code not skipped) may reach this many times a limit. */
+const BACKSTOP = 4;
 
 /** A quote or list marker; `>` needs no space after it (CommonMark), a list marker does. */
 const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
 /** Quote and list markers on one line, counted together (`- - - …`, `>- >- …`): they hang the parse itself. */
-const MARKERS_TOO_DEEP = new RegExp(`^(?:[ \\t]*${MARKER}){${MD_NEST_MAX + 1}}`);
-const BLOCK_MARKER = new RegExp(`^[ \\t]*(?:${MARKER}|#{1,6}(?:[ \\t]|$))`);
+const markersRe = (n: number): RegExp => new RegExp(`^(?:[ \\t]*${MARKER}){${n}}`);
+const MARKERS_TOO_DEEP = markersRe(MD_NEST_MAX + 1);
+/** The same count over every line, thematic breaks and code included: the backstop (4× the limit). */
+const MARKERS_TOO_DEEP_RAW = markersRe(MD_NEST_MAX * BACKSTOP + 1);
+const BLOCK_MARKER = new RegExp(`^[ \\t]*${MARKER}`);
+const HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+/** A fence as CommonMark has it, also inside quotes: a backtick fence has no backtick in its info string. */
+const FENCE_OPEN = /^(?:[ \t]*>)*[ \t]{0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
+const FENCE_CLOSE = /^(?:[ \t]*>)*[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/;
+/** A line that may open an HTML block (up to 3 spaces, then `<`): no fence counts in it up to the next blank line. */
+const HTML_START = /^ {0,3}</;
+/** HTML blocks of types 1–5 run to a closing marker, not to a blank line: no code is skipped from here on. */
+const HTML_LONG = /^ {0,3}<(?:(?:script|pre|style|textarea)(?:[ \t>]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/i;
 
 /**
- * Pre-parse guards (A40 critic M2, M3, M5): text that would hang the parser is shown raw. One pass over the lines, with
- * fenced code skipped (code is not parsed, so its `[`, `*` and markers cost nothing and must not count):
+ * Pre-parse guards (A40 critic M2, M3, M5, M6): text that would hang the parser is shown raw. One pass over the lines;
+ * fenced code is skipped (code is not parsed, so its `[`, `*` and markers cost nothing and must not count), but the
+ * skip is only a convenience: every count is ALSO kept over the whole text with nothing skipped, and any of them over
+ * 4× its limit shows raw text, so a fence the parser does not agree with can never hide a bomb.
  *  - more than 64 KB; more than 2000 `*`, `_`, `~`; more than 2000 `[` or `[` nested deeper than 32 (an ESC `[` of an
  *    ANSI colour does not count);
  *  - 25 quote/list markers on one line (not a thematic break such as `- - - …`);
- *  - a run of more than 500 lines without a block marker after a quote/list line (lazy continuation is quadratic), and,
- *    as a backstop, more than 5000 non-empty lines outside fenced code.
+ *  - a run of more than 500 lines without a block marker after a quote/list line (lazy continuation is quadratic; a
+ *    heading ends it), and, as a backstop, more than 5000 non-empty lines.
  */
 export const tooHeavy = (text: string): boolean => {
   if (text.length > MD_BYTES_MAX) return true;
-  let emphasis = 0;
-  let brackets = 0;
-  let depth = 0;
-  let lines = 0;
-  let lazy = 0;
-  let inBlock = false;
+  // Counts with the code skipped (limit) and over everything (BACKSTOP × limit).
+  const skip = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
+  const all = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
   let fence: string | null = null;
+  let html = false;
+  let codeSkipOff = false;
   for (const line of text.split('\n')) {
-    const open = FENCE.exec(line);
+    const blank = line.trim() === '';
+    // Everything, nothing skipped.
+    if (blank) {
+      all.inBlock = false;
+      all.lazy = 0;
+    } else {
+      if (++all.lines > MD_LINES_MAX * BACKSTOP) return true;
+      if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
+      if (HEADING.test(line)) {
+        all.inBlock = false;
+        all.lazy = 0;
+      } else if (BLOCK_MARKER.test(line)) {
+        all.inBlock = true;
+        all.lazy = 0;
+      } else if (all.inBlock && ++all.lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
+      // Over everything only the totals count: unclosed `[` in code (600 log lines) are legal, so no depth limit here.
+      if (count(line, all, BACKSTOP, Infinity)) return true;
+    }
+    // The fence / HTML state, as far as the guard can tell.
     if (fence !== null) {
-      if (open !== null && open[1]![0] === fence[0] && open[1]!.length >= fence.length && line.trim().length === open[1]!.length) fence = null;
+      const close = FENCE_CLOSE.exec(line);
+      if (close !== null && close[1]![0] === fence[0] && close[1]!.length >= fence.length) fence = null;
       continue;
     }
-    if (open !== null) {
-      fence = open[1]!;
+    if (blank) {
+      html = false;
+      skip.inBlock = false;
+      skip.lazy = 0;
       continue;
     }
-    if (line.trim() === '') {
-      inBlock = false;
-      lazy = 0;
-      continue;
+    if (!html && !codeSkipOff) {
+      const open = FENCE_OPEN.exec(line);
+      if (open !== null) {
+        fence = open[1] ?? open[2]!;
+        continue;
+      }
     }
-    if (++lines > MD_LINES_MAX) return true;
+    if (HTML_START.test(line)) {
+      html = true;
+      if (HTML_LONG.test(line)) codeSkipOff = true;
+    }
+    if (++skip.lines > MD_LINES_MAX) return true;
     if (!THEMATIC_BREAK.test(line) && MARKERS_TOO_DEEP.test(line)) return true;
-    if (BLOCK_MARKER.test(line)) {
-      inBlock = true;
-      lazy = 0;
-    } else if (inBlock && ++lazy > MD_LAZY_RUN_MAX) return true;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line.charCodeAt(i);
-      if ((ch === 42 || ch === 95 || ch === 126) && ++emphasis > MD_EMPHASIS_MAX) return true;
-      // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
-      if (ch === 91 && (i === 0 || line.charCodeAt(i - 1) !== 27)) {
-        if (++brackets > MD_BRACKETS_MAX || ++depth > MD_BRACKET_DEPTH_MAX) return true;
-      } else if (ch === 93 && depth > 0) depth--;
-    }
+    if (HEADING.test(line)) {
+      skip.inBlock = false;
+      skip.lazy = 0;
+    } else if (BLOCK_MARKER.test(line)) {
+      skip.inBlock = true;
+      skip.lazy = 0;
+    } else if (skip.inBlock && ++skip.lazy > MD_LAZY_RUN_MAX) return true;
+    if (count(line, skip, 1)) return true;
   }
   return false;
 };
+
+/** Emphasis and bracket counts of one line against `factor` × the limits; `[` nests, `]` closes. */
+function count(line: string, c: { emphasis: number; brackets: number; depth: number }, factor: number, depthMax = MD_BRACKET_DEPTH_MAX): boolean {
+  for (let i = 0; i < line.length; i++) {
+    const ch = line.charCodeAt(i);
+    if ((ch === 42 || ch === 95 || ch === 126) && ++c.emphasis > MD_EMPHASIS_MAX * factor) return true;
+    // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
+    if (ch === 91 && (i === 0 || line.charCodeAt(i - 1) !== 27)) {
+      if (++c.brackets > MD_BRACKETS_MAX * factor || ++c.depth > depthMax) return true;
+    } else if (ch === 93 && c.depth > 0) c.depth--;
+  }
+  return false;
+}
 
 /** Lists and quotes nested inside each other, counted together. */
 export const nestDepth = (n: MdNode): number => {

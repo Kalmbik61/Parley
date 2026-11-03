@@ -6,8 +6,15 @@ export type Defs = Map<string, { url: string; title: string | null }>;
 /** Inline code: no break at a hyphen (U+2060 word joiner after each `-`, display only); a path breaks at `/`. */
 export const noHyphenBreak = (s: string): string => s.replace(/-/g, '-\u2060');
 
-/** Inline code as shown: a newline inside it is a space (CommonMark, the window's `<code>`), hyphens do not break. */
-export const codeText = (value: string): string => noHyphenBreak(value.replace(/\r\n|\r|\n/g, ' '));
+/**
+ * Inline code as shown: a newline inside it is a space (CommonMark, the window's `<code>`), hyphens do not break.
+ * `noWrap` (short code that keeps its fill): it does not wrap at all, a U+2060 after `/` and a no-break space instead
+ * of a space, because iOS stretches the fill of a wrapped nested Text to the line end.
+ */
+export const codeText = (value: string, noWrap = false): string => {
+  const text = noHyphenBreak(value.replace(/\r\n|\r|\n/g, ' '));
+  return noWrap ? text.replace(/\//g, '/\u2060').replace(/ /g, '\u00A0') : text;
+};
 
 /** The address of a `link`/`image` or, for a reference, of its definition; '' when there is none. */
 export function addressOf(node: MdNode, defs: Defs): string {

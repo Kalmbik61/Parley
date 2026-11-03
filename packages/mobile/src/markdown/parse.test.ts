@@ -376,7 +376,7 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
     // ESC [ does not count in prose either
     expect(types(parseMarkdown(`${'\u001b[32mx '.repeat(40)}`))).toEqual(['paragraph']);
     // brackets, emphasis and markers inside fenced code do not count
-    const heavyCode = `\`\`\`\n${'[['.repeat(3000)}\n${'* '.repeat(3000)}\n${'- '.repeat(30)}\n\`\`\``;
+    const heavyCode = `\`\`\`\n${'[a] [b] '.repeat(700)}\n${'a*b '.repeat(700)}\n${'- '.repeat(30)}\n\`\`\``;
     expect(kids(parseMarkdown(heavyCode))[0]!.type).toBe('code');
   });
 
@@ -411,12 +411,49 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
       autolinks: fill('<https://a.b> '),
       definitions: fill('[a]: x\n'),
     };
+    // Every generator also behind a line that looks like a fence or an HTML block to a naive guard but not to CommonMark
+    // (A40 critic M6): the guard must not let one line in front hide a bomb.
+    const prefixes: Record<string, string> = {
+      plain: '',
+      badFence: '```a`\n',
+      htmlThenFence: '<div>\n```\n\n',
+      commentFence: '<!--\n```\n-->\n\n',
+      tildeInfo: '~~~ a`b\n',
+      quoteFence: '> ```\n',
+    };
     const slow: string[] = [];
     for (const [name, bomb] of Object.entries(generators)) {
-      // The best of two runs: a busy CI machine may stall one run, a real hang (seconds) stalls both.
-      const ms = Math.min(timed(bomb).ms, timed(bomb).ms);
-      if (ms > 500) slow.push(`${name}: ${Math.round(ms)} ms`);
+      for (const [pname, prefix] of Object.entries(prefixes)) {
+        // The best of two runs: a busy CI machine may stall one run, a real hang (seconds) stalls both.
+        const input = prefix + bomb;
+        const ms = Math.min(timed(input).ms, timed(input).ms);
+        if (ms > 500) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
+      }
     }
     expect(slow).toEqual([]);
+  });
+});
+
+describe('guards: fence recognition, headings, short inline code (A40 critic M6, m17, m14)', () => {
+  it('a heading is not a lazy-line container', () => {
+    const doc = `# Files\n${'plain line\n'.repeat(600)}`;
+    expect(types(parseMarkdown(doc))[0]).toBe('heading');
+  });
+
+  it('a fence inside a quote is recognised: code with many [ in a quote stays Markdown', () => {
+    const doc = `> \`\`\`\n${'> line [x\n'.repeat(600)}> \`\`\`\n\ntext`;
+    expect(types(parseMarkdown(doc))).toEqual(['blockquote', 'paragraph']);
+  });
+
+  it('a real fence still skips, a fake one (backtick in the info string) does not', () => {
+    const bomb = '**_'.repeat(8000);
+    expect(plainText(parseMarkdown(`\`\`\`a\`\n${bomb}`))).toContain('**_**_');
+    expect(types(parseMarkdown(`\`\`\`js\n${'*'.repeat(500)}\n\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+  });
+
+  it('short inline code does not wrap: no-break space and U+2060 after "/"', () => {
+    expect(codeText('~/.claude/settings.json', true)).toBe('~/\u2060.claude/\u2060settings.json');
+    expect(codeText('docker mcp run', true)).toBe('docker\u00A0mcp\u00A0run');
+    expect(codeText('a b/c', false)).toBe('a b/c');
   });
 });
