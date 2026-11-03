@@ -2,8 +2,8 @@
 // `headerTintColor` does not remove. The native-stack items API can hide that shared background: a custom item with
 // `hidesSharedBackground: true` draws only what we put in it, in the Parley accent. The back button is such an item too
 // (`router.back()`); the stack keeps its own edge-swipe, which does not depend on the visible button.
-import { useEffect, useState, type ComponentProps, type ReactElement } from 'react';
-import { AccessibilityInfo, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import type { ComponentProps, ReactElement, ReactNode } from 'react';
+import { Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { typography, useColors } from '../theme';
@@ -76,7 +76,7 @@ export function BarSymbol({ name, label, onPress, disabled = false }: { name: Co
 const styles = StyleSheet.create({
   back: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, minWidth: 44, paddingRight: 4 },
   text: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
-  strip: { position: 'absolute', left: 0, right: 0, zIndex: 2, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, height: 40 },
+  strip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, minHeight: 44 },
   stripText: { flex: 1, fontWeight: '600' },
   stripLine: { position: 'absolute', left: 16, right: 16, bottom: 0, height: StyleSheet.hairlineWidth },
   symbol: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
@@ -95,29 +95,18 @@ export function useBarMaterial() {
   };
 }
 
-function useReduceTransparency(): boolean {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    void AccessibilityInfo.isReduceTransparencyEnabled().then(setOn);
-    const sub = AccessibilityInfo.addEventListener('reduceTransparencyChanged', setOn);
-    return () => sub.remove();
-  }, []);
-  return on;
-}
-
 /**
- * The waiting strip as the bar's second row (D1 §17.5): bar material, no warning fill, a 0.5 pt separator inset 16, text in
+ * The waiting strip as the bar's second row (D1 §17.5): the solid bar colour (an RN view does not blur, so a translucent one lets the feed text show through), no warning fill, a 0.5 pt separator inset 16, text in
  * `label` semibold, the icon in the state colour, and either a tint action ("Review ›") or a `barSubtitle` chevron.
  */
-export function BarStrip({ icon, iconColor, text, action, top, onPress }: { icon: ComponentProps<typeof SymbolView>['name']; iconColor: string; text: string; action?: string; top: number; onPress: () => void }) {
+export function BarStrip({ icon, iconColor, text, action, onPress }: { icon: ComponentProps<typeof SymbolView>['name']; iconColor: string; text: string; action?: string; onPress: () => void }) {
   const c = useColors();
-  const solid = useReduceTransparency();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={action === undefined ? text : `${text}. ${action}`}
       onPress={onPress}
-      style={[styles.strip, { top, backgroundColor: solid ? c.barBgSolid : c.barBg }]}
+      style={[styles.strip, { backgroundColor: c.barBgSolid }]}
     >
       <SymbolView name={icon} size={16} tintColor={iconColor} />
       <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.stripText, { color: c.label }]}>
@@ -126,12 +115,18 @@ export function BarStrip({ icon, iconColor, text, action, top, onPress }: { icon
       {action === undefined ? (
         <SymbolView name="chevron.right" size={12} weight="semibold" tintColor={c.barSubtitle} />
       ) : (
-        <Text allowFontScaling style={[typography.subheadline, { color: c.tint, fontWeight: '600' }]}>{action}</Text>
+        <Text allowFontScaling style={[typography.subheadline, { color: c.tint, fontWeight: '600' }]}>{action} ›</Text>
       )}
       <View pointerEvents="none" style={[styles.stripLine, { backgroundColor: c.separator }]} />
     </Pressable>
   );
 }
 
-/** Height of the strip row, for the list's top padding. */
-export const BAR_STRIP_HEIGHT = 40;
+/**
+ * The strips stacked under the bar, in the layout flow above the list: a spacer as tall as the transparent bar, then the
+ * strips. The list starts below them, so its first row (e.g. "Load earlier messages") is never covered, large text sizes
+ * grow the stack instead of cutting it, and scrolled content is clipped at the strip, not drawn through it.
+ */
+export function BarStripStack({ top, children }: { top: number; children: ReactNode }) {
+  return <View style={{ paddingTop: top }}>{children}</View>;
+}

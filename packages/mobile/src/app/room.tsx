@@ -19,7 +19,7 @@ import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
 import { useRoomChat } from '../room/use-room-chat';
 import { typography, useColors } from '../theme';
-import { BAR_STRIP_HEIGHT, barBack, BarStrip, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
+import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
 import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
@@ -164,11 +164,16 @@ export default function RoomScreen() {
         }}
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-        {room.proposal !== null ? (
-          <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review ›" top={insets.top + 44} onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
-        ) : waiting[0] !== undefined ? (
-          <BarStrip icon="hand.raised" iconColor={c.needsYou} text={`${waiting[0].label} needs you`} top={insets.top + 44} onPress={() => router.push(`/session/${sessionParam({ ...target, sessionId: waiting[0]!.id })}` as never)} />
-        ) : null}
+        {(room.proposal !== null || waiting[0] !== undefined) && (
+          <BarStripStack top={insets.top + 44}>
+            {room.proposal !== null && (
+              <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
+            )}
+            {waiting[0] !== undefined && (
+              <BarStrip icon="hand.raised" iconColor={c.needsYou} text={`${waiting[0].label} needs you`} onPress={() => router.push(`/session/${sessionParam({ ...target, sessionId: waiting[0]!.id })}` as never)} />
+            )}
+          </BarStripStack>
+        )}
         <FlatList
           ref={list}
           data={data}
@@ -179,7 +184,7 @@ export default function RoomScreen() {
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={[styles.list, (room.proposal !== null || waiting[0] !== undefined) && { paddingTop: BAR_STRIP_HEIGHT + 4 }]}
+          contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>

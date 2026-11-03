@@ -31,7 +31,7 @@ import { useCanAct, useClient, useNow, useRemoteState } from '../../hooks/use-re
 import { parseSessionParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { spacing, typography, useColors } from '../../theme';
-import { BAR_STRIP_HEIGHT, barBack, BarStrip, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
+import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
 import { Button } from '../../ui/Button';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
@@ -286,7 +286,9 @@ export default function SessionScreen() {
   const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
       {strip !== null && (
-        <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} top={insets.top + 44} onPress={() => list.current?.scrollToEnd({ animated: true })} />
+        <BarStripStack top={insets.top + 44}>
+          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={() => list.current?.scrollToEnd({ animated: true })} />
+        </BarStripStack>
       )}
       <FlatList
         ref={list}
@@ -298,7 +300,7 @@ export default function SessionScreen() {
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[styles.list, strip !== null && { paddingTop: BAR_STRIP_HEIGHT + 4 }]}
+        contentContainerStyle={styles.list}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}

@@ -18,7 +18,7 @@ export interface Colors {
   danger: string;
   warningBg: string;
   neutralBg: string;
-  /** Session/room bar material by theme (D1 §17.5); `barBgSolid` replaces it under Reduce Transparency. */
+  /** Session/room bar material by theme (D1 §17.5); the strip under the bar uses `barBgSolid` (an RN view does not blur). */
   barBg: string;
   barBgSolid: string;
   /** The whole subtitle of the bar and the chevron of its strip (D1 §17.5). */
