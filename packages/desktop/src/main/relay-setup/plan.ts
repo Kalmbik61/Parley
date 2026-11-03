@@ -1,7 +1,8 @@
 import net from 'node:net';
 import { shQuote, type SetupIntent } from './input.js';
 import { INSTALL_DIR, holderOf, type PortHolder, type ProbeResult } from './probe.js';
-import { managedFiles, proxySnippet, sha256, type EnvValues, type ProxyServer, type SetupMode } from './templates.js';
+import { pullCommand } from './pull-progress.js';
+import { CADDY_IMAGE, managedFiles, proxySnippet, sha256, type EnvValues, type ProxyServer, type SetupMode } from './templates.js';
 
 /**
  * The command plan (spec 6.7 steps 4–5). Every step is «check → do»: the check is a command whose exit code 0 means
@@ -25,6 +26,8 @@ export interface PlanStep {
   commands: PlanCommand[];
   /** Run even when the check passes, if an earlier step changed something (restart after new files or image). */
   rerunOnChange?: boolean;
+  /** A cancel may end the running command (the image download); the other steps are finished first (spec 7.2). */
+  interruptible?: boolean;
 }
 
 export type PortDecision =
@@ -139,6 +142,20 @@ function ufwRules(ports: number[]): PlanStep {
   };
 }
 
+/** The relay image and, with Caddy, the Caddy image: pulled here so that `up` has nothing left to download (spec 7.1). */
+function imageStep(image: string, mode: SetupMode): PlanStep {
+  const images = mode === 'caddy' ? [image, CADDY_IMAGE] : [image];
+  const check = `docker image inspect ${images.map(shQuote).join(' ')} >/dev/null 2>&1`;
+  return {
+    id: 'image',
+    title: mode === 'caddy' ? `Relay image ${image} and Caddy` : `Relay image ${image}`,
+    check,
+    checkShow: `docker image inspect ${images.join(' ')}`,
+    interruptible: true,
+    commands: images.map((ref) => ({ run: pullCommand(ref, shQuote), show: `docker pull ${ref}` })),
+  };
+}
+
 function installSteps(ctx: PlanContext, env: EnvValues): PlanStep[] {
   const files = managedFiles(env);
   const steps: PlanStep[] = [];
@@ -165,13 +182,7 @@ function installSteps(ctx: PlanContext, env: EnvValues): PlanStep[] {
       ...(env.mode === 'proxy' ? [plain(`rm -f ${D}/Caddyfile`)] : []),
     ],
   });
-  steps.push({
-    id: 'image',
-    title: `Relay image ${ctx.image}`,
-    check: `docker image inspect ${shQuote(ctx.image)} >/dev/null 2>&1`,
-    checkShow: `docker image inspect ${ctx.image}`,
-    commands: [{ run: `docker pull ${shQuote(ctx.image)}`, show: `docker pull ${ctx.image}` }],
-  });
+  steps.push(imageStep(ctx.image, env.mode));
   if (ctx.probe.ufwActive && ctx.decision.mode === 'caddy') {
     steps.push(ufwRules(ctx.decision.httpsPort === 443 ? [80, 443] : [80, ctx.decision.httpsPort]));
   }
@@ -182,7 +193,7 @@ function installSteps(ctx: PlanContext, env: EnvValues): PlanStep[] {
     check: up,
     checkShow: up,
     rerunOnChange: true,
-    commands: [plain(`${COMPOSE} up -d --remove-orphans`)],
+    commands: [plain(`${COMPOSE} up -d --remove-orphans --quiet-pull`)],
   });
   return steps;
 }
@@ -205,7 +216,7 @@ function rollbackSteps(): PlanStep[] {
       title: 'Restart with the previous image',
       check: null,
       checkShow: null,
-      commands: [plain(`${COMPOSE} up -d --remove-orphans`)],
+      commands: [plain(`${COMPOSE} up -d --remove-orphans --quiet-pull`)],
     },
   ];
 }

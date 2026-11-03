@@ -50,7 +50,9 @@ export type RelaySetupPhase =
   | { phase: 'proxy-pending'; address: string; snippet: string; certificateHint: string }
   | { phase: 'done'; address: string; configured: boolean }
   | { phase: 'removed'; docker: 'kept' }
-  | { phase: 'failed'; step: string | null; message: string };
+  | { phase: 'failed'; step: string | null; message: string }
+  /** The person cancelled (not an error). `step` is where the run stopped; `health` → «Check» tests again. */
+  | { phase: 'cancelled'; step: string | null; message: string };
 
 export interface RelaySetupCalls {
   keys: { params: Record<string, never>; result: { files: string[]; agent: boolean } };
@@ -65,8 +67,19 @@ export interface RelaySetupCalls {
 export type RelaySetupCallName = keyof RelaySetupCalls;
 export const RELAY_SETUP_CALL_NAMES: readonly RelaySetupCallName[] = ['keys', 'begin', 'trust', 'provide', 'plan', 'run', 'check', 'cancel'];
 
+/** Progress of the relay image download: layers always, bytes when the Docker Engine API reports them. */
+export interface RelayPullProgress {
+  layersDone: number;
+  layersTotal: number;
+  bytesDone: number | null;
+  bytesTotal: number | null;
+}
+
 export type RelaySetupEvent =
   | { event: 'step'; id: string; title: string; status: 'running' | 'skipped' | 'done' | 'failed' | 'stopped' }
-  | { event: 'line'; step: string; text: string };
+  | { event: 'line'; step: string; text: string }
+  | { event: 'progress'; step: string; progress: RelayPullProgress }
+  /** A cancel arrived during a step that cannot be interrupted: the run stops after it. */
+  | { event: 'cancelling' };
 
 export const RELAY_MANUAL_URL = 'https://github.com/Kalmbik61/Parley/blob/master/packages/relay/README.md';

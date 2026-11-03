@@ -23,9 +23,11 @@ export interface HealthOptions {
   attempts?: number;
   delayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** The person cancelled: the waiting stops. */
+  cancelled?: () => boolean;
 }
 
-export type HealthResult = { ok: true } | { ok: false; detail: string };
+export type HealthResult = { ok: true } | { ok: false; detail: string; cancelled?: true };
 
 export async function checkHealth(address: string, options: HealthOptions): Promise<HealthResult> {
   const attempts = options.attempts ?? 18;
@@ -33,6 +35,7 @@ export async function checkHealth(address: string, options: HealthOptions): Prom
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let detail = 'no answer';
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (options.cancelled?.() === true) return { ok: false, detail, cancelled: true };
     try {
       const { status } = await options.fetcher(`https://${address}/v1/health`);
       if (status === 200) return { ok: true };
@@ -42,6 +45,7 @@ export async function checkHealth(address: string, options: HealthOptions): Prom
     }
     if (attempt + 1 < attempts) await sleep(delay);
   }
+  if (options.cancelled?.() === true) return { ok: false, detail, cancelled: true };
   return { ok: false, detail };
 }
 

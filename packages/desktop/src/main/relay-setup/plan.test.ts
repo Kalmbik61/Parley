@@ -126,6 +126,30 @@ describe('buildPlan: install', () => {
     expect(text).not.toMatch(/curl[^"]*\|\s*(ba)?sh/);
   });
 
+  it('the image step pulls the relay image and Caddy, can be interrupted, and checks all images', () => {
+    const image = buildPlan(ctx(probe())).steps.find((s) => s.id === 'image')!;
+    expect(image.interruptible).toBe(true);
+    expect(image.commands).toHaveLength(2);
+    expect(image.commands[0]!.run).toContain('fromImage=');
+    expect(image.commands[1]!.run).toContain('fromImage=caddy&tag=sha256:');
+    expect(image.check).toMatch(/^docker image inspect .* .* >\/dev\/null 2>&1$/);
+    for (const c of image.commands) expect(c.run).toContain('docker image inspect');
+    expect(buildPlan(ctx(probe())).steps.filter((s) => s.interruptible)).toHaveLength(1);
+  });
+
+  it('behind another web server only the relay image is pulled (no Caddy)', () => {
+    const p = probe({}, [{ port: 80, processes: ['nginx'] }]);
+    const image = buildPlan(ctx(p)).steps.find((s) => s.id === 'image')!;
+    expect(image.commands).toHaveLength(1);
+    expect(image.check).not.toContain('caddy');
+  });
+
+  it('start and the apt/compose steps are not interruptible; start does not stream the pull', () => {
+    const plan = buildPlan(ctx(probe()));
+    expect(plan.steps.find((s) => s.id === 'start')?.interruptible).toBeUndefined();
+    expect(plan.steps.find((s) => s.id === 'start')?.commands[0]?.run).toBe('docker compose --project-directory /opt/parley-relay up -d --remove-orphans --quiet-pull');
+  });
+
   it('writes Docker repo lines from the probe, not from free text', () => {
     const debian = probe({ os: parseOsRelease('ID=debian\nVERSION_ID="12"\n'), arch: 'arm64' });
     const plan = buildPlan(ctx(debian));

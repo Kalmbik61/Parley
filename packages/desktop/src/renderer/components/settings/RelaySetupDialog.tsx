@@ -70,7 +70,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
           if (index < 0) return [...current, { id: event.id, title: event.title, status: event.status, lines: [] }];
           return current.map((row, i) => (i === index ? { ...row, status: event.status } : row));
         });
-      } else {
+      } else if (event.event === 'line') {
         setRows((current) => current.map((row) => (row.id === event.step ? { ...row, lines: [...row.lines.slice(-200), event.text] } : row)));
       }
     });

@@ -7,6 +7,9 @@ import { isValidImageRef } from './image.js';
  * `templates.test.ts` fails when they drift apart.
  */
 
+/** The Caddy image of `COMPOSE_CADDY`; the image step pulls it too, so `up` has nothing left to download. */
+export const CADDY_IMAGE = 'caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e';
+
 export const COMPOSE_CADDY = `# Parley relay behind Caddy. Usage:
 #   RELAY_DOMAIN=relay.example.com docker compose up -d
 # The relay port is not published: only Caddy listens on the host (80 for the certificate, 443 for the app).
@@ -23,7 +26,7 @@ services:
     expose:
       - '8787'
   caddy:
-    image: caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    image: ${CADDY_IMAGE}
     restart: unless-stopped
     depends_on:
       - relay

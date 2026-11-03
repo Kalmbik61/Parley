@@ -1,10 +1,11 @@
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { Client } from 'ssh2';
 import { describeHostKey, type HostKeyInfo, type HostKeyVerdict, type KnownHosts } from './known-hosts.js';
 import { shQuote, type SetupAuth, type SetupSecrets } from './input.js';
-import type { RemoteShell, RunOptions, RunResult } from './shell.js';
+import { detachedCommand, interruptCommand, type RemoteShell, type RunOptions, type RunResult } from './shell.js';
 
 /**
  * SSH with `ssh2` (pure JS), main process only. Credentials arrive here in memory, are used for one connection and
@@ -41,6 +42,8 @@ export type ConnectFn = (request: ConnectRequest, knownHosts: KnownHosts) => Pro
 
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_CAP = 1024 * 1024;
+/** A detached command may take long (apt, an image); only the view of it is bound by this. */
+const DETACHED_TIMEOUT_MS = 60 * 60_000;
 
 export async function listPrivateKeys(sshDir: string = path.join(os.homedir(), '.ssh')): Promise<string[]> {
   let names: string[];
@@ -64,9 +67,24 @@ export async function listPrivateKeys(sshDir: string = path.join(os.homedir(), '
 }
 
 function wrap(connection: Client): SshConnection {
+  // A command in flight when the connection drops must end as an error («connection lost»), not as exit code 255.
+  const lost = new Set<(error: Error) => void>();
+  connection.on('close', () => {
+    for (const reject of lost) reject(new Error('the connection to the server was lost'));
+    lost.clear();
+  });
   return {
     exec(command, options) {
-      return new Promise<RunResult>((resolve, reject) => {
+      return new Promise<RunResult>((resolveRaw, rejectRaw) => {
+        const resolve = (result: RunResult): void => {
+          lost.delete(rejectRaw);
+          resolveRaw(result);
+        };
+        const reject = (error: Error): void => {
+          lost.delete(rejectRaw);
+          rejectRaw(error);
+        };
+        lost.add(rejectRaw);
         connection.exec(command, (error, stream) => {
           if (error) {
             reject(error);
@@ -75,9 +93,11 @@ function wrap(connection: Client): SshConnection {
           let stdout = '';
           let stderr = '';
           const pending = { out: '', err: '' };
+          // A multibyte character may be split between two chunks: one streaming decoder per stream.
+          const decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
           const timer = setTimeout(() => stream.close(), options.timeoutMs ?? COMMAND_TIMEOUT_MS);
           const feed = (kind: 'out' | 'err', chunk: Buffer): void => {
-            const text = chunk.toString('utf8');
+            const text = decoders[kind].write(chunk);
             if (kind === 'out' && stdout.length < OUTPUT_CAP) stdout += text;
             if (kind === 'err' && stderr.length < OUTPUT_CAP) stderr += text;
             if (options.onLine === undefined) return;
@@ -89,6 +109,8 @@ function wrap(connection: Client): SshConnection {
           stream.stderr.on('data', (chunk: Buffer) => feed('err', chunk));
           stream.on('close', (code: number | null) => {
             clearTimeout(timer);
+            pending.out += decoders.out.end();
+            pending.err += decoders.err.end();
             for (const rest of [pending.out, pending.err]) if (rest !== '') options.onLine?.(rest);
             resolve({ code: code ?? 255, stdout, stderr });
           });
@@ -186,16 +208,24 @@ export type SudoMode = { kind: 'root' } | { kind: 'nopasswd' } | { kind: 'passwo
 
 /** Fixed wrapper: `sh -c <quoted command>`, under `sudo` when the step needs root and the user is not root. */
 export function createShell(connection: SshConnection, sudo: SudoMode): RemoteShell {
+  const execute = (command: string, options: RunOptions, timeoutMs?: number): Promise<RunResult> => {
+    // stdin of the command is closed: after `sudo -S` took the password line nothing else can read the rest.
+    const inner = `sh -c ${shQuote(`exec </dev/null; ${command}`)}`;
+    const elevate = options.sudo === true && sudo.kind !== 'root';
+    const line = !elevate ? inner : sudo.kind === 'password' ? `sudo -S -p '' ${inner}` : `sudo -n ${inner}`;
+    return connection.exec(line, {
+      ...(elevate && sudo.kind === 'password' ? { stdin: `${sudo.password}\n` } : {}),
+      ...(options.onLine !== undefined ? { onLine: options.onLine } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
+  };
   return {
     run(command: string, options: RunOptions = {}): Promise<RunResult> {
-      // stdin of the command is closed: after `sudo -S` took the password line nothing else can read the rest.
-      const inner = `sh -c ${shQuote(`exec </dev/null; ${command}`)}`;
-      const elevate = options.sudo === true && sudo.kind !== 'root';
-      const line = !elevate ? inner : sudo.kind === 'password' ? `sudo -S -p '' ${inner}` : `sudo -n ${inner}`;
-      return connection.exec(line, {
-        ...(elevate && sudo.kind === 'password' ? { stdin: `${sudo.password}\n` } : {}),
-        ...(options.onLine !== undefined ? { onLine: options.onLine } : {}),
-      });
+      if (options.detach === undefined) return execute(command, options);
+      return execute(detachedCommand(command, options.detach), options, DETACHED_TIMEOUT_MS);
+    },
+    interrupt(): Promise<RunResult> {
+      return execute(interruptCommand(), { sudo: true });
     },
   };
 }

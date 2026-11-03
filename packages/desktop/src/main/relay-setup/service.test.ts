@@ -32,6 +32,10 @@ interface FakeServer {
   failCommand?: RegExp;
   /** The first command matching `match` waits for `release` (a cancel arrives meanwhile). */
   gate?: { match: RegExp; release: Promise<void>; started: () => void };
+  /** The command with this text throws as if the connection dropped. */
+  dropOn?: RegExp;
+  /** The second channel ran the `kill` command: the gated command ends with 143 once released. */
+  killed?: boolean;
   lines: string[];
   stdins: string[];
 }
@@ -46,6 +50,10 @@ function connection(server: FakeServer): SshConnection {
       const { command, sudo } = unwrap(line);
       const reply = (code: number, stdout = ''): { code: number; stdout: string; stderr: string } => ({ code, stdout, stderr: '' });
       if (sudo && line.startsWith("sudo -S") && options.stdin !== `${SECRETS.sudoPassword}\n`) return reply(1);
+      if (command.includes('kill -s TERM -- -"$pid"')) {
+        server.killed = true;
+        return reply(0);
+      }
       if (command === 'cat /etc/os-release') return reply(0, server.osRelease);
       if (command === 'uname -m') return reply(0, 'x86_64\n');
       if (command === 'id -u') return reply(0, server.uid);
@@ -68,6 +76,8 @@ function connection(server: FakeServer): SshConnection {
         started();
         await release;
       }
+      if (server.killed === true) return reply(143);
+      if (server.dropOn?.test(command)) throw new Error('connection lost');
       if (server.failCommand?.test(command)) {
         options.onLine?.(`error: authentication with ${server.echoSecretOnFailure ?? ''} failed`);
         return reply(100);
@@ -202,7 +212,8 @@ describe('install, re-run, health and the bridge', () => {
     const done = await h.service.call('run', { removeData: false });
     expect(done).toEqual({ phase: 'done', address: '203-0-113-7.sslip.io', configured: true });
     expect(h.configure).toHaveBeenCalledWith('203-0-113-7.sslip.io');
-    expect(mutations(h.server).join('\n')).toContain("docker pull 'parley-relay:stand'");
+    expect(mutations(h.server).join('\n')).toContain('images/create?fromImage=parley-relay&tag=stand');
+    expect(mutations(h.server).join('\n')).toContain('setsid flock -n');
     expect(h.events.filter((e) => e.event === 'step' && e.status === 'done').length).toBeGreaterThan(3);
     expect(h.server.lines.at(-1)).toBe('<closed>');
   });
@@ -331,24 +342,99 @@ describe('sslip for a non-public address (R8)', () => {
 });
 
 describe('a cancel never cuts a run in half (R4)', () => {
-  it('begin is refused during a run; cancel stops before the next step and closes the connection', async () => {
+  function gate(match: RegExp) {
     let release!: () => void;
     let started!: () => void;
     const hold = new Promise<void>((r) => (release = r));
     const begun = new Promise<void>((r) => (started = r));
-    const h = await setup({ gate: { match: /apt-get update/, release: hold, started } });
+    return { gate: { match, release: hold, started }, release, begun };
+  }
+  const stepEvents = (h: Awaited<ReturnType<typeof setup>>): string[] => h.events.filter((e) => e.event === 'step').map((e) => (e.event === 'step' ? `${e.id}:${e.status}` : ''));
+
+  it('begin is refused during a run; a step that cannot be interrupted finishes, then the run is cancelled and the connection closed', async () => {
+    const g = gate(/apt-get update/);
+    const h = await setup({ gate: g.gate });
     await trusted(h);
     const running = h.service.call('run', { removeData: false });
-    await begun;
+    await g.begun;
     await expect(h.service.call('begin', request())).rejects.toMatchObject({ code: 'bad_request' });
     expect(await h.service.call('cancel', {})).toBeNull();
-    release();
+    expect(h.events).toContainEqual({ event: 'cancelling' });
+    g.release();
     const phase = await running;
-    expect(phase).toMatchObject({ phase: 'failed', step: 'dir' });
-    expect(h.events).toContainEqual(expect.objectContaining({ event: 'step', id: 'dir', status: 'stopped' }));
-    // The step that was running finished; later steps never started.
+    expect(phase).toMatchObject({ phase: 'cancelled', step: 'dir', message: expect.stringContaining('Run the setup again to finish') });
+    expect(stepEvents(h)).toContain('docker:done');
+    expect(stepEvents(h)).toEqual(expect.arrayContaining(['dir:stopped', 'files:stopped', 'image:stopped', 'start:stopped']));
+    // The step that was running finished; later steps never started; no kill was sent.
     expect(mutations(h.server).join('\n')).not.toContain('install -d -m 0755 /opt/parley-relay');
+    expect(mutations(h.server).join('\n')).not.toContain('kill -s TERM');
     expect(h.server.lines.at(-1)).toBe('<closed>');
+  });
+
+  it('during the image step the second command kills the group: image stopped, phase cancelled, no later step', async () => {
+    const g = gate(/images\/create\?fromImage=parley-relay/);
+    const h = await setup({ gate: g.gate });
+    await trusted(h);
+    const running = h.service.call('run', { removeData: false });
+    await g.begun;
+    const cancelling = h.service.call('cancel', {});
+    // The fake releases the stuck command when the kill arrives, as a real killed process ends.
+    await vi.waitFor(() => expect(h.server.killed).toBe(true));
+    g.release();
+    await cancelling;
+    const phase = await running;
+    expect(phase).toMatchObject({ phase: 'cancelled', step: 'image', message: expect.stringContaining('A download may finish on the server by itself') });
+    expect(stepEvents(h)).toEqual(expect.arrayContaining(['image:stopped', 'start:stopped']));
+    expect(stepEvents(h)).not.toContain('image:failed');
+    expect(h.events).not.toContainEqual({ event: 'cancelling' });
+    expect(mutations(h.server).join('\n')).not.toContain('up -d');
+    expect(mutations(h.server).filter((c) => c.includes('kill -s TERM'))).toHaveLength(1);
+    expect(h.server.lines.at(-1)).toBe('<closed>');
+  });
+
+  it('during start: «cancelling», start runs to the end, the wait for the relay is skipped → cancelled at health, Check is possible', async () => {
+    const g = gate(/--quiet-pull/);
+    const h = await setup({ gate: g.gate });
+    await trusted(h);
+    const running = h.service.call('run', { removeData: false });
+    await g.begun;
+    await h.service.call('cancel', {});
+    expect(h.events).toContainEqual({ event: 'cancelling' });
+    g.release();
+    expect(await running).toMatchObject({ phase: 'cancelled', step: 'health' });
+    expect(stepEvents(h)).toContain('start:done');
+    expect(mutations(h.server).join('\n')).not.toContain('kill -s TERM');
+    expect(await h.service.call('check', {})).toEqual({ phase: 'done', address: '203-0-113-7.sslip.io', configured: true });
+  });
+
+  it('a cancel while the relay is awaited stops the wait: cancelled at health, Check tests again', async () => {
+    let stuck!: () => void;
+    const waiting = new Promise<void>((r) => (stuck = r));
+    let answer = 503;
+    const h = await setup({ installed: true }, {
+      health: async () => {
+        stuck();
+        return { status: answer };
+      },
+      healthAttempts: 50,
+      healthDelayMs: 60_000,
+      sleep: undefined,
+    });
+    await trusted(h);
+    const running = h.service.call('run', { removeData: false });
+    await waiting;
+    expect(await h.service.call('cancel', {})).toBeNull();
+    expect(await running).toMatchObject({ phase: 'cancelled', step: 'health' });
+    answer = 200;
+    expect((await h.service.call('check', {})).phase).toBe('done');
+  });
+
+  it('a dropped connection ends the run with the text of spec 7.3, not «step failed»', async () => {
+    const h = await setup({ dropOn: /images\/create/ });
+    await trusted(h);
+    const phase = await h.service.call('run', { removeData: false });
+    expect(phase).toMatchObject({ phase: 'failed', step: 'image', message: expect.stringContaining('Commands keep running on the server and finish on their own') });
+    expect(stepEvents(h)).toContain('image:failed');
   });
 });
 

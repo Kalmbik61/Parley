@@ -1,0 +1,10 @@
+{"status":"Pulling from library/busybox","id":"1.36.1"}
+{"status":"Pulling fs layer","progressDetail":{},"id":"821d9dafb26d"}
+{"status":"Download complete","progressDetail":{"hidecounts":true},"id":"f015501df97a"}
+{"status":"Downloading","progressDetail":{"current":1048576,"total":1896265},"id":"821d9dafb26d"}
+{"status":"Downloading","progressDetail":{"current":1048576,"total":1896265},"id":"821d9dafb26d"}
+{"status":"Download complete","progressDetail":{"hidecounts":true},"id":"821d9dafb26d"}
+{"status":"Extracting","progressDetail":{"current":1,"units":"s"},"id":"821d9dafb26d"}
+{"status":"Pull complete","progressDetail":{"hidecounts":true},"id":"821d9dafb26d"}
+{"status":"Digest: sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"}
+{"status":"Status: Downloaded newer image for busybox:1.36.1"}

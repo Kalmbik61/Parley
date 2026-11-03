@@ -10,7 +10,7 @@ import { redactSecrets, type RunLog } from './log.js';
 import type { ConnectFn, SshConnection, SudoMode } from './ssh.js';
 import { createShell, listPrivateKeys } from './ssh.js';
 import type { RemoteShell } from './shell.js';
-import { runPlan } from './steps.js';
+import { createCancelHandle, requestCancel, runPlan, type CancelHandle } from './steps.js';
 import { proxySnippet } from './templates.js';
 
 export interface RelaySetupDeps {
@@ -54,6 +54,13 @@ interface Session {
   running: boolean;
 }
 
+/** Spec 7.3: the commands run apart from the SSH channel, so the server goes on without the Mac. */
+const LOST_MESSAGE = 'The connection to the server was lost. Commands keep running on the server and finish on their own; run the wizard again in a minute.';
+/** Spec 7.2. */
+const CANCELLED_MESSAGE = 'Cancelled. Run the setup again to finish: finished steps are skipped.';
+const CANCELLED_DOWNLOAD_MESSAGE = 'Cancelled. A download may finish on the server by itself; running the setup again picks it up.';
+const CANCELLED_HEALTH_MESSAGE = 'Cancelled. Use Check to test the relay again.';
+
 const bad = (message: string): ControlCallError => new ControlCallError('bad_request', message);
 
 function view(plan: Plan): RelayPlanView {
@@ -83,7 +90,10 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   let idle: NodeJS.Timeout | null = null;
   /** Where «Check» goes after a run: the address to test and whether the bridge has been told yet. */
   let pendingAddress: string | null = null;
-  let cancelRequested = false;
+  /** The cancel channel of the run in progress; `null` outside a run. */
+  let runCancel: CancelHandle | null = null;
+  /** The health wait in progress (the session is already gone by then): a cancel stops it. */
+  let healthWait: { cancelled: boolean; wake: () => void } | null = null;
   const idleMs = deps.idleMs ?? 10 * 60_000;
 
   const secretList = (s: Session | null): string[] =>
@@ -105,7 +115,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     session = null;
     // The last log line of the run has been masked by now; the secrets are not kept for the next one.
     lastSecrets = [];
-    cancelRequested = false;
+    runCancel = null;
   }
 
   function touch(): void {
@@ -244,12 +254,29 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   }
 
   async function health(address: string): Promise<RelaySetupPhase> {
-    const result = await checkHealth(address, {
-      fetcher: deps.health,
-      ...(deps.healthAttempts !== undefined ? { attempts: deps.healthAttempts } : {}),
-      ...(deps.healthDelayMs !== undefined ? { delayMs: deps.healthDelayMs } : {}),
-      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
-    });
+    let wake: () => void = () => undefined;
+    const woken = new Promise<void>((resolve) => (wake = resolve));
+    const wait = { cancelled: false, wake };
+    healthWait = wait;
+    const baseSleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    let result;
+    try {
+      result = await checkHealth(address, {
+        fetcher: deps.health,
+        ...(deps.healthAttempts !== undefined ? { attempts: deps.healthAttempts } : {}),
+        ...(deps.healthDelayMs !== undefined ? { delayMs: deps.healthDelayMs } : {}),
+        // A cancel ends the pause between two attempts at once.
+        sleep: (ms) => Promise.race([baseSleep(ms), woken]),
+        cancelled: () => wait.cancelled,
+      });
+    } finally {
+      healthWait = null;
+    }
+    if (!result.ok && result.cancelled === true) {
+      pendingAddress = address;
+      note('cancelled while waiting for the relay to answer');
+      return { phase: 'cancelled', step: 'health', message: CANCELLED_HEALTH_MESSAGE };
+    }
     if (!result.ok) {
       pendingAddress = address;
       return { phase: 'failed', step: 'health', message: `The relay did not answer over HTTPS at ${address}: ${result.detail}. Check the DNS, the firewall and the log, then use Check again.` };
@@ -275,6 +302,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     const plan = s.plan;
     const shell = shellOf(s);
     s.running = true;
+    const cancel = createCancelHandle();
+    runCancel = cancel;
     if (idle !== null) clearTimeout(idle);
     note(`run started: ${plan.intent} on ${s.input.host}`);
     const outcome = await runPlan(plan, shell, {
@@ -287,12 +316,29 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
         void deps.log.write(clean).catch(() => {});
         deps.emit({ event: 'line', step: stepId, text: clean });
       },
-    }, () => cancelRequested);
+      progress: (stepId, progress) => deps.emit({ event: 'progress', step: stepId, progress }),
+      cancelling: () => {
+        note('cancel requested: the run stops after the current step');
+        deps.emit({ event: 'cancelling' });
+      },
+    }, cancel);
     const probe = s.probe;
+    if (outcome.lost === true) return failed(outcome.failedStep, LOST_MESSAGE);
+    if (outcome.stopped === true) {
+      note(`cancelled at step ${outcome.failedStep ?? '-'}`);
+      end();
+      return { phase: 'cancelled', step: outcome.failedStep, message: outcome.interrupted === true ? CANCELLED_DOWNLOAD_MESSAGE : CANCELLED_MESSAGE };
+    }
     end();
-    if (outcome.stopped === true) return failed(outcome.failedStep, 'Stopped before the step «' + (outcome.failedStep ?? '') + '». Run the wizard again to finish: finished steps are skipped.');
     if (!outcome.ok) return failed(outcome.failedStep, `The step «${outcome.failedStep}» failed. The server output is in the log above.`);
     if (plan.intent === 'remove') return { phase: 'removed', docker: 'kept' };
+    // A cancel that arrived during the last step: it ran to the end, the wait for the relay is what is left to skip.
+    const verify = (address: string): Promise<RelaySetupPhase> => {
+      if (!cancel.requested) return health(address);
+      pendingAddress = address;
+      note('cancelled before the check of the relay');
+      return Promise.resolve({ phase: 'cancelled', step: 'health', message: CANCELLED_HEALTH_MESSAGE });
+    };
     if (plan.intent === 'rollback') {
       const restored = probe.previous === null ? null : addressFromEnv(probe.previous);
       if (restored === null) return failed(null, 'The restored configuration is not valid');
@@ -300,14 +346,14 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
         pendingAddress = restored.address;
         return { phase: 'proxy-pending', address: restored.address, ...proxySnippet('nginx', restored.proxyPort) };
       }
-      return health(restored.address);
+      return verify(restored.address);
     }
     if (plan.address === null) return failed(null, 'No address');
     if (plan.mode === 'proxy' && plan.proxy !== null) {
       pendingAddress = plan.address;
       return { phase: 'proxy-pending', address: plan.address, ...plan.proxy };
     }
-    return health(plan.address);
+    return verify(plan.address);
   }
 
   const handlers: { [N in RelaySetupCallName]: (params: RelaySetupCalls[N]['params']) => Promise<RelaySetupCalls[N]['result']> } = {
@@ -370,10 +416,16 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       return health(pendingAddress);
     },
     async cancel() {
-      if (session?.running === true) {
-        // Takes effect before the next step; the connection is closed when the run ends.
-        cancelRequested = true;
+      if (session?.running === true && runCancel !== null) {
+        // An interruptible step is ended through a second channel, the others finish first; the connection is
+        // closed when the run ends.
         note('cancel requested during a run');
+        await requestCancel(runCancel);
+        return null;
+      }
+      if (healthWait !== null) {
+        healthWait.cancelled = true;
+        healthWait.wake();
         return null;
       }
       note('cancelled');
