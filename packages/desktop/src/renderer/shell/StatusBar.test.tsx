@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
@@ -271,7 +271,7 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(screen.getByRole('dialog', { name: 'GLM' })).toBeTruthy();
     expect(screen.getByText('Requires an active GLM Coding Plan.')).toBeTruthy();
   });
-  it('Claude/Codex/GLM всегда в порядке продукта, за ними только найденные свои провайдеры', () => {
+  it('подключённые основные провайдеры идут в порядке продукта', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'codex', label: 'Codex', version: '0.44.0' }),
@@ -280,32 +280,18 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
       ],
     });
     const { container } = renderPlain();
-    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex', 'glm']);
+    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex']);
   });
 
-  it('недоступные сегменты приглушены, без not found, версии и лимитов; доступны с клавиатуры', () => {
-    useProvidersStore.setState({
-      providers: [
-        provider({ id: 'claude', label: 'Claude', version: '2.1.276' }),
-        provider({ id: 'codex', label: 'Codex', available: false, version: '0.44.0' }),
-        provider({ id: 'glm', label: 'GLM', available: false }),
-      ],
-    });
+  it('неподключённые основные провайдеры не отображаются', () => {
+    useProvidersStore.setState({ providers: [
+      provider({ id: 'claude', label: 'Claude', version: '2.1.276' }),
+      provider({ id: 'codex', label: 'Codex', available: false, version: '0.44.0' }),
+      provider({ id: 'glm', label: 'GLM', available: false }),
+    ] });
     const { container } = renderPlain();
-    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual([
-      'claude',
-      'codex',
-      'glm',
-    ]);
-    const codex = segments(container)[1];
-    // Версии и лимитов у ненайденного нет: версия из прошлой пробы о нынешнем CLI ничего не говорит.
-    expect(codex?.textContent).toBe('Codex');
-    expect(codex?.className).toContain('opacity-50');
-    const button = screen.getByRole('button', { name: 'Codex — not connected. Click to connect' });
-    expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'));
-    expect(button.getAttribute('type')).toBe('button');
-    expect(button.getAttribute('aria-haspopup')).toBe('dialog');
-    expect(screen.queryByText('not found')).toBeNull();
+    expect(segments(container).map((el) => el.dataset.providerSegment)).toEqual(['claude']);
+    expect(screen.queryByRole('button', { name: /not connected/ })).toBeNull();
   });
 
   it('значок 14, имя по handoff — «Claude Code» и «Codex», версия — моноширинным 11px neutral-700', () => {
@@ -336,13 +322,13 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
   it('прочий провайдер — метка хоста и буквенный значок, как прежде', () => {
     useProvidersStore.setState({ providers: [provider({ id: 'gemini', label: 'Gemini CLI', version: '1.2.3' })] });
     const { container } = renderPlain();
-    expect(segments(container)[3]?.textContent).toBe('GGemini CLI1.2.3');
-    expect(segments(container)[3]?.querySelector('img')).toBeNull();
+    expect(segments(container)[0]?.textContent).toBe('GGemini CLI1.2.3');
+    expect(segments(container)[0]?.querySelector('img')).toBeNull();
   });
 
-  it('пустой список старого хоста сохраняет три основные кнопки и остальную строку', () => {
+  it('пустой список не создаёт кнопок провайдеров; остальная строка сохранена', () => {
     const { container } = renderPlain({ noticeLine: 'Что-то случилось' });
-    expect(segments(container)).toHaveLength(3);
+    expect(segments(container)).toHaveLength(0);
     expect(screen.getByText('Host 1.0.0')).toBeTruthy();
     expect(screen.getByText('Что-то случилось')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Auto-wake on' })).toBeTruthy();
@@ -526,7 +512,7 @@ describe('StatusBar — лимиты подписок: сегмент прова
     });
     const { container } = renderPlain();
     expect(container.querySelector('[data-limits]')).toBeNull();
-    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGLM', 'GGemini CLI1.2.3']);
+    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGemini CLI1.2.3']);
   });
 
   it('проценты целые, округление вниз: 58.7 → 58 %, 41.99 → 41 %, 99.9 → 99 %, 0.4 → 0 %; полоска по тому же числу', () => {
@@ -889,7 +875,7 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(zeta?.className).toContain('min-w-0');
     expect(codex?.className).toContain('min-w-0');
     const bar = container.firstElementChild as HTMLElement;
-    expect(zeta?.parentElement).toBe(bar);
+    expect(zeta?.closest('[data-connected-providers]')?.parentElement).toBe(bar);
     expect(zeta?.children).toHaveLength(4);
     // У провайдера без данных лимитов сжимать нечего: значок и имя, без блока лимитов.
     expect(codex?.children).toHaveLength(2);
@@ -921,14 +907,14 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
   });
 
   // Сегмент — кнопка поповера, и строка делит нехватку между кнопками целиком, пропорционально вес × ширина: порядок «лимиты,
-  // версия, имя» держится только внутри кнопки. Сегмент, которому нечего отдать, кроме имени (недоступный GLM), получал свою
+  // версия, имя» держится только внутри кнопки. Сегмент, которому нечего отдать, кроме имени (GLM без лимитов), получал свою
   // долю и терял имя, пока у соседей текст лимитов ещё широк (E2E `limits.spec.ts`, 800×500 с тремя провайдерами).
-  it('сегмент из значка и имени (недоступный GLM) сжимается последним: у сегментов с лимитами или версией вес на порядки больше', () => {
+  it('сегмент из значка и имени (GLM без лимитов) сжимается последним: у сегментов с лимитами или версией вес на порядки больше', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'claude', label: 'Claude', limits: both }),
         provider({ id: 'codex', label: 'Codex', version: '0.44.0' }),
-        provider({ id: 'glm', label: 'GLM', available: false }),
+        provider({ id: 'glm', label: 'GLM' }),
       ],
     });
     const { container } = renderPlain();
@@ -957,7 +943,6 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(floor('codex')).toBe(`${14 + 7 * 2 + 4 + 44}px`);
     expect(floor('zeta')).toBe(`${14 + 7 * 2}px`);
     expect(floor('omega')).toBe('');
-    expect(floor('glm')).toBe('');
   });
 
   it('у имени и версии нет потолков ширины: длинная метка показывается целиком, пока место есть; порядок сжатия держат веса и min-w-0', () => {
@@ -1306,31 +1291,85 @@ describe('StatusBar — сегмент Diagnostics', () => {
   });
 });
 
-describe('StatusBar: свои провайдеры и «+» (спека своих провайдеров, раздел 4)', () => {
+describe('StatusBar: переполнение подключённых провайдеров', () => {
+  let width: number;
+  const observers = new Set<ResizeObserverCallback>();
+  const resize = (next: number): void => {
+    width = next;
+    act(() => { for (const callback of observers) callback([], {} as ResizeObserver); });
+  };
+  beforeEach(() => {
+    width = 400;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { width: this.hasAttribute('data-provider-slot') ? 100 : this.hasAttribute('data-connected-providers') ? width : 0 } as DOMRect;
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) { observers.add(callback); }
+      observe(): void {}
+      disconnect(): void { observers.delete(this.callback); }
+    });
+    useProvidersStore.setState({ providers: [
+      provider({ id: 'claude', label: 'Claude' }),
+      provider({ id: 'codex', label: 'Codex' }),
+      provider({ id: 'glm', label: 'GLM' }),
+      provider({ id: 'offline', label: 'Offline', available: false }),
+    ] });
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); observers.clear(); });
+
+  it('при сужении показывает только поместившиеся; клик на «…» открывает остальные, расширение возвращает их', () => {
+    const { container } = renderPlain();
+    expect(segments(container)).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: S.statusBar.moreProviders })).toBeNull();
+    resize(280);
+    expect(segments(container).map((item) => item.dataset.providerSegment)).toEqual(['claude', 'codex']);
+    fireEvent.click(screen.getByRole('button', { name: S.statusBar.moreProviders }));
+    const popup = screen.getByRole('dialog', { name: S.statusBar.moreProviders });
+    expect(within(popup).getByRole('button', { name: 'GLM — connected' })).toBeTruthy();
+    expect(within(popup).queryByText('Claude Code')).toBeNull();
+    expect(within(popup).queryByText('Offline')).toBeNull();
+    fireEvent.keyDown(popup, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: S.statusBar.moreProviders })).toBeNull();
+    resize(400);
+    expect(segments(container)).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: S.statusBar.moreProviders })).toBeNull();
+  });
+
+  it('если не помещается ни один, все доступны в «…»; отключение обновляет открытый список', () => {
+    width = 30;
+    const { container } = renderPlain();
+    expect(segments(container)).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: S.statusBar.moreProviders }));
+    expect(within(screen.getByRole('dialog', { name: S.statusBar.moreProviders })).getAllByRole('button')).toHaveLength(3);
+    act(() => useProvidersStore.setState({ providers: [provider({ id: 'codex', label: 'Codex' })] }));
+    expect(within(screen.getByRole('dialog', { name: S.statusBar.moreProviders })).getAllByRole('button')).toHaveLength(1);
+    act(() => useProvidersStore.setState({ providers: [] }));
+    expect(screen.queryByRole('dialog', { name: S.statusBar.moreProviders })).toBeNull();
+    expect(screen.queryByRole('button', { name: S.statusBar.moreProviders })).toBeNull();
+  });
+});
+
+describe('StatusBar: свои подключённые провайдеры', () => {
   const connected: HostStatus = { state: 'connected', hostVersion: '1.0.0', methods: [...REQUIRED_METHODS] };
   const customInfo = {
     preset: null, baseUrl: 'https://example.test', auth: 'bearer' as const,
     models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: false, folder: '/tmp/x',
   };
 
-  it('«+» в конце строки статуса открывает Settings на Providers с выбором вендора', () => {
-    useUiStore.getState().closeSettingsDialog();
+  it('кнопки добавления нет: подключение доступно в настройках', () => {
     renderBar(connected);
-    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
-    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'new' });
-    expect(useUiStore.getState().dialogs.settings).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Add provider' })).toBeNull();
   });
 
-  it('свой провайдер без ключа виден приглушённым; клик открывает Settings на нём', () => {
+  it.each([false, true])('свой провайдер виден только подключённым (%s)', (available) => {
     useUiStore.getState().closeSettingsDialog();
-    useProvidersStore.setState({
-      providers: [{ id: 'custom-kimi', label: 'Kimi', available: false, version: null, limits: null, custom: customInfo }],
-    });
+    useProvidersStore.setState({ providers: [
+      { id: 'custom-kimi', label: 'Kimi', available, version: null, limits: null, custom: customInfo },
+    ] });
     renderBar(connected);
-    const segment = document.querySelector('[data-provider-segment="custom-kimi"]') as HTMLElement;
-    expect(segment).toBeTruthy();
-    expect(segment.className).toContain('opacity-50');
-    fireEvent.click(segment);
+    const segment = document.querySelector('[data-provider-segment="custom-kimi"]');
+    if (!available) { expect(segment).toBeNull(); return; }
+    fireEvent.click(segment!);
     expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'custom-kimi' });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -1361,13 +1400,10 @@ describe('StatusBar: сегмент аккаунта подписки (спек�
     useUiStore.getState().closeSettingsDialog();
   });
 
-  it('стоит после трёх основных; не вошёл — приглушён, без версии и лимитов', () => {
+  it('аккаунт без входа не показывается', () => {
     useProvidersStore.setState({ providers: [account({}, { limits })] });
     const { container } = renderPlain();
-    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex', 'glm', 'custom-claude-2']);
-    const segment = container.querySelector<HTMLElement>('[data-provider-segment="custom-claude-2"]')!;
-    expect(segment.className).toContain('opacity-50');
-    expect(segment.textContent).toBe('Claude Code 2');
+    expect(segments(container)).toHaveLength(0);
   });
 
   it('вошёл: брендовый значок Claude, версия CLI и лимиты наравне с основными', () => {
@@ -1381,23 +1417,13 @@ describe('StatusBar: сегмент аккаунта подписки (спек�
   });
 
   it('клик открывает поповер с карточкой аккаунта, а не Settings', () => {
-    useProvidersStore.setState({ providers: [account()] });
+    useProvidersStore.setState({ providers: [account({ signedIn: true }, { available: true, needs: null })] });
     renderPlain();
     fireEvent.click(document.querySelector('[data-provider-segment="custom-claude-2"]')!);
     const card = screen.getByRole('dialog', { name: 'Claude Code 2' });
     expect(card.querySelector('[data-provider-card="custom-claude-2"]')).toBeTruthy();
-    expect(screen.getByText('Not signed in')).toBeTruthy();
+    expect(screen.queryByText('Not signed in')).toBeNull();
     expect(useUiStore.getState().dialogs.settings).toBe(false);
-  });
-
-  it('Sign in в поповере закрывает его и открывает Settings на аккаунте с просьбой войти', () => {
-    useProvidersStore.setState({ providers: [account()] });
-    renderPlain();
-    fireEvent.click(document.querySelector('[data-provider-segment="custom-claude-2"]')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(screen.queryByRole('dialog', { name: 'Claude Code 2' })).toBeNull();
-    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'custom-claude-2', settingsSignIn: true });
-    expect(useUiStore.getState().dialogs.settings).toBe(true);
   });
 
   it('Open in Settings в поповере закрывает его и открывает Settings на аккаунте', () => {

@@ -189,6 +189,7 @@ describe('release.yml (V5)', () => {
     expect(release).toMatch(
       /^ {6}dry_run:\n(?: {8}.*\n)*? {8}type: boolean\n(?: {8}.*\n)*? {8}default: true\n/m,
     );
+    expect(release).toMatch(/^ {6}release_tag:\n(?: {8}.*\n)*? {8}type: string\n/m);
   });
 
   it('права: по умолчанию чтение, запись — у трёх задач, и каждая просит её у себя; один прогон на ref, прерывать нельзя', () => {
@@ -201,7 +202,7 @@ describe('release.yml (V5)', () => {
       );
     }
     expect(release).toMatch(
-      /^concurrency:\n {2}group: release-\$\{\{ github\.ref \}\}\n {2}cancel-in-progress: false\n/m,
+      /^concurrency:\n {2}group: release-\$\{\{ inputs\.release_tag \|\| github\.ref \}\}\n {2}cancel-in-progress: false\n/m,
     );
   });
 
@@ -222,9 +223,23 @@ describe('release.yml (V5)', () => {
 
   it('тег — только значением TAG в env, никогда в run', () => {
     for (const line of release.split('\n').filter((item) => item.includes('github.ref_name'))) {
-      expect(line).toMatch(/^ {10}TAG: \$\{\{ github\.ref_name \}\}$/);
+      expect(line).toMatch(/^ {10}TAG: \$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}$/);
     }
     expect(release).toMatch(/node scripts\/release\/prepare-release\.mjs/);
+  });
+
+  it('manual recovery builds the exact validated tag and raises macOS nofile before packaging', () => {
+    const buildCheckout = stepsOf(jobsOf(release).get('build-mac') ?? '').find(
+      (step) => stepName(step) === 'Checkout',
+    );
+    const packaging = stepsOf(jobsOf(release).get('build-mac') ?? '').find(
+      (step) => stepName(step) === 'Package for macOS',
+    );
+
+    expect(buildCheckout).toMatch(/^ {10}ref: \$\{\{ inputs\.release_tag \|\| github\.ref \}\}$/m);
+    expect(packaging).toContain('sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=262144');
+    expect(packaging).toContain('ulimit -n 262144');
+    expect(packaging).toContain('pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never');
   });
 
   it('сборка на macos-15: install с повтором, build, fetch-node для двух архитектур, dist с электрон-билдером', () => {
@@ -476,7 +491,8 @@ describe('release.yml: шаг «коммит тега лежит в master» —
     git('commit', '-q', '-m', file);
     return git('rev-parse', 'HEAD');
   };
-  const runStep = () => spawnSync('bash', ['-c', script], { cwd: repo, env, encoding: 'utf8' });
+  const runStep = (tag = 'v1.0.0') =>
+    spawnSync('bash', ['-c', script], { cwd: repo, env: { ...env, TAG: tag }, encoding: 'utf8' });
 
   beforeEach(() => {
     repo = mkdtempSync(path.join(tmpdir(), 'rel-master-'));
@@ -489,19 +505,20 @@ describe('release.yml: шаг «коммит тега лежит в master» —
   });
 
   it('шаг в файле есть', () => {
-    expect(script).toContain('git merge-base --is-ancestor HEAD origin/master');
+    expect(script).toContain('git rev-parse --verify "${TAG}^{commit}"');
+    expect(script).toContain('git merge-base --is-ancestor "$tagged_commit" origin/master');
   });
 
   it('тег на коммите из истории master (и на его конце) — проходит', () => {
     const first = commit('a');
     commit('b');
+    git('tag', 'v1.0.0', first);
+    git('tag', 'v1.0.1', 'master');
     // Так выглядит master после `actions/checkout` с `fetch-depth: 0`: ветка — как удалённая `origin/master`.
     git('update-ref', 'refs/remotes/origin/master', 'HEAD');
 
-    git('checkout', '-q', '--detach', first);
-    expect(runStep().status).toBe(0);
-    git('checkout', '-q', '--detach', 'master');
-    expect(runStep().status).toBe(0);
+    expect(runStep('v1.0.0').status).toBe(0);
+    expect(runStep('v1.0.1').status).toBe(0);
   });
 
   it('тег на коммите ветки, которой нет в master, — релиз не создаётся', () => {
@@ -509,6 +526,7 @@ describe('release.yml: шаг «коммит тега лежит в master» —
     git('update-ref', 'refs/remotes/origin/master', 'HEAD');
     git('checkout', '-q', '-b', 'feat/release');
     commit('c');
+    git('tag', 'v1.0.0', 'HEAD');
 
     const result = runStep();
 
@@ -518,6 +536,7 @@ describe('release.yml: шаг «коммит тега лежит в master» —
 
   it('master не найден (нет origin/master) — тоже отказ, а не тихий пропуск', () => {
     commit('a');
+    git('tag', 'v1.0.0', 'HEAD');
 
     expect(runStep().status).not.toBe(0);
   });

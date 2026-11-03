@@ -58,8 +58,9 @@ describe('белый список против запретного списка
     'swarms.cancel', 'swarms.create', 'swarms.seen',
     // Из master после слияния 2026-11-01 (лимиты агентов, сон, закрытие готовых сессий): телефону не открыты.
     'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
-    // Из master 0.27.0 (ограниченная синхронизация окна, #164): мост остаётся на works.list / works.changed.
-    'works.sync', 'works.mailState',
+    // Постраничная синхронизация окна (PR #164): её берёт клиент с признаком `works-sync` в hello, телефон пока живёт на
+    // `works.list` и `works.changed`.
+    'works.mailState', 'works.sync',
     // Из ветки s-209 (обновление CLI провайдера из Parley): действие на Маке, телефону не открыто.
     'providers.update', 'providers.skipUpdate',
   ];
