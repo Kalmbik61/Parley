@@ -88,6 +88,8 @@ async function exec(line, options) {
     return ok();
   }
   if (command.includes('kill -s TERM')) {
+    // The test asserts on this line: a cancel that reaches the server must leave a trace.
+    note(`kill: ${command.slice(0, 80)}`);
     server.killed = true;
     await sleep(50);
     server.killed = false;

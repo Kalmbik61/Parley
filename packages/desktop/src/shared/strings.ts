@@ -1523,7 +1523,7 @@ export const S = {
         newSetup: 'New setup',
         cancelling: 'Cancelling after this step…',
         downloading: (progress: string): string => `Downloading images: ${progress}`,
-        runLost: 'The setup could not be started: the session on the server has ended. Close this window and start again.',
+        runLost: 'The setup was started, but this window could not read its progress. Close it and open «Set up on my server…» again to see the run.',
         progressLabel: 'Image download progress',
         webTitle: 'Your web server',
         webNetwork: 'Docker network',

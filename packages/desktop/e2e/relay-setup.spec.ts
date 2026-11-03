@@ -118,6 +118,15 @@ test.describe('Settings → Remote access → Set up on my server', () => {
     await shot('2-pull-progress');
     await expect(window.getByTestId('relay-setup-progress')).toBeVisible();
 
+    // Esc and a click on the backdrop during the run: the window stays, the run goes on, no cancel reaches the server.
+    await window.keyboard.press('Escape');
+    await window.mouse.click(8, 8);
+    await window.waitForTimeout(400);
+    await expect(window.getByTestId('relay-setup-dialog')).toBeVisible();
+    await expect(window.getByTestId('relay-setup-record')).toBeVisible();
+    await expect(window.getByTestId('relay-setup-cancel-run')).toBeEnabled();
+    expect(await fakeCalls()).not.toContain('kill');
+
     // × during the run only hides the window: no cancel reaches the server.
     await window.getByRole('button', { name: 'Close' }).first().click();
     await expect(window.getByTestId('relay-setup-dialog')).toBeHidden();

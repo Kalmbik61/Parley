@@ -41,6 +41,8 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
   const [view, setView] = useState<RelayRunView | null>(null);
   /** The first `state` has answered; until then nothing is drawn, so a record is never replaced by an empty form. */
   const [ready, setReady] = useState(false);
+  /** `run` was taken by main but its record could not be read: the run may still be live there, so Close must not cancel it. */
+  const [lostRun, setLostRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const alive = useRef(true);
@@ -117,7 +119,9 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
       if (alive.current) setPhase(next);
     } catch (err: unknown) {
       const info = decodeIpcError(err);
-      if (alive.current) setError(info.code === 'bad_input' ? info.message : (T.errors as Record<string, string>)[info.code] ?? T.errors.setup_failed);
+      // `bad_request` says «session ended» only for the expired session; the other refusals keep their own words.
+      const expired = info.code === 'bad_request' && /not expected now/.test(info.message);
+      if (alive.current) setError(info.code === 'bad_input' ? info.message : expired ? T.errors.bad_request : info.code === 'bad_request' ? info.message : (T.errors as Record<string, string>)[info.code] ?? T.errors.setup_failed);
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -129,6 +133,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
     wipeSecrets();
     setPhase(null);
     setView(null);
+    setLostRun(false);
     setError(null);
     setRemoveData(false);
     onClose();
@@ -362,8 +367,11 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
                   const started = await setup.call('run', { removeData });
                   if (started.phase !== 'running') return started;
                   // The record exists in main now: read it (events that come meanwhile wait for it).
-                  const record = await loadState();
-                  return record !== null ? { phase: 'running' as const } : { phase: 'failed' as const, step: null, message: T.runLost };
+                  // One more read before giving up: the run is live in main, a failed read must not look like a failed run.
+                  const record = (await loadState()) ?? (await loadState());
+                  if (record !== null) return { phase: 'running' as const };
+                  setLostRun(true);
+                  return { phase: 'failed' as const, step: null, message: T.runLost };
                 });
               }}
               onCancel={close}
@@ -377,7 +385,8 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
 
           {terminal ? (
             <DialogFooter>
-              <Button type="button" data-testid="relay-setup-close" onClick={endSession}>{T.close}</Button>
+              {/* A live run in main is not ours to cancel when the window only failed to read it. */}
+              <Button type="button" data-testid="relay-setup-close" onClick={lostRun ? hide : endSession}>{T.close}</Button>
             </DialogFooter>
           ) : null}
         </div>
@@ -403,6 +412,8 @@ function RunRecord(props: {
   const running = phase.phase === 'running';
   // An interruptible step gets no `cancelling` event: the button answers the click at once, locally.
   const [asked, setAsked] = useState(false);
+  // A new phase (cancelled at health → Check → running again) gives Cancel back.
+  useEffect(() => setAsked(false), [phase.phase]);
   const canCheck = phase.phase === 'proxy-pending' || ((phase.phase === 'failed' || phase.phase === 'cancelled') && phase.step === 'health');
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="relay-setup-record">
