@@ -72,7 +72,7 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
       rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo')], swarms: [],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
     },
   ],
 };
@@ -190,6 +190,17 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   const longRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' };
   store.dispatch({ t: 'feed.open', ref: longRef });
   store.dispatch({ t: 'feed.loaded', ref: longRef, epoch: 'demo', items: longFeedItems(14), revision: 3, mode: null, decisions: null });
+  // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
+  const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
+  store.dispatch({ t: 'feed.open', ref: tinyRef });
+  store.dispatch({
+    t: 'feed.loaded', ref: tinyRef, epoch: 'demo', revision: 3, mode: null, decisions: null,
+    items: [
+      { kind: 'prompt', id: 't1', at: at(3), text: 'Say hello.', images: 0 },
+      { kind: 'text', id: 't2', at: at(2), messageId: 'mt2', streaming: false, text: 'Hello! This feed has three rows only.' },
+      { kind: 'turn', id: 't3', at: at(1), durationMs: 4000 },
+    ] as never[],
+  });
   const longRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rlong' };
   store.dispatch({ t: 'room.open', ref: longRoom });
   store.dispatch({ t: 'room.loaded', ref: longRoom, epoch: 'demo', next: null, messages: longRoomLetters('rlong', 60) });
@@ -365,6 +376,8 @@ export function demoRoute(raw: unknown): string | null {
     // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
     case 'a44-session':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}?${dev}`;
+    case 'a44-tiny':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
     case 'a44-room':
       return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong&${dev}`;
     case 'chat':
