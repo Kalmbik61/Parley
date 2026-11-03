@@ -932,6 +932,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     compaction: compactionService,
     worktrees: worktreesService,
     holds: worktreeHolds,
+    sweeper: worktreeSweeper,
     feed: feedService,
     browserAgent: browserEndpoint,
     send,

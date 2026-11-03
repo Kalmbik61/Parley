@@ -18,6 +18,8 @@ import type { RemoveCopyResult, WorktreeInfo } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { createWorktreesHandlers } from '../methods/worktrees.js';
+import type { WorktreesService } from './worktrees-service.js';
 import { createWorktreeSweeper } from './worktree-sweeper.js';
 import type { WorktreeSweeperDeps } from './worktree-sweeper.js';
 
@@ -262,5 +264,24 @@ describe('служба уборки копий', () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
+  });
+
+  it('leftovers отдаёт остатки прохода', async () => {
+    await seed('closed');
+    removeImpl = async () => ({ removed: false, reason: 'dirty', files: 2 });
+    const sweeper = boot();
+    await sweeper.pass();
+    const { worktreesLeftovers } = createWorktreesHandlers({ worktrees: {} as WorktreesService, sweeper });
+    const reply = await worktreesLeftovers({}, {} as never);
+    expect(reply.items).toHaveLength(1);
+    expect(reply.items[0]).toMatchObject({ reason: 'dirty', files: 2 });
+  });
+
+  it('removeCopy у незакончившей сессии — bad_request', async () => {
+    const ref = await seed('sleeping');
+    const sweeper = boot();
+    const { worktreesRemoveCopy } = createWorktreesHandlers({ worktrees: {} as WorktreesService, sweeper });
+    await expect(worktreesRemoveCopy({ ref }, {} as never)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(removed).toEqual([]);
   });
 });
