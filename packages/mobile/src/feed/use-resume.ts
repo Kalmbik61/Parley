@@ -11,7 +11,7 @@ export interface ResumeHandle {
   seed(view: ResumeView): void;
 }
 
-const EMPTY: ResumeView = { line: { kind: 'none' }, pending: null };
+const EMPTY: ResumeView = { line: { kind: 'none' }, hidden: false, pending: null };
 
 export function useResume(
   client: RemoteClient | null,

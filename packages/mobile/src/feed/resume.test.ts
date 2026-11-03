@@ -40,7 +40,7 @@ describe('Resume button', () => {
     expect(resume).toHaveBeenCalledTimes(1);
     expect(r.view().line).toEqual({ kind: 'waking' });
     r.observe(up());
-    expect(r.view()).toEqual({ line: { kind: 'none' }, pending: null });
+    expect(r.view()).toEqual({ line: { kind: 'none' }, hidden: false, pending: null });
   });
 
   it('a second plain tap while waking does nothing and reports not-taken', async () => {
@@ -155,6 +155,65 @@ describe('Resume and send', () => {
     expect(back).toEqual(['hello']);
   });
 
+  it('held: no Sleeping row while a card holds the launch', async () => {
+    const { r } = setup();
+    r.start(null);
+    await flush();
+    expect(r.view().hidden).toBe(false);
+    r.observe({ ...asleep, held: true });
+    expect(r.view().hidden).toBe(true);
+    r.observe({ ...asleep, held: false });
+    expect(r.view().hidden).toBe(false);
+  });
+
+  it('an activity event that came during a refused attempt is not lost', async () => {
+    let finish!: (a: AutoSend) => void;
+    const sent: string[] = [];
+    const r = createResume({
+      resume: async () => ({ outcome: 'ok' }),
+      send: (t) => {
+        sent.push(t);
+        return sent.length === 1 ? new Promise<AutoSend>((res) => (finish = res)) : Promise.resolve('done');
+      },
+      textBack: () => {},
+      notify: () => {},
+      onChange: () => {},
+    });
+    r.observe(asleep);
+    r.start('hello');
+    await flush();
+    r.observe(up({ lastEventAt: 't1' }));
+    expect(sent).toEqual(['hello']);
+    r.observe(up({ lastEventAt: 't2' })); // arrives while the first call is still running
+    expect(sent).toHaveLength(1);
+    finish('retry');
+    await flush();
+    expect(sent).toEqual(['hello', 'hello']);
+  });
+
+  it('screen closed during a send: a taken text is not given back, a refused one is', async () => {
+    for (const [answer, backs] of [['done', []], ['retry', ['hello']]] as const) {
+      let finish!: (a: AutoSend) => void;
+      const back: string[] = [];
+      const r = createResume({
+        resume: async () => ({ outcome: 'ok' }),
+        send: () => new Promise<AutoSend>((res) => (finish = res)),
+        textBack: (t) => void back.push(t),
+        notify: () => {},
+        onChange: () => {},
+      });
+      r.observe(asleep);
+      r.start('hello');
+      await flush();
+      r.observe(up({ lastEventAt: 't1' }));
+      r.dispose();
+      expect(back).toEqual([]);
+      finish(answer);
+      await flush();
+      expect(back).toEqual(backs);
+    }
+  });
+
   it('m1: no hook event (lastEventAt null) is not ready', async () => {
     const { r, sent } = setup();
     r.start('hello');
@@ -227,7 +286,7 @@ describe('Resume and send', () => {
     await flush();
     expect(back).toEqual(['keep me']);
     expect(sent).toEqual([]);
-    expect(r.view()).toEqual({ line: { kind: 'failed', message: "Couldn't wake it — No free slot" }, pending: null });
+    expect(r.view()).toMatchObject({ line: { kind: 'failed', message: "Couldn't wake it — No free slot" }, pending: null });
   });
 
   it('2 minutes without ready: the text comes back and is never sent later', async () => {

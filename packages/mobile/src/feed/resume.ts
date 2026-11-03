@@ -21,6 +21,8 @@ export type ResumeLine =
 
 export interface ResumeView {
   line: ResumeLine;
+  /** A card holds the launch: draw no "Sleeping" row (its Resume would do nothing). */
+  hidden: boolean;
   /** The text of "Resume and send" that has not gone yet. `held`: the launch waits for a card the person answers. */
   pending: { text: string; held: boolean } | null;
 }
@@ -159,11 +161,21 @@ export function createResume(deps: ResumeDeps): Resume {
       .catch((): AutoSend => 'not-started')
       .then((result) => {
         attempting = false;
-        if (disposed || pending === null) return;
+        if (disposed) {
+          // The screen closed during the call: a taken text is gone; one that did not go comes back to the field.
+          if (result !== 'done' && pending !== null) giveBack();
+          pending = null;
+          return;
+        }
+        if (pending === null) return;
         if (result === 'retry') {
-          // Nothing reached the terminal: not ready yet. The same text goes again on the next activity event.
+          // Nothing reached the terminal: not ready yet. The same text goes again on the next activity event; one that
+          // came while the call was running is not lost.
           if (expired) timeUp();
-          else change();
+          else {
+            change();
+            check();
+          }
           return;
         }
         pending = null;
@@ -214,7 +226,7 @@ export function createResume(deps: ResumeDeps): Resume {
 
   return {
     // While a send is under way the chat's own bubble stands in for the waiting one.
-    view: () => ({ line: last?.held === true && (line.kind === 'waking' || line.kind === 'still') ? { kind: 'none' } : line, pending: attempting ? null : pending }),
+    view: () => ({ hidden: last?.held === true && (line.kind !== 'none' || pending !== null), line: last?.held === true && (line.kind === 'waking' || line.kind === 'still') ? { kind: 'none' } : line, pending: attempting ? null : pending }),
     start(text) {
       if (inFlight || line.kind === 'waking' || line.kind === 'still') {
         // A wake is running: a message attaches to it (once), a plain Resume has nothing to add.
@@ -260,7 +272,8 @@ export function createResume(deps: ResumeDeps): Resume {
     dispose() {
       disposed = true;
       clearTimers();
-      giveBack();
+      // A send under way decides by itself (above); the text must not come back if it went.
+      if (!attempting) giveBack();
     },
     seed(view) {
       frozen = true;
