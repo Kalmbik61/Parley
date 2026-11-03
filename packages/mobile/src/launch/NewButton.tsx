@@ -2,6 +2,7 @@
 import { Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
+import { DEMO } from '../dev/flags';
 import { useCanAct, useRemoteState } from '../hooks/use-remote';
 import { workParam, type WorkRef } from '../nav/refs';
 import { useColors } from '../theme';
@@ -12,7 +13,8 @@ export function NewButton({ work }: { work?: WorkRef | null }) {
   const router = useRouter();
   const state = useRemoteState();
   const online = useCanAct();
-  if (state === null || !canShowNew(state)) return null;
+  // The demo build has no Mac to say what it can do: show the button so the bar can be looked at.
+  if (state === null || (!DEMO && !canShowNew(state))) return null;
   return (
     <Pressable
       accessibilityRole="button"

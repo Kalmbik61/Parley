@@ -19,6 +19,7 @@ import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
 import { useRoomChat } from '../room/use-room-chat';
 import { typography, useColors } from '../theme';
+import { barBack, BarSymbol, barRight } from '../ui/bar';
 import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
@@ -142,7 +143,7 @@ export default function RoomScreen() {
       <Stack.Screen
         options={{
           headerLargeTitle: false,
-          headerBackButtonDisplayMode: 'minimal',
+          ...barBack(null),
           title: room.title,
           headerTransparent: Platform.OS === 'ios',
           headerBlurEffect: 'systemChromeMaterial',
@@ -156,11 +157,7 @@ export default function RoomScreen() {
               </Text>
             </View>
           ),
-          headerRight: () => (
-            <Pressable accessibilityRole="button" accessibilityLabel="More" onPress={openMenu} hitSlop={8} style={styles.bar}>
-              <SymbolView name="ellipsis.circle" size={22} tintColor={c.tint} />
-            </Pressable>
-          ),
+          ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={openMenu} />),
         }}
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>

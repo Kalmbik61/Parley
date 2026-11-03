@@ -38,6 +38,7 @@ import {
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { useRuntimeState } from '../runtime/use-runtime';
 import { spacing, typography, useColors } from '../theme';
+import { barLeftText } from '../ui/bar';
 
 type Kind = 'session' | 'room';
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -236,11 +237,7 @@ export default function NewScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
-      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', headerBackVisible: false, headerLeft: () => (
-        <Pressable accessibilityRole="button" hitSlop={8} onPress={step === 'letter' ? later : close}>
-          <Text allowFontScaling style={[typography.body, { color: c.tint }]}>{step === 'letter' ? 'Later' : 'Cancel'}</Text>
-        </Pressable>
-      ) }} />
+      <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', ...barLeftText(step === 'letter' ? 'Later' : 'Cancel', step === 'letter' ? later : close) }} />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {/* First child of the scroll view, so it sits below a translucent sheet header (as on the M1 screens). */}

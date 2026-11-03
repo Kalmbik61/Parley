@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { DEMO } from '../dev/flags';
+import { barBack } from '../ui/bar';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
@@ -77,7 +78,7 @@ export default function DecisionScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
-      <Stack.Screen options={{ title: done ? '' : title, headerBackTitle: 'Inbox' }} />
+      <Stack.Screen options={{ title: done ? '' : title, ...barBack('Inbox') }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         <ConnectionBanner />
         {room && work ? (

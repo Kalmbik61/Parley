@@ -3,6 +3,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text } from 'react-native';
 import { workKeyOf } from '@parley/remote-client';
+import { barBack } from '../ui/bar';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Markdown } from '../markdown/Markdown';
 import { parseWorkParam } from '../nav/refs';
@@ -42,7 +43,7 @@ export default function LetterScreen() {
 
   return (
     <View style={[styles.page, { backgroundColor: colors.bg }]}>
-      <Stack.Screen options={{ title: 'Letter', headerBackTitle: 'Inbox' }} />
+      <Stack.Screen options={{ title: 'Letter', ...barBack('Inbox') }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body}>
         <ConnectionBanner />
         {message === undefined ? (
