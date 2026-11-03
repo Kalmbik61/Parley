@@ -3,10 +3,10 @@ import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-na
 import { haptic } from '../haptics';
 import { SymbolView } from 'expo-symbols';
 import type { RemoteSession } from '@parley/protocol/remote';
-import { attentionOfSession, sessionKey, type RemoteState, type RemoteSwarm, type WorkRow, type WorkView } from '@parley/remote-client';
-import { capsuleOf, type CapsuleInput } from '../cards/status';
+import { attentionOfSession, type RemoteState, type RemoteSwarm, type WorkRow, type WorkView } from '@parley/remote-client';
+import { capsuleOfSession, type Capsule } from '../cards/status';
 import { spacing, typography, useColors } from '../theme';
-import { attentionColor, CountPill, Dot } from '../ui/parts';
+import { CountPill, Dot, toneColor } from '../ui/parts';
 import { ProviderAvatar } from '../ui/avatars';
 import { computeGuides, contentLeft, indentFor, STUB, trunkX, type GuideSpec } from './guides';
 import { useNow } from '../hooks/use-remote';
@@ -22,15 +22,17 @@ export interface TreeActions {
 export interface TreeEnv {
   state: RemoteState;
   view: WorkView;
+  /** Shared clock (`useNow`): the "N ago" details tick with it. */
+  now: number;
   actions: TreeActions;
 }
 
 const refOf = (view: WorkView, id: string) => ({ projectPath: view.work.projectPath, workId: view.work.id, sessionId: id });
-/** Input of `capsuleOf` for a session of the tree: the one word source for a row and a team head. */
-export function capsuleInput(env: TreeEnv, session: RemoteSession): CapsuleInput {
-  const live = env.state.activity[sessionKey(refOf(env.view, session.id))];
-  return { session, attention: attentionOf(env, session), need: live?.activity.need ?? session.stuck, subagents: live?.activity.subagents ?? 0, waitingFor: live?.activity.waitingFor ?? null, turnEndedAt: live?.activity.turnEndedAt ?? null, now: Date.now() };
-}
+/** The one word source of the tree: a row, a team head, a room or swarm member (`capsuleOf`, as the window's `sessionWord`). */
+export const capsuleIn = (env: TreeEnv, s: RemoteSession): Capsule => capsuleOfSession(env.state, refOf(env.view, s.id), s, env.now);
+
+/** `Finished a turn · 3 min ago`: the word and its age (D1 §8.2). */
+const wordLine = (cap: Capsule): string => (cap.detail === null ? cap.label : `${cap.label} · ${cap.detail}`);
 
 export const attentionOf = (env: TreeEnv, s: RemoteSession) => attentionOfSession(env.state, refOf(env.view, s.id), s);
 
@@ -68,23 +70,22 @@ function Guides({ spec, indent, mid }: { spec: GuideSpec; indent: number; mid: n
 
 function SessionLine({ session, depth, env, spec, indent }: { session: RemoteSession; depth: number; env: TreeEnv; spec?: GuideSpec; indent?: number }) {
   const c = useColors();
-  const a = attentionOf(env, session);
-  const cap = capsuleOf(capsuleInput(env, session));
+  const cap = capsuleIn(env, session);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${session.label}. ${cap.label}`}
+      accessibilityLabel={`${session.label}. ${wordLine(cap)}`}
       onPress={() => env.actions.openSession(session.id)}
       style={[styles.line, { paddingLeft: depth === 0 || indent === undefined ? 12 : contentLeft(depth, indent) }]}
     >
       {spec !== undefined && indent !== undefined && <Guides spec={spec} indent={indent} mid={24} />}
-      <ProviderAvatar provider={session.provider} size={24} badge={<Dot color={attentionColor(c, a)} ring={a === 'unseen'} />} />
+      <ProviderAvatar provider={session.provider} size={24} badge={<Dot color={toneColor(c, cap.tone)} ring={cap.ring} />} />
       <View style={styles.flex}>
         <Text numberOfLines={1} allowFontScaling style={[typography.body, { color: session.lifecycle === 'closed' ? c.label2 : c.label }]}>
           {session.label}
         </Text>
         <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-          {cap.label}
+          {wordLine(cap)}
           {session.role !== null ? ` · ${session.role}` : ''}
         </Text>
       </View>
@@ -147,16 +148,30 @@ function RoomBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, { 
       )}
       {open &&
         row.members.map((m) => (
-          <Pressable key={m.id} accessibilityRole="button" onPress={() => env.actions.openSession(m.id)} style={styles.memberLine}>
-            <ProviderAvatar provider={m.provider} size={20} badge={<Dot color={attentionColor(c, attentionOf(env, m))} ring={attentionOf(env, m) === 'unseen'} />} />
-            <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>
-              {m.label}
-            </Text>
-            {row.room.lead === m.id && <SymbolView name="star.fill" size={12} tintColor={c.tint} />}
-          </Pressable>
+          <MemberLine key={m.id} m={m} lead={row.room.lead === m.id} env={env} />
         ))}
       </View>
     </View>
+  );
+}
+
+/** A room member: avatar with the state dot, name, the state word and its age (a dot is never the only carrier, D1 §1.4). */
+function MemberLine({ m, lead, env }: { m: RemoteSession; lead: boolean; env: TreeEnv }) {
+  const c = useColors();
+  const cap = capsuleIn(env, m);
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`${m.label}. ${wordLine(cap)}${lead ? '. Lead' : ''}`} onPress={() => env.actions.openSession(m.id)} style={styles.memberLine}>
+      <ProviderAvatar provider={m.provider} size={20} badge={<Dot color={toneColor(c, cap.tone)} ring={cap.ring} />} />
+      <View style={styles.flex}>
+        <Text numberOfLines={1} allowFontScaling style={[typography.subheadline, { color: c.label }]}>
+          {m.label}
+        </Text>
+        <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
+          {wordLine(cap)}
+        </Text>
+      </View>
+      {lead && <SymbolView name="star.fill" size={12} tintColor={c.tint} />}
+    </Pressable>
   );
 }
 
@@ -211,7 +226,7 @@ function SwarmBlock({ row, depth, env, spec, indent }: { row: Extract<WorkRow, {
                 {m.member.role === 'drone' ? ` ${m.member.n}` : ''}
               </Text>
               <Text allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-                {m.member.handedAt !== null ? 'handed in ✓' : m.session?.lifecycle === 'closed' ? 'closed' : 'working'}
+                {m.member.handedAt !== null ? 'handed in ✓' : m.session === null ? 'closed' : capsuleIn(env, m.session).label}
               </Text>
             </Pressable>
           ))}
@@ -273,7 +288,9 @@ function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
   const waits = [headSession, ...team.children.flatMap((x) => (x.row.kind === 'session' ? [x.row.session] : x.row.kind === 'room' ? x.row.members : []))].filter((s): s is RemoteSession => s !== null);
   const [open, setOpen] = useState(teamOpenByDefault(waits.map((s) => attentionOf(env, s))));
   const name = headSession?.label ?? (team.head.kind === 'room' ? team.head.room.title : team.head.kind === 'swarm' ? `Swarm [${team.head.swarm.tag}]` : '');
-  const headWord = headSession !== null ? capsuleOf(capsuleInput(env, headSession)).label : 'Idle';
+  // `TeamCard` draws this card only for a session head, so the word always comes from `capsuleOf`.
+  const headCap = headSession !== null ? capsuleIn(env, headSession) : null;
+  const headWord = headCap === null ? '' : wordLine(headCap);
   const toggle = (): void => { setOpen((o) => !o); haptic.selection(); };
   return (
     <View style={[styles.card, { backgroundColor: c.surface }]}>
@@ -283,7 +300,7 @@ function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
         )}
         <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${headWord}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex, { alignItems: 'flex-start' }]}>
           {headSession !== null ? (
-            <ProviderAvatar provider={headSession.provider} size={36} />
+            <ProviderAvatar provider={headSession.provider} size={36} badge={headCap === null ? undefined : <Dot color={toneColor(c, headCap.tone)} ring={headCap.ring} />} />
           ) : (
             <View style={[styles.avatar, { backgroundColor: c.tint }]}>
               <Text style={[typography.headline, { color: c.onTint }]}>{name.slice(0, 1).toUpperCase()}</Text>

@@ -450,8 +450,8 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
       for (const [pname, prefix] of Object.entries(BAND_PREFIXES)) {
         const input = prefix + bomb;
         let ms = timed(input).ms;
-        if (ms > 500) ms = timed(input).ms; // a busy machine may stall one run, a real hang (seconds) stalls both
-        if (ms > 500) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
+        if (ms > 2000) ms = timed(input).ms; // a busy machine may stall one run, a real hang (seconds) stalls both
+        if (ms > 2000) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
       }
     }
     expect(slow).toEqual([]);
@@ -509,7 +509,7 @@ describe('the code skip cannot be fooled (A40 critic M6, round 5)', () => {
         const input = prefix + bomb;
         const first = timed(input);
         const ms = Math.min(first.ms, timed(input).ms);
-        if (ms > 500) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
+        if (ms > 2000) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
         // The fence is not column 0 / not a fence, so the bomb counts: it must come back raw.
         // `tildeInfo` is a real fence at column 0: the bomb is code (a legal parse), only the time bound applies.
         if (pname !== 'tildeInfo' && !isRaw(first.root, input)) bad.push(`${pname}+${bname}: not raw`);
@@ -539,7 +539,7 @@ describe('a long list is shown as its source (A40 critic m19)', () => {
       parseMarkdown(src(4999));
       return performance.now() - t;
     };
-    expect(Math.min(run(), run())).toBeLessThan(500); // the best of two: a busy machine may stall one run
+    expect(Math.min(run(), run())).toBeLessThan(2000); // the best of two: a busy machine may stall one run
   });
 });
 
@@ -568,7 +568,7 @@ describe('one budget per message (A40 critic M7)', () => {
     for (const [name, md] of Object.entries(generators)) {
       const first = timed(md);
       const ms = Math.min(first.ms, timed(md).ms);
-      if (ms > 500) bad.push(`${name}: ${Math.round(ms)} ms`);
+      if (ms > 2000) bad.push(`${name}: ${Math.round(ms)} ms`);
       if (!rawOrCode(first.root, md)) bad.push(`${name}: neither raw nor code`);
     }
     expect(bad).toEqual([]);

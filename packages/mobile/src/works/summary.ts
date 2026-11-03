@@ -1,8 +1,11 @@
+import type { Attention } from '@parley/core/attention';
+import type { RemoteSession } from '@parley/protocol/remote';
 import type { WorkView } from '@parley/remote-client';
 
 /** Second line of a Works row: open sessions, rooms and swarms, working count or "idle" (D1 §8.1). */
-export function worksSummary(v: Pick<WorkView, 'work' | 'rows'>): string {
-  const workingCount = v.rows.filter((r) => r.kind === 'session' && r.attention === 'working').length;
+export function worksSummary(v: Pick<WorkView, 'work'>, attentionOf: (s: RemoteSession) => Attention): string {
+  // Every session of the work, room and swarm members too: the same set as the row's dot (`WorkView.level`).
+  const workingCount = v.work.sessions.filter((s) => attentionOf(s) === 'working').length;
   const open = v.work.sessions.filter((s) => s.lifecycle !== 'closed').length;
   const rooms = v.work.rooms.filter((r) => !r.archived).length;
   const swarms = v.work.swarms.length;

@@ -34,8 +34,6 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         sess('msgs', 'Docs-reviewer', { role: 'reviewer' }),
         sess('cb2', 'Engine-worker 1', { role: 'executor' }),
         sess('cb3', 'Engine-worker 2', { role: 'verifier' }),
-        // A46: a session that has not started yet — "Starting".
-        sess('fresh', 'Docs-starter', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null }),
         sess('s-01', 'Аналитик', { role: 'analyst' }),
         sess('s-02', 'Редактор', { role: 'editor' }),
       ],
@@ -56,6 +54,18 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         { id: 'sw1', tag: 'Research', creator: { kind: 'session', sessionId: 'greta' }, queen: 'queen', status: 'running', createdAt: ago(20), endedAt: null, seenAt: null,
           members: [{ sessionId: 'queen', role: 'queen', n: 0, handedAt: null }, { sessionId: 'drone1', role: 'drone', n: 1, handedAt: ago(2) }] },
       ],
+    },
+    {
+      // A46: one work with a team head in each state word — a sleeping lead with a working and a finished member, a not-started lead.
+      projectPath: P, id: 'w3', title: 'Status words', status: 'active', messages: { direct: null, inline: 0 },
+      sessions: [
+        sess('rl', 'Release-lead', { role: 'feature-lead', lifecycle: 'sleeping' as never, lastEvent: { event: 'Stop', at: ago(95) } }),
+        sess('rk1', 'Release-worker', { role: 'executor', model: 'sonnet', createdBy: 'rl' }),
+        sess('rk2', 'Release-checker', { role: 'verifier', model: 'sonnet', createdBy: 'rl' }),
+        sess('fresh', 'Docs-starter', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null }),
+        sess('fk', 'Docs-helper', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null, createdBy: 'fresh' }),
+      ],
+      rooms: [], swarms: [],
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
@@ -88,6 +98,8 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   // A35d: needs you with no card on screen — the "Answer at your Mac" strip under the bar.
   act(ref('solo'), 'blocked', { kind: 'approval', since: ago(3), detail: null, resetsAt: null, window: null, account: null });
   act(ref('drone1'), 'working');
+  act({ projectPath: P, workId: 'w3', sessionId: 'rk1' }, 'working');
+  act({ projectPath: P, workId: 'w3', sessionId: 'rk2' }, 'unseen');
   const letter = (id: string, from: string, text: string, min: number, read: boolean) =>
     ({ id, roomId: null, from, to: ['human'], at: ago(min), text, kind: 'note', readBy: read ? { human: ago(min - 1) } : {} }) as never;
   store.dispatch({
@@ -151,6 +163,13 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
     ] as never[],
   });
+  // A46: a finished chat (the turn ended) for the sessions that read "Finished a turn", "Sleeping" and "Starting".
+  const finishedItems = feedItems.slice(0, 6);
+  for (const [wid, id] of [['w3', 'rk2'], ['w3', 'rl'], ['w3', 'fresh']] as const) {
+    const fr = { projectPath: P, workId: wid, sessionId: id };
+    store.dispatch({ t: 'feed.open', ref: fr });
+    store.dispatch({ t: 'feed.loaded', ref: fr, epoch: 'demo', items: finishedItems, revision: 8, mode: null, decisions: null });
+  }
   for (const id of ['greta', 'drone1', 'solo', 'zzz']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
@@ -220,7 +239,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|finished|work-words|sleeping-lead|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -248,7 +267,13 @@ export function demoRoute(name: unknown): string | null {
     case 'sleeping':
       return s('zzz');
     case 'starting':
-      return s('fresh');
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'fresh' })}`;
+    case 'finished':
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'rk2' })}`;
+    case 'work-words':
+      return `/work/${workParam({ projectPath: P, workId: 'w3' })}`;
+    case 'sleeping-lead':
+      return `/session/${sessionParam({ projectPath: P, workId: 'w3', sessionId: 'rl' })}`;
     // A37b screenshots: the state comes from the `preview` param (waking, failed, pending, alert), not from taps.
     case 'sleeping-waking':
     case 'sleeping-failed':

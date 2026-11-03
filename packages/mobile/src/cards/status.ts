@@ -1,14 +1,16 @@
 // Status capsule of the Session screen (D1 §9.2) and Work-list text, from the projection and the activity cache.
 import type { Attention } from '@parley/core/attention';
 import type { RemoteSession } from '@parley/protocol/remote';
-import type { RemoteNeed } from '@parley/remote-client';
+import { attentionOfSession, sessionKey, type RemoteNeed, type RemoteState, type SessionRef } from '@parley/remote-client';
 import { timeAgo } from './model';
 
-export type CapsuleTone = 'needsYou' | 'working' | 'idle' | 'success' | 'danger' | 'off';
+export type CapsuleTone = 'needsYou' | 'working' | 'unseen' | 'idle' | 'success' | 'danger' | 'off';
 export interface Capsule {
-  icon: 'hand.raised.fill' | 'ellipsis' | 'pause.circle' | 'moon.zzz' | 'checkmark.circle.fill' | 'xmark.circle.fill';
+  icon: 'hand.raised.fill' | 'ellipsis' | 'pause.circle' | 'moon.zzz' | 'checkmark.circle.fill' | 'xmark.circle.fill' | 'minus.circle';
   label: string;
   tone: CapsuleTone;
+  /** A ring instead of a filled dot: "finished a turn" and "starting" (D1 §9.1). */
+  ring: boolean;
   /** Second line. */
   detail: string | null;
 }
@@ -42,36 +44,60 @@ export interface CapsuleInput {
   subagents: number;
   waitingFor: string | null;
   turnEndedAt: string | null;
+  /** `activity.lastEventAt`: the last hook event (the history's `lastEvent` holds lifecycle moves, not hooks). */
+  lastEventAt?: string | null;
   now: number;
 }
+
+const agoOf = (at: string | null | undefined, now: number): string | null => {
+  const a = timeAgo(at ?? null, now);
+  return a === null ? null : `${a} ago`;
+};
+
+/** Done / Failed of a session that handed in a result (closed or asleep): the window's `result ?? 'exited'` word. */
+const resultCapsule = (s: RemoteSession, now: number): Capsule => {
+  const failed = s.result === 'failed';
+  return { icon: failed ? 'xmark.circle.fill' : 'checkmark.circle.fill', label: failed ? 'Failed' : 'Done', tone: failed ? 'danger' : 'success', ring: false, detail: agoOf(s.resultAt, now) };
+};
 
 export function capsuleOf(i: CapsuleInput): Capsule {
   const { session: s } = i;
   if (s.lifecycle === 'closed') {
-    const failed = s.result === 'failed';
-    return {
-      icon: failed ? 'xmark.circle.fill' : 'checkmark.circle.fill',
-      label: failed ? 'Failed' : 'Done',
-      tone: failed ? 'danger' : 'success',
-      detail: s.resultAt === null ? null : (timeAgo(s.resultAt, i.now) === null ? null : `${timeAgo(s.resultAt, i.now)} ago`),
-    };
+    if (s.result !== null) return resultCapsule(s, i.now);
+    return { icon: 'minus.circle', label: 'Closed', tone: 'off', ring: false, detail: agoOf(s.lastEvent?.at, i.now) };
   }
   if (s.lifecycle === 'sleeping') {
+    if (s.result !== null) return resultCapsule(s, i.now);
     const ago = timeAgo(s.lastEvent?.at ?? null, i.now);
-    return { icon: 'moon.zzz', label: 'Sleeping', tone: 'off', detail: ago === null ? null : `Last active ${ago} ago` };
+    return { icon: 'moon.zzz', label: 'Sleeping', tone: 'off', ring: false, detail: ago === null ? null : `Last active ${ago} ago` };
   }
-  if (s.lifecycle === 'pending') return { icon: 'ellipsis', label: 'Starting', tone: 'idle', detail: null };
+  if (s.lifecycle === 'pending') return { icon: 'ellipsis', label: 'Starting', tone: 'idle', ring: true, detail: null };
   if (i.attention === 'needs-you') {
-    return { icon: 'hand.raised.fill', label: 'Needs you', tone: 'needsYou', detail: needReason(i.need) };
+    return { icon: 'hand.raised.fill', label: 'Needs you', tone: 'needsYou', ring: false, detail: needReason(i.need) };
   }
   if (i.attention === 'working') {
     const detail = i.waitingFor !== null ? `Waiting for ${i.waitingFor}` : i.subagents > 0 ? `${i.subagents} subagent${i.subagents === 1 ? '' : 's'}` : null;
-    return { icon: 'ellipsis', label: 'Working', tone: 'working', detail };
+    return { icon: 'ellipsis', label: 'Working', tone: 'working', ring: false, detail };
   }
   if (i.attention === 'unseen') {
-    const ago = timeAgo(i.turnEndedAt ?? s.lastEvent?.at ?? null, i.now);
-    return { icon: 'checkmark.circle.fill', label: 'Finished a turn', tone: 'success', detail: ago === null ? null : `${ago} ago` };
+    return { icon: 'checkmark.circle.fill', label: 'Finished a turn', tone: 'unseen', ring: true, detail: agoOf(i.turnEndedAt ?? i.lastEventAt ?? s.lastEvent?.at, i.now) };
   }
-  const ago = timeAgo(s.lastEvent?.at ?? null, i.now);
-  return { icon: 'pause.circle', label: 'Idle', tone: 'idle', detail: ago === null ? null : `${ago} ago` };
+  return { icon: 'pause.circle', label: 'Idle', tone: 'idle', ring: false, detail: agoOf(i.lastEventAt ?? s.lastEvent?.at, i.now) };
 }
+
+/** The one builder of `capsuleOf`'s input from the store: the tree, the team head and the session screen all use it. */
+export function capsuleInputOf(state: RemoteState, ref: SessionRef, session: RemoteSession, now: number): CapsuleInput {
+  const live = state.activity[sessionKey(ref)]?.activity;
+  return {
+    session,
+    attention: attentionOfSession(state, ref, session),
+    need: live?.need ?? session.stuck,
+    subagents: live?.subagents ?? 0,
+    waitingFor: live?.waitingFor ?? null,
+    turnEndedAt: live?.turnEndedAt ?? null,
+    lastEventAt: live?.lastEventAt ?? null,
+    now,
+  };
+}
+
+export const capsuleOfSession = (state: RemoteState, ref: SessionRef, session: RemoteSession, now: number): Capsule => capsuleOf(capsuleInputOf(state, ref, session, now));
