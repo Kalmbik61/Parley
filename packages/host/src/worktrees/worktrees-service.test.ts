@@ -275,6 +275,24 @@ describe('worktree отсутствует (раунд исправлений 8, 
     await expect(readFile(path.join(project, 'draft.md'), 'utf8')).resolves.toContain('черновик');
   });
 
+  it('Discard после идущей уборки берёт свежую запись', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService({
+      ...stubSessions(),
+      // Уборка заканчивается во время ожидания: копия снята, removedAt записан.
+      afterSweep: async () => {
+        await git(project, ['worktree', 'remove', '--force', info.path]);
+        await updateMap(project, ref.workId, (map) => {
+          const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+        });
+      },
+    });
+
+    await expect(service.discard(ref, false)).resolves.toBeUndefined();
+    expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
+  });
+
   it('убранная копия: commit — worktree-missing', async () => {
     const { ref, info } = await sessionWithWorktree();
     const service = createWorktreesService(stubSessions());
