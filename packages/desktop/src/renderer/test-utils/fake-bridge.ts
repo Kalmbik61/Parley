@@ -77,8 +77,8 @@ export interface FakeBridge extends ParleyBridge {
   /** Handler of a `relaySetup.call` (the relay setup wizard); without one the call is rejected. */
   setRelaySetupHandler<N extends RelaySetupCallName>(name: N, handler: (params: RelaySetupCalls[N]['params']) => RelaySetupCalls[N]['result'] | Promise<RelaySetupCalls[N]['result']>): void;
   readonly relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }>;
-  /** The fake numbers the events (`seq`) like the service does. */
-  emitRelaySetup(event: RelaySetupEventBody): void;
+  /** The fake numbers the events (`seq`) like the service does, unless the test gives one. */
+  emitRelaySetup(event: RelaySetupEventBody & { seq?: number }): void;
   /** Вызовы `call` — для проверки, что и с какими параметрами позвали. */
   readonly calls: Array<{ method: MethodName; params: unknown }>;
   emit<E extends EventName>(event: E, data: EventData<E>): void;
@@ -448,7 +448,7 @@ export function createFakeBridge(): FakeBridge {
     },
     relaySetupCalls,
     emitRelaySetup: (event) => {
-      setupSeq += 1;
+      setupSeq = event.seq ?? setupSeq + 1;
       for (const listener of setupListeners) listener({ ...event, seq: setupSeq });
     },
     relaySetup: {

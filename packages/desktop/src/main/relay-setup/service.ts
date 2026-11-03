@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { applyRunEvent } from '../../shared/relay-run-view.js';
 import { RELAY_MANUAL_URL, type RelayPlanView, type RelayRunView, type RelaySetupCallName, type RelaySetupCalls, type RelaySetupEvent, type RelaySetupEventBody, type RelaySetupPhase } from '../../shared/relay-setup-types.js';
 import { ControlCallError } from '../remote-control.js';
 import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
@@ -62,38 +63,6 @@ const LOST_MESSAGE = 'The connection to the server was lost. Commands keep runni
 const CANCELLED_MESSAGE = 'Cancelled. Run the setup again to finish: finished steps are skipped.';
 const CANCELLED_DOWNLOAD_MESSAGE = 'Cancelled. A download may finish on the server by itself; running the setup again picks it up.';
 const CANCELLED_HEALTH_MESSAGE = 'Cancelled. Use Check to test the relay again.';
-
-/** Spec 8.1: lines kept per step in the run record (the log file keeps all of them). */
-const RECORD_LINES = 200;
-
-/** The run record changes by events only, so that a reader holding a snapshot at `seq` can replay the later ones. */
-function applyEvent(view: RelayRunView, body: RelaySetupEventBody): void {
-  switch (body.event) {
-    case 'step': {
-      const row = view.steps.find((step) => step.id === body.id);
-      if (row !== undefined) row.status = body.status;
-      // The download bar belongs to its step: it goes with it.
-      if (body.status !== 'running' && view.progress?.step === body.id) view.progress = null;
-      return;
-    }
-    case 'line': {
-      const row = view.steps.find((step) => step.id === body.step);
-      if (row === undefined) return;
-      row.lines.push(body.text);
-      if (row.lines.length > RECORD_LINES) row.lines.splice(0, row.lines.length - RECORD_LINES);
-      return;
-    }
-    case 'progress':
-      view.progress = { ...body.progress, step: body.step };
-      return;
-    case 'cancelling':
-      view.cancelling = true;
-      return;
-    case 'phase':
-      view.phase = body.phase;
-      view.cancelling = false;
-  }
-}
 
 const bad = (message: string): ControlCallError => new ControlCallError('bad_request', message);
 
@@ -351,7 +320,7 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   function publish(rec: { view: RelayRunView }, body: RelaySetupEventBody): void {
     seqCounter += 1;
     rec.view.seq = seqCounter;
-    applyEvent(rec.view, body);
+    applyRunEvent(rec.view, body);
     if (record === rec) deps.emit({ ...body, seq: rec.view.seq });
   }
 

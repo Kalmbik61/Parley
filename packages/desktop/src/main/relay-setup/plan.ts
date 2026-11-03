@@ -1,7 +1,8 @@
 import net from 'node:net';
 import { isValidDomain, shQuote, type SetupIntent } from './input.js';
-import type { RelayPlanWeb } from '../../shared/relay-setup-types.js';
-import { pullCommand } from './pull-progress.js';
+import type { RelayPlanWeb, RelayPullProgress } from '../../shared/relay-setup-types.js';
+import { describePullProgress } from '../../shared/relay-run-view.js';
+import { createPullProgress, pullCommand } from './pull-progress.js';
 import { INSTALL_DIR, holderOf, isOurs, type PortHolder, type ProbeResult } from './probe.js';
 import {
   CADDY_IMAGE,
@@ -727,11 +728,24 @@ export function buildPlan(ctx: PlanContext): Plan {
   };
 }
 
-/** The end of the log of a dead command of the previous run (spec 7.3). */
+/**
+ * The end of the log of a dead command of the previous run (spec 7.3). The log of an image download holds the raw lines
+ * of the Docker Engine API; they go through the same summary as in a live run (layers and bytes), never as JSON.
+ */
 function tailNotes(probe: ProbeResult): string[] {
   if (probe.previousTail === null) return [];
-  const lines = probe.previousTail.text.split('\n').map((l) => l.trim().slice(0, 200)).filter((l) => l !== '').slice(-10);
-  return [`The previous run stopped in the command «${probe.previousTail.id}»; the end of its log: ${lines.join(' | ')}`];
+  const raw = probe.previousTail.text.split('\n');
+  let lines = raw.map((l) => l.trim().slice(0, 200)).filter((l) => l !== '');
+  if (probe.previousTail.id.startsWith('image')) {
+    const kept: string[] = [];
+    let last: RelayPullProgress | null = null;
+    const summary = createPullProgress({ onProgress: (p) => (last = p), onLog: (l) => kept.push(l.trim().slice(0, 200)), now: () => 0 });
+    for (const line of raw) summary.feed(line);
+    summary.finish();
+    lines = kept.filter((l) => l !== '' && !l.startsWith('downloading:'));
+    if (last !== null) lines.push(`downloading: ${describePullProgress(last)}`);
+  }
+  return [`The previous run stopped in the command «${probe.previousTail.id}»; the end of its log: ${lines.slice(-10).join(' | ')}`];
 }
 
 /** Is the host an IPv4 address (for the sslip name)? */

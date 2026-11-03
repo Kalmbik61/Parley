@@ -154,6 +154,20 @@ describe('buildPlan: install', () => {
     expect(buildPlan(ctx(probe())).steps.filter((s) => s.interruptible)).toHaveLength(1);
   });
 
+  it('the log tail of a dead image download in the notes is a summary, not raw Engine API JSON', () => {
+    const text = [
+      '{"status":"Pulling from library/busybox","id":"1.36.1"}',
+      '{"status":"Pulling fs layer","progressDetail":{},"id":"821d9dafb26d"}',
+      '{"status":"Downloading","progressDetail":{"current":1048576,"total":1896265},"id":"821d9dafb26d"}',
+    ].join('\n');
+    const notes = buildPlan(ctx(probe({ previousTail: { id: 'image-1', text } }))).notes.join('\n');
+    expect(notes).toContain('image-1');
+    expect(notes).toContain('downloading: 1.0 of 1.9 MB · 0 of 1 layers');
+    expect(notes).not.toContain('{');
+    const apt = buildPlan(ctx(probe({ previousTail: { id: 'docker-2', text: 'E: dpkg was interrupted' } }))).notes.join('\n');
+    expect(apt).toContain('E: dpkg was interrupted');
+  });
+
   it('behind another web server only the relay image is pulled (no Caddy)', () => {
     const p = probe({}, [{ port: 80, processes: ['nginx'] }]);
     const image = buildPlan(ctx(p)).steps.find((s) => s.id === 'image')!;
