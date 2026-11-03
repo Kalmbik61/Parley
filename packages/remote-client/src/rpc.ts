@@ -26,6 +26,8 @@ const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'sessions.stop',
   'sessions.close',
   'sessions.switchAgent',
+  'rooms.archive',
+  'rooms.delete',
   'consents.decide',
 ]);
 

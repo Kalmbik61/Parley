@@ -27,6 +27,9 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         // A37b: a sleeping session — the Resume row.
         sess('zzz', 'Docs-editor', { role: 'writer', model: 'sonnet', lifecycle: 'sleeping' as never, lastEvent: { event: 'Stop', at: ago(180) } }),
         // A35a: the human's case — a room a person made (no owning session), its two members top-level.
+        sess('rel', 'Release-notes-writer', { role: 'writer' }),
+        sess('cb2', 'Engine-worker 1', { role: 'executor' }),
+        sess('cb3', 'Engine-worker 2', { role: 'verifier' }),
         sess('s-01', 'Аналитик', { role: 'analyst' }),
         sess('s-02', 'Редактор', { role: 'editor' }),
       ],
@@ -36,6 +39,10 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         // A35d: a long room with a decision — the list scrolls under the strip.
         { id: 'r3', title: 'long room', members: ['s-01', 's-02'], lead: 's-01', ownerId: null, mode: 'free', archived: false,
           proposal: { id: 'p-07', kind: 'decision', from: 'Аналитик', text: 'Publish the report', rev: 1, at: ago(12), planId: null, planRev: null }, messages: null },
+        // A41b: live and sleeping members (the menu of an ordinary room) and a room of the autonomous engine.
+        { id: 'r4', title: 'Release prep', members: ['drone1', 'queen', 'rel', 'zzz'], lead: 'queen', ownerId: null, mode: 'free', archived: false,
+          proposal: { id: 'p-09', kind: 'decision', from: 'Research queen', text: 'Cut the release', rev: 1, at: ago(9), planId: null, planRev: null }, messages: null },
+        { id: 'r5', title: 'Autonomous run', members: ['cb2', 'cb3'], lead: 'cb2', ownerId: null, mode: 'autonomous', archived: false, proposal: null, messages: null },
         { id: 'r2', title: 'тест', members: ['s-01', 's-02'], lead: 's-02', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null },
       ],
       swarms: [
@@ -130,6 +137,14 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       letter2('m-15', 'greta', 18, '## Lint is green\nAll **12** packages pass.\n- eslint\n- typecheck'),
     ],
   });
+  for (const roomId of ['r4', 'r5']) {
+    const rr = { projectPath: P, workId: 'w1', roomId };
+    store.dispatch({ t: 'room.open', ref: rr });
+    store.dispatch({
+      t: 'room.loaded', ref: rr, epoch: 'demo', next: null,
+      messages: [{ id: `m-${roomId}`, roomId, from: 'human', to: [], at: ago(30), text: roomId === 'r4' ? 'Prepare the release notes.' : 'Run the stage.', kind: 'note', readBy: {} } as never],
+    });
+  }
   const rref2 = { projectPath: P, workId: 'w1', roomId: 'r2' };
   store.dispatch({ t: 'room.open', ref: rref2 });
   store.dispatch({
@@ -172,7 +187,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=room-menu|room-menu-autonomous|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -222,6 +237,17 @@ export function demoRoute(name: unknown): string | null {
       return `/room?ref=${encodeURIComponent(w)}&room=r1`;
     case 'settings-diagnostics':
       return '/settings/diagnostics';
+    // A41b screenshots (the sheet opens by itself in the developer build).
+    case 'room-menu':
+      return `/room?ref=${encodeURIComponent(w)}&room=r4&preview=menu`;
+    case 'room-menu-autonomous':
+      return `/room?ref=${encodeURIComponent(w)}&room=r5&preview=menu`;
+    case 'room-archive':
+      return `/room?ref=${encodeURIComponent(w)}&room=r4&preview=archive`;
+    case 'room-delete':
+      return `/room?ref=${encodeURIComponent(w)}&room=r4&preview=delete`;
+    case 'room-result':
+      return `/room?ref=${encodeURIComponent(w)}&room=r4&preview=result`;
     case 'room-long':
       return `/room?ref=${encodeURIComponent(w)}&room=r3`;
     case 'room-ownerless':

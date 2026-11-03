@@ -368,3 +368,32 @@ describe('session menu actions (A38b)', () => {
     expect(calls(rpc, 'sessions.switchAgent')).toHaveLength(1);
   });
 });
+
+describe('room menu actions (A41b)', () => {
+  const calls = (rpc: { call: unknown }, m: string) => (rpc.call as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === m).map((c) => c[1]);
+  const room = { projectPath: '/p', workId: 'w1', roomId: 'r-1' };
+  it('archiveRoom sends exactly the spec params, stopSessions as given', async () => {
+    for (const stop of [true, false]) {
+      const { client, rpc } = setup(() => ({}));
+      expect(await client.archiveRoom(room, stop)).toEqual({ outcome: 'ok' });
+      expect(calls(rpc, 'rooms.archive')).toEqual([{ projectPath: '/p', workId: 'w1', roomId: 'r-1', stopSessions: stop }]);
+    }
+  });
+  it('deleteRoom sends exactly projectPath, workId, roomId', async () => {
+    const { client, rpc } = setup(() => ({}));
+    expect(await client.deleteRoom(room)).toEqual({ outcome: 'ok' });
+    expect(calls(rpc, 'rooms.delete')).toEqual([{ projectPath: '/p', workId: 'w1', roomId: 'r-1' }]);
+  });
+  it.each(['archive', 'delete'] as const)('%s: host refusal is rejected with code and message; connection loss is lost and is not retried', async (kind) => {
+    const run = (c: ReturnType<typeof setup>['client']) => (kind === 'archive' ? c.archiveRoom(room, true) : c.deleteRoom(room));
+    const { client } = setup(() => {
+      throw Object.assign(new Error('the phone does not change rooms of an autonomous run'), { code: 'conflict' });
+    });
+    expect(await run(client)).toEqual({ outcome: 'rejected', code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
+    const { client: c2, rpc } = setup(() => {
+      throw lost();
+    });
+    expect(await run(c2)).toEqual({ outcome: 'lost' });
+    expect(calls(rpc, `rooms.${kind}`)).toHaveLength(1);
+  });
+});

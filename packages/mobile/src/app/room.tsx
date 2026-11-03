@@ -2,13 +2,15 @@
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
 import { attentionOfSession, roomKey, type RoomRef } from '@parley/remote-client';
+import { confirmByOwner } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
@@ -17,7 +19,10 @@ import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
+import { ResultSheet } from '../room/ResultSheet';
+import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, NO_FACE_ID_TOAST, roomMenu, roomToast, runAll, runSummary, sleepConfirm, type RoomMenuFacts, type RunResult } from '../room/room-menu';
 import { useRoomChat } from '../room/use-room-chat';
+import { haptic } from '../haptics';
 import { typography, useColors } from '../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
 import { Button } from '../ui/Button';
@@ -32,7 +37,7 @@ export default function RoomScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref?: string; room?: string }>();
+  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string }>();
   const work = parseWorkParam(str(params.ref));
   const roomId = str(params.room);
   const target: RoomRef | null = work !== null && roomId !== undefined && roomId !== '' ? { ...work, roomId } : null;
@@ -45,6 +50,10 @@ export default function RoomScreen() {
   const seen = useRef(0);
   const [away, setAway] = useState(0);
   const chat = useRoomChat(target, toast.show);
+  const [result, setResult] = useState<{ title: string; results: RunResult[] } | null>(null);
+  useCloseOnLock(result !== null, () => setResult(null));
+  const busyMenu = useRef(false);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -105,22 +114,137 @@ export default function RoomScreen() {
       else if (i === 1) void Clipboard.setStringAsync(m.text);
     });
   };
-  const openMembers = (): void => {
-    if (found === null || target === null) return;
-    const names = members.map((s) => `${found.room.lead === s.id ? '★ ' : ''}${s.label}`);
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...names, 'Cancel'], cancelButtonIndex: names.length, title: `Members (${members.length})` }, (i) => {
-      const s = members[i];
-      if (s !== undefined) router.push(`/session/${sessionParam({ ...target, sessionId: s.id })}` as never);
-    });
+  // Demo data has no hello: every menu method counts as present (screenshots).
+  const menuMethods = DEMO ? ['sessions.stop', 'sessions.resume', 'rooms.archive', 'rooms.delete'] : (state?.methods ?? null);
+  const menuFacts = (): RoomMenuFacts | null =>
+    found === null
+      ? null
+      : {
+          methods: menuMethods,
+          room: { id: found.room.id, title: found.room.title, mode: found.room.mode, hasProposal: found.room.proposal !== null, members: found.room.members },
+          sessions: found.work.sessions,
+          otherRooms: found.work.rooms,
+        };
+  const runSession = async (kind: 'sleep' | 'wake'): Promise<void> => {
+    const f = menuFacts();
+    if (f === null || target === null || client === null || busyMenu.current) return;
+    const who = membersWhere(f, kind === 'sleep' ? 'active' : 'sleeping');
+    busyMenu.current = true;
+    try {
+      const results = await runAll(who, (id) => {
+        const r = { projectPath: target.projectPath, workId: target.workId, sessionId: id };
+        return kind === 'sleep' ? client.sessionCommand('sessions.stop', r) : client.resumeSession(r);
+      });
+      const sum = runSummary(kind, results);
+      if (sum.allOk) {
+        haptic.success();
+        toast.show(sum.title);
+      } else {
+        haptic.error();
+        setResult({ title: sum.title, results });
+      }
+    } finally {
+      busyMenu.current = false;
+    }
+  };
+  // Face ID first, then the call. Cancelled: nothing is sent and nothing is said.
+  const ownerThen = async (kind: 'archive' | 'delete', send: () => Promise<Parameters<typeof roomToast>[1]>): Promise<void> => {
+    const owner = await confirmByOwner(FACE_ID_PROMPT[kind]);
+    if (owner === 'cancelled') return;
+    if (owner === 'unavailable') {
+      toast.show(NO_FACE_ID_TOAST);
+      return;
+    }
+    const outcome = await send();
+    if (outcome.outcome === 'ok') {
+      haptic.success();
+      if (kind === 'delete') router.back();
+      else toast.show(roomToast(kind, outcome));
+    } else {
+      haptic.error();
+      toast.show(roomToast(kind, outcome));
+    }
+  };
+  const archive = (): void => {
+    const f = menuFacts();
+    if (f === null || target === null || client === null) return;
+    const sheet = archiveSheet(f);
+    ActionSheetIOS.showActionSheetWithOptions(
+      { title: sheet.title, message: sheet.message, options: [...sheet.options.map((o) => o.title), 'Cancel'], cancelButtonIndex: sheet.options.length },
+      (i) => {
+        const o = sheet.options[i];
+        if (o !== undefined) void ownerThen('archive', () => client.archiveRoom(target, o.stopSessions));
+      },
+    );
+  };
+  const remove = (): void => {
+    const f = menuFacts();
+    if (f === null || target === null || client === null) return;
+    const q = deleteConfirm(f);
+    Alert.alert(q.title, q.message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: q.button, style: 'destructive', onPress: () => void ownerThen('delete', () => client.deleteRoom(target)) },
+    ]);
   };
   const openMenu = (): void => {
-    if (target === null) return;
-    const entries = [
-      { title: `Members (${members.length})`, run: openMembers },
-      { title: 'Open work', run: () => router.push(`/work/${workParam(target)}` as never) },
-    ];
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...entries.map((e) => e.title), 'Cancel'], cancelButtonIndex: entries.length }, (i) => entries[i]?.run());
+    const f = menuFacts();
+    if (f === null) return;
+    const m = roomMenu(f);
+    const run: Record<string, () => void> = {
+      sleepAll: () => {
+        const q = sleepConfirm(membersWhere(f, 'active').length);
+        Alert.alert(q.title, q.message, [{ text: 'Cancel', style: 'cancel' }, { text: q.button, onPress: () => void runSession('sleep') }]);
+      },
+      wakeAll: () => void runSession('wake'),
+      copy: () => {
+        void Clipboard.setStringAsync(f.room.id);
+        toast.show('Copied');
+      },
+      archive,
+      delete: remove,
+    };
+    const disabled = m.items.flatMap((it, i) => (it.disabled === true ? [i] : []));
+    const destructive = m.items.findIndex((it) => it.destructive === true);
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        options: [...m.items.map((it) => it.title), 'Cancel'],
+        cancelButtonIndex: m.items.length,
+        ...(m.title === undefined ? {} : { title: m.title }),
+        ...(disabled.length > 0 ? { disabledButtonIndices: disabled } : {}),
+        ...(destructive >= 0 ? { destructiveButtonIndex: destructive } : {}),
+      },
+      (i) => {
+        const it = m.items[i];
+        if (it !== undefined) run[it.id]?.();
+      },
+    );
   };
+  previewActs.current = {
+    menu: openMenu,
+    archive,
+    remove,
+    result: () =>
+      setResult({
+        title: 'Put to sleep: 2 of 4',
+        results: [
+          { id: 'a', label: 'Research drone 1', status: 'ok', text: null },
+          { id: 'b', label: 'Research queen', status: 'ok', text: null },
+          { id: 'c', label: 'Changelog-writer', status: 'refused', text: 'Too many changes from the phone — try again in a minute' },
+          { id: 'd', label: 'Docs-editor', status: 'not-sent', text: 'Not sent — reconnecting' },
+        ],
+      }),
+  };
+  useEffect(() => {
+    if (!DEMO || found === null || params.preview === undefined) return;
+    const t = setTimeout(() => {
+      const p = previewActs.current;
+      if (params.preview === 'menu') p?.menu();
+      else if (params.preview === 'archive') p?.archive();
+      else if (params.preview === 'delete') p?.remove();
+      else if (params.preview === 'result') p?.result();
+    }, 700);
+    return () => clearTimeout(t);
+  }, [params.preview, found !== null]);
 
   if (target === null) return <Shell title="Room" body={<EmptyState icon="questionmark.circle" title="This room link is not valid" />} />;
   if (state === null || state.snapshot === null) return <Shell title="Room" body={<Skeleton />} />;
@@ -310,6 +434,9 @@ export default function RoomScreen() {
         </View>
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
+      <Modal visible={result !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setResult(null)}>
+        {result !== null && <ResultSheet title={result.title} results={result.results} onClose={() => setResult(null)} />}
+      </Modal>
     </View>
   );
 }
