@@ -69,16 +69,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 4', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 5', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(4);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(5);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(4);
+    expect(pragma('user_version')).toBe(5);
   });
 
   it('шаг 4 создаёт таблицы Assistant Core: idempotency_key уникален, состояния ограничены', () => {
@@ -147,7 +147,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(4);
+    expect(pragma('user_version')).toBe(5);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -181,7 +181,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(4);
+    expect(pragma('user_version')).toBe(5);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -208,7 +208,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(4);
+    expect(pragma('user_version')).toBe(5);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -220,7 +220,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(4);
+    expect(pragma('user_version')).toBe(5);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);

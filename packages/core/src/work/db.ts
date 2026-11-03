@@ -154,6 +154,44 @@ const SCHEMA_ASSISTANT_CORE = `
   CREATE INDEX IF NOT EXISTS assistant_cards_state ON assistant_cards(state, source, created_at);
 `;
 
+/**
+ * Уведомления (спека 2026-11-03, T1): `notifications` — каноническое хранилище событий, только конверт (виды, счётчики,
+ * маршруты, opaque-id; пользовательских текстов в строках нет). `UNIQUE(dedupe_key)` + `ON CONFLICT DO NOTHING` не дают
+ * повтору события (reconnect, рестарт) создать вторую запись. `notification_outbox` — durable очередь доставки по каналам:
+ * попытки, `next_attempt_at` и предел попыток. Пассивный сток: прошлые события при первом старте не заливаются.
+ */
+const SCHEMA_NOTIFICATIONS = `
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    event_id TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    workspace_id TEXT,
+    entity_ref TEXT NOT NULL,
+    type TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info','warning','critical')),
+    created_at INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    requires_action INTEGER NOT NULL CHECK(requires_action IN (0,1)),
+    payload_ref TEXT,
+    notification_id TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK(state IN ('new','seen','acked','expired')),
+    seen_at INTEGER,
+    acked_at INTEGER,
+    acked_via TEXT);
+  CREATE INDEX IF NOT EXISTS notifications_state ON notifications(state, created_at);
+  CREATE TABLE IF NOT EXISTS notification_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    notification_id TEXT NOT NULL REFERENCES notifications(notification_id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','sent','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL,
+    sent_at INTEGER,
+    UNIQUE(notification_id, channel));
+  CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(state, next_attempt_at);
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -183,6 +221,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   { version: 3, up: upgradeIncarnationsOnce },
   // 4: durable jobs и карточки Assistant Core (спека 2026-11-03, задача C2).
   { version: 4, up: (db) => db.exec(SCHEMA_ASSISTANT_CORE) },
+  // 5: канонические уведомления и durable outbox (спека 2026-11-03, задача T1).
+  { version: 5, up: (db) => db.exec(SCHEMA_NOTIFICATIONS) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
