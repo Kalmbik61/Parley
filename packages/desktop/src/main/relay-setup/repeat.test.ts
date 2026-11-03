@@ -169,6 +169,9 @@ describe('remove (spec 6.4)', () => {
     expect(plan(quiet, 'remove').steps.map((s) => s.id)).toEqual(['down', 'ufw', 'files']);
     expect(runs(plan(quiet, 'remove', true))).toContain('docker volume ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker volume rm');
     expect(runs(plan(quiet, 'remove', false))).not.toContain('docker volume');
+    // A leftover container of an earlier layout must not keep its volume in use (found by the stand).
+    expect(runs(plan(quiet, 'remove', true))).toContain('down -v --remove-orphans');
+    expect(runs(plan(quiet, 'remove', false))).toContain('down --remove-orphans');
     expect(runs(plan(quiet, 'remove', true))).not.toContain('/var/backups');
   });
   it('the server changed and our site cannot be undone through it → blocked, nothing is torn down', async () => {

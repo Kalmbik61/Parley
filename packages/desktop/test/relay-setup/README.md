@@ -36,7 +36,11 @@ RELAY_SETUP_STAND=1 RELAY_SETUP_FULL=1 pnpm --filter @parley/desktop exec vitest
 | S2b | The same layout: removal at once, without a repeat |
 | S3 | nginx on the host (`systemctl` is a stand shim, `docker/systemctl-shim.sh`) → `nginx-acme`: `nginx -t`, the default site still answers, our name reaches our Caddy; removal restores `/etc/nginx` byte for byte |
 
-S1 and S2 servers run with `--dns 127.0.0.1`: nothing inside them can reach an ACME server (the course names are real). S3 needs internet (Docker Hub for the pinned Caddy).
+S1 and S2 servers run with `--dns 127.0.0.1`: nothing inside them can reach an ACME server (the course names are real; S1 asserts that a public name does not resolve). S2 also models the container of run 2 that never started (`parley-relay-caddy-1`, state Created).
+
+S3 is online: the server pulls the pinned Caddy from Docker Hub, and the stand's own Caddy (`parley-relay-acme`) then asks Let's Encrypt **production** for a certificate for the TEST-NET name `203-0-113-7.sslip.io`. The validation fails (nothing answers at 203.0.113.7), but the request leaves this Mac and counts for that name at Let's Encrypt.
+
+Each server keeps ~470 MB of anonymous volume until its container is removed with `docker rm -fv`; the suites do that, and remove their temporary directories.
 
 The tests remove their containers (`parley-stand-*`) when they finish.
 
@@ -48,11 +52,17 @@ The tests remove their containers (`parley-stand-*`) when they finish.
 | 2 second run changes nothing | `stand-install` «re-run changes nothing» |
 | 3 update keeps `data/` (volume) and changes the image | `stand-install` «update keeps the data» |
 | 4 roll back; remove keeps data until confirmed | `stand-install` same test |
-| 5 nginx on 80 untouched + snippet; 443 busy → 8443 in the address | `stand` «nginx on 80», `stand-install` «443 taken» |
+| 5 nginx on 80: `nginx-acme` plan, `/etc/nginx` untouched by the probe; 443 busy → 8443 in the address | `stand` «nginx on 80 under a service», `stand-install` «443 taken» |
 | 6 host key change stops the run | `stand` «changed host key» |
 | 7 hostile input refused before connecting | unit tests (`src/main/relay-setup/input.test.ts`, `service.test.ts`) |
 | 8 no credential in log, IPC or on disk | unit test «no password, passphrase or sudo password reaches…» |
 | 9 Alpine: stop after the probe, nothing changed | `stand` «Alpine» |
+| 10 Caddy of the person in Docker (`:ro` mounts, a `relay` service of their own) → `caddy-site`; their sites keep answering; repeat; `down`/`up` of their project; removal takes only our file | `stand-web` S1 |
+| 11 manual layout of the course VPS: repeat, second repeat, rollback blocked, removal with data; run 2's `Created` container | `stand-web` S2 |
+| 12 the same layout: removal at once | `stand-web` S2b |
+| 13 nginx on the host → `nginx-acme` (own Caddy on 8443): nginx still answers, our name reaches our Caddy, removal restores `/etc/nginx` | `stand-web` S3 |
+
+Layouts the stand covers: `caddy` (own Caddy), `caddy-site` in Docker (S1, S2), `nginx-acme` on the host (S3) and, through the probe cases, the `proxy` plan. Not covered: `caddy-site` under systemd, `nginx-acme` in Docker, a working TLS certificate.
 
 ## What the stand does not cover
 
