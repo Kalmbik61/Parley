@@ -99,8 +99,9 @@ describe('cardBelongsToSession (M1)', () => {
     expect(cardBelongsToSession(by({ source: 'launch', workId: 'w' }, '/q'), ref)).toBe(false);
     expect(cardBelongsToSession(by({ source: 'launch' }), ref)).toBe(false);
   });
-  it('the requester match holds across project paths; agent-switch keeps its own rule', () => {
-    expect(cardBelongsToSession(by({ source: 'agent', sessionId: 's', workId: 'w' }, '/q'), ref)).toBe(true);
+  it('same workId and sessionId in another project does not match; agent-switch keeps its own rule', () => {
+    expect(cardBelongsToSession(by({ source: 'agent', sessionId: 's', workId: 'w' }, '/q'), ref)).toBe(false);
+    expect(cardBelongsToSession(by({ source: 'agent', sessionId: 's', workId: 'w' }), ref)).toBe(true);
     expect(cardBelongsToSession(swit, { projectPath: '/p', workId: 'w', sessionId: 's' })).toBe(true);
     expect(cardBelongsToSession(swit, { ...ref, sessionId: 'x' })).toBe(false);
     expect(cardBelongsToSession(trust, ref)).toBe(false);
