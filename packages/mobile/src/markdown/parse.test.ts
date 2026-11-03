@@ -330,12 +330,93 @@ describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
   });
 
   it('list and quote markers on one line, together, return raw text fast', () => {
-    for (const bomb of ['- '.repeat(4000), '> - '.repeat(400), '1. '.repeat(3000), `${'>'.repeat(30)} x`.repeat(1)]) {
+    // `- - - …` alone is a thematic break (cheap, not raw); the others are bombs.
+    expect(timed('- '.repeat(4000)).ms).toBeLessThan(200);
+    const bombs = [
+      '> - '.repeat(400), '1. '.repeat(3000), `${'>'.repeat(30)} x`,
+      `>${'- '.repeat(4000)}`, `${'>'.repeat(100)} ${'- '.repeat(4000)}`, '- >'.repeat(3000), '1. >'.repeat(2000),
+    ];
+    for (const bomb of bombs) {
       const { ms, root } = timed(bomb);
       expect(ms).toBeLessThan(200);
       expect(plainText(root)).toBe(bomb);
     }
     expect(all(parseMarkdown('- a\n- b\n  - c')).some((n) => n.type === 'list')).toBe(true);
     expect(types(parseMarkdown('- '.repeat(24) + 'x'))).toEqual(['list']);
+  });
+});
+
+describe('lazy continuation, false positives and the bomb regression (A40 critic M5, m15)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+
+  it('lazy continuation lines after a list item or a quote return raw text fast', () => {
+    for (const bomb of ['- a\n' + 'b\n'.repeat(14998), '> a\n' + 'b\n'.repeat(14998), '> a\nb\n'.repeat(10000)]) {
+      const { ms, root } = timed(bomb);
+      expect(ms).toBeLessThan(200);
+      expect(plainText(root)).toBe(bomb);
+    }
+  });
+
+  it('a realistic long reply still renders as Markdown', () => {
+    const logLine = 'x'.repeat(60);
+    const item = `- a list item\n${`${logLine}\n`.repeat(400)}`;
+    expect(types(parseMarkdown(item))).toEqual(['list']);
+    const code = `\`\`\`\n${'x\n'.repeat(15000)}\`\`\``;
+    expect(kids(parseMarkdown(code))[0]).toMatchObject({ type: 'code' });
+  });
+
+  it('a thematic break of spaced dashes and ANSI colours in a code block are not bombs', () => {
+    expect(types(parseMarkdown(`${'- '.repeat(25)}\n\ntext`))).toEqual(['thematicBreak', 'paragraph']);
+    const ansi = `\`\`\`\n${'\u001b[32mok\u001b[0m\n'.repeat(33)}\`\`\`\n\ntext with **bold**`;
+    expect(types(parseMarkdown(ansi))).toEqual(['code', 'paragraph']);
+    // ESC [ does not count in prose either
+    expect(types(parseMarkdown(`${'\u001b[32mx '.repeat(40)}`))).toEqual(['paragraph']);
+    // brackets, emphasis and markers inside fenced code do not count
+    const heavyCode = `\`\`\`\n${'[['.repeat(3000)}\n${'* '.repeat(3000)}\n${'- '.repeat(30)}\n\`\`\``;
+    expect(kids(parseMarkdown(heavyCode))[0]!.type).toBe('code');
+  });
+
+  it('every known bomb generator, about 60 KB each, returns within a fixed bound', () => {
+    const fill = (unit: string, size = 60_000): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+    const table = (rows: number): string => `| a | b |\n|---|---|\n${'| 1 | 2 |\n'.repeat(rows)}`;
+    const generators: Record<string, string> = {
+      emphasis: fill('**_'),
+      tildes: fill('~~a '),
+      brackets: `${'['.repeat(10000)}a${']'.repeat(10000)}`,
+      openBrackets: fill('['),
+      linkOpeners: fill('[a]('),
+      imageOpeners: fill('!['),
+      footnoteOpeners: fill('[^'),
+      markersSpace: fill('- '),
+      markersQuote: fill('> - '),
+      markersNoSpace: `>${fill('- ', 30_000)}`,
+      markersMixed: fill('- >'),
+      markersOrdered: fill('1. >'),
+      markersDeepQuote: `${'>'.repeat(100)} ${fill('- ', 30_000)}`,
+      lazyList: `- a\n${fill('b\n')}`,
+      lazyQuote: fill('> a\nb\n'),
+      hugeTable: table(6000),
+      wideTable: `|${'a|'.repeat(8000)}\n|${'-|'.repeat(8000)}\n`,
+      backticks: fill('`'),
+      backtickRuns: fill('``a` '),
+      lessThan: fill('<'),
+      htmlOpeners: fill('<a '),
+      entities: fill('&amp; &#x41; &bogus;'),
+      www: fill('www.a.b '),
+      backslashes: fill('\\'),
+      autolinks: fill('<https://a.b> '),
+      definitions: fill('[a]: x\n'),
+    };
+    const slow: string[] = [];
+    for (const [name, bomb] of Object.entries(generators)) {
+      // The best of two runs: a busy CI machine may stall one run, a real hang (seconds) stalls both.
+      const ms = Math.min(timed(bomb).ms, timed(bomb).ms);
+      if (ms > 500) slow.push(`${name}: ${Math.round(ms)} ms`);
+    }
+    expect(slow).toEqual([]);
   });
 });
