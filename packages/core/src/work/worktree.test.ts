@@ -224,6 +224,56 @@ describe('createWorktree', () => {
   });
 });
 
+describe('createWorktree — подъём из ветки', () => {
+  it('reuseBranch поднимает копию на существующей ветке с её коммитами', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    await setIdentity(info.path);
+    await writeFile(path.join(info.path, 'a.txt'), 'своё\n', 'utf8');
+    await git(info.path, ['add', 'a.txt']);
+    await git(info.path, ['commit', '-m', 'свой']);
+    await git(project, ['worktree', 'remove', '--', info.path]);
+
+    await createWorktree(project, info, { reuseBranch: true });
+
+    const branch = (await git(info.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    expect(branch).toBe(info.branch);
+    await expect(readFile(path.join(info.path, 'a.txt'), 'utf8')).resolves.toContain('своё');
+  });
+
+  it('без reuseBranch существующая ветка — отказ, как раньше', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await git(project, ['branch', info.branch]);
+
+    await expect(createWorktree(project, info)).rejects.toThrow();
+  });
+
+  it('reuseBranch без ветки заводит новую от базы', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+
+    await createWorktree(project, info, { reuseBranch: true });
+
+    const branch = (await git(info.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    expect(branch).toBe(info.branch);
+    await expect(readFile(path.join(info.path, 'README.md'), 'utf8')).resolves.toContain('старт');
+  });
+
+  it('копия, удалённая руками, поднимается', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    await rm(info.path, { recursive: true, force: true });
+
+    await createWorktree(project, info, { reuseBranch: true });
+
+    const branch = (await git(info.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    expect(branch).toBe(info.branch);
+  });
+});
+
 describe('worktreeDiff', () => {
   it('видит и коммит в ветке, и незакоммиченный файл', async () => {
     await initProject();

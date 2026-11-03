@@ -129,6 +129,11 @@ export interface WorktreeInfo {
   base: string;
   /** `null` — worktree только запланирован, хост ещё не создал его на диске. */
   createdAt: string | null;
+  /**
+   * ISO-время, когда Parley убрал каталог копии (ветка осталась); нет поля или `null` — не убирал.
+   * `createdAt` при уборке не трогается: `null` в нём по-прежнему значит «ещё не создан».
+   */
+  removedAt?: string | null;
 }
 
 /** Приватное evidence запуска Codex: не входит в agent/public works/island projections. */

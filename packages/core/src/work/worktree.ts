@@ -104,10 +104,29 @@ export async function baseBranchOf(checkoutPath: string): Promise<string> {
  * Заводит worktree на диске: каталог создаёт сама команда, родителя — на всякий случай мы.
  * База и ветка — из карты (база бывает веткой родителя): проверка до git и до
  * mkdir, `--end-of-options` — чтобы база вида `--upload-pack=…` не стала флагом.
+ * `reuseBranch` поднимает копию на уже существующей ветке (после уборки каталога);
+ * без него существующая ветка — отказ git, как и прежде.
  */
-export async function createWorktree(projectPath: string, info: WorktreeInfo): Promise<void> {
+export async function createWorktree(
+  projectPath: string,
+  info: WorktreeInfo,
+  options: { reuseBranch?: boolean } = {},
+): Promise<void> {
   await assertRevisions(projectPath, [info.base, info.branch]);
   await mkdir(path.dirname(info.path), { recursive: true });
+  // Регистрация осталась после ручного удаления каталога — git иначе откажет в `add`.
+  // git пишет в списке realpath, а каталога может не быть: сравниваем по realpath родителя.
+  const registered = path.join(await realpath(path.dirname(info.path)), path.basename(info.path));
+  if ((await listWorktrees(projectPath)).some((entry) => entry.path === registered || entry.path === info.path)) {
+    if (!(await stat(info.path).then(() => true, () => false))) {
+      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
+    }
+  }
+  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+  if (options.reuseBranch === true && code === 0) {
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'add', '--end-of-options', info.path, info.branch]);
+    return;
+  }
   await run('git', [
     ...NO_FSMONITOR,
     '-C',
