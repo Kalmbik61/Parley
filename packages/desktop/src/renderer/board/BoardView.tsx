@@ -5,12 +5,15 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { folderName } from '../sidebar/sort.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
-import { boardColumns, cardKey, resolveTaken } from './board-model.js';
+import { boardColumns, cardKey, filterProjects, resolveTaken } from './board-model.js';
 import type { BoardCard, BoardFilter } from './board-model.js';
 import { useBoardProjects, useBoardStore } from './board-store.js';
 import { BoardCardView } from './BoardCardView.js';
 import { BoardColumn } from './BoardColumn.js';
 import { CardDialog } from './CardDialog.js';
+import { NewTaskForm } from './NewTaskForm.js';
+import { ProjectMenu } from './ProjectMenu.js';
+import { SuggestedStrip } from './SuggestedStrip.js';
 import { targetInfo } from './target-info.js';
 
 const filterValue = (filter: BoardFilter, keys: ReadonlyMap<string, string>): string => {
@@ -30,6 +33,8 @@ export function BoardView({ bridge }: { bridge: ParleyBridge }): JSX.Element {
   const activity = useActivityStore(state => state.byRef);
   const [showOlder, setShowOlder] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Форма одна на всё время, пока открыта; `dictate` считает нажатия Dictate и форму не пересоздаёт.
+  const [form, setForm] = useState<{ dictate: number } | null>(null);
 
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
@@ -45,6 +50,8 @@ export function BoardView({ bridge }: { bridge: ParleyBridge }): JSX.Element {
     if (project.inbox) continue;
     for (const path of [project.key, ...project.paths]) keys.set(path, `p:${project.key}`);
   }
+  const filtered = filterProjects(projects, filter);
+  const single = filter.kind === 'project' ? (filtered[0] ?? null) : null;
   const stale = projects.filter(project => !project.live);
   const missingPath = filter.kind === 'project' && !keys.has(filter.path) ? filter.path : null;
   const all = [...columns.backlog, ...columns.inProgress, ...columns.review, ...columns.done, ...columns.olderDone];
@@ -72,6 +79,20 @@ export function BoardView({ bridge }: { bridge: ParleyBridge }): JSX.Element {
     for (const project of stale) for (const path of project.paths) void refresh(bridge, path);
   };
 
+  // Открытая форма остаётся как есть: New task её не трогает, Dictate включает диктовку в ней же.
+  const openForm = (): void => setForm(current => current ?? { dictate: 0 });
+  const dictateIntoForm = (): void => setForm(current => ({ dictate: (current?.dictate ?? 0) + 1 }));
+
+  const backlogTop = (
+    <>
+      {form !== null && (
+        <NewTaskForm bridge={bridge} projects={projects} defaultPath={single !== null ? single.projectPath : null}
+          dictate={form.dictate} onClose={() => setForm(null)} />
+      )}
+      <SuggestedStrip bridge={bridge} projects={filtered} />
+    </>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-(--space-3)">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -91,6 +112,13 @@ export function BoardView({ bridge }: { bridge: ParleyBridge }): JSX.Element {
         {stale.length > 0 && (
           <button type="button" className="shrink-0 rounded-md px-2 py-1 text-sm hover:bg-accent" onClick={onRefresh}>{S.board.refresh}</button>
         )}
+        <button type="button" className="shrink-0 rounded-md px-2 py-1 text-sm hover:bg-accent" onClick={openForm}>{S.board.newTask}</button>
+        <button type="button" className="shrink-0 rounded-md px-2 py-1 text-sm hover:bg-accent" onClick={dictateIntoForm}>{S.board.dictate}</button>
+        {single !== null && (
+          <div className="ml-auto">
+            <ProjectMenu bridge={bridge} project={single} onOpenFile={path => { void bridge.app.openBacklog(path); }} />
+          </div>
+        )}
       </div>
       {stale.length > 0 && <p className="text-xs text-muted-foreground">{S.board.liveUnavailable}</p>}
       {empty ? (
@@ -100,7 +128,7 @@ export function BoardView({ bridge }: { bridge: ParleyBridge }): JSX.Element {
         </div>
       ) : null}
       <div className="scrollbar-sleek flex min-h-0 flex-1 gap-3 overflow-x-auto">
-        <BoardColumn title={S.board.columns.backlog} count={columns.backlog.length}>{columns.backlog.map(renderCard)}</BoardColumn>
+        <BoardColumn title={S.board.columns.backlog} count={columns.backlog.length} top={backlogTop}>{columns.backlog.map(renderCard)}</BoardColumn>
         <BoardColumn title={S.board.columns.inProgress} count={columns.inProgress.length}>{columns.inProgress.map(renderCard)}</BoardColumn>
         <BoardColumn title={S.board.columns.review} count={columns.review.length}>{columns.review.map(renderCard)}</BoardColumn>
         <BoardColumn title={S.board.columns.done} count={columns.done.length}>

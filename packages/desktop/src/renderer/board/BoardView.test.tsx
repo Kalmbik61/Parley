@@ -1,11 +1,14 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogSnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { useActivityStore } from '../store/activity.js';
+import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import type { BacklogRow } from './board-model.js';
 import { useBoardStore } from './board-store.js';
 import type { BoardSlot } from './board-store.js';
@@ -29,6 +32,14 @@ function fill(slots: [string, BoardSlot][], inboxPath: string | null = null): vo
   useBoardStore.setState({ supported: true, slots: new Map(slots), inboxPath, filter: { kind: 'all' } });
 }
 
+/** Голос окна включён, диктовка подставная; снимается в `afterEach`, чтобы запись не пережила тест. */
+let disposeDictation: (() => void) | null = null;
+function startDictation(): void {
+  useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+  disposeDictation = useDictationStore.getState().configure(fakeDictationDeps('spoken task'));
+}
+const taskField = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.board.taskField }) as HTMLTextAreaElement;
+
 beforeEach(() => {
   useBoardStore.setState({ supported: true, slots: new Map(), inboxPath: null, filter: { kind: 'all' } });
   useWorksStore.setState({ entries: [] });
@@ -39,6 +50,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  disposeDictation?.();
+  disposeDictation = null;
 });
 
 describe('BoardView', () => {
@@ -183,5 +196,29 @@ describe('BoardView', () => {
     render(<BoardView bridge={bridge} />);
     fireEvent.click(screen.getByText(S.board.refresh));
     expect(call).toHaveBeenCalledWith('backlog.subscribe', { projectPath: '/p' });
+  });
+
+  it('New task при форме, открытой через Dictate, не стирает введённое и не трогает запись', async () => {
+    startDictation();
+    fill([['/p', slot(snap('/p', []))]]);
+    render(<BoardView bridge={bridge} />);
+    fireEvent.click(screen.getByText(S.board.dictate));
+    await waitFor(() => expect(useDictationStore.getState().phase).toBe('recording'));
+    fireEvent.change(taskField(), { target: { value: 'Keep me' } });
+    fireEvent.click(screen.getByText(S.board.newTask));
+    expect(taskField().value).toBe('Keep me');
+    expect(useDictationStore.getState().phase).toBe('recording');
+  });
+
+  it('Dictate при форме, открытой через New task, включает диктовку в ней же и не стирает введённое', async () => {
+    startDictation();
+    fill([['/p', slot(snap('/p', []))]]);
+    render(<BoardView bridge={bridge} />);
+    fireEvent.click(screen.getByText(S.board.newTask));
+    fireEvent.change(taskField(), { target: { value: 'Keep me' } });
+    fireEvent.click(screen.getByText(S.board.dictate));
+    await waitFor(() => expect(useDictationStore.getState().phase).toBe('recording'));
+    expect(useDictationStore.getState().targetId).toBe('board:new-task');
+    expect(taskField().value).toBe('Keep me');
   });
 });
