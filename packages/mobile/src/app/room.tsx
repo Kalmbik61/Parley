@@ -2,7 +2,7 @@
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -19,6 +19,7 @@ import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
+import { useFollowEnd } from '../feed/use-follow-end';
 import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
 import { SelectTextSheet } from '../feed/SelectTextSheet';
 import type { Selection } from '../feed/selection';
@@ -37,7 +38,6 @@ import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
 type RoomRow = { t: 'line'; l: Line } | { t: 'out'; o: OutLetter };
-const NEAR_BOTTOM = 80;
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 export default function RoomScreen() {
@@ -45,7 +45,7 @@ export default function RoomScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string }>();
+  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string; jump?: string; draft?: string }>();
   const work = parseWorkParam(str(params.ref));
   const roomId = str(params.room);
   const target: RoomRef | null = work !== null && roomId !== undefined && roomId !== '' ? { ...work, roomId } : null;
@@ -54,9 +54,6 @@ export default function RoomScreen() {
   const canAct = useCanAct();
   const toast = useToast();
   const list = useRef<FlatList<RoomRow>>(null);
-  const atBottom = useRef(true);
-  const seen = useRef(0);
-  const [away, setAway] = useState(0);
   const chat = useRoomChat(target, toast.show);
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
   const hostId = useRuntimeState().host?.hostId ?? null;
@@ -104,28 +101,29 @@ export default function RoomScreen() {
   const rows = useMemo(() => lines(messages), [messages]);
   const out = useMemo(() => visibleOutLetters(chat.out, messages), [chat.out, messages]);
   const data = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
-  const total = data.length;
+  const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
+  // Earlier pages land at the top: they are not "new" for Jump to latest, so count them out.
+  const older = useRef({ first: null as string | null, added: 0 });
+  const firstKey = data.length === 0 ? null : rowKey(data[0]!);
+  if (older.current.first !== firstKey) {
+    const at = older.current.first === null ? -1 : data.findIndex((r) => rowKey(r) === older.current.first);
+    if (at > 0) older.current.added += at;
+    older.current.first = firstKey;
+  }
+  const total = data.length - older.current.added;
+  const follow = useFollowEnd(list, total);
+  // Developer preview (A44 screenshots): `?jump=1` shows the capsule, `?draft=long` a several-line draft.
+  useEffect(() => {
+    if (!DEMO || found === null) return;
+    const t = setTimeout(() => {
+      if (params.draft === 'long') chat.setDraft('First line of a long draft\nSecond line of the draft\nThird line of the draft\nFourth line of the draft');
+      if (params.jump === '1') follow.devAway(3);
+    }, 3600);
+    return () => clearTimeout(t);
+  }, [found !== null]);
   const lastHuman = useMemo(() => [...messages].reverse().find((m) => m.from === 'human')?.id ?? null, [messages]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
   const labels = useMemo(() => mentionables.map((m) => m.label), [mentionables]);
-
-  const onContentSizeChange = (): void => {
-    if (atBottom.current) {
-      list.current?.scrollToEnd({ animated: seen.current !== 0 });
-      setTimeout(() => atBottom.current && list.current?.scrollToEnd({ animated: false }), 120);
-      seen.current = total;
-    } else setAway(Math.max(0, total - seen.current));
-  };
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    atBottom.current = contentSize.height - layoutMeasurement.height - contentOffset.y < NEAR_BOTTOM;
-    if (atBottom.current && away !== 0) {
-      seen.current = total;
-      setAway(0);
-    }
-    // Scrolled to the start: the next older page.
-    if (contentOffset.y < 40 && target !== null) client?.loadOlder(target);
-  };
 
   const onLongPress = (m: Message): void => {
     haptic.selection();
@@ -335,7 +333,7 @@ export default function RoomScreen() {
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         {(room.proposal !== null || waiting[0] !== undefined) && (
-          <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
+          <BarStripStack onChange={follow.keepEnd}>
             {room.proposal !== null && (
               <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
             )}
@@ -347,9 +345,14 @@ export default function RoomScreen() {
         <FlatList
           ref={list}
           data={data}
-          keyExtractor={(r) => (r.t === 'line' ? r.l.message.id : r.o.id)}
-          onContentSizeChange={onContentSizeChange}
-          onScroll={onScroll}
+          keyExtractor={rowKey}
+          {...follow.handlers}
+          onScroll={(e) => {
+            follow.handlers.onScroll(e);
+            // Scrolled to the start: the next older page (not while the open is still pinning to the end).
+            if (e.nativeEvent.contentOffset.y < 40 && target !== null && !follow.isPinned()) client?.loadOlder(target);
+          }}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           scrollEventThrottle={64}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
@@ -407,21 +410,18 @@ export default function RoomScreen() {
           }
           onScrollToIndexFailed={() => undefined}
         />
-        {away > 0 && (
+        {follow.away > 0 && (
+          <View pointerEvents="box-none" style={styles.jumpAnchor}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Jump to latest, ${away} new`}
-            onPress={() => {
-              list.current?.scrollToEnd({ animated: true });
-              atBottom.current = true;
-              seen.current = total;
-              setAway(0);
-            }}
+            accessibilityLabel={`Jump to latest, ${follow.away} new`}
+            onPress={follow.jump}
             style={[styles.jump, { backgroundColor: c.surface, borderColor: c.separator }]}
           >
             <SymbolView name="arrow.down" size={14} tintColor={c.tint} />
-            <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {away}</Text>
+            <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {follow.away}</Text>
           </Pressable>
+          </View>
         )}
         <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
           {hidden.kind === 'hidden' ? (
@@ -518,6 +518,9 @@ function Shell({ title, body }: { title: string; body: React.ReactNode }) {
   );
 }
 
+// The capsule's slot: in flow right above the composer area, overlapping the list by its own height (net layout height 0),
+// so it follows the composer through the keyboard, a taller draft, the reply plate, the Resume row and cards.
+const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
@@ -533,5 +536,6 @@ const styles = StyleSheet.create({
   at: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   input: { flex: 1, minHeight: 44, maxHeight: 130, borderRadius: 22, paddingHorizontal: 16, paddingTop: 11, paddingBottom: 11 },
   send: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  jump: { position: 'absolute', alignSelf: 'center', bottom: 140, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  jumpAnchor: { height: JUMP_H, marginTop: -JUMP_H, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 8 },
+  jump: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
 });

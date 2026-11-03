@@ -4,6 +4,7 @@ import type { FeedCard } from '@parley/core';
 import type { RemoteClient, SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
+import { longFeedItems, longRoomLetters } from './long-feed';
 import { HUMAN_TABLE } from './md-demo';
 
 const P = '/Users/me/parley';
@@ -57,7 +58,8 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo')], rooms: [], swarms: [],
+      rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo')], swarms: [],
     },
   ],
 };
@@ -149,6 +151,13 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
       { kind: 'text', id: 'g2', at: at(4), messageId: 'mg2', streaming: false, text: HUMAN_TABLE },
     ] as never[],
   });
+  // A44: a long mixed feed and a long room history (routes a44-session, a44-room).
+  const longRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' };
+  store.dispatch({ t: 'feed.open', ref: longRef });
+  store.dispatch({ t: 'feed.loaded', ref: longRef, epoch: 'demo', items: longFeedItems(14), revision: 3, mode: null, decisions: null });
+  const longRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rlong' };
+  store.dispatch({ t: 'room.open', ref: longRoom });
+  store.dispatch({ t: 'room.loaded', ref: longRoom, epoch: 'demo', next: null, messages: longRoomLetters('rlong', 60) });
   for (const id of ['greta', 'drone1', 'solo', 'zzz']) {
     store.dispatch({ t: 'feed.open', ref: ref(id) });
     store.dispatch({ t: 'feed.loaded', ref: ref(id), epoch: 'demo', items: feedItems, revision: 8, mode: null, decisions: null });
@@ -275,6 +284,22 @@ export function demoRoute(name: unknown): string | null {
     // A40: the session feed (a FlatList) with the human's table as the agent's reply.
     case 'md-feed':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'mdfeed' })}`;
+    // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
+    case 'a44-session':
+    case 'a44-session-jump':
+    case 'a44-session-jump-draft':
+    case 'a44-session-jump-plate': {
+      const base = `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}`;
+      const q = name === 'a44-session' ? '' : name === 'a44-session-jump' ? '?jump=1' : name === 'a44-session-jump-draft' ? '?jump=1&draft=long' : '?jump=1&preview=plate';
+      return base + q;
+    }
+    case 'a44-room':
+    case 'a44-room-jump':
+    case 'a44-room-jump-draft':
+    case 'a44-room-jump-plate': {
+      const base = `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong`;
+      return base + (name === 'a44-room' ? '' : name === 'a44-room-jump' ? '&jump=1' : name === 'a44-room-jump-draft' ? '&jump=1&draft=long' : '&jump=1&preview=plate');
+    }
     case 'chat':
       return s('drone1');
     case 'room':

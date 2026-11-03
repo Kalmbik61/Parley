@@ -2,7 +2,7 @@
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -24,6 +24,7 @@ import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
+import { useFollowEnd } from '../../feed/use-follow-end';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -51,7 +52,6 @@ import { subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
-const NEAR_BOTTOM = 80;
 
 function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule | null; meta: string }) {
   const c = useColors();
@@ -81,7 +81,7 @@ export default function SessionScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { ref: param, fresh, preview } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string }>();
+  const { ref: param, fresh, preview, jump: devJump, draft: devDraft } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; jump?: string; draft?: string }>();
   const ref = parseSessionParam(param);
   const client = useClient();
   const state = useRemoteState();
@@ -92,8 +92,6 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
-  const atBottom = useRef(true);
-  const [away, setAway] = useState(0);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -101,7 +99,6 @@ export default function SessionScreen() {
   // Select Text (D1 §9.2): the message source in a read-only field; `initial` is a developer-preview selection.
   const [selectFor, setSelectFor] = useState<{ text: string; initial?: Selection } | null>(null);
   useCloseOnLock(selectFor !== null, () => setSelectFor(null));
-  const seen = useRef(0);
 
   const load = (r: SessionRef): void => {
     setLoadFailed(false);
@@ -188,6 +185,16 @@ export default function SessionScreen() {
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  const follow = useFollowEnd(list, rows.length);
+  // Developer preview (A44 screenshots): `?jump=1` shows the capsule, `?draft=long` a several-line draft.
+  useEffect(() => {
+    if (!DEMO || found === null) return;
+    const t = setTimeout(() => {
+      if (devDraft === 'long') chat.setDraft('First line of a long draft\nSecond line of the draft\nThird line of the draft\nFourth line of the draft');
+      if (devJump === '1') follow.devAway(3);
+    }, 3600);
+    return () => clearTimeout(t);
+  }, [found !== null]);
   // Developer preview of the message pieces (A42): set during render once the session is found.
   // The message actions, read through a ref so the feed rows keep a stable prop and `memo` works (critic A42 m8).
   const msgRef = useRef<MessageApi | null>(null);
@@ -242,27 +249,6 @@ export default function SessionScreen() {
     },
     [folded],
   );
-
-  // New items: follow the end while the person is at the bottom; otherwise count them for "Jump to latest".
-  const onContentSizeChange = (): void => {
-    if (atBottom.current) {
-      const animated = seen.current !== 0;
-      // Row heights are estimated until drawn: scroll once now and once after layout settles.
-      list.current?.scrollToEnd({ animated });
-      setTimeout(() => atBottom.current && list.current?.scrollToEnd({ animated: false }), 120);
-    }
-    else setAway(Math.max(0, rows.length - seen.current));
-    if (atBottom.current) seen.current = rows.length;
-  };
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const bottom = contentSize.height - layoutMeasurement.height - contentOffset.y < NEAR_BOTTOM;
-    atBottom.current = bottom;
-    if (bottom && away !== 0) {
-      seen.current = rows.length;
-      setAway(0);
-    }
-  };
 
   const shell = (title: string, body: React.ReactNode) => (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
@@ -456,16 +442,15 @@ export default function SessionScreen() {
   const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
       {strip !== null && (
-        <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
-          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={() => list.current?.scrollToEnd({ animated: true })} />
+        <BarStripStack onChange={follow.keepEnd}>
+          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
       <FlatList
         ref={list}
         data={rows}
         keyExtractor={rowKey}
-        onContentSizeChange={onContentSizeChange}
-        onScroll={onScroll}
+        {...follow.handlers}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
@@ -521,21 +506,18 @@ export default function SessionScreen() {
           </View>
         }
       />
-      {away > 0 && (
+      {follow.away > 0 && (
+        <View pointerEvents="box-none" style={styles.jumpAnchor}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Jump to latest, ${away} new`}
-          onPress={() => {
-            list.current?.scrollToEnd({ animated: true });
-            atBottom.current = true;
-            seen.current = rows.length;
-            setAway(0);
-          }}
+          accessibilityLabel={`Jump to latest, ${follow.away} new`}
+          onPress={follow.jump}
           style={[styles.jump, { backgroundColor: c.surface, borderColor: c.separator }]}
         >
           <SymbolView name="arrow.down" size={14} tintColor={c.tint} />
-          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {away}</Text>
+          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {follow.away}</Text>
         </Pressable>
+        </View>
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
@@ -649,6 +631,9 @@ function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
 
 export { attentionOf };
 
+// The capsule's slot: in flow right above the composer area, overlapping the list by its own height (net layout height 0),
+// so it follows the composer through the keyboard, a taller draft, the reply plate, the Resume row and cards.
+const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
@@ -662,7 +647,8 @@ const styles = StyleSheet.create({
   headerTitle: { alignItems: 'center', maxWidth: 240 },
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  jump: { position: 'absolute', alignSelf: 'center', bottom: 90, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  jumpAnchor: { height: JUMP_H, marginTop: -JUMP_H, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 8 },
+  jump: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
   bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12 },
   teamRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 28 },
