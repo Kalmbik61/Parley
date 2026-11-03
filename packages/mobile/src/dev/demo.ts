@@ -4,6 +4,7 @@ import type { FeedCard } from '@parley/core';
 import type { RemoteClient, SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
+import { HUMAN_TABLE } from './md-demo';
 
 const P = '/Users/me/parley';
 const ago = (min: number): string => new Date(Date.now() - min * 60_000).toISOString();
@@ -106,6 +107,8 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
     { kind: 'tool', id: 'f2', at: at(39), toolUseId: 't2', name: 'Read', input: { file_path: 'docs/design/mobile.md' }, status: 'done' },
     { kind: 'tool', id: 'f3', at: at(38), toolUseId: 't3', name: 'Bash', input: { command: 'pnpm lint' }, status: 'done' },
     { kind: 'text', id: 'f4', at: at(37), messageId: 'm1', streaming: false, text: '## D1 is updated\nThe session screen is now the **chat**:\n- pinned header\n- feed with `Markdown`\n- composer\n\n```\npnpm lint\n```' },
+    // A40: the human's reply with a GFM table.
+    { kind: 'text', id: 'f4b', at: at(36.5), messageId: 'm1b', streaming: false, text: HUMAN_TABLE },
     { kind: 'turn', id: 'f5', at: at(36), durationMs: 372_000 },
     { kind: 'prompt', id: 'f6', at: at(5), text: 'Run the linter once more', images: 0 },
     { kind: 'tool', id: 'f7', at: at(4), toolUseId: 't7', name: 'Bash', input: { command: 'pnpm lint && pnpm -r build' }, status: 'running' },
@@ -216,6 +219,15 @@ export function demoRoute(name: unknown): string | null {
       return `${s('greta')}?preview=switch`;
     case 'session-strip':
       return s('solo');
+    // A40 screenshots: one Markdown demo text on a plain screen.
+    case 'md-table':
+    case 'md-code':
+    case 'md-path':
+    case 'md-lists':
+    case 'md-table-scrolled':
+      return '/md?case=table&scrollX=240';
+    case 'md-all':
+      return `/md?case=${name.slice('md-'.length)}`;
     case 'chat':
       return s('drone1');
     case 'room':
