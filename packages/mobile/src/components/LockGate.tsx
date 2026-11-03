@@ -14,6 +14,7 @@ import { FullWindowOverlay } from 'react-native-screens';
 import { SymbolView } from 'expo-symbols';
 import { DEMO, DEV_LOCK_MS } from '../dev/flags';
 import { appLock, startLock } from '../auth/lock-instance';
+import { knownHosts } from '../auth/use-covered';
 import { shouldCover, type AppLock, type UnlockResult } from '../auth/app-lock';
 import { runtime } from '../runtime/instance';
 import { useRuntimeState } from '../runtime/use-runtime';
@@ -49,7 +50,7 @@ function RealLockGate({ children }: { children: ReactNode }) {
   const { locked } = useLockState(lock);
   // Paired Macs: `null` while the list is not read yet (it is set before `ready`, so empty and booting means unknown).
   const { phase, hosts: hostList } = useRuntimeState();
-  const hosts = hostList.length > 0 ? hostList.length : phase === 'ready' ? 0 : null;
+  const hosts = knownHosts(hostList, phase);
   // No paired Mac — no lock (spec §11.4): Face ID is not asked either; it is asked once the first Mac is paired.
   const paired = hosts !== null && hosts > 0;
   const pairedRef = useRef(paired);

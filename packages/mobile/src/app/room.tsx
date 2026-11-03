@@ -1,14 +1,16 @@
 // Room = the chat of a room (D1 §9.7, plan A33): history by `context.messages`, live by `rooms.mail`, members and lead,
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
-import { attentionOfSession, roomKey, type RoomRef } from '@parley/remote-client';
+import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
+import { confirmByOwner } from '../auth/lock-instance';
+import { useCovered } from '../auth/use-covered';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
@@ -17,7 +19,13 @@ import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
+import { ResultSheet } from '../room/ResultSheet';
+import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
+import { roomRuns, runKeyOf } from '../room/room-runs';
+import { useRuntimeState } from '../runtime/use-runtime';
 import { useRoomChat } from '../room/use-room-chat';
+import { haptic } from '../haptics';
+import { RECONNECTING } from '../feed/session-menu';
 import { typography, useColors } from '../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../ui/bar';
 import { Button } from '../ui/Button';
@@ -32,7 +40,7 @@ export default function RoomScreen() {
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref?: string; room?: string }>();
+  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string }>();
   const work = parseWorkParam(str(params.ref));
   const roomId = str(params.room);
   const target: RoomRef | null = work !== null && roomId !== undefined && roomId !== '' ? { ...work, roomId } : null;
@@ -45,6 +53,18 @@ export default function RoomScreen() {
   const seen = useRef(0);
   const [away, setAway] = useState(0);
   const chat = useRoomChat(target, toast.show);
+  // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
+  const hostId = useRuntimeState().host?.hostId ?? null;
+  const runKey = target === null ? '' : runKeyOf(hostId, target);
+  const run = useSyncExternalStore(roomRuns.subscribe, () => roomRuns.get(runKey), () => roomRuns.get(runKey));
+  const covered = useCovered();
+  const focused = useIsFocused();
+  const [deleted, setDeleted] = useState(false);
+  // Back after a successful delete: only while this screen is in front, and only if there is somewhere to go (critic m1).
+  useEffect(() => {
+    if (deleted && focused && router.canGoBack()) router.back();
+  }, [deleted, focused]);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -105,22 +125,145 @@ export default function RoomScreen() {
       else if (i === 1) void Clipboard.setStringAsync(m.text);
     });
   };
-  const openMembers = (): void => {
-    if (found === null || target === null) return;
-    const names = members.map((s) => `${found.room.lead === s.id ? '★ ' : ''}${s.label}`);
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...names, 'Cancel'], cancelButtonIndex: names.length, title: `Members (${members.length})` }, (i) => {
-      const s = members[i];
-      if (s !== undefined) router.push(`/session/${sessionParam({ ...target, sessionId: s.id })}` as never);
-    });
+  // Demo data has no hello: every menu method counts as present (screenshots).
+  const menuMethods = DEMO ? ['sessions.stop', 'sessions.resume', 'rooms.archive', 'rooms.delete'] : (state?.methods ?? null);
+  const menuFacts = (): RoomMenuFacts | null =>
+    found === null
+      ? null
+      : {
+          methods: menuMethods,
+          room: { id: found.room.id, title: found.room.title, mode: found.room.mode, hasProposal: found.room.proposal !== null, members: found.room.members, archived: found.room.archived },
+          sessions: found.work.sessions,
+          otherRooms: found.work.rooms,
+          online: canAct && !(DEMO && params.preview === 'offline'),
+          pending: run.pending,
+        };
+  // The latest facts, read when a run starts: the snapshot may have changed while a confirm was on screen (critic m2).
+  const factsRef = useRef<RoomMenuFacts | null>(null);
+  factsRef.current = menuFacts();
+  const runSession = async (kind: 'sleep' | 'wake', call?: (id: string) => Promise<SessionCommandOutcome>): Promise<void> => {
+    const f = factsRef.current;
+    if (f === null || target === null || (client === null && call === undefined)) return;
+    const who = membersWhere(f, kind === 'sleep' ? 'active' : 'sleeping');
+    if (who.length === 0) return;
+    toast.show(startToast(kind, who.length));
+    const sum = await roomRuns.run(runKey, kind, who, call ?? ((id) => {
+      const r = { projectPath: target.projectPath, workId: target.workId, sessionId: id };
+      return kind === 'sleep' ? client!.sessionCommand('sessions.stop', r) : client!.resumeSession(r);
+    }));
+    if (sum === null) return;
+    if (sum.allOk) {
+      haptic.success();
+      toast.show(sum.title);
+    } else haptic.error();
+  };
+  // Face ID first, then the call, in the room's single slot. Cancelled: nothing is sent and nothing is said.
+  const ownerThen = async (kind: 'archive' | 'delete', send: () => Promise<SessionCommandOutcome>): Promise<void> => {
+    // Offline now (the connection dropped while a sheet was up): no slot, no Face ID.
+    if (factsRef.current?.online !== true) {
+      toast.show(RECONNECTING);
+      return;
+    }
+    const res = await roomRuns.hold(runKey, kind, () => ownerGate(async () => (factsRef.current?.online === true ? confirmByOwner(FACE_ID_PROMPT[kind]) : 'cancelled'), send));
+    if (!res.started || res.value.kind === 'silent') return;
+    if (res.value.kind === 'toast') {
+      toast.show(res.value.text);
+      return;
+    }
+    const outcome = res.value.outcome;
+    if (outcome.outcome === 'ok') {
+      haptic.success();
+      if (kind === 'delete') setDeleted(true);
+      else toast.show(roomToast(kind, outcome));
+    } else {
+      haptic.error();
+      toast.show(roomToast(kind, outcome));
+    }
+  };
+  const archive = (): void => {
+    const f = factsRef.current;
+    if (f === null || target === null || client === null) return;
+    const sheet = archiveSheet(f);
+    ActionSheetIOS.showActionSheetWithOptions(
+      { title: sheet.title, message: sheet.message, options: [...sheet.options.map((o) => o.title), 'Cancel'], cancelButtonIndex: sheet.options.length },
+      (i) => {
+        const o = sheet.options[i];
+        if (o !== undefined) void ownerThen('archive', () => client.archiveRoom(target, o.stopSessions));
+      },
+    );
+  };
+  const remove = (): void => {
+    const f = factsRef.current;
+    if (f === null || target === null || client === null) return;
+    const q = deleteConfirm(f);
+    Alert.alert(q.title, q.message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: q.button, style: 'destructive', onPress: () => void ownerThen('delete', () => client.deleteRoom(target)) },
+    ]);
   };
   const openMenu = (): void => {
-    if (target === null) return;
-    const entries = [
-      { title: `Members (${members.length})`, run: openMembers },
-      { title: 'Open work', run: () => router.push(`/work/${workParam(target)}` as never) },
-    ];
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...entries.map((e) => e.title), 'Cancel'], cancelButtonIndex: entries.length }, (i) => entries[i]?.run());
+    const f = factsRef.current;
+    if (f === null) return;
+    const m = roomMenu(f);
+    const acts: Record<string, () => void> = {
+      sleepAll: () => {
+        const q = sleepConfirm(membersWhere(f, 'active').length);
+        Alert.alert(q.title, q.message, [{ text: 'Cancel', style: 'cancel' }, { text: q.button, onPress: () => void runSession('sleep') }]);
+      },
+      wakeAll: () => void runSession('wake'),
+      copy: () => {
+        void Clipboard.setStringAsync(f.room.id);
+        toast.show('Copied');
+      },
+      archive,
+      delete: remove,
+    };
+    const disabled = m.items.flatMap((it, i) => (it.disabled === true ? [i] : []));
+    const destructive = m.items.findIndex((it) => it.destructive === true);
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        options: [...m.items.map((it) => it.title), 'Cancel'],
+        cancelButtonIndex: m.items.length,
+        ...(m.title === undefined ? {} : { title: m.title }),
+        ...(disabled.length > 0 ? { disabledButtonIndices: disabled } : {}),
+        ...(destructive >= 0 ? { destructiveButtonIndex: destructive } : {}),
+      },
+      (i) => {
+        const it = m.items[i];
+        if (it !== undefined) acts[it.id]?.();
+      },
+    );
   };
+  // Developer preview: the result sheet comes out of the real runner with a fake call that answers what the bridge and host say.
+  const previewCall = (id: string): Promise<SessionCommandOutcome> => {
+    const nth = factsRef.current === null ? 0 : membersWhere(factsRef.current, 'active').findIndex((x) => x.id === id);
+    if (nth === 2) return Promise.resolve({ outcome: 'rejected', code: 'rate_limited', message: 'too many changes per minute' });
+    if (nth === 3) return Promise.resolve({ outcome: 'rejected', code: 'not_connected', message: 'not connected' });
+    return Promise.resolve({ outcome: 'ok' });
+  };
+  previewActs.current = {
+    menu: openMenu,
+    archive,
+    remove,
+    result: () => void runSession('sleep', previewCall),
+    busy: () => {
+      roomRuns.seedPending(runKey, { kind: 'sleep', done: 2, total: 4 });
+      // The menu reads the facts of the last render: let the screen see the progress first.
+      setTimeout(() => previewActs.current?.menu(), 300);
+    },
+  };
+  useEffect(() => {
+    if (!DEMO || found === null || params.preview === undefined) return;
+    const t = setTimeout(() => {
+      const p = previewActs.current;
+      if (params.preview === 'menu' || params.preview === 'offline') p?.menu();
+      else if (params.preview === 'archive') p?.archive();
+      else if (params.preview === 'delete') p?.remove();
+      else if (params.preview === 'result') p?.result();
+      else if (params.preview === 'busy') p?.busy();
+    }, 700);
+    return () => clearTimeout(t);
+  }, [params.preview, found !== null]);
 
   if (target === null) return <Shell title="Room" body={<EmptyState icon="questionmark.circle" title="This room link is not valid" />} />;
   if (state === null || state.snapshot === null) return <Shell title="Room" body={<Skeleton />} />;
@@ -310,6 +453,10 @@ export default function RoomScreen() {
         </View>
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
+      {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
+      <Modal visible={run.unseen !== null && !covered && focused} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+        {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
+      </Modal>
     </View>
   );
 }

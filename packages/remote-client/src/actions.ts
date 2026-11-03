@@ -487,6 +487,28 @@ export async function sessionCommand(rpc: Rpc, method: SessionCommand, ref: Sess
   }
 }
 
+// ---- Действия меню комнаты (A41b): Archive, Delete ----
+
+/** `rooms.archive {projectPath, workId, roomId, stopSessions}`. Изменяющий вызов: не повторяется. */
+export async function archiveRoom(rpc: Rpc, room: RoomRef, stopSessions: boolean): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call('rooms.archive', { projectPath: room.projectPath, workId: room.workId, roomId: room.roomId, stopSessions });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
+/** `rooms.delete {projectPath, workId, roomId}`. Изменяющий вызов: не повторяется. */
+export async function deleteRoom(rpc: Rpc, room: RoomRef): Promise<SessionCommandOutcome> {
+  try {
+    await rpc.call('rooms.delete', { projectPath: room.projectPath, workId: room.workId, roomId: room.roomId });
+    return { outcome: 'ok' };
+  } catch (error) {
+    return rejection(error) ?? { outcome: 'lost' };
+  }
+}
+
 export type SwitchOptions = Result<'sessions.switchOptions'>;
 export type SwitchOptionsOutcome = { outcome: 'ok'; options: SwitchOptions } | { outcome: 'lost' } | Rejected;
 

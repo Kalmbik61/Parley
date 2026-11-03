@@ -10,6 +10,8 @@ import {
   sendMessage,
   resumeSession,
   sessionCommand,
+  archiveRoom,
+  deleteRoom,
   loadSwitchOptions,
   switchAgent,
   type SessionCommand,
@@ -74,6 +76,10 @@ export interface RemoteClient {
   resumeSession(ref: SessionRef): Promise<ResumeSessionOutcome>;
   /** Stop (`feed.interrupt`), Put to sleep (`sessions.stop`), Close (`sessions.close`); без автоповтора. */
   sessionCommand(method: SessionCommand, ref: SessionRef): Promise<SessionCommandOutcome>;
+  /** Archive room (`rooms.archive`); без автоповтора. */
+  archiveRoom(room: RoomRef, stopSessions: boolean): Promise<SessionCommandOutcome>;
+  /** Delete room (`rooms.delete`); без автоповтора. */
+  deleteRoom(room: RoomRef): Promise<SessionCommandOutcome>;
   /** Цели замены провайдера (чтение). */
   switchOptions(ref: SessionRef): Promise<SwitchOptionsOutcome>;
   /** Заменить агента сессии; без автоповтора и без `force`. */
@@ -144,6 +150,8 @@ export function createRemoteClient({ rpc, clock }: RemoteClientOptions): RemoteC
     sendMessage: (params) => sendMessage(rpc, env, params),
     resumeSession: (ref) => resumeSession(rpc, ref),
     sessionCommand: (method, ref) => sessionCommand(rpc, method, ref),
+    archiveRoom: (room, stopSessions) => archiveRoom(rpc, room, stopSessions),
+    deleteRoom: (room) => deleteRoom(rpc, room),
     switchOptions: (ref) => loadSwitchOptions(rpc, ref),
     switchAgent: (params) => switchAgent(rpc, params),
     decideConsent: (id, decision, extra) => decideConsent(store, rpc, id, decision, extra),
