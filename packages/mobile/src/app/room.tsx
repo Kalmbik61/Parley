@@ -24,7 +24,8 @@ import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { useFollowEnd } from '../feed/use-follow-end';
-import { WINDOW_ROWS, sizeToInclude, widened, windowStart } from '../feed/window';
+import { useTailWindow } from '../feed/use-tail-window';
+import { WINDOW_ROWS } from '../feed/window';
 import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
 import { SelectTextSheet } from '../feed/SelectTextSheet';
 import type { Selection } from '../feed/selection';
@@ -43,6 +44,7 @@ import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
 type RoomRow = { t: 'line'; l: Line } | { t: 'out'; o: OutLetter };
+const noSpan = (): number => 0;
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 export default function RoomScreen() {
@@ -111,8 +113,8 @@ export default function RoomScreen() {
   const chron = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
   const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
   // The list gets the tail window of the rows (A44b): all drawn and measured in one pass; older rows come from the top.
-  const [windowSize, setWindowSize] = useState(WINDOW_ROWS);
-  const start = windowStart(chron.length, windowSize, () => 0);
+  const chronKeys = useMemo(() => chron.map(rowKey), [chron]);
+  const { start, widen, include, onRevealed, onScroll: trackStart } = useTailWindow(chronKeys, noSpan);
   const data = useMemo(() => chron.slice(start), [chron, start]);
   // A quote jump into rows outside the window widens it first, then scrolls once they are drawn.
   const jumpTo = useRef<string | null>(null);
@@ -126,6 +128,9 @@ export default function RoomScreen() {
   // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
   const follow = useFollowEnd(list, keys);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
   // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
   const shownEmpty = useRef(false);
   if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
@@ -376,14 +381,15 @@ export default function RoomScreen() {
           data={data}
           keyExtractor={rowKey}
           {...follow.handlers}
-          initialNumToRender={WINDOW_ROWS}
-          maxToRenderPerBatch={WINDOW_ROWS}
-          // Towards the start: the local rows first, then the next page from the Mac (not while the list is hidden).
-          onStartReached={() => {
-            if (!follow.revealed) return;
-            if (start > 0) setWindowSize((n) => widened(chron.length, n));
-            else if (target !== null) client?.loadOlder(target);
+          onScroll={(e) => {
+            follow.handlers.onScroll(e);
+            trackStart(e);
           }}
+          initialNumToRender={WINDOW_ROWS}
+          maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+          // Towards the start: the local rows first, then the next page from the Mac (not while the list is hidden).
+          // Not passed while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+          onStartReached={follow.revealed ? () => { if (start > 0) widen(); else if (target !== null) client?.loadOlder(target); } : undefined}
           onStartReachedThreshold={1}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           scrollEventThrottle={64}
@@ -441,7 +447,7 @@ export default function RoomScreen() {
                   if (at >= start) list.current?.scrollToIndex({ index: at - start, animated: true, viewPosition: 0.3 });
                   else {
                     jumpTo.current = id;
-                    setWindowSize(sizeToInclude(chron.length, windowSize, at));
+                    include(at);
                   }
                 }}
               />

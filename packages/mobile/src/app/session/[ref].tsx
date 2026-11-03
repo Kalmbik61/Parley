@@ -30,7 +30,8 @@ import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
 import { useFollowEnd } from '../../feed/use-follow-end';
-import { WINDOW_ROWS, widened, windowStart } from '../../feed/window';
+import { useTailWindow } from '../../feed/use-tail-window';
+import { WINDOW_ROWS } from '../../feed/window';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -200,14 +201,15 @@ export default function SessionScreen() {
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
   // The list gets the tail window of the folded rows (A44b): all drawn and measured in one pass; older rows come from the top.
-  const [windowSize, setWindowSize] = useState(WINDOW_ROWS);
-  const start = useMemo(
-    () => windowStart(allRows.length, windowSize, (i) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }),
-    [allRows, windowSize],
-  );
+  const allKeys = useMemo(() => allRows.map(rowKey), [allRows]);
+  const spanAt = useCallback((i: number) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }, [allRows]);
+  const { start, widen, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
   const rows = useMemo(() => allRows.slice(start), [allRows, start]);
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
   const follow = useFollowEnd(list, rowKeys);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
   // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
   const shownEmpty = useRef(false);
   if (rows.length === 0 && feed?.status === 'ready') shownEmpty.current = true;
@@ -494,11 +496,16 @@ export default function SessionScreen() {
         data={rows}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         initialNumToRender={WINDOW_ROWS}
-        maxToRenderPerBatch={WINDOW_ROWS}
-        onStartReached={() => { if (follow.revealed && start > 0) setWindowSize((n) => widened(allRows.length, n)); }}
+        maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+        // Not while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+        onStartReached={follow.revealed && start > 0 ? widen : undefined}
         onStartReachedThreshold={1}
         keyExtractor={rowKey}
         {...follow.handlers}
+        onScroll={(e) => {
+          follow.handlers.onScroll(e);
+          trackStart(e);
+        }}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
