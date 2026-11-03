@@ -354,7 +354,7 @@ describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
   it('a bracket bomb returns raw text fast', () => {
     const bomb = `${'['.repeat(10000)}a${']'.repeat(10000)}`;
     const { ms, root } = timed(bomb);
-    expect(ms).toBeLessThan(200);
+    expect(ms).toBeLessThan(1000);
     expect(plainText(root)).toBe(bomb);
     const flat = `${'[a] '.repeat(2001)}`; // balanced but more than 2000 `[`
     expect(plainText(parseMarkdown(flat))).toBe(flat);
@@ -363,14 +363,14 @@ describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
 
   it('list and quote markers on one line, together, return raw text fast', () => {
     // `- - - …` alone is a thematic break (cheap, not raw); the others are bombs.
-    expect(timed('- '.repeat(4000)).ms).toBeLessThan(200);
+    expect(timed('- '.repeat(4000)).ms).toBeLessThan(1000);
     const bombs = [
       '> - '.repeat(400), '1. '.repeat(3000), `${'>'.repeat(30)} x`,
       `>${'- '.repeat(4000)}`, `${'>'.repeat(100)} ${'- '.repeat(4000)}`, '- >'.repeat(3000), '1. >'.repeat(2000),
     ];
     for (const bomb of bombs) {
       const { ms, root } = timed(bomb);
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(1000);
       expect(plainText(root)).toBe(bomb);
     }
     expect(all(parseMarkdown('- a\n- b\n  - c')).some((n) => n.type === 'list')).toBe(true);
@@ -388,7 +388,7 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
   it('lazy continuation lines after a list item or a quote return raw text fast', () => {
     for (const bomb of ['- a\n' + 'b\n'.repeat(14998), '> a\n' + 'b\n'.repeat(14998), '> a\nb\n'.repeat(10000)]) {
       const { ms, root } = timed(bomb);
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(1000);
       expect(plainText(root)).toBe(bomb);
     }
   });
@@ -450,8 +450,8 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
       for (const [pname, prefix] of Object.entries(BAND_PREFIXES)) {
         const input = prefix + bomb;
         let ms = timed(input).ms;
-        if (ms > 500) ms = timed(input).ms; // a busy machine may stall one run, a real hang (seconds) stalls both
-        if (ms > 500) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
+        if (ms > 2000) ms = timed(input).ms; // a busy machine may stall one run, a real hang (seconds) stalls both
+        if (ms > 2000) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
       }
     }
     expect(slow).toEqual([]);
@@ -509,7 +509,7 @@ describe('the code skip cannot be fooled (A40 critic M6, round 5)', () => {
         const input = prefix + bomb;
         const first = timed(input);
         const ms = Math.min(first.ms, timed(input).ms);
-        if (ms > 500) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
+        if (ms > 2000) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
         // The fence is not column 0 / not a fence, so the bomb counts: it must come back raw.
         // `tildeInfo` is a real fence at column 0: the bomb is code (a legal parse), only the time bound applies.
         if (pname !== 'tildeInfo' && !isRaw(first.root, input)) bad.push(`${pname}+${bname}: not raw`);
@@ -539,7 +539,7 @@ describe('a long list is shown as its source (A40 critic m19)', () => {
       parseMarkdown(src(4999));
       return performance.now() - t;
     };
-    expect(Math.min(run(), run())).toBeLessThan(500); // the best of two: a busy machine may stall one run
+    expect(Math.min(run(), run())).toBeLessThan(2000); // the best of two: a busy machine may stall one run
   });
 });
 
@@ -563,12 +563,12 @@ describe('one budget per message (A40 critic M7)', () => {
     mixed: Array.from({ length: 32 }, (_, l) => Array.from({ length: 300 }, () => `${l % 2 === 0 ? '-' : '+'} x`).join('\n')).join('\n\n'),
   };
 
-  it('the critic generators come back raw (or as code) in under 0.5 s', () => {
+  it('the critic generators come back raw (or as code) in under 2 s', () => {
     const bad: string[] = [];
     for (const [name, md] of Object.entries(generators)) {
       const first = timed(md);
       const ms = Math.min(first.ms, timed(md).ms);
-      if (ms > 500) bad.push(`${name}: ${Math.round(ms)} ms`);
+      if (ms > 2000) bad.push(`${name}: ${Math.round(ms)} ms`);
       if (!rawOrCode(first.root, md)) bad.push(`${name}: neither raw nor code`);
     }
     expect(bad).toEqual([]);

@@ -8,6 +8,7 @@ import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-route
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
+import { capsuleOfSession } from '../cards/status';
 import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
 import { confirmByOwner } from '../auth/lock-instance';
 import { useCloseOnLock } from '../auth/use-lock-sheet';
@@ -93,8 +94,8 @@ export default function RoomScreen() {
   const mentionables = useMemo<Mentionable[]>(
     () =>
       members.map((s) => {
-        const a = found === null || target === null ? 'idle' : attentionOfSession(state!, { projectPath: target.projectPath, workId: target.workId, sessionId: s.id }, s);
-        return { id: s.id, label: s.label, meta: `${s.model ?? s.provider} · ${a === 'needs-you' ? 'needs you' : a === 'working' ? 'working' : 'idle'}` };
+        const word = found === null || target === null ? 'idle' : capsuleOfSession(state!, { projectPath: target.projectPath, workId: target.workId, sessionId: s.id }, s, Date.now()).label.toLowerCase();
+        return { id: s.id, label: s.label, meta: `${s.model ?? s.provider} · ${word}` };
       }),
     [members, state, found, target],
   );
