@@ -72,6 +72,7 @@ import { SwitchAgentDialogHost } from '../components/dialogs/SwitchAgentDialog.j
 import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
+import { BoardSync } from '../board/BoardSync.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { cn } from '../lib/cn.js';
@@ -829,6 +830,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           компонент, а не хук в теле: на каждое `activity.changed` перерисовывается он, а не
           вся оболочка (раунд исправлений 1 куска 3.3). */}
       <SidebarSectionsWriter />
+      <BoardSync bridge={bridge} />
       <LayoutPersistence bridge={bridge} />
       {shell}
       {/* Над <webview> указатель до DOM окна не доходит, и зоны броска над группой со страницей молчали
