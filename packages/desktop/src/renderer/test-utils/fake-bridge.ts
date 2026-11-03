@@ -291,6 +291,7 @@ export function createFakeBridge(): FakeBridge {
   let consentCards: ConsentCard[] = [];
   /** Ответы без `setHandler`: у остальных методов обработчик обязателен, у согласий на папки хватает списка в памяти. */
   const defaultHandlers: Partial<Record<MethodName, Handler>> = {
+    'worktrees.hold': () => ({ ok: true }),
     'trust.list': () => ({ folders: trustFolders.map((record) => ({ ...record })) }),
     'trust.check': (({ folder }: { folder: string }) => ({ trusted: trustFolders.some((record) => record.folder === folder) })) as Handler,
     'trust.grant': (({ folder, by }: { folder: string; by: TrustRecord['by'] }) => {

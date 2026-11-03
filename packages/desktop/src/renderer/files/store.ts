@@ -17,6 +17,7 @@
 
 import { create } from 'zustand';
 import type { WindowWorkEntry } from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { FileRootSpec, WorkLayout } from '../../shared/layout-types.js';
@@ -24,8 +25,10 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { groups } from '../layout/tree.js';
 import { useLayoutStore } from '../layout/store.js';
 import { fileTabNames } from '../layout/tab-meta.js';
+import { hostMethods } from '../lib/capabilities.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useNotesStore } from '../review/notes/store.js';
+import { useHostStore } from '../store/host.js';
 import { bufferKey, bufferReducer, initialBuffer, isBufferDirty, splitBufferKey, type BufferEvent, type BufferModel } from './buffer.js';
 import type { DirtyBufferRef } from './close-guard.js';
 
@@ -229,6 +232,24 @@ export function dirtyBufferKeys(buffers: Record<string, FileBuffer>): string[] {
 }
 
 /**
+ * Сессии, чьи копии (worktree) держат несохранённые правки: хост не уберёт их папки.
+ * `workKey` = `${projectPath} ${workId}`, а в пути проекта пробелы возможны, поэтому `workId` — хвост
+ * после последнего пробела. Без повторов, по порядку `refKey`.
+ */
+export function heldWorktreeRefs(buffers: Record<string, FileBuffer>): SessionRef[] {
+  const byKey = new Map<string, SessionRef>();
+  for (const key of dirtyBufferKeys(buffers)) {
+    const { root } = buffers[key]!;
+    if (root.spec.kind !== 'worktree') continue;
+    const cut = root.workKey.lastIndexOf(' ');
+    if (cut < 0) continue;
+    const ref: SessionRef = { projectPath: root.workKey.slice(0, cut), workId: root.workKey.slice(cut + 1), sessionId: root.spec.sessionId };
+    byKey.set(refKey(ref), ref);
+  }
+  return [...byKey.keys()].sort().map((key) => byKey.get(key)!);
+}
+
+/**
  * Имя файла буфера для вопросов о файле («Save changes to …?», закрытие окна, «Discard worktree…») —
  * так же, как заголовок его вкладки в строке (раунд fix-live, D5): у одного пути из двух корней —
  * с меткой корня, иначе не видно, чей буфер сохраняешь или отбрасываешь. Вкладки уже нет в
@@ -310,6 +331,25 @@ export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
       bridge.app.setDirtyBuffers(dirty);
     }
   };
+
+  // Копии с несохранёнными правками — хосту (`worktrees.hold`). Пустой список после каждого (пере)подключения
+  // тоже уходит: без первого сообщения хост уборку не начинает.
+  let sentHolds: string | null = null;
+  const sendHolds = (force: boolean): void => {
+    if (!hostMethods(useHostStore.getState().status).has('worktrees.hold')) return;
+    const refs = heldWorktreeRefs(useFilesStore.getState().buffers);
+    const json = JSON.stringify(refs);
+    if (!force && json === sentHolds) return;
+    sentHolds = json;
+    bridge.call('worktrees.hold', { refs }).catch((error: unknown) => {
+      sentHolds = null;
+      console.warn('[parley] worktrees.hold', error);
+    });
+  };
+  const unsubHost = useHostStore.subscribe((state, prev) => {
+    if (state.connections !== prev.connections) sendHolds(true);
+  });
+
   const unsubFiles = useFilesStore.subscribe((state, prev) => {
     if (state.buffers === prev.buffers) return;
     for (const [key, buffer] of Object.entries(state.buffers)) {
@@ -318,6 +358,7 @@ export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
       if (before?.status !== 'disk-changed-clean' || before.diskMtimeMs !== buffer.model.diskMtimeMs) reload(key, buffer);
     }
     sendDirty();
+    sendHolds(false);
   });
   const unsubNotes = useNotesStore.subscribe((state, prev) => {
     if (state.pendingSaves !== prev.pendingSaves) sendDirty();
@@ -333,11 +374,13 @@ export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
 
   // Раскладка могла измениться до подписки.
   release();
+  sendHolds(false);
 
   return () => {
     unsubLayout();
     unsubFiles();
     unsubNotes();
+    unsubHost();
     unsubChanged();
   };
 }

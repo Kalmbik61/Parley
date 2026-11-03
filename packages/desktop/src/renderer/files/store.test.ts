@@ -6,16 +6,16 @@
 import { act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { TextFile } from '../../shared/files-types.js';
-import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { FileRootSpec, GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { moveTab, pruneLayout } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { bufferKey } from './buffer.js';
+import { bufferKey, initialBuffer } from './buffer.js';
 import { useNotesStore } from '../review/notes/store.js';
-import { absPathOf, bindBuffersToLayouts, bufferName, defaultRoot, filesRootSpec, rootDirOf, useFilesStore } from './store.js';
+import { absPathOf, bindBuffersToLayouts, bufferName, defaultRoot, filesRootSpec, heldWorktreeRefs, rootDirOf, useFilesStore, type FileBuffer } from './store.js';
 
 const worktree = (createdAt: string | null) => ({ path: '/wt/s02', branch: 'harnas/w-0003/s02', base: 'main', createdAt });
 
@@ -315,6 +315,36 @@ describe('внешний файл: только чтение (2026-10-31)', () =
   it('absPathOf внешнего корня — сам путь, rootDirOf — null', () => {
     expect(absPathOf(entry, { kind: 'external' }, abs)).toBe(abs);
     expect(rootDirOf(entry, { kind: 'external' })).toBeNull();
+  });
+});
+
+describe('heldWorktreeRefs — копии с несохранёнными правками для хоста', () => {
+  const buffer = (workKey: string, spec: FileRootSpec, dirty: boolean): FileBuffer => ({
+    root: { workKey, spec },
+    path: 'a.ts',
+    watchId: null,
+    model: { ...initialBuffer(), status: 'clean', text: dirty ? 'x' : 'a', savedText: 'a' },
+  });
+
+  it('грязный буфер worktree даёт ссылку на сессию', () => {
+    const buffers = { k1: buffer('/p w-01', { kind: 'worktree', sessionId: 's-1' }, true) };
+    expect(heldWorktreeRefs(buffers)).toEqual([{ projectPath: '/p', workId: 'w-01', sessionId: 's-1' }]);
+  });
+
+  it('чистый буфер и корень project не дают', () => {
+    const buffers = {
+      k1: buffer('/p w-01', { kind: 'worktree', sessionId: 's-1' }, false),
+      k2: buffer('/p w-01', { kind: 'project' }, true),
+    };
+    expect(heldWorktreeRefs(buffers)).toEqual([]);
+  });
+
+  it('пробел в пути проекта разбирается верно', () => {
+    const buffers = {
+      k1: buffer('/my proj/app w-02', { kind: 'worktree', sessionId: 's-3' }, true),
+      k2: buffer('/my proj/app w-02', { kind: 'worktree', sessionId: 's-3' }, true),
+    };
+    expect(heldWorktreeRefs(buffers)).toEqual([{ projectPath: '/my proj/app', workId: 'w-02', sessionId: 's-3' }]);
   });
 });
 

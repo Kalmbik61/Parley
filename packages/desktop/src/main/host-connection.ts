@@ -16,6 +16,7 @@ import {
   refKey,
   ROOMS_MAIL_FEATURE,
   WORKS_SYNC_FEATURE,
+  WORKTREE_HOLDS_FEATURE,
   type BrowserAgentOpEvent,
   type BrowserAgentResult,
   type EventData,
@@ -455,7 +456,7 @@ export class HostConnection {
           token,
           protocol: PROTOCOL_VERSION,
           client: 'desktop',
-          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE, ...(this.worksSync ? [WORKS_SYNC_FEATURE] : [])],
+          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE, WORKTREE_HOLDS_FEATURE, ...(this.worksSync ? [WORKS_SYNC_FEATURE] : [])],
         },
       }),
     );
