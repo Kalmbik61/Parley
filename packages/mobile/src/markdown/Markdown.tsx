@@ -2,10 +2,10 @@
 // (D1 §9.2–9.3). A render error falls back to the raw text, the screen never crashes.
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { typography, useColors } from '../theme';
-import { codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, plainText, addressOf, type Defs } from './helpers';
+import { codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, addressOf, type Defs } from './helpers';
 import { definitionsOf, hostOf, parseMarkdown, rawRoot, type MdNode } from './parse';
 
 export function confirmOpen(url: string): void {
@@ -72,8 +72,15 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
             );
           }
           case 'image':
-          case 'imageReference':
-            return `\n${imageLine(n, ctx.defs)}\n`;
+          case 'imageReference': {
+            // On its own line, but no extra blank lines; the title (" (title)") stays on the image line.
+            const prev = nodes[i - 1];
+            const next = nodes[i + 1];
+            const lead = prev !== undefined && prev.type !== 'break' ? '\n' : '';
+            const titled = next?.type === 'text' && next.literal === true && (next.value ?? '').startsWith(' (');
+            const trail = next !== undefined && next.type !== 'break' && !titled ? '\n' : '';
+            return `${lead}${imageLine(n, ctx.defs)}${trail}`;
+          }
           case 'mention':
           case 'humanMention': {
             if (ctx.labelOf === undefined) return n.raw ?? '';
@@ -201,19 +208,19 @@ function ListView({ node, ctx }: { node: MdNode; ctx: Ctx }) {
       {items.map((item, i) => {
         const blocks = item.children ?? [];
         if (typeof item.checked === 'boolean') {
-          // A task item is one accessible checkbox: the symbol and the first paragraph, labelled with its text.
+          // A task item: only the marker is the accessible element ("done" / "not done"); the text stays normal text.
           const head = blocks[0]?.type === 'paragraph' ? blocks[0] : null;
           const rest = head === null ? blocks : blocks.slice(1);
           return (
             <View key={i} style={styles.itemBody}>
-              <View
-                accessible
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: item.checked }}
-                accessibilityLabel={head === null ? (item.checked ? 'done' : 'not done') : plainText(head)}
-                style={styles.item}
-              >
-                <View style={{ width: markerWidth }}>
+              <View style={styles.item}>
+                <View
+                  accessible
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: item.checked }}
+                  accessibilityLabel={item.checked ? 'done' : 'not done'}
+                  style={{ width: markerWidth }}
+                >
                   <SymbolView name={item.checked ? 'checkmark.square.fill' : 'square'} size={symbol} tintColor={item.checked ? c.tint : c.label2} style={{ width: symbol, height: Math.round(22 * fontScale) }} />
                 </View>
                 <View style={styles.flex}>{head !== null && <BlockView node={head} ctx={ctx} />}</View>
@@ -305,7 +312,7 @@ class Boundary extends Component<{ text: string; children: ReactNode }, { failed
   }
 }
 
-function Tree({ text, labelOf, tableOffset }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number }) {
+const Tree = memo(function Tree({ text, labelOf, tableOffset }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number }) {
   const root = useMemo<MdNode>(() => {
     try {
       return parseMarkdown(text);
@@ -321,7 +328,7 @@ function Tree({ text, labelOf, tableOffset }: { text: string; labelOf?: (session
       ))}
     </View>
   );
-}
+});
 
 /** While `active` (a reply being written) the text is taken at most every `ms`; otherwise at once. */
 function useThrottled(text: string, active: boolean, ms: number): string {

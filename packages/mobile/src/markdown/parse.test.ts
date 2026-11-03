@@ -104,6 +104,9 @@ describe('markdown: what Markdown hides stays visible', () => {
     const para = kids(parseMarkdown('[a](https://e.com "T") ![i](https://e.com/p.png "P")'))[0]!;
     expect(plainText(para)).toContain(' (T)');
     expect(plainText(para)).toContain(' (P)');
+    // the title stays a literal text node right after the image (the renderer keeps it on the image line)
+    const kidsOf = kids(para);
+    expect(kidsOf[kidsOf.findIndex((n) => n.type === 'image') + 1]).toMatchObject({ type: 'text', value: ' (P)', literal: true });
   });
 
   it('a table with excess cells becomes a code block with the table source', () => {
@@ -306,5 +309,33 @@ describe('table width and font scale', () => {
     expect(columnWidths(rows, 1)).toEqual([100]);
     expect(columnWidths(rows, 2)).toEqual([180]);
     expect(columnWidths([{ type: 'tableRow', children: [cell('')] }], 2)).toEqual([128]);
+  });
+});
+
+describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+
+  it('a bracket bomb returns raw text fast', () => {
+    const bomb = `${'['.repeat(10000)}a${']'.repeat(10000)}`;
+    const { ms, root } = timed(bomb);
+    expect(ms).toBeLessThan(200);
+    expect(plainText(root)).toBe(bomb);
+    const flat = `${'[a] '.repeat(2001)}`; // balanced but more than 2000 `[`
+    expect(plainText(parseMarkdown(flat))).toBe(flat);
+    expect(all(parseMarkdown('[a](https://e.com) [b] [c]')).some((n) => n.type === 'link')).toBe(true);
+  });
+
+  it('list and quote markers on one line, together, return raw text fast', () => {
+    for (const bomb of ['- '.repeat(4000), '> - '.repeat(400), '1. '.repeat(3000), `${'>'.repeat(30)} x`.repeat(1)]) {
+      const { ms, root } = timed(bomb);
+      expect(ms).toBeLessThan(200);
+      expect(plainText(root)).toBe(bomb);
+    }
+    expect(all(parseMarkdown('- a\n- b\n  - c')).some((n) => n.type === 'list')).toBe(true);
+    expect(types(parseMarkdown('- '.repeat(24) + 'x'))).toEqual(['list']);
   });
 });

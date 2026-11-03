@@ -65,15 +65,25 @@ export const MD_EMPHASIS_MAX = 2000;
 export const MD_TABLE_ROWS_MAX = 200;
 export const MD_TABLE_CELLS_MAX = 2000;
 export const MD_NEST_MAX = 24;
+export const MD_BRACKETS_MAX = 2000;
+export const MD_BRACKET_DEPTH_MAX = 32;
+
+/** Quote and list markers on one line, counted together (`- - - …`, `> - > - …`): they hang the parse itself. */
+const MARKERS_TOO_DEEP = new RegExp(`^(?:[ \\t]*(?:>|[-+*]|\\d{1,9}[.)])(?=[ \\t]|$)){${MD_NEST_MAX + 1}}`, 'm');
 
 const tooLarge = (text: string): boolean => {
   if (text.length > MD_BYTES_MAX) return true;
-  let n = 0;
+  let emphasis = 0;
+  let brackets = 0;
+  let depth = 0;
   for (let i = 0; i < text.length; i++) {
     const ch = text.charCodeAt(i);
-    if ((ch === 42 || ch === 95 || ch === 126) && ++n > MD_EMPHASIS_MAX) return true;
+    if ((ch === 42 || ch === 95 || ch === 126) && ++emphasis > MD_EMPHASIS_MAX) return true;
+    // `[` bombs: unmatched or deeply nested brackets make link resolution quadratic.
+    if (ch === 91 && (++brackets > MD_BRACKETS_MAX || ++depth > MD_BRACKET_DEPTH_MAX)) return true;
+    if (ch === 93 && depth > 0) depth--;
   }
-  return false;
+  return MARKERS_TOO_DEEP.test(text);
 };
 
 /** Lists and quotes nested inside each other, counted together. */
@@ -147,7 +157,7 @@ function expandText(value: string, literal: boolean): MdNode[] {
   const pushText = (text: string): void => {
     text.split(LINE_BREAK).forEach((line, index) => {
       if (index > 0) out.push({ type: 'break' });
-      if (line !== '') out.push({ type: 'text', value: line });
+      if (line !== '') out.push(literal ? { type: 'text', value: line, literal: true } : { type: 'text', value: line });
     });
   };
   if (literal) {
