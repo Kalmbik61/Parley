@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<script>window.jsxRuntime=window.jsxRuntime||{Fragment:React.Fragment,jsx:function(t,p,k){var q=Object.assign({},p);if(k!==undefined)q.key=k;return React.createElement(t,q)},jsxs:function(t,p,k){var q=Object.assign({},p);if(k!==undefined)q.key=k;return React.createElement(t,q)}};</script>
+<script src="https://unpkg.com/framer-motion@11.18.2/dist/framer-motion.js"></script>
+<script src="./orb-spec.js"></script>
+</helmet>
+<div style="position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:visible">
+  <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+    <div style="width:100%;height:100%;border-radius:50%;background:radial-gradient(125% 125% at 32% 26%, #F0DDA5 0%, #EFB05C 46%, #975C00 100%)"></div>
+  </sc-if>
+  {{ orb }}
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:260,&quot;height&quot;:260},&quot;state&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;idle&quot;,&quot;listening&quot;,&quot;thinking&quot;,&quot;working&quot;,&quot;forming&quot;,&quot;speaking&quot;,&quot;awaiting&quot;,&quot;recording&quot;,&quot;error&quot;,&quot;offline&quot;],&quot;default&quot;:&quot;idle&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:168,&quot;min&quot;:24,&quot;max&quot;:320,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;},&quot;reduced&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;card&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;voice&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;paused&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;arcPeriod&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;1.6&quot;,&quot;2&quot;,&quot;2.4&quot;],&quot;default&quot;:&quot;2&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;cutout&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#100E0C&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;seed&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;tsType&quot;:&quot;number&quot;}}">
+class Component extends DCLogic {
+  static ok() { return !!(window.Motion && window.Motion.motion && window.Motion.useAnimationFrame && window.JarvisOrbSpec); }
+  state = { ready: Component.ok() };
+  componentDidMount() {
+    if (!this.state.ready) this._poll = setInterval(() => { if (Component.ok()) { clearInterval(this._poll); this.setState({ ready: true }); } }, 40);
+  }
+  componentWillUnmount() { clearInterval(this._poll); }
+  renderVals() {
+    const p = this.props, size = Number(p.size) || 168;
+    if (!this.state.ready) return { loading: true, orb: null };
+    const View = Component._view || (Component._view = Component.build(window.Motion, window.JarvisOrbSpec));
+    const b = v => v === true || v === 'true';
+    return {
+      loading: false,
+      orb: React.createElement(View, {
+        state: p.state || 'idle', size, reduced: b(p.reduced), card: b(p.card), voice: b(p.voice), paused: b(p.paused),
+        arcT: Number(p.arcPeriod) || 2, cutout: p.cutout || '#100E0C', seed: Number(p.seed) || 1
+      })
+    };
+  }
+
+  static build(M, S) {
+    const { motion, AnimatePresence, useMotionValue, useAnimationFrame } = M;
+    const h = React.createElement, useRef = React.useRef, TAU = Math.PI * 2;
+    const EASE = M.cubicBezier ? M.cubicBezier(0.42, 0, 0.58, 1) : (u => u < .5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+    const EO = M.cubicBezier ? M.cubicBezier(0, 0, 0.58, 1) : (u => 1 - (1 - u) * (1 - u));
+    const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')'; };
+    const soft = (c, a) => 'radial-gradient(closest-side, ' + rgba(c, a) + ' 0%, ' + rgba(c, a * .8) + ' 28%, ' + rgba(c, a * .45) + ' 55%, ' + rgba(c, a * .14) + ' 80%, ' + rgba(c, 0) + ' 100%)';
+    const grads = P => ({
+      core: 'radial-gradient(125% 125% at 32% 26%, ' + P.c3 + ' 0%, ' + P.c1 + ' 46%, ' + P.edge + ' 100%)',
+      halo: 'radial-gradient(closest-side, ' + rgba(P.c1, .5) + ' 0%, ' + rgba(P.c1, .5) + ' 70%, ' + rgba(P.c1, .36) + ' 76%, ' + rgba(P.c1, .18) + ' 84%, ' + rgba(P.c1, .06) + ' 92%, ' + rgba(P.c1, 0) + ' 100%)',
+      b1: soft(P.c3, .95), b2: soft(P.c1w, .95), b3: soft(P.c2, .5)
+    });
+    const SECTOR = 'radial-gradient(ellipse 22% 36% at 50% 17%, rgba(255,253,248,.95) 0%, rgba(255,253,248,.62) 38%, rgba(255,253,248,.2) 70%, rgba(255,253,248,0) 100%)';
+    const SHADE = 'linear-gradient(180deg, rgba(255,250,240,.16) 0%, rgba(255,250,240,0) 26%, rgba(0,0,0,0) 56%, rgba(0,0,0,.26) 100%)';
+    const SHEEN = 'radial-gradient(58% 42% at 35% 20%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 58%)';
+    const NUM = ['fB', 'aB', 's0', 'hLo', 'hHi', 'hS', 'hs0', 'fD', 'aD', 'fR', 'rot0', 'aP', 'aL', 'dim', 'op'];
+    const abs = { position: 'absolute', pointerEvents: 'none' };
+
+    function Fill({ bg, xf }) {
+      return h(AnimatePresence, { initial: false },
+        h(motion.div, {
+          key: bg, style: Object.assign({}, abs, { inset: 0, borderRadius: '50%', background: bg }),
+          initial: { opacity: 0 }, animate: { opacity: 1 },
+          exit: { opacity: 0, transition: { delay: xf / 1000, duration: 0 } },
+          transition: { duration: xf / 1000, ease: xf <= 100 ? 'linear' : 'easeInOut' }
+        }));
+    }
+    function Layer({ on, k, rm, enter, children }) {
+      return h(AnimatePresence, { initial: false },
+        on ? h(motion.div, {
+          key: k, style: Object.assign({}, abs, { inset: 0 }),
+          initial: { opacity: 0 },
+          animate: { opacity: 1, transition: { duration: rm ? .1 : (enter || .2), ease: rm ? 'linear' : 'easeOut' } },
+          exit: { opacity: 0, transition: { duration: rm ? .1 : .15, ease: rm ? 'linear' : 'easeIn' } }
+        }, children) : null);
+    }
+    function makeGen(seed) {
+      let s = (seed * 7919) % 233280 || 1;
+      const rnd = () => (s = (s * 9301 + 49297) % 233280) / 233280;
+      let on = false, segEnd = 0, sylEnd = 0, v = 0;
+      return (t, kind) => {
+        if (t >= segEnd) { on = !on; segEnd = t + (on ? (kind === 'tts' ? 1.3 + rnd() * 1.5 : .9 + rnd() * 1.8) : (kind === 'tts' ? .35 + rnd() * .45 : .45 + rnd() * .9)); sylEnd = 0; }
+        if (t >= sylEnd) { sylEnd = t + .11 + rnd() * .17; v = on ? .45 + rnd() * .55 : 0; }
+        return v;
+      };
+    }
+    const ALERT = bs => h('span', { style: { font: '700 ' + Math.round(bs * .66) + 'px/1 "Golos Text", system-ui, sans-serif', color: '#2A0C07', marginTop: -1 } }, '!');
+    const SPEAKER = bs => h('svg', { viewBox: '0 0 24 24', width: bs * .64, height: bs * .64, fill: 'none', stroke: '#2B1C08', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round' },
+      h('path', { d: 'M4 9.5h3l4.5-4v13L7 14.5H4z', fill: '#2B1C08' }), h('path', { d: 'M15.5 9a4 4 0 0 1 0 6' }), h('path', { d: 'M18.5 6.5a7.5 7.5 0 0 1 0 11' }));
+
+    return function OrbView(props) {
+      const d = props.size, mini = d <= 48, rm = props.reduced;
+      const c = S.resolve(props.state, { mini, reduced: rm, card: props.card, voice: props.voice, paused: props.paused, arcT: props.arcT });
+      const P = S.PAL[c.pal], G = grads(P);
+      const tw = useRef(null), ph = useRef(null), gen = useRef(null), live = useRef(null);
+      const sig = NUM.map(k => c[k]).join('|');
+      if (!tw.current) {
+        const v = {}; NUM.forEach(k => { v[k] = c[k]; });
+        tw.current = { cur: v, from: Object.assign({}, v), to: Object.assign({}, v), t0: 0, dur: 0, sig };
+        const r = (props.seed * 0.618034) % 1;
+        ph.current = { b: r, d1: (r + .21) % 1, d2: (r + .57) % 1, d3: (r + .83) % 1, r: 0, p: 0, a: r, s: r, c: r, t: 0, L: 0, idle: 0 };
+        gen.current = makeGen(props.seed);
+      } else if (tw.current.sig !== sig) {
+        const T = tw.current, to = {}; NUM.forEach(k => { to[k] = c[k]; });
+        T.from = Object.assign({}, T.cur); T.to = to; T.t0 = performance.now(); T.dur = c.ramp; T.sig = sig;
+      }
+      live.current = {
+        level: c.level, frozen: c.frozen, ring: c.ring && c.ring.mode,
+        arcT: c.arc && c.arc.T, arcStill: c.arc ? c.arc.still : 0, secT: c.sector && c.sector.T, secStill: c.sector ? c.sector.still : 0,
+        dotsT: c.dots && c.dots.T, dotsStill: !!(c.dots && c.dots.still)
+      };
+      ph.current.idle = 0;
+
+      const V = useMotionValue;
+      const mv = {
+        core: V(c.s0), hO: V(c.hLo), hS: V(1 + c.hs0), rot: V(c.rot0), b1x: V(0), b1y: V(0), b2x: V(0), b2y: V(0), b3x: V(0), b3y: V(0),
+        rS: V(1.12), rO: V(.55), dim: V(c.dim), op: V(c.op), aR: V(-30), sR: V(40), y0: V(0), y1: V(0), y2: V(0), o0: V(0), o1: V(0), o2: V(0)
+      };
+      const s1 = .58 * d, s2 = .52 * d, s3 = .46 * d;
+
+      // still = кадр до первого rAF (статичные снимки, печать, фоновая вкладка): целевые значения, характерная фаза
+      const step = (time, delta, still) => {
+        const T = tw.current, q = ph.current, L = live.current;
+        if (!still) q.ran = true;
+        const u = still || !T.dur ? 1 : Math.min(1, (performance.now() - T.t0) / T.dur), e = EASE(u), x = T.cur;
+        for (let i = 0; i < NUM.length; i++) { const k = NUM[i]; x[k] = T.from[k] + (T.to[k] - T.from[k]) * e; }
+        const dt = still ? 0 : Math.min(delta || 16, 64) / 1000;
+        if (still) { if (L.level) q.L = L.level === 'tts' ? .55 : .45; }
+        else if (L.level) { if (!L.frozen) { const raw = gen.current(time / 1000, L.level); q.L += (raw - q.L) * (1 - Math.exp(-dt / (raw > q.L ? .05 : .18))); } }
+        else q.L *= Math.exp(-dt / .18);
+        if (!still) {
+          const moving = u < 1 || x.fB || x.fD || x.fR || L.level || q.L > .002 || L.ring === 'cycle' || L.arcT || L.secT || L.dotsT;
+          if (!moving) { if (q.idle >= 2) return; q.idle++; } else q.idle = 0;
+        }
+        q.b += dt * x.fB; q.d1 += dt * x.fD / 1.7; q.d2 += dt * x.fD / 2.1; q.d3 += dt * x.fD / 1.4; q.r += dt * x.fR * 360; q.p += dt / .62;
+        if (L.arcT) q.a += dt / L.arcT;
+        if (L.secT) q.s += dt / L.secT;
+        if (L.ring === 'cycle') q.c += dt / 2.4;
+        if (L.dotsT) q.t += dt; else q.t = 0;
+        const W = v => (1 - Math.cos(TAU * v)) / 2, wb = W(q.b);
+        mv.core.set(x.s0 + x.aB * wb + x.aP * q.L * W(q.p));
+        mv.hO.set(Math.min(1, x.hLo + (x.hHi - x.hLo) * wb + x.aL * q.L));
+        mv.hS.set(1 + x.hs0 + x.hS * wb);
+        const w1 = W(q.d1) * x.aD, w2 = W(q.d2) * x.aD, w3 = W(q.d3) * x.aD;
+        mv.b1x.set(.12 * s1 * w1); mv.b1y.set(.09 * s1 * w1);
+        mv.b2x.set(-.11 * s2 * w2); mv.b2y.set(.11 * s2 * w2);
+        mv.b3x.set(.09 * s3 * w3); mv.b3y.set(-.11 * s3 * w3);
+        mv.rot.set(x.rot0 + q.r); mv.dim.set(x.dim); mv.op.set(x.op);
+        if (L.ring === 'cycle') { const k = EO(q.c % 1); mv.rS.set(.9 + .32 * k); mv.rO.set(.65 * (1 - k)); }
+        else if (L.ring === 'level') { mv.rS.set(.96 + .26 * q.L); mv.rO.set(.25 + .6 * q.L); }
+        else if (L.ring === 'static') { mv.rS.set(1.12); mv.rO.set(.55); }
+        mv.aR.set(L.arcT ? (q.a % 1) * 360 : L.arcStill);
+        mv.sR.set(L.secT ? (q.s % 1) * 360 : L.secStill);
+        const tD = still && L.dotsT ? Math.max(q.t, .7) : q.t;
+        for (let i = 0; i < 3; i++) {
+          if (L.dotsStill) { mv['y' + i].set(d * .08 * i); mv['o' + i].set([.9, .6, .3][i]); continue; }
+          const tt = tD - i * .4;
+          if (!L.dotsT || tt < 0) { mv['o' + i].set(0); continue; }
+          const uu = (tt / 1.2) % 1;
+          mv['y' + i].set(d * .2 * EASE(uu));
+          mv['o' + i].set(uu < .25 ? .9 * uu / .25 : .9 * (1 - EO((uu - .25) / .75)));
+        }
+      };
+      useAnimationFrame((time, delta) => step(time, delta, false));
+      if (!ph.current.ran) step(0, 0, true);
+
+      const bw = mini ? 1.5 : Math.max(1.5, Math.round(d * .009 * 2) / 2);
+      const box = k => ({ left: -k * d, top: -k * d, width: (1 + 2 * k) * d, height: (1 + 2 * k) * d });
+      const R = 48, C = TAU * R, sw = px => px * 100 / (1.24 * d);
+      const svg = child => h('svg', { viewBox: '0 0 100 100', width: '100%', height: '100%', style: { display: 'block', overflow: 'visible' } }, child);
+      const blob = (key, geo, bg, x, y) => h(motion.div, { key, style: Object.assign({}, abs, geo, { x, y }) }, h(Fill, { bg, xf: c.xf }));
+      const ds = Math.max(3, Math.round(d * .055)), bs = mini ? 14 : Math.round(d * .17);
+
+      return h(motion.div, { style: { position: 'relative', width: d, height: d, flex: 'none', opacity: mv.op } },
+        h(motion.div, { style: Object.assign({}, abs, box(.2), { opacity: mv.hO, scale: mv.hS }) }, h(Fill, { bg: G.halo, xf: c.xf })),
+        h(Layer, { on: !!c.ring, k: 'ring', rm },
+          h(motion.div, { style: Object.assign({}, abs, box(.04), { borderRadius: '50%', border: bw + 'px solid ' + rgba(P.c1, .9), boxSizing: 'border-box', scale: mv.rS, opacity: mv.rO }) })),
+        h(motion.div, { style: Object.assign({}, abs, { inset: 0, borderRadius: '50%', overflow: 'hidden', scale: mv.core, WebkitMaskImage: '-webkit-radial-gradient(white, black)' }) },
+          h(Fill, { bg: G.core, xf: c.xf }),
+          h(motion.div, { style: Object.assign({}, abs, { inset: 0, rotate: mv.rot }) },
+            blob('b1', { width: s1, height: s1, left: .06 * d, top: .08 * d }, G.b1, mv.b1x, mv.b1y),
+            blob('b2', { width: s2, height: s2, left: .44 * d, top: .32 * d }, G.b2, mv.b2x, mv.b2y),
+            blob('b3', { width: s3, height: s3, left: .26 * d, top: .5 * d }, G.b3, mv.b3x, mv.b3y)),
+          h(Layer, { on: !!c.sector, k: 'sector', rm }, h(motion.div, { style: Object.assign({}, abs, { inset: 0, rotate: mv.sR, background: SECTOR }) })),
+          h('div', { style: Object.assign({}, abs, { inset: 0, background: SHADE }) }),
+          h('div', { style: Object.assign({}, abs, { inset: 0, background: SHEEN }) }),
+          h(motion.div, { style: Object.assign({}, abs, { inset: 0, background: '#000', opacity: mv.dim }) })),
+        h(Layer, { on: !!c.arc, k: 'arc', rm },
+          h(motion.div, { style: Object.assign({}, abs, box(.12), { rotate: mv.aR }) },
+            svg(h('circle', { cx: 50, cy: 50, r: R, fill: 'none', stroke: P.c1, strokeWidth: sw(2), strokeLinecap: 'round', strokeDasharray: (C / 3) + ' ' + C, transform: 'rotate(-90 50 50)' })))),
+        h(Layer, { on: c.gap, k: 'gap', rm, enter: .15 },
+          h('div', { style: Object.assign({}, abs, box(.12)) },
+            svg(h('circle', { cx: 50, cy: 50, r: R, fill: 'none', stroke: P.c1, strokeWidth: sw(2), strokeLinecap: 'round', strokeDasharray: (C * .93) + ' ' + (C * .07), transform: 'rotate(-32.4 50 50)' })))),
+        h(Layer, { on: !!c.dots, k: 'dots', rm }, [0, 1, 2].map(i => h(motion.div, { key: i, style: Object.assign({}, abs, { left: d * .5 - ds / 2, top: d * .98 - ds / 2, width: ds, height: ds, borderRadius: '50%', background: P.c3, y: mv['y' + i], opacity: mv['o' + i] }) }))),
+        h(Layer, { on: !!c.badge, k: 'badge-' + c.badge, rm },
+          c.badge ? h('div', { style: Object.assign({}, abs, { left: d * .854 - bs / 2, top: d * .854 - bs / 2, width: bs, height: bs, borderRadius: '50%', boxSizing: 'border-box', border: (mini ? 2 : Math.max(2, Math.round(d * .014))) + 'px solid ' + props.cutout, background: c.badge === 'alert' ? '#DC604C' : '#F0DDA5', display: 'flex', alignItems: 'center', justifyContent: 'center' }) }, c.badge === 'alert' ? ALERT(bs) : SPEAKER(bs)) : null)
+      );
+    };
+  }
+}
+</script>
+</body>
+</html>
