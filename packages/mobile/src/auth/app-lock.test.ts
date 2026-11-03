@@ -115,17 +115,27 @@ describe('app lock', () => {
 
 describe('the cover (R1)', () => {
   it('covers while locked, before the setting is read, and away from the foreground with the lock on', async () => {
-    expect(shouldCover(null, true)).toBe(true);
+    expect(shouldCover(null, true, 1)).toBe(true);
     const lock = createAppLock({ auth: auth(true), enabled: true });
-    expect(shouldCover(lock, true)).toBe(true); // locked
+    expect(shouldCover(lock, true, 1)).toBe(true); // locked
     await lock.unlock();
-    expect(shouldCover(lock, true)).toBe(false);
-    expect(shouldCover(lock, false)).toBe(true); // inactive or background: no data in the app switcher
+    expect(shouldCover(lock, true, 1)).toBe(false);
+    expect(shouldCover(lock, false, 1)).toBe(true); // inactive or background: no data in the app switcher
   });
   it('with the lock off nothing is covered', () => {
     const lock = createAppLock({ auth: auth(true), enabled: false });
-    expect(shouldCover(lock, true)).toBe(false);
-    expect(shouldCover(lock, false)).toBe(false);
+    expect(shouldCover(lock, true, 1)).toBe(false);
+    expect(shouldCover(lock, false, 1)).toBe(false);
+  });
+  it('no paired Mac — no lock (critic s-220 m1); the host list not read yet covers as before', () => {
+    const lock = createAppLock({ auth: auth(true), enabled: true });
+    expect(lock.state()).toBe('locked');
+    expect(shouldCover(lock, true, 0)).toBe(false);
+    expect(shouldCover(lock, false, 0)).toBe(false);
+    expect(shouldCover(null, true, 0)).toBe(false);
+    expect(shouldCover(lock, true, null)).toBe(true);
+    expect(shouldCover(null, true, null)).toBe(true);
+    expect(shouldCover(lock, true, 2)).toBe(true);
   });
 });
 
