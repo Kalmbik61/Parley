@@ -208,7 +208,7 @@ describe('RelaySetupDialog', () => {
     bridge.setRelaySetupHandler('keys', () => ({ files: [], agent: false }));
     bridge.setRelaySetupHandler('state', () => record({ progress: { step: 'image', layersDone: 3, layersTotal: 8, bytesDone: 41_200_000, bytesTotal: 82_000_000 } }));
     render(<RelaySetupDialog bridge={bridge} open onClose={() => undefined} />);
-    expect((await screen.findByTestId('relay-setup-progress-text')).textContent).toBe('Downloading the relay image: 41.2 of 82.0 MB · 3 of 8 layers');
+    expect((await screen.findByTestId('relay-setup-progress-text')).textContent).toBe('Downloading images: 41.2 of 82.0 MB · 3 of 8 layers');
     expect(screen.getByTestId('relay-setup-progress').getAttribute('aria-valuenow')).toBe('50');
     expect(screen.queryByTestId('relay-setup-cancelling')).toBeNull();
     expect((screen.getByTestId('relay-setup-cancel-run') as HTMLButtonElement).disabled).toBe(false);
@@ -220,6 +220,92 @@ describe('RelaySetupDialog', () => {
     // The bar goes with its step.
     bridge.emitRelaySetup({ event: 'step', id: 'image', title: 'Relay image', status: 'done', seq: 7 });
     await waitFor(() => expect(screen.queryByTestId('relay-setup-progress')).toBeNull());
+  });
+
+  it('a refused run (the session ended) leaves the plan with the error; Cancel leaves the window', async () => {
+    const onClose = vi.fn();
+    const bridge = mount(onClose);
+    bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
+    bridge.setRelaySetupHandler('run', () => {
+      throw new Error('parley-error:{"code":"bad_request","message":"This step is not expected now"}');
+    });
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    fireEvent.click(await screen.findByTestId('relay-setup-run'));
+    expect(await screen.findByText(T.errors.bad_request)).toBeTruthy();
+    // No «Running…» dead end: the plan is still there and the window can be left.
+    expect(screen.queryByText(T.running)).toBeNull();
+    expect(screen.getByTestId('relay-setup-plan')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: T.cancel })[0]!);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(names(bridge)).toContain('cancel');
+  });
+
+  it('a run that main accepted but whose record cannot be read ends as a failure with Close, not as «Running…»', async () => {
+    const bridge = mount();
+    bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
+    bridge.setRelaySetupHandler('run', () => ({ phase: 'running' }));
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    fireEvent.click(await screen.findByTestId('relay-setup-run'));
+    expect((await screen.findByTestId('relay-setup-failed')).textContent).toContain(T.runLost);
+    expect(screen.getByTestId('relay-setup-close')).toBeTruthy();
+  });
+
+  it('a run that main accepted but whose record cannot be read: Close hides the window and never cancels the live run; the state is read twice', async () => {
+    const onClose = vi.fn();
+    const bridge = mount(onClose);
+    bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
+    bridge.setRelaySetupHandler('run', () => ({ phase: 'running' }));
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    const before = names(bridge).filter((n) => n === 'state').length;
+    fireEvent.click(await screen.findByTestId('relay-setup-run'));
+    fireEvent.click(await screen.findByTestId('relay-setup-close'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(names(bridge)).not.toContain('cancel');
+    // The first read at open, then two after Run.
+    expect(names(bridge).filter((n) => n === 'state').length - before).toBeGreaterThanOrEqual(2);
+  });
+
+  it('only the expired session is told as «the session has ended»; another refusal keeps its words', async () => {
+    const bridge = mount();
+    bridge.setRelaySetupHandler('begin', () => ({ phase: 'plan', plan: PLAN, os: 'Ubuntu' }));
+    bridge.setRelaySetupHandler('run', () => {
+      throw new Error('parley-error:{"code":"bad_request","message":"This plan cannot be run"}');
+    });
+    fireEvent.change(await screen.findByTestId('relay-setup-host'), { target: { value: '1.2.3.4' } });
+    fireEvent.click(screen.getByTestId('relay-setup-connect'));
+    fireEvent.click(await screen.findByTestId('relay-setup-run'));
+    expect(await screen.findByText('This plan cannot be run')).toBeTruthy();
+    expect(screen.queryByText(T.errors.bad_request)).toBeNull();
+  });
+
+  it('Cancel works again after a new phase: cancelled at health → Check → running', async () => {
+    const bridge = createFakeBridge();
+    bridge.setRelaySetupHandler('keys', () => ({ files: [], agent: false }));
+    bridge.setRelaySetupHandler('state', () => record());
+    bridge.setRelaySetupHandler('cancel', () => null);
+    render(<RelaySetupDialog bridge={bridge} open onClose={() => undefined} />);
+    const first = (await screen.findByTestId('relay-setup-cancel-run')) as HTMLButtonElement;
+    fireEvent.click(first);
+    await waitFor(() => expect(first.disabled).toBe(true));
+    bridge.emitRelaySetup({ event: 'phase', phase: { phase: 'cancelled', step: 'health', message: 'Cancelled. Use Check to test the relay again.' }, seq: 6 });
+    await screen.findByTestId('relay-setup-check');
+    bridge.emitRelaySetup({ event: 'phase', phase: { phase: 'running' }, seq: 7 });
+    const again = (await screen.findByTestId('relay-setup-cancel-run')) as HTMLButtonElement;
+    expect(again.disabled).toBe(false);
+  });
+
+  it('Cancel is disabled at once after the click, also for a step that sends no «cancelling»', async () => {
+    const bridge = createFakeBridge();
+    bridge.setRelaySetupHandler('keys', () => ({ files: [], agent: false }));
+    bridge.setRelaySetupHandler('state', () => record());
+    bridge.setRelaySetupHandler('cancel', () => null);
+    render(<RelaySetupDialog bridge={bridge} open onClose={() => undefined} />);
+    const button = (await screen.findByTestId('relay-setup-cancel-run')) as HTMLButtonElement;
+    fireEvent.click(button);
+    await waitFor(() => expect(button.disabled).toBe(true));
   });
 
   it('Cancel during the run calls cancel and does not close the window', async () => {

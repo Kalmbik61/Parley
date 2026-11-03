@@ -1522,7 +1522,8 @@ export const S = {
         stepStatus: { pending: 'waiting', running: 'running', skipped: 'already done', done: 'done', failed: 'failed', stopped: 'stopped' },
         newSetup: 'New setup',
         cancelling: 'Cancelling after this step…',
-        downloading: (progress: string): string => `Downloading the relay image: ${progress}`,
+        downloading: (progress: string): string => `Downloading images: ${progress}`,
+        runLost: 'The setup was started, but this window could not read its progress. Close it and open «Set up on my server…» again to see the run.',
         progressLabel: 'Image download progress',
         webTitle: 'Your web server',
         webNetwork: 'Docker network',
@@ -1536,7 +1537,7 @@ export const S = {
         proxyPending: (address: string): string => `The relay is running on this server only for your own web server. Add this to its configuration, get a certificate for ${address}, then press Check.`,
         failed: 'The setup stopped',
         checkAgain: 'Check',
-        errors: { bad_input: 'Check the fields and try again', setup_failed: 'The setup step failed' },
+        errors: { bad_input: 'Check the fields and try again', bad_request: 'The session has ended. Cancel and start again.', setup_failed: 'The setup step failed' },
       },
       status: {
         off: 'Remote access is off',

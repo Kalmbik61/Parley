@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { ControlCallError } from '../remote-control.js';
-import { registerRelaySetupIpc } from './ipc.js';
+import { fakeSshModulePath, registerRelaySetupIpc } from './ipc.js';
 import type { RelaySetupService } from './service.js';
 
 function register(service: RelaySetupService) {
@@ -42,5 +42,17 @@ describe('relay-setup:call', () => {
     });
     const invoke = register({ call, dispose: () => undefined } as unknown as RelaySetupService);
     expect(((await invoke('begin', {}).catch((e: Error) => e)) as Error).message).toContain('bad_input');
+  });
+});
+
+describe('the scripted SSH seam of the e2e', () => {
+  it('is read only from an unpackaged build and only as an absolute path', () => {
+    const env = { PARLEY_RELAY_SETUP_FAKE_SSH: '/tmp/fake.mjs' };
+    expect(fakeSshModulePath(env, false)).toBe('/tmp/fake.mjs');
+    // A packaged app never looks at the variable.
+    expect(fakeSshModulePath(env, true)).toBeNull();
+    expect(fakeSshModulePath({}, false)).toBeNull();
+    expect(fakeSshModulePath({ PARLEY_RELAY_SETUP_FAKE_SSH: '' }, false)).toBeNull();
+    expect(fakeSshModulePath({ PARLEY_RELAY_SETUP_FAKE_SSH: 'relative/fake.mjs' }, false)).toBeNull();
   });
 });

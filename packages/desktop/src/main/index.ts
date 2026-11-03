@@ -87,7 +87,7 @@ import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createRemoteLauncher, bridgePaths, resolveBridgeEntry } from './remote-launcher.js';
 import { createRemoteService, registerRemoteIpc } from './remote-ipc.js';
 import { createPhoneActionNotifier } from './phone-actions.js';
-import { createAppRelaySetup, registerRelaySetupIpc } from './relay-setup/ipc.js';
+import { createAppRelaySetup, fakeSshModulePath, loadFakeSsh, registerRelaySetupIpc } from './relay-setup/ipc.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
 import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assistant-mirror.js';
@@ -982,9 +982,12 @@ if (!gotLock) {
     });
     registerRemoteIpc(ipcMain, remoteService);
     // Settings → Remote access → «Set up on my server…»: SSH from this process only (mobile spec 6.7).
+    // E2E of the window screenshots: a scripted server instead of ssh2, never in a packaged app (spec 10).
+    const fakeSsh = fakeSshModulePath(process.env, app.isPackaged);
     const relaySetup = createAppRelaySetup({
       remoteDir: bridge.dir,
       net,
+      ...(fakeSsh !== null ? { overrides: await loadFakeSsh(fakeSsh) } : {}),
       configureBridge: async (address) => {
         await remoteService.call('configure', { relayUrl: address });
       },
