@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ComponentRef, type ReactNode } from 'react';
-import { AccessibilityInfo, findNodeHandle, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import type { FeedCard, FeedPermissionCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { cardGist } from '@parley/core/card-gist';
@@ -129,8 +129,7 @@ export function QuestionCardView({ card, sessionRef, canAct, children, initialDr
     if (shownStep.current === current) return;
     shownStep.current = current;
     stepChangedAt.current = Date.now();
-    const node = findNodeHandle(heading.current);
-    if (node !== null && node !== undefined) AccessibilityInfo.setAccessibilityFocus(node);
+    if (heading.current !== null) AccessibilityInfo.sendAccessibilityEvent(heading.current, 'focus');
   }, [current]);
   const settling = (): boolean => Date.now() - stepChangedAt.current < STEP_TAP_GUARD_MS;
   const body = (
