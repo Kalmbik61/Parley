@@ -333,6 +333,7 @@ export const METHODS = {
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
   // Этап 8: конфликты до слияния и изменения папки проекта для сессии без worktree (спека 3.2, 11.5).
   'worktrees.mergeCheck': z.object({ ref: sessionRef }),
+  'worktrees.hold': z.object({ refs: z.array(sessionRef).max(500) }),
   'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
   'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
   // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
@@ -572,6 +573,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
   'worktrees.mergeCheck': MergeCheck;
+  'worktrees.hold': { ok: true };
   'changes.project': ProjectChanges;
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };

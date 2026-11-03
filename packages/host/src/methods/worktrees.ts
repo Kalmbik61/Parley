@@ -5,10 +5,13 @@
  */
 
 import type { Handler } from '../context.js';
+import type { WorktreeHolds } from '../worktrees/holds.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 
 export interface WorktreesMethodDeps {
   worktrees: WorktreesService;
+  /** Удержания окон; без них `worktrees.hold` ничего не запоминает. */
+  holds?: WorktreeHolds;
 }
 
 export interface WorktreesHandlers {
@@ -18,6 +21,7 @@ export interface WorktreesHandlers {
   worktreesMerge: Handler<'worktrees.merge'>;
   worktreesDiscard: Handler<'worktrees.discard'>;
   worktreesMergeCheck: Handler<'worktrees.mergeCheck'>;
+  worktreesHold: Handler<'worktrees.hold'>;
 }
 
 export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHandlers {
@@ -44,5 +48,10 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
     },
 
     worktreesMergeCheck: async (params) => deps.worktrees.mergeCheck(params.ref),
+
+    worktreesHold: async (params, request) => {
+      deps.holds?.set(request.client, params.refs);
+      return { ok: true };
+    },
   };
 }
