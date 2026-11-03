@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { caddyBlockAppend, removeCaddyBlock, sha256 } from './templates.js';
-import { afterShaOf, buildEditScript, caddyCommands, editCommand, EDIT_EXIT, FILE_CHANGED, nginxCommands, nginxStepCheck, webStepCheck, type EditAction } from './web-edit.js';
+import { afterShaOf, buildEditScript, caddyCommands, editCommand, CONTAINER_CHANGED, EDIT_EXIT, FILE_CHANGED, nginxCommands, nginxStepCheck, webStepCheck, type EditAction } from './web-edit.js';
 
 let dir = '';
 beforeEach(() => {
@@ -142,7 +142,49 @@ describe('buildEditScript (spec 5.2)', () => {
     const script = buildEditScript({ action: 'add', target: '/a/b', beforeSha: null, content: 'x', afterSha: sha256('x'), check: null, reload: 'true' });
     expect(script).not.toContain('\\');
     expect(script.startsWith('set -eu\n')).toBe(true);
-    expect(editCommand(script)).toMatch(/^printf %s '[A-Za-z0-9+/=]+' \| base64 -d \| sh$/);
+    expect(editCommand(script)).toMatch(/^sh -c "\$\(printf %s '[A-Za-z0-9+/=]+' \| base64 -d\)"$/);
+  });
+});
+
+describe('critic fixes on the script', () => {
+  it('m3: a restore that fails says where the original is and exits 9', () => {
+    const target = path.join(dir, 'f');
+    writeFileSync(target, 'old\n');
+    // The check removes the backup and fails: the restore has nothing to copy back.
+    const result = run({ action: 'replace', target, content: 'new\n', before: sha256('old\n'), check: 'rm -f "$BK"; false' });
+    expect(result.status).toBe(EDIT_EXIT.restore);
+    expect(result.stderr).toMatch(/RESTORE FAILED: the original is in .*-f/);
+  });
+  it('m4: a container that is not running stops the edit before any write or backup', () => {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    const id = 'ab'.repeat(32);
+    const fake = (answer: string): NodeJS.ProcessEnv => {
+      writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\necho ${answer}\n`, { mode: 0o755 });
+      return { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+    };
+    const target = path.join(dir, 'f');
+    writeFileSync(target, 'old\n');
+    const script = (env: NodeJS.ProcessEnv): Run => {
+      const file = path.join(dir, 'script.sh');
+      writeFileSync(file, buildEditScript({ action: 'replace', target, beforeSha: sha256('old\n'), content: 'new\n', afterSha: sha256('new\n'), check: 'true', reload: 'true', containerId: id, backupDir: path.join(dir, 'backups') }));
+      const r = spawnSync('/bin/sh', [file], { encoding: 'utf8', env });
+      return { status: r.status, stderr: r.stderr };
+    };
+    const stopped = script(fake('false'));
+    expect(stopped.status).toBe(EDIT_EXIT.container);
+    expect(stopped.stderr).toContain(CONTAINER_CHANGED);
+    expect(readFileSync(target, 'utf8')).toBe('old\n');
+    expect(backups()).toEqual([]);
+    expect(script(fake('true')).status).toBe(0);
+    expect(readFileSync(target, 'utf8')).toBe('new\n');
+  });
+  it('the script survives a command that reads stdin (it is run through sh -c, not piped in)', () => {
+    const target = path.join(dir, 'f');
+    const script = buildEditScript({ action: 'add', target, beforeSha: null, content: 'x\n', afterSha: sha256('x\n'), check: 'cat > /dev/null', reload: 'true', backupDir: path.join(dir, 'backups') });
+    const result = spawnSync('/bin/sh', ['-c', `sh -c "$(printf %s '${Buffer.from(script).toString('base64')}' | base64 -d)"`], { encoding: 'utf8', input: '' });
+    expect(result.status).toBe(0);
+    expect(editCommand(script)).toContain('sh -c "$(');
   });
 });
 
@@ -167,13 +209,13 @@ describe('Caddy commands', () => {
 
 describe('nginx edit (spec 5.2, 4.1)', () => {
   /** A stand-in `nginx`: `-t` warns about a conflicting name when the marker file says so, `-T` lists the target when it exists. */
-  function fakeNginx(target: string, conflict: boolean): NodeJS.ProcessEnv {
+  function fakeNginx(target: string, conflict: boolean, broken = false): NodeJS.ProcessEnv {
     const bin = path.join(dir, 'bin');
     mkdirSync(bin);
     const script = [
       '#!/bin/sh',
       'case "$1" in',
-      `  -t) ${conflict ? 'echo \'nginx: [warn] conflicting server name "relay.example.com" on 0.0.0.0:80, ignored\' >&2;' : ''} echo "nginx: configuration file /etc/nginx/nginx.conf test is successful" >&2; exit 0 ;;`,
+      `  -t) ${broken ? "echo 'nginx: [emerg] broken config' >&2; exit 1;" : ''} ${conflict ? 'echo \'nginx: [warn] conflicting server name "relay.example.com" on 0.0.0.0:80, ignored\' >&2;' : ''} echo "nginx: configuration file /etc/nginx/nginx.conf test is successful" >&2; exit 0 ;;`,
       `  -T) [ -e ${JSON.stringify(target)} ] && echo "# configuration file ${target}:"; exit 0 ;;`,
       '  -s) exit 0 ;;',
       'esac',
@@ -198,6 +240,13 @@ describe('nginx edit (spec 5.2, 4.1)', () => {
     expect(result.status).toBe(EDIT_EXIT.check);
     expect(result.stderr).toContain('check failed: the file was restored');
     expect(existsSync(target)).toBe(false);
+  });
+  it('the output of a failing nginx -t reaches the log', () => {
+    const target = path.join(dir, 'parley-relay.conf');
+    const { check, reload } = commands(target);
+    const result = run({ action: 'add', target, content: 'server {}\n', before: null, check, reload, env: fakeNginx(target, false, true) });
+    expect(result.status).toBe(EDIT_EXIT.check);
+    expect(result.stderr).toContain('nginx: [emerg] broken config');
   });
   it('an old file of ours comes back when the check fails', () => {
     const target = path.join(dir, 'parley-relay.conf');

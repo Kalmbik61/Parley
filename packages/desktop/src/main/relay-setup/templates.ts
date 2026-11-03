@@ -167,6 +167,10 @@ volumes:
 
 /** Port 443 belongs to somebody else, so the TLS-ALPN challenge cannot work: Let's Encrypt must use HTTP-01 through nginx. */
 export const CADDYFILE_ACME = `# Certificate through the HTTP challenge on port 80 (nginx forwards it here); the app is served on RELAY_HTTPS_PORT.
+# No redirect from http://: it would send the browser to port 443 of your nginx.
+{
+\tauto_https disable_redirects
+}
 {$RELAY_DOMAIN} {
 \ttls {
 \t\tissuer acme {
@@ -326,12 +330,14 @@ export function removeCaddyBlock(text: string): string | null {
  * The only block the wizard puts into nginx (spec 4.1): port 80, one name, no TLS. In Docker the upstream is resolved at
  * request time (`resolver` and a variable), so `nginx -t` passes before our Caddy exists and survives its re-creation.
  */
-export function nginxSiteFile(name: string, runtime: 'docker' | 'host', acmePort: number | null, httpsPort = 8443): string {
+export function nginxSiteFile(name: string, runtime: 'docker' | 'host', acmePort: number | null, httpsPort = 8443, ipv6 = false): string {
   const head = [
     '# parley-relay: added by the Parley relay setup wizard. Remove it with the wizard (Remove relay).',
     `# Port 80 of ${name} goes to the relay's own Caddy, which gets the certificate and serves https://${name}:${httpsPort}.`,
     'server {',
     '    listen 80;',
+    // Where nginx already listens on IPv6, a name without its own `[::]:80` listener falls into the default site.
+    ...(ipv6 ? ['    listen [::]:80;'] : []),
     `    server_name ${name};`,
   ];
   const upstream =
@@ -340,4 +346,15 @@ export function nginxSiteFile(name: string, runtime: 'docker' | 'host', acmePort
       : [];
   const pass = runtime === 'docker' ? '$parley_relay_acme' : `http://127.0.0.1:${acmePort ?? 18080}`;
   return [...head, ...upstream, '    location / {', `        proxy_pass ${pass};`, '        proxy_set_header Host $host;', '    }', '}', ''].join('\n');
+}
+
+/**
+ * Our block with the site brought up to date, in place: the lines before and after stay where they are, and the marker
+ * line (with its «newline-added» note, if any) is kept. `null` — no block. Unchanged block → the text is returned as it is.
+ */
+export function replaceCaddyBlock(text: string, name: string, upstream: string): string | null {
+  const begin = new RegExp(BLOCK_BEGIN_SOURCE, 'm').exec(text);
+  const end = new RegExp(BLOCK_END_SOURCE, 'm').exec(text);
+  if (begin === null || end === null || end.index < begin.index) return null;
+  return `${text.slice(0, begin.index)}${begin[0]}\n${caddySiteBlock(name, upstream)}${text.slice(end.index)}`;
 }

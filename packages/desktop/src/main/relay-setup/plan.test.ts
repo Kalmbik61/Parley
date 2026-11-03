@@ -20,6 +20,8 @@ function probe(over: Partial<ProbeResult> = {}, listeners: Listener[] = []): Pro
     web: null,
     activeCommand: null,
     previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: false,
     install: null,
     previous: null,

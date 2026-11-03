@@ -43,6 +43,8 @@ function probeOf(over: Partial<ProbeResult> = {}): ProbeResult {
     web: null,
     activeCommand: null,
     previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: false,
     install: parseEnv(read('env.txt')),
     previous: parseEnv(read('previous-env.txt')),

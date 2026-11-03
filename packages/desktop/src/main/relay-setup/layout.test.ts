@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -28,6 +29,8 @@ function baseProbe(over: Partial<ProbeResult> = {}): ProbeResult {
     web: null,
     activeCommand: null,
     previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: false,
     install: parseEnv(read('env.txt')),
     previous: parseEnv(read('previous-env.txt')),
@@ -60,7 +63,7 @@ const plan = (probe: ProbeResult, name = NAME, intent: 'install' | 'rollback' | 
 /** The script inside the `web` step's command. */
 function scriptOf(p: Plan): string {
   const run = p.steps.find((s) => s.id === 'web')!.commands[0]!.run;
-  const b64 = /^printf %s '([^']+)' \| base64 -d \| sh$/.exec(run)![1]!;
+  const b64 = /^sh -c "\$\(printf %s '([^']+)' \| base64 -d\)"$/.exec(run)![1]!;
   return Buffer.from(b64, 'base64').toString('utf8');
 }
 
@@ -295,7 +298,9 @@ describe('nginx-acme (spec 4 rows 3 and 4б, 4.1)', () => {
     expect(card).toMatchObject({ server: 'nginx (systemd)', file: '/etc/nginx/conf.d/parley-relay.conf', action: 'add', reload: 'nginx -s reload' });
     expect(card.content).toContain('proxy_pass http://127.0.0.1:18080;');
     expect(card.content).not.toContain('resolver');
-    expect(card.check).toMatch(/^out=\$\(nginx -t 2>&1\) && ! echo "\$out" \| grep -qF 'conflicting server name "relay\.example\.com"' && nginx -T 2>\/dev\/null \| grep -qF '# configuration file \/etc\/nginx\/conf\.d\/parley-relay\.conf:'$/);
+    expect(card.check).toContain('out=$(nginx -t 2>&1); rc=$?; [ $rc -eq 0 ] || echo "$out" >&2; [ $rc -eq 0 ]');
+    expect(card.check).toContain(`grep -qF 'conflicting server name "relay.example.com"'`);
+    expect(card.check).toContain("nginx -T 2>/dev/null | grep -qF '# configuration file /etc/nginx/conf.d/parley-relay.conf:'");
     const body = (file: string): string => Buffer.from(/'([^']+)'/.exec(p.steps.find((s) => s.id === 'files')!.commands.find((c) => c.show.startsWith(`write /opt/parley-relay/${file}`))!.run)![1]!, 'base64').toString();
     expect(body('compose.yml')).toBe(COMPOSE_ACME_HOST);
     expect(COMPOSE_ACME_HOST).toContain("'127.0.0.1:${RELAY_ACME_PORT:?set RELAY_ACME_PORT}:80'");
@@ -327,3 +332,60 @@ describe('nginx-acme (spec 4 rows 3 and 4б, 4.1)', () => {
     expect(reason(decideLayout(await hostProbe({}, { ...hostAnswers, 'systemctl is-active caddy nginx apache2 httpd': 'inactive\ninactive\ninactive\ninactive\n' })))).toMatch(/not managed by systemd/);
   });
 });
+
+describe('critic fixes on the layouts', () => {
+  const TRAEFIK_ID = '77'.repeat(32);
+  const traefik = (over: Partial<ContainerInfo> = {}): ContainerInfo => ({
+    id: TRAEFIK_ID, name: 'edge-traefik-1', image: 'traefik:3', labels: {}, path: 'traefik', args: [], workdir: '', mounts: [],
+    published: [{ hostPort: 80, hostIp: '0.0.0.0' }], networks: ['edge_default'], networkAliases: {}, networkMode: 'edge_default', ...over,
+  });
+  it('m1: layout 5 behind any container takes the validated network; a clash on the names blocks', async () => {
+    const probe = await surveyed({}, { containers: [traefik()], listeners: [] });
+    expect(decideLayout(probe)).toMatchObject({ mode: 'proxy', network: 'edge_default' });
+    expect(decideLayout(await surveyed({}, { containers: [traefik({ networks: ['bad name'], networkAliases: { 'bad name': [] } })], listeners: [] }))).toMatchObject({ mode: 'proxy', network: null });
+    const stranger = traefik({ id: '88'.repeat(32), name: 'parley-relay', published: [] });
+    expect(decideLayout(await surveyed({}, { containers: [traefik(), stranger], listeners: [] }))).toMatchObject({ mode: 'blocked', reason: expect.stringMatching(/already used/) });
+  });
+  it('m2: the caddy layout fetches the pinned Caddy image as well', () => {
+    const p = plan(baseProbe({ listeners: [], containers: [] }), 'r.example.com');
+    expect(p.mode).toBe('caddy');
+    expect(p.steps.find((s) => s.id === 'image')!.commands.map((c) => c.show)).toEqual([`docker pull ${IMAGE}`, expect.stringMatching(/^docker pull caddy:2\.11\.7@sha256:/)]);
+  });
+  it('m6: our block is replaced where it stands; an unchanged block is no change at all', async () => {
+    const original = `${read('Caddyfile.marker-block')}after.example.com {\n\trespond "later"\n}\n`;
+    const answers = { [CHECK]: 'v2', [CADDYFILE_PATH]: original };
+    const same = plan(await surveyed(answers), 'relay.example.com');
+    const edit = same.web!.edits[0]!;
+    expect(edit).toMatchObject({ action: 'replace', file: '/opt/course-platform/deploy/Caddyfile' });
+    expect(edit.content).toBe(original);
+    const step = same.steps.find((s) => s.id === 'web')!;
+    expect(step.check).toContain(`= '${createHash('sha256').update(original).digest('hex')}'`);
+    const renamed = plan(await surveyed(answers), 'other.example.com').web!.edits[0]!.content!;
+    expect(renamed.indexOf('other.example.com {')).toBeLessThan(renamed.indexOf('after.example.com {'));
+    expect(renamed).toContain('after.example.com {\n\trespond "later"\n}\n');
+  });
+  it('m4: the script checks the container is still running before it writes', async () => {
+    const script = scriptOf(plan(await surveyed(COURSE)));
+    expect(script).toContain(`docker inspect -f '{{.State.Running}}' '${CADDY_ID}'`);
+    expect(script.indexOf('State.Running')).toBeLessThan(script.indexOf('base64 -d >'));
+  });
+  it('T4b M1: our nginx block listens on IPv6 where nginx does', async () => {
+    const probe = await surveyed(nginxDockerAnswers(DUMP_V6), { containers: [nginxBox()], listeners: [] });
+    expect(plan(probe, 'relay.example.com').web!.edits[0]!.content).toContain('    listen 80;\n    listen [::]:80;\n    server_name relay.example.com;');
+    const plainProbe = await surveyed(nginxDockerAnswers(read('nginx-t-official.txt')), { containers: [nginxBox()], listeners: [] });
+    expect(plan(plainProbe, 'relay.example.com').web!.edits[0]!.content).not.toContain('[::]');
+    expect(nginxSiteFile('r.example.com', 'host', 18080, 8443, true)).toContain('listen [::]:80;');
+  });
+  it('T4b minor: the ACME Caddyfile does not redirect http:// to 443', () => {
+    expect(CADDYFILE_ACME).toContain('auto_https disable_redirects');
+  });
+});
+
+const NGINX_BOX_ID = 'f5'.repeat(32);
+const nginxBox = (): ContainerInfo => ({
+  id: NGINX_BOX_ID, name: 'shop-nginx-1', image: 'nginx:1.27', labels: {}, path: 'nginx', args: [], workdir: '',
+  mounts: [{ type: 'bind', source: '/srv/nginx/conf.d', destination: '/etc/nginx/conf.d', rw: false }],
+  published: [{ hostPort: 80, hostIp: '0.0.0.0' }], networks: ['shop_default'], networkAliases: {}, networkMode: 'shop_default',
+});
+const nginxDockerAnswers = (dump: string): Record<string, string> => ({ [`docker exec '${NGINX_BOX_ID}' nginx -v`]: '', [`docker exec '${NGINX_BOX_ID}' nginx -T`]: dump });
+const DUMP_V6 = read('nginx-t-official.txt').replace('    listen       80;', '    listen       80;\n    listen  [::]:80;');

@@ -252,6 +252,8 @@ export interface WebSurvey {
   include: { hostDir: string; containerDir: string; suffix: string } | null;
   /** Our earlier change: a file or a block between markers. */
   ours: { kind: 'file'; hostPath: string; sha256: string } | { kind: 'block' } | null;
+  /** nginx already listens on `[::]:80`: our server block needs that listener too. */
+  ipv6: boolean;
   /** `parley-relay` / `parley-relay-acme` already belong to somebody else in the chosen network. */
   nameClash: boolean;
   /** Why a site cannot be added; empty — it can. */
@@ -262,6 +264,18 @@ export interface WebSurvey {
 
 export const NAME_CLASH_REASON = 'The names parley-relay and parley-relay-acme are already used by another container in the web server network';
 const BUILTIN_NETWORKS = new Set(['bridge', 'host', 'none']);
+
+/**
+ * The network a container-holder of port 80 offers us, checked once for every path (Caddy, nginx, Traefik, anything):
+ * a name that passes the pattern and, in it, no foreign container that already uses `parley-relay` or `parley-relay-acme`.
+ */
+export function containerNetwork(container: ContainerInfo, all: ContainerInfo[]): { network: string | null; clash: boolean } {
+  const chosen = chooseNetwork(container, all);
+  const network = chosen !== null && isNetworkName(chosen) ? chosen : null;
+  if (network === null) return { network: null, clash: false };
+  const taken = (name: string): boolean => all.some((c) => !isOurs(c) && c.networks.includes(network) && (c.name === name || (c.networkAliases[network] ?? []).includes(name)));
+  return { network, clash: taken('parley-relay') || taken('parley-relay-acme') };
+}
 
 /** The user-defined network of a container: the one with our relay, else the first by name. */
 export function chooseNetwork(container: ContainerInfo, all: ContainerInfo[]): string | null {
@@ -293,6 +307,7 @@ const empty = (holder: PortHolder, kind: WebKind, runtime: WebSurvey['runtime'],
   admin: null,
   include: null,
   ours: null,
+  ipv6: false,
   nameClash: false,
   reasons,
   blockers: [],
@@ -337,18 +352,12 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
 
   if (container !== null) {
     if (container.networkMode === 'host') reasons.push('The web server container uses the host network');
-    const chosen = chooseNetwork(container, probe.containers);
-    // A network name that fails the pattern is never kept: it would end up in `.env` and in a compose file.
-    const network = chosen !== null && isNetworkName(chosen) ? chosen : null;
+    const { network, clash } = containerNetwork(container, probe.containers);
     if (network === null) reasons.push('The web server container is only in the default bridge network, where containers cannot find each other by name');
     survey.container = { id: container.id, name: isContainerName(container.name) ? container.name.replace(/^\//, '') : container.id.slice(0, 12), network };
-    if (network !== null) {
-      const taken = (name: string): boolean =>
-        probe.containers.some((c) => !isOurs(c) && c.networks.includes(network) && (c.name === name || (c.networkAliases[network] ?? []).includes(name)));
-      if (taken('parley-relay') || taken('parley-relay-acme')) {
-        survey.nameClash = true;
-        block(NAME_CLASH_REASON);
-      }
+    if (clash) {
+      survey.nameClash = true;
+      block(NAME_CLASH_REASON);
     }
   } else {
     const units = await run('systemctl is-active caddy nginx apache2 httpd');
@@ -417,6 +426,7 @@ export async function probeWeb(probe: ProbeResult, shell: RemoteShell): Promise<
   } else {
     const dump = await run(exec('nginx -T'));
     const parsed = dump.code === 0 ? parseNginxDump(dump.stdout) : null;
+    survey.ipv6 = dump.code === 0 && /^\s*listen\s+[^;]*\[::\]:80\b/m.test(dump.stdout);
     const dir = parsed === null ? null : pickNginxDir(parsed);
     if (dir === null || parsed === null) reasons.push('The nginx configuration has no include <directory>/*.conf in its http block');
     else {
@@ -462,4 +472,17 @@ export async function probeActive(shell: RemoteShell): Promise<PreviousCommand> 
   if (raw === null || !/^[a-z][a-z0-9-]{0,31}$/.test(raw)) return { active: null, tail: null };
   const log = await shell.run(`tail -n 20 ${STATE_DIR}/${raw}.log`, as);
   return { active: null, tail: log.code === 0 && log.stdout.trim() !== '' ? { id: raw, text: log.stdout } : null };
+}
+
+/** What the earlier install's `.env` says it edited, if that file still exists and carries our change (spec 6.2). */
+export async function probeInstalledEdit(env: Record<string, string> | null, shell: RemoteShell): Promise<ProbeResult['installEdit']> {
+  const file = env?.RELAY_WEB_FILE;
+  const kind = env?.RELAY_WEB_EDIT === 'block' ? 'block' : 'file';
+  if (file === undefined || !isSafePath(file)) return null;
+  const out = await shell.run(`base64 -w0 ${shQuote(file)}`, { sudo: true });
+  if (out.code !== 0) return null;
+  const bytes = Buffer.from(out.stdout.trim(), 'base64');
+  const text = bytes.toString('utf8');
+  const ours = kind === 'block' ? countMarkers(text).begin > 0 : isOurFile(text, env?.RELAY_PROXY_PORT);
+  return ours ? { file, kind, sha256: createHash('sha256').update(bytes).digest('hex') } : null;
 }

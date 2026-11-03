@@ -24,11 +24,15 @@ export interface EditScript {
   /** Check command run after the write; `null` — the reload does the checking (Caddy under systemd). */
   check: string | null;
   reload: string;
+  /** Docker: the container the commands go to; it must still be running before anything is written. */
+  containerId?: string | null;
   backupDir?: string;
 }
 
 /** Exit codes of the script: the step fails with the text on stderr. */
-export const EDIT_EXIT = { changed: 3, space: 4, backup: 5, write: 6, check: 7, reload: 8 } as const;
+export const EDIT_EXIT = { changed: 3, space: 4, backup: 5, write: 6, check: 7, reload: 8, restore: 9, container: 10 } as const;
+
+export const CONTAINER_CHANGED = 'the web server container changed since the survey; run the wizard again';
 
 export const FILE_CHANGED = 'the file changed since the server was inspected: run the wizard again';
 
@@ -58,6 +62,9 @@ export function buildEditScript(edit: EditScript): string {
     'cur=none',
     'if [ -e "$T" ]; then cur=$(sha256sum "$T" | cut -d" " -f1); fi',
     `[ "$cur" = ${shQuote(edit.beforeSha ?? 'none')} ] || { echo ${shQuote(FILE_CHANGED)} >&2; exit ${EDIT_EXIT.changed}; }`,
+    ...(edit.containerId == null
+      ? []
+      : [`[ "$(docker inspect -f '{{.State.Running}}' ${shQuote(edit.containerId)} 2>/dev/null)" = true ] || { echo ${shQuote(CONTAINER_CHANGED)} >&2; exit ${EDIT_EXIT.container}; }`]),
     `free=$(df -Pk "$(dirname "$T")" | awk 'NR==2 {print $4}')`,
     '[ "$free" -ge 1024 ] || { echo "not enough free space next to the file" >&2; exit ' + EDIT_EXIT.space + '; }',
     'BK=',
@@ -65,17 +72,19 @@ export function buildEditScript(edit: EditScript): string {
     '  mkdir -p "$B" && chmod 700 "$B" && BK="$B/$(date +%Y%m%d-%H%M%S)-$(basename "$T")" && cp -p "$T" "$BK" || { echo "backup failed: nothing was changed" >&2; exit ' + EDIT_EXIT.backup + '; }',
     'fi',
     'restore() { if [ -n "$BK" ]; then cp -p "$BK" "$T"; else rm -f "$T"; fi; }',
-    `${write} || { restore; echo "write failed: the file was restored" >&2; exit ${EDIT_EXIT.write}; }`,
-    `${verify} || { restore; echo "write check failed: the file was restored" >&2; exit ${EDIT_EXIT.write}; }`,
-    ...(edit.check === null ? [] : [`${edit.check} || { restore; echo "check failed: the file was restored" >&2; exit ${EDIT_EXIT.check}; }`]),
-    `${edit.reload} || { restore; echo "reload failed: the file was restored" >&2; exit ${EDIT_EXIT.reload}; }`,
+    // A restore that fails must not end silently: the person has to know where the original is.
+    `undo() { restore || { echo "RESTORE FAILED: the original is in $BK" >&2; exit ${EDIT_EXIT.restore}; }; echo "$1" >&2; exit "$2"; }`,
+    `${write} || undo "write failed: the file was restored" ${EDIT_EXIT.write}`,
+    `${verify} || undo "write check failed: the file was restored" ${EDIT_EXIT.write}`,
+    ...(edit.check === null ? [] : [`{ ${edit.check}; } || undo "check failed: the file was restored" ${EDIT_EXIT.check}`]),
+    `${edit.reload} || undo "reload failed: the file was restored" ${EDIT_EXIT.reload}`,
     'echo "done: backup $BK"',
     '',
   ].join('\n');
 }
 
-/** The command the plan sends: the script as base64 into `sh` (no quoting trouble, nothing for a login shell to expand). */
-export const editCommand = (script: string): string => `printf %s ${shQuote(Buffer.from(script, 'utf8').toString('base64'))} | base64 -d | sh`;
+/** The command the plan sends: the script as base64, decoded into `sh -c` (not piped to its stdin, where a command that reads stdin would eat the rest). */
+export const editCommand = (script: string): string => `sh -c "$(printf %s ${shQuote(Buffer.from(script, 'utf8').toString('base64'))} | base64 -d)"`;
 
 export interface CaddyTarget {
   runtime: 'docker' | 'host';
@@ -123,11 +132,17 @@ const nginxIn = (target: NginxTarget, command: string): string => (target.runtim
  * Check and reload of an nginx edit (spec 5.2): `nginx -t` passes without «conflicting server name» for our name (nginx
  * would silently ignore such a block), and `nginx -T` lists our file. The reload does not report its own failure.
  */
-export function nginxCommands(target: NginxTarget): { check: string; reload: string } {
+export function nginxCommands(target: NginxTarget, removing = false): { check: string; reload: string } {
   const conflict = shQuote(`conflicting server name "${target.name}"`);
   const listed = shQuote(`# configuration file ${target.file}:`);
+  // Removing our file: `nginx -t` passes and `nginx -T` no longer lists it.
+  // The output of `nginx -t` is printed when it fails, so the person sees why in the window.
+  const test = `out=$(${nginxIn(target, 'nginx -t')} 2>&1); rc=$?; [ $rc -eq 0 ] || echo "$out" >&2; [ $rc -eq 0 ]`;
+  const check = removing
+    ? `${test} && ! ${nginxIn(target, 'nginx -T')} 2>/dev/null | grep -qF ${listed}`
+    : `${test} && { ! echo "$out" | grep -qF ${conflict} || { echo "$out" >&2; false; }; } && ${nginxIn(target, 'nginx -T')} 2>/dev/null | grep -qF ${listed}`;
   return {
-    check: `out=$(${nginxIn(target, 'nginx -t')} 2>&1) && ! echo "$out" | grep -qF ${conflict} && ${nginxIn(target, 'nginx -T')} 2>/dev/null | grep -qF ${listed}`,
+    check,
     reload: nginxIn(target, 'nginx -s reload'),
   };
 }

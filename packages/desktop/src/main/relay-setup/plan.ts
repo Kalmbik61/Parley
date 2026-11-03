@@ -1,10 +1,11 @@
 import net from 'node:net';
-import { shQuote, type SetupIntent } from './input.js';
+import { isValidDomain, shQuote, type SetupIntent } from './input.js';
 import type { RelayPlanWeb } from '../../shared/relay-setup-types.js';
 import { INSTALL_DIR, holderOf, type PortHolder, type ProbeResult } from './probe.js';
 import {
   CADDY_IMAGE,
   caddyBlockAppend,
+  replaceCaddyBlock,
   caddySiteFile,
   managedFiles,
   nginxSiteFile,
@@ -28,7 +29,7 @@ import {
   type EditAction,
   type NginxTarget,
 } from './web-edit.js';
-import { chooseNetwork, type WebSurvey } from './web.js';
+import { NAME_CLASH_REASON, containerNetwork, isNetworkName, type WebSurvey } from './web.js';
 
 /**
  * The command plan (spec 6.7 steps 4–5). Every step is «check → do»: the check is a command whose exit code 0 means
@@ -59,7 +60,8 @@ export type Layout =
   | { mode: 'caddy'; httpPort: 80; httpsPort: 443 | 8443 }
   | { mode: 'caddy-site'; runtime: 'docker' | 'host'; web: WebSurvey; network: string | null; relayPort: number }
   | { mode: 'nginx-acme'; runtime: 'docker' | 'host'; web: WebSurvey; network: string | null; acmePort: number | null }
-  | { mode: 'proxy'; relayPort: number; server: ProxyServer; holder: string; reason: string | null; network: string | null }
+  /** `kept`: an earlier `proxy` install already answers, so the layout stays (spec 6.2). */
+  | { mode: 'proxy'; relayPort: number; server: ProxyServer; holder: string; reason: string | null; network: string | null; kept: boolean }
   | { mode: 'blocked'; reason: string };
 
 const PROXY_PORT_CANDIDATES = [8787, 18787, 28787];
@@ -86,6 +88,15 @@ function describeHolder(holder: PortHolder): string {
 export function decideLayout(probe: ProbeResult): Layout {
   const h80 = holderOf(probe, 80);
   const h443 = holderOf(probe, 443);
+  // A working manual `proxy` install stays as it is: a new layout would change the address and break the person's snippet.
+  const env = probe.install;
+  if (env?.RELAY_MODE === 'proxy' && probe.proxyHealthy === true && isValidDomain(env.RELAY_DOMAIN ?? '')) {
+    const port = Number(env.RELAY_PROXY_PORT ?? '8787');
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+      const network = env.RELAY_NETWORK !== undefined && isNetworkName(env.RELAY_NETWORK) ? env.RELAY_NETWORK : null;
+      return { mode: 'proxy', relayPort: port, server: serverKind(h80, probe.web), holder: h80 === null ? 'your web server' : describeHolder(h80), reason: null, network, kept: true };
+    }
+  }
   if (h80 === null) {
     if (h443 === null) return { mode: 'caddy', httpPort: 80, httpsPort: 443 };
     if (holderOf(probe, 8443) !== null) return { mode: 'blocked', reason: 'Ports 443 and 8443 are both taken' };
@@ -117,8 +128,24 @@ export function decideLayout(probe: ProbeResult): Layout {
   let reason: string | null = web?.reasons[0] ?? nginxReason;
   if (reason === null && web?.kind === 'caddy') reason = 'one Caddy must hold both port 80 and port 443';
   else if (reason === null && web?.kind === 'nginx') reason = 'nginx could not be set up automatically';
-  const network = h80.kind === 'container' && h80.container.networkMode !== 'host' ? chooseNetwork(h80.container, probe.containers) : null;
-  return { mode: 'proxy', relayPort: freePort, server: serverKind(h80, web), holder: describeHolder(h80), reason, network };
+  let network: string | null = null;
+  if (h80.kind === 'container' && h80.container.networkMode !== 'host') {
+    const found = containerNetwork(h80.container, probe.containers);
+    if (found.clash) return { mode: 'blocked', reason: NAME_CLASH_REASON };
+    network = found.network;
+  }
+  return { mode: 'proxy', relayPort: freePort, server: serverKind(h80, web), holder: describeHolder(h80), reason, network, kept: false };
+}
+
+/** Address an install answers on, from its `.env` (the file came from the server, so every value is checked again). */
+export function addressFromEnv(env: Record<string, string>): { address: string; proxyPort: number | null } | null {
+  const domain = env.RELAY_DOMAIN ?? '';
+  const httpsPort = Number(env.RELAY_HTTPS_PORT ?? '443');
+  const proxyPort = Number(env.RELAY_PROXY_PORT ?? '8787');
+  if (!isValidDomain(domain) || !Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) return null;
+  if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) return null;
+  if (env.RELAY_MODE === 'proxy') return { address: domain, proxyPort };
+  return { address: httpsPort === 443 ? domain : `${domain}:${httpsPort}`, proxyPort: null };
 }
 
 export const sslipName = (ip: string): string => `${ip.replace(/\./g, '-')}.sslip.io`;
@@ -234,6 +261,8 @@ interface SiteEdit {
   serverName: 'Caddy' | 'nginx';
   check: string | null;
   reload: string;
+  /** Docker: the container the check and the reload go to. */
+  containerId: string | null;
   /** «Already done» for the step. */
   stepCheck: string;
   note: string;
@@ -263,6 +292,7 @@ function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string
       serverName: 'Caddy',
       check: commands.check,
       reload: commands.reload,
+      containerId: caddy.runtime === 'docker' ? caddy.containerId : null,
       stepCheck: webStepCheck(target, afterSha ?? '', caddy, name),
       note: 'none: Caddy checks the whole configuration while loading it and keeps the old one if it is bad',
     };
@@ -270,9 +300,10 @@ function caddyEdit(layout: Extract<Layout, { mode: 'caddy-site' }>, name: string
   if (web.ours?.kind === 'file') return edit('replace', web.ours.hostPath, caddySiteFile(name, upstream), web.ours.sha256, null, 'file');
   const text = web.caddyfile.text;
   if (web.ours?.kind === 'block') {
-    const without = removeCaddyBlock(text);
-    if (without === null) return null;
-    return edit('replace', web.config.host, without + caddyBlockAppend(without, name, upstream), web.caddyfile.sha256, null, 'block');
+    // Replaced where it stands: lines of the person after our block keep their place, and an unchanged block is no change.
+    const updated = replaceCaddyBlock(text, name, upstream);
+    if (updated === null) return null;
+    return edit('replace', web.config.host, updated, web.caddyfile.sha256, null, 'block');
   }
   if (web.include !== null) return edit('add', `${web.include.hostDir}/parley-relay${web.include.suffix}`, caddySiteFile(name, upstream), null, null, 'file');
   return edit('append', web.config.host, caddyBlockAppend(text, name, upstream), web.caddyfile.sha256, text, 'block');
@@ -283,7 +314,7 @@ function nginxEdit(layout: Extract<Layout, { mode: 'nginx-acme' }>, name: string
   const { web } = layout;
   if (web.include === null) return null;
   const target = web.ours?.kind === 'file' ? web.ours.hostPath : `${web.include.hostDir}/parley-relay.conf`;
-  const content = nginxSiteFile(name, layout.runtime, layout.acmePort, NGINX_ACME_PORT);
+  const content = nginxSiteFile(name, layout.runtime, layout.acmePort, NGINX_ACME_PORT, web.ipv6);
   const afterSha = afterShaOf('replace', content, null);
   const nginx: NginxTarget = { runtime: layout.runtime, containerId: web.container?.id ?? null, name, file: `${web.include.containerDir}/parley-relay.conf` };
   const commands = nginxCommands(nginx);
@@ -298,12 +329,13 @@ function nginxEdit(layout: Extract<Layout, { mode: 'nginx-acme' }>, name: string
     serverName: 'nginx',
     check: commands.check,
     reload: commands.reload,
+    containerId: layout.runtime === 'docker' ? nginx.containerId : null,
     stepCheck: nginxStepCheck(target, afterSha ?? '', nginx),
     note: 'nginx -t must pass without «conflicting server name» for our name, and nginx -T must list our file; nginx -s reload does not report its own failure',
   };
 }
 
-function webStep(edit: SiteEdit): { step: PlanStep; card: NonNullable<RelayPlanWeb['edits'][number]> } {
+function webStep(edit: SiteEdit, id = 'web'): { step: PlanStep; card: NonNullable<RelayPlanWeb['edits'][number]> } {
   const script = buildEditScript({
     action: edit.action,
     target: edit.target,
@@ -312,13 +344,14 @@ function webStep(edit: SiteEdit): { step: PlanStep; card: NonNullable<RelayPlanW
     afterSha: edit.afterSha,
     check: edit.check,
     reload: edit.reload,
+    containerId: edit.containerId,
   });
   const verb = { add: 'Add', replace: 'Replace', append: 'Append a block to', remove: 'Remove', 'remove-block': 'Remove our block from' }[edit.action];
   const backup = edit.beforeSha === null ? 'none (the file is new)' : `${BACKUP_DIR}/<time>-${edit.target.split('/').pop() ?? ''}`;
   const checkText = edit.check ?? edit.note;
   return {
     step: {
-      id: 'web',
+      id,
       title: `${verb} ${edit.target} (your ${edit.serverName})`,
       check: edit.stepCheck,
       checkShow: edit.stepCheck,
@@ -333,12 +366,119 @@ function webStep(edit: SiteEdit): { step: PlanStep; card: NonNullable<RelayPlanW
       server: edit.server,
       file: edit.target,
       action: edit.action,
-      content: edit.content,
+      content: edit.action === 'remove' || edit.action === 'remove-block' ? null : edit.content,
       backup,
       check: checkText,
       reload: edit.reload,
     },
   };
+}
+
+/** Our change in the person's web server that is there now: found by the probe of the holder of port 80, else the one `.env` names. */
+interface PriorEdit {
+  file: string;
+  kind: 'file' | 'block';
+  server: 'Caddy' | 'nginx';
+  sha256: string;
+  /** Found on the server that holds port 80 now (so it can be undone through that server). */
+  live: boolean;
+}
+
+function priorEdit(probe: ProbeResult): PriorEdit | null {
+  const { web } = probe;
+  if (web?.ours?.kind === 'file') return { file: web.ours.hostPath, kind: 'file', server: web.kind === 'nginx' ? 'nginx' : 'Caddy', sha256: web.ours.sha256, live: true };
+  if (web?.ours?.kind === 'block' && web.config !== null && web.caddyfile !== null) {
+    return { file: web.config.host, kind: 'block', server: 'Caddy', sha256: web.caddyfile.sha256, live: true };
+  }
+  if (probe.installEdit !== null) {
+    return { ...probe.installEdit, server: probe.install?.RELAY_MODE === 'nginx-acme' ? 'nginx' : 'Caddy', live: false };
+  }
+  return null;
+}
+
+/** What is seen on port 80 now, for the texts that say «the server now looks different». */
+function seenOn80(probe: ProbeResult): string {
+  const holder = holderOf(probe, 80);
+  return holder === null ? 'no program uses port 80' : `port 80 is used by ${describeHolder(holder)}`;
+}
+
+/** Undoes our change (spec 6.4, 5.2): the same transaction, with the removal of our file or of our block. */
+function undoEdit(probe: ProbeResult, prior: PriorEdit): { edit: SiteEdit } | { blocked: string } {
+  const differs = `Parley's site is in ${prior.file} of ${prior.server}, but the server now looks different (${seenOn80(probe)}). `;
+  const { web } = probe;
+  if (!prior.live || web === null || web.kind !== (prior.server === 'nginx' ? 'nginx' : 'caddy')) {
+    return { blocked: `${differs}Remove that site from the server by hand, then remove the relay.` };
+  }
+  if (web.reasons.length > 0) return { blocked: `${differs}It cannot be changed now: ${web.reasons[0] ?? 'unsupported'}. Remove that site by hand, then remove the relay.` };
+  if (web.kind === 'nginx') {
+    if (web.include === null) return { blocked: `${differs}Remove that site by hand.` };
+    const nginx: NginxTarget = { runtime: web.runtime === 'docker' ? 'docker' : 'host', containerId: web.container?.id ?? null, name: '', file: `${web.include.containerDir}/parley-relay.conf` };
+    const commands = nginxCommands(nginx, true);
+    return {
+      edit: {
+        action: 'remove',
+        target: prior.file,
+        content: '',
+        beforeSha: prior.sha256,
+        afterSha: null,
+        kind: 'file',
+        server: nginx.runtime === 'docker' ? 'nginx (Docker)' : 'nginx (systemd)',
+        serverName: 'nginx',
+        check: commands.check,
+        reload: commands.reload,
+        containerId: nginx.runtime === 'docker' ? nginx.containerId : null,
+        stepCheck: `[ ! -e ${shQuote(prior.file)} ]`,
+        note: 'nginx -t must pass and nginx -T must no longer list our file',
+      },
+    };
+  }
+  if (web.config === null || web.caddyfile === null) return { blocked: `${differs}Remove that site by hand.` };
+  const caddy: CaddyTarget = {
+    runtime: web.runtime === 'docker' ? 'docker' : 'host',
+    containerId: web.container?.id ?? null,
+    containerFile: web.runtime === 'docker' ? web.config.container : null,
+    admin: web.admin ?? '127.0.0.1:2019',
+  };
+  const commands = caddyCommands(caddy);
+  const common = {
+    server: caddy.runtime === 'docker' ? 'Caddy (Docker)' : 'Caddy (systemd)',
+    serverName: 'Caddy' as const,
+    check: commands.check,
+    reload: commands.reload,
+    containerId: caddy.runtime === 'docker' ? caddy.containerId : null,
+    note: 'none: Caddy checks the whole configuration while loading it and keeps the old one if it is bad',
+  };
+  if (prior.kind === 'file') {
+    return { edit: { ...common, action: 'remove', target: prior.file, content: '', beforeSha: prior.sha256, afterSha: null, kind: 'file', stepCheck: `[ ! -e ${shQuote(prior.file)} ]` } };
+  }
+  const without = removeCaddyBlock(web.caddyfile.text);
+  if (without === null) return { blocked: `${differs}Remove that block by hand.` };
+  return {
+    edit: {
+      ...common,
+      action: 'remove-block',
+      target: web.config.host,
+      content: without,
+      beforeSha: web.caddyfile.sha256,
+      afterSha: afterShaOf('remove-block', without, null),
+      kind: 'block',
+      stepCheck: `! grep -qE '^# BEGIN parley-relay' ${shQuote(web.config.host)}`,
+    },
+  };
+}
+
+/** “Roll back” only inside one layout (spec 6.3). */
+function rollbackBlock(probe: ProbeResult): string | null {
+  const now = probe.install ?? {};
+  const before = probe.previous ?? {};
+  const keys = ['RELAY_MODE', 'RELAY_DOMAIN', 'RELAY_WEB_FILE', 'RELAY_NETWORK', 'RELAY_PROXY_PORT', 'RELAY_ACME_PORT'];
+  const differs = 'The previous version used a different layout; install again instead';
+  if (keys.some((key) => (now[key] ?? (key === 'RELAY_MODE' ? 'caddy' : '')) !== (before[key] ?? (key === 'RELAY_MODE' ? 'caddy' : '')))) return differs;
+  // The `.env` must also match what the server shows now.
+  const prior = priorEdit(probe);
+  const withEdit = now.RELAY_MODE === 'caddy-site' || now.RELAY_MODE === 'nginx-acme';
+  if (withEdit ? prior === null || prior.file !== now.RELAY_WEB_FILE : prior !== null) return differs;
+  return null;
 }
 
 function installSteps(ctx: PlanContext, env: EnvValues, web: PlanStep | null): PlanStep[] {
@@ -369,7 +509,8 @@ function installSteps(ctx: PlanContext, env: EnvValues, web: PlanStep | null): P
       ...(ownCaddyfile ? [] : [plain(`rm -f ${D}/Caddyfile`)]),
     ],
   });
-  steps.push(imageStep(env.mode === 'nginx-acme' ? [ctx.image, CADDY_IMAGE] : [ctx.image]));
+  // The images the layout's compose file runs: `caddy` and `nginx-acme` bring their own Caddy.
+  steps.push(imageStep(env.mode === 'nginx-acme' || env.mode === 'caddy' ? [ctx.image, CADDY_IMAGE] : [ctx.image]));
   if (ctx.probe.ufwActive && ctx.decision.mode === 'caddy') {
     steps.push(ufwRules(ctx.decision.httpsPort === 443 ? [80, 443] : [80, ctx.decision.httpsPort]));
   }
@@ -423,16 +564,21 @@ function rollbackSteps(): PlanStep[] {
   ];
 }
 
-function removeSteps(ctx: PlanContext): PlanStep[] {
+function removeSteps(ctx: PlanContext, undo: PlanStep | null): PlanStep[] {
   const down = ctx.removeData === true ? `${COMPOSE} down -v` : `${COMPOSE} down`;
   const rules = `if [ -f ${D}/ufw-rules ]; then grep -E '^[0-9]{1,5}/tcp$' ${D}/ufw-rules | while read -r rule; do ufw delete allow "$rule"; done; fi`;
+  // Volumes left over from an earlier layout (compose no longer knows them) go with the data, found by the project label.
+  const leftovers = 'docker volume ls -q --filter label=com.docker.compose.project=parley-relay | xargs -r docker volume rm';
   return [
+    // Our site goes first: when the check or the reload after its removal fails the file comes back and the run stops,
+    // so the person's server never points at a relay that is gone.
+    ...(undo === null ? [] : [undo]),
     {
       id: 'down',
       title: ctx.removeData === true ? 'Stop the relay and delete its data (routes, device trust, certificates)' : 'Stop the relay (its data is kept)',
       check: `test ! -d ${D}`,
       checkShow: `test ! -d ${D}`,
-      commands: [plain(down)],
+      commands: [plain(down), ...(ctx.removeData === true ? [plain(leftovers)] : [])],
     },
     { id: 'ufw', title: 'Remove the firewall rules this wizard added', check: `test ! -d ${D}`, checkShow: `test ! -d ${D}`, commands: [plain(rules)] },
     { id: 'files', title: `Delete ${D}`, check: `test ! -d ${D}`, checkShow: `test ! -d ${D}`, commands: [plain(`rm -rf ${D}`)] },
@@ -449,19 +595,33 @@ export function buildPlan(ctx: PlanContext): Plan {
   }
   if (ctx.intent === 'rollback') {
     if (probe.install === null || probe.previous === null) return empty('There is no previous version to roll back to');
+    const different = rollbackBlock(probe);
+    if (different !== null) return empty(different);
     return { intent: 'rollback', steps: rollbackSteps(), notes: tailNotes(probe), blocked: null, mode: null, address: null, proxy: null, web: null };
   }
   if (ctx.intent === 'remove') {
-    if (probe.install === null) return empty('No relay installed by this wizard was found');
+    const prior = priorEdit(probe);
+    if (probe.install === null && prior === null) return empty('No relay installed by this wizard was found');
+    let undo: ReturnType<typeof webStep> | null = null;
+    if (prior !== null) {
+      const undone = undoEdit(probe, prior);
+      if ('blocked' in undone) return empty(undone.blocked);
+      undo = webStep(undone.edit, 'web-undo');
+    }
     return {
       intent: 'remove',
-      steps: removeSteps(ctx),
-      notes: ['Docker and its packages stay installed.', ctx.removeData === true ? 'The relay data will be deleted.' : 'The relay data stays in Docker volumes.', ...tailNotes(probe)],
+      steps: removeSteps(ctx, undo?.step ?? null),
+      notes: [
+        'Docker and its packages stay installed.',
+        ctx.removeData === true ? 'The relay data will be deleted.' : 'The relay data stays in Docker volumes.',
+        ...(prior !== null ? [`Parley removes only its own ${prior.kind === 'block' ? 'block' : 'file'} from your ${prior.server} (${prior.file}); a backup stays in ${BACKUP_DIR}/. If the check or the reload fails, the file is restored and nothing else is removed.`] : []),
+        ...tailNotes(probe),
+      ],
       blocked: null,
       mode: null,
       address: null,
       proxy: null,
-      web: null,
+      web: undo === null || prior === null ? null : { summary: `Parley removes its site from your ${prior.server}.`, network: null, edits: [undo.card] },
     };
   }
   if (probe.docker && !probe.compose) {
@@ -469,6 +629,11 @@ export function buildPlan(ctx: PlanContext): Plan {
   }
   if (decision.mode === 'blocked') return empty(decision.reason);
   const edit = decision.mode === 'caddy-site' ? caddyEdit(decision, ctx.name) : decision.mode === 'nginx-acme' ? nginxEdit(decision, ctx.name) : null;
+  // Our site in the person's server is never moved by the wizard (spec 6.2): the person removes the relay first.
+  const prior = priorEdit(probe);
+  if (prior !== null && (edit === null || edit.target !== prior.file)) {
+    return empty(`Parley's site is in ${prior.file} of ${prior.server}, but the server now looks different (${seenOn80(probe)}). Remove the relay first, then install again.`);
+  }
   if ((decision.mode === 'caddy-site' || decision.mode === 'nginx-acme') && edit === null) return empty('The web server configuration could not be prepared for the change');
   const network = decision.mode === 'caddy-site' || decision.mode === 'nginx-acme' || decision.mode === 'proxy' ? decision.network : null;
   const env: EnvValues = {
@@ -489,6 +654,10 @@ export function buildPlan(ctx: PlanContext): Plan {
     'If your hosting provider has a firewall in front of the server, open the ports there yourself; the wizard cannot see it.',
     ...tailNotes(probe),
   ];
+  const address = relayAddress(ctx.name, decision);
+  const before = probe.install === null ? null : (addressFromEnv(probe.install)?.address ?? null);
+  if (decision.mode === 'proxy' && decision.kept) notes.push(`Your web server already serves the relay at ${address}; Parley keeps this layout.`);
+  else if (before !== null && before !== address) notes.push(`The relay address changes from ${before} to ${address}; pair your phone again.`);
   let proxy: Plan['proxy'] = null;
   let web: Plan['web'] = null;
   let webStepDef: PlanStep | null = null;
@@ -528,7 +697,7 @@ export function buildPlan(ctx: PlanContext): Plan {
     notes,
     blocked: null,
     mode: decision.mode,
-    address: relayAddress(ctx.name, decision),
+    address,
     proxy,
     web,
   };

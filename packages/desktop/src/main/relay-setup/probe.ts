@@ -82,6 +82,10 @@ export interface ProbeResult {
   activeCommand: ActiveCommand | null;
   /** The end of the log of the previous run's last command, when that command is dead (shown in the plan notes). */
   previousTail: { id: string; text: string } | null;
+  /** The file the earlier install says it changed (`RELAY_WEB_FILE`), when it still exists and is ours (spec 6.2). */
+  installEdit: { file: string; kind: 'file' | 'block'; sha256: string } | null;
+  /** An earlier `proxy` install answers `https://<address>/v1/health` right now; `null` — not asked. */
+  proxyHealthy: boolean | null;
   /** `.env` of the earlier install (the wizard writes it), `null` — none. */
   install: Record<string, string> | null;
   previous: Record<string, string> | null;
@@ -251,6 +255,8 @@ export async function probeFull(base: ProbeBase, shell: RemoteShell): Promise<Pr
     web: null,
     activeCommand: null,
     previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: ufw.code === 0 && parseUfwActive(ufw.stdout),
     install: env.code === 0 ? parseEnv(env.stdout) : null,
     previous: previous.code === 0 ? parseEnv(previous.stdout) : null,
