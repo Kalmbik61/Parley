@@ -443,7 +443,7 @@ D=/var/tmp/parley-relay-setup; mkdir -p -m 0700 "$D"; rm -f "$D/<id>.code"
 setsid flock -n "$D/lock" sh -c 'echo "<id>" > "$D/active"; <команда>; echo $? > "$D/<id>.code"; rm -f "$D/active"' \
   > "$D/<id>.log" 2>&1 < /dev/null &
 p=$!; echo "$p" > "$D/pid"
-tail -n +1 -f --pid="$p" "$D/<id>.log"; cat "$D/<id>.code" 2>/dev/null && exit "$(cat "$D/<id>.code")"; exit 255
+tail -n +1 -f --pid="$p" "$D/<id>.log"; [ -f "$D/<id>.code" ] && exit "$(cat "$D/<id>.code")"; exit 255
 ```
 
 Состоянием владеет фоновая часть: она держит `flock` на `$D/lock` всё время работы, сама пишет код и сама
