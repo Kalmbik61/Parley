@@ -110,7 +110,7 @@ function describeParams(params: unknown): string | undefined {
  * `decision`): цель — сессия, в подробностях карточка, вид и выбор; ответы на вопрос и текст отказа — длиной и хэшем.
  */
 function auditOf(method: string, params: unknown): { target: string | undefined; detail: string | undefined } {
-  const where = refDetail(params);
+  const where = refDetail(params, isRoomMenu(method));
   if (method !== 'feed.decide' || typeof params !== 'object' || params === null) {
     return { target: targetOf(params), detail: joinDetail([...where, describeParams(params)]) };
   }
@@ -136,11 +136,13 @@ const joinDetail = (parts: Array<string | undefined>): string | undefined => {
  * Где сессия из `ref` (критик A37a m3): номера сессий повторяются между работами, поэтому в журнал — `workId` и хэш
  * `projectPath` (путь сам не пишется).
  */
-function refDetail(params: unknown): string[] {
+const isRoomMenu = (method: string): boolean => method === 'rooms.archive' || method === 'rooms.delete';
+
+function refDetail(params: unknown, roomMenu = false): string[] {
   if (typeof params !== 'object' || params === null) return [];
-  // Методы комнаты (A41a) несут проект и работу на верхнем уровне, рядом с `roomId`.
-  const p = params as { ref?: unknown; roomId?: unknown };
-  const ref = p.ref ?? (typeof p.roomId === 'string' ? params : undefined);
+  const p = params as { ref?: unknown };
+  // Меню комнаты (A41a): проект и работа на верхнем уровне, рядом с `roomId`; у прочих методов журнал прежний.
+  const ref = p.ref ?? (roomMenu ? params : undefined);
   if (typeof ref !== 'object' || ref === null) return [];
   const { projectPath, workId } = ref as Record<string, unknown>;
   const parts: string[] = [];
@@ -249,7 +251,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     reply(deviceId, state, id, { error: { code, message, ...extra } });
 
   function refuse(deviceId: string, state: DeviceState, method: string, params: unknown, outcome: string, detail?: string): void {
-    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail: joinDetail([...refDetail(params), detail]) });
+    audit.append({ kind: 'call-refused', deviceId, deviceName: state.name, method, target: targetOf(params), outcome, detail: joinDetail([...refDetail(params, isRoomMenu(method)), detail]) });
   }
 
   /** Методы, которые телефон может звать в эту эпоху: белый список этапа ∩ `hello.methods` хоста. */

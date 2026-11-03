@@ -1465,6 +1465,13 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(JSON.stringify(audits)).not.toContain('Design review');
   });
 
+  it('A41a m6: only the room menu adds workId and a project hash for a flat roomId; rooms.send keeps its old audit detail', async () => {
+    call(D, 'a', 'rooms.send', { projectPath: '/p', workId: 'w-1', roomId: 'r-1', to: [], text: 'hi', kind: 'note' });
+    await flush();
+    const [send] = audits.filter((a) => a.kind === 'call');
+    expect(send?.detail ?? '').not.toMatch(/^workId=w-1 project:sha256=/);
+  });
+
   it('A41a: the room menu shares the mutating limit', async () => {
     for (let i = 0; i < 30; i++) {
       call(D, `m${i}`, i % 2 === 0 ? 'rooms.delete' : 'rooms.archive', { projectPath: '/p', workId: 'w-1', roomId: 'r-1', ...(i % 2 === 0 ? {} : { stopSessions: false }) });

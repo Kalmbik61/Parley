@@ -229,7 +229,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
         roomAutonomous: () => false,
         projectKnown: (projectPath) => projectPath === '/p',
         workKnown: (projectPath, workId) => projectPath === '/p' && workId === 'w-1',
-        roomState: async () => ({ workArchived: false, autonomous: false }),
+        roomState: async (_projectPath, _workId, roomId) => (roomId === 'r-1' ? { workArchived: false, autonomous: false } : null),
         sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
       },
     });
@@ -351,6 +351,33 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
     expect(h.spies['sessions.switchAgent']).toHaveBeenCalledTimes(1);
     // Удаление с телефона по-прежнему закрыто.
     expect(await codeOf(h.link.call('sessions.delete', { ref }))).toBe('unknown_method');
+  });
+
+  it('A41a: меню комнаты за переключателем; известная работа и комната; лишний ключ и нет stopSessions — bad_request до обработчика', async () => {
+    const room = { projectPath: '/p', workId: 'w-1', roomId: 'r-1' };
+    const archive = { ...room, stopSessions: false };
+    const cases = [['rooms.archive', archive], ['rooms.delete', room]] as const;
+    const off = await hostWith({ enabled: false, open: true });
+    for (const [m, params] of cases) {
+      expect(off.link.methods, m).not.toContain(m);
+      expect(await codeOf(off.link.call(m, params)), m).toBe('unknown_method');
+      expect(off.spies[m], m).not.toHaveBeenCalled();
+    }
+    const h = await hostWith({ enabled: true, open: true });
+    for (const [m, params] of cases) {
+      expect(h.link.methods, m).toContain(m);
+      expect(await codeOf(h.link.call(m, params)), m).toBe('ok');
+      expect(await codeOf(h.link.call(m, { ...params, projectPath: '/etc' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, workId: 'w-9' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, roomId: 'r-9' })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...params, extra: 1 })), m).toBe('bad_request');
+      expect(h.spies[m], m).toHaveBeenCalledTimes(1);
+    }
+    expect(await codeOf(h.link.call('rooms.archive', room))).toBe('bad_request');
+    expect(await codeOf(h.link.call('rooms.archive', { ...archive, stopSessions: 'no' }))).toBe('bad_request');
+    expect(h.spies['rooms.archive']).toHaveBeenCalledTimes(1);
+    // Прочее меню комнаты по-прежнему закрыто.
+    expect(await codeOf(h.link.call('rooms.rename', { ...room, title: 'x' }))).toBe('unknown_method');
   });
 
   it('A37a: sessions.resume за переключателем; известная работа; лишний ключ — bad_request до обработчика', async () => {
