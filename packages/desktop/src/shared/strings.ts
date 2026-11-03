@@ -718,6 +718,7 @@ export const S = {
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
     addProvider: 'Add provider',
+    moreProviders: 'More connected providers',
     refreshLimits: 'Refresh provider limits',
     refreshErrors: {
       authentication: 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.',
