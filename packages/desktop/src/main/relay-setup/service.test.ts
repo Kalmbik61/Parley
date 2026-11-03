@@ -36,7 +36,7 @@ interface FakeServer {
   stdins: string[];
 }
 
-const READS = /^(cat \/etc\/os-release|uname -m|id -u|sudo -n true|ss -ltnp|ufw status|docker --version|docker compose version|docker ps -q \| xargs -r docker inspect --format '[^']*'|cat \/var\/tmp\/parley-relay-setup\/active|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log|\[ ! -d \/var\/tmp\/parley-relay-setup \] \|\| ! command -v flock >\/dev\/null 2>&1 \|\| flock -n \/var\/tmp\/parley-relay-setup\/lock true|systemctl (is-active|show) .*|nginx -T|docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|base64 -w0 '[^']*'|cat \/opt\/parley-relay\/(previous\/)?\.env)$/;
+const READS = /^(cat \/etc\/os-release|uname -m|id -u|sudo -n true|ss -ltnp|ufw status|docker --version|docker compose version|docker ps -aq \| xargs -r docker inspect --format '[^']*'|cat \/var\/tmp\/parley-relay-setup\/active|curl -sk --max-time 5 --resolve '[^']*' -o \/dev\/null -w '%\{http_code\}' '[^']*'|tail -n 20 \/var\/tmp\/parley-relay-setup\/[a-z][a-z0-9-]*\.log|\[ ! -d \/var\/tmp\/parley-relay-setup \] \|\| ! command -v flock >\/dev\/null 2>&1 \|\| flock -n \/var\/tmp\/parley-relay-setup\/lock true|systemctl (is-active|show) .*|nginx -T|docker exec '[0-9a-f]{64}' (caddy version|nginx -v|nginx -T)|base64 -w0 '[^']*'|cat \/opt\/parley-relay\/(previous\/)?\.env)$/;
 
 function connection(server: FakeServer): SshConnection {
   return {

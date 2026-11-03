@@ -1,7 +1,7 @@
 import net from 'node:net';
 import { isValidDomain, shQuote, type SetupIntent } from './input.js';
 import type { RelayPlanWeb } from '../../shared/relay-setup-types.js';
-import { INSTALL_DIR, holderOf, type PortHolder, type ProbeResult } from './probe.js';
+import { INSTALL_DIR, holderOf, isOurs, type PortHolder, type ProbeResult } from './probe.js';
 import {
   CADDY_IMAGE,
   caddyBlockAppend,
@@ -88,6 +88,12 @@ function describeHolder(holder: PortHolder): string {
 export function decideLayout(probe: ProbeResult): Layout {
   const h80 = holderOf(probe, 80);
   const h443 = holderOf(probe, 443);
+  // A stopped container of somebody else that comes back by itself and wants 80/443 would lose them to our Caddy.
+  const waiting = probe.containers.find((c) => c.running === false && !isOurs(c) && !['', 'no'].includes(c.restartPolicy ?? '') && (c.boundPorts ?? []).some((port) => port === 80 || port === 443));
+  if (waiting !== undefined) {
+    const port = (waiting.boundPorts ?? []).includes(80) ? 80 : 443;
+    return { mode: 'blocked', reason: `Port ${port} is assigned to the stopped container ${waiting.name} (restart policy ${waiting.restartPolicy}). Start it or remove it, then run the wizard again.` };
+  }
   // A working manual `proxy` install stays as it is: a new layout would change the address and break the person's snippet.
   const env = probe.install;
   if (env?.RELAY_MODE === 'proxy' && probe.proxyHealthy === true && isValidDomain(env.RELAY_DOMAIN ?? '')) {
@@ -406,6 +412,10 @@ function seenOn80(probe: ProbeResult): string {
 function undoEdit(probe: ProbeResult, prior: PriorEdit): { edit: SiteEdit } | { blocked: string } {
   const differs = `Parley's site is in ${prior.file} of ${prior.server}, but the server now looks different (${seenOn80(probe)}). `;
   const { web } = probe;
+  // Our site is recorded but the web server holds no port 80 right now (a restart, a deploy): nothing is wrong, it must run first.
+  if (!prior.live && holderOf(probe, 80) === null) {
+    return { blocked: `Parley's site is in ${prior.file} of ${prior.server}, but your web server is not running now (${seenOn80(probe)}). Start your web server and run the wizard again.` };
+  }
   if (!prior.live || web === null || web.kind !== (prior.server === 'nginx' ? 'nginx' : 'caddy')) {
     return { blocked: `${differs}Remove that site from the server by hand, then remove the relay.` };
   }
@@ -656,6 +666,11 @@ export function buildPlan(ctx: PlanContext): Plan {
   ];
   const address = relayAddress(ctx.name, decision);
   const before = probe.install === null ? null : (addressFromEnv(probe.install)?.address ?? null);
+  const wasProxy = probe.install?.RELAY_MODE === 'proxy';
+  const wasPort = Number(probe.install?.RELAY_PROXY_PORT ?? '8787');
+  if (wasProxy && !(decision.mode === 'proxy' && decision.kept) && Number.isInteger(wasPort)) {
+    notes.push(`Your web server's manual snippet for the relay (127.0.0.1:${wasPort}) stops working after this run.`);
+  }
   if (decision.mode === 'proxy' && decision.kept) notes.push(`Your web server already serves the relay at ${address}; Parley keeps this layout.`);
   else if (before !== null && before !== address) notes.push(`The relay address changes from ${before} to ${address}; pair your phone again.`);
   let proxy: Plan['proxy'] = null;

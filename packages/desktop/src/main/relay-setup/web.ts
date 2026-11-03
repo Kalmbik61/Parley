@@ -486,3 +486,13 @@ export async function probeInstalledEdit(env: Record<string, string> | null, she
   const ours = kind === 'block' ? countMarkers(text).begin > 0 : isOurFile(text, env?.RELAY_PROXY_PORT);
   return ours ? { file, kind, sha256: createHash('sha256').update(bytes).digest('hex') } : null;
 }
+
+/**
+ * A working `proxy` install answers on the server itself, whatever the network of this machine does (spec 6.2): through the
+ * person's own web server on loopback with the name resolved to it. Reads only; no `curl` — no answer.
+ */
+export async function probeProxyOnServer(domain: string, shell: RemoteShell): Promise<boolean> {
+  const command = `curl -sk --max-time 5 --resolve ${shQuote(`${domain}:443:127.0.0.1`)} -o /dev/null -w '%{http_code}' ${shQuote(`https://${domain}/v1/health`)}`;
+  const out = await shell.run(command, { sudo: true });
+  return out.code === 0 && out.stdout.trim() === '200';
+}

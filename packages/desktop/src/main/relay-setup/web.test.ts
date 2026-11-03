@@ -7,6 +7,7 @@ import { parseContainers, parseEnv, parseListeners, parseOsRelease, type Contain
 import type { RemoteShell, RunResult } from './shell.js';
 import { BLOCK_BEGIN, BLOCK_BEGIN_NL, BLOCK_END, caddyBlockAppend } from './templates.js';
 import {
+  probeProxyOnServer,
   chooseNetwork,
   countMarkers,
   hostPathOf,

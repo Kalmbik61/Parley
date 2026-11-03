@@ -5,7 +5,7 @@ import { addressFromEnv, buildPlan, decideLayout, type Plan } from './plan.js';
 import { parseContainers, parseEnv, parseListeners, parseOsRelease, type ProbeResult } from './probe.js';
 import type { RemoteShell, RunResult } from './shell.js';
 import { sha256 } from './templates.js';
-import { probeInstalledEdit, probeWeb } from './web.js';
+import { probeInstalledEdit, probeProxyOnServer, probeWeb } from './web.js';
 
 const IMAGE = 'ghcr.io/kalmbik61/parley-relay@sha256:' + 'a'.repeat(64);
 const dir = path.join(__dirname, 'fixtures', 'course-vps');
@@ -204,5 +204,54 @@ describe('probeInstalledEdit', () => {
     expect(await probeInstalledEdit(null, shellOf({}))).toBeNull();
     const block = await probeInstalledEdit({ RELAY_WEB_FILE: '/opt/course-platform/deploy/Caddyfile', RELAY_WEB_EDIT: 'block' }, shellOf({ [CADDYFILE_PATH]: read('Caddyfile.marker-block') }));
     expect(block?.kind).toBe('block');
+  });
+});
+
+describe('critic T5 fixes', () => {
+  it('M1: the proxy check on the server asks the web server on loopback with the name resolved to it; no curl, no answer', async () => {
+    const ran: string[] = [];
+    const answer = (code: number, stdout: string): RemoteShell => ({
+      async run(command): Promise<RunResult> {
+        ran.push(command);
+        return { code, stdout, stderr: '' };
+      },
+    });
+    expect(await probeProxyOnServer('r.example.com', answer(0, '200'))).toBe(true);
+    expect(ran[0]).toBe("curl -sk --max-time 5 --resolve 'r.example.com:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://r.example.com/v1/health'");
+    expect(await probeProxyOnServer('r.example.com', answer(0, '502'))).toBe(false);
+    expect(await probeProxyOnServer('r.example.com', answer(127, ''))).toBe(false);
+  });
+  it('M1: any move off proxy says that the manual snippet stops working; keeping the layout does not', () => {
+    const env = { RELAY_MODE: 'proxy', RELAY_DOMAIN: 'r.example.com', RELAY_PROXY_PORT: '8787', RELAY_HTTPS_PORT: '443' };
+    const gone = baseProbe({ listeners: [], containers: [], install: env, previous: null, proxyHealthy: false });
+    const moved = buildPlan({ intent: 'install', probe: gone, decision: decideLayout(gone), name: 'r.example.com', image: IMAGE });
+    expect(moved.notes.join(' ')).toContain("Your web server's manual snippet for the relay (127.0.0.1:8787) stops working after this run.");
+    const alive = baseProbe({ listeners: [{ port: 80, processes: ['nginx'] }], containers: [], install: env, previous: null, proxyHealthy: true });
+    const kept = buildPlan({ intent: 'install', probe: alive, decision: decideLayout(alive), name: 'r.example.com', image: IMAGE });
+    expect(kept.notes.join(' ')).not.toContain('stops working');
+  });
+  it('m1: our site is recorded but the web server holds no port 80 now → «start your web server»', async () => {
+    const probe = baseProbe({
+      listeners: [],
+      containers: [],
+      install: { RELAY_MODE: 'caddy-site', RELAY_DOMAIN: NAME, RELAY_WEB_FILE: '/opt/x/parley-relay.caddy' },
+      installEdit: { file: '/opt/x/parley-relay.caddy', kind: 'file', sha256: sha256('x') },
+    });
+    probe.web = await probeWeb(probe, shellOf({}));
+    const p = plan(probe, 'remove');
+    expect(p.blocked).toMatch(/your web server is not running now \(no program uses port 80\)\. Start your web server and run the wizard again\./);
+  });
+  it('m2: a stopped container of somebody else with a restart policy that is set to publish 80 or 443 blocks the plan', () => {
+    const stopped = { ...parseContainers(read('containers.jsonl'))[0]!, id: '99'.repeat(32), name: 'shop-nginx-1', running: false, restartPolicy: 'unless-stopped', boundPorts: [80, 443], published: [], labels: {} };
+    const free = { listeners: [], containers: [stopped] };
+    expect(decideLayout(baseProbe(free))).toEqual({
+      mode: 'blocked',
+      reason: 'Port 80 is assigned to the stopped container shop-nginx-1 (restart policy unless-stopped). Start it or remove it, then run the wizard again.',
+    });
+    expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, boundPorts: [443] }] }))).toMatchObject({ mode: 'blocked', reason: expect.stringMatching(/^Port 443 is assigned/) });
+    // No restart policy, our own container or other ports: nothing waits for the ports.
+    expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, restartPolicy: 'no' }] })).mode).toBe('caddy');
+    expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, labels: { 'com.docker.compose.project': 'parley-relay' } }] })).mode).toBe('caddy');
+    expect(decideLayout(baseProbe({ ...free, containers: [{ ...stopped, boundPorts: [8080] }] })).mode).toBe('caddy');
   });
 });

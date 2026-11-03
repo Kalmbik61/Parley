@@ -4,7 +4,7 @@ import { ControlCallError } from '../remote-control.js';
 import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
 import { isValidDomain, validateInput, type SetupInput } from './input.js';
 import type { KnownHosts, HostKeyInfo } from './known-hosts.js';
-import { probeActive, probeInstalledEdit, probeWeb } from './web.js';
+import { probeActive, probeInstalledEdit, probeProxyOnServer, probeWeb } from './web.js';
 import { addressFromEnv, buildPlan, decideLayout, sslipName, type Plan } from './plan.js';
 import { probeBase, probeFull, type ProbeBase, type ProbeResult } from './probe.js';
 import { redactSecrets, type RunLog } from './log.js';
@@ -218,7 +218,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     // A working `proxy` install keeps its layout (spec 6.2): one attempt from this machine, five seconds.
     const env = probe.install;
     if (s.input.intent === 'install' && env?.RELAY_MODE === 'proxy' && isValidDomain(env.RELAY_DOMAIN ?? '')) {
-      probe.proxyHealthy = await answers(env.RELAY_DOMAIN ?? '');
+      // Either answer keeps the layout: this machine's network (VPN, portal, DNS cache) can give a false refusal.
+      probe.proxyHealthy = (await answers(env.RELAY_DOMAIN ?? '')) || (await probeProxyOnServer(env.RELAY_DOMAIN ?? '', shell));
     }
     const previous = await probeActive(shell);
     probe.activeCommand = previous.active;

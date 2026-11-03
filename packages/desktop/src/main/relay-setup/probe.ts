@@ -17,8 +17,8 @@ export const PROBE = {
   ufw: 'ufw status',
   docker: 'docker --version',
   compose: 'docker compose version',
-  // One JSON line per running container; no containers or no Docker → empty output (`xargs -r` runs nothing).
-  containers: `docker ps -q | xargs -r docker inspect --format '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"path":{{json .Path}},"args":{{json .Args}},"workdir":{{json .Config.WorkingDir}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}},"networkMode":{{json .HostConfig.NetworkMode}}}'`,
+  // One JSON line per container, stopped ones included (a stopped web server with a restart policy comes back and wants 80); no containers or no Docker → empty output (`xargs -r` runs nothing).
+  containers: `docker ps -aq | xargs -r docker inspect --format '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"labels":{{json .Config.Labels}},"path":{{json .Path}},"args":{{json .Args}},"workdir":{{json .Config.WorkingDir}},"mounts":{{json .Mounts}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}},"networkMode":{{json .HostConfig.NetworkMode}},"running":{{json .State.Running}},"restart":{{json .HostConfig.RestartPolicy.Name}},"bindings":{{json .HostConfig.PortBindings}}}'`,
   env: `cat ${INSTALL_DIR}/.env`,
   previousEnv: `cat ${INSTALL_DIR}/previous/.env`,
 } as const;
@@ -63,6 +63,12 @@ export interface ContainerInfo {
   /** Per network: its aliases and DNS names (the container's own short id included by Docker). */
   networkAliases: Record<string, string[]>;
   networkMode: string;
+  /** `State.Running`; containers are listed with the stopped ones. */
+  running: boolean;
+  /** `HostConfig.RestartPolicy.Name`: `no`, `always`, `unless-stopped`, `on-failure`; empty when unknown. */
+  restartPolicy: string;
+  /** Host TCP ports the container is configured to publish (`HostConfig.PortBindings`), running or not. */
+  boundPorts: number[];
 }
 
 export interface ProbeResult {
@@ -73,7 +79,7 @@ export interface ProbeResult {
   docker: boolean;
   compose: boolean;
   listeners: Listener[];
-  /** Running containers; empty without Docker or when nothing was printed. */
+  /** All containers, stopped ones included; empty without Docker or when nothing was printed. */
   containers: ContainerInfo[];
   ufwActive: boolean;
   /** The web server on 80/443 and what can be added to it (stage 3, `probeWeb`); `null` — not surveyed or nothing there. */
@@ -161,6 +167,19 @@ function aliasesOf(networks: unknown): Record<string, string[]> {
   return result;
 }
 
+function boundPortsOf(bindings: unknown): number[] {
+  const ports: number[] = [];
+  if (!isRecord(bindings)) return ports;
+  for (const [key, list] of Object.entries(bindings)) {
+    if (!key.endsWith('/tcp') || !Array.isArray(list)) continue;
+    for (const b of list) {
+      const port = isRecord(b) ? Number(b.HostPort) : NaN;
+      if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.push(port);
+    }
+  }
+  return ports;
+}
+
 function parseContainer(value: unknown): ContainerInfo | null {
   if (!isRecord(value) || str(value.id) === '') return null;
   const labels: Record<string, string> = {};
@@ -194,6 +213,9 @@ function parseContainer(value: unknown): ContainerInfo | null {
     networks: isRecord(value.networks) ? Object.keys(value.networks) : [],
     networkAliases: aliasesOf(value.networks),
     networkMode: str(value.networkMode),
+    running: value.running !== false,
+    restartPolicy: str(value.restart),
+    boundPorts: boundPortsOf(value.bindings),
   };
 }
 

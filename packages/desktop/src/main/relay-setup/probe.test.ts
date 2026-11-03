@@ -55,12 +55,18 @@ describe('parseContainers', () => {
     expect(parseContainers('')).toEqual([]);
     expect(parseContainers('\n  \n')).toEqual([]);
     expect(parseContainers('not json\n{"id":"a","name":"/x","labels":null,"ports":{"80/tcp":[{"HostIp":"::","HostPort":"80"}],"53/udp":[{"HostPort":"53"}],"1/tcp":null},"mounts":null,"networks":{"n":{}}}\n[]\n{"name":"no id"}')).toEqual([
-      { id: 'a', name: 'x', image: '', labels: {}, path: '', args: [], workdir: '', mounts: [], published: [{ hostPort: 80, hostIp: '::' }], networks: ['n'], networkAliases: { n: [] }, networkMode: '' },
+      { id: 'a', name: 'x', image: '', labels: {}, path: '', args: [], workdir: '', mounts: [], published: [{ hostPort: 80, hostIp: '::' }], networks: ['n'], networkAliases: { n: [] }, networkMode: '', running: true, restartPolicy: '', boundPorts: [] },
     ]);
   });
   it('the inspect template is one single-quote-free constant', () => {
     expect(PROBE.containers.match(/'/g)).toHaveLength(2);
-    expect(PROBE.containers.startsWith('docker ps -q | xargs -r docker inspect --format ')).toBe(true);
+    expect(PROBE.containers.startsWith('docker ps -aq | xargs -r docker inspect --format ')).toBe(true);
+  });
+  it('stopped containers: running, restart policy and the ports they are set to publish are read', () => {
+    const line = '{"id":"b","name":"/shop","running":false,"restart":"unless-stopped","ports":{},"bindings":{"80/tcp":[{"HostIp":"","HostPort":"80"}],"443/tcp":[{"HostPort":"443"}],"53/udp":[{"HostPort":"53"}]}}';
+    expect(parseContainers(line)[0]).toMatchObject({ running: false, restartPolicy: 'unless-stopped', boundPorts: [80, 443], published: [] });
+    // Older output without these keys counts as running.
+    expect(parseContainers('{"id":"c","name":"/x"}')[0]).toMatchObject({ running: true, restartPolicy: '', boundPorts: [] });
   });
   it('stage 2: containers that were printed count even when inspect exits 1 (one vanished)', async () => {
     const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
