@@ -511,6 +511,9 @@ export default function SessionScreen() {
           sessionRef={ref}
           label={session.label}
           roomTitle={(id) => view.work.rooms.find((r) => r.id === id)?.title ?? id}
+          providerLabel={(id) => state.providers?.providers.find((p) => p.id === id)?.label ?? null}
+          canAct={canAct}
+          onToast={toast.show}
           onClose={() => setSwitchOpen(false)}
           onDone={(text) => {
             setSwitchOpen(false);

@@ -12,7 +12,7 @@ import { Button } from '../ui/Button';
 import { hostLine } from './session-menu';
 import { canContinue, CARRY_TITLE, carryChoices, currentLine, defaultTarget, forgetLost, keepsLines, newAttempt, NO_TARGETS, recallLost, rememberLost, switchParams, switchStep, targetNote, UNCONFIRMED_LINE, type Carry, type SwitchAttempt, type Target } from './switch-model';
 
-export function SwitchSheet({ client, sessionRef, label, roomTitle, onClose, onDone }: { client: RemoteClient | null; sessionRef: SessionRef; label: string; roomTitle(id: string): string; onClose(): void; onDone(text: string): void }) {
+export function SwitchSheet({ client, sessionRef, label, roomTitle, providerLabel, canAct, onClose, onDone, onToast }: { client: RemoteClient | null; sessionRef: SessionRef; label: string; roomTitle(id: string): string; providerLabel(id: string): string | null; canAct: boolean; onClose(): void; onDone(text: string): void; onToast(text: string): void }) {
   const c = useColors();
   const [options, setOptions] = useState<SwitchOptions | null>(DEMO ? demoSwitchOptions : null);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +24,9 @@ export function SwitchSheet({ client, sessionRef, label, roomTitle, onClose, onD
   const [busy, setBusy] = useState(false);
   const attempt = useRef<SwitchAttempt>(recalled.current?.attempt ?? newAttempt());
   const [lost, setLost] = useState(recalled.current !== undefined);
+  const [reason, setReason] = useState<string | null>(recalled.current?.line ?? null);
+  const mounted = useRef(true);
+  useEffect(() => () => void (mounted.current = false), []);
   const frozenTarget = useRef<Target | undefined>(recalled.current?.target);
 
   useEffect(() => {
@@ -45,19 +48,28 @@ export function SwitchSheet({ client, sessionRef, label, roomTitle, onClose, onD
   const choices = carryChoices(target);
   const ok = options !== null && canContinue(options, target);
   const go = async (): Promise<void> => {
-    if (client === null || target === undefined || busy) return;
+    if (client === null || target === undefined || busy || !canAct) return;
     setBusy(true);
-    const outcome = await client.switchAgent(switchParams(sessionRef, attempt.current.requestId, target, carry));
-    setBusy(false);
+    const id = attempt.current.requestId;
+    frozenTarget.current = target;
+    // The attempt is on record BEFORE the call: closing the sheet mid-call and reopening shows it frozen, same id.
+    rememberLost(key, { attempt: { ...attempt.current, lost: true }, line: UNCONFIRMED_LINE, target, carry });
+    const outcome = await client.switchAgent(switchParams(sessionRef, id, target, carry));
     const step = switchStep(attempt.current, outcome, target);
-    attempt.current = step.attempt;
     if (step.close) {
-      forgetLost(key);
-      onDone(step.toast ?? '');
-    } else {
-      frozenTarget.current = target;
-      rememberLost(key, { attempt: step.attempt, target, carry });
+      // A definite answer ends the attempt. A late one reaches the person as a toast, and never closes a newer sheet.
+      if (recallLost(key)?.attempt.requestId === id) forgetLost(key);
+      attempt.current = step.attempt;
+      if (mounted.current) onDone(step.toast ?? '');
+      else onToast(step.toast ?? '');
+      return;
+    }
+    if (recallLost(key)?.attempt.requestId === id) rememberLost(key, { attempt: step.attempt, line: step.line ?? UNCONFIRMED_LINE, target, carry });
+    attempt.current = step.attempt;
+    if (mounted.current) {
+      setBusy(false);
       setLost(true);
+      setReason(step.line);
     }
   };
 
@@ -82,7 +94,7 @@ export function SwitchSheet({ client, sessionRef, label, roomTitle, onClose, onD
           <ActivityIndicator color={c.label2} />
         ) : (
           <>
-            <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>{currentLine(options.current)}</Text>
+            <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>{currentLine(options.current, providerLabel)}</Text>
             {options.targets.length === 0 && <Text allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>{NO_TARGETS}</Text>}
             {options.targets.length > 0 && (
             <View style={[styles.box, { backgroundColor: c.surface }]}>
@@ -135,8 +147,8 @@ export function SwitchSheet({ client, sessionRef, label, roomTitle, onClose, onD
                 <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.flex, { color: c.label }]}>{b}</Text>
               </View>
             ))}
-            {lost && <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.needsYou }]}>{UNCONFIRMED_LINE}</Text>}
-            {options.blockers.length === 0 && options.targets.length > 0 && <Button title={lost ? 'Try again' : 'Continue'} variant="prominent" loading={busy} disabled={!ok && !lost} onPress={() => void go()} />}
+            {lost && <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.needsYou }]}>{reason ?? UNCONFIRMED_LINE}</Text>}
+            {options.blockers.length === 0 && options.targets.length > 0 && <Button title={lost ? 'Try again' : 'Continue'} variant="prominent" loading={busy} disabled={(!ok && !lost) || !canAct} onPress={() => void go()} />}
           </>
         )}
       </ScrollView>

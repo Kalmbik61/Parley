@@ -50,9 +50,9 @@ export function needsText(needs: string | null): string {
 const capital = (id: string): string => (id === '' ? id : id[0]!.toUpperCase() + id.slice(1));
 
 /** "Now on Claude · usage limit": the provider the session is on, which the host leaves out of the targets. */
-export function currentLine(current: SwitchOptions['current']): string {
+export function currentLine(current: SwitchOptions['current'], labelOf: (id: string) => string | null = () => null): string {
   const why = current.available ? null : current.reason === 'limit' ? 'usage limit' : current.reason === 'sign-in' ? 'signed out' : current.reason === 'provider-missing' ? 'not installed' : 'not available';
-  return [`Now on ${capital(current.provider)}`, why].filter((x): x is string => x !== null).join(' · ');
+  return [`Now on ${labelOf(current.provider) ?? capital(current.provider)}`, why].filter((x): x is string => x !== null).join(' · ');
 }
 
 /** What the session keeps: only the non-empty parts. `leads` and `owns` are room ids: `roomTitle` turns them into names. */
@@ -93,10 +93,23 @@ export const newAttempt = (random?: () => number): SwitchAttempt => ({ requestId
 
 export const UNCONFIRMED_LINE = "We couldn't confirm it";
 
-/** After a call: `close` — a definite answer (toast it, close the sheet, next opening has a new id); lost — stay. */
-export function switchStep(attempt: SwitchAttempt, outcome: SwitchAgentOutcome, target: Target, random?: () => number): { attempt: SwitchAttempt; close: boolean; toast: string | null } {
-  if (outcome.outcome === 'lost') return { attempt: { ...attempt, lost: true }, close: false, toast: null };
-  return { attempt: newAttempt(random), close: true, toast: switchToast(outcome, target) };
+/** Answers that say the call may not have reached the host (or that the first switch still runs): the request id is kept. */
+const INDEFINITE_CODES: ReadonlySet<string> = new Set(['timeout', 'connection_lost', 'not_connected', 'rate_limited', 'busy']);
+
+/** `started`, `held`, `queued` or a host refusal such as `conflict` / `bad_request` — only these end the attempt. */
+export function isDefinite(outcome: SwitchAgentOutcome): boolean {
+  if (outcome.outcome === 'lost') return false;
+  if (outcome.outcome === 'rejected') return !INDEFINITE_CODES.has(outcome.code);
+  return true;
+}
+
+/**
+ * After a call: a definite answer closes the sheet (toast; the next opening has a new id); anything else keeps it open and
+ * frozen with the same id and says why in a line. `line` is that reason.
+ */
+export function switchStep(attempt: SwitchAttempt, outcome: SwitchAgentOutcome, target: Target, random?: () => number): { attempt: SwitchAttempt; close: boolean; toast: string | null; line: string | null } {
+  if (!isDefinite(outcome)) return { attempt: { ...attempt, lost: true }, close: false, toast: null, line: outcome.outcome === 'rejected' ? hostLine(outcome) : UNCONFIRMED_LINE };
+  return { attempt: newAttempt(random), close: true, toast: switchToast(outcome, target), line: null };
 }
 
 export function switchParams(ref: SwitchAgentParams['ref'], requestId: string, target: Target, carry: Carry): SwitchAgentParams {
@@ -113,6 +126,8 @@ export function switchToast(outcome: SwitchAgentOutcome, target: Target): string
 /** A call that got no answer outlives the sheet: reopening it shows the frozen target and "Try again" with the same id. */
 export interface LostSwitch {
   attempt: SwitchAttempt;
+  /** Why the sheet is frozen (the last call's reason; before an answer — "couldn't confirm"). */
+  line: string;
   target: Target;
   carry: Carry;
 }
