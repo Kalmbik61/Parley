@@ -12,9 +12,10 @@ import type { FeedItem } from '@parley/core';
 import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
-import { ActiveCard } from '../../cards/CardViews';
+import { PendingCardActions, PendingCardBody } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
+import { pruneQuestionDrafts } from '../../cards/question-drafts';
 import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -22,6 +23,7 @@ import { Toast, useToast } from '../../components/Toast';
 import { devLateCard, devMoreSession } from '../../dev/demo';
 import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
+import { demoQuestionDraft } from '../../dev/demo';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
@@ -97,8 +99,6 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
-  // Only the card's buttons pass through state (set in an effect); its text fields are rendered in the same render as their state (A44 N2).
-  const [cardActions, setCardActions] = useState<React.ReactNode>(null);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -131,6 +131,12 @@ export default function SessionScreen() {
   useGoneDismiss(client, goneHere);
 
   const cardCount = state !== null && ref !== null ? (state.cards[sessionKey(ref)]?.cards.length ?? 0) : 0;
+  // A45: a question card that settled elsewhere (answered at the Mac, stale, gone) takes its draft with it, as in the window.
+  const pendingCards = state !== null && ref !== null ? state.cards[sessionKey(ref)] : undefined;
+  useEffect(() => {
+    if (ref === null || pendingCards === undefined || pendingCards.error) return;
+    pruneQuestionDrafts(sessionKey(ref), pendingCards.cards.map((card) => card.cardId));
+  }, [pendingCards]);
   const seenCount = useRef<number | null>(null);
   useEffect(() => {
     if (loading) return;
@@ -505,19 +511,14 @@ export default function SessionScreen() {
               </View>
             )}
             {first !== undefined && (
-              <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
-                {(parts) => (
-                  <>
-                    <ActionsPublisher actions={parts.actions} onActions={setCardActions} />
-                    {parts.body}
-                    {rest.length > 0 && (
-                      <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
-                        {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
-                      </Text>
-                    )}
-                  </>
+              <>
+                <PendingCardBody card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} {...(DEMO && demoQuestionDraft(preview) !== null ? { initialDraft: demoQuestionDraft(preview)! } : {})} />
+                {rest.length > 0 && (
+                  <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+                    {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
+                  </Text>
                 )}
-              </ActiveCard>
+              </>
             )}
             {turnRunning && first === undefined && (
               <Text allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
@@ -544,7 +545,7 @@ export default function SessionScreen() {
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined ? (
-          cardActions
+          <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
@@ -626,15 +627,6 @@ export default function SessionScreen() {
       {content()}
     </View>
   );
-}
-
-/** Hands the card's buttons to the footer and takes them back when the card goes. */
-function ActionsPublisher({ actions, onActions }: { actions: React.ReactNode; onActions: (actions: React.ReactNode) => void }) {
-  useEffect(() => {
-    onActions(actions);
-  });
-  useEffect(() => () => onActions(null), [onActions]);
-  return null;
 }
 
 /** A provider-switch or project-MCP request for this session stands above the feed with the same Deny / Allow as in Inbox (D1 §9.4). */

@@ -74,8 +74,10 @@ export interface QuestionDraft {
   picked: Readonly<Record<number, readonly string[]>>;
   otherOn: Readonly<Record<number, boolean>>;
   otherText: Readonly<Record<number, string>>;
+  /** The question on screen (0-based), as the window's `CardDraft.step`; kept with the picks while the card waits. */
+  step: number;
 }
-export const EMPTY_QUESTION_DRAFT: QuestionDraft = { picked: {}, otherOn: {}, otherText: {} };
+export const EMPTY_QUESTION_DRAFT: QuestionDraft = { picked: {}, otherOn: {}, otherText: {}, step: 0 };
 
 /** Wire format shared with the window: one string per question, multi-select joined with ", ". Empty — no answer yet. */
 export function answerOf(question: FeedQuestion, at: number, draft: QuestionDraft): string {
@@ -101,6 +103,65 @@ export function questionDecision(card: FeedQuestionCard, draft: QuestionDraft): 
   }
   return { kind: 'question', answers };
 }
+
+// ---------- question steps (the window's QuestionCard: one question at a time) ----------
+
+/** The step clamped into `0..count-1` (a card that changed under a stored draft never points past its end). */
+export const stepOf = (draft: QuestionDraft, count: number): number => Math.min(Math.max(draft.step, 0), Math.max(count - 1, 0));
+
+/** "Question 2 of 3"; `null` for a single question (no "1 of 1"). */
+export const stepLabel = (draft: QuestionDraft, count: number): string | null =>
+  count > 1 ? `Question ${stepOf(draft, count) + 1} of ${count}` : null;
+
+export const hasBack = (draft: QuestionDraft, count: number): boolean => stepOf(draft, count) > 0;
+export const isLastStep = (draft: QuestionDraft, count: number): boolean => stepOf(draft, count) >= count - 1;
+
+/** Why the card cannot be answered here at all (truncated, or two questions with one text); `null` when it can. */
+export const UNANSWERABLE_TEXT = "This question can't be answered here — answer at your Mac";
+export const TOO_LONG_TEXT = 'Answer is too long — 16 KB max';
+export function unanswerableReason(card: FeedQuestionCard): string | null {
+  if (card.truncated === true || card.questions.length === 0) return UNANSWERABLE_TEXT;
+  return new Set(card.questions.map((q) => q.question)).size !== card.questions.length ? UNANSWERABLE_TEXT : null;
+}
+
+/** The caption under the card for the current step: why Next / Send answer is off, when it is not just "no answer yet". */
+export function stepNote(card: FeedQuestionCard, draft: QuestionDraft): string | null {
+  const unanswerable = unanswerableReason(card);
+  if (unanswerable !== null) return unanswerable;
+  const at = stepOf(draft, card.questions.length);
+  const q = card.questions[at];
+  return q !== undefined && answerOf(q, at, draft).length > ANSWER_LIMIT ? TOO_LONG_TEXT : null;
+}
+
+/** Next is enabled when the current question has a valid answer (non-empty, within the limit — as the island's `valid(step)`) and there is a next one. */
+export function canNext(card: FeedQuestionCard, draft: QuestionDraft): boolean {
+  const at = stepOf(draft, card.questions.length);
+  const q = card.questions[at];
+  if (q === undefined || isLastStep(draft, card.questions.length) || unanswerableReason(card) !== null) return false;
+  const a = answerOf(q, at, draft);
+  return a !== '' && a.length <= ANSWER_LIMIT;
+}
+
+/** What VoiceOver hears when the question changes: "Question 2 of 3. <text>"; just the text for a single question. */
+export function stepAnnouncement(card: FeedQuestionCard, draft: QuestionDraft): string {
+  const count = card.questions.length;
+  const text = card.questions[stepOf(draft, count)]?.question ?? '';
+  const label = stepLabel(draft, count);
+  return label === null ? text : `${label}. ${text}`;
+}
+
+/** Taps on Next / Send answer this soon after a step change are ignored (a double tap must not reach "Send answer"). */
+export const STEP_TAP_GUARD_MS = 400;
+
+export const nextStep = (card: FeedQuestionCard, draft: QuestionDraft): QuestionDraft =>
+  canNext(card, draft) ? { ...draft, step: stepOf(draft, card.questions.length) + 1 } : draft;
+
+export const backStep = (card: FeedQuestionCard, draft: QuestionDraft): QuestionDraft =>
+  hasBack(draft, card.questions.length) ? { ...draft, step: stepOf(draft, card.questions.length) - 1 } : draft;
+
+/** Send answer: only on the last question and only when `questionDecision` has an answer for every one. */
+export const canSend = (card: FeedQuestionCard, draft: QuestionDraft): boolean =>
+  isLastStep(draft, card.questions.length) && questionDecision(card, draft) !== null;
 
 export function togglePick(draft: QuestionDraft, at: number, question: FeedQuestion, label: string): QuestionDraft {
   const picked = draft.picked[at] ?? [];
