@@ -15,7 +15,7 @@ import { ActiveCard } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
 import { pruneQuestionDrafts } from '../../cards/question-drafts';
-import { capsuleOf, needReason, type Capsule } from '../../cards/status';
+import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
@@ -46,7 +46,7 @@ import { spacing, typography, useColors } from '../../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
 import { Button } from '../../ui/Button';
 import { ReplyPlate } from '../../ui/ReplyPlate';
-import { EmptyState, Skeleton } from '../../ui/parts';
+import { EmptyState, Skeleton, toneColor } from '../../ui/parts';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
 import { subtreeOf, teamLine } from '../../works/teams';
@@ -57,7 +57,8 @@ const NEAR_BOTTOM = 80;
 
 function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule | null; meta: string }) {
   const c = useColors();
-  const tone = capsule === null ? c.idle : capsule.tone === 'needsYou' ? c.needsYou : capsule.tone === 'working' ? c.working : capsule.tone === 'danger' ? c.danger : capsule.tone === 'success' ? c.success : capsule.tone === 'idle' ? c.idle : c.off;
+  const tone = capsule === null ? c.idle : toneColor(c, capsule.tone);
+  const ring = capsule?.ring === true;
   // State first and never squeezed, then `role · model · time` (D1 §9.1).
   const word = capsule === null ? '' : capsule.label;
   const status = [word, meta].filter((x) => x !== '').join(' · ');
@@ -68,7 +69,7 @@ function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule |
       </Text>
       {status !== '' && (
         <View style={styles.statusLine}>
-          <View style={[styles.dot, { backgroundColor: tone }]} />
+          <View style={[styles.dot, ring ? { borderWidth: 2, borderColor: tone } : { backgroundColor: tone }]} />
           <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.barSubtitle }]}>
             {status}
           </Text>
@@ -305,7 +306,7 @@ export default function SessionScreen() {
   const live = state.activity[sessionKey(ref)];
   const attention = attentionOfSession(state, ref, session);
   const need = live?.activity.need ?? session.stuck;
-  const capsule = capsuleOf({ session, attention, need, subagents: live?.activity.subagents ?? 0, waitingFor: live?.activity.waitingFor ?? null, turnEndedAt: live?.activity.turnEndedAt ?? null, now });
+  const capsule = capsuleOfSession(state, ref, session, now);
   const entry = state.cards[sessionKey(ref)];
   const cards = entry?.cards ?? [];
   const first = cards[0];
@@ -316,6 +317,7 @@ export default function SessionScreen() {
   const env: TreeEnv = {
     state,
     view,
+    now,
     actions: {
       openSession: (id) => router.push(`/session/${sessionParam({ ...ref, sessionId: id })}` as never),
       openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),

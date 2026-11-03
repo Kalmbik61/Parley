@@ -6,13 +6,10 @@ import type { Capsule, CapsuleTone } from '../cards/status';
 import { spacing, typography, useColors, type Colors } from '../theme';
 
 export const toneColor = (c: Colors, tone: CapsuleTone): string =>
-  ({ needsYou: c.needsYou, working: c.working, idle: c.idle, success: c.success, danger: c.danger, off: c.off })[tone];
+  ({ needsYou: c.needsYou, working: c.working, unseen: c.tint, idle: c.idle, success: c.success, danger: c.danger, off: c.off })[tone];
 
 export const attentionColor = (c: Colors, a: Attention): string =>
   ({ 'needs-you': c.needsYou, unseen: c.tint, working: c.working, idle: c.idle, off: c.off })[a];
-
-export const attentionWord = (a: Attention): string =>
-  ({ 'needs-you': 'Needs you', unseen: 'Finished a turn', working: 'Working', idle: 'Idle', off: 'Closed' })[a];
 
 /** State dot. Never the only carrier of meaning: rows add a word or symbol (D1 §1.4). */
 export function Dot({ color, ring }: { color: string; ring?: boolean }) {

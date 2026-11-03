@@ -208,3 +208,72 @@
 **accept after majors** — исправить M1 (закрытая без итога → «Closed»), M2 (спящая с итогом → «Done»/«Failed», как в
 окне и D1 §8.2) и M3 (счёт «working» на Works по всем сессиям работы), каждое с тестом. Minor можно закрыть в том же
 проходе (m2, m4, m5 — по несколько строк каждое) или записать в план.
+
+## Перепроверка (коммит 439fa3f8)
+
+Коммит `439fa3f8` лежит поверх `8b03aedf` и слияния `10191cae` с `feat/mobile-a40-a43`. Слияние не трогает
+`packages/mobile`, `remote-client`, `protocol` и `core` (`git diff --stat 8b03aedf 10191cae` по ним пуст), поэтому
+`dist` пробы годится.
+
+### Прогоны
+
+- `pnpm --filter @parley/mobile test`: 44 файла, **385/385** с первого прогона.
+- `pnpm --filter @parley/mobile typecheck`: 0 ошибок.
+- `eslint` по всем изменённым файлам mobile: чисто.
+- Проба `probe-a46/probe.mts` переведена на новый API: `capsuleOfSession`, `worksSummary(v, attentionOf)`. Прежняя версия
+  сохранена как `probe-v1.mts`. Тот же стор, что и в первом прогоне:
+  ```
+  rows [ 'session:lead', 'room:r[lead,m1,m2]', 'session:sleepDone' ] level working
+  worksSummary = "4 sessions · 1 room · 2 working"
+  lead            -> Idle | idle | ring false | 5 min ago | activity.lastEventAt = 2026-11-03T11:55:00Z
+  closedNoResult  -> Closed | off | ring false | 3 h ago
+  sleepDone       -> Done | success | ring false | 2 h ago
+  ```
+  До правки было `idle` / `3 h ago` / `Done` / `Sleeping`.
+
+### Статус находок
+
+| # | Статус | Чем подтверждено |
+|---|---|---|
+| M1 | **закрыто** | `status.ts:65-67`: при `result === null` — `Closed`, `off`, `minus.circle`, давность по записи `closed`. Тесты `status.test.ts` (`closed` без итога → «Closed», в том числе через `capsuleOfSession`). Проба: `Closed` |
+| M2 | **закрыто** | `status.ts:69-72`: `sleeping` с итогом → `resultCapsule` (Done/Failed от `resultAt`), без итога → `Sleeping`. Тест «a sleeping lead that handed in a result reads Done (the window, s-38)». Проба: `Done · 2 h ago`. Строка Resume зависит от `lifecycle`, её это не задело |
+| M3 | **закрыто** | `works/summary.ts:6-8` считает `working` по `v.work.sessions` через переданную функцию внимания, то есть по тому же набору, что и точка (`WorkView.level`). Вызов — `app/(tabs)/works.tsx:26,33,43`. Тест «room members included». Проба: `2 working` |
+| m1 | **закрыто** | Новый тон `unseen` → `c.tint` и поле `ring`. И шапка (`session/[ref].tsx:58-70`), и дерево, и участники, и шапка команды рисуют точку из одного `Capsule` (`toneColor` + `ring`). «Finished a turn» — кольцо акцента (D1 §9.1), «Starting» — серое кольцо (как полое кольцо окна). На снимках шапка и строка дерева совпадают. Остаток по спящей — новая m10 |
+| m2 | **закрыто** | `CapsuleInput.lastEventAt` из `activity.lastEventAt` (`status.ts:89-101`), запасной — `s.lastEvent`. У `unseen` цепочка `turnEndedAt → lastEventAt → lastEvent`. Тест «idle takes its age from the last hook event»: 5 min против 3 h |
+| m3 | **закрыто** | `wordLine` (`TeamTree.tsx:35`): «Finished a turn · 3 min ago» в строке, у участника комнаты и в шапке команды. `TreeEnv.now` берётся из `useNow(30_000)` на экранах работы и сессии (`work/[ref].tsx:22,38`, `session/[ref].tsx:309-312`; лист Team наследует `env`). В шапке экрана сессии детали по-прежнему нет: D1 §9.1 хочет там «Working · 2 subagents». Это за пределом моей рекомендации, пусть остаётся заметкой. `StatusCapsule` (`ui/parts.tsx`) так и не используется |
+| m4 | **закрыто** | Чистая функция `capsuleInputOf` / `capsuleOfSession` в `cards/status.ts:89-103`. Её вызывают дерево (`capsuleIn`), шапка команды, участники, `@`-меню и экран сессии; дубль на экране сессии убран, недостижимое `'Idle'` в шапке тоже. Тесты гоняют её на `RemoteState` с несвежей activity: спящий + `unseen`, `pending` + `working`, закрытый + `working`, s-38. Случай «`pending` + `need`» не покрыт, это мелочь |
+| m5 | **закрыто** | `room.tsx:96`: `capsuleOfSession(...).label.toLowerCase()`, поэтому меню пишет «finished a turn», «sleeping», «starting», «closed», «done» |
+| m6 | **закрыто** | `MemberLine` (`TeamTree.tsx:159-176`): слово с давностью, точка из капсулы, `accessibilityLabel` вида «имя. слово. Lead». Участники роя берут слово из капсулы (`:229`). У аватара шапки команды появился значок (`:303`). Регистр слов роя — новая m8 |
+| m7 | **частично, открыто** | Сделано: новый `work-words-*.png` (работа «Status words») — шапка-лид «Sleeping · Last active 2 h ago», «Working», «Finished a turn · 3 min ago», шапка-лид «Starting», у шапок значки; `work-*.png` — слова и давность у участников комнаты; `session-finished-*` (Release-checker) больше себе не противоречит; все четыре слова в шапке сессии в обеих темах; дев-лаунчера нет ни на одном из 12 файлов. Осталось: плавающая шестерёнка дев-клиента по-прежнему на всех 12 снимках закрывает правую кнопку панели (`⋯` на экранах сессии). Попутно: на `session-starting-*` у ни разу не запущенной сессии показан законченный разговор («Completed in 6m 12s») — так в демо, слову это не мешает |
+
+### Новые находки (minor)
+
+#### m8. Слова участников роя смешивают регистры
+
+- `works/TeamTree.tsx:229`: `capsuleIn(env, m.session).label` даёт «Working», «Idle», «Finished a turn», «Done» с большой
+  буквы, а соседние слова того же столбца строчные: «handed in ✓», «closed». D1 §8.2 и окно пишут слова роя строчными
+  («waiting», «handed in ✓», «failed», «closed»).
+- **Исправить:** `.toLowerCase()`, как в `@`-меню (`room.tsx:96`).
+
+#### m9. Название теста Markdown осталось со старым порогом; соседние пороги по 200 мс тоже могут флейкать
+
+- `markdown/parse.test.ts:566`: тест называется «… in under 0.5 s», а проверяет `> 2000` (`:571`). Порог подняли, как
+  просили (`:453-454`, `:512`, `:542`, `:571`), а имя теста — нет.
+- В том же файле есть одиночные замеры `toBeLessThan(200)` без повтора (`:357`, `:366`, `:373`, `:391`). Под нагрузкой они
+  могут дать тот же флейк, что был на 507 мс. Задачей это не было, поэтому только как наблюдение.
+- **Исправить:** переименовать тест («… within the time bound»). Для 200-мс замеров при желании взять лучший из двух
+  прогонов, как в остальных.
+
+#### m10. Точка спящей сессии залита, а D1 требует полую
+
+- `cards/status.ts:72`: у `Sleeping` стоит `ring: false`. D1 §8.2:684 («`systemGray3`, полая») и §9.1:931 («`idle`,
+  полая») требуют полую точку. Сейчас спящая отличается от `idle` только оттенком серого (`off` против `idle`). На
+  `work-words-*.png` и `session-sleeping-*.png` точка залита.
+- **Исправить:** `ring: true` у `Sleeping` и, по D1 §8.2:684, у `Closed`. Тест на `ring`.
+
+### Вердикт
+
+**accept** — все три major закрыты, и это подтверждено кодом, тестами и пробой. Открыто minor: 4 (остаток m7 —
+шестерёнка дев-клиента на снимках; m8 — регистр слов роя; m9 — имя теста Markdown; m10 — полая точка спящей). Каждую
+можно закрыть одной строкой. Открытой остаётся и приёмка плана на устройстве (сессия «working» в окне за 1–2 с
+становится «Working» на iPhone): её делает ведущий.

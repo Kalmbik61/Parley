@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { selectWorks } from '@parley/remote-client';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
-import { useRemoteState } from '../../hooks/use-remote';
+import { useNow, useRemoteState } from '../../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { NewButton } from '../../launch/NewButton';
@@ -19,6 +19,7 @@ export default function WorkScreen() {
   const { ref: param } = useLocalSearchParams<{ ref: string }>();
   const ref = parseWorkParam(param);
   const state = useRemoteState();
+  const now = useNow(30_000);
   const view = useMemo(() => {
     if (state === null || ref === null) return null;
     for (const g of selectWorks(state, { showClosed: true })) {
@@ -34,6 +35,7 @@ export default function WorkScreen() {
     const env: TreeEnv = {
       state,
       view,
+      now,
       actions: {
         openSession: (id) => router.push(`/session/${sessionParam({ projectPath: ref.projectPath, workId: ref.workId, sessionId: id })}` as never),
         openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),
