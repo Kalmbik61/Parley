@@ -75,6 +75,10 @@ const BACKSTOP = 2;
 const BACKSTOP_DEPTH_MAX = 64;
 /** A list with more items than this is shown as its source, like a table over its limit (`MD_TABLE_*`): ~5 native views per item. */
 export const MD_LIST_ITEMS_MAX = 300;
+/** Message-wide budgets (M7): extra markers before parsing; list items + table cells, and block nodes, after it. */
+export const MD_EXTRA_MARKERS_MAX = 300;
+export const MD_ITEMS_CELLS_MAX = 2000;
+export const MD_BLOCKS_MAX = 3000;
 
 /** A quote or list marker; `>` needs no space after it (CommonMark), a list marker does. */
 const MARKER = '(?:>|(?:[-+*]|\\d{1,9}[.)])(?=[ \\t]|$))';
@@ -113,34 +117,42 @@ const HTML_LONG = /^ {0,3}<(?:(?:script|pre|style|textarea)(?:[ \t>]|$)|!--|\?|!
 export const tooHeavy = (text: string): boolean => {
   if (text.length > MD_BYTES_MAX) return true;
   // Counts with the code skipped (limit) and over everything (BACKSTOP × limit).
-  const skip = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
+  const skip = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false, extraMarkers: 0 };
   const all = { emphasis: 0, brackets: 0, depth: 0, lines: 0, lazy: 0, inBlock: false };
   let fence: string | null = null;
   let html = false;
   let codeSkipOff = false;
   for (const line of text.split('\n')) {
     const blank = line.trim() === '';
-    // Everything, nothing skipped.
+    const inCode: boolean = fence !== null;
+    const opener: RegExpExecArray | null = !inCode && !blank && !html && !codeSkipOff ? FENCE_OPEN.exec(line) : null;
+    // Over everything, nothing skipped (the backstop). Code the column-0 fence rule already skips counts only its
+    // lines (and the 64 KB of the whole text): `*`, `_`, `~` and `[` in real code are legal in any number (m20).
     if (blank) {
       all.inBlock = false;
       all.lazy = 0;
     } else {
       // A long code block of short lines is legal, so lines have more room than the other counts.
       if (++all.lines > MD_LINES_MAX * BACKSTOP * 2) return true;
-      if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
-      if (HEADING.test(line) || FENCE_OPEN.test(line)) {
+      if (opener !== null) {
         all.inBlock = false;
         all.lazy = 0;
-      } else if (BLOCK_MARKER.test(line)) {
-        all.inBlock = true;
-        all.lazy = 0;
-      } else if (all.inBlock && ++all.lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
-      if (count(line, all, BACKSTOP, BACKSTOP_DEPTH_MAX)) return true;
+      } else if (!inCode) {
+        if (MARKERS_TOO_DEEP_RAW.test(line)) return true;
+        if (HEADING.test(line)) {
+          all.inBlock = false;
+          all.lazy = 0;
+        } else if (BLOCK_MARKER.test(line)) {
+          all.inBlock = true;
+          all.lazy = 0;
+        } else if (all.inBlock && ++all.lazy > MD_LAZY_RUN_MAX * BACKSTOP) return true;
+        if (count(line, all, BACKSTOP, BACKSTOP_DEPTH_MAX)) return true;
+      }
     }
     // The fence / HTML state, as far as the guard can tell.
-    if (fence !== null) {
+    if (inCode) {
       const close = FENCE_CLOSE.exec(line);
-      if (close !== null && close[1]![0] === fence[0] && close[1]!.length >= fence.length) fence = null;
+      if (close !== null && close[1]![0] === fence![0] && close[1]!.length >= fence!.length) fence = null;
       continue;
     }
     if (blank) {
@@ -149,14 +161,11 @@ export const tooHeavy = (text: string): boolean => {
       skip.lazy = 0;
       continue;
     }
-    if (!html && !codeSkipOff) {
-      const open = FENCE_OPEN.exec(line);
-      if (open !== null) {
-        fence = open[1] ?? open[2]!;
-        skip.inBlock = false;
-        skip.lazy = 0;
-        continue;
-      }
+    if (opener !== null) {
+      fence = opener[1] ?? opener[2]!;
+      skip.inBlock = false;
+      skip.lazy = 0;
+      continue;
     }
     if (HTML_START.test(line)) {
       html = true;
@@ -164,6 +173,8 @@ export const tooHeavy = (text: string): boolean => {
     }
     if (++skip.lines > MD_LINES_MAX) return true;
     if (!THEMATIC_BREAK.test(line) && MARKERS_TOO_DEEP.test(line)) return true;
+    // One message-wide budget for markers: a line with k markers adds k - 2 (M7).
+    if ((skip.extraMarkers += Math.max(0, markersOn(line) - 2)) > MD_EXTRA_MARKERS_MAX) return true;
     if (HEADING.test(line)) {
       skip.inBlock = false;
       skip.lazy = 0;
@@ -175,6 +186,36 @@ export const tooHeavy = (text: string): boolean => {
   }
   return false;
 };
+
+const MARKER_AT_START = new RegExp(`^[ \\t]*${MARKER}`);
+/** How many quote/list markers a line starts with (at most 30: enough for the budget). */
+function markersOn(line: string): number {
+  let rest = line;
+  let k = 0;
+  for (let m = MARKER_AT_START.exec(rest); m !== null && k < 30; m = MARKER_AT_START.exec(rest)) {
+    k++;
+    rest = rest.slice(m[0].length);
+  }
+  return k;
+}
+
+/**
+ * The budget of one message after parsing (M7): list items + table cells, and block nodes, over their limits show raw
+ * text. Every limit above is per structure; many structures (16 lists of 300, 14 tables of 2000 cells) are not covered
+ * by them, and each costs ~5 native views per item, so the sum is bounded here.
+ */
+export function overBudget(root: MdNode): boolean {
+  let cells = 0;
+  let blocks = 0;
+  const walk = (n: MdNode): void => {
+    if (n.type === 'listItem' || n.type === 'tableCell') cells++;
+    if (BLOCK_TYPES.has(n.type)) blocks++;
+    n.children?.forEach(walk);
+  };
+  walk(root);
+  return cells > MD_ITEMS_CELLS_MAX || blocks > MD_BLOCKS_MAX;
+}
+const BLOCK_TYPES = new Set(['paragraph', 'heading', 'code', 'blockquote', 'list', 'listItem', 'table', 'thematicBreak', 'definition', 'footnoteDefinition']);
 
 /** Emphasis and bracket counts of one line against `factor` × the limits; `[` nests, `]` closes. */
 function count(line: string, c: { emphasis: number; brackets: number; depth: number }, factor: number, depthMax = MD_BRACKET_DEPTH_MAX): boolean {
@@ -321,6 +362,7 @@ export function parseMarkdown(text: string): MdNode {
   const root = tree as unknown as MdNode;
   if (nestDepth(root) > MD_NEST_MAX) return rawRoot(text);
   revealHidden(root, src);
+  if (overBudget(root)) return rawRoot(text);
   expandChildren(root);
   return root;
 }

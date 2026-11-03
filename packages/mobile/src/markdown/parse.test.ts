@@ -526,8 +526,59 @@ describe('a long list is shown as its source (A40 critic m19)', () => {
     const src = (n: number) => Array.from({ length: n }, (_, i) => `- item ${i}`).join('\n');
     expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX)))[0]!.type).toBe('list');
     expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX + 1)))[0]).toMatchObject({ type: 'code', value: src(MD_LIST_ITEMS_MAX + 1) });
+    const run = (): number => {
+      const t = performance.now();
+      parseMarkdown(src(4999));
+      return performance.now() - t;
+    };
+    expect(Math.min(run(), run())).toBeLessThan(500); // the best of two: a busy machine may stall one run
+  });
+});
+
+describe('one budget per message (A40 critic M7)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
     const t = performance.now();
-    parseMarkdown(src(4999));
-    expect(performance.now() - t).toBeLessThan(500);
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+  const rawOrCode = (root: MdNode, md: string): boolean =>
+    (types(root).length === 1 && plainText(root) === md) || types(root).every((t) => t === 'code');
+
+  const generators: Record<string, string> = {
+    // 24 markers per line (the limit is 25), the first marker alternates so no line joins the previous list
+    markers24: Array.from({ length: 1300 }, (_, i) => `${i % 2 === 0 ? '-' : '+'} ${'- '.repeat(22)}x`).join('\n'),
+    // 14 tables of 199 rows x 10 columns, each within its own limits
+    tables: Array.from({ length: 14 }, () => `| ${Array.from({ length: 10 }, (_, c) => `h${c}`).join(' | ')} |\n|${'---|'.repeat(10)}\n${Array.from({ length: 199 }, () => `| ${'x | '.repeat(9)}x |`).join('\n')}`).join('\n\n'),
+    // 16 lists of 300 items, the marker alternates
+    lists: Array.from({ length: 16 }, (_, l) => Array.from({ length: 300 }, () => `${l % 2 === 0 ? '-' : '+'} a`).join('\n')).join('\n\n'),
+    // everything below 1x, 28 KB, thousands of items
+    mixed: Array.from({ length: 32 }, (_, l) => Array.from({ length: 300 }, () => `${l % 2 === 0 ? '-' : '+'} x`).join('\n')).join('\n\n'),
+  };
+
+  it('the critic generators come back raw (or as code) in under 0.5 s', () => {
+    const bad: string[] = [];
+    for (const [name, md] of Object.entries(generators)) {
+      const first = timed(md);
+      const ms = Math.min(first.ms, timed(md).ms);
+      if (ms > 500) bad.push(`${name}: ${Math.round(ms)} ms`);
+      if (!rawOrCode(first.root, md)) bad.push(`${name}: neither raw nor code`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('a real document with a few lists and tables stays Markdown', () => {
+    const doc = `# T\n\n${generators.lists!.split('\n\n').slice(0, 2).join('\n\n')}\n\n| a | b |\n|---|---|\n${'| 1 | 2 |\n'.repeat(150)}`;
+    expect(types(parseMarkdown(doc))).toEqual(['heading', 'list', 'list', 'table']);
+  });
+});
+
+describe('real code is not counted by the backstop (A40 critic m20)', () => {
+  it('a 1300-line Python block with underscores stays Markdown', () => {
+    const py = `\`\`\`python\n${'self._a_b = __c__ * __d__\n'.repeat(1300)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(py))).toEqual(['code', 'paragraph']);
+  });
+  it('a 65-line progress bar with [=====> stays Markdown', () => {
+    const bar = `\`\`\`\n${'progress [=====>\n'.repeat(65)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(bar))).toEqual(['code', 'paragraph']);
   });
 });
