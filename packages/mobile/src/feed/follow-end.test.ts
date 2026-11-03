@@ -270,7 +270,7 @@ describe('follow the end: reveal (A44b)', () => {
 
   it('starts hidden, also on a re-open of the same screen', () => {
     expect(fe.open().revealed).toBe(false);
-    expect(fe.revealCheck(landedAt(3000, 10), 100).revealed).toBe(true);
+    expect(fe.revealCheck(landedAt(3000, 10), 200).revealed).toBe(true);
     expect(fe.open().revealed).toBe(false);
   });
 
