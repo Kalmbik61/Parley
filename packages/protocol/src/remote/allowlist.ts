@@ -39,6 +39,9 @@ const A_METHODS = [
   'sessions.close',
   'sessions.switchOptions',
   'sessions.switchAgent',
+  // Меню комнаты (решение человека 2026-11-03, правки 21): Archive и Delete — тоже за `remoteCreate`, с воротами по комнате.
+  'rooms.archive',
+  'rooms.delete',
 ] as const;
 const A_EVENTS = [
   'works.changed',
@@ -116,8 +119,6 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'rooms.addMember',
   'rooms.setLead',
   'rooms.setOwner',
-  'rooms.delete',
-  'rooms.archive',
   'rooms.reopen',
   'rooms.rename',
   'rooms.setMode',
@@ -178,6 +179,11 @@ function sessionRef(value: unknown): boolean {
     onlyKeys(ref, SESSION_REF_KEYS) &&
     [ref.projectPath, ref.workId, ref.sessionId].every(v => typeof v === 'string' && v.length > 0)
   );
+}
+
+/** `projectPath`, `workId`, `roomId` — непустые строки (как `roomId` у `rooms.send`). */
+function roomRefStrings(p: Record<string, unknown>): boolean {
+  return [p.projectPath, p.workId, p.roomId].every(v => typeof v === 'string' && v.length > 0);
 }
 
 /** Параметры — только `ref` сессии. */
@@ -274,6 +280,8 @@ const ROOM_SEND_KEYS: ReadonlySet<string> = new Set([
   'replyTo',
   'requestedAt',
 ]);
+const ROOM_ARCHIVE_KEYS: ReadonlySet<string> = new Set(['projectPath', 'workId', 'roomId', 'stopSessions']);
+const ROOM_DELETE_KEYS: ReadonlySet<string> = new Set(['projectPath', 'workId', 'roomId']);
 const ROOM_MODES: ReadonlySet<unknown> = new Set(['free', 'checklist', 'verified']);
 export const REMOTE_LABEL_MAX = 64;
 export const REMOTE_ROOM_TITLE_MAX = 128;
@@ -326,6 +334,15 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       (p.kind === 'note' || p.kind === 'question') &&
       textUpTo(p.text, REMOTE_TEXT_LIMIT_BYTES)
     );
+  },
+  // Меню комнаты (спека 4.2, правки 21): ровно проект, работа и комната (непустые строки); у архива ещё `stopSessions`.
+  'rooms.archive': params => {
+    const p = record(params);
+    return p !== null && onlyKeys(p, ROOM_ARCHIVE_KEYS) && roomRefStrings(p) && typeof p.stopSessions === 'boolean';
+  },
+  'rooms.delete': params => {
+    const p = record(params);
+    return p !== null && onlyKeys(p, ROOM_DELETE_KEYS) && roomRefStrings(p);
   },
   // Сообщение агенту: `clientMsgId` обязателен — по нему мост не пускает дубль при повторе.
   'pty.send': params => {

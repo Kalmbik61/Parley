@@ -1541,6 +1541,8 @@ export const S = {
         providerMove: (label: string, work: string, provider: string): string => `Moved session ${label} in ${work} to ${provider}`,
         sessionStart: (work: string): string => `Started a session in ${work}`,
         sessionClose: (label: string, work: string): string => `Closed session ${label} in ${work}`,
+        roomArchive: (label: string, work: string): string => `Archived room ${label} in ${work}`,
+        roomDelete: (label: string, work: string): string => `Deleted room ${label} in ${work}`,
         mcpEnable: (count: number, repo: string, servers: string): string =>
           `Enabled ${count} MCP ${count === 1 ? 'server' : 'servers'} in ${repo}: ${servers}`,
         revokeButton: 'Revoke this phone',
