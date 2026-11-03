@@ -566,6 +566,30 @@ describe('removeWorktreeCopy', () => {
 
     expect((await git(project, ['branch', '--list', info.branch])).stdout.trim()).toBe('');
   });
+
+  it('незарегистрированная отсутствующая копия: prune не нужен, ветка по правилу', async () => {
+    await initProject();
+    const other = plannedWorktree(project, 'w-0001', 's-03', 'main', worktreeRoot);
+    await createWorktree(project, other);
+    await rm(other.path, { recursive: true, force: true });
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await git(project, ['branch', info.branch]);
+
+    await expect(removeWorktreeCopy(project, info)).resolves.toEqual({ removed: true, branchDeleted: true });
+
+    expect((await git(project, ['worktree', 'list', '--porcelain'])).stdout).toContain('prunable');
+  });
+
+  it('сбой правила ветки не теряет факт удаления', async () => {
+    const info = await fresh();
+
+    await expect(removeWorktreeCopy(project, { ...info, base: 'no-such-base' })).resolves.toEqual({
+      removed: true,
+      branchDeleted: false,
+    });
+
+    await expect(stat(info.path)).rejects.toThrow();
+  });
 });
 
 describe('baseBranchOf', () => {

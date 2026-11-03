@@ -100,6 +100,26 @@ export async function baseBranchOf(checkoutPath: string): Promise<string> {
   return (await run('git', [...NO_FSMONITOR, '-C', checkoutPath, 'rev-parse', 'HEAD'])).stdout.trim();
 }
 
+/** Каталог есть: ENOENT/ENOTDIR — нет, любая другая ошибка `stat` (EACCES, EMFILE) — не «нет», а сбой. */
+async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    await stat(dir);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
+  }
+}
+
+/** Знает ли git этот путь как рабочую копию; git пишет realpath, а каталога может не быть — сравнение по realpath родителя. */
+async function isRegistered(projectPath: string, dir: string): Promise<boolean> {
+  // Нет и родителя — копия не могла быть зарегистрирована под realpath, остаётся сравнение как есть.
+  const parent = await realpath(path.dirname(dir)).catch(() => path.dirname(dir));
+  const real = path.join(parent, path.basename(dir));
+  return (await listWorktrees(projectPath)).some((entry) => entry.path === real || entry.path === dir);
+}
+
 /**
  * Заводит worktree на диске: каталог создаёт сама команда, родителя — на всякий случай мы.
  * База и ветка — из карты (база бывает веткой родителя): проверка до git и до
@@ -115,12 +135,8 @@ export async function createWorktree(
   await assertRevisions(projectPath, [info.base, info.branch]);
   await mkdir(path.dirname(info.path), { recursive: true });
   // Регистрация осталась после ручного удаления каталога — git иначе откажет в `add`.
-  // git пишет в списке realpath, а каталога может не быть: сравниваем по realpath родителя.
-  const registered = path.join(await realpath(path.dirname(info.path)), path.basename(info.path));
-  if ((await listWorktrees(projectPath)).some((entry) => entry.path === registered || entry.path === info.path)) {
-    if (!(await stat(info.path).then(() => true, () => false))) {
-      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
-    }
+  if ((await isRegistered(projectPath, info.path)) && !(await directoryExists(info.path))) {
+    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
   }
   const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
   if (options.reuseBranch === true && code === 0) {
@@ -1145,11 +1161,7 @@ export async function removeWorktreeCopy(
   options: { force?: boolean } = {},
 ): Promise<RemoveCopyResult> {
   await assertRevisions(projectPath, [info.base, info.branch]);
-  const exists = await stat(info.path).then(
-    () => true,
-    () => false,
-  );
-  if (exists) {
+  if (await directoryExists(info.path)) {
     let own: { cwd: string; pin: string[] };
     try {
       own = await pinnedCheckout(projectPath, info.path);
@@ -1183,16 +1195,21 @@ export async function removeWorktreeCopy(
       const first = typeof stderr === 'string' ? (stderr.split('\n').find((line) => line.trim() !== '') ?? '') : '';
       return { removed: false, reason: 'refused', message: first !== '' ? first : String(error) };
     }
-  } else {
-    // Регистрация могла остаться после ручного удаления: с ней git не даст снять ветку.
+  } else if (await isRegistered(projectPath, info.path)) {
+    // Регистрация осталась после ручного удаления: с ней git не даст снять ветку.
     await run('git', [...NO_FSMONITOR, '-C', projectPath, 'worktree', 'prune']);
   }
 
-  const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+  // Каталог уже убран: сбой правила ветки не должен терять этот факт.
   let branchDeleted = false;
-  if (code === 0 && info.branch !== info.base && (await isBranchMerged(projectPath, info.branch, info.base))) {
-    await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
-    branchDeleted = true;
+  try {
+    const { code } = await exitCode(['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${info.branch}`]);
+    if (code === 0 && info.branch !== info.base && (await isBranchMerged(projectPath, info.branch, info.base))) {
+      await run('git', [...NO_FSMONITOR, '-C', projectPath, 'branch', '-D', '--end-of-options', info.branch]);
+      branchDeleted = true;
+    }
+  } catch {
+    branchDeleted = false;
   }
   return { removed: true, branchDeleted };
 }
