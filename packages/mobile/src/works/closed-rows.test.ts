@@ -6,7 +6,7 @@ import { projectWorksSnapshot } from '@parley/protocol/remote';
 import { createRemoteStore, selectWork } from '@parley/remote-client';
 import type { RemoteWork } from '@parley/protocol/remote';
 import { archivedLabel, closedLabel, createClosedStore } from './closed-state';
-import { buildTeams, closedAdded, countRows, subtreeOf } from './teams';
+import { buildTeams, closedAdded, sheetClosedCount, countRows, subtreeOf } from './teams';
 
 const sess = (id: string, over: Record<string, unknown> = {}) => ({
   id, label: id, provider: 'claude', model: null, role: null, parent: null, createdBy: null,
@@ -73,6 +73,12 @@ describe('A43: closed rows on the phone', () => {
     // Closed sessions under lead that expanding adds: old, m-closed, cc and its swarm member, the cancelled/seen swarms' queens.
     // The closed anchor of the open room is visible without expanding, so it is not counted.
     expect(closedAdded(sheet(all.rows), sheet(shown.rows))).toBe(6);
+    // The count comes from the collapsed and the full trees only, so it is the same before and after expanding:
+    // the link stays and reads "Hide closed" once expanded.
+    const n = sheetClosedCount(shown.rows, all.rows, 'lead');
+    expect(n).toBe(6);
+    expect(closedLabel(n, false)).toBe('6 more closed');
+    expect(closedLabel(n, true)).toBe('Hide closed');
     // Other sessions have none under them: no link.
     expect(closedAdded(subtreeOf(all.rows, 'worker').map((x) => x.row), subtreeOf(shown.rows, 'worker').map((x) => x.row))).toBe(0);
   });

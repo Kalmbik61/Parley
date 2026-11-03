@@ -57,7 +57,7 @@ import { ClosedLinks } from '../../works/ClosedLinks';
 import { useExpansion } from '../../works/closed-store';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
-import { closedAdded, countRows, subtreeOf, teamLine } from '../../works/teams';
+import { countRows, sheetClosedCount, subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
@@ -337,9 +337,10 @@ export default function SessionScreen() {
   const team = subtreeOf(view.rows, session.id);
   const counts = countRows(team.map((x) => x.row), session.id);
   // "N more closed" in the sheet: closed sessions under this session that expanding would add (the full tree minus what is shown).
-  const closedUnder = closedAdded(
-    subtreeOf(selectWork(state, ref, { showClosed: true })?.rows ?? [], session.id).map((x) => x.row),
-    team.map((x) => x.row),
+  const closedUnder = sheetClosedCount(
+    selectWork(state, ref, { showClosed: false })?.rows ?? [],
+    selectWork(state, ref, { showClosed: true })?.rows ?? [],
+    session.id,
   );
 
   const sleeping = session.lifecycle === 'sleeping';

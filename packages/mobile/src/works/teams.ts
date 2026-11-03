@@ -170,3 +170,12 @@ export function headLook(head: WorkRow): HeadLook {
   if (head.kind === 'swarm') return { kind: 'swarm', swarmId: head.swarm.id };
   return { kind: 'session', sessionId: head.session.id };
 }
+
+/**
+ * "N more closed" of the Team sheet: what expanding adds under the session. Both trees are fixed (collapsed and full), never
+ * the tree the screen shows: after expanding that one already holds the closed rows and the count would drop to 0.
+ */
+export function sheetClosedCount(collapsed: readonly WorkRow[], full: readonly WorkRow[], sessionId: string): number {
+  const under = (rows: readonly WorkRow[]): WorkRow[] => subtreeOf(rows, sessionId).map((x) => x.row);
+  return closedAdded(under(full), under(collapsed));
+}
