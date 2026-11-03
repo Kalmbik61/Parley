@@ -894,3 +894,5 @@ export type { AssistantMcpParams } from './assistant/launch.js';
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
+export { sessionWorktreeFinished } from './work/worktree-owner.js';
+export type { WorktreeLeftover } from './work/worktree-owner.js';
