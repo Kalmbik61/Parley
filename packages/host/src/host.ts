@@ -126,6 +126,8 @@ import { createWorktreeHolds } from './worktrees/holds.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { createWorktreeSweeper } from './worktrees/worktree-sweeper.js';
 import { readHostVersion } from './version.js';
+import { createIngest } from './notifications/ingest.js';
+import { createNotificationStore } from './notifications/store.js';
 
 export interface HostOptions {
   home?: string;
@@ -821,6 +823,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
+  // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
+  const notificationIngest = createIngest({ store: createNotificationStore(workDb()), hostId: 'local' });
+  assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
+  assistantService.onCardChanged((change) => notificationIngest.onCard(change));
   void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
   handle.context.onShutdown(async () => assistantJobs.stop());
 

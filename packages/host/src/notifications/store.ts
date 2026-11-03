@@ -167,6 +167,8 @@ export interface NotificationStore {
   get(dedupeKey: string): NotificationRow | null;
   /** Решение принято в одном из каналов: строка `acked` (один раз; `false` — уже обработана или её нет). */
   ack(dedupeKey: string, via: NotificationVia, now: number): boolean;
+  /** Запись outbox для канала на момент `at` (роутер, эскалация). Идемпотентна по (уведомление, канал); для закрытой строки не создаётся. */
+  enqueue(notificationId: string, channel: string, at: number): boolean;
   /** Показано пользователю: `new` → `seen`. */
   seen(dedupeKey: string, now: number): boolean;
   /** Окно действия закрылось: строка терминальна, ожидающая доставка снимается. */
@@ -258,6 +260,17 @@ export function createNotificationStore(db: DatabaseSync, random: () => number =
         dropPending(row.notificationId);
         return true;
       });
+    },
+    enqueue(notificationId, channel, at) {
+      if (!KIND.test(channel)) throw new Error('Notification channel must be a kind word');
+      const inserted = db
+        .prepare(
+          `INSERT INTO notification_outbox (notification_id, channel, state, attempts, next_attempt_at)
+           SELECT notification_id, ?, 'pending', 0, ? FROM notifications WHERE notification_id = ? AND state IN ('new','seen')
+           ON CONFLICT(notification_id, channel) DO NOTHING`,
+        )
+        .run(channel, at, notificationId);
+      return Number(inserted.changes) === 1;
     },
     dueOutbox(now) {
       const rows = db
