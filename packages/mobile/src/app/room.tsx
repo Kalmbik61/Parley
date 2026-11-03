@@ -24,6 +24,8 @@ import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { useFollowEnd } from '../feed/use-follow-end';
+import { useTailWindow } from '../feed/use-tail-window';
+import { WINDOW_ROWS } from '../feed/window';
 import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
 import { SelectTextSheet } from '../feed/SelectTextSheet';
 import type { Selection } from '../feed/selection';
@@ -42,6 +44,7 @@ import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
 type RoomRow = { t: 'line'; l: Line } | { t: 'out'; o: OutLetter };
+const noSpan = (): number => 0;
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 export default function RoomScreen() {
@@ -107,11 +110,31 @@ export default function RoomScreen() {
   const messages = entry?.messages ?? [];
   const rows = useMemo(() => lines(messages), [messages]);
   const out = useMemo(() => visibleOutLetters(chat.out, messages), [chat.out, messages]);
-  const data = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
+  const chron = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
   const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
+  // The list gets the tail window of the rows (A44b): all drawn and measured in one pass; older rows come from the top.
+  const chronKeys = useMemo(() => chron.map(rowKey), [chron]);
+  const { start, widen, include, onRevealed, onScroll: trackStart } = useTailWindow(chronKeys, noSpan);
+  const data = useMemo(() => chron.slice(start), [chron, start]);
+  // A quote jump into rows outside the window widens it first, then scrolls once they are drawn.
+  const jumpTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (jumpTo.current === null) return;
+    const index = data.findIndex((r) => rowKey(r) === jumpTo.current);
+    if (index < 0) return;
+    jumpTo.current = null;
+    list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+  }, [data]);
   // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
   const follow = useFollowEnd(list, keys);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
+  // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
+  const shownEmpty = useRef(false);
+  if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && data.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || params.dev === undefined || client === null || target === null) return;
@@ -119,6 +142,7 @@ export default function RoomScreen() {
       focus: devFocus.fire,
       draft: () => chat.setDraft(LONG_DRAFT),
       up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreRoom(client, target),
       card: () => undefined,
     });
@@ -344,16 +368,29 @@ export default function RoomScreen() {
             )}
           </BarStripStack>
         )}
+        <View style={styles.flex}>
+          {hiddenFeed && (
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+              <Skeleton rows={4} />
+            </View>
+          )}
         <FlatList
           ref={list}
+          style={{ opacity: hiddenFeed ? 0 : 1 }}
+          accessibilityElementsHidden={hiddenFeed}
           data={data}
           keyExtractor={rowKey}
           {...follow.handlers}
           onScroll={(e) => {
             follow.handlers.onScroll(e);
-            // Scrolled to the start: the next older page (not while the open is still pinning to the end).
-            if (e.nativeEvent.contentOffset.y < 40 && target !== null && !follow.isPinned()) client?.loadOlder(target);
+            trackStart(e);
           }}
+          initialNumToRender={WINDOW_ROWS}
+          maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+          // Towards the start: the local rows first, then the next page from the Mac (not while the list is hidden).
+          // Not passed while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+          onStartReached={follow.revealed ? () => { if (start > 0) widen(); else if (target !== null) client?.loadOlder(target); } : undefined}
+          onStartReachedThreshold={1}
           maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           scrollEventThrottle={64}
           keyboardDismissMode="interactive"
@@ -364,7 +401,7 @@ export default function RoomScreen() {
           ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>
               <ConnectionBanner />
-              {entry?.older != null && (
+              {entry?.older != null && start === 0 && (
                 <View style={styles.older}>
                   {entry.more === 'error' ? (
                     <Button variant="plain" title="Couldn't load earlier messages · Try again" onPress={() => client?.loadOlder(target)} />
@@ -405,14 +442,20 @@ export default function RoomScreen() {
                 onLongPress={onLongPress}
                 onOpenQuote={(id) => {
                   const at = rows.findIndex((r) => r.message.id === id);
-                  if (at >= 0) follow.leave();
-                  if (at >= 0) list.current?.scrollToIndex({ index: at, animated: true, viewPosition: 0.3 });
+                  if (at < 0) return;
+                  follow.leave();
+                  if (at >= start) list.current?.scrollToIndex({ index: at - start, animated: true, viewPosition: 0.3 });
+                  else {
+                    jumpTo.current = id;
+                    include(at);
+                  }
                 }}
               />
             )
           }
           onScrollToIndexFailed={() => undefined}
         />
+        </View>
         {follow.away > 0 && (
           <View pointerEvents="box-none" style={styles.jumpAnchor}>
           <Pressable

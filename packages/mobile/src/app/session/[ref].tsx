@@ -30,6 +30,8 @@ import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
 import { useFollowEnd } from '../../feed/use-follow-end';
+import { useTailWindow } from '../../feed/use-tail-window';
+import { WINDOW_ROWS } from '../../feed/window';
 import { SelectTextSheet } from '../../feed/SelectTextSheet';
 import type { Selection } from '../../feed/selection';
 import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
@@ -194,12 +196,24 @@ export default function SessionScreen() {
     ]);
   const pendingRow = resume.view.pending;
   const pendingMessage: OutMessage | null = pendingRow === null ? null : { id: 'resume-pending', text: pendingRow.text, at: 0, state: { kind: pendingRow.held ? 'held' : 'waking' } };
-  const rows = useMemo<Row[]>(
+  const allRows = useMemo<Row[]>(
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  // The list gets the tail window of the folded rows (A44b): all drawn and measured in one pass; older rows come from the top.
+  const allKeys = useMemo(() => allRows.map(rowKey), [allRows]);
+  const spanAt = useCallback((i: number) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }, [allRows]);
+  const { start, widen, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
+  const rows = useMemo(() => allRows.slice(start), [allRows, start]);
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
   const follow = useFollowEnd(list, rowKeys);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
+  // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
+  const shownEmpty = useRef(false);
+  if (rows.length === 0 && feed?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && rows.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
@@ -207,6 +221,7 @@ export default function SessionScreen() {
       focus: devFocus.fire,
       draft: () => chat.setDraft(LONG_DRAFT),
       up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreSession(client, ref),
       card: () => devLateCard(client, ref),
     });
@@ -343,7 +358,7 @@ export default function SessionScreen() {
   const header = (
     <View style={styles.passport}>
       <ConnectionBanner />
-      {origin.length > 0 && (
+      {origin.length > 0 && start === 0 && (
         <View style={styles.origin}>
           <SymbolView name="arrow.turn.left.up" size={14} tintColor={c.label2} />
           <Text allowFontScaling numberOfLines={2} style={[typography.footnote, styles.flex, { color: c.label2 }]}>
@@ -468,11 +483,29 @@ export default function SessionScreen() {
           <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
+      <View style={styles.flex}>
+        {hiddenFeed && (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+            <Skeleton rows={3} />
+          </View>
+        )}
       <FlatList
         ref={list}
+        style={{ opacity: hiddenFeed ? 0 : 1 }}
+        accessibilityElementsHidden={hiddenFeed}
         data={rows}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        initialNumToRender={WINDOW_ROWS}
+        maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+        // Not while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+        onStartReached={follow.revealed && start > 0 ? widen : undefined}
+        onStartReachedThreshold={1}
         keyExtractor={rowKey}
         {...follow.handlers}
+        onScroll={(e) => {
+          follow.handlers.onScroll(e);
+          trackStart(e);
+        }}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
@@ -528,6 +561,7 @@ export default function SessionScreen() {
           </View>
         }
       />
+      </View>
       {follow.away > 0 && (
         <View pointerEvents="box-none" style={styles.jumpAnchor}>
         <Pressable
@@ -545,7 +579,10 @@ export default function SessionScreen() {
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
         {first !== undefined ? (
-          <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
+          // The body is in the hidden list: the buttons stay out of sight and out of reach with it (critic m1).
+          <View pointerEvents={hiddenFeed ? 'none' : 'auto'} accessibilityElementsHidden={hiddenFeed} style={{ opacity: hiddenFeed ? 0 : 1 }}>
+            <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
+          </View>
         ) : (
           <>
             {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}

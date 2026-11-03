@@ -39,3 +39,21 @@ export function longRoomLetters(roomId: string, count: number): never[] {
     return { id: `lr-${i}`, roomId, from: from[i % 3], to: [], at: ago((count - i) * 3), text, kind: 'note', readBy: {} } as never;
   });
 }
+
+/** A long feed of short turns: a one-line prompt, a one-line reply, a status line (A44b: the first drawn rows look short). */
+export function shortFeedItems(turns: number): never[] {
+  const items: unknown[] = [];
+  for (let t = 0; t < turns; t++) {
+    const at = (k: number): string => ago((turns - t) * 2 - k);
+    items.push({ kind: 'prompt', id: `sp${t}`, at: at(0), text: `Q${t + 1}`, images: 0 });
+    items.push({ kind: 'text', id: `sx${t}`, at: at(1), messageId: `smx${t}`, streaming: false, text: t === turns - 1 ? LAST_TEXT : `A${t + 1}: ok.` });
+    items.push({ kind: 'turn', id: `su${t}`, at: at(1), durationMs: 2000 });
+  }
+  return items as never[];
+}
+
+/** Room letters, all one line, the last one marked. */
+export function shortRoomLetters(roomId: string, count: number): never[] {
+  const from = ['greta', 'd1', 'a13'];
+  return Array.from({ length: count }, (_, i) => ({ id: `sr-${i}`, roomId, from: from[i % 3], to: [], at: ago((count - i) * 2), text: i === count - 1 ? LAST_TEXT : `Letter ${i + 1}: ok.`, kind: 'note', readBy: {} }) as never);
+}

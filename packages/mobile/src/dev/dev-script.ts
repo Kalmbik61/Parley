@@ -17,7 +17,7 @@ export const devFocus = {
 
 export const LONG_DRAFT = 'First line of a long draft\nSecond line of the draft\nThird line of the draft\nFourth line of the draft';
 
-export type DevStep = 'focus' | 'draft' | 'up' | 'more' | 'card';
+export type DevStep = 'focus' | 'draft' | 'up' | 'top' | 'more' | 'card';
 
 export function runDevScript(spec: string, run: Record<DevStep, () => void>): () => void {
   const timers = spec

@@ -5,7 +5,7 @@ import type { RemoteClient, SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
 import { EMPTY_QUESTION_DRAFT, type QuestionDraft } from '../cards/model';
-import { longFeedItems, longRoomLetters } from './long-feed';
+import { longFeedItems, longRoomLetters, shortFeedItems, shortRoomLetters } from './long-feed';
 import { HUMAN_TABLE } from './md-demo';
 
 const P = '/Users/me/parley';
@@ -71,8 +71,8 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     },
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
-      rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
+      rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rbig', title: 'Big history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rshort', title: 'Short letters', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('big', 'Big-feed-demo'), sess('shorts', 'Short-turns-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
     },
   ],
 };
@@ -190,6 +190,18 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   const longRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' };
   store.dispatch({ t: 'feed.open', ref: longRef });
   store.dispatch({ t: 'feed.loaded', ref: longRef, epoch: 'demo', items: longFeedItems(14), revision: 3, mode: null, decisions: null });
+  // A44b: 300+ folded rows, and a long feed of short turns (routes a44-session-big, a44-session-shorts, a44-room-big, a44-room-shorts).
+  for (const [sessionId, items] of [['big', longFeedItems(80)], ['shorts', shortFeedItems(150)]] as const) {
+    const r: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId };
+    store.dispatch({ t: 'feed.open', ref: r });
+    store.dispatch({ t: 'feed.loaded', ref: r, epoch: 'demo', items, revision: 3, mode: null, decisions: null });
+  }
+  const bigRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rbig' };
+  const shortRoom = { projectPath: '/Users/me/codex-bridge', workId: 'w2', roomId: 'rshort' };
+  store.dispatch({ t: 'room.open', ref: bigRoom });
+  store.dispatch({ t: 'room.loaded', ref: bigRoom, epoch: 'demo', next: null, messages: longRoomLetters('rbig', 300) });
+  store.dispatch({ t: 'room.open', ref: shortRoom });
+  store.dispatch({ t: 'room.loaded', ref: shortRoom, epoch: 'demo', next: null, messages: shortRoomLetters('rshort', 320) });
   // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
   const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
   store.dispatch({ t: 'feed.open', ref: tinyRef });
@@ -376,6 +388,12 @@ export function demoRoute(raw: unknown): string | null {
     // A44: the long feeds; `-jump` shows the Jump to latest capsule, `-draft` adds a several-line draft, `-plate` the reply plate.
     case 'a44-session':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'long' })}?${dev}`;
+    case 'a44-session-big':
+    case 'a44-session-shorts':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: String(name).endsWith('big') ? 'big' : 'shorts' })}?${dev}`;
+    case 'a44-room-big':
+    case 'a44-room-shorts':
+      return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=${String(name).endsWith('big') ? 'rbig' : 'rshort'}&${dev}`;
     case 'a44-tiny':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
     case 'a44-room':

@@ -260,3 +260,77 @@ describe('follow the end: new items and Jump to latest', () => {
     expect(fe.contentChanged(step.state, 6200, more(4)).scroll).toBe('animated');
   });
 });
+
+describe('follow the end: reveal (A44b)', () => {
+  const end = (content: number): fe.ScrollMetrics => ({ offset: content - 100, content, viewport: 100 });
+  const landedAt = (content: number, now: number): fe.FollowState => {
+    const s = fe.contentChanged(fe.open(), 0, K, content).state;
+    return fe.scrolled(s, end(content), now, K);
+  };
+
+  it('starts hidden, also on a re-open of the same screen', () => {
+    expect(fe.open().revealed).toBe(false);
+    expect(fe.revealCheck(landedAt(3000, 10), 200).revealed).toBe(true);
+    expect(fe.open().revealed).toBe(false);
+  });
+
+  it('reveals one frame after the last growth once the pin\'s scroll has landed at the end', () => {
+    const s = landedAt(3000, 10);
+    expect(fe.revealCheck(s, fe.REVEAL_FRAME_MS - 1).revealed).toBe(false);
+    expect(fe.revealCheck(s, fe.REVEAL_FRAME_MS).revealed).toBe(true);
+    const grown = fe.contentChanged(s, 20, K, 3100).state;
+    expect(fe.revealCheck(grown, 20 + fe.REVEAL_FRAME_MS).revealed).toBe(false); // the scroll event saw the old height
+    expect(fe.revealDeadline(grown, 20)).toBe(fe.REVEAL_FRAME_MS);
+    expect(fe.revealCheck(fe.scrolled(grown, end(3100), 60, K), 20 + fe.REVEAL_FRAME_MS).revealed).toBe(true);
+  });
+
+  it('a quiet spell is not enough while the list is not at the end (estimated heights): it waits for the cap', () => {
+    const s = fe.scrolled(fe.contentChanged(fe.open(), 0, K, 3000).state, { offset: 1000, content: 3000, viewport: 100 }, 10, K);
+    expect(fe.revealCheck(s, 200).revealed).toBe(false);
+    expect(fe.revealDeadline(s, 200)).toBe(fe.REVEAL_CAP_MS - 200);
+    expect(fe.revealCheck(s, fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('reveals at the cap since the first rows, whatever keeps growing', () => {
+    let s = fe.contentChanged(fe.open(), 0, K, 3000).state;
+    for (let t = 20; t < fe.REVEAL_CAP_MS; t += 20) s = fe.contentChanged(s, t, K, 3000 + t).state;
+    expect(fe.revealCheck(s, fe.REVEAL_CAP_MS - 1).revealed).toBe(false);
+    expect(fe.revealCheck(s, fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('a skeleton-only phase starts no cap', () => {
+    const s = fe.contentChanged(fe.open(), 0, [], 200).state;
+    expect(fe.revealDeadline(s, 10_000)).toBeNull();
+    expect(fe.revealCheck(s, 10_000).revealed).toBe(false);
+    const rows = fe.contentChanged(s, 10_000, K, 3000).state;
+    expect(fe.revealCheck(rows, 10_000 + fe.REVEAL_CAP_MS - 1).revealed).toBe(false);
+    expect(fe.revealCheck(rows, 10_000 + fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('a feed that fits the window shows at once; a long one does not', () => {
+    const laidOut = fe.viewportChanged(fe.open(), 800, 0).state;
+    expect(fe.contentChanged(laidOut, 1, K, 500).state.revealed).toBe(true);
+    expect(fe.contentChanged(laidOut, 1, K, 3000).state.revealed).toBe(false);
+  });
+
+  it('a long feed whose first drawn rows look short is not revealed until it is measured (critic ПB1)', () => {
+    const long = Array.from({ length: 200 }, (_, i) => `r${i}`);
+    const laidOut = fe.viewportChanged(fe.open(), 760, 0).state;
+    const first = fe.contentChanged(laidOut, 1, long, 640).state; // only the first rows are drawn: 640 pt < 760 pt
+    expect(first.revealed).toBe(false);
+    expect(fe.revealCheck(fe.viewportChanged(first, 760, 2).state, 3).revealed).toBe(false);
+    const window30 = long.slice(-30);
+    expect(fe.contentChanged(laidOut, 1, window30, 640).state.revealed).toBe(true); // a whole 30-row window that fits
+  });
+
+  it('a short feed shows at once whichever of the size and the layout event came first (critic m3)', () => {
+    const sizeFirst = fe.contentChanged(fe.open(), 0, K, 500).state;
+    expect(sizeFirst.revealed).toBe(false);
+    expect(fe.viewportChanged(sizeFirst, 800, 1).state.revealed).toBe(true);
+    expect(fe.revealCheck(fe.viewportChanged(fe.contentChanged(fe.open(), 0, K, 3000).state, 800, 1).state, 2).revealed).toBe(false);
+  });
+
+  it('a touch shows the list', () => {
+    expect(fe.dragBegan(fe.open()).revealed).toBe(true);
+  });
+});
