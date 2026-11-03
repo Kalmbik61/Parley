@@ -1,14 +1,16 @@
-import { useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useSyncExternalStore, type ComponentRef, type ReactNode } from 'react';
+import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import type { FeedCard, FeedPermissionCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { cardGist } from '@parley/core/card-gist';
-import type { SessionRef } from '@parley/remote-client';
+import { sessionKey, type SessionRef } from '@parley/remote-client';
+import { DEV_FOCUS } from '../dev/flags';
 import { haptic } from '../haptics';
 import { Markdown } from '../markdown/Markdown';
 import { spacing, typography, useColors } from '../theme';
 import { Button } from '../ui/Button';
-import { alwaysRules, canAlways, EMPTY_QUESTION_DRAFT, gistView, questionDecision, toggleOther, togglePick, type QuestionDraft } from './model';
+import { alwaysRules, backStep, canAlways, canNext, canSend, gistView, hasBack, isLastStep, nextStep, questionDecision, STEP_TAP_GUARD_MS, stepAnnouncement, stepLabel, stepNote, stepOf, toggleOther, togglePick, type QuestionDraft } from './model';
+import { draftKey, dropQuestionDraft, readQuestionDraft, seedQuestionDraft, subscribeQuestionDrafts, updateQuestionDraft } from './question-drafts';
 import { useDecision } from './use-decision';
 
 const cardBox = (c: ReturnType<typeof useColors>) => ({ backgroundColor: c.surface, borderRadius: spacing.cardRadius, padding: 16, gap: 12 });
@@ -106,15 +108,39 @@ export function PermissionCardView({ card, sessionRef, projectPath, canAct, chil
   return <>{children({ body, actions })}</>;
 }
 
-export function QuestionCardView({ card, sessionRef, canAct, children }: CardProps<FeedQuestionCard>) {
+/** Several questions go one at a time, as in the window; the draft (picks and step) outlives the screen (A45). */
+export function QuestionCardView({ card, sessionRef, canAct, children, initialDraft }: CardProps<FeedQuestionCard> & { initialDraft?: QuestionDraft }) {
   const c = useColors();
   const d = useDecision(sessionRef, card.cardId);
-  const [draft, setDraft] = useState<QuestionDraft>(EMPTY_QUESTION_DRAFT);
+  const key = draftKey(sessionKey(sessionRef), card.cardId);
+  if (initialDraft !== undefined) seedQuestionDraft(key, initialDraft);
+  const draft = useSyncExternalStore(subscribeQuestionDrafts, () => readQuestionDraft(key));
+  const setDraft = (f: (x: QuestionDraft) => QuestionDraft): void => updateQuestionDraft(key, f);
+  const heading = useRef<ComponentRef<typeof Text>>(null);
+  const stepChangedAt = useRef(0);
   const decision = questionDecision(card, draft);
   const off = !canAct || d.busy;
+  const count = card.questions.length;
+  const current = stepOf(draft, count);
+  const label = stepLabel(draft, count);
+  // VoiceOver: after Next / Back the focus moves to the "Question i of N" heading, which also reads the question text.
+  const shownStep = useRef(current);
+  useEffect(() => {
+    if (shownStep.current === current) return;
+    shownStep.current = current;
+    stepChangedAt.current = Date.now();
+    if (heading.current !== null) AccessibilityInfo.sendAccessibilityEvent(heading.current, 'focus');
+  }, [current]);
+  const settling = (): boolean => Date.now() - stepChangedAt.current < STEP_TAP_GUARD_MS;
   const body = (
-    <View style={{ gap: 16 }}>
+    <View style={{ gap: 8 }}>
+      {label !== null && (
+        <Text ref={heading} accessible accessibilityRole="header" accessibilityLabel={stepAnnouncement(card, draft)} allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
+          {label}
+        </Text>
+      )}
       {card.questions.map((q, at) => {
+        if (at !== current) return null;
         const picked = draft.picked[at] ?? [];
         const otherOn = draft.otherOn[at] === true;
         return (
@@ -162,6 +188,7 @@ export function QuestionCardView({ card, sessionRef, canAct, children }: CardPro
             </Pressable>
             {otherOn && (
               <TextInput
+                autoFocus={DEV_FOCUS}
                 accessibilityLabel="Your answer"
                 value={draft.otherText[at] ?? ''}
                 onChangeText={(t) => setDraft((x) => ({ ...x, otherText: { ...x.otherText, [at]: t } }))}
@@ -175,10 +202,22 @@ export function QuestionCardView({ card, sessionRef, canAct, children }: CardPro
       })}
     </View>
   );
+  const send = async (): Promise<void> => {
+    if (decision === null || settling()) return;
+    const ui = await d.submit(decision);
+    if (ui?.kind === 'done') dropQuestionDraft(key);
+  };
   const actions = (
     <View style={{ gap: 8 }}>
-      <Button title="Send answer" variant="prominent" loading={d.busy} disabled={!canAct || decision === null} onPress={() => decision !== null && void d.submit(decision)} />
-      <Note text={!canAct ? PAUSED : d.message} />
+      <View style={styles.pair}>
+        {hasBack(draft, count) && <Button title="Back" flex disabled={off} onPress={() => setDraft((x) => backStep(card, x))} />}
+        {isLastStep(draft, count) ? (
+          <Button title="Send answer" variant="prominent" flex loading={d.busy} disabled={!canAct || !canSend(card, draft)} onPress={() => void send()} />
+        ) : (
+          <Button title="Next" variant="prominent" flex disabled={off || !canNext(card, draft)} onPress={() => !settling() && setDraft((x) => nextStep(card, x))} />
+        )}
+      </View>
+      <Note text={!canAct ? PAUSED : (d.message ?? stepNote(card, draft))} />
     </View>
   );
   return <>{children({ body, actions })}</>;
@@ -207,10 +246,10 @@ export function PlanCardView({ card, sessionRef, canAct, children }: CardProps<F
 }
 
 /** Picks the view for a card's kind. */
-export function ActiveCard(props: Omit<CardProps<FeedCard>, 'card'> & { card: FeedCard }) {
-  const { card, ...rest } = props;
+export function ActiveCard(props: Omit<CardProps<FeedCard>, 'card'> & { card: FeedCard; initialDraft?: QuestionDraft }) {
+  const { card, initialDraft, ...rest } = props;
   if (card.kind === 'permission') return <PermissionCardView {...rest} card={card} />;
-  if (card.kind === 'question') return <QuestionCardView {...rest} card={card} />;
+  if (card.kind === 'question') return <QuestionCardView {...rest} card={card} {...(initialDraft === undefined ? {} : { initialDraft })} />;
   return <PlanCardView {...rest} card={card} />;
 }
 
