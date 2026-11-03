@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { RELAY_MANUAL_URL, type RelayPlanView, type RelaySetupCallName, type RelaySetupCalls, type RelaySetupEvent, type RelaySetupPhase } from '../../shared/relay-setup-types.js';
+import { RELAY_MANUAL_URL, type RelayPlanView, type RelayRunView, type RelaySetupCallName, type RelaySetupCalls, type RelaySetupEvent, type RelaySetupEventBody, type RelaySetupPhase } from '../../shared/relay-setup-types.js';
 import { ControlCallError } from '../remote-control.js';
 import { addressesOf, checkHealth, domainPointsTo, firstIPv4, isPublicIPv4, type HealthFetcher, type Resolver } from './health.js';
 import { isValidDomain, validateInput, type SetupInput } from './input.js';
@@ -26,6 +26,7 @@ export interface RelaySetupDeps {
   resolver: Resolver;
   /** Sets the Relay field of the bridge (`configure`). */
   configureBridge: (address: string) => Promise<void>;
+  /** Events of the run record, numbered (`seq`) by the service. */
   emit: (event: RelaySetupEvent) => void;
   listKeys?: () => Promise<string[]>;
   agentAvailable?: () => boolean;
@@ -61,6 +62,36 @@ const CANCELLED_MESSAGE = 'Cancelled. Run the setup again to finish: finished st
 const CANCELLED_DOWNLOAD_MESSAGE = 'Cancelled. A download may finish on the server by itself; running the setup again picks it up.';
 const CANCELLED_HEALTH_MESSAGE = 'Cancelled. Use Check to test the relay again.';
 
+/** Spec 8.1: lines kept per step in the run record (the log file keeps all of them). */
+const RECORD_LINES = 200;
+
+/** The run record changes by events only, so that a reader holding a snapshot at `seq` can replay the later ones. */
+function applyEvent(view: RelayRunView, body: RelaySetupEventBody): void {
+  switch (body.event) {
+    case 'step': {
+      const row = view.steps.find((step) => step.id === body.id);
+      if (row !== undefined) row.status = body.status;
+      return;
+    }
+    case 'line': {
+      const row = view.steps.find((step) => step.id === body.step);
+      if (row === undefined) return;
+      row.lines.push(body.text);
+      if (row.lines.length > RECORD_LINES) row.lines.splice(0, row.lines.length - RECORD_LINES);
+      return;
+    }
+    case 'progress':
+      view.progress = body.progress;
+      return;
+    case 'cancelling':
+      view.cancelling = true;
+      return;
+    case 'phase':
+      view.phase = body.phase;
+      view.cancelling = false;
+  }
+}
+
 const bad = (message: string): ControlCallError => new ControlCallError('bad_request', message);
 
 function view(plan: Plan): RelayPlanView {
@@ -92,6 +123,8 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
   let pendingAddress: string | null = null;
   /** The cancel channel of the run in progress; `null` outside a run. */
   let runCancel: CancelHandle | null = null;
+  /** The run record (spec 8.1): from Run to the outcome and after it, until `dismiss` or a new `begin`. In memory only. */
+  let record: { view: RelayRunView } | null = null;
   /** The health wait in progress (the session is already gone by then): a cancel stops it. */
   let healthWait: { cancelled: boolean; wake: () => void } | null = null;
   const idleMs = deps.idleMs ?? 10 * 60_000;
@@ -292,7 +325,15 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     return { phase: 'done', address, configured };
   }
 
-  async function execute(s: Session, removeData: boolean): Promise<RelaySetupPhase> {
+  /** Numbers the event, applies it to the record and sends it to the window. */
+  function publish(rec: { view: RelayRunView }, body: RelaySetupEventBody): void {
+    rec.view.seq += 1;
+    applyEvent(rec.view, body);
+    if (record === rec) deps.emit({ ...body, seq: rec.view.seq });
+  }
+
+  /** The synchronous part of «Run»: checks, the record, the start. The run itself goes on in the background. */
+  function startRun(s: Session, removeData: boolean): RelaySetupPhase {
     if (s.plan === null || s.probe === null) return failed(null, 'No plan');
     if (s.plan.blocked !== null) throw bad('This plan cannot be run');
     if (s.input.intent === 'remove') {
@@ -305,24 +346,46 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     const cancel = createCancelHandle();
     runCancel = cancel;
     if (idle !== null) clearTimeout(idle);
+    const rec = {
+      view: {
+        seq: 0,
+        intent: plan.intent,
+        host: s.input.host,
+        plan: view(plan),
+        steps: plan.steps.map((step) => ({ id: step.id, title: step.title, status: 'pending' as const, lines: [] as string[] })),
+        progress: null,
+        cancelling: false,
+        phase: { phase: 'running' } as RelaySetupPhase,
+      } satisfies RelayRunView,
+    };
+    record = rec;
+    execute(s, plan, shell, cancel, rec).then(
+      (phase) => publish(rec, { event: 'phase', phase }),
+      () => publish(rec, { event: 'phase', phase: { phase: 'failed', step: null, message: 'The setup run failed unexpectedly' } }),
+    );
+    return { phase: 'running' };
+  }
+
+  async function execute(s: Session, plan: Plan, shell: RemoteShell, cancel: CancelHandle, rec: { view: RelayRunView }): Promise<RelaySetupPhase> {
     note(`run started: ${plan.intent} on ${s.input.host}`);
     const outcome = await runPlan(plan, shell, {
       step: (id, title, status) => {
         note(`step ${id}: ${status}`);
-        deps.emit({ event: 'step', id, title, status });
+        publish(rec, { event: 'step', id, title, status });
       },
       line: (stepId, text) => {
         const clean = mask(text);
         void deps.log.write(clean).catch(() => {});
-        deps.emit({ event: 'line', step: stepId, text: clean });
+        publish(rec, { event: 'line', step: stepId, text: clean });
       },
-      progress: (stepId, progress) => deps.emit({ event: 'progress', step: stepId, progress }),
+      progress: (stepId, progress) => publish(rec, { event: 'progress', step: stepId, progress }),
       cancelling: () => {
         note('cancel requested: the run stops after the current step');
-        deps.emit({ event: 'cancelling' });
+        publish(rec, { event: 'cancelling' });
       },
     }, cancel);
     const probe = s.probe;
+    if (probe === null) return failed(null, 'No probe result');
     if (outcome.lost === true) return failed(outcome.failedStep, LOST_MESSAGE);
     if (outcome.stopped === true) {
       note(`cancelled at step ${outcome.failedStep ?? '-'}`);
@@ -364,8 +427,10 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
       // Everything is validated before the first byte leaves this machine (acceptance 7).
       const checked = validateInput(raw);
       if (!checked.ok) throw new ControlCallError('bad_input', Object.values(checked.errors).join(' · '));
-      if (session?.running === true) throw bad('A setup run is in progress');
+      if (session?.running === true || record?.view.phase.phase === 'running') throw bad('A setup run is in progress');
       end();
+      // A new setup forgets the record of the previous run.
+      record = null;
       const s: Session = { input: checked.value, trusted: null, pendingKey: null, connection: null, sudo: null, base: null, probe: null, plan: null, name: null, waiting: null, running: false };
       session = s;
       lastSecrets = secretList(s);
@@ -409,11 +474,25 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     },
     async run({ removeData }) {
       const s = current('plan');
-      return execute(s, removeData === true);
+      return startRun(s, removeData === true);
     },
     async check() {
       if (pendingAddress === null) throw bad('Nothing to check');
-      return health(pendingAddress);
+      const rec = record;
+      if (rec?.view.phase.phase === 'running') throw bad('A setup run is in progress');
+      if (rec !== null) publish(rec, { event: 'phase', phase: { phase: 'running' } });
+      const phase = await health(pendingAddress);
+      // The outcome of the check replaces the outcome of the run in the record.
+      if (rec !== null) publish(rec, { event: 'phase', phase });
+      return phase;
+    },
+    async state() {
+      return record === null ? null : structuredClone(record.view);
+    },
+    async dismiss() {
+      if (record?.view.phase.phase === 'running') throw bad('A setup run is in progress');
+      record = null;
+      return null;
     },
     async cancel() {
       if (session?.running === true && runCancel !== null) {
@@ -438,6 +517,9 @@ export function createRelaySetup(deps: RelaySetupDeps): RelaySetupService {
     call(name, params) {
       return handlers[name](params as never) as Promise<RelaySetupCalls[typeof name]['result']>;
     },
-    dispose: end,
+    dispose() {
+      end();
+      record = null;
+    },
   };
 }

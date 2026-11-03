@@ -94,8 +94,8 @@ describe.skipIf(!available)(`the wrapper of spec 7.3 (${hasLocal ? 'local' : 'ub
     expect(out).toContain('interrupt-exit=0');
     expect(out).toContain('sleepers=0');
     expect(out).not.toContain('never');
-    // A killed command cannot clean up: `active` stays (the survey reads it), the kernel frees the lock.
-    expect(out).toContain('ACTIVE-LEFT');
+    // The killed command cannot clean up; the interrupt does it once the kernel has freed the lock.
+    expect(out).toContain('no-active');
     expect(out).toContain('lock-free');
   });
 
@@ -139,6 +139,18 @@ describe.skipIf(!available)(`the wrapper of spec 7.3 (${hasLocal ? 'local' : 'ub
     );
     expect(out).toContain('interrupt-exit=0');
     expect(out).toContain('sleepers=0');
+  });
+
+  it('a quick command never loses its output or code, however the processes are scheduled', () => {
+    const out = runScript(
+      [
+        asVar('W', w('echo quick-output')),
+        'bad=0; n=0',
+        'while [ $n -lt 60 ]; do n=$((n+1)); o=$(sh -c "$W" 2>&1); c=$?; [ "$c" = 0 ] && [ "$o" = quick-output ] || { bad=$((bad+1)); echo "round $n: code=$c out=$o"; }; done',
+        'echo "bad=$bad"',
+      ].join('\n'),
+    );
+    expect(out).toContain('bad=0');
   });
 
   it('a hostile command text stays inside the quoted script', () => {

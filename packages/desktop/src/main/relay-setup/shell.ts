@@ -39,8 +39,9 @@ export function detachedCommand(command: string, id: string, dir: string = SETUP
   if (!COMMAND_ID.test(id)) throw new Error(`invalid command id: ${id}`);
   // The command runs in a subshell, so an `exit` inside it still lets the exit code be written.
   const background = `echo ${id} > ${dir}/active; (\n${command}\n); echo $? > ${dir}/${id}.code; rm -f ${dir}/active`;
+  // The log is created before the background part starts: `tail` must find it even if the child is not scheduled yet.
   return [
-    `D=${dir}; mkdir -p -m 0700 "$D"; rm -f "$D/${id}.code" "$D/pid"`,
+    `D=${dir}; mkdir -p -m 0700 "$D"; rm -f "$D/${id}.code" "$D/pid"; : > "$D/${id}.log"`,
     `setsid flock -n "$D/lock" sh -c ${shQuote(background)} > "$D/${id}.log" 2>&1 < /dev/null &`,
     `p=$!; echo "$p" > "$D/pid"`,
     `tail -n +1 -f --pid="$p" "$D/${id}.log"; [ -f "$D/${id}.code" ] && exit "$(cat "$D/${id}.code")"; exit 255`,
@@ -48,7 +49,7 @@ export function detachedCommand(command: string, id: string, dir: string = SETUP
 }
 
 /**
- * Kills the process group by the `pid` file; waits a moment for a command that has just started. `kill -s TERM`
+ * Kills the process group by the `pid` file, then clears `active` once the lock is free; waits a moment for a command that has just started. `kill -s TERM`
  * and not `kill -TERM`: the `dash` of Ubuntu and Debian rejects `kill -TERM -- -<pgid>` (checked on ubuntu:24.04).
  */
 export function interruptCommand(dir: string = SETUP_DIR): string {
@@ -57,6 +58,11 @@ export function interruptCommand(dir: string = SETUP_DIR): string {
     `while [ ! -s "$D/pid" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done`,
     `read -r pid < "$D/pid" || exit 1`,
     `case $pid in ''|*[!0-9]*) exit 1;; esac`,
-    `kill -s TERM -- -"$pid"`,
+    `kill -s TERM -- -"$pid" || exit 1`,
+    // The killed command cannot clean up after itself. Once the kernel has freed the lock the cancel is complete:
+    // `active` goes, so the next survey does not report a command that «died mid-run» for a cancel we asked for.
+    `i=0; while ! flock -n "$D/lock" true && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done`,
+    `flock -n "$D/lock" true && rm -f "$D/active"`,
+    'exit 0',
   ].join('\n');
 }

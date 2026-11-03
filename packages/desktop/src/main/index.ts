@@ -995,7 +995,9 @@ if (!gotLock) {
       },
     });
     registerRelaySetupIpc(ipcMain, relaySetup);
-    app.on('before-quit', () => relaySetup.dispose());
+    // `quit`, not `before-quit`: guards on `before-quit` and `will-quit` can cancel the exit, and a cancelled exit must
+    // not touch a run in progress (the server-side commands outlive the app anyway, spec 7.3).
+    app.on('quit', () => relaySetup.dispose());
     void remoteService.init();
     app.on('before-quit', () => remoteService.dispose());
     registerIpc({

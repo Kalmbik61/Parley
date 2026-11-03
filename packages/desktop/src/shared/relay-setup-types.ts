@@ -60,12 +60,17 @@ export interface RelaySetupCalls {
   trust: { params: Record<string, never>; result: RelaySetupPhase };
   provide: { params: { passphrase?: string; sudoPassword?: string }; result: RelaySetupPhase };
   plan: { params: { removeData: boolean }; result: RelaySetupPhase };
+  /** Answers at once with `{ phase: 'running' }`; the outcome arrives as a `phase` event and through `state`. */
   run: { params: { removeData: boolean }; result: RelaySetupPhase };
   check: { params: Record<string, never>; result: RelaySetupPhase };
   cancel: { params: Record<string, never>; result: null };
+  /** The run record kept in main (spec 8.1), or `null`. */
+  state: { params: Record<string, never>; result: RelayRunView | null };
+  /** Forgets the record; refused while the run is going. */
+  dismiss: { params: Record<string, never>; result: null };
 }
 export type RelaySetupCallName = keyof RelaySetupCalls;
-export const RELAY_SETUP_CALL_NAMES: readonly RelaySetupCallName[] = ['keys', 'begin', 'trust', 'provide', 'plan', 'run', 'check', 'cancel'];
+export const RELAY_SETUP_CALL_NAMES: readonly RelaySetupCallName[] = ['keys', 'begin', 'trust', 'provide', 'plan', 'run', 'check', 'cancel', 'state', 'dismiss'];
 
 /** Progress of the relay image download: layers always, bytes when the Docker Engine API reports them. */
 export interface RelayPullProgress {
@@ -75,11 +80,34 @@ export interface RelayPullProgress {
   bytesTotal: number | null;
 }
 
-export type RelaySetupEvent =
-  | { event: 'step'; id: string; title: string; status: 'running' | 'skipped' | 'done' | 'failed' | 'stopped' }
+export type RelayStepStatus = 'running' | 'skipped' | 'done' | 'failed' | 'stopped';
+
+/** What happens during a run, without the sequence number (the service numbers the events). */
+export type RelaySetupEventBody =
+  | { event: 'step'; id: string; title: string; status: RelayStepStatus }
   | { event: 'line'; step: string; text: string }
   | { event: 'progress'; step: string; progress: RelayPullProgress }
   /** A cancel arrived during a step that cannot be interrupted: the run stops after it. */
-  | { event: 'cancelling' };
+  | { event: 'cancelling' }
+  /** The outcome of a run, and of «Check» afterwards. */
+  | { event: 'phase'; phase: RelaySetupPhase };
+
+/** Every event carries the number of the record's change it caused: `RelayRunView.seq` after it equals this. */
+export type RelaySetupEvent = RelaySetupEventBody & { seq: number };
+
+/** The run record (spec 8.1). Lives in main: a reloaded window reads it again. Holds no secrets. */
+export interface RelayRunView {
+  /** Number of the last applied event. */
+  seq: number;
+  intent: SetupIntent;
+  host: string;
+  plan: RelayPlanView;
+  /** At most 200 lines per step (the log file keeps all of them). */
+  steps: Array<{ id: string; title: string; status: 'pending' | RelayStepStatus; lines: string[] }>;
+  progress: RelayPullProgress | null;
+  cancelling: boolean;
+  /** `{ phase: 'running' }` during the run, the outcome after it. */
+  phase: RelaySetupPhase;
+}
 
 export const RELAY_MANUAL_URL = 'https://github.com/Kalmbik61/Parley/blob/master/packages/relay/README.md';

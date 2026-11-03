@@ -20,6 +20,10 @@ describe('relay-setup:call', () => {
     expect(call).not.toHaveBeenCalled();
     await invoke('cancel', {});
     expect(call).toHaveBeenCalledWith('cancel', {});
+    await invoke('state', {});
+    await invoke('dismiss', {});
+    expect(call).toHaveBeenCalledWith('state', {});
+    expect(call).toHaveBeenCalledWith('dismiss', {});
   });
 
   it('an unexpected error never carries its text (and so no secret) to the window', async () => {
