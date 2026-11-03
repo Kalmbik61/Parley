@@ -5,6 +5,8 @@
 import type { ComponentProps, ReactElement, ReactNode } from 'react';
 import { Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { useRouter } from 'expo-router';
+// The copy of @react-navigation/elements that expo-router bundles (its public `react-navigation` entry).
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { SymbolView } from 'expo-symbols';
 import { typography, useColors } from '../theme';
 
@@ -124,9 +126,16 @@ export function BarStrip({ icon, iconColor, text, action, onPress }: { icon: Com
 
 /**
  * The strips stacked under the bar, in the layout flow above the list: a spacer as tall as the transparent bar, then the
- * strips. The list starts below them, so its first row (e.g. "Load earlier messages") is never covered, large text sizes
- * grow the stack instead of cutting it, and scrolled content is clipped at the strip, not drawn through it.
+ * strips. The whole stack, the area under the bar included, has the solid bar colour, so bar and strips read as one bar
+ * (D1 §9.1). The list starts below, so its first row is never covered, large text sizes grow the stack, and scrolled
+ * content is clipped at the strip. `onChange` fires when the stack's height changes (a strip appeared or grew).
  */
-export function BarStripStack({ top, children }: { top: number; children: ReactNode }) {
-  return <View style={{ paddingTop: top }}>{children}</View>;
+export function BarStripStack({ onChange, children }: { onChange?: () => void; children: ReactNode }) {
+  const c = useColors();
+  const headerHeight = useHeaderHeight();
+  return (
+    <View style={{ paddingTop: headerHeight, backgroundColor: c.barBgSolid }} onLayout={onChange}>
+      {children}
+    </View>
+  );
 }

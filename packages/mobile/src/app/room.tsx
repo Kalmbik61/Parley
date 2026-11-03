@@ -165,7 +165,7 @@ export default function RoomScreen() {
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         {(room.proposal !== null || waiting[0] !== undefined) && (
-          <BarStripStack top={insets.top + 44}>
+          <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
             {room.proposal !== null && (
               <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
             )}
