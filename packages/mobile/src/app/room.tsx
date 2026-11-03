@@ -23,8 +23,7 @@ import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
-import { newestFirst, reverseIndex } from '../feed/inverted';
-import { useInvertedFeed } from '../feed/use-inverted-feed';
+import { useFollowEnd } from '../feed/use-follow-end';
 import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
 import { SelectTextSheet } from '../feed/SelectTextSheet';
 import type { Selection } from '../feed/selection';
@@ -108,13 +107,11 @@ export default function RoomScreen() {
   const messages = entry?.messages ?? [];
   const rows = useMemo(() => lines(messages), [messages]);
   const out = useMemo(() => visibleOutLetters(chat.out, messages), [chat.out, messages]);
-  // The list is inverted (A44b): chronological rows first, then the list order is newest first.
-  const chron = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
-  const data = useMemo(() => newestFirst(chron), [chron]);
+  const data = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
   const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
-  // "New" is whatever comes before the newest item the person has seen, so earlier pages at the top are never counted.
+  // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
-  const follow = useInvertedFeed(list, keys);
+  const follow = useFollowEnd(list, keys);
   // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
   useEffect(() => {
     if (!DEMO || found === null || params.dev === undefined || client === null || target === null) return;
@@ -338,7 +335,7 @@ export default function RoomScreen() {
       />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
         {(room.proposal !== null || waiting[0] !== undefined) && (
-          <BarStripStack>
+          <BarStripStack onChange={follow.keepEnd}>
             {room.proposal !== null && (
               <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
             )}
@@ -351,19 +348,20 @@ export default function RoomScreen() {
           ref={list}
           data={data}
           keyExtractor={rowKey}
-          inverted
-          onScroll={follow.onScroll}
-          // The older page is appended at the far (visual top) end of the inverted list.
-          onEndReached={() => client?.loadOlder(target)}
-          onEndReachedThreshold={0.5}
-          maintainVisibleContentPosition={follow.maintainVisibleContentPosition}
+          {...follow.handlers}
+          onScroll={(e) => {
+            follow.handlers.onScroll(e);
+            // Scrolled to the start: the next older page (not while the open is still pinning to the end).
+            if (e.nativeEvent.contentOffset.y < 40 && target !== null && !follow.isPinned()) client?.loadOlder(target);
+          }}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           scrollEventThrottle={64}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[styles.list, { paddingBottom: room.proposal !== null || waiting[0] !== undefined ? 8 : headerHeight + 8 }]}
+          contentContainerStyle={[styles.list, { paddingTop: room.proposal !== null || waiting[0] !== undefined ? 8 : headerHeight + 8 }]}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-          ListFooterComponent={
+          ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>
               <ConnectionBanner />
               {entry?.older != null && (
@@ -407,8 +405,8 @@ export default function RoomScreen() {
                 onLongPress={onLongPress}
                 onOpenQuote={(id) => {
                   const at = rows.findIndex((r) => r.message.id === id);
-                  // The inverted list counts from the newest item, and its "start" is the bottom: 0.7 puts the message 30% from the top.
-                  if (at >= 0) list.current?.scrollToIndex({ index: reverseIndex(chron.length, at), animated: true, viewPosition: 0.7 });
+                  if (at >= 0) follow.leave();
+                  if (at >= 0) list.current?.scrollToIndex({ index: at, animated: true, viewPosition: 0.3 });
                 }}
               />
             )
@@ -530,7 +528,7 @@ const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
-  list: { padding: 16, paddingTop: 12, paddingBottom: 8 },
+  list: { padding: 16, paddingTop: 8, paddingBottom: 12 },
   titleBox: { alignItems: 'flex-start', maxWidth: 240 },
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },

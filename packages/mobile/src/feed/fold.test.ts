@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedItem } from '@parley/core';
 import { foldFeed, groupTitle, turnStatusText } from './fold';
-import { newestFirst } from './inverted';
 
 const at = '2026-11-01T10:00:00.000Z';
 const prompt = (id: string): FeedItem => ({ kind: 'prompt', id, at, text: id, images: 0 });
@@ -29,14 +28,5 @@ describe('foldFeed', () => {
     expect(groupTitle([text('a')]).title).toBe('Wrote replies');
     expect(turnStatusText('completed', 372_000)).toBe('Completed in 6m 12s');
     expect(turnStatusText('stopped', null)).toBe('Stopped');
-  });
-
-  it('newest first (inverted list): the latest turn leads, a group stays above its opened items on screen', () => {
-    const items = [prompt('p1'), tool('t1', 'Bash'), text('a'), turn('u1'), prompt('p2'), tool('t2', 'Read'), text('b'), turn('u2')];
-    const list = newestFirst(foldFeed(items, new Set(['t2'])));
-    const key = (r: { key: string }) => r.key;
-    // listed from the bottom of the screen up: status, reply, opened item, its group, prompt, then the older turn
-    expect(list.map(key)).toEqual(['control:p2', 'b', 't2', 't2', 'p2', 'control:p1', 'a', 't1', 'p1']);
-    expect(list[3]).toMatchObject({ kind: 'group', open: true });
   });
 });
