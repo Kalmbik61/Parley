@@ -93,13 +93,14 @@ export const newAttempt = (random?: () => number): SwitchAttempt => ({ requestId
 
 export const UNCONFIRMED_LINE = "We couldn't confirm it";
 
-/** Answers that say the call may not have reached the host (or that the first switch still runs): the request id is kept. */
-const INDEFINITE_CODES: ReadonlySet<string> = new Set(['timeout', 'connection_lost', 'not_connected', 'rate_limited', 'busy']);
+/** The host refusals that end the attempt: it answered and nothing was switched. Everything else (`host_offline`, `internal`,
+ *  `timeout`, `not_connected`, `rate_limited`, an unknown code...) may hide a switch that went through: the id is kept. */
+const DEFINITE_REFUSALS: ReadonlySet<string> = new Set(['conflict', 'bad_request', 'not_found', 'unknown_method']);
 
-/** `started`, `held`, `queued` or a host refusal such as `conflict` / `bad_request` — only these end the attempt. */
+/** `started`, `held`, `queued` or one of the refusals above — only these end the attempt. */
 export function isDefinite(outcome: SwitchAgentOutcome): boolean {
   if (outcome.outcome === 'lost') return false;
-  if (outcome.outcome === 'rejected') return !INDEFINITE_CODES.has(outcome.code);
+  if (outcome.outcome === 'rejected') return DEFINITE_REFUSALS.has(outcome.code);
   return true;
 }
 

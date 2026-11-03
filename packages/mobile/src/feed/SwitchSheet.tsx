@@ -26,7 +26,10 @@ export function SwitchSheet({ client, sessionRef, label, roomTitle, providerLabe
   const [lost, setLost] = useState(recalled.current !== undefined);
   const [reason, setReason] = useState<string | null>(recalled.current?.line ?? null);
   const mounted = useRef(true);
-  useEffect(() => () => void (mounted.current = false), []);
+  useEffect(() => {
+    mounted.current = true; // Fast Refresh re-runs the effect after its cleanup
+    return () => void (mounted.current = false);
+  }, []);
   const frozenTarget = useRef<Target | undefined>(recalled.current?.target);
 
   useEffect(() => {
