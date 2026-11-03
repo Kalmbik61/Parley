@@ -118,6 +118,7 @@ import { limitReturnFromEnv } from './wake/limit-return.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreeHolds } from './worktrees/holds.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
+import { createWorktreeSweeper } from './worktrees/worktree-sweeper.js';
 import { readHostVersion } from './version.js';
 
 export interface HostOptions {
@@ -846,6 +847,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // при отбрасывании она делит с обычным `sessions.stop`.
   const worktreesService = createWorktreesService(sessionsService);
   const worktreeHolds = createWorktreeHolds(() => handle.context.clients());
+  // Уборка копий закончивших сессий: проход сразу и на каждое изменение работ, только при открытом окне.
+  const worktreeSweeper = createWorktreeSweeper(handle.context, {
+    works: worksService,
+    sessions: sessionsService,
+    holds: worktreeHolds,
+  });
+  handle.context.onShutdown(async () => worktreeSweeper.stop());
 
   // Сокет слушает раньше первого чтения работ (п. 5 ниже, затем `worksService.start()`):
   // методы снимка работ (WORKS_GATED_* в methods/index.ts) ждут его, иначе окно, подключившееся
@@ -1116,6 +1124,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   pressureSensor.start();
   wakeService.start();
   autoSleepService.start();
+  worktreeSweeper.start();
   // Очередь собирается из карт работ, прочитанных выше: запуски, что ждали слота до перезапуска хоста, продолжаются.
   capacityService.start();
   capacityFeed.start();
