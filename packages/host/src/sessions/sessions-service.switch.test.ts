@@ -797,6 +797,18 @@ describe('ревью критика: восстановление и гонки 
     expect((await sessionOf(ref)).provider).toBe('claude');
   });
 
+  it('критик A38a m3: удержанная замена без записи в памяти ответов — тот же requestId к другому провайдеру conflict, к тому же held', async () => {
+    const r = rig({ consents: { request: vi.fn() } as never });
+    const { ref } = await liveClaude(r);
+    expect(await r.sessions.switchAgent(ref, request('codex'))).toMatchObject({ outcome: 'held' });
+    // Новый сервис — пустая память ответов, `switching` в карте остаётся.
+    const fresh = rig({ consents: { request: vi.fn() } as never });
+    await fresh.works.refresh();
+    await expect(fresh.sessions.switchAgent(ref, request('custom-claude-2'))).rejects.toMatchObject({ code: 'conflict', message: 'this requestId was used for another switch' });
+    expect(await fresh.sessions.switchAgent(ref, request('codex'))).toEqual({ outcome: 'held', carried: 'handover' });
+    expect(await sessionOf(ref)).toMatchObject({ provider: 'codex', switching: { id: request('codex').requestId, to: 'codex' } });
+  });
+
   it('№1: held Codex → перезапуск хоста снял switching → Deny не закрывает заменённую сессию', async () => {
     const r = rig({ consents: { request: vi.fn() } as never });
     const { ref } = await liveClaude(r);

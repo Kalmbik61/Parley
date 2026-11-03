@@ -1887,8 +1887,12 @@ export function createSessionsService(
     if (session === undefined) {
       throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
     }
-    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет.
-    if (session.switching?.id === request.requestId) return { outcome: 'held', carried: carry };
+    // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет. Тот же `requestId` к другому
+    // провайдеру — другой запрос (критик A38a m3; сюда доходит, когда память ответов уже забыла запись).
+    if (session.switching?.id === request.requestId) {
+      if (session.switching.to === request.provider) return { outcome: 'held', carried: carry };
+      throw new HostError('conflict', 'this requestId was used for another switch');
+    }
     if (session.switching !== null && session.switching !== undefined) {
       throw busyError('The session is already continuing on another provider');
     }
