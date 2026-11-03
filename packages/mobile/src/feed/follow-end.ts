@@ -47,6 +47,8 @@ export interface FollowState {
   readonly scrollViewport: number | null;
   readonly scrollOffset: number | null;
   readonly layoutHeight: number | null;
+  /** The latest content height reported by the size callback. */
+  readonly contentHeight: number | null;
   /** Growth that arrived while a finger was down: one scroll on release, if still at the bottom. */
   readonly pendingGrowth: boolean;
   /** The last item the human has seen; "new" is what comes after it. */
@@ -76,7 +78,7 @@ export function countAfter(keys: readonly string[], seenKey: string | null, prev
 export function open(): FollowState {
   return {
     pinned: true, revealed: false, atBottom: true, touching: false, momentum: false, hadRows: false, openedAt: null, lastGrowthAt: 0, ownUntil: 0,
-    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, pendingGrowth: false, seenKey: null, away: 0,
+    echoUntil: 0, scrollContent: null, scrollViewport: null, scrollOffset: null, layoutHeight: null, contentHeight: null, pendingGrowth: false, seenKey: null, away: 0,
   };
 }
 
@@ -96,8 +98,9 @@ export function contentChanged(s: FollowState, now: number, keys: readonly strin
   const base: FollowState = first
     ? { ...s, hadRows: true, pinned: !s.touching, openedAt: now, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS }
     : { ...s, lastGrowthAt: now, echoUntil: now + GROWTH_ECHO_MS };
+  const sized: FollowState = content === undefined ? base : { ...base, contentHeight: content };
   const fits = content !== undefined && base.layoutHeight !== null && content <= base.layoutHeight;
-  const shown: FollowState = fits ? { ...base, revealed: true } : base;
+  const shown: FollowState = fits ? { ...sized, revealed: true } : sized;
   return follow(shown, now, keys, first);
 }
 
@@ -110,16 +113,26 @@ function follow(base: FollowState, now: number, keys: readonly string[], first: 
   return { state: { ...base, away: countAfter(keys, base.seenKey, base.away) }, scroll: 'none' };
 }
 
-/** Time passed: the feed shows after one frame without growth, or at the cap since the first real data. A skeleton-only phase has no `openedAt`, so it starts nothing. */
-export function revealCheck(s: FollowState, now: number): FollowState {
-  if (s.revealed || !s.hadRows || s.openedAt === null) return s;
-  return now - s.lastGrowthAt >= REVEAL_FRAME_MS || now - s.openedAt >= REVEAL_CAP_MS ? { ...s, revealed: true } : s;
+/** The last scroll event saw the latest content height and was at its end: the pin's scroll has landed. */
+function landed(s: FollowState): boolean {
+  if (s.scrollContent === null || s.scrollViewport === null || s.scrollOffset === null) return false;
+  if (s.contentHeight !== null && s.scrollContent < s.contentHeight - 1) return false;
+  return nearBottom({ offset: s.scrollOffset, content: s.scrollContent, viewport: s.scrollViewport });
 }
 
-/** Milliseconds until the feed may be revealed; null when it is shown or has no rows yet. */
+/** Time passed: the feed shows once the pin's scroll has landed at the end and one frame passed without growth, or at the cap since the first real rows. A skeleton-only phase has no `openedAt`, so it starts nothing. */
+export function revealCheck(s: FollowState, now: number): FollowState {
+  if (s.revealed || !s.hadRows || s.openedAt === null) return s;
+  const quiet = now - s.lastGrowthAt >= REVEAL_FRAME_MS && landed(s);
+  return quiet || now - s.openedAt >= REVEAL_CAP_MS ? { ...s, revealed: true } : s;
+}
+
+/** Milliseconds until the feed may be revealed; null when it is shown or has no rows yet. A scroll event re-checks sooner. */
 export function revealDeadline(s: FollowState, now: number): number | null {
   if (s.revealed || !s.hadRows || s.openedAt === null) return null;
-  return Math.max(0, Math.min(s.lastGrowthAt + REVEAL_FRAME_MS, s.openedAt + REVEAL_CAP_MS) - now);
+  const cap = s.openedAt + REVEAL_CAP_MS;
+  const quietAt = s.lastGrowthAt + REVEAL_FRAME_MS;
+  return Math.max(0, (now >= quietAt && !landed(s) ? cap : Math.min(quietAt, cap)) - now);
 }
 
 /** Time passed: the pin ends after a quiet spell or at the cap. */

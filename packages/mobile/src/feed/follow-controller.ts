@@ -83,7 +83,8 @@ export function createFollowController(io: FollowIo) {
       run(fe.viewportChanged(state, height, io.now()));
     },
     scroll(m: fe.ScrollMetrics): void {
-      commit(fe.scrolled(state, m, io.now(), keys));
+      commit(fe.revealCheck(fe.scrolled(state, m, io.now(), keys), io.now()));
+      armReveal();
     },
     beginDrag(): void {
       commit(fe.dragBegan(state));

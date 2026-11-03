@@ -262,20 +262,33 @@ describe('follow the end: new items and Jump to latest', () => {
 });
 
 describe('follow the end: reveal (A44b)', () => {
+  const end = (content: number): fe.ScrollMetrics => ({ offset: content - 100, content, viewport: 100 });
+  const landedAt = (content: number, now: number): fe.FollowState => {
+    const s = fe.contentChanged(fe.open(), 0, K, content).state;
+    return fe.scrolled(s, end(content), now, K);
+  };
+
   it('starts hidden, also on a re-open of the same screen', () => {
     expect(fe.open().revealed).toBe(false);
-    const shown = fe.revealCheck(fe.contentChanged(fe.open(), 0, K).state, 100);
-    expect(shown.revealed).toBe(true);
+    expect(fe.revealCheck(landedAt(3000, 10), 100).revealed).toBe(true);
     expect(fe.open().revealed).toBe(false);
   });
 
-  it('reveals one frame after the last growth, not before', () => {
-    const s = fe.contentChanged(fe.open(), 0, K, 3000).state;
+  it('reveals one frame after the last growth once the pin\'s scroll has landed at the end', () => {
+    const s = landedAt(3000, 10);
     expect(fe.revealCheck(s, fe.REVEAL_FRAME_MS - 1).revealed).toBe(false);
     expect(fe.revealCheck(s, fe.REVEAL_FRAME_MS).revealed).toBe(true);
     const grown = fe.contentChanged(s, 20, K, 3100).state;
-    expect(fe.revealCheck(grown, fe.REVEAL_FRAME_MS).revealed).toBe(false);
+    expect(fe.revealCheck(grown, 20 + fe.REVEAL_FRAME_MS).revealed).toBe(false); // the scroll event saw the old height
     expect(fe.revealDeadline(grown, 20)).toBe(fe.REVEAL_FRAME_MS);
+    expect(fe.revealCheck(fe.scrolled(grown, end(3100), 60, K), 20 + fe.REVEAL_FRAME_MS).revealed).toBe(true);
+  });
+
+  it('a quiet spell is not enough while the list is not at the end (estimated heights): it waits for the cap', () => {
+    const s = fe.scrolled(fe.contentChanged(fe.open(), 0, K, 3000).state, { offset: 1000, content: 3000, viewport: 100 }, 10, K);
+    expect(fe.revealCheck(s, 200).revealed).toBe(false);
+    expect(fe.revealDeadline(s, 200)).toBe(fe.REVEAL_CAP_MS - 200);
+    expect(fe.revealCheck(s, fe.REVEAL_CAP_MS).revealed).toBe(true);
   });
 
   it('reveals at the cap since the first rows, whatever keeps growing', () => {
@@ -290,8 +303,8 @@ describe('follow the end: reveal (A44b)', () => {
     expect(fe.revealDeadline(s, 10_000)).toBeNull();
     expect(fe.revealCheck(s, 10_000).revealed).toBe(false);
     const rows = fe.contentChanged(s, 10_000, K, 3000).state;
-    expect(fe.revealCheck(rows, 10_000 + fe.REVEAL_CAP_MS - 1).revealed).toBe(true); // by the frame rule here
-    expect(fe.revealDeadline(rows, 10_000)).toBe(fe.REVEAL_FRAME_MS);
+    expect(fe.revealCheck(rows, 10_000 + fe.REVEAL_CAP_MS - 1).revealed).toBe(false);
+    expect(fe.revealCheck(rows, 10_000 + fe.REVEAL_CAP_MS).revealed).toBe(true);
   });
 
   it('a feed that fits the window shows at once; a long one does not', () => {

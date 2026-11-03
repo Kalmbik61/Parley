@@ -133,15 +133,14 @@ describe('follow controller (A44)', () => {
     c.dispose();
   });
 
-  it('A44b: the list shows one frame after the last growth, once', () => {
+  const landed = (content: number): ScrollMetrics => ({ offset: content - 100, content, viewport: 100 });
+
+  it('A44b: the list shows one frame after the last growth, once the scroll has landed at the end', () => {
     const { c, reveals } = setup();
     c.contentSizeChanged(3000);
-    expect(reveals).toEqual([]);
-    vi.advanceTimersByTime(20);
-    c.contentSizeChanged(3200);
-    vi.advanceTimersByTime(20);
-    expect(reveals).toEqual([]);
-    vi.advanceTimersByTime(20);
+    vi.advanceTimersByTime(100);
+    expect(reveals).toEqual([]); // quiet, but no scroll event has seen the end yet
+    c.scroll(landed(3000));
     expect(reveals.length).toBe(1);
     c.contentSizeChanged(3400);
     vi.advanceTimersByTime(1000);
@@ -167,7 +166,9 @@ describe('follow controller (A44)', () => {
     expect(reveals).toEqual([]);
     c.setKeys(K);
     c.contentSizeChanged(3000);
-    vi.advanceTimersByTime(40);
+    vi.advanceTimersByTime(599);
+    expect(reveals).toEqual([]);
+    vi.advanceTimersByTime(5);
     expect(reveals.length).toBe(1);
     c.dispose();
   });
