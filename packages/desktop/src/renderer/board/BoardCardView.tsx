@@ -1,5 +1,6 @@
 /** Карточка доски: заголовок, чип проекта, цель для «в работе» и «на проверке». */
 import { useState } from 'react';
+import { useDraggable } from '@dnd-kit/core';
 import { MoreHorizontal } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { Badge } from '../ui/badge.js';
@@ -8,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Textarea } from '../ui/textarea.js';
 import { useWorksStore } from '../store/works.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
+import { dndId, type DragSourceData } from '../layout/dnd.js';
 import { relativeTimeAgo } from '../lib/relative-time.js';
 import { moveCard, returnCard } from './board-actions.js';
 import { cardKey, resolveTaken } from './board-model.js';
@@ -33,9 +35,12 @@ export function BoardCardView({ bridge, card, target, onOpen }: BoardCardViewPro
   const gone = target === null || target.gone;
   const targetLost = showTarget && (target !== null || item.taken !== undefined) && gone;
   const returnDisabled = taken === null || gone;
+  // Тянуть можно только карточки Backlog, не ждущие отправки; порог PointerSensor сохраняет обычный клик.
+  const data: DragSourceData = { item: { kind: 'card', projectPath: project.projectPath, id: item.id ?? null, index: card.index, title: item.title } };
+  const { setNodeRef, listeners } = useDraggable({ id: dndId.card(cardKey(card)), data, disabled: state !== 'backlog' || sendingTo !== undefined });
   const toBacklog = (): void => { void moveCard(bridge, card, 'backlog'); };
   return (
-    <li className="flex min-w-0 flex-col gap-1.5 rounded-lg bg-card p-2.5 text-sm" data-board-card={item.id ?? undefined}>
+    <li ref={setNodeRef} {...listeners} className="flex min-w-0 flex-col gap-1.5 rounded-lg bg-card p-2.5 text-sm" data-board-card={item.id ?? undefined}>
       <div className="flex min-w-0 items-start gap-1">
         <button type="button" className="line-clamp-2 min-w-0 flex-1 text-left font-medium [overflow-wrap:anywhere]" onClick={() => onOpen(card)}>
           {item.title}

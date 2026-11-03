@@ -144,3 +144,17 @@ export function resolveTaken(taken: string | undefined, project: BoardProject, e
 export function cardKey(card: Pick<BoardCard, 'project' | 'item' | 'index'>): string {
   return `${card.project.projectPath}#${card.item.id ?? `@${card.index}`}`;
 }
+
+/**
+ * Карточка Backlog, которую тащат: ищется заново по проекту и номеру. Без номера — по месту, но только если там карточка
+ * с тем же заголовком: список мог сдвинуться за время перетаскивания, и на этом месте уже другая. `null` — пропала или не в Backlog.
+ */
+export function findBacklogCard(projects: readonly BoardProject[], projectPath: string, id: string | null, index: number, title: string): BoardCard | null {
+  const project = projects.find(row => row.projectPath === projectPath);
+  if (!project) return null;
+  const at = id !== null ? project.snapshot.items.findIndex(row => row.id === id) : index;
+  const item = project.snapshot.items[at];
+  if (!item || (id === null && item.title !== title)) return null;
+  const state = item.state ?? backlogState(item, { review: item.review });
+  return state === 'backlog' ? { project, item, state, index: at } : null;
+}

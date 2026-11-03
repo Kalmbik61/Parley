@@ -1,3 +1,4 @@
+import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogSnapshot } from '@parley/protocol';
@@ -91,5 +92,72 @@ describe('BoardCardView', () => {
     render(<ul><BoardCardView bridge={bridge} card={card} target={null} onOpen={vi.fn()} /></ul>);
     expect(screen.getByText(S.board.sending('S01'))).toBeTruthy();
     expect(screen.getByText(S.board.sendTo).closest('button')!.hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('BoardCardView — перетаскивание', () => {
+  /** Карточка под настоящим `DndContext` с порогом 4 px, как в окне; `started` — его `onDragStart`. */
+  const mount = (card: BoardCard, onOpen = vi.fn()): { started: ReturnType<typeof vi.fn>; onOpen: ReturnType<typeof vi.fn> } => {
+    const started = vi.fn();
+    function Wrap(): JSX.Element {
+      const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+      return (
+        <DndContext sensors={sensors} onDragStart={started}>
+          <ul><BoardCardView bridge={bridge} card={card} target={null} onOpen={onOpen} /></ul>
+        </DndContext>
+      );
+    }
+    render(<Wrap />);
+    return { started, onOpen };
+  };
+  /** Тащит карточку за порог и не отпускает: жест остаётся на документе, пока его не закончит `afterEach`. */
+  const dragFrom = (card: BoardCard): { started: ReturnType<typeof vi.fn> } => {
+    const { started } = mount(card);
+    const li = document.querySelector('[data-board-card]');
+    if (li === null) throw new Error('карточки нет');
+    fireEvent.pointerDown(li, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 30, clientY: 10 });
+    return { started };
+  };
+
+  // Начатый жест dnd-kit вешает на document перехват click (`stopPropagation` в capture-фазе) и снимает его через 50 мс после
+  // pointerup. Тест, не отпустивший карточку, оставил бы его жить дольше `cleanup()`: он съедал бы клик следующего теста.
+  afterEach(async () => {
+    fireEvent.pointerUp(document, { isPrimary: true });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  });
+
+  it('карточка Backlog тянется за порог 4 px, предмет — card с проектом, номером и заголовком', async () => {
+    const { started } = dragFrom(make('backlog'));
+    await act(async () => {});
+    expect(started).toHaveBeenCalledTimes(1);
+    const event = started.mock.calls[0]?.[0] as { active: { data: { current?: { item?: unknown } } } };
+    expect(event.active.data.current?.item).toEqual({ kind: 'card', projectPath: '/p', id: 'b-001', index: 0, title: 'Task' });
+  });
+
+  it('карточка в sending и карточки Review, In progress, Done не тащатся', async () => {
+    useBoardStore.setState({ sending: new Map([['/p#b-001', 'S01']]) });
+    let result = dragFrom(make('backlog'));
+    await act(async () => {});
+    expect(result.started).not.toHaveBeenCalled();
+    cleanup();
+    useBoardStore.setState({ sending: new Map() });
+    for (const state of ['in-progress', 'review', 'done'] as const) {
+      result = dragFrom(make(state));
+      await act(async () => {});
+      expect(result.started).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
+  it('клик по заголовку открывает карточку: порог 4 px его не съедает', () => {
+    const { started, onOpen } = mount(make('backlog'));
+    const title = screen.getByText('Task');
+    // Клик без сдвига: нажатие и отпускание на месте, затем click. Жест не начинается, перехвата click нет.
+    fireEvent.pointerDown(title, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 10 });
+    fireEvent.click(title);
+    expect(started).not.toHaveBeenCalled();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

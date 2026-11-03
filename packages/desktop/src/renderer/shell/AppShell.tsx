@@ -73,6 +73,8 @@ import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDi
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { BoardSync } from '../board/BoardSync.js';
+import { scheduleSend } from '../board/board-send.js';
+import { boardProjects, findBacklogCard } from '../board/board-model.js';
 import { useBoardStore } from '../board/board-store.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
@@ -92,10 +94,12 @@ import {
   dropFromDragEnd,
   layoutCollision,
   sidebarDropFromDragEnd,
+  cardDropFromDragEnd,
   type DragItem,
   type SidebarTarget,
 } from '../layout/dnd.js';
-import { resolveSidebarDrop } from '../layout/dnd-sidebar.js';
+import { resolveCardDrop, resolveSidebarDrop } from '../layout/dnd-sidebar.js';
+import { useDragStore } from '../layout/drag-store.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
@@ -141,6 +145,10 @@ import { Titlebar } from './Titlebar.js';
  */
 function dragLabel(item: DragItem, key: string | null): string {
   // Имя файла, а не путь: путь из глубины дерева не влез бы в ярлык.
+  if (item.kind === 'card') {
+    const { slots, inboxPath } = useBoardStore.getState();
+    return findBacklogCard(boardProjects(slots, inboxPath), item.projectPath, item.id, item.index, item.title)?.item.title ?? '';
+  }
   if (item.kind === 'file') return item.path.slice(item.path.lastIndexOf('/') + 1);
   const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
   if (item.kind === 'session') {
@@ -381,6 +389,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const handleDragStart = (event: DragStartEvent): void => {
     const item = dragItemOf(event.active.data.current);
+    // Что тащат, знают ленты и терминалы (карточка доски над ними): стор меняется на старте и конце жеста, а не на каждое
+    // движение указателя, как `useDndContext()`.
+    useDragStore.getState().setItem(item);
     setDragging(item === null ? null : dragLabel(item, useLayoutStore.getState().activeWorkKey));
   };
 
@@ -390,11 +401,22 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   };
 
   const handleDragEnd = (event: DragEndEvent): void => {
+    useDragStore.getState().setItem(null);
     setDragging(null);
     setDropPreview(null, null);
     const key = useLayoutStore.getState().activeWorkKey;
     // Бросок на строку сайдбара — не в раскладку (2.5). Цель чужой работы сюда не доходит (`layoutCollision`), но и здесь
     // берём только работу, чей ключ совпал с активной: сессия тащится из строки активной карточки.
+    // Карточка доски — на строку сайдбара (любой работы), ленту или терминал: ищется заново, письмо уходит с Undo.
+    const onCard = cardDropFromDragEnd(event);
+    if (onCard !== null) {
+      const { slots, inboxPath } = useBoardStore.getState();
+      const card = findBacklogCard(boardProjects(slots, inboxPath), onCard.card.projectPath, onCard.card.id, onCard.card.index, onCard.card.title);
+      if (card === null) return;
+      const target = resolveCardDrop(card, onCard.target, onCard.workKey, useWorksStore.getState().entries);
+      if (target !== null) scheduleSend(bridge, card, target);
+      return;
+    }
     const onSidebar = sidebarDropFromDragEnd(event);
     if (onSidebar !== null) {
       if (key !== null && onSidebar.workKey === key) dropOnSidebar(bridge, key, onSidebar.sessionId, onSidebar.target);
@@ -424,6 +446,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   };
 
   const handleDragCancel = (): void => {
+    useDragStore.getState().setItem(null);
     setDragging(null);
     setDropPreview(null, null);
   };
@@ -829,7 +852,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={layoutCollision(activeWorkKey, (item) => canSend && acceptsTerminal(item))}
+      collisionDetection={layoutCollision(activeWorkKey, (item) => item.kind === 'card' || (canSend && acceptsTerminal(item)))}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}

@@ -15,10 +15,13 @@
  * комнаты проводит хост в `rooms.addMember`.
  */
 
-import type { WindowWorkMap } from '@parley/core';
+import type { WindowWorkEntry, WindowWorkMap } from '@parley/core';
 import { isRoomArchived } from '../lib/room-archive.js';
 import { homeRoomOf } from '../sidebar/sort.js';
-import type { SidebarTarget } from './dnd.js';
+import type { BoardCard } from '../board/board-model.js';
+import { liveTargets, type SendTarget } from '../board/board-send.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
+import type { CardDropTarget, SidebarTarget } from './dnd.js';
 
 /** Что делает бросок: собрать комнату из двух сессий или ввести сессию в комнату. */
 export type SidebarDrop =
@@ -43,4 +46,21 @@ export function resolveSidebarDrop(map: WindowWorkMap, sessionId: string, target
   const room = map.rooms.find((candidate) => candidate.id === target.roomId);
   if (room === undefined || isRoomArchived(room) || homeRoomOf(map, dragged.id)?.id === room.id) return null;
   return { kind: 'join', sessionId: dragged.id, roomId: room.id };
+}
+
+/**
+ * Кому уйдёт карточка Backlog, брошенная на `over` в работе `workKey` (ключ работы-владельца цели): цель должна быть
+ * среди живых целей проекта карточки (`liveTargets`); `null` — бросить нельзя. Работа цели любая, не только активная.
+ */
+export function resolveCardDrop(card: BoardCard, over: CardDropTarget, workKey: string, entries: readonly WindowWorkEntry[]): SendTarget | null {
+  const [kind, id] =
+    over.kind === 'room-row' ? (['room', over.roomId] as const)
+    : over.kind === 'session-row' || over.kind === 'terminal' ? (['session', over.sessionId] as const)
+    : 'roomId' in over ? (['room', over.roomId] as const)
+    : (['session', over.sessionId] as const);
+  return (
+    liveTargets(card.project, entries).find(
+      (target) => target.kind === kind && target.id === id && workKeyOf(target.entry.projectPath, target.entry.map.work.id) === workKey,
+    ) ?? null
+  );
 }

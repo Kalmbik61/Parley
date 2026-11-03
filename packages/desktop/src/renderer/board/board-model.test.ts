@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WindowWorkEntry } from '@parley/core';
 import type { BacklogSnapshot } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
-import { boardColumns, boardProjectPaths, boardProjects, cardKey, filterProjects, resolveTaken, reviewCount } from './board-model.js';
+import { boardColumns, boardProjectPaths, boardProjects, cardKey, filterProjects, findBacklogCard, resolveTaken, reviewCount } from './board-model.js';
 import type { BacklogRow, BoardProject } from './board-model.js';
 import type { BoardSlot } from './board-store.js';
 
@@ -89,6 +89,36 @@ describe('board-model', () => {
     const list = projects(['/p', snap('/p', [{}, { id: null }])]);
     const cols = boardColumns(list, { kind: 'all' }, '2026-11-14');
     expect(cols.backlog.map(cardKey).sort()).toEqual(['/p#@1', '/p#b-001']);
+  });
+
+  describe('findBacklogCard', () => {
+    it('по номеру — там, где карточка стоит сейчас', () => {
+      const list = projects(['/p', snap('/p', [{ id: 'b-009', title: 'New' }, { id: 'b-001', title: 'Old' }])]);
+      const card = findBacklogCard(list, '/p', 'b-001', 0, 'Old');
+      expect(card?.item.title).toBe('Old');
+      expect(card?.index).toBe(1);
+    });
+
+    it('без номера — по месту, если там карточка с тем же заголовком', () => {
+      const list = projects(['/p', snap('/p', [{ id: null, title: 'A' }, { id: null, title: 'B' }])]);
+      const card = findBacklogCard(list, '/p', null, 1, 'B');
+      expect(card?.item.title).toBe('B');
+      expect(card?.index).toBe(1);
+    });
+
+    it('карточка без номера, список сдвинулся — не найдена', () => {
+      // Была второй ('B'); пока тащили, перед ней встала другая карточка без номера.
+      const list = projects(['/p', snap('/p', [{ id: null, title: 'A' }, { id: null, title: 'N' }, { id: null, title: 'B' }])]);
+      expect(findBacklogCard(list, '/p', null, 1, 'B')).toBeNull();
+      // Список стал короче места — тоже не найдена.
+      expect(findBacklogCard(projects(['/p', snap('/p', [{ id: null, title: 'A' }])]), '/p', null, 1, 'B')).toBeNull();
+    });
+
+    it('не в Backlog и проекта нет — null', () => {
+      const list = projects(['/p', snap('/p', [{ state: 'review' }])]);
+      expect(findBacklogCard(list, '/p', 'b-001', 0, 'Item 1')).toBeNull();
+      expect(findBacklogCard(list, '/other', 'b-001', 0, 'Item 1')).toBeNull();
+    });
   });
 
   describe('resolveTaken', () => {

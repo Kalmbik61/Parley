@@ -75,6 +75,7 @@ import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { useLayoutStore } from '../layout/store.js';
 import { updateTab } from '../layout/tree.js';
+import { useFeedDropTarget } from '../sidebar/use-drop-target.js';
 import { Button } from '../ui/button.js';
 import { defaultRoot } from '../files/store.js';
 import { cn } from '../lib/cn.js';
@@ -493,15 +494,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     [bridge, sessionKey, workKey, tab.id, sendDeps],
   );
 
+  // Лента — цель броска карточки доски (письмо сессии); нативный drop файлов выше не затронут.
+  const { setNodeRef: setFeedRef, over: cardOver } = useFeedDropTarget(workKey, { sessionId: sessionRef.sessionId });
   return (
     <ChatEnvContext.Provider value={env}>
       <div
+        ref={setFeedRef}
         data-testid="chat-view"
         {...(dropping ? { 'data-dropping': '' } : {})}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        className={cn('flex h-full min-h-0 w-full min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
+        className={cn('flex h-full min-h-0 w-full min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
       >
         <ChatToolbar
           workKey={workKey}

@@ -9,6 +9,7 @@ import type { Active, ClientRect, DragEndEvent, DroppableContainer, Over } from 
 import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import {
   acceptsTerminal,
+  cardDropFromDragEnd,
   applyDrop,
   centerOverlayOnCursor,
   dndId,
@@ -761,5 +762,65 @@ describe('оверлей под указателем (раунд исправл�
     const transform = { x: 7, y: 9, scaleX: 1, scaleY: 1 };
     expect(centerOverlayOnCursor(args({ activatorEvent: null, transform }))).toEqual(transform);
     expect(centerOverlayOnCursor(args({ activeNodeRect: null, transform }))).toEqual(transform);
+  });
+});
+
+describe('карточка доски (задача 8)', () => {
+  const card: DragItem = { kind: 'card', projectPath: '/p', id: 'b-001', index: 0, title: 'Task' };
+  const sessionRow = container(dndId.sessionRow('B', 's-2'), { workKey: 'B', kind: 'session-row', sessionId: 's-2' });
+  const feed = container(dndId.feed('A', 'r-1'), { workKey: 'A', kind: 'feed', roomId: 'r-1' });
+  const body = container(dndId.body('A', 'g-a'), { workKey: 'A', kind: 'body', groupId: 'g-a' });
+  const SIDE: ClientRect = { left: 0, top: 100, width: 288, height: 26, right: 288, bottom: 126 };
+  const FEED: ClientRect = { left: 300, top: 50, width: 400, height: 300, right: 700, bottom: 350 };
+  const rects = { [sessionRow.id]: SIDE, [feed.id]: FEED, [body.id]: RECT };
+
+  it('card — DragItem: dragItemOf читает его, а без projectPath или заголовка — нет', () => {
+    expect(dragItemOf({ item: card })).toEqual(card);
+    expect(dragItemOf({ item: { kind: 'card', id: 'b-001', index: 0, title: 'Task' } })).toBeNull();
+    expect(dragItemOf({ item: { kind: 'card', projectPath: '/p', id: 'b-001', index: 0 } })).toBeNull();
+    // Карточка без номера — это `id: null`, а не отсутствие поля.
+    expect(dragItemOf({ item: { kind: 'card', projectPath: '/p', id: null, index: 2, title: 'Task' } })).not.toBeNull();
+  });
+
+  it('card не меняет раскладку', () => {
+    const { layout, left } = twoGroups();
+    const result = applyDrop(layout, card, { kind: 'center', groupId: left }, BIG);
+    expect(result.error).toBeNull();
+    expect(result.layout).toBe(layout);
+  });
+
+  it('card принимает терминал', () => {
+    expect(acceptsTerminal(card)).toBe(true);
+  });
+
+  it('card видит строку сайдбара чужой работы и ленту активной, но не тело группы', () => {
+    expect(collide('A', card, [body, sessionRow], rects, { x: 100, y: 110 }).map((hit) => hit.id)).toEqual([sessionRow.id]);
+    expect(collide('A', card, [body, feed], rects, { x: 400, y: 100 }).map((hit) => hit.id)).toEqual([feed.id]);
+    expect(collide('A', card, [body], rects, { x: 500, y: 200 })).toEqual([]);
+  });
+
+  it('ленту сессия и вкладка не видят', () => {
+    expect(collide('A', { kind: 'session', sessionId: 's-1' }, [feed], rects, { x: 400, y: 100 })).toEqual([]);
+    expect(collide('A', { kind: 'tab', tabId: 'mail' }, [feed], rects, { x: 400, y: 100 })).toEqual([]);
+  });
+
+  it('cardDropFromDragEnd разбирает строку, ленту, терминал; dropFromDragEnd карточку в раскладку не берёт', () => {
+    const row = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'B', kind: 'session-row', sessionId: 's-2' }), { x: 1, y: 1 }));
+    expect(row).toEqual({ workKey: 'B', card, target: { kind: 'session-row', sessionId: 's-2' } });
+    const room = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'feed', roomId: 'r-1' }), { x: 1, y: 1 }));
+    expect(room?.target).toEqual({ kind: 'feed', roomId: 'r-1' });
+    const chat = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'feed', sessionId: 's-1' }), { x: 1, y: 1 }));
+    expect(chat?.target).toEqual({ kind: 'feed', sessionId: 's-1' });
+    const term = cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'terminal', sessionId: 's-1' }), { x: 1, y: 1 }));
+    expect(term?.target).toEqual({ kind: 'terminal', sessionId: 's-1' });
+    expect(cardDropFromDragEnd(endEvent(card, overOf({ workKey: 'A', kind: 'body', groupId: 'g' }), { x: 1, y: 1 }))).toBeNull();
+    expect(cardDropFromDragEnd(endEvent({ kind: 'session', sessionId: 's-1' }, overOf({ workKey: 'A', kind: 'feed', roomId: 'r-1' }), { x: 1, y: 1 }))).toBeNull();
+    for (const data of [
+      { workKey: 'A', kind: 'feed', roomId: 'r-1' },
+      { workKey: 'A', kind: 'terminal', sessionId: 's-1' },
+      { workKey: 'A', kind: 'body', groupId: 'g' },
+    ] as DropTargetData[]) {
+      expect(dropFromDragEnd(endEvent(card, overOf(data), { x: 1, y: 1 }))).toBeNull();
+    }
   });
 });

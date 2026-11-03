@@ -66,6 +66,7 @@ import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
 import { useOutboxFlying, useOutboxItems } from '../../lib/outbox.js';
 import { workKey } from '../../lib/tree-order.js';
+import { useFeedDropTarget } from '../../sidebar/use-drop-target.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
 import type { ActivityEntry } from '../../store/activity.js';
@@ -397,6 +398,9 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   }, [pending, landedIds, draftKey]);
   // Серое письмо выросло или ушло — у низа лента остаётся у низа.
   useLayoutEffect(keepAtBottom, [keepAtBottom, shownPending.length]);
+  // Лента — цель броска карточки доски (письмо всей комнате); нативный drop файлов ниже не затронут. Хук — до раннего
+  // выхода «комнаты нет»: у смонтированной панели комната может появиться в карте позже, и порядок хуков не должен меняться.
+  const { setNodeRef: setFeedRef, over: cardOver } = useFeedDropTarget(workKey(entry.projectPath, entry.map.work.id), { roomId });
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -502,12 +506,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   return (
     <div
+      ref={setFeedRef}
       data-room-panel=""
       {...(dropping ? { 'data-dropping': '' } : {})}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
+      className={cn('flex h-full min-h-0 min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
         browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
