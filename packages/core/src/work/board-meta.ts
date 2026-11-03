@@ -2,8 +2,12 @@ import path from 'node:path';
 import { readSharedFile, writeSharedFile } from './store.js';
 import type { SharedFileSnapshot, SharedProjectPaths } from './store.js';
 import type { BacklogDocument, BacklogItem } from './backlog.js';
+import { backlogState } from './board-card.js';
+import type { BacklogState } from './board-card.js';
 
-export type BacklogState = 'backlog' | 'in-progress' | 'review' | 'done';
+export { backlogState };
+export type { BacklogState };
+
 /** Время карточки в ISO 8601 UTC; хранится рядом с бэклогом, а не в его Markdown-строках. */
 export interface BoardItemMeta { created?: string; sent?: string; review?: string }
 export interface BoardMeta { version: 1; items: Record<string, BoardItemMeta> }
@@ -11,12 +15,6 @@ export type BoardItem = BacklogItem & BoardItemMeta & { state: BacklogState };
 
 const FIELDS = ['created', 'sent', 'review'] as const;
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-
-export function backlogState(item: BacklogItem, meta?: BoardItemMeta): BacklogState {
-  if (item.checked) return 'done';
-  if (item.taken === undefined) return 'backlog';
-  return meta?.review === undefined ? 'in-progress' : 'review';
-}
 
 export const boardMetaPath = (paths: SharedProjectPaths): string => path.join(paths.dir, 'board.json');
 

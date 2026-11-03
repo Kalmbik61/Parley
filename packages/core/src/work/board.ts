@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parleyHome } from '../home.js';
 import { addBacklogItem, completeBacklogItem, readBacklog, removeBacklogItem, takeBacklogItem, updateBacklogItem } from './backlog.js';
 import type { BacklogDocument, BacklogItem, BacklogWriteResult } from './backlog.js';
+import { boardCardMessage } from './board-card.js';
 import { boardItems, readBoardMeta, updateBoardMeta } from './board-meta.js';
 import type { BacklogState, BoardItem, BoardMeta } from './board-meta.js';
 import { SharedStateError, sharedProjectPaths, withSharedProjectLock } from './store.js';
@@ -166,9 +167,4 @@ export function planBacklogIds(map: WorkMap): Set<string> {
   return ids;
 }
 
-export function boardCardMessage(card: { id: string; title: string; details: string; project: string }): string {
-  const { id, title, details, project } = card;
-  return `Board card ${id} (${project}): ${title}\n\n` +
-    (details.trim() ? `${details.trim()}\n\n` : '') +
-    `When it is done, call report with status done and backlog ["${id}"].`;
-}
+export { boardCardMessage };
