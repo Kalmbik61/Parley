@@ -19,7 +19,10 @@ export type WorkTitleLookup = (ref: { projectPath: string; workId: string }) => 
 
 const baseName = (folder: string): string => path.basename(folder.replace(/\/+$/, '')) || folder;
 
-/** What the notification names: the work title, then basename(projectPath) only for an unknown work; the repo name for MCP. */
+/**
+ * What the notification names: the work title, then basename(projectPath) only for an unknown work; the repo name for MCP.
+ * For `session-close` it is the work too; the session label comes from `action.target`.
+ */
 async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLookup | undefined): Promise<string> {
   if (typeof target === 'string') return target;
   if ('repo' in target) return baseName(target.repo);
@@ -29,7 +32,13 @@ async function targetText(target: PhoneAction['target'], workTitle: WorkTitleLoo
 
 /** Same work (or same string target) = same coalescing key; two folders trusted in a row both notify. */
 const targetKey = (target: PhoneAction['target']): string =>
-  typeof target === 'string' ? target : 'repo' in target ? `${target.repo}\0${target.servers.join('\0')}` : `${target.projectPath}\0${target.workId}`;
+  typeof target === 'string'
+    ? target
+    : 'repo' in target
+      ? `${target.repo}\0${target.servers.join('\0')}`
+      : 'label' in target
+        ? `${target.projectPath}\0${target.workId}\0${target.sessionId}`
+        : `${target.projectPath}\0${target.workId}`;
 
 /** `target` is the already resolved text (see `targetText`); `mcp-enable` also lists the server names of `action.target`. */
 export function phoneActionBody(action: Pick<PhoneAction, 'kind'> & { target?: PhoneAction['target'] }, target: string): string {
@@ -48,6 +57,10 @@ export function phoneActionBody(action: Pick<PhoneAction, 'kind'> & { target?: P
       return TEXT.providerSwitch(clip(target));
     case 'session-create':
       return TEXT.sessionStart(clip(target));
+    case 'session-close': {
+      const label = typeof action.target === 'object' && 'label' in action.target ? action.target.label : '';
+      return TEXT.sessionClose(clip(label), clip(target));
+    }
   }
 }
 

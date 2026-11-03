@@ -24,6 +24,9 @@ import { until } from './harness.js';
 
 const stages = Object.entries(REMOTE_STAGES);
 
+const REF_ONLY = ['feed.interrupt', 'sessions.stop', 'sessions.close', 'sessions.switchOptions'] as const;
+const MENU = [...REF_ONLY, 'sessions.switchAgent'] as const;
+
 describe('белый список против запретного списка', () => {
   it('ничего из списков этапов A, B и C не запрещено, и наоборот', () => {
     for (const [stage, lists] of stages) {
@@ -37,7 +40,7 @@ describe('белый список против запретного списка
   it('то, что телефону нельзя никогда, не лежит ни в одном этапе (в том числе `settings.set`)', () => {
     const mustBeForbidden = [
       'settings.set', 'settings.get', 'host.shutdown', 'wake.now', 'pty.input', 'pty.resize', 'works.create', 'works.delete',
-      'sessions.delete', 'sessions.close', 'rooms.delete', 'rooms.archive', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
+      'sessions.delete', 'sessions.rename', 'rooms.delete', 'rooms.archive', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
       'providers.setKey', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
     ];
     for (const name of mustBeForbidden) {
@@ -51,8 +54,8 @@ describe('белый список против запретного списка
   const NOT_DECIDED: readonly string[] = [
     'decisions.list', 'feed.progress', 'history.search', 'providers.authStatus', 'providers.cancelSignIn', 'providers.deleteCustom',
     'providers.saveCustom', 'providers.signIn', 'providers.signInInput', 'providers.signInResize', 'providers.signOut', 'recipes.list',
-    'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare', 'sessions.interrupted', 'sessions.switchAgent',
-    'sessions.switchOptions', 'swarms.cancel', 'swarms.create', 'swarms.seen',
+    'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare', 'sessions.interrupted',
+    'swarms.cancel', 'swarms.create', 'swarms.seen',
     // Из master после слияния 2026-11-01 (лимиты агентов, сон, закрытие готовых сессий): телефону не открыты.
     'capacity.get', 'sessions.setKeepAwake', 'works.setCloseFinished',
     // Из master 0.27.0 (ограниченная синхронизация окна, #164): мост остаётся на works.list / works.changed.
@@ -80,6 +83,43 @@ describe('белый список против запретного списка
     expect(REMOTE_STAGES.C.methods).toEqual(REMOTE_STAGES.B.methods);
     for (const m of REMOTE_STAGES.A.methods) expect(REMOTE_STAGES.B.methods).toContain(m);
     expect(REMOTE_STAGES.A.methods).toEqual(expect.arrayContaining(['sessions.create', 'rooms.create', 'rooms.send', 'providers.list', 'roles.list']));
+  });
+
+  it('A38a: меню сессии — этап A, sessions.close не в запретном перечне; удаление, переименование, модель, режим — закрыты', () => {
+    for (const m of MENU) {
+      expect(REMOTE_STAGES.A.methods, m).toContain(m);
+      expect(isRemoteForbidden(m), m).toBe(false);
+    }
+    for (const m of ['sessions.delete', 'sessions.rename', 'sessions.setModel', 'sessions.setMode', 'sessions.compact', 'sessions.setKeepAwake']) {
+      expect(REMOTE_STAGES.A.methods as readonly string[], m).not.toContain(m);
+    }
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+    for (const m of REF_ONLY) {
+      expect(checkRemoteParams(m, { ref }), m).toBe(true);
+      for (const params of [{ ref, extra: 1 }, { ref: { ...ref, x: 1 } }, {}, { ref: { ...ref, sessionId: '' } }, { ref: { projectPath: '/p', workId: 'w-1' } }]) {
+        expect(checkRemoteParams(m, params), `${m} ${JSON.stringify(params)}`).toBe(false);
+      }
+    }
+    const sw = { ref, requestId: '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f', provider: 'codex' };
+    expect(checkRemoteParams('sessions.switchAgent', sw)).toBe(true);
+    expect(checkRemoteParams('sessions.switchAgent', { ...sw, model: 'gpt-6', effort: 'high', carry: 'transcript' })).toBe(true);
+    expect(checkRemoteParams('sessions.switchAgent', { ...sw, model: null, effort: null, carry: 'handover' })).toBe(true);
+    for (const extra of [
+      { force: true },
+      { force: false },
+      { requestId: 'not-a-uuid' },
+      { requestId: undefined },
+      { provider: '' },
+      { provider: 'x'.repeat(65) },
+      { model: 'm'.repeat(201) },
+      { model: 7 },
+      { effort: 'High!' },
+      { carry: 'everything' },
+      { ref: { ...ref, workId: '' } },
+      { label: 'x' },
+    ]) {
+      expect(checkRemoteParams('sessions.switchAgent', { ...sw, ...extra }), JSON.stringify(extra)).toBe(false);
+    }
   });
 
   it('A37a: sessions.resume — этап A; правило: ключ только ref со строгими projectPath, workId, sessionId', () => {
@@ -147,6 +187,11 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
       'sessions.delete': vi.fn(async () => ({ ok: true })),
       'host.info': vi.fn(async () => ({})),
       'sessions.resume': vi.fn(async () => ({ ok: true })),
+      'feed.interrupt': vi.fn(async () => ({ ok: true })),
+      'sessions.stop': vi.fn(async () => ({ ok: true })),
+      'sessions.close': vi.fn(async () => ({ ok: true })),
+      'sessions.switchOptions': vi.fn(async () => ({ current: { provider: 'claude', available: true, reason: null }, targets: [], suggested: null, keeps: { rooms: 0, leads: [], owns: [], children: 0, unread: 0, worktree: null }, blockers: [] })),
+      'sessions.switchAgent': vi.fn(async () => ({ outcome: 'started', carried: 'handover' })),
     };
     const pty = { input: vi.fn(), resize: vi.fn() };
     const server = createHostServer({
@@ -163,7 +208,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
         roomAutonomous: () => false,
         projectKnown: (projectPath) => projectPath === '/p',
         workKnown: (projectPath, workId) => projectPath === '/p' && workId === 'w-1',
-        sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping' }),
+        sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true }),
       },
     });
     await new Promise<void>((r) => server.listen(socketPath, r));
@@ -259,6 +304,31 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
     expect(await codeOf(h.link.call('sessions.create', { ...sessionParams, effort: 'high' }))).toBe('bad_request');
     expect(h.spies['rooms.create']).not.toHaveBeenCalled();
     expect(h.spies['sessions.create']).not.toHaveBeenCalled();
+  });
+
+  it('A38a: меню сессии за переключателем; известная работа; force у switchAgent — bad_request до обработчика', async () => {
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-1' };
+    const sw = { ref, requestId: '0b6e5d3c-1a2b-4c3d-8e9f-0a1b2c3d4e5f', provider: 'codex' };
+    const paramsOf = (m: string): Record<string, unknown> => (m === 'sessions.switchAgent' ? sw : { ref });
+    const off = await hostWith({ enabled: false, open: true });
+    for (const m of MENU) {
+      expect(off.link.methods, m).not.toContain(m);
+      expect(await codeOf(off.link.call(m, paramsOf(m))), m).toBe('unknown_method');
+      expect(off.spies[m], m).not.toHaveBeenCalled();
+    }
+    const h = await hostWith({ enabled: true, open: true });
+    for (const m of MENU) {
+      expect(h.link.methods, m).toContain(m);
+      expect(await codeOf(h.link.call(m, paramsOf(m))), m).toBe('ok');
+      expect(await codeOf(h.link.call(m, { ...paramsOf(m), ref: { ...ref, projectPath: '/etc' } })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...paramsOf(m), ref: { ...ref, workId: 'w-9' } })), m).toBe('bad_request');
+      expect(await codeOf(h.link.call(m, { ...paramsOf(m), extra: 1 })), m).toBe('bad_request');
+      expect(h.spies[m], m).toHaveBeenCalledTimes(1);
+    }
+    expect(await codeOf(h.link.call('sessions.switchAgent', { ...sw, force: true }))).toBe('bad_request');
+    expect(h.spies['sessions.switchAgent']).toHaveBeenCalledTimes(1);
+    // Удаление с телефона по-прежнему закрыто.
+    expect(await codeOf(h.link.call('sessions.delete', { ref }))).toBe('unknown_method');
   });
 
   it('A37a: sessions.resume за переключателем; известная работа; лишний ключ — bad_request до обработчика', async () => {
