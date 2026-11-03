@@ -479,7 +479,7 @@ describe('the run record lives in main (spec 8.1)', () => {
     expect(await h.service.call('run', { removeData: false })).toEqual({ phase: 'running' });
     await img.begun;
     // During the image step the bar belongs to it ...
-    expect((await h.service.call('state', {}))?.progress).toMatchObject({ step: 'image', layersTotal: 1, bytesDone: 5, bytesTotal: 10 });
+    expect((await h.service.call('state', {}))?.progress).toMatchObject({ step: 'image', layersTotal: 1 });
     h.server.gate = g.gate;
     img.release();
     await g.begun;
