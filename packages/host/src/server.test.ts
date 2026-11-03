@@ -1053,6 +1053,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
           return { ref: { projectPath: params.projectPath, workId: params.workId ?? 'w-02', sessionId: 's-09' } };
         }),
         'pty.send': vi.fn(async () => ({ inserted: true, submitted: true })),
+        'sessions.resume': vi.fn(async () => ({ ok: true })),
         'trust.check': vi.fn(async () => ({ trusted: false })),
         'consents.list': vi.fn(async () => ({ items: [] })),
         'consents.decide': vi.fn(async () => ({ applied: true, state: 'allowed' })),
@@ -1129,6 +1130,43 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect(desktop.methods).toContain('consents.decide');
       expect((await answer(desktop.client, 608, 'consents.decide', { id: 'c-01', decision: 'deny' })).error).toBeUndefined();
       expect((await answer(desktop.client, 606, 'pty.send', { ref: { projectPath: '/other', workId: 'w-09', sessionId: 's-09' }, text: 'x', submit: true })).error).toBeUndefined();
+      s.close();
+    });
+
+    it('A37a: sessions.resume — за переключателем, правило параметров и известная работа до обработчика', async () => {
+      const s = await a28Server({ enabled: false });
+      const off = await s.connect('remote');
+      expect(off.methods).not.toContain('sessions.resume');
+      expect((await answer(off.client, 900, 'sessions.resume', { ref })).error).toMatchObject({ code: 'unknown_method' });
+      expect(s.spies['sessions.resume']).not.toHaveBeenCalled();
+      // Окно переключатель не трогает.
+      const desktop = await s.connect('desktop');
+      expect(desktop.methods).toContain('sessions.resume');
+      expect((await answer(desktop.client, 901, 'sessions.resume', { ref: { projectPath: '/other', workId: 'w-09', sessionId: 's-09' } })).error).toBeUndefined();
+      expect(s.spies['sessions.resume']).toHaveBeenCalledTimes(1);
+
+      s.state.enabled = true;
+      const remote = await s.connect('remote');
+      expect(remote.methods).toContain('sessions.resume');
+      expect((await answer(remote.client, 902, 'sessions.resume', { ref })).error).toBeUndefined();
+      expect(s.spies['sessions.resume']).toHaveBeenLastCalledWith({ ref }, expect.anything());
+      let id = 910;
+      // Правило параметров: лишний ключ, нет поля `ref`, пустое поле — bad_request.
+      for (const params of [
+        { ref, extra: 1 },
+        { ref: { ...ref, extra: 'x' } },
+        {},
+        { ref: { projectPath: '/p', workId: 'w-01' } },
+        { ref: { ...ref, sessionId: '' } },
+        { ref: { ...ref, workId: 7 } },
+      ]) {
+        expect((await answer(remote.client, ++id, 'sessions.resume', params)).error, JSON.stringify(params)).toMatchObject({ code: 'bad_request' });
+      }
+      // Чужой проект или работа — bad_request до обработчика.
+      for (const target of [{ ...ref, projectPath: '/other' }, { ...ref, workId: 'w-99' }]) {
+        expect((await answer(remote.client, ++id, 'sessions.resume', { ref: target })).error).toMatchObject({ code: 'bad_request', message: 'unknown project or work' });
+      }
+      expect(s.spies['sessions.resume']).toHaveBeenCalledTimes(2);
       s.close();
     });
 
@@ -1504,6 +1542,48 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         desktop.client.close();
       } finally {
         delete process.env['PARLEY_CLAUDE_BIN'];
+      }
+    }, 40_000);
+
+    it('A37a: sessions.resume с телефона — спящий Claude с не решёнными серверами .mcp.json удержан карточкой project-mcp', async () => {
+      // Решения Claude читаются из дома человека: пустой дом, чтобы настройки машины не решили за карточку.
+      const saved = { home: process.env['HOME'], config: process.env['CLAUDE_CONFIG_DIR'] };
+      const userHome = await mkdtemp(path.join(tmpdir(), 'parley-remote-user-'));
+      projects.push(userHome);
+      process.env['HOME'] = userHome;
+      delete process.env['CLAUDE_CONFIG_DIR'];
+      process.env['PARLEY_CLAUDE_BIN'] = STUB;
+      try {
+        const { home, token } = await boot();
+        const p = await project();
+        const sessionId = p.sessions[0]!;
+        await updateMap(p.dir, p.workId, (current) => {
+          const target = current.sessions.find((entry) => entry.id === sessionId);
+          if (target) target.lifecycle = 'sleeping';
+        });
+        await writeFile(path.join(p.dir, '.mcp.json'), JSON.stringify({ mcpServers: { github: { type: 'stdio', command: 'node', args: ['gh.js'] } } }));
+        const remote = await connectAs(home, token, 'remote');
+        expect(remote.methods).toContain('sessions.resume');
+        await waitWork(remote.client, p.workId);
+        const ref = { projectPath: p.dir, workId: p.workId, sessionId };
+
+        expect((await answer(remote.client, 800, 'sessions.resume', { ref })).error).toBeUndefined();
+        const listed = await answer(remote.client, 801, 'consents.list', {});
+        const cards = (listed.result as { items: Array<Record<string, unknown>> }).items;
+        expect(cards).toHaveLength(1);
+        expect(cards[0]).toMatchObject({
+          kind: 'project-mcp',
+          requestedBy: { source: 'resume', workId: p.workId },
+          servers: [expect.objectContaining({ name: 'github' })],
+        });
+        const map = await readMap(p.dir, p.workId);
+        expect(map.sessions.find((entry) => entry.id === sessionId)?.lifecycle).toBe('sleeping');
+        remote.client.close();
+      } finally {
+        delete process.env['PARLEY_CLAUDE_BIN'];
+        if (saved.home === undefined) delete process.env['HOME'];
+        else process.env['HOME'] = saved.home;
+        if (saved.config !== undefined) process.env['CLAUDE_CONFIG_DIR'] = saved.config;
       }
     }, 40_000);
   });

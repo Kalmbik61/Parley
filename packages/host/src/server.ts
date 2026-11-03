@@ -87,10 +87,16 @@ const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATION
 const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
 /**
  * За одним переключателем `remoteCreate` (спека 4.2, правки 17): запуск, сообщение агенту и согласия — `trustFolder`
- * ключом `sessions.create`, `consents.decide` (Allow — доверие к папке или агент на другом провайдере; критик M2).
+ * ключом `sessions.create`, `consents.decide` (Allow — доверие к папке или агент на другом провайдере; критик M2),
+ * `sessions.resume` (пробуждение спящей сессии, правки 19; цель — известный проект и работа по `ref`).
  * `providers.list`, `roles.list`, `consents.list` и `trust.check` — чтение.
  */
-const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([...REMOTE_LAUNCH_METHODS, 'pty.send', 'consents.decide']);
+const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
+  ...REMOTE_LAUNCH_METHODS,
+  'pty.send',
+  'consents.decide',
+  'sessions.resume',
+]);
 
 /**
  * Клиенты, чей сокет уже закрыт: после `await` записи доверия запуск для ушедшего телефона не идёт (критик m9).

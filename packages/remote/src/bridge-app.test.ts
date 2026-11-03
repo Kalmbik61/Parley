@@ -1322,4 +1322,28 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(host.calls.filter((c) => c.method !== 'trust.check')).toHaveLength(6);
     expect(actions).toEqual([]);
   });
+
+  it('A37a: sessions.resume is mutating: audited with the session as target, limited, no phone.action; a bad ref is bad_request before the host', async () => {
+    call(D, 'bad', 'sessions.resume', { ref: { ...ref('s-1'), sessionId: '' } });
+    await flush();
+    expect(answer('bad')).toMatchObject({ error: { code: 'bad_request' } });
+    expect(host.calls.filter((c) => c.method === 'sessions.resume')).toEqual([]);
+    call(D, 'a', 'sessions.resume', { ref: ref('s-1') });
+    await flush();
+    expect(answer('a')).toMatchObject({ result: { ok: true } });
+    expect(host.calls.filter((c) => c.method === 'sessions.resume')).toHaveLength(1);
+    expect(audits).toEqual([
+      expect.objectContaining({ kind: 'call-refused', method: 'sessions.resume', outcome: 'bad_request' }),
+      expect.objectContaining({ kind: 'call', method: 'sessions.resume', deviceId: D, target: 's-1', outcome: 'ok' }),
+    ]);
+    for (let i = 0; i < 29; i++) {
+      call(D, `m${i}`, 'sessions.resume', { ref: ref('s-1') });
+      await flush();
+    }
+    call(D, 'over', 'sessions.resume', { ref: ref('s-1') });
+    await flush();
+    expect(host.calls.filter((c) => c.method === 'sessions.resume')).toHaveLength(30);
+    expect(answer('over')).toMatchObject({ error: { code: 'rate_limited' } });
+    expect(actions).toEqual([]);
+  });
 });
