@@ -569,6 +569,7 @@ describe('parley-core work session new', () => {
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
+      'check_for_update_on_startup',
     ]);
     const mcp = overrides[0] as string;
     expect(mcp).toContain(`PARLEY_HOME=${JSON.stringify(home)}`);

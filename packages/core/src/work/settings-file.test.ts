@@ -91,6 +91,24 @@ describe('выключение плагинов в сессии (сокраще�
   });
 });
 
+describe('решения о серверах MCP проекта (спека 2026-11-02, 7)', () => {
+  it('без projectMcp или с пустыми списками файл побайтно прежний', () => {
+    const plain = workSettingsJson({});
+    expect(workSettingsJson({ projectMcp: { enabled: [], disabled: [] } })).toBe(plain);
+    expect(workSettings({}) as unknown as Record<string, unknown>).not.toHaveProperty('enabledMcpjsonServers');
+  });
+
+  it('enabledMcpjsonServers и disabledMcpjsonServers — только эти два ключа добавляются, хуки и statusLine на месте', () => {
+    const base = workSettings({ model: 'sonnet' });
+    const withMcp = workSettings({ model: 'sonnet', projectMcp: { enabled: ['a', 'a'], disabled: ['b'] } });
+    expect(withMcp).toEqual({ ...base, enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] });
+  });
+
+  it('только выключенные: enabledMcpjsonServers — пустой список, а не отсутствие ключа', () => {
+    expect(workSettings({ projectMcp: { enabled: [], disabled: ['a', 'b'] } })).toMatchObject({ enabledMcpjsonServers: [], disabledMcpjsonServers: ['a', 'b'] });
+  });
+});
+
 describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, решение 1)', () => {
   const URL = 'http://127.0.0.1:53123/hooks';
 

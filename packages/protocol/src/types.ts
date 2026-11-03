@@ -35,6 +35,16 @@ export const PROVIDER_CHECK_REASONS = [
   'network',
   'unsupported_response',
 ] as const;
+/**
+ * Новая версия CLI провайдера (`providers.list.update`, спека 2026-11-02): `method` — способ установки
+ * (`standalone`, `npm`, `brew`, `native`, `unknown`), `checkedAt` — ISO-время последнего запроса источника.
+ */
+export interface CliUpdate {
+  latest: string;
+  method: string;
+  checkedAt: string;
+}
+
 export type ProviderCheckReason = (typeof PROVIDER_CHECK_REASONS)[number];
 
 /**

@@ -27,6 +27,7 @@ import {
   PARLEY,
   providerLabel,
   updateMap,
+  userClaudeConfigDir,
   migrateMapsToDb,
   migrateProjects,
   parleyHome,
@@ -72,6 +73,7 @@ import { createPressureSensor } from './capacity/memory-pressure.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createConsentsService } from './consents/consents-service.js';
 import { createHeldLaunchActions } from './consents/held-launches.js';
+import { createProjectMcp } from './consents/project-mcp.js';
 import { createContextService } from './context/context-service.js';
 import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
@@ -86,6 +88,8 @@ import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
+import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
+import { createCliUpdateRunner } from './providers/update-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createSender } from './pty/send.js';
@@ -132,6 +136,11 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  /**
+   * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
+   * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
+   */
+  cliUpdates?: Pick<CliUpdatesOptions, 'fetchImpl' | 'home' | 'userHome' | 'env' | 'now'>;
   /**
    * Лимиты подписок (спека комнат Organic, 3.5): корень логов Codex, часы и период опроса. Боевой хост
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
@@ -529,10 +538,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let sessionsService!: ReturnType<typeof createSessionsService>;
   let wakeService!: ReturnType<typeof createWakeService>;
   /* eslint-enable prefer-const */
+  // Серверы MCP из `.mcp.json` проекта (спека 2026-11-02, 7): решения Parley лежат в `<parleyHome>/mcp-consent.json`,
+  // собственные решения Claude только читаются.
+  const projectMcp = createProjectMcp({
+    home: parleyHome(),
+    userHome: os.homedir(),
+    claudeConfigDir: userClaudeConfigDir(),
+    log: handle.context.log,
+  });
   const consentsService = createConsentsService({
     home: parleyHome(),
     host: handle.context,
     trust: { grant: (folder, by) => grantTrust(folder, by) },
+    projectMcp: projectMcp.store,
     ...createHeldLaunchActions({
       launch: (ref, mode, launchOptions) => sessionsService.launch(ref, mode, launchOptions),
       close: (ref) => sessionsService.close(ref),
@@ -597,6 +615,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     {
       capacity: capacityService,
       consents: consentsService,
+      projectMcp,
       hooks: hookServer,
       providerVersions,
       signedIn: accountSignedIn,
@@ -839,6 +858,33 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   worksReady.catch(() => undefined);
 
   // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
+  // Проверка версий CLI: фон со своим таймером, старт хоста, `providers.list` и запуск сессий её не ждут.
+  const cliUpdates =
+    options.cliUpdates === undefined
+      ? undefined
+      : createCliUpdates({
+          ...options.cliUpdates,
+          log,
+          onChange: (command) => handle.context.broadcast('providers.changed', { provider: command }),
+        });
+  cliUpdates?.start();
+  // Обновление CLI по просьбе человека (`providers.update`): сессии считаются, но не трогаются.
+  const cliUpdateRunner =
+    cliUpdates === undefined
+      ? undefined
+      : createCliUpdateRunner({
+          log,
+          versions: providerVersions,
+          updates: cliUpdates,
+          ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
+          runningSessions: async (command) => {
+            const registry = await loadProviders();
+            return ptyManager.list().filter((pty) => pty.provider !== null && registry[pty.provider]?.runner.command === command).length;
+          },
+        });
+  handle.context.onShutdown(async () => cliUpdateRunner?.stop());
+  handle.context.onShutdown(async () => cliUpdates?.stop());
+
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
   const customCheck = createCustomCheckService(handle.context, options.customCheck);
 
@@ -857,6 +903,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     history,
     worksReady,
     providerVersions,
+    ...(cliUpdates === undefined ? {} : { cliUpdates }),
+    ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
     codexCatalog,
     limits: limitsService,
     glmCheck,

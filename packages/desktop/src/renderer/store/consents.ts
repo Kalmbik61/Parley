@@ -13,6 +13,7 @@ import type { WindowWorkEntry } from '@parley/core';
 import type { AgentSwitchCard, ConsentCard, FolderTrustCard } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
+import { isKnownConsent } from '../lib/known-consent.js';
 import { sessionRowLabel } from '../lib/participant.js';
 
 type ConsentBridge = Pick<ParleyBridge, 'call' | 'on'>;
@@ -25,7 +26,8 @@ export interface ConsentsState {
   /** Подписывается на мост и один раз запрашивает `consents.list`; возвращает отписку. */
   init: (bridge: ConsentBridge) => () => void;
   /** `consents.decide`; ошибку хоста бросает вызывающему (тост — у него). */
-  decide: (id: string, decision: 'allow' | 'deny') => Promise<{ applied: boolean }>;
+  /** `enabled` и `revision` — только для карточки `project-mcp`: включённые пары и номер списка, который видел человек. */
+  decide: (id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number) => Promise<{ applied: boolean }>;
   ask: (id: string) => void;
   stopAsking: () => void;
 }
@@ -45,11 +47,11 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
     const gone = new Set<string>();
     const apply = (upsert: readonly ConsentCard[], removed: readonly string[]): void => {
       for (const id of removed) gone.add(id);
-      for (const card of upsert) if (card.state !== 'pending') gone.add(card.id);
+      for (const card of upsert) if (card.state !== 'pending' || !isKnownConsent(card)) gone.add(card.id);
       set((state) => {
         const next = new Map(state.cards.map((card) => [card.id, card]));
         for (const id of gone) next.delete(id);
-        for (const card of upsert) if (card.state === 'pending') next.set(card.id, card);
+        for (const card of upsert) if (card.state === 'pending' && isKnownConsent(card)) next.set(card.id, card);
         return { cards: [...next.values()] };
       });
     };
@@ -60,7 +62,7 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
         // Событие свежее снимка: карточка, что уже пришла событием, остаётся его версией.
         set((state) => {
           const known = new Set(state.cards.map((card) => card.id));
-          const fresh = result.items.filter((card) => card.state === 'pending' && !gone.has(card.id) && !known.has(card.id));
+          const fresh = result.items.filter((card) => card.state === 'pending' && isKnownConsent(card) && !gone.has(card.id) && !known.has(card.id));
           return { cards: [...fresh, ...state.cards] };
         });
       },
@@ -76,9 +78,9 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
       unsubscribe();
     };
   },
-  decide: async (id, decision) => {
+  decide: async (id, decision, enabled, revision) => {
     if (current === null) throw new Error('consents: not connected');
-    const { applied } = await current.call('consents.decide', { id, decision });
+    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }) });
     return { applied };
   },
   ask: (id) => set({ asking: id }),
@@ -104,7 +106,7 @@ export function trustCardFor(
  * Кто просил, для диалога: «S03 Ruslan · create_session». Просившая сессия берётся из карты работы карточки, нет её
  * (человек, автозапуск, сессия уже ушла) — ярлык карточки, нет и его — один источник.
  */
-export function consentRequester(card: FolderTrustCard, entries: readonly WindowWorkEntry[]): string {
+export function consentRequester(card: Pick<FolderTrustCard, 'requestedBy' | 'projectPath'>, entries: readonly WindowWorkEntry[]): string {
   const { requestedBy } = card;
   const via = S.dialogs.trustFolder.via[requestedBy.source];
   const session =

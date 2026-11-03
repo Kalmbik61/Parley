@@ -20,6 +20,7 @@ import { PILL } from '../providers/pill.js';
 import { CustomProviderPanel } from '../providers/CustomProviderPanel.js';
 import { accountOf } from '../providers/custom-provider-draft.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
+import { ProviderUpdateRow } from '../providers/ProviderUpdateRow.js';
 
 const CORE_IDS = ['claude', 'codex', 'glm'] as const;
 
@@ -80,6 +81,9 @@ export function ProvidersSettings(): JSX.Element {
           <span>{S.statusBar.addProvider}</span>
         </button>
       </div>
+      {/* GLM и свои провайдеры делят CLI `claude`: строка обновления только у самих Claude Code и Codex. */}
+      {current !== undefined && current.custom == null && (current.id === 'claude' || current.id === 'codex') ?
+        <ProviderUpdateRow key={current.id} provider={current} onReload={reload} /> : null}
       {current !== undefined && current.custom == null ?
         <ProviderCard provider={current} onReload={reload} onRestartHost={() => useUiStore.getState().confirmRestartHost()} /> :
         <CustomProviderPanel

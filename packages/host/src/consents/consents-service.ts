@@ -13,8 +13,10 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { refKey } from '@parley/protocol';
-import type { AgentSwitchCard, ConsentCard, FolderTrustCard, SessionRef, TrustRecord } from '@parley/protocol';
+import type { AgentSwitchCard, ConsentCard, FolderTrustCard, ProjectMcpCard, SessionRef, TrustRecord } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { HostError } from '../errors.js';
+import type { McpConsentStore } from './project-mcp.js';
 
 /** Запуск, остановленный до согласия: его продолжает или отвергает решение человека. */
 export interface HeldLaunch {
@@ -43,14 +45,27 @@ export interface ConsentsService {
    */
   requestSwitch(input: Omit<AgentSwitchCard, 'id' | 'kind' | 'projectPath' | 'at' | 'state'>): ConsentCard;
   /**
+   * Новые серверы MCP из `.mcp.json` перед запуском Claude (спека 2026-11-02, 7): одна карточка `project-mcp` на репозиторий,
+   * второй запуск добавляет к ней своё удержание и недостающие серверы (`revision` растёт). Запуск ждёт решения человека.
+   * Серверы, о которых решение уже записано (человек решил, пока запуск шёл), в карточку не попадают; не осталось ни
+   * одного — `null`: спрашивать нечего, запуск идёт сразу.
+   */
+  requestProjectMcp(
+    input: { projectPath: string; repo: string; servers: ProjectMcpCard['servers']; requestedBy: ProjectMcpCard['requestedBy'] },
+    hold: HeldLaunch,
+  ): ConsentCard | null;
+  /**
    * `by` — откуда пришло решение (запись в `trust.json`); окно и остров — `window`. Второе решение по той же
    * карточке — `applied: false`. Продолжение или отказ удержанных запусков идут в фоне: ответ не ждёт запуска
-   * процессов.
+   * процессов. `enabled` — только для `project-mcp`: пары имя и отпечаток ровно из нынешней карточки; несовпавшая пара —
+   * `bad_request`, до всякого изменения.
    */
   decide(
     id: string,
     decision: 'allow' | 'deny',
     by?: TrustRecord['by'],
+    enabled?: ReadonlyArray<{ name: string; fingerprint: string }>,
+    revision?: number,
   ): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
   onChange(listener: (change: ConsentChange) => void): () => void;
   stop(): void;
@@ -60,6 +75,8 @@ export interface ConsentsDeps {
   home: string;
   host: Pick<HostContext, 'broadcast' | 'log'>;
   trust: { grant(folder: string, by: TrustRecord['by']): Promise<unknown> };
+  /** Решения о серверах MCP (`mcp-consent.json`): сюда решение `project-mcp` записывается перед продолжением запуска. */
+  projectMcp?: Pick<McpConsentStore, 'record' | 'lookup'>;
   continueLaunch(hold: HeldLaunch): Promise<void>;
   refuseLaunch(hold: HeldLaunch): Promise<void>;
   /** Замена агента от имени человека: `allow` карточки `agent-switch` (`requestId` — id карточки). */
@@ -122,7 +139,16 @@ function validCard(value: unknown): value is ConsentCard {
         (value['model'] === null || typeof value['model'] === 'string') &&
         typeof value['reason'] === 'string' &&
         typeof value['requestedBy']['sessionId'] === 'string'
-      : value['kind'] === 'folder-trust' && typeof value['folder'] === 'string')
+      : value['kind'] === 'project-mcp'
+        ? value['version'] === 1 &&
+          Number.isInteger(value['revision']) &&
+          (value['revision'] as number) >= 1 &&
+          typeof value['repo'] === 'string' &&
+          Array.isArray(value['servers']) &&
+          value['servers'].every(
+            (server) => isRecord(server) && typeof server['name'] === 'string' && typeof server['fingerprint'] === 'string' && typeof server['command'] === 'string',
+          )
+        : value['kind'] === 'folder-trust' && typeof value['folder'] === 'string')
   );
 }
 
@@ -337,11 +363,78 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       return { ...card };
     },
 
-    async decide(id, decision, by = 'window') {
+    requestProjectMcp(input, hold) {
+      // Решение могло быть записано, пока запуск готовился (гонка с карточкой, которую только что закрыли): такие серверы
+      // не спрашиваем, а если спрашивать нечего — не держим запуск.
+      const servers = input.servers.filter((server) => deps.projectMcp?.lookup(input.repo, server.name, server.fingerprint) === undefined);
+      if (servers.length === 0) return null;
+      const existing = pending().find((card): card is ProjectMcpCard => card.kind === 'project-mcp' && card.repo === input.repo);
+      if (existing !== undefined) {
+        // Событие — только когда у карточки изменился список серверов; новое удержание окно не касается.
+        let changed = false;
+        for (const server of servers) {
+          if (!existing.servers.some((known) => known.name === server.name && known.fingerprint === server.fingerprint)) {
+            // Тот же сервер с другим отпечатком заменяет прежнюю строку: решение будет о нынешнем.
+            existing.servers = [...existing.servers.filter((known) => known.name !== server.name), server];
+            changed = true;
+          }
+        }
+        const holds = state.holds[existing.id] ?? [];
+        const same = (candidate: HeldLaunch): boolean => refKey(candidate.ref) === refKey(hold.ref) && candidate.mode === hold.mode;
+        if (!holds.some(same)) state.holds[existing.id] = [...holds, hold];
+        if (changed) existing.revision += 1;
+        save();
+        if (changed) emit({ upsert: [{ ...existing }], removed: [] });
+        return { ...existing };
+      }
+      state.seq += 1;
+      const card: ProjectMcpCard = {
+        id: `c-${String(state.seq).padStart(2, '0')}`,
+        kind: 'project-mcp',
+        version: 1,
+        revision: 1,
+        repo: input.repo,
+        servers: servers.map((server) => ({ ...server })),
+        projectPath: input.projectPath,
+        requestedBy: input.requestedBy,
+        at: new Date().toISOString(),
+        state: 'pending',
+      };
+      state.cards.push(card);
+      state.holds[card.id] = [hold];
+      save();
+      emit({ upsert: [{ ...card }], removed: [] });
+      return { ...card };
+    },
+
+    async decide(id, decision, by = 'window', enabled, revision) {
       const card = state.cards.find((candidate) => candidate.id === id);
       // Незнакомая карточка — уже закрытая (решена давно и забыта): «уже решено», а не ошибка.
       if (card === undefined) return { applied: false, state: 'denied' };
       if (card.state !== 'pending') return { applied: false, state: card.state };
+      if (card.kind === 'project-mcp') {
+        // Включается только то, что человек назвал и что есть в карточке; отказ и ответ без списка — всё выключено.
+        // Чужое имя отвергается до любого изменения: карточка остаётся ждать.
+        // Решение привязано к тому, что человек видел: имя И отпечаток должны совпасть с нынешней карточкой (список мог
+        // смениться, пока он смотрел). Всё остальное в карточке записывается выключенным.
+        // Ещё и номер списка: решение о карточке, которую человек видел, а не о той, что стала другой за это время.
+        if (revision !== card.revision) throw new HostError('bad_request', 'The MCP server list changed since the card was shown');
+        const pairs = decision === 'allow' ? (enabled ?? []) : [];
+        const current = new Map(card.servers.map((server) => [server.name, server.fingerprint]));
+        if (pairs.some((pair) => current.get(pair.name) !== pair.fingerprint)) throw new HostError('bad_request', 'Unknown or changed MCP server in the decision');
+        const chosen = new Set(pairs.map((pair) => pair.name));
+        card.state = decision === 'allow' ? 'allowed' : 'denied';
+        // Решение о каждом названном в карточке сервере, и о выключенных тоже: иначе вопрос повторялся бы.
+        deps.projectMcp?.record(card.repo, card.servers.map((server) => ({ name: server.name, fingerprint: server.fingerprint, enabled: chosen.has(server.name) })), by);
+        const heldLaunches = state.holds[id] ?? [];
+        delete state.holds[id];
+        trimDecided();
+        save();
+        // Запуск идёт в любом случае: отказ значит «без этих серверов», а не «без сессии».
+        for (const hold of heldLaunches) void run('continuation', hold, deps.continueLaunch);
+        emit({ upsert: [], removed: [id] });
+        return { applied: true, state: card.state };
+      }
       // Решение занимается синхронно: второе нажатие, пришедшее за время записи доверия, получит `applied: false`.
       card.state = decision === 'allow' ? 'allowed' : 'denied';
       if (card.kind === 'agent-switch') {

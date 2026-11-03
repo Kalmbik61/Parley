@@ -492,6 +492,7 @@ describe('create(): модель и усилие из диалога (дизай
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
+      'check_for_update_on_startup',
     ]);
     // Ключ доверия — realpath проекта (на macOS `/var` и `/private/var` — одна папка).
     expect(overrides.find((override) => override.startsWith('projects='))).toContain(await realpath(project));

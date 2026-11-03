@@ -9,8 +9,10 @@
 import { useEffect, useState } from 'react';
 import type { ConsentCard } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
+import { isKnownConsent } from '../../lib/known-consent.js';
 import { shortenMiddle } from '../../lib/shorten-middle.js';
 import { switchRequestText } from '../../store/consents.js';
+import { ProjectMcpServerList, repoName, useServerSelection } from '../../components/dialogs/ProjectMcpServers.js';
 import { Button } from '../../ui/button.js';
 import { CARD_ARM_MS } from '../arm.js';
 
@@ -18,8 +20,8 @@ export interface ConsentViewProps {
   card: ConsentCard;
   /** Решение по этой карточке в пути. */
   deciding: boolean;
-  note: 'done' | 'elsewhere' | 'failed' | null;
-  onDecide(id: string, decision: 'allow' | 'deny'): void;
+  note: 'done' | 'elsewhere' | 'failed' | 'stale' | null;
+  onDecide(id: string, decision: 'allow' | 'deny', enabled?: Array<{ name: string; fingerprint: string }>, revision?: number): void;
 }
 
 export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps): JSX.Element {
@@ -34,6 +36,36 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
     };
   }, [card.id]);
   const disabled = deciding || !armed;
+  const selection = useServerSelection(card.kind === 'project-mcp' ? card.servers : []);
+  // Карточка серверов MCP (спека 2026-11-02, 7): выбор серверов, а не доверие к папке.
+  if (card.kind === 'project-mcp') {
+    if (!isKnownConsent(card)) return <></>;
+    const text = S.dialogs.projectMcp;
+    const who = card.requestedBy.label ?? card.requestedBy.sessionId ?? '—';
+    return (
+      <div data-testid="island-card" className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
+        <div data-testid="island-project-mcp-title" className="font-semibold text-foreground">{text.title(repoName(card.repo))}</div>
+        <div title={card.repo} className="font-mono text-[11px] text-muted-foreground [overflow-wrap:anywhere]">{shortenMiddle(card.repo)}</div>
+        <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{S.island.consentRequestedBy(who, S.island.consentSource[card.requestedBy.source])}</div>
+        <ProjectMcpServerList servers={card.servers} isOn={selection.isOn} toggle={selection.toggle} disabled={deciding || !armed || note === 'done'} />
+        {note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.consentAnswered}</div> : null}
+        {note === 'failed' ? <div className="text-[var(--status-warning-text)]">{S.island.consentFailed}</div> : null}
+        {note === 'stale' ? <div data-testid="island-project-mcp-stale" className="text-[var(--status-warning-text)]">{text.stale}</div> : null}
+        {note === 'done' ? (
+          <div data-testid="island-consent-done" className="text-[var(--color-accent)]">{S.island.consentDone}</div>
+        ) : note === 'elsewhere' ? null : (
+          <div className="flex flex-wrap gap-2">
+            <Button data-testid="island-project-mcp-enable" size="default" className="cursor-pointer text-sm" disabled={deciding || !armed} aria-busy={deciding || undefined} onClick={() => onDecide(card.id, 'allow', selection.enabled, card.revision)}>
+              {text.enable}
+            </Button>
+            <Button data-testid="island-project-mcp-reject" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding || !armed} onClick={() => onDecide(card.id, 'deny', undefined, card.revision)}>
+              {text.rejectAll}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
   const isSwitch = card.kind === 'agent-switch';
   const who = isSwitch ? card.requestedBy.label : (card.requestedBy.label ?? card.requestedBy.sessionId ?? '—');
   return (

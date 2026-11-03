@@ -160,6 +160,8 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * - `tui.notifications` (`approval-requested`, `agent-turn-complete`), способ `osc9` и условие
  *   `always` — те же события уведомлениями терминала; по умолчанию они молчат, пока терминал «в фокусе»,
  *   а для Codex в pty хоста фокус всегда «есть»;
+ * - `check_for_update_on_startup=false` — Codex не показывает на старте выбор «Update available», который
+ *   блокирует сессию, запущенную с телефона; личный конфиг человека не трогается;
  * - `notify` человека не подменяется: конец хода Codex — OSC 9 и журнал (`task_complete`), спека 2026-10-07, 5.5;
  * - `skills.include_instructions` — родной каталог скиллов (`{skillCatalog}`): значение есть только при включённом
  *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
@@ -193,6 +195,8 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   'tui.notification_method="osc9"',
   '-c',
   'tui.notification_condition="always"',
+  '-c',
+  'check_for_update_on_startup=false',
   '-c',
   '{skillCatalog}',
   '{codexHooks}',
