@@ -104,6 +104,7 @@ describe('cardBelongsToSession (M1)', () => {
     expect(cardBelongsToSession(by({ source: 'agent', sessionId: 's', workId: 'w' }), ref)).toBe(true);
     expect(cardBelongsToSession(swit, { projectPath: '/p', workId: 'w', sessionId: 's' })).toBe(true);
     expect(cardBelongsToSession(swit, { ...ref, sessionId: 'x' })).toBe(false);
+    expect(cardBelongsToSession(swit, { ...ref, projectPath: '/q' })).toBe(false);
     expect(cardBelongsToSession(trust, ref)).toBe(false);
   });
 });
