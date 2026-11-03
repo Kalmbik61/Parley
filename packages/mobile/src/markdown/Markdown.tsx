@@ -16,6 +16,9 @@ export function confirmOpen(url: string): void {
   ]);
 }
 
+/** Longer inline code is drawn without the fill: iOS stretches the fill of a wrapped nested Text to the line end. */
+const INLINE_FILL_MAX = 24;
+
 interface Ctx {
   defs: Defs;
   labelOf?: (sessionId: string) => string;
@@ -55,7 +58,7 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
             );
           case 'inlineCode':
             return (
-              <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2), backgroundColor: c.codeFill }]}>
+              <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2) }, (n.value ?? '').length <= INLINE_FILL_MAX && { backgroundColor: c.codeFill }]}>
                 {codeText(n.value ?? '')}
               </Text>
             );
