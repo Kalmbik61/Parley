@@ -10,15 +10,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
 import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
 import { confirmByOwner } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { useCovered } from '../auth/use-covered';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
-import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, type Mentionable } from '../room/model';
+import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
-import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
+import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
+import { SelectTextSheet } from '../feed/SelectTextSheet';
+import type { Selection } from '../feed/selection';
+import { replyQuote, withQuote } from '../feed/reply';
+import { ReplyPlate } from '../ui/ReplyPlate';
 import { ResultSheet } from '../room/ResultSheet';
 import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
 import { roomRuns, runKeyOf } from '../room/room-runs';
@@ -60,11 +65,14 @@ export default function RoomScreen() {
   const covered = useCovered();
   const focused = useIsFocused();
   const [deleted, setDeleted] = useState(false);
+  // Select Text (D1 §9.7, as 9.2); `initial` is a developer-preview selection.
+  const [selectFor, setSelectFor] = useState<{ message: Message; initial?: Selection } | null>(null);
+  useCloseOnLock(selectFor !== null, () => setSelectFor(null));
   // Back after a successful delete: only while this screen is in front, and only if there is somewhere to go (critic m1).
   useEffect(() => {
     if (deleted && focused && router.canGoBack()) router.back();
   }, [deleted, focused]);
-  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void } | null>(null);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void; plate(): void; select(): void; outgoing(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -120,9 +128,11 @@ export default function RoomScreen() {
   };
 
   const onLongPress = (m: Message): void => {
-    ActionSheetIOS.showActionSheetWithOptions({ options: ['Reply', 'Copy', 'Cancel'], cancelButtonIndex: 2 }, (i) => {
-      if (i === 0) chat.setReply(m);
+    haptic.selection();
+    ActionSheetIOS.showActionSheetWithOptions({ options: ['Reply', 'Copy', 'Select Text', 'Cancel'], cancelButtonIndex: 3 }, (i) => {
+      if (i === 0) chat.setReply({ message: m, selected: '' });
       else if (i === 1) void Clipboard.setStringAsync(m.text);
+      else if (i === 2) setSelectFor({ message: m });
     });
   };
   // Demo data has no hello: every menu method counts as present (screenshots).
@@ -246,6 +256,18 @@ export default function RoomScreen() {
     archive,
     remove,
     result: () => void runSession('sleep', previewCall),
+    plate: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) chat.setReply({ message: m, selected: '' });
+    },
+    select: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) setSelectFor({ message: m, initial: { start: 0, end: Math.max(0, m.text.indexOf(' A28')) } });
+    },
+    outgoing: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) chat.seedOut({ id: 'out-demo', text: withQuote('Wave 3 is merged; next A27', 'Why not in parallel with A28?'), typed: 'Why not in parallel with A28?', to: [], replyTo: m.id, at: Date.now(), state: 'sent', note: null, messageId: null });
+    },
     busy: () => {
       roomRuns.seedPending(runKey, { kind: 'sleep', done: 2, total: 4 });
       // The menu reads the facts of the last render: let the screen see the progress first.
@@ -261,6 +283,9 @@ export default function RoomScreen() {
       else if (params.preview === 'delete') p?.remove();
       else if (params.preview === 'result') p?.result();
       else if (params.preview === 'busy') p?.busy();
+      else if (params.preview === 'plate') p?.plate();
+      else if (params.preview === 'select') p?.select();
+      else if (params.preview === 'outgoing') p?.outgoing();
     }, 700);
     return () => clearTimeout(t);
   }, [params.preview, found !== null]);
@@ -278,7 +303,9 @@ export default function RoomScreen() {
   const q = mentionQuery(chat.draft);
   const menu = q === null || hidden.kind === 'hidden' ? null : filterMentionable(mentionables, q.query);
   const to = recipientsOf(chat.draft, chat.chips).map((x) => x.label);
-  const problem = letterProblem(chat.draft);
+  const outgoing = roomOutgoing(chat.draft, chat.reply);
+  // The whole letter is measured, with the selected fragment's quote block (critic A42 M3).
+  const problem = letterProblem(chat.draft) ?? letterProblem(outgoing.text);
   const canSend = hidden.kind === 'input' && hidden.sendEnabled && problem === null && !chat.busy;
   const memberIds = room.members;
 
@@ -412,7 +439,13 @@ export default function RoomScreen() {
                   }}
                 />
               )}
-              {chat.reply !== null && <ReplyPlate message={chat.reply} who={who} onClear={() => chat.setReply(null)} />}
+              {chat.reply !== null && (
+                <ReplyPlate
+                  title={`Reply to ${chat.reply.message.from === 'human' ? 'yourself' : who.label(chat.reply.message.from)}`}
+                  quote={replyQuote(chat.reply.message.text, chat.reply.selected)}
+                  onClear={() => chat.setReply(null)}
+                />
+              )}
               <ToLine names={to} />
               <View style={styles.row}>
                 <Pressable
@@ -453,8 +486,21 @@ export default function RoomScreen() {
         </View>
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
+      <Modal visible={selectFor !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectFor(null)}>
+        {selectFor !== null && (
+          <SelectTextSheet
+            text={selectFor.message.text}
+            {...(selectFor.initial === undefined ? {} : { initial: selectFor.initial })}
+            onClose={() => setSelectFor(null)}
+            onReply={(selected) => {
+              chat.setReply({ message: selectFor.message, selected });
+              setSelectFor(null);
+            }}
+          />
+        )}
+      </Modal>
       {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
-      <Modal visible={run.unseen !== null && !covered && focused} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+      <Modal visible={run.unseen !== null && !covered && focused && selectFor === null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
         {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
       </Modal>
     </View>

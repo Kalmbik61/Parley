@@ -12,6 +12,7 @@ export function Composer({
   onChange,
   onSend,
   busy,
+  measured,
 }: {
   label: string;
   mode: ComposerMode;
@@ -19,6 +20,8 @@ export function Composer({
   onChange(text: string): void;
   onSend(): void;
   busy: boolean;
+  /** What would go (the draft with the reply plate's quote): the 16 KB problem, the counter and ⬆ use it (critic A42 M3). */
+  measured?: string;
 }) {
   const c = useColors();
   if (mode.kind === 'hidden') {
@@ -28,8 +31,9 @@ export function Composer({
       </Text>
     );
   }
-  const problem = messageProblem(draft);
-  const counter = sizeCounter(draft);
+  const whole = measured ?? draft;
+  const problem = messageProblem(draft) ?? messageProblem(whole);
+  const counter = sizeCounter(whole);
   const canSend = mode.sendEnabled && problem === null && !busy;
   return (
     <View style={styles.wrap}>
