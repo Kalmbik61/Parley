@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { openMemoryDb } from '@parley/core';
 import { createCardStore } from '../assistant/cards.js';
-import { MAX_ATTEMPTS, createNotificationStore, jobKey, needsConfirmationKey, type NewNotification } from './store.js';
+import { LEASE_MS, MAX_ATTEMPTS, createNotificationStore, jobKey, needsConfirmationKey, type NewNotification } from './store.js';
 
 const event = (dedupeKey: string, extra: Partial<NewNotification> = {}): NewNotification => ({
   dedupeKey,
@@ -85,7 +85,9 @@ describe('notification store', () => {
     expect(due.map((r) => r.channel)).toEqual(['telegram', 'mobile']);
     const [tg, mobile] = due as [(typeof due)[number], (typeof due)[number]];
     store.markSent(mobile.id, 101);
-    expect(store.dueOutbox(100).map((r) => r.channel)).toEqual(['telegram']);
+    // Выданная запись под арендой: второй вызов её не получает, после аренды — получает.
+    expect(store.dueOutbox(100)).toEqual([]);
+    expect(store.dueOutbox(100 + LEASE_MS).map((r) => r.channel)).toEqual(['telegram']);
 
     let now = 100;
     let row = store.markFailed(tg.id, now)!;
@@ -113,5 +115,39 @@ describe('notification store', () => {
     expect(a.created && b.created).toBe(true);
     expect(lo.markFailed(lo.dueOutbox(0)[0]!.id, 0)?.nextAttemptAt).toBe(2_500);
     expect(hi.markFailed(hi.dueOutbox(0)[0]!.id, 0)?.nextAttemptAt).toBe(5_000);
+  });
+
+  it('outbox: аренда не даёт выдать запись дважды, истёкшая аренда после рестарта возвращает её', () => {
+    const db = openMemoryDb();
+    createNotificationStore(db).write(event('a', { channels: ['t'] }), 0);
+    expect(createNotificationStore(db).dueOutbox(10)).toHaveLength(1);
+    expect(createNotificationStore(db).dueOutbox(11)).toEqual([]);
+    expect(createNotificationStore(db).dueOutbox(10 + LEASE_MS)).toHaveLength(1);
+  });
+
+  it('ack и markExpired снимают очередь, а закрытое уведомление не выдаётся', () => {
+    const store = createNotificationStore(openMemoryDb());
+    store.write(event('a', { channels: ['t'] }), 0);
+    store.write(event('b', { channels: ['t'] }), 0);
+    expect(store.ack('a', 'island', 1)).toBe(true);
+    expect(store.markExpired('b')).toBe(true);
+    expect(store.dueOutbox(2)).toEqual([]);
+  });
+
+  it('outbox: строка, закрытая после постановки в очередь, не выдаётся даже при живой записи', () => {
+    const db = openMemoryDb();
+    const store = createNotificationStore(db);
+    store.write(event('a', { channels: ['t'] }), 0);
+    db.prepare(`UPDATE notifications SET state = 'acked' WHERE dedupe_key = 'a'`).run();
+    expect(store.dueOutbox(1)).toEqual([]);
+  });
+
+  it('конверт отвергает абсолютные и пользовательские пути', () => {
+    const store = createNotificationStore(openMemoryDb());
+    for (const [i, ref] of ['/Users/name/project', 'Users/name/project', 'a/../b', 'x//y', '/etc/passwd'].entries()) {
+      expect(() => store.write(event(`p${i}`, { payloadRef: ref }), 1)).toThrow(/opaque/);
+      expect(() => store.write(event(`q${i}`, { entityRef: ref }), 1)).toThrow(/opaque/);
+    }
+    expect(() => store.write(event('ok', { payloadRef: 'room/r1:card-2' }), 1)).not.toThrow();
   });
 });

@@ -82,6 +82,11 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
     // Закрытие карточек (решена, вытеснена, просрочена) идёт по событиям карточек — `onCard`: при двух активных карточках
     // из разных источников состояние окна показывает только последнюю и не говорит, какая из них решена.
     const proposal = state.proposal;
+    // Растёт только на активные карточки: id тех, что ядро уже не держит активными, отбрасываются.
+    for (const id of offered) {
+      const card = deps.assistant.card(id);
+      if (id !== proposal?.id && card !== null && card.state !== 'active') offered.delete(id);
+    }
     if (proposal !== null && !offered.has(proposal.id)) {
       offered.add(proposal.id);
       if (toChat(state) || deps.cardsToggle()) {

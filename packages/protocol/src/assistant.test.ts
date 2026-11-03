@@ -160,11 +160,13 @@ describe('Assistant Core: origin, correlation, cards.decide, jobs.ackInline', ()
     expect(decide.safeParse({ cardId: '', revision: 1, choice: 'send' }).success).toBe(false);
     expect(decide.safeParse({ cardId: 'p1', revision: 1, choice: 'maybe' }).success).toBe(false);
     expect(decide.safeParse({ cardId: 'p1', choice: 'send' }).success).toBe(false);
+    expect(decide.safeParse({ cardId: 'p1', revision: 1, choice: 'send', extra: true }).success).toBe(false);
   });
   it('jobs.ackInline: id и целая ревизия', () => {
     const ack = METHODS['jobs.ackInline'];
     expect(ack.safeParse({ jobId: 'job-1', revision: 3 }).success).toBe(true);
     expect(ack.safeParse({ jobId: 'job-1' }).success).toBe(false);
     expect(ack.safeParse({ jobId: '', revision: 3 }).success).toBe(false);
+    expect(ack.safeParse({ jobId: 'job-1', revision: 3, extra: true }).success).toBe(false);
   });
 });

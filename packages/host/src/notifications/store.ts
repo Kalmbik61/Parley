@@ -68,14 +68,21 @@ export interface WriteResult {
 export const MAX_ATTEMPTS = 6;
 const BASE_DELAY_MS = 5_000;
 const MAX_DELAY_MS = 10 * 60_000;
+/** Аренда записи outbox при выдаче: пока она не истекла, та же запись второму вызову не отдаётся. */
+export const LEASE_MS = 60_000;
 
 /** Ключ события job в терминальном состоянии. */
 export const jobKey = (jobId: string, terminalState: string): string => `job:${jobId}:${terminalState}`;
 /** Ключ карточки, ждущей подтверждения. */
 export const needsConfirmationKey = (cardId: string): string => `needs_confirmation:${cardId}`;
 
-/** Opaque-id/маршрут: латиница, цифры и `: _ . - /`; пробелов и кириллицы (пользовательского текста) нет. */
-const OPAQUE = /^[A-Za-z0-9:_./-]{1,200}$/;
+/**
+ * Opaque-id/маршрут: латиница, цифры и `: _ . - /`; начинается с буквы или цифры (абсолютный путь не проходит), без `..`
+ * и `//`, без видимых корней пользовательских путей; пробелов и кириллицы (пользовательского текста) нет.
+ */
+const OPAQUE = /^[A-Za-z0-9][A-Za-z0-9:_./-]{0,199}$/;
+const USER_PATH = /(^|[/:])(users|home|var|tmp|etc|private|volumes)\//i;
+const isOpaque = (value: string): boolean => OPAQUE.test(value) && !value.includes('..') && !value.includes('//') && !USER_PATH.test(value);
 const KIND = /^[a-z][a-z0-9_-]{0,63}$/;
 
 function assertEnvelope(n: NewNotification): void {
@@ -88,7 +95,7 @@ function assertEnvelope(n: NewNotification): void {
     ['payloadRef', n.payloadRef],
   ];
   for (const [name, value] of opaque) {
-    if (value !== undefined && !OPAQUE.test(value)) throw new Error(`Notification ${name} must be an opaque id`);
+    if (value !== undefined && !isOpaque(value)) throw new Error(`Notification ${name} must be an opaque id`);
   }
   if (!KIND.test(n.type)) throw new Error('Notification type must be a kind word');
   for (const channel of n.channels ?? []) if (!KIND.test(channel)) throw new Error('Notification channel must be a kind word');
@@ -164,7 +171,10 @@ export interface NotificationStore {
   seen(dedupeKey: string, now: number): boolean;
   /** Окно действия закрылось: строка терминальна, ожидающая доставка снимается. */
   markExpired(dedupeKey: string): boolean;
-  /** Записи outbox, которым пора на отправку. */
+  /**
+   * Записи outbox, которым пора на отправку, с арендой: выданная запись не выдаётся снова, пока аренда (`LEASE_MS`)
+   * не истекла; истёкшая (в том числе после рестарта) снова due. Доставка at-least-once: отправка дольше аренды может уйти дважды. Отдаются только строки, чьё уведомление ещё `new`/`seen`.
+   */
   dueOutbox(now: number): OutboxRow[];
   markSent(outboxId: number, now: number): void;
   /** Неудача доставки: следующая попытка через экспоненциальную паузу с jitter, после `MAX_ATTEMPTS` — `failed`. */
@@ -183,6 +193,19 @@ export function createNotificationStore(db: DatabaseSync, random: () => number =
   /** Снимает ожидающие записи outbox строки: событие закрыто, доставлять нечего. */
   const dropPending = (notificationId: string): void => {
     db.prepare(`DELETE FROM notification_outbox WHERE notification_id = ? AND state = 'pending'`).run(notificationId);
+  };
+  /** Смена состояния строки и снятие её очереди — одна транзакция (вложенный вызов использует внешнюю). */
+  const atomically = <T>(fn: () => T): T => {
+    if (db.isTransaction) return fn();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   };
   return {
     write(n, now) {
@@ -213,12 +236,14 @@ export function createNotificationStore(db: DatabaseSync, random: () => number =
     ack(dedupeKey, via, now) {
       const row = byKey(dedupeKey);
       if (row === null) return false;
-      const changed = db
-        .prepare(`UPDATE notifications SET state = 'acked', acked_at = ?, acked_via = ?, revision = revision + 1 WHERE dedupe_key = ? AND state IN ('new','seen')`)
-        .run(now, via, dedupeKey).changes;
-      if (Number(changed) !== 1) return false;
-      dropPending(row.notificationId);
-      return true;
+      return atomically(() => {
+        const changed = db
+          .prepare(`UPDATE notifications SET state = 'acked', acked_at = ?, acked_via = ?, revision = revision + 1 WHERE dedupe_key = ? AND state IN ('new','seen')`)
+          .run(now, via, dedupeKey).changes;
+        if (Number(changed) !== 1) return false;
+        dropPending(row.notificationId);
+        return true;
+      });
     },
     seen(dedupeKey, now) {
       const changed = db.prepare(`UPDATE notifications SET state = 'seen', seen_at = ?, revision = revision + 1 WHERE dedupe_key = ? AND state = 'new'`).run(now, dedupeKey).changes;
@@ -227,13 +252,24 @@ export function createNotificationStore(db: DatabaseSync, random: () => number =
     markExpired(dedupeKey) {
       const row = byKey(dedupeKey);
       if (row === null) return false;
-      const changed = db.prepare(`UPDATE notifications SET state = 'expired', revision = revision + 1 WHERE dedupe_key = ? AND state IN ('new','seen')`).run(dedupeKey).changes;
-      if (Number(changed) !== 1) return false;
-      dropPending(row.notificationId);
-      return true;
+      return atomically(() => {
+        const changed = db.prepare(`UPDATE notifications SET state = 'expired', revision = revision + 1 WHERE dedupe_key = ? AND state IN ('new','seen')`).run(dedupeKey).changes;
+        if (Number(changed) !== 1) return false;
+        dropPending(row.notificationId);
+        return true;
+      });
     },
     dueOutbox(now) {
-      return (db.prepare(`SELECT * FROM notification_outbox WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at, id`).all(now) as unknown as RawOutbox[]).map(outboxFromRaw);
+      const rows = db
+        .prepare(
+          `UPDATE notification_outbox SET next_attempt_at = ?
+           WHERE id IN (
+             SELECT o.id FROM notification_outbox o JOIN notifications n ON n.notification_id = o.notification_id
+             WHERE o.state = 'pending' AND o.next_attempt_at <= ? AND n.state IN ('new','seen'))
+           RETURNING *`,
+        )
+        .all(now + LEASE_MS, now) as unknown as RawOutbox[];
+      return rows.map(outboxFromRaw).sort((x, y) => x.id - y.id);
     },
     markSent(outboxId, now) {
       db.prepare(`UPDATE notification_outbox SET state = 'sent', sent_at = ? WHERE id = ? AND state = 'pending'`).run(now, outboxId);

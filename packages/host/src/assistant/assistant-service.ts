@@ -339,17 +339,20 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     for (const listener of [...stateListeners]) listener(state);
   };
   /** Изменение карточки ядра уходит слушателям по одной: каждый канал закрывает именно ту карточку, что решена. */
+  const changeOf = (row: CardRow): AssistantCardChanged => ({
+    cardId: row.proposalId,
+    kind: row.kind,
+    state: row.state === 'active' ? 'needs_confirmation' : row.state,
+    revision: row.revision,
+    expiresAt: row.expiresAt,
+    decidedVia: row.decidedVia,
+    outcome: row.outcome,
+  });
+  /** Переходы карточек при старте (погасли за время простоя, закрыты как unknown): слушатели ещё не подключены, каждый новый получает их при подключении. */
+  let startupChanged: string[] = [];
   const emitCard = (row: CardRow | null): void => {
     if (row === null || stopped) return;
-    const change: AssistantCardChanged = {
-      cardId: row.proposalId,
-      kind: row.kind,
-      state: row.state === 'active' ? 'needs_confirmation' : row.state,
-      revision: row.revision,
-      expiresAt: row.expiresAt,
-      decidedVia: row.decidedVia,
-      outcome: row.outcome,
-    };
+    const change = changeOf(row);
     for (const listener of [...cardListeners]) {
       try {
         listener(change);
@@ -1221,8 +1224,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   // Рестарт хоста: просроченное гаснет, нетерминальная карточка снова показывается окну и подтверждается как прежде.
-  cards.closeUnsettled(now());
-  cards.expireDue(now());
+  startupChanged = [...cards.closeUnsettled(now()), ...cards.expireDue(now())].map((card) => card.proposalId);
   const resumed = shown();
   if (resumed !== null) {
     state = { ...state, proposal: resumed.view, phase: 'awaiting-confirm' };
@@ -1262,6 +1264,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       }
       // Карточка забирается до первого await и персистентно: второй `decide` с тем же id не выполнит действие повторно.
       const claimed = cards.claim(proposalId, now());
+      // Срок вышел внутри claim (sweep его не успел): переход виден каналам так же, как погашение по таймеру.
+      if (!claimed.ok && claimed.reason === 'expired' && peek.state === 'active') emitCard(cards.get(proposalId));
       if (!claimed.ok) return { applied: false, error: claimed.reason === 'expired' ? 'This card has already expired' : 'This card is no longer current' };
       const current: Pending = { ...pendingOf(claimed.card), via };
       const epoch = resets;
@@ -1314,6 +1318,16 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     },
     onCardChanged(listener) {
       cardListeners.add(listener);
+      // Подключение после старта: слушатель получает переходы старта и все активные карточки (уведомления могут снять эскалации).
+      const replay = stopped ? [] : [...new Set(startupChanged)].map((id) => cards.get(id)).concat(cards.active());
+      for (const row of replay) {
+        if (row === null) continue;
+        try {
+          listener(changeOf(row));
+        } catch (error) {
+          deps.log(`assistant: card listener failed: ${(error as Error).message}`);
+        }
+      }
       return () => {
         cardListeners.delete(listener);
       };

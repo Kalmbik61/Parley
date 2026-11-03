@@ -192,4 +192,22 @@ describe('assistant jobs', () => {
     expect(jobs.getJob(jobId)!.deliveredInline).toBe(false);
     expect(jobs.ackInline('job-none', 1)).toEqual({ ok: false, deliveredInline: false, reason: 'not_found' });
   });
+
+  it('ackInline: флаг лежит в колонке delivered_inline и переживает рестарт; не терминальный job не принимается', async () => {
+    const first = setup();
+    const { jobId } = first.submit('k1');
+    first.runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    await settled();
+    const revision = first.jobs.getJob(jobId)!.revision;
+    expect(first.jobs.ackInline(jobId, revision)).toMatchObject({ ok: true, reason: 'acked' });
+    expect(first.db.prepare('SELECT delivered_inline AS d, outcome FROM assistant_jobs WHERE job_id = ?').get(jobId)).toEqual({ d: 1, outcome: null });
+    first.jobs.stop();
+    const second = setup({}, first.db);
+    expect(second.jobs.getJob(jobId)).toMatchObject({ deliveredInline: true, revision });
+    expect(second.jobs.ackInline(jobId, revision)).toEqual({ ok: true, deliveredInline: true, reason: 'already_acked' });
+    const live = second.submit('k2');
+    expect(second.jobs.ackInline(live.jobId, second.jobs.getJob(live.jobId)!.revision)).toMatchObject({ ok: false, reason: 'stale' });
+    expect(second.db.prepare('SELECT delivered_inline AS d FROM assistant_jobs WHERE job_id = ?').get(live.jobId)).toEqual({ d: 0 });
+    second.jobs.stop();
+  });
 });

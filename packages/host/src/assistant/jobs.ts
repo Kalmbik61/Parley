@@ -95,6 +95,7 @@ interface Raw {
   provider: string;
   created_at: number;
   updated_at: number;
+  delivered_inline: number;
 }
 
 const fromRaw = (row: Raw): Job => ({
@@ -109,7 +110,7 @@ const fromRaw = (row: Raw): Job => ({
   provider: row.provider,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
-  deliveredInline: false,
+  deliveredInline: row.delivered_inline === 1,
 });
 
 export function createJobs(deps: JobsDeps): Jobs {
@@ -117,12 +118,6 @@ export function createJobs(deps: JobsDeps): Jobs {
   const now = deps.now ?? Date.now;
   const cap = deps.capPerProvider ?? JOB_CAP_PER_PROVIDER;
   const retryMs = deps.limitRetryMs ?? JOB_LIMIT_RETRY_MS;
-  /**
-   * Флаг `deliveredInline` пока только в памяти: колонку `outcome` занимает решение человека (db.ts, C2), а отдельной
-   * колонки нет — миграцию ведёт lane NOTIFY. После рестарта флаг сбрасывается (зависимость: колонка `delivered_inline`).
-   */
-  const delivered = new Set<string>();
-  const hydrate = (row: Raw): Job => ({ ...fromRaw(row), deliveredInline: delivered.has(row.job_id) });
   const listeners = new Set<(job: Job) => void>();
   const runs = new Map<string, JobRun>();
   /** Job после `limit`: до этого момента не стартует (в памяти — после рестарта повтор сразу). */
@@ -132,7 +127,7 @@ export function createJobs(deps: JobsDeps): Jobs {
 
   const get = (jobId: string): Job | null => {
     const row = db.prepare('SELECT * FROM assistant_jobs WHERE job_id = ?').get(jobId) as unknown as Raw | undefined;
-    return row === undefined ? null : hydrate(row);
+    return row === undefined ? null : fromRaw(row);
   };
   const emit = (job: Job): void => {
     for (const listener of [...listeners]) {
@@ -178,7 +173,7 @@ export function createJobs(deps: JobsDeps): Jobs {
 
   function pumpOnce(): void {
     const stamp = now();
-    const queued = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(hydrate);
+    const queued = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);
     const busy = new Map<string, number>();
     for (const row of db.prepare(`SELECT provider, COUNT(*) AS n FROM assistant_jobs WHERE state = 'running' GROUP BY provider`).all() as unknown as Array<{ provider: string; n: number }>) {
       busy.set(row.provider, Number(row.n));
@@ -253,7 +248,7 @@ export function createJobs(deps: JobsDeps): Jobs {
         `INSERT INTO assistant_jobs (job_id, idempotency_key, origin, correlation_json, state, revision, request_text, provider, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 1, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING`,
       ).run(jobId, input.idempotencyKey, input.origin, JSON.stringify(input.correlation), input.text, input.provider ?? deps.defaultProvider(), stamp, stamp);
       const row = db.prepare('SELECT * FROM assistant_jobs WHERE idempotency_key = ?').get(input.idempotencyKey) as unknown as Raw;
-      const job = hydrate(row);
+      const job = fromRaw(row);
       // Повторный submit с тем же ключом (reconnect, рестарт) ничего не запускает и не оповещает: job тот же.
       if (job.jobId === jobId) {
         emit(job);
@@ -277,9 +272,8 @@ export function createJobs(deps: JobsDeps): Jobs {
       const job = get(jobId);
       if (job === null) return { ok: false, deliveredInline: false, reason: 'not_found' };
       if (!['completed', 'failed', 'cancelled'].includes(job.state) || job.revision !== revision) return { ok: false, deliveredInline: job.deliveredInline, reason: 'stale' };
-      const already = delivered.has(jobId);
-      delivered.add(jobId);
-      return { ok: true, deliveredInline: true, reason: already ? 'already_acked' : 'acked' };
+      const changed = db.prepare('UPDATE assistant_jobs SET delivered_inline = 1 WHERE job_id = ? AND delivered_inline = 0').run(jobId).changes;
+      return { ok: true, deliveredInline: true, reason: Number(changed) === 1 ? 'acked' : 'already_acked' };
     },
     onJobChanged(listener) {
       listeners.add(listener);
@@ -288,7 +282,7 @@ export function createJobs(deps: JobsDeps): Jobs {
       };
     },
     async recover() {
-      const orphans = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'running'`).all() as unknown as Raw[]).map(hydrate).filter((job) => !runs.has(job.jobId));
+      const orphans = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'running'`).all() as unknown as Raw[]).map(fromRaw).filter((job) => !runs.has(job.jobId));
       for (const job of orphans) {
         let verdict: 'confirmed' | 'unconfirmed' = 'unconfirmed';
         try {

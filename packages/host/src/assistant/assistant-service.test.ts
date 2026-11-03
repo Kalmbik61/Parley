@@ -610,6 +610,15 @@ describe('assistant-service: решение по карточке агента',
     await service.ask({ ...ASK, text: 'дальше' });
     expect(turns[1]?.spec.args.join(' ')).toContain('already answered');
   });
+  it('decideCard: карточка закрыта с ошибкой (ответ уже дан) — возвращается эта ошибка, не голый успех', async () => {
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    const id = last().proposal!.id;
+    decide.mockResolvedValue({ applied: false, state: 'allowed' });
+    const result = await service.decideCard({ cardId: id, revision: 1, choice: 'send' });
+    expect(result).toEqual({ applied: true, error: 'Already answered', reason: 'applied' });
+    expect(result.error).not.toBeNull();
+  });
   it('feed.decide бросил — карточка остаётся, ошибка в окно', async () => {
     const service = await started();
     await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
@@ -1736,6 +1745,39 @@ describe('assistant-service: durable карточки', () => {
     service.stop();
   });
 
+  it('переходы старта (просрочена за простой, закрыта как unknown) и активные карточки приходят слушателю после подключения', async () => {
+    let clock = 1_000_000;
+    const db = openMemoryDb();
+    const first = createAssistantService({ ...deps, cards: createCardStore(db), now: () => clock, cardTtlMs: 60_000 });
+    const old = await propose(first, 'старая');
+    first.stop();
+    clock += 61_000;
+    db.prepare(`INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at) VALUES ('p90','message','{}','{}','x','decided',2,${clock + 60_000},${clock})`).run();
+    const second = createAssistantService({ ...deps, cards: createCardStore(db), now: () => clock, cardTtlMs: 60_000 });
+    const live = await propose(second, 'живая');
+    const events: Array<[string, string, string | null]> = [];
+    second.onCardChanged((change) => events.push([change.cardId, change.state, change.outcome]));
+    const again: Array<[string, string, string | null]> = [];
+    second.onCardChanged((change) => again.push([change.cardId, change.state, change.outcome]));
+    for (const got of [events, again]) {
+      expect(got).toEqual(expect.arrayContaining([[old.id, 'expired', null], ['p90', 'decided', 'unknown'], [live.id, 'needs_confirmation', null]]));
+    }
+    second.stop();
+  });
+
+  it('срок вышел внутри claim: decide сообщает слушателям expired', async () => {
+    let clock = 1_000_000;
+    const service = createAssistantService({ ...deps, now: () => clock, cardTtlMs: 60_000 });
+    const card = await propose(service, 'x');
+    const events: string[] = [];
+    service.onCardChanged((change) => events.push(change.state));
+    events.length = 0;
+    clock += 61_000;
+    await service.decide(card.id, 'send');
+    expect(events.filter((state) => state === 'expired')).toHaveLength(1);
+    service.stop();
+  });
+
   it('один decide на три входа: island, telegram и mobile пишутся в одну durable-карточку', async () => {
     const store = createCardStore(openMemoryDb());
     const service = createAssistantService({ ...deps, cards: store });
@@ -1771,6 +1813,7 @@ describe('assistant-service: durable карточки', () => {
       const card = await propose(service, 'Пропусти Safari');
       const events: string[] = [];
       service.onCardChanged((change) => events.push(change.state));
+      events.length = 0; // повтор активных карточек при подключении не считается
       (deps.sendLetter as Mock).mockRejectedValueOnce(new Error('offline'));
       await expect(service.decide(card.id, 'send')).resolves.toMatchObject({ applied: false });
       expect(store.get(card.id)?.state).toBe('active');

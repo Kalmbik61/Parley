@@ -223,6 +223,15 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   { version: 4, up: (db) => db.exec(SCHEMA_ASSISTANT_CORE) },
   // 5: канонические уведомления и durable outbox (спека 2026-11-03, задача T1).
   { version: 5, up: (db) => db.exec(SCHEMA_NOTIFICATIONS) },
+  // 6: флаг «экран показал финал job» переживает рестарт (спека 2026-11-03, C2); колонку `outcome` он не занимает.
+  {
+    version: 6,
+    up: (db) => {
+      // Шаг повторяем на базе с опущенной версией: колонка, что уже есть, не добавляется второй раз.
+      const has = db.prepare('PRAGMA table_info(assistant_jobs)').all().some((column) => column['name'] === 'delivered_inline');
+      if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN delivered_inline INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
