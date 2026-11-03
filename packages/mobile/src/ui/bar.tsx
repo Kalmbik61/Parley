@@ -2,8 +2,8 @@
 // `headerTintColor` does not remove. The native-stack items API can hide that shared background: a custom item with
 // `hidesSharedBackground: true` draws only what we put in it, in the Parley accent. The back button is such an item too
 // (`router.back()`); the stack keeps its own edge-swipe, which does not depend on the visible button.
-import type { ComponentProps, ReactElement, ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { useCallback, useState, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { type NativeScrollEvent, type NativeSyntheticEvent, Platform, Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { useRouter } from 'expo-router';
 // The copy of @react-navigation/elements that expo-router bundles (its public `react-navigation` entry).
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -77,6 +77,25 @@ export function LargeTitle({ children, padded = true }: { children: string; padd
       {children}
     </Text>
   );
+}
+
+/**
+ * For a screen with a `LargeTitle`: `title` is '' while the large title is in view and the screen's title once it has
+ * scrolled under the bar, so the bar always names the screen. Give `onScroll` to the ScrollView (scrollEventThrottle 16)
+ * and spread `headerTitle` into the screen options.
+ */
+export function useBarTitleOnScroll(title: string) {
+  const [shown, setShown] = useState(false);
+  // The automatic inset (the bar) makes the resting offset -headerHeight; `contentInset` in the event does not include it.
+  const headerHeight = useHeaderHeight();
+  const onScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const next = e.nativeEvent.contentOffset.y + headerHeight > 36;
+      setShown((was) => (was === next ? was : next));
+    },
+    [headerHeight],
+  );
+  return { onScroll, scrollEventThrottle: 16, headerTitle: shown ? title : '' };
 }
 
 /** A round symbol button (the "•••", the "+"): 44 pt target, accent, no capsule. */
