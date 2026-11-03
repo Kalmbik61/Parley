@@ -14,7 +14,8 @@ import { useRuntimeState } from '../../../runtime/use-runtime';
 import { displayName } from '../../../settings/local-settings';
 import { biometryKind, biometryLabel, type BiometryKind } from '../../../settings/biometric';
 import { useColors } from '../../../theme';
-import { LargeTitle } from '../../../ui/bar';
+import { Stack } from 'expo-router';
+import { LargeTitle, useBarTitleOnScroll } from '../../../ui/bar';
 import { hostStatusLine } from '../../../hosts/status-line';
 
 export default function SettingsScreen() {
@@ -67,8 +68,10 @@ export default function SettingsScreen() {
     await runtime.setNotificationsEnabled(on);
   };
 
+  const scroll = useBarTitleOnScroll('Settings');
   return (
-    <ScrollView contentInsetAdjustmentBehavior="automatic" style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
+    <ScrollView onScroll={scroll.onScroll} scrollEventThrottle={scroll.scrollEventThrottle} contentInsetAdjustmentBehavior="automatic" style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
+      <Stack.Screen options={{ headerTitle: scroll.headerTitle }} />
       <View>
         <LargeTitle>Settings</LargeTitle>
         <ConnectionBanner />

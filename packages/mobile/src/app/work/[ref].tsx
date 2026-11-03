@@ -7,7 +7,7 @@ import { useRemoteState } from '../../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../../nav/refs';
 import { runtime } from '../../runtime/instance';
 import { NewButton } from '../../launch/NewButton';
-import { barBack, barRight, LargeTitle } from '../../ui/bar';
+import { barBack, barRight, LargeTitle, useBarTitleOnScroll } from '../../ui/bar';
 import { typography, useColors } from '../../theme';
 import { EmptyState, Skeleton } from '../../ui/parts';
 import { attentionOf, SingleGroup, TeamCard, type TreeEnv } from '../../works/TeamTree';
@@ -65,10 +65,11 @@ export default function WorkScreen() {
     );
   })();
 
+  const scroll = useBarTitleOnScroll(view?.work.title ?? 'Work');
   return (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
-      <Stack.Screen options={{ title: view?.work.title ?? 'Work', headerTitle: '', headerLargeTitle: false, ...barBack('Works'), ...barRight(<NewButton work={ref} />) }} />
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={false} onRefresh={() => runtime.retry()} />}>
+      <Stack.Screen options={{ title: view?.work.title ?? 'Work', headerTitle: scroll.headerTitle, headerLargeTitle: false, ...barBack('Works'), ...barRight(<NewButton work={ref} />) }} />
+      <ScrollView onScroll={scroll.onScroll} scrollEventThrottle={scroll.scrollEventThrottle} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={false} onRefresh={() => runtime.retry()} />}>
         <LargeTitle padded={false}>{view?.work.title ?? 'Work'}</LargeTitle>
         <View style={styles.banner}>
           <ConnectionBanner />
