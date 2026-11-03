@@ -112,7 +112,7 @@ test.describe('Settings → Remote access → Set up on my server', () => {
 
     // 2. Run: the image step streams; the bar and the text of spec 7.1.
     await window.getByTestId('relay-setup-run').click();
-    await expect(window.getByTestId('relay-setup-progress-text')).toContainText('Downloading the relay image:', { timeout: 30_000 });
+    await expect(window.getByTestId('relay-setup-progress-text')).toContainText('Downloading images:', { timeout: 30_000 });
     // Once a layer or two are done, so the text shows both bytes and layers.
     await expect(window.getByTestId('relay-setup-progress-text')).toHaveText(/MB · [1-9] of 5 layers/, { timeout: 30_000 });
     await shot('2-pull-progress');

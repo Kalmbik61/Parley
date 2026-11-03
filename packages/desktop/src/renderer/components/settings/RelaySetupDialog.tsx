@@ -49,7 +49,7 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
   const buffer = useRef<RelaySetupEvent[]>([]);
 
   /** Subscription first (done by the effect), then `state`, then the buffered events newer than the snapshot. */
-  const loadState = useCallback(async (): Promise<void> => {
+  const loadState = useCallback(async (): Promise<RelayRunView | null> => {
     loading.current = true;
     buffer.current = [];
     try {
@@ -59,10 +59,11 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
       } catch {
         snapshot = null;
       }
-      if (!alive.current) return;
+      if (!alive.current) return snapshot;
       if (snapshot !== null) for (const event of buffer.current) if (event.seq > snapshot.seq) snapshot = withRunEvent(snapshot, event);
       setView(snapshot);
       if (snapshot !== null) setPhase(null);
+      return snapshot;
     } finally {
       loading.current = false;
       buffer.current = [];
@@ -355,12 +356,14 @@ export function RelaySetupDialog({ bridge, open, onClose }: RelaySetupDialogProp
                 void step(() => setup.call('plan', { removeData: value }));
               }}
               onRun={() => {
-                setPhase({ phase: 'running' });
+                // `phase` stays on the plan until main has taken the run: a refused `run` (the session ended on an idle
+                // timer) leaves the plan with its error instead of a «Running…» nobody can leave.
                 void step(async () => {
                   const started = await setup.call('run', { removeData });
+                  if (started.phase !== 'running') return started;
                   // The record exists in main now: read it (events that come meanwhile wait for it).
-                  if (started.phase === 'running') await loadState();
-                  return started;
+                  const record = await loadState();
+                  return record !== null ? { phase: 'running' as const } : { phase: 'failed' as const, step: null, message: T.runLost };
                 });
               }}
               onCancel={close}
@@ -398,6 +401,8 @@ function RunRecord(props: {
   const { view } = props;
   const phase = view.phase;
   const running = phase.phase === 'running';
+  // An interruptible step gets no `cancelling` event: the button answers the click at once, locally.
+  const [asked, setAsked] = useState(false);
   const canCheck = phase.phase === 'proxy-pending' || ((phase.phase === 'failed' || phase.phase === 'cancelled') && phase.step === 'health');
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="relay-setup-record">
@@ -443,7 +448,10 @@ function RunRecord(props: {
 
       <DialogFooter>
         {running ? (
-          <Button type="button" variant="outline" data-testid="relay-setup-cancel-run" disabled={view.cancelling} onClick={props.onCancel}>{T.cancel}</Button>
+          <Button type="button" variant="outline" data-testid="relay-setup-cancel-run" disabled={view.cancelling || asked} onClick={() => {
+            setAsked(true);
+            props.onCancel();
+          }}>{T.cancel}</Button>
         ) : (
           <>
             {canCheck ? <Button type="button" data-testid="relay-setup-check" disabled={props.busy} onClick={props.onCheck}>{T.checkAgain}</Button> : null}
