@@ -11,6 +11,8 @@ export interface OutLetter {
   note: string | null;
   /** The id the host gave it: when the history holds it, the bubble is the letter itself. */
   messageId: string | null;
+  /** What the person typed (the text without the selected fragment's quote block): this goes back to the field on a refusal. */
+  typed?: string;
 }
 
 /** Bubbles of letters that the history has not absorbed yet: by the host's id, or the same text after the send. */
