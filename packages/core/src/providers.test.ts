@@ -47,6 +47,8 @@ const CODEX_TUI_ARGS = [
   'tui.notification_method="osc9"',
   '-c',
   'tui.notification_condition="always"',
+  '-c',
+  'check_for_update_on_startup=false',
 ];
 /** Всё, что codex получает при запуске без единой подстановки. */
 const CODEX_STATIC_ARGS = ['--no-daemon', ...CODEX_TUI_ARGS];
@@ -66,6 +68,17 @@ describe('реестр провайдеров', () => {
       command: 'codex',
       args: ['resume', 'uuid-1', ...CODEX_TUI_ARGS],
     });
+  });
+
+  it('codex: и запуск, и resume несут -c check_for_update_on_startup=false парой', () => {
+    for (const args of [
+      startCommand(PROVIDERS.codex).args,
+      resumeCommand(PROVIDERS.codex, { providerSessionId: 'uuid-1' }).args,
+    ]) {
+      const i = args.indexOf('check_for_update_on_startup=false');
+      expect(i).toBeGreaterThan(0);
+      expect(args[i - 1]).toBe('-c');
+    }
   });
 
   it('GLM resumes through official Claude Code', () => {
@@ -1330,6 +1343,8 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_method="osc9"',
         '-c',
         'tui.notification_condition="always"',
+        '-c',
+        'check_for_update_on_startup=false',
         '--model',
         'gpt-6-sol',
         '-c',
@@ -1363,6 +1378,8 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_method="osc9"',
         '-c',
         'tui.notification_condition="always"',
+        '-c',
+        'check_for_update_on_startup=false',
         'New messages (1). Call check_inbox.',
       ],
     });
@@ -1374,7 +1391,7 @@ describe('codex: запуск и возобновление (спека комн
       providerSessionId: 'uuid-1',
       prompt: undefined,
     } as never).args;
-    expect(args.at(-1)).toBe('tui.notification_condition="always"');
+    expect(args.at(-1)).toBe('check_for_update_on_startup=false');
     expect(args).not.toContain('--model');
     expect(args).not.toContain('model_reasoning_effort="high"');
   });

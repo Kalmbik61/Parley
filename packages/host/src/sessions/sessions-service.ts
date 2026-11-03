@@ -79,6 +79,7 @@ import {
   readCustomProviders,
   mirrorProjectTrust,
   syncApiKeyApproval,
+  claudeConfigDirFor,
   userClaudeConfigDir,
   userClaudeJsonPath,
   readSecret,
@@ -122,6 +123,7 @@ import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { Result, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
+import type { ProjectMcp } from '../consents/project-mcp.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
@@ -190,7 +192,7 @@ export type LaunchOutcome = 'started' | 'held' | 'queued';
  * Созданная сессия; `held` — её запуск ждёт согласия на папку, `queued` — слота машины (причина очереди); запись
  * `pending` уже в карте.
  */
-export type CreatedSession = SessionRef & { held?: 'folder-trust'; queued?: QueueReason };
+export type CreatedSession = SessionRef & { held?: 'folder-trust' | 'project-mcp'; queued?: QueueReason };
 
 /**
  * Попыток записать старт процесса в карту, пока база работ занята: подъём всей работы после перезапуска хоста
@@ -372,7 +374,12 @@ export interface SessionsFeedOptions {
    * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
    * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
    */
-  consents?: Pick<ConsentsService, 'request'>;
+  consents?: Pick<ConsentsService, 'request'> & Partial<Pick<ConsentsService, 'requestProjectMcp'>>;
+  /**
+   * Серверы MCP из `.mcp.json` (спека 2026-11-02, 7): запуск Claude с серверами без решения удерживается карточкой
+   * `project-mcp`, решение человека уходит в файл `--settings` сессии. Без сервиса (изолированные тесты) ключей нет.
+   */
+  projectMcp?: Pick<ProjectMcp, 'inspect'>;
   /**
    * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта (`null` — не слушает) и токены на
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
@@ -761,30 +768,41 @@ export function createSessionsService(
     }
   }
 
-  async function launch(
+  /** Исход запуска и, для `held`, причина удержания; запись причины живёт ровно один вызов — подъёмы и продолжения её не копят. */
+  async function launchDetailed(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
-  ): Promise<LaunchOutcome> {
+  ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
-    if (launching.has(key) || closing.has(key)) return 'started';
+    if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
       await repairLive(ref, live);
-      return 'started';
+      return { outcome: 'started' };
     }
     launching.add(key);
     try {
-      return await launchHeld(ref, mode, options);
+      const outcome = await launchHeld(ref, mode, options);
+      const heldKind = outcome === 'held' ? heldKinds.get(key) ?? 'folder-trust' : undefined;
+      return heldKind === undefined ? { outcome } : { outcome, heldKind };
     } finally {
       launching.delete(key);
+      heldKinds.delete(key);
     }
+  }
+
+  async function launch(ref: SessionRef, mode: LaunchMode, options: LaunchChoice = {}): Promise<LaunchOutcome> {
+    return (await launchDetailed(ref, mode, options)).outcome;
   }
 
   /**
    * Тело запуска под ключом `launching`, который держит вызывающий: `launch` — на один запуск, `switchAgent` — на всю
    * замену агента (спека замены агента, 6.3). `notify: false` — об отказе скажет сам вызывающий.
    */
+  /** Почему запуск удержан: `createInteractive` отдаёт это вызывающему как `held`. */
+  const heldKinds = new Map<string, 'folder-trust' | 'project-mcp'>();
+
   async function launchHeld(
     ref: SessionRef,
     requested: LaunchMode,
@@ -875,9 +893,42 @@ export function createSessionsService(
             // `new` — быстрая сессия без промпта; после согласия она поднимается обычным запуском.
             { ref, mode: mode === 'resume' ? 'resume' : 'launch', by },
           );
+          heldKinds.set(key, 'folder-trust');
           held = true;
           failed = false;
           return 'held';
+        }
+      }
+
+      // Серверы MCP из `.mcp.json` (спека 2026-11-02, 7): только Claude-семейство (команда `claude`: Claude, GLM, свои).
+      // Серверы без решения — карточка и `held`, до бюджета, worktree и процесса, как у доверия к папке Codex. Папка —
+      // worktree сессии, если он уже есть, иначе проект: решение хранится по репозиторию и от выбора не зависит.
+      if (entry.runner.command === 'claude' && feed.projectMcp !== undefined && feed.consents?.requestProjectMcp !== undefined) {
+        const found = await timer.step('projectMcp', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
+        if (found.undecided.length > 0) {
+          const by = options.by ?? 'human';
+          const requester = session.parent ?? (map.sessions.some((candidate) => candidate.id === by) ? by : undefined);
+          const card = feed.consents.requestProjectMcp(
+            {
+              projectPath: ref.projectPath,
+              repo: found.repo,
+              servers: found.undecided,
+              requestedBy: {
+                source: mode === 'resume' ? 'resume' : by === 'human' ? 'launch' : 'agent',
+                ...(requester === undefined ? {} : { sessionId: requester }),
+                workId: ref.workId,
+                label: session.label,
+              },
+            },
+            { ref, mode: mode === 'resume' ? 'resume' : 'launch', by },
+          );
+          // `null` — решение о всех этих серверах уже записано (человек решил, пока запуск готовился): запуск идёт сразу.
+          if (card !== null) {
+            heldKinds.set(key, 'project-mcp');
+            held = true;
+            failed = false;
+            return 'held';
+          }
         }
       }
 
@@ -1005,6 +1056,18 @@ export function createSessionsService(
       // уходят только в конфиг MCP-сервера, в окружение процесса — нет.
       const agentUrl = feed.agent?.url() ?? null;
       if (agentUrl !== null && feed.agent !== undefined) agentChannel = { url: agentUrl, token: feed.agent.register(ref) };
+      // Решения о серверах MCP — уже по настоящей папке сессии (worktree создан). Включённые человеком идут в `enabled`;
+      // всё остальное, чего человек не решал (файл в worktree отличается от проекта), — в `disabled`: ни один сервер без
+      // решения не включается, а вопрос Claude из-за этого не возникает. Только Claude-семейство.
+      let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
+      if (entry.runner.command === 'claude' && feed.projectMcp !== undefined) {
+        const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
+        if (found.undecided.length > 0) {
+          host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
+        }
+        const disabled = [...found.disabled, ...found.undecided.map((server) => server.name), ...found.unmanaged];
+        if (found.enabled.length > 0 || disabled.length > 0) projectMcp = { enabled: found.enabled, disabled };
+      }
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       // Политика одобрений и ключи доверия — только Codex. Ключи — realpath: cwd сессии (worktree) к этому месту уже
       // создан на диске, а до создания `/tmp` и `/private/tmp` дали бы разные ключи, и Codex показал бы экран доверия.
@@ -1023,6 +1086,7 @@ export function createSessionsService(
         channel: false,
         ...(trust === undefined ? {} : { trust }),
         ...(codexApprovals === undefined ? {} : { codexWriteApprovals: codexApprovals }),
+        ...(projectMcp === undefined ? {} : { projectMcp }),
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
@@ -1248,9 +1312,9 @@ export function createSessionsService(
     mode: LaunchMode,
     choice: LaunchChoice,
   ): Promise<CreatedSession> {
-    const outcome = await launch(ref, mode, choice);
+    const { outcome, heldKind } = await launchDetailed(ref, mode, choice);
     activity.markSeen(ref);
-    if (outcome === 'held') return { ...ref, held: 'folder-trust' };
+    if (outcome === 'held') return { ...ref, held: heldKind ?? 'folder-trust' };
     if (outcome === 'queued') {
       // Причина — в записи очереди; записи нет (сессию успели поднять или закрыть) — потолок машины.
       const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -1978,6 +2042,7 @@ export function createSessionsService(
       }
       // `held`: запуск Codex ждёт согласия на папку; `queued`: машине тесно, запуск ждёт слота в очереди. И там и там
       // `switching` остаётся до старта нового агента, снимет его сам запуск (`finishSwitch`).
+      heldKinds.delete(refKey(ref));
       return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
     } catch (error) {
       if (!applied) {

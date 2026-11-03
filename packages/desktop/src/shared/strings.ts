@@ -699,6 +699,22 @@ export const S = {
     ago: (relative: string): string => `${relative} ago`,
   },
 
+  /** Строка обновления CLI в Settings → Providers (`components/providers/ProviderUpdateRow.tsx`). */
+  providerUpdate: {
+    arrow: '→',
+    update: 'Update',
+    updating: 'Updating…',
+    skip: 'Skip this version',
+    busy: 'An update of this CLI is already running.',
+    updated: (to: string): string => `Updated to ${to}`,
+    failed: 'Update failed',
+    manual: 'Run it yourself:',
+    /** «2 Codex sessions will stay on 0.162.0 until restarted». */
+    sessions: (count: number, name: string, from: string | null): string =>
+      `${count} ${name} ${count === 1 ? 'session' : 'sessions'} will stay on ${from ?? 'the old version'} until restarted`,
+    smokeFailed: "The new version rejected Parley's launch flags. New sessions may fail to start.",
+  },
+
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
     addProvider: 'Add provider',
@@ -710,6 +726,8 @@ export const S = {
       timeout: 'The Z.ai quota request timed out. Try again.',
       unavailable: 'Z.ai quota is temporarily unavailable. Try again.',
     },
+    /** Тихая метка «↑» рядом с версией в сегменте провайдера: новая версия CLI (`shell/StatusBar.tsx`). */
+    updateMark: (latest: string): string => `${latest} available`,
     providerTitle: (name: string, available: boolean): string =>
       `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',
@@ -1127,6 +1145,15 @@ export const S = {
       confirm: 'Trust',
       /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
       via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
+    },
+    /** Серверы MCP из `.mcp.json` проекта перед запуском Claude (спека 2026-11-02, 7; карточка `project-mcp`). */
+    projectMcp: {
+      title: (repo: string): string => `Enable MCP servers for ${repo}?`,
+      body: 'These servers come from the .mcp.json of the project and run code on your machine. Nothing is enabled unless you switch it on; the session starts either way.',
+      switchLabel: (name: string): string => `Enable ${name}`,
+      enable: 'Enable selected',
+      rejectAll: 'Reject all',
+      stale: 'The server list changed — review again',
     },
     /** Просьба агента продолжить сессию на другом провайдере (`request_agent_switch`, карточка `agent-switch`). */
     agentSwitch: {
@@ -2619,6 +2646,9 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      updateProvider: 'update the provider CLI',
+      decideProjectMcp: 'save the MCP server choice',
+      skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',

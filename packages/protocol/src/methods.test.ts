@@ -6,7 +6,7 @@ import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
+import type { Capabilities, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 import * as protocolExports from './index.js';
 import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
@@ -356,6 +356,38 @@ describe('комнаты: ведущий и решение (дизайн ком�
   });
 });
 
+describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)', () => {
+  it('skipUpdate принимает {provider: строка} и отвечает {ok: true}', () => {
+    expect(METHODS['providers.skipUpdate'].safeParse({ provider: 'codex' }).success).toBe(true);
+    expect(METHODS['providers.skipUpdate'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.skipUpdate'].safeParse({ provider: 42 }).success).toBe(false);
+    expectTypeOf<Result<'providers.skipUpdate'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('providers.update: {provider}, ответ busy или done с итогом', () => {
+    expect(METHODS['providers.update'].safeParse({ provider: 'codex' }).success).toBe(true);
+    expect(METHODS['providers.update'].safeParse({}).success).toBe(false);
+    const busy: Result<'providers.update'> = { state: 'busy' };
+    const finished: Result<'providers.update'> = {
+      state: 'done', ok: false, from: '0.162.0', to: null, output: 'EACCES', runningSessions: 2,
+      manualCommand: '/usr/local/bin/codex update', smoke: { ok: true, output: '' },
+    };
+    expect([busy.state, finished.state]).toEqual(['busy', 'done']);
+  });
+
+  it('update в providers.list необязателен (старый хост молчит) и может быть null', () => {
+    const update: CliUpdate = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
+    const list: Result<'providers.list'> = {
+      providers: [
+        { id: 'codex', label: 'Codex', available: true, update },
+        { id: 'claude', label: 'Claude', available: true, update: null },
+        { id: 'glm', label: 'GLM', available: true },
+      ],
+    };
+    expect(list.providers[2]).not.toHaveProperty('update');
+  });
+});
+
 describe('модель, усилие и поля providers.list (дизайн комнат, 3.2)', () => {
   const create = { projectPath: '/p', workId: 'w-0001', provider: 'claude', label: '', task: '', parent: null };
   const parse = (extra: Record<string, unknown>) => METHODS['sessions.create'].safeParse({ ...create, ...extra });
@@ -436,6 +468,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       limits?: ProviderLimits | null;
       check?: ProviderCheck | null;
       custom?: CustomProviderInfo | null;
+      update?: CliUpdate | null;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
@@ -944,5 +977,23 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
   it('результат switchAgent и тип лимитов цели', () => {
     expectTypeOf<Result<'sessions.switchAgent'>['outcome']>().toEqualTypeOf<'started' | 'held' | 'queued'>();
     expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['limits']>().toEqualTypeOf<ProviderLimits | null>();
+  });
+});
+
+describe('consents.decide: enabled для карточки project-mcp (спека 2026-11-02, 7)', () => {
+  it('enabled необязателен и должен быть списком непустых строк', () => {
+    const decide = METHODS['consents.decide'];
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow' }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a', fingerprint: 'f1' }] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [] }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 2 }).success).toBe(true);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 0 }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: 1.5 }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', revision: '2' }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: 'a' }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: ['a'] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: 'a' }] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: [{ name: '', fingerprint: 'f' }] }).success).toBe(false);
+    expect(decide.safeParse({ id: 'c-01', decision: 'allow', enabled: Array.from({ length: 201 }, (_, i) => ({ name: `n${i}`, fingerprint: 'f' })) }).success).toBe(false);
   });
 });
