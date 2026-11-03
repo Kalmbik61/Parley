@@ -4,9 +4,9 @@ import { haptic } from '../haptics';
 import { SymbolView } from 'expo-symbols';
 import type { RemoteSession } from '@parley/protocol/remote';
 import { attentionOfSession, sessionKey, type RemoteState, type RemoteSwarm, type WorkRow, type WorkView } from '@parley/remote-client';
-import { capsuleOf } from '../cards/status';
+import { capsuleOf, type CapsuleInput } from '../cards/status';
 import { spacing, typography, useColors } from '../theme';
-import { attentionColor, attentionWord, CountPill, Dot } from '../ui/parts';
+import { attentionColor, CountPill, Dot } from '../ui/parts';
 import { ProviderAvatar } from '../ui/avatars';
 import { computeGuides, contentLeft, indentFor, STUB, trunkX, type GuideSpec } from './guides';
 import { useNow } from '../hooks/use-remote';
@@ -26,6 +26,12 @@ export interface TreeEnv {
 }
 
 const refOf = (view: WorkView, id: string) => ({ projectPath: view.work.projectPath, workId: view.work.id, sessionId: id });
+/** Input of `capsuleOf` for a session of the tree: the one word source for a row and a team head. */
+export function capsuleInput(env: TreeEnv, session: RemoteSession): CapsuleInput {
+  const live = env.state.activity[sessionKey(refOf(env.view, session.id))];
+  return { session, attention: attentionOf(env, session), need: live?.activity.need ?? session.stuck, subagents: live?.activity.subagents ?? 0, waitingFor: live?.activity.waitingFor ?? null, turnEndedAt: live?.activity.turnEndedAt ?? null, now: Date.now() };
+}
+
 export const attentionOf = (env: TreeEnv, s: RemoteSession) => attentionOfSession(env.state, refOf(env.view, s.id), s);
 
 const LINE = 1.5;
@@ -63,12 +69,11 @@ function Guides({ spec, indent, mid }: { spec: GuideSpec; indent: number; mid: n
 function SessionLine({ session, depth, env, spec, indent }: { session: RemoteSession; depth: number; env: TreeEnv; spec?: GuideSpec; indent?: number }) {
   const c = useColors();
   const a = attentionOf(env, session);
-  const live = env.state.activity[sessionKey(refOf(env.view, session.id))];
-  const cap = capsuleOf({ session, attention: a, need: live?.activity.need ?? session.stuck, subagents: live?.activity.subagents ?? 0, waitingFor: live?.activity.waitingFor ?? null, turnEndedAt: live?.activity.turnEndedAt ?? null, now: Date.now() });
+  const cap = capsuleOf(capsuleInput(env, session));
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${session.label}. ${attentionWord(a)}`}
+      accessibilityLabel={`${session.label}. ${cap.label}`}
       onPress={() => env.actions.openSession(session.id)}
       style={[styles.line, { paddingLeft: depth === 0 || indent === undefined ? 12 : contentLeft(depth, indent) }]}
     >
@@ -268,7 +273,7 @@ function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
   const waits = [headSession, ...team.children.flatMap((x) => (x.row.kind === 'session' ? [x.row.session] : x.row.kind === 'room' ? x.row.members : []))].filter((s): s is RemoteSession => s !== null);
   const [open, setOpen] = useState(teamOpenByDefault(waits.map((s) => attentionOf(env, s))));
   const name = headSession?.label ?? (team.head.kind === 'room' ? team.head.room.title : team.head.kind === 'swarm' ? `Swarm [${team.head.swarm.tag}]` : '');
-  const a = headSession !== null ? attentionOf(env, headSession) : 'idle';
+  const headWord = headSession !== null ? capsuleOf(capsuleInput(env, headSession)).label : 'Idle';
   const toggle = (): void => { setOpen((o) => !o); haptic.selection(); };
   return (
     <View style={[styles.card, { backgroundColor: c.surface }]}>
@@ -276,7 +281,7 @@ function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
         {open && team.children.length > 0 && (
           <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ position: 'absolute', left: trunkX(1, 28), top: 48, bottom: 0, width: LINE, backgroundColor: c.treeLine }} />
         )}
-        <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${attentionWord(a)}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex, { alignItems: 'flex-start' }]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${name}. ${headWord}`} onPress={() => headSession !== null && env.actions.openSession(headSession.id)} style={[styles.row, styles.flex, { alignItems: 'flex-start' }]}>
           {headSession !== null ? (
             <ProviderAvatar provider={headSession.provider} size={36} />
           ) : (
@@ -289,7 +294,7 @@ function SessionTeamCard({ team, env }: { team: Team; env: TreeEnv }) {
               {name}
             </Text>
             <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.label2 }]}>
-              {attentionWord(a)}
+              {headWord}
             </Text>
             {team.children.length > 0 && (
               <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>

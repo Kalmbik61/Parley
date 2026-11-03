@@ -14,7 +14,9 @@ describe('capsuleOf (D1 §9.2)', () => {
       .toMatchObject({ label: 'Needs you', tone: 'needsYou', detail: 'Waiting for your approval' });
     expect(capsuleOf({ ...base, session: session(), attention: 'working', subagents: 2 })).toMatchObject({ label: 'Working', detail: '2 subagents' });
     expect(capsuleOf({ ...base, session: session(), attention: 'working', waitingFor: 's-12' })).toMatchObject({ detail: 'Waiting for s-12' });
-    expect(capsuleOf({ ...base, session: session(), turnEndedAt: '2026-10-31T11:57:00Z' })).toMatchObject({ label: 'Idle', detail: 'Finished a turn · 3 min ago' });
+    expect(capsuleOf({ ...base, session: session(), attention: 'unseen', turnEndedAt: '2026-10-31T11:57:00Z' })).toMatchObject({ label: 'Finished a turn', detail: '3 min ago' });
+    expect(capsuleOf({ ...base, session: session({ lastEvent: { event: 'x', at: '2026-10-31T11:50:00Z' } }) })).toMatchObject({ label: 'Idle', detail: '10 min ago' });
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'pending' }) })).toMatchObject({ label: 'Starting', detail: null });
     expect(capsuleOf({ ...base, session: session({ lifecycle: 'sleeping', lastEvent: { event: 'x', at: '2026-10-31T11:00:00Z' } }) })).toMatchObject({ label: 'Sleeping', detail: 'Last active 1 h ago' });
     expect(capsuleOf({ ...base, session: session({ lifecycle: 'closed', result: 'failed' }) })).toMatchObject({ label: 'Failed', tone: 'danger' });
     expect(capsuleOf({ ...base, session: session({ lifecycle: 'closed', result: 'done' }) })).toMatchObject({ label: 'Done', tone: 'success' });
@@ -23,5 +25,14 @@ describe('capsuleOf (D1 §9.2)', () => {
     expect(needReason(null)).toBe('Waiting for you');
     expect(needReason({ kind: 'sign-in', since: '', detail: null, resetsAt: null, window: null, account: 'auth' })).toBe('Signed out of the provider');
     expect(needReason({ kind: 'limit', since: '', detail: null, resetsAt: null, window: 'session', account: null })).toBe('Usage limit reached');
+  });
+});
+
+describe('capsuleOf as the team head word', () => {
+  it('names a sleeping, a closed and a not-started lead, not "Idle"', () => {
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'sleeping' }) }).label).toBe('Sleeping');
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'closed', result: 'done' }) }).label).toBe('Done');
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'closed', result: 'failed' }) }).label).toBe('Failed');
+    expect(capsuleOf({ ...base, session: session({ lifecycle: 'pending' }) }).label).toBe('Starting');
   });
 });

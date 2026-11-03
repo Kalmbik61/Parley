@@ -60,6 +60,7 @@ export function capsuleOf(i: CapsuleInput): Capsule {
     const ago = timeAgo(s.lastEvent?.at ?? null, i.now);
     return { icon: 'moon.zzz', label: 'Sleeping', tone: 'off', detail: ago === null ? null : `Last active ${ago} ago` };
   }
+  if (s.lifecycle === 'pending') return { icon: 'ellipsis', label: 'Starting', tone: 'idle', detail: null };
   if (i.attention === 'needs-you') {
     return { icon: 'hand.raised.fill', label: 'Needs you', tone: 'needsYou', detail: needReason(i.need) };
   }
@@ -67,6 +68,10 @@ export function capsuleOf(i: CapsuleInput): Capsule {
     const detail = i.waitingFor !== null ? `Waiting for ${i.waitingFor}` : i.subagents > 0 ? `${i.subagents} subagent${i.subagents === 1 ? '' : 's'}` : null;
     return { icon: 'ellipsis', label: 'Working', tone: 'working', detail };
   }
-  const ago = timeAgo(i.turnEndedAt ?? s.lastEvent?.at ?? null, i.now);
-  return { icon: 'pause.circle', label: 'Idle', tone: 'idle', detail: ago === null ? null : `Finished a turn · ${ago} ago` };
+  if (i.attention === 'unseen') {
+    const ago = timeAgo(i.turnEndedAt ?? s.lastEvent?.at ?? null, i.now);
+    return { icon: 'checkmark.circle.fill', label: 'Finished a turn', tone: 'success', detail: ago === null ? null : `${ago} ago` };
+  }
+  const ago = timeAgo(s.lastEvent?.at ?? null, i.now);
+  return { icon: 'pause.circle', label: 'Idle', tone: 'idle', detail: ago === null ? null : `${ago} ago` };
 }

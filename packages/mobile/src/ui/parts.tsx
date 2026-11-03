@@ -11,9 +11,6 @@ export const toneColor = (c: Colors, tone: CapsuleTone): string =>
 export const attentionColor = (c: Colors, a: Attention): string =>
   ({ 'needs-you': c.needsYou, unseen: c.tint, working: c.working, idle: c.idle, off: c.off })[a];
 
-export const attentionWord = (a: Attention): string =>
-  ({ 'needs-you': 'Needs you', unseen: 'Finished a turn', working: 'Working', idle: 'Idle', off: 'Closed' })[a];
-
 /** State dot. Never the only carrier of meaning: rows add a word or symbol (D1 §1.4). */
 export function Dot({ color, ring }: { color: string; ring?: boolean }) {
   return (

@@ -34,6 +34,8 @@ export const demoSnapshot: RemoteWorksSnapshot = {
         sess('msgs', 'Docs-reviewer', { role: 'reviewer' }),
         sess('cb2', 'Engine-worker 1', { role: 'executor' }),
         sess('cb3', 'Engine-worker 2', { role: 'verifier' }),
+        // A46: a session that has not started yet — "Starting".
+        sess('fresh', 'Docs-starter', { role: 'writer', lifecycle: 'pending' as never, lastEvent: null, startedAt: null }),
         sess('s-01', 'Аналитик', { role: 'analyst' }),
         sess('s-02', 'Редактор', { role: 'editor' }),
       ],
@@ -78,7 +80,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'bridge.status', host: 'online', epoch: 'demo' });
   store.dispatch({ t: 'snapshot', snapshot: demoSnapshot, epoch: 'demo' });
   const act = (ref: SessionRef, activity: string, need: unknown = null): void =>
-    store.dispatch({ t: 'activity.changed', ref, metrics: null, activity: { activity, subagents: 0, tasks: [], waitingFor: null, heldByBackground: false, turnEndedAt: null, turnBoundaryAt: null, lastEventAt: ago(1), source: 'hooks', hooksMissing: false, need } as never });
+    store.dispatch({ t: 'activity.changed', ref, metrics: null, activity: { activity, subagents: 0, tasks: [], waitingFor: null, heldByBackground: false, turnEndedAt: activity === 'unseen' ? ago(3) : null, turnBoundaryAt: null, lastEventAt: ago(1), source: 'hooks', hooksMissing: false, need } as never });
   const ref = (sessionId: string): SessionRef => ({ projectPath: P, workId: 'w1', sessionId });
   act(ref('d1'), 'blocked', { kind: 'approval', since: ago(2), detail: null, resetsAt: null, window: null, account: null });
   act(ref('a13'), 'blocked', { kind: 'question', since: ago(5), detail: null, resetsAt: null, window: null, account: null });
@@ -218,7 +220,7 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
 export const DEMO_MCP_ON: Record<string, readonly string[]> = { 'c-4': ['filesystem', 'postgres'] };
 export const DEMO_CONSENT_NOTES: Record<string, string> = { 'c-5': 'The server list changed — review again' };
 
-/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
+/** `PARLEY_MOBILE_DEV_ROUTE=a42-reply|a42-prompt|a42-select|a42-plate|a42-quote|a42-room-plate|a42-room-select|a42-room-outgoing|room-menu|room-menu-autonomous|room-menu-archived|room-menu-busy|room-menu-offline|room-archive|room-delete|room-result|menu-working|menu-sleeping|close-confirm|switch-sheet|sleeping|starting|sleeping-waking|sleeping-failed|sleeping-pending|sleeping-alert|works|work|session|question|plain|decision|decision-sheet|decision-sheet-long|letters|letter|new|new-room` → a path to open once, for screenshots. */
 export function demoRoute(name: unknown): string | null {
   const w = workParam({ projectPath: P, workId: 'w1' });
   const s = (id: string): string => `/session/${sessionParam({ projectPath: P, workId: 'w1', sessionId: id })}`;
@@ -245,6 +247,8 @@ export function demoRoute(name: unknown): string | null {
       return s('greta');
     case 'sleeping':
       return s('zzz');
+    case 'starting':
+      return s('fresh');
     // A37b screenshots: the state comes from the `preview` param (waking, failed, pending, alert), not from taps.
     case 'sleeping-waking':
     case 'sleeping-failed':
