@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   addSystemMessage,
@@ -286,6 +287,11 @@ export interface SessionsService {
   /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
   delete(ref: SessionRef, force?: boolean): Promise<void>;
   live(ref: SessionRef): boolean;
+  /**
+   * Уборка копии под замком сессии: `null` без запуска `run`, если сессия жива, запускается или закрывается; иначе
+   * `launch` этой сессии ждёт окончания `run` (ошибку он не видит).
+   */
+  sweepGuard<T>(ref: SessionRef, run: () => Promise<T>): Promise<T | null>;
   stopAll(): Promise<void>;
   /** Собирает прерванных посреди хода — на старте хоста, после сверки живости. */
   collectInterrupted(): Promise<void>;
@@ -517,6 +523,8 @@ export function createSessionsService(
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
   // ручной `sessions.resume` одновременно с подъёмом той же сессии письмом.
   const launching = new Set<string>();
+  /** Сессии, чью копию сейчас убирают: ключ → промис уборки. Запуск ждёт его до своих проверок. */
+  const sweeping = new Map<string, Promise<unknown>>();
 
   // Идущие замены агента (спека замены агента, 5.3, 6.13): по сессии — id запроса и его исход. Живут только в памяти
   // этого хоста: `switching` в карте без записи здесь после перезапуска — оборванная замена (`clearStaleSwitches`).
@@ -778,6 +786,8 @@ export function createSessionsService(
     options: LaunchChoice = {},
   ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
+    const sweep = sweeping.get(key);
+    if (sweep !== undefined) await sweep.catch(() => {});
     if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
@@ -988,10 +998,25 @@ export function createSessionsService(
       // Worktree запланирован (`plannedWorktree` в `create()` или в старой карте
       // в core), но каталога на диске ещё нет — заводим его перед первым же
       // запуском, в том числе перед `resume` прерванной сессии (спека 8.1–8.3).
-      if (session.worktree !== null && session.worktree.createdAt === null) {
-        const worktree = session.worktree;
+      // Убранная копия (`removedAt` или каталог пропал) поднимается из своей ветки (`reuseBranch`).
+      const planned = session.worktree;
+      let needsWorktree = false;
+      if (planned !== null) {
+        needsWorktree = planned.createdAt === null || Boolean(planned.removedAt);
+        if (!needsWorktree) {
+          try {
+            await stat(planned.path);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            needsWorktree = code === 'ENOENT' || code === 'ENOTDIR';
+          }
+        }
+      }
+      if (planned !== null && needsWorktree) {
+        const worktree = planned;
+        const reuseBranch = worktree.createdAt !== null;
         try {
-          await timer.step('worktree', () => createWorktree(ref.projectPath, worktree));
+          await timer.step('worktree', () => createWorktree(ref.projectPath, worktree, { reuseBranch }));
         } catch (error) {
           const text = `worktree for ${sessionTag(ref.sessionId)} was not created: ${(error as Error).message}`;
           host.broadcast('host.notice', {
@@ -1019,10 +1044,12 @@ export function createSessionsService(
         }
         const createdAt = new Date().toISOString();
         worktree.createdAt = createdAt;
+        delete worktree.removedAt;
         await timer.step('worktree', () => updateMap(ref.projectPath, ref.workId, (current) => {
           const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
           if (target?.worktree !== null && target?.worktree !== undefined) {
             target.worktree.createdAt = createdAt;
+            delete target.worktree.removedAt;
           }
         }));
       }
@@ -2316,6 +2343,17 @@ export function createSessionsService(
     switchAgent,
     clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
+    async sweepGuard(ref, run) {
+      const key = refKey(ref);
+      if (pty.get(ref) !== undefined || launching.has(key) || closing.has(key) || sweeping.has(key)) return null;
+      const running = run();
+      sweeping.set(key, running);
+      try {
+        return await running;
+      } finally {
+        sweeping.delete(key);
+      }
+    },
     async stopAll() {
       await Promise.all(
         pty.list().map((handle) =>

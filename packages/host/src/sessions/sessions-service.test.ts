@@ -1661,6 +1661,104 @@ describe('worktree (план, кусок 4.2)', () => {
   });
 });
 
+describe('убранная копия', () => {
+  /** Работа с одной сессией, чей worktree уже заведён на диске: возвращает ссылку и сведения копии. */
+  async function sessionWithCopy(): Promise<{ ref: SessionRef; info: WorktreeInfo }> {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+    let sessionId = '';
+    let info!: WorktreeInfo;
+    await updateMap(project, work.work.id, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'копия', task: 'т' });
+      sessionId = session.id;
+      info = plannedWorktree(project, work.work.id, session.id, 'main', worktreeRootDir);
+      session.worktree = info;
+    });
+    await createWorktree(project, info);
+    await updateMap(project, work.work.id, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session?.worktree) session.worktree.createdAt = new Date().toISOString();
+    });
+    return { ref: { projectPath: project, workId: work.work.id, sessionId }, info };
+  }
+
+  it('запуск поднимает копию по removedAt на прежней ветке', async () => {
+    const { ref, info } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    await writeFile(path.join(info.path, 'новое.txt'), 'x\n', 'utf8');
+    await runGit('git', ['-C', info.path, 'add', 'новое.txt']);
+    await runGit('git', ['-C', info.path, 'commit', '-m', 'в копии']);
+    await runGit('git', ['-C', project, 'worktree', 'remove', '--force', info.path]);
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+    });
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch');
+
+    expect(existsSync(info.path)).toBe(true);
+    expect(existsSync(path.join(info.path, 'новое.txt'))).toBe(true);
+    const head = await runGit('git', ['-C', info.path, 'rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(head.stdout.trim()).toBe(info.branch);
+    const stored = (await readMap(ref.projectPath, ref.workId)).sessions.find((s) => s.id === ref.sessionId);
+    expect(stored?.worktree?.removedAt).toBeUndefined();
+    await service.stop(ref);
+  });
+
+  it('запись без removedAt и без каталога поднимается', async () => {
+    const { ref, info } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    await rm(info.path, { recursive: true, force: true });
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch');
+
+    expect(existsSync(info.path)).toBe(true);
+    await service.stop(ref);
+  });
+
+  it('sweepGuard не зовёт run у живой сессии', async () => {
+    const { ref } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch');
+    const run = vi.fn(async () => 'ok');
+
+    expect(await service.sweepGuard(ref, run)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    await service.stop(ref);
+  });
+
+  it('запуск ждёт идущую уборку', async () => {
+    const { ref, info } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    await rm(info.path, { recursive: true, force: true });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const sweep = service.sweepGuard(ref, async () => {
+      await gate;
+      events.push('sweep-done');
+    });
+    const launched = service.launch(ref, 'launch').then(() => {
+      events.push(existsSync(info.path) ? 'launched' : 'launched-without-copy');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events).toEqual([]);
+
+    release();
+    await Promise.all([sweep, launched]);
+    expect(events).toEqual(['sweep-done', 'launched']);
+    await service.stop(ref);
+  });
+});
+
 describe('скилл parley при запуске сессии (кусок 10 плана комнат)', () => {
   const skillIn = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley', 'SKILL.md');
   const aliasIn = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
