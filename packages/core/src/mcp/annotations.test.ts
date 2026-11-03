@@ -38,6 +38,7 @@ const TABLE: Record<string, Hints> = {
   get_capacity: READ,
   backlog_list: READ,
   backlog_suggest: WRITE,
+  backlog_take: WRITE,
   remember: WRITE,
   memory_read: READ,
   search_history: READ,

@@ -12,6 +12,7 @@ import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within }
 import { toast } from 'sonner';
 import { S } from '../../../shared/strings.js';
 import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
+import { useDraftInserts } from '../../board/board-drafts.js';
 import { useUiStore } from '../../store/ui.js';
 import { fakeDictationDeps } from '../../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -1037,5 +1038,35 @@ describe('Composer — набор с любого места', () => {
 
     view.unmount();
     expect(focusComposer()).toBe(false);
+  });
+});
+
+describe('Composer — карточка доски, брошенная на смонтированное поле (задача 9)', () => {
+  beforeEach(() => {
+    useDraftInserts.setState({ inserts: {}, mounted: {} });
+  });
+
+  it('запрос вставки кладёт текст в поле, забирает запрос и обновляет черновик', () => {
+    renderComposer();
+    expect(useDraftInserts.getState().mounted[KEY]).toBe(1);
+    act(() => useDraftInserts.getState().request(KEY, 'Board card b-001: Fix'));
+    expect(editor().textContent).toBe('Board card b-001: Fix');
+    expect(execCommand).toHaveBeenLastCalledWith('insertText', false, 'Board card b-001: Fix');
+    expect(useDraftInserts.getState().inserts[KEY]).toBeUndefined();
+    expect(useUiStore.getState().composerDrafts[KEY]).toBe('Board card b-001: Fix');
+  });
+
+  it('в непустое поле карточка встаёт в конец через пустую строку', () => {
+    renderComposer();
+    type('earlier');
+    act(() => useDraftInserts.getState().request(KEY, 'Board card b-001'));
+    expect(execCommand).toHaveBeenLastCalledWith('insertText', false, '\n\nBoard card b-001');
+    expect(editor().textContent?.startsWith('earlier')).toBe(true);
+  });
+
+  it('размонтированное поле снимает регистрацию', () => {
+    const view = renderComposer();
+    view.unmount();
+    expect(useDraftInserts.getState().mounted[KEY]).toBeUndefined();
   });
 });

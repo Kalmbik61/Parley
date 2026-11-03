@@ -72,6 +72,11 @@ import { SwitchAgentDialogHost } from '../components/dialogs/SwitchAgentDialog.j
 import { NewSessionOrRoomDialog } from '../components/dialogs/NewSessionOrRoomDialog.js';
 import { visibleWorkOrder } from '../sidebar/sort.js';
 import { SidebarSectionsWriter, useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
+import { BoardSync } from '../board/BoardSync.js';
+import { putCardDraft } from '../board/board-drafts.js';
+import { scheduleSend } from '../board/board-send.js';
+import { boardProjects, findBacklogCard } from '../board/board-model.js';
+import { useBoardStore } from '../board/board-store.js';
 import { NewWorkComposer } from '../sidebar/NewWorkComposer.js';
 import { WorkSidebar } from '../sidebar/WorkSidebar.js';
 import { cn } from '../lib/cn.js';
@@ -90,10 +95,12 @@ import {
   dropFromDragEnd,
   layoutCollision,
   sidebarDropFromDragEnd,
+  cardDropFromDragEnd,
   type DragItem,
   type SidebarTarget,
 } from '../layout/dnd.js';
-import { resolveSidebarDrop } from '../layout/dnd-sidebar.js';
+import { resolveCardDrop, resolveSidebarDrop } from '../layout/dnd-sidebar.js';
+import { useDragStore } from '../layout/drag-store.js';
 import { setDropPreview } from '../layout/DropIndicator.js';
 import { tabId } from '../layout/ids.js';
 import { tabMeta } from '../layout/tab-meta.js';
@@ -139,6 +146,10 @@ import { Titlebar } from './Titlebar.js';
  */
 function dragLabel(item: DragItem, key: string | null): string {
   // Имя файла, а не путь: путь из глубины дерева не влез бы в ярлык.
+  if (item.kind === 'card') {
+    const { slots, inboxPath } = useBoardStore.getState();
+    return findBacklogCard(boardProjects(slots, inboxPath), item.projectPath, item.id, item.index, item.title)?.item.title ?? '';
+  }
   if (item.kind === 'file') return item.path.slice(item.path.lastIndexOf('/') + 1);
   const entry = useWorksStore.getState().entries.find((candidate) => workKey(candidate.projectPath, candidate.map.work.id) === key);
   if (item.kind === 'session') {
@@ -379,6 +390,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   const handleDragStart = (event: DragStartEvent): void => {
     const item = dragItemOf(event.active.data.current);
+    // Что тащат, знают ленты и терминалы (карточка доски над ними): стор меняется на старте и конце жеста, а не на каждое
+    // движение указателя, как `useDndContext()`.
+    useDragStore.getState().setItem(item);
     setDragging(item === null ? null : dragLabel(item, useLayoutStore.getState().activeWorkKey));
   };
 
@@ -388,11 +402,26 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   };
 
   const handleDragEnd = (event: DragEndEvent): void => {
+    useDragStore.getState().setItem(null);
     setDragging(null);
     setDropPreview(null, null);
     const key = useLayoutStore.getState().activeWorkKey;
     // Бросок на строку сайдбара — не в раскладку (2.5). Цель чужой работы сюда не доходит (`layoutCollision`), но и здесь
     // берём только работу, чей ключ совпал с активной: сессия тащится из строки активной карточки.
+    // Карточка доски — на строку сайдбара (любой работы), ленту или терминал: ищется заново, письмо уходит с Undo.
+    const onCard = cardDropFromDragEnd(event);
+    if (onCard !== null) {
+      const { slots, inboxPath } = useBoardStore.getState();
+      const card = findBacklogCard(boardProjects(slots, inboxPath), onCard.card.projectPath, onCard.card.id, onCard.card.index, onCard.card.title);
+      if (card === null) return;
+      const target = resolveCardDrop(card, onCard.target, onCard.workKey, useWorksStore.getState().entries);
+      // Поле ввода не отправляет, а кладёт письмо карточки черновиком.
+      if (target !== null) {
+        if (onCard.target.kind === 'composer') void putCardDraft(bridge, card, target);
+        else scheduleSend(bridge, card, target);
+      }
+      return;
+    }
     const onSidebar = sidebarDropFromDragEnd(event);
     if (onSidebar !== null) {
       if (key !== null && onSidebar.workKey === key) dropOnSidebar(bridge, key, onSidebar.sessionId, onSidebar.target);
@@ -422,6 +451,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   };
 
   const handleDragCancel = (): void => {
+    useDragStore.getState().setItem(null);
     setDragging(null);
     setDropPreview(null, null);
   };
@@ -661,6 +691,13 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   // становится активной (id `mail` общий на раскладку), затем вкладка
   // открывается в её раскладке.
   const handleOpenMail = (key: string): void => openTabInWork(key, { kind: 'mail', id: tabId.mail() });
+  // Доска одна на работу, как почта. С путём проекта (меню секции) сначала ставится фильтр доски; без активной работы — ничего.
+  const handleOpenBoard = (projectPath?: string): void => {
+    const key = useLayoutStore.getState().activeWorkKey;
+    if (key === null) return;
+    if (projectPath !== undefined) useBoardStore.getState().setFilter({ kind: 'project', path: projectPath });
+    openTabInWork(key, { kind: 'board', id: tabId.board() });
+  };
   const handleOpenRoom = (key: string, roomId: string): void => openTabInWork(key, { kind: 'room', id: tabId.room(roomId), roomId });
 
   const shell = (
@@ -685,6 +722,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
                     }
                     onOpenMail={handleOpenMail}
                     onOpenRoom={handleOpenRoom}
+                    onOpenBoard={handleOpenBoard}
                   />
                 </ErrorBoundary>
               </div>
@@ -787,7 +825,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           const snapshot = await bridge.call('backlog.get', { projectPath: context.projectPath });
           const item = snapshot.items.find(row => row.id === context.id);
           const taken = `${target.workId}/${'roomId' in target ? target.roomId : target.sessionId}`;
-          if (!item || item.checked || [item.title, item.details].filter(Boolean).join('\n\n') !== context.task ||
+          if (!item || item.checked || [item.title, item.details].filter(Boolean).join('\n\n') !== (context.itemText ?? context.task) ||
               (item.taken !== undefined && item.taken !== taken)) throw new Error('The backlog item changed.');
           // An unchanged same-target marker may have committed before its reply was lost.
           if (item.taken === taken) return;
@@ -819,7 +857,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={layoutCollision(activeWorkKey, (item) => canSend && acceptsTerminal(item))}
+      collisionDetection={layoutCollision(activeWorkKey, (item) => item.kind === 'card' || (canSend && acceptsTerminal(item)))}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
@@ -829,6 +867,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           компонент, а не хук в теле: на каждое `activity.changed` перерисовывается он, а не
           вся оболочка (раунд исправлений 1 куска 3.3). */}
       <SidebarSectionsWriter />
+      <BoardSync bridge={bridge} />
       <LayoutPersistence bridge={bridge} />
       {shell}
       {/* Над <webview> указатель до DOM окна не доходит, и зоны броска над группой со страницей молчали

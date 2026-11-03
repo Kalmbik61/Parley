@@ -6,7 +6,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { resolveSidebarDrop } from './dnd-sidebar.js';
+import type { WindowWorkEntry } from '@parley/core';
+import type { BacklogSnapshot } from '@parley/protocol';
+import type { BoardCard, BoardProject } from '../board/board-model.js';
+import { workKey } from '../lib/tree-order.js';
+import { resolveCardDrop, resolveSidebarDrop } from './dnd-sidebar.js';
 
 const map = () =>
   makeWork('w-01', {
@@ -93,5 +97,52 @@ describe('resolveSidebarDrop — сессия на строку комнаты (
     legacy.map.rooms = [{ id: 'r-01', title: 'Старая', creator: 'human', members: ['s-02'], createdAt: '2026-09-27T08:00:00.000Z' } as never];
     expect(resolveSidebarDrop(legacy.map, 's-01', { kind: 'room-row', roomId: 'r-01' })).toEqual({ kind: 'join', sessionId: 's-01', roomId: 'r-01' });
     expect(resolveSidebarDrop(legacy.map, 's-02', { kind: 'room-row', roomId: 'r-01' })).toBeNull();
+  });
+});
+
+describe('resolveCardDrop — карточка Backlog на цель', () => {
+  const cardOf = (paths: readonly string[], inbox = false): BoardCard => {
+    const item = { id: 'b-001', title: 'Task', details: '', checked: false, section: null } as BacklogSnapshot['items'][number];
+    const snapshot = { projectPath: paths[0], sharedProjectPath: paths[0], version: 'v1', items: [item] } as unknown as BacklogSnapshot;
+    const project: BoardProject = { key: paths[0]!, projectPath: paths[0]!, paths, title: 'p', inbox, snapshot, live: true };
+    return { project, item, state: 'backlog', index: 0 };
+  };
+  const entry = (projectPath: string, id: string, patch: Partial<WindowWorkEntry['map']['work']> = {}): WindowWorkEntry => {
+    const base = makeWork(id, {
+      projectPath,
+      sessions: [makeSession('s-01', 'один'), makeSession('s-02', 'два', { lifecycle: 'closed' })],
+      rooms: [
+        { ...makeRoom('r-01', 'Живая'), members: ['s-01'], lead: 's-01', createdAt: '2026-09-29T08:00:00.000Z' },
+        { ...makeRoom('r-02', 'Архив'), members: ['s-01'], lead: 's-01', createdAt: '2026-09-29T08:00:00.000Z', archivedAt: '2026-09-30T08:00:00.000Z' },
+      ],
+    });
+    return { ...base, map: { ...base.map, work: { ...base.map.work, ...patch } } };
+  };
+  const entries = [entry('/p', 'w-01'), entry('/p', 'w-02'), entry('/other', 'w-01')];
+  const key = (path: string, id: string): string => workKey(path, id);
+
+  it('строка сессии другой работы того же проекта — цель', () => {
+    const target = resolveCardDrop(cardOf(['/p']), { kind: 'session-row', sessionId: 's-01' }, key('/p', 'w-02'), entries);
+    expect(target?.kind).toBe('session');
+    expect(target?.entry.map.work.id).toBe('w-02');
+  });
+
+  it('лента и терминал — те же цели; комната — живая', () => {
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'feed', roomId: 'r-01' }, key('/p', 'w-01'), entries)?.kind).toBe('room');
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'feed', sessionId: 's-01' }, key('/p', 'w-01'), entries)?.kind).toBe('session');
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'terminal', sessionId: 's-01' }, key('/p', 'w-01'), entries)?.id).toBe('s-01');
+  });
+
+  it('закрытая сессия, архивная комната, чужой проект, нет в карте — null', () => {
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'session-row', sessionId: 's-02' }, key('/p', 'w-01'), entries)).toBeNull();
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'room-row', roomId: 'r-02' }, key('/p', 'w-01'), entries)).toBeNull();
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'session-row', sessionId: 's-01' }, key('/other', 'w-01'), entries)).toBeNull();
+    expect(resolveCardDrop(cardOf(['/p']), { kind: 'room-row', roomId: 'r-99' }, key('/p', 'w-01'), entries)).toBeNull();
+  });
+
+  it('Входящие — любая живая цель любого проекта', () => {
+    const inbox = cardOf(['/inbox'], true);
+    expect(resolveCardDrop(inbox, { kind: 'session-row', sessionId: 's-01' }, key('/other', 'w-01'), entries)?.entry.projectPath).toBe('/other');
+    expect(resolveCardDrop(inbox, { kind: 'room-row', roomId: 'r-01' }, key('/p', 'w-02'), entries)?.kind).toBe('room');
   });
 });

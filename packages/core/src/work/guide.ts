@@ -201,15 +201,16 @@ only before creating a session.
 taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.
 \`backlog_suggest(kind, title, details?, why)\` — one finding outside your task: bug, debt or
 idea, with a reason. Check backlog_list first; do not expand your task. The project rule
-answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID. These tools
-cannot edit, remove or close existing items. Before completion, collect worthwhile loose
+answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID.
+\`backlog_take(id)\` — mark an item as yours when the human asks you to take it from the board.
+Otherwise these tools cannot edit, remove or close existing items. Before completion, collect worthwhile loose
 ends as suggestions. A project with its own TODOS.md specifies its policy in PARLEY.md.
 
 ${MEMORY_PARAGRAPH}
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
-A repeated call overwrites the summary and the artifacts.
+A repeated call overwrites the summary and the artifacts. \`backlog\` lists the board cards (b-NNN) a done result finishes; they move to Review for the human.
 A summary is two or three sentences to the point: neighbouring sessions will read it in their
 brief and the human in the window. Artifacts are result files; the path is always relative
 to the project root; the contents are not copied into the map, only the path and the kind

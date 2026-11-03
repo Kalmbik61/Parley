@@ -17,6 +17,7 @@ function randomHex(length: number, random: () => number): string {
 export const tabId: {
   terminal(sessionId: string): string;
   mail(): 'mail';
+  board(): 'board';
   room(roomId: string): string;
   diff(sessionId: string, commit: string | null): string;
   file(root: FileRootSpec, path: string): string;
@@ -24,6 +25,7 @@ export const tabId: {
 } = {
   terminal: (sessionId) => `terminal:${sessionId}`,
   mail: () => 'mail',
+  board: () => 'board',
   room: (roomId) => `room:${roomId}`,
   diff: (sessionId, commit) => (commit === null ? `diff:${sessionId}` : `diff:${sessionId}:${commit}`),
   file: (root, path) =>

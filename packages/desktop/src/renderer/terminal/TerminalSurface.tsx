@@ -51,6 +51,7 @@ import { tabMeta } from '../layout/tab-meta.js';
 import { focusTab } from '../layout/tree.js';
 import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
+import { useCardBlocksTerminal } from '../sidebar/use-drop-target.js';
 import { useUiStore } from '../store/ui.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { WaitingForTrust } from '../components/WaitingForTrust.js';
@@ -133,7 +134,10 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   const dark = useUiStore((state) => state.dark);
   const key = workKeyOf(sessionRef.projectPath, sessionRef.workId);
   const dropData: DropTargetData = { workKey: key, kind: 'terminal', sessionId: sessionRef.sessionId };
-  const drop = useDroppable({ id: dndId.terminal(key, tabId), data: dropData, disabled: !visible });
+  // Карточку доски, которую в эту сессию не отправить, терминал не берёт: иначе он выиграл бы коллизию у других целей
+  // (`layoutCollision`), и бросок пропал бы молча. Файлы и вкладки на это не смотрят.
+  const cardBlocked = useCardBlocksTerminal(key, sessionRef.sessionId);
+  const drop = useDroppable({ id: dndId.terminal(key, tabId), data: dropData, disabled: !visible || cardBlocked });
   const { setNodeRef } = drop;
   const setRoot = useCallback(
     (node: HTMLDivElement | null) => {

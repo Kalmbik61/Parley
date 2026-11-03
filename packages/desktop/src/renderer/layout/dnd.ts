@@ -39,7 +39,9 @@ export type DragItem =
   | { kind: 'tab'; tabId: string }
   | { kind: 'session'; sessionId: string }
   // Файл дерева «Файлов» (7.2): path относительный, от корня root.
-  | { kind: 'file'; root: FileRoot; path: string };
+  | { kind: 'file'; root: FileRoot; path: string }
+  // Карточка Backlog доски: проект и номер (без номера — место и заголовок) — сама карточка ищется в сторе в момент броска.
+  | { kind: 'card'; projectPath: string; id: string | null; index: number; title: string };
 export type DropZone =
   | { kind: 'strip'; groupId: string; index: number }
   | { kind: 'center'; groupId: string }
@@ -60,12 +62,23 @@ export interface DragSourceData {
 /** Строка сайдбара, на которую можно бросить сессию (2.5): строка сессии вне комнат или строка комнаты. */
 export type SidebarTarget = { kind: 'session-row'; sessionId: string } | { kind: 'room-row'; roomId: string };
 
+/** Лента открытой комнаты или Chat сессии: цель броска карточки доски. */
+export type FeedTarget = { kind: 'feed'; roomId: string } | { kind: 'feed'; sessionId: string };
+
+/** Поле ввода комнаты или Chat: карточка доски становится в нём черновиком. */
+export type ComposerTarget = { kind: 'composer'; roomId: string } | { kind: 'composer'; sessionId: string };
+
+/** Куда можно бросить карточку доски: строка сайдбара, лента, поле ввода или терминал сессии. */
+export type CardDropTarget = SidebarTarget | FeedTarget | ComposerTarget | { kind: 'terminal'; sessionId: string };
+
 /** `data` каждого droppable и sortable раскладки и сайдбара; `workKey` — работа-владелец. */
 export type DropTargetData = { workKey: string } & (
   | { kind: 'strip'; groupId: string; index: number } // вкладка строки или хвост строки
   | { kind: 'body'; groupId: string } // центр или край — по zoneForPoint
   | { kind: 'terminal'; sessionId: string } // поверхность терминала
   | SidebarTarget // строка сессии или комнаты в сайдбаре
+  | FeedTarget // лента комнаты или Chat
+  | ComposerTarget // поле ввода комнаты или Chat
 );
 
 /**
@@ -84,6 +97,10 @@ export const dndId = {
   sessionRow: (workKey: string, sessionId: string): string =>
     `session-row\u0000${workKey}\u0000${sessionId}`,
   roomRow: (workKey: string, roomId: string): string => `room-row\u0000${workKey}\u0000${roomId}`,
+  // Карточка доски: ключ — `cardKey` (проект и номер), работы у неё нет. Лента — владелец комнаты или сессии.
+  card: (key: string): string => `card\u0000${key}`,
+  feed: (workKey: string, ownerId: string): string => `feed\u0000${workKey}\u0000${ownerId}`,
+  composer: (workKey: string, ownerId: string): string => `composer\u0000${workKey}\u0000${ownerId}`,
   // Ключ корня, а не работы: у проекта и worktree сессий одни и те же относительные пути.
   file: (rootKey: string, path: string): string => `file\u0000${rootKey}\u0000${path}`,
 };
@@ -122,6 +139,7 @@ export function acceptsTerminal(item: DragItem): boolean {
     case 'session':
       return false;
     case 'file':
+    case 'card':
       return true;
   }
 }
@@ -138,6 +156,15 @@ function isDragItem(value: unknown): value is DragItem {
   if (typeof value !== 'object' || value === null) return false;
   const item = value as { kind?: unknown; root?: unknown; path?: unknown };
   if (item.kind === 'file') return isFileRoot(item.root) && typeof item.path === 'string';
+  if (item.kind === 'card') {
+    const card = value as { projectPath?: unknown; id?: unknown; index?: unknown; title?: unknown };
+    return (
+      typeof card.projectPath === 'string' &&
+      (card.id === null || typeof card.id === 'string') &&
+      typeof card.index === 'number' &&
+      typeof card.title === 'string'
+    );
+  }
   return item.kind === 'tab' || item.kind === 'session';
 }
 
@@ -156,6 +183,8 @@ function isDropTarget(data: unknown): data is DropTargetData {
     (value.kind === 'strip' ||
       value.kind === 'body' ||
       value.kind === 'terminal' ||
+      value.kind === 'feed' ||
+      value.kind === 'composer' ||
       value.kind === 'session-row' ||
       value.kind === 'room-row')
   );
@@ -199,15 +228,22 @@ export function layoutCollision(
         : null;
     const takesTerminal = item !== null && accepts(item);
     // Строки сайдбара (2.5) берут только сессию: вкладка и файл на сессию или комнату не значат ничего.
-    const takesSidebar = item?.kind === 'session';
+    // Карточка доски берёт строки любой работы, ленту и терминал; зоны раскладки её не принимают.
+    const isCard = item?.kind === 'card';
+    const takesSidebar = item?.kind === 'session' || isCard;
 
     const hits: { container: DroppableContainer; data: DropTargetData; area: number }[] = [];
     for (const container of droppableContainers) {
       if (container.disabled) continue;
       const data: unknown = container.data.current;
-      if (!isDropTarget(data) || data.workKey !== activeWorkKey) continue;
+      if (!isDropTarget(data)) continue;
+      const sidebarRow = data.kind === 'session-row' || data.kind === 'room-row';
+      // Строки сайдбара карточки доски — любой работы; остальное — только активной.
+      if (data.workKey !== activeWorkKey && !(isCard && sidebarRow)) continue;
       if (data.kind === 'terminal' && !takesTerminal) continue;
-      if ((data.kind === 'session-row' || data.kind === 'room-row') && !takesSidebar) continue;
+      if (sidebarRow && !takesSidebar) continue;
+      if ((data.kind === 'feed' || data.kind === 'composer') && !isCard) continue;
+      if (isCard && !sidebarRow && data.kind !== 'terminal' && data.kind !== 'feed' && data.kind !== 'composer') continue;
       const rect = droppableRects.get(container.id);
       if (rect === undefined || !contains(rect, point)) continue;
       hits.push({ container, data, area: rect.width * rect.height });
@@ -230,7 +266,7 @@ export function layoutCollision(
 }
 
 /** Вкладка, которую открывает брошенная строка сессии или файл. */
-function tabOfItem(item: Exclude<DragItem, { kind: 'tab' }>): TabSpec {
+function tabOfItem(item: Exclude<DragItem, { kind: 'tab' | 'card' }>): TabSpec {
   if (item.kind === 'session') return { kind: 'terminal', id: tabIdOf.terminal(item.sessionId), sessionId: item.sessionId };
   return { kind: 'file', id: tabIdOf.file(item.root.spec, item.path), root: item.root.spec, path: item.path };
 }
@@ -269,6 +305,8 @@ export function applyDrop(
   sizes: GroupSizes,
 ): OpResult {
   if (item.kind === 'tab') return moveOpenTab(layout, item.tabId, zone, sizes);
+  // Карточка доски раскладку не меняет: её бросок разбирает `cardDropFromDragEnd`.
+  if (item.kind === 'card') return { layout, error: null };
 
   const tab = tabOfItem(item);
   // Уже открытая сессия или файл — тот же перенос, что и у вкладки.
@@ -345,11 +383,14 @@ export function dropFromDragEnd(event: DragEndEvent): { item: DragItem; zone: Dr
   if (item === null || over === null) return null;
   const data: unknown = over.data.current;
   if (!isDropTarget(data)) return null;
+  if (item.kind === 'card') return null;
   const point = pointerOf(event);
   switch (data.kind) {
     case 'session-row':
     case 'room-row':
-      // Бросок в сайдбар — не в раскладку: его разбирает `sidebarDropFromDragEnd`.
+    case 'feed':
+    case 'composer':
+      // Бросок в сайдбар, ленту и поле ввода — не в раскладку: его разбирают `sidebarDropFromDragEnd` и `cardDropFromDragEnd`.
       return null;
     case 'terminal':
       return { item, zone: { kind: 'terminal', sessionId: data.sessionId } };
@@ -390,6 +431,33 @@ export function sidebarDropFromDragEnd(
       return { workKey: over.workKey, sessionId: item.sessionId, target: { kind: 'session-row', sessionId: over.sessionId } };
     case 'room-row':
       return { workKey: over.workKey, sessionId: item.sessionId, target: { kind: 'room-row', roomId: over.roomId } };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Бросок карточки доски на строку сайдбара, ленту, поле ввода или терминал: какая карточка, на какую цель и в какой работе
+ * (`workKey` цели). `null` — бросок не карточки или мимо этих целей. Можно ли бросить и кому уйдёт письмо, решает
+ * `resolveCardDrop` (`dnd-sidebar.ts`).
+ */
+export function cardDropFromDragEnd(
+  event: DragEndEvent,
+): { workKey: string; card: Extract<DragItem, { kind: 'card' }>; target: CardDropTarget } | null {
+  const item = dragItemOf(event.active.data.current);
+  const over: unknown = event.over?.data.current;
+  if (item?.kind !== 'card' || !isDropTarget(over)) return null;
+  switch (over.kind) {
+    case 'session-row':
+      return { workKey: over.workKey, card: item, target: { kind: 'session-row', sessionId: over.sessionId } };
+    case 'room-row':
+      return { workKey: over.workKey, card: item, target: { kind: 'room-row', roomId: over.roomId } };
+    case 'terminal':
+      return { workKey: over.workKey, card: item, target: { kind: 'terminal', sessionId: over.sessionId } };
+    case 'feed':
+      return { workKey: over.workKey, card: item, target: 'roomId' in over ? { kind: 'feed', roomId: over.roomId } : { kind: 'feed', sessionId: over.sessionId } };
+    case 'composer':
+      return { workKey: over.workKey, card: item, target: 'roomId' in over ? { kind: 'composer', roomId: over.roomId } : { kind: 'composer', sessionId: over.sessionId } };
     default:
       return null;
   }

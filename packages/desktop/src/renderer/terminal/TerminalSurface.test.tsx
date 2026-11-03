@@ -8,11 +8,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { DndContext, PointerSensor, useDraggable, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core';
 import type { ILink } from '@xterm/xterm';
-import { refKey, type ConsentCard, type SessionRef } from '@parley/protocol';
+import { refKey, type BacklogSnapshot, type ConsentCard, type SessionRef } from '@parley/protocol';
 import { toast } from 'sonner';
+import { useBoardStore } from '../board/board-store.js';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
+import { dndId, dragItemOf, type DragItem, type DragSourceData } from '../layout/dnd.js';
+import { useDragStore } from '../layout/drag-store.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
@@ -785,5 +789,113 @@ describe('TerminalSurface — диктовка (спека 3.3)', () => {
     await useDictationStore.getState().toggle(id);
     await waitFor(() => expect(sent).toEqual([{ ref, text: 'hello from voice', submit: false }]));
     dispose();
+  });
+});
+
+// Карточка Backlog доски над терминалом (задача 8): терминал — цель броска, только если карточку можно отправить в эту
+// сессию; иначе он выключен и не отбирает бросок у других целей (`layoutCollision` отдаёт терминалу приоритет). Файл
+// на это не смотрит. Настоящий `DndContext` с порогом 4 px, как в окне; «под указателем» задаёт `collisionDetection`
+// теста — jsdom прямоугольников не считает, а выключенные droppable dnd-kit в него не передаёт. Тащимый предмет тест кладёт
+// в стор жеста (`layout/drag-store.ts`) своими обработчиками, как `AppShell`: терминал узнаёт по нему, что в руке карточка.
+describe('TerminalSurface — карточка доски над терминалом (задача 8)', () => {
+  const key = workKey(ref.projectPath, ref.workId);
+  const terminalId = dndId.terminal(key, 'terminal:s-01');
+  const CARD: DragItem = { kind: 'card', projectPath: ref.projectPath, id: 'b-001', index: 0, title: 'Task' };
+  const FILE: DragItem = { kind: 'file', root: { workKey: key, spec: { kind: 'project' } }, path: 'src/a.ts' };
+
+  /** Указатель всегда над терминалом: он получает бросок, если его droppable включён. */
+  const overTerminal: CollisionDetection = ({ droppableContainers }) => {
+    const hit = droppableContainers.find((container) => container.id === terminalId);
+    return hit === undefined ? [] : [{ id: hit.id, data: { droppableContainer: hit, value: 1 } }];
+  };
+
+  function Source({ item }: { item: DragItem }): JSX.Element {
+    const data: DragSourceData = { item };
+    const { setNodeRef, listeners } = useDraggable({ id: 'drag-source', data });
+    return <div ref={setNodeRef} {...listeners} data-drag-source="" />;
+  }
+
+  function Stage({ item, onEnd }: { item: DragItem; onEnd: (event: DragEndEvent) => void }): JSX.Element {
+    const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+    return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={overTerminal}
+        onDragStart={(event: DragStartEvent) => {
+          useDragStore.getState().setItem(dragItemOf(event.active.data.current));
+        }}
+        onDragEnd={(event) => {
+          useDragStore.getState().setItem(null);
+          onEnd(event);
+        }}
+        onDragCancel={() => {
+          useDragStore.getState().setItem(null);
+        }}
+      >
+        <Source item={item} />
+        <TerminalSurface bridge={bridge} sessionRef={ref} tabId="terminal:s-01" groupId="g-1" visible fontFamily="Menlo" fontSize={13} />
+      </DndContext>
+    );
+  }
+
+  /** Тащит `item` за порог, держит над терминалом и отпускает; результат — id цели, на которой кончился бросок (`null` — мимо). */
+  async function dropOnTerminal(item: DragItem): Promise<unknown> {
+    const ended = vi.fn();
+    render(<Stage item={item} onEnd={ended} />);
+    const source = document.querySelector<HTMLElement>('[data-drag-source]');
+    if (source === null) throw new Error('тащимого нет');
+    fireEvent.pointerDown(source, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 30, clientY: 10 });
+    await act(async () => {});
+    // Droppable пересчитывается после старта перетаскивания — движение ещё раз даёт dnd-kit обновить столкновения.
+    fireEvent.pointerMove(document, { isPrimary: true, clientX: 32, clientY: 10 });
+    await act(async () => {});
+    fireEvent.pointerUp(document, { isPrimary: true, clientX: 32, clientY: 10 });
+    await act(async () => {});
+    return (ended.mock.calls.at(-1)?.[0] as DragEndEvent | undefined)?.over?.id ?? null;
+  }
+
+  const putSession = (patch: Parameters<typeof makeSession>[2] = {}): void =>
+    useWorksStore.setState({
+      entries: [makeWork(ref.workId, { projectPath: ref.projectPath, sessions: [makeSession(ref.sessionId, 'один', patch)] })],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+  /** Доска знает проект `path` с одной карточкой Backlog b-001. */
+  const putBoard = (path: string): void => {
+    const item = { id: 'b-001', title: 'Task', details: '', checked: false, section: null };
+    const snapshot = { projectPath: path, sharedProjectPath: path, version: 'v1', items: [item] } as unknown as BacklogSnapshot;
+    useBoardStore.setState({ slots: new Map([[path, { snapshot, live: true }]]), inboxPath: null });
+  };
+
+  beforeEach(() => {
+    putBoard(ref.projectPath);
+    useDragStore.setState({ item: null });
+  });
+  afterEach(() => {
+    useBoardStore.setState({ slots: new Map(), inboxPath: null });
+    useDragStore.setState({ item: null });
+  });
+
+  it('карточка проекта сессии, сессия живая — терминал принимает бросок', async () => {
+    putSession();
+    expect(await dropOnTerminal(CARD)).toBe(terminalId);
+  });
+
+  it('закрытая сессия — терминал под карточкой выключен, бросок идёт мимо него', async () => {
+    putSession({ lifecycle: 'closed' });
+    expect(await dropOnTerminal(CARD)).toBeNull();
+  });
+
+  it('карточка другого проекта — терминал выключен', async () => {
+    putSession();
+    putBoard('/tmp/elsewhere');
+    expect(await dropOnTerminal({ ...CARD, projectPath: '/tmp/elsewhere' })).toBeNull();
+  });
+
+  it('файл над терминалом закрытой сессии — терминал включён, как и раньше', async () => {
+    putSession({ lifecycle: 'closed' });
+    expect(await dropOnTerminal(FILE)).toBe(terminalId);
   });
 });
