@@ -59,7 +59,7 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
           case 'inlineCode':
             return (
               <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2) }, (n.value ?? '').length <= INLINE_FILL_MAX && { backgroundColor: c.codeFill }]}>
-                {codeText(n.value ?? '')}
+                {codeText(n.value ?? '', (n.value ?? '').length <= INLINE_FILL_MAX)}
               </Text>
             );
           case 'link':
