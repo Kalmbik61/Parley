@@ -192,6 +192,23 @@ describe('обновление CLI из Parley', () => {
     await vi.waitFor(() => expect(alive(pid)).toBe(false));
   });
 
+  it('EPERM при убийстве группы (macOS: группы уже нет или одни зомби) — не ошибка: ни в exit, ни в stop()', async () => {
+    bin = await script(`    exit 0`);
+    const real = process.kill.bind(process);
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      return real(pid, signal);
+    }) as typeof process.kill);
+    try {
+      const update = runner({ versions: { now: '0.162.0', after: '0.166.0' }, latest: '0.166.0' });
+      await expect(update.run('codex', 'w')).resolves.toMatchObject({ state: 'done', ok: true });
+      expect(spy.mock.calls.some(([pid]) => pid < 0)).toBe(true);
+      expect(() => update.stop()).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('занятость: пока идёт одно обновление, второе получает busy; потом снова можно', async () => {
     bin = await script('    sleep 1; exit 0');
     const update = runner({ versions: { now: '0.162.0', after: '0.166.0' }, latest: '0.166.0' });
