@@ -123,7 +123,7 @@ import { createJobPrompt } from './assistant/job-context.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
-import { createVoiceTelemetry } from './voice/telemetry.js';
+import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
@@ -1076,7 +1076,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     send,
     assistant: assistantService,
     assistantRequests,
-    voiceTelemetry: createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs }),
+    voiceTelemetry: createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs, usdPerMinute: () => LIVE_USD_PER_MINUTE }),
     assistantJobs: {
       ...assistantJobs,
       ackInline(jobId, rev) {

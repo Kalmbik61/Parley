@@ -4,7 +4,7 @@ import { METHODS } from '@parley/protocol';
 import { createJobs, type Job, type JobEnd, type JobRun } from '../assistant/jobs.js';
 import { createRequests } from '../assistant/requests.js';
 import { createVoiceTelemetryHandlers } from '../methods/voice-telemetry.js';
-import { createVoiceTelemetry, TELEMETRY_MAX_ROWS } from './telemetry.js';
+import { createVoiceTelemetry, LIVE_USD_PER_MINUTE, TELEMETRY_MAX_ROWS } from './telemetry.js';
 
 function setup(rate: number | null = null) {
   const db = openMemoryDb();
@@ -77,6 +77,14 @@ describe('VoiceTelemetry (хост)', () => {
     priced.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-04', 'closed', 100, 90)").run();
     priced.telemetry.record({ voiceSessionId: 'vs-1', interrupts: 0 });
     expect(priced.telemetry.list()[0]?.voice_cost_estimate_usd).toBeCloseTo(0.3, 6);
+  });
+
+  it('LIVE_USD_PER_MINUTE = 0.05: стоимость сессии — оценка по минутам голоса', () => {
+    expect(LIVE_USD_PER_MINUTE).toBe(0.05);
+    const h = setup(LIVE_USD_PER_MINUTE);
+    h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-04', 'closed', 700, 600)").run();
+    h.telemetry.record({ voiceSessionId: 'vs-1', interrupts: 0 });
+    expect(h.telemetry.list()[0]).toMatchObject({ voice_seconds: 600, voice_cost_estimate_usd: expect.closeTo(0.5, 9) });
   });
 
   it('до закрытия usage берётся оценка', () => {

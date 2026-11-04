@@ -401,7 +401,7 @@ export interface VoiceTelemetryRow {
   interrupts: number | null;
   superseded_count: number | null;
   voice_seconds: number | null;
-  /** `null` — тариф не задан (хост не выдумывает цену). */
+  /** Оценка стоимости голоса по ориентировочному тарифу, не счёт; `null` — тариф не задан. */
   voice_cost_estimate_usd: number | null;
 }
 

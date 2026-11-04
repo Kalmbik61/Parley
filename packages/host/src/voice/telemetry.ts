@@ -3,7 +3,7 @@
  * хоста. Остров присылает то, что измерил сам (`first_audio_ms`, `ack_audible`, `delegation_to_submit_ms`,
  * `transcript_wait_ms`, `result_hold_ms`, `speech_state`, `interrupts`); хост дописывает то, что знает точнее клиента:
  * `link_request_ms`, `job_duration_ms` (по Request и job), `superseded_count`, `voice_seconds` (по `voice_usage`) и
- * `voice_cost_estimate_usd` (только если задан тариф: цену хост не выдумывает).
+ * `voice_cost_estimate_usd` (оценка по `LIVE_USD_PER_MINUTE`, не счёт; без заданного тарифа поле `null`).
  *
  * Только числа, перечисления и id: ни аудио, ни транскрипта, ни текста поручения или итога — у схемы нет таких полей.
  * Записи одного ключа «сессия + Request» сливаются (`COALESCE`): новый факт дописывается, прежний не затирается.
@@ -15,6 +15,12 @@ import type { Jobs } from '../assistant/jobs.js';
 import type { Requests } from '../assistant/requests.js';
 
 export const TELEMETRY_MAX_ROWS = 500;
+
+/**
+ * Ориентировочный тариф Live, USD за минуту голоса. Источник: страница цен OpenAI для gpt-live-1, ориентировочная,
+ * проверено 2026-11-04; то же значение в спеке «Голос↔Ассистент» и записке T0. `voice_cost_estimate_usd` — оценка, а не счёт.
+ */
+export const LIVE_USD_PER_MINUTE = 0.05;
 
 export interface VoiceTelemetryInput {
   voiceSessionId: string;

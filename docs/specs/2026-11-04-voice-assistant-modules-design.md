@@ -153,7 +153,7 @@ VOICE_PROMPT по руководству live-prompting:
 **(T6) Хранение и определения.**
 - Таблица `voice_telemetry` в базе хоста (миграция 12): строка сессии (`request_id = ''`) и по строке на Request; хранится не больше 500 последних строк. У схемы нет текстовых полей, кроме id и перечислений. Чтение для приёмки — метод `voice.telemetry.list` (локальный).
 - Остров записывает измеренное сам (`voice.telemetry.record`): `first_audio_ms` (от начала сессии до первого воспроизведения моделью), `interrupts` (человек заговорил поверх воспроизведения), `ack_audible`, `delegation_to_submit_ms`, `transcript_wait_ms` (часть предыдущего до сборки текста), `result_hold_ms` (от готовности итога до передачи в Live), `speech_state`.
-- Хост дописывает своё: `link_request_ms`, `job_duration_ms` (по Request и job), `superseded_count` (вытесненные Request сессии), `voice_seconds` (из `voice_usage`), `voice_cost_estimate_usd` — только если задан тариф; без него `null`, цена не выдумывается.
+- Хост дописывает своё: `link_request_ms`, `job_duration_ms` (по Request и job), `superseded_count` (вытесненные Request сессии), `voice_seconds` (из `voice_usage`), `voice_cost_estimate_usd` — оценка по константе `LIVE_USD_PER_MINUTE = 0.05` (страница цен OpenAI для gpt-live-1, ориентировочная, проверено 2026-11-04; это оценка, а не счёт); без заданного тарифа хук отдаёт `null`.
 
 ## 12. Приёмка (реальный OpenAI и Mac)
 | ID | Сценарий |
