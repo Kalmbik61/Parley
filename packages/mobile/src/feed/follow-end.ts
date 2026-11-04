@@ -23,6 +23,8 @@ export const NEAR_BOTTOM = 80;
 export const GROWTH_ECHO_MS = 150;
 /** Our own scroll is in flight for at most this long (a momentum end clears it sooner). */
 export const OWN_SCROLL_MS = 600;
+/** A44c: a re-read that brings at most this many new rows (one render batch) is followed with instant scrolls; more reopens the feed like the first open. */
+export const REREAD_INSTANT_ROWS = 10;
 
 export interface ScrollMetrics {
   readonly offset: number;
@@ -169,6 +171,8 @@ export function scrolled(s: FollowState, m: ScrollMetrics, now: number, keys: re
   // content height is someone else's (VoiceOver, a status-bar tap), even inside the echo window (critic A44 N6).
   if (!grown && movedUp && !nearBottom(m) && !next.pinned) return evaluate(next, m, keys);
   if (next.pinned || grown || now < next.echoUntil || own(next, now)) return next;
+  // A44c: the human leaves the end only upwards; a frame that moved DOWN (the tail of an animation we started) never does.
+  if (next.atBottom && s.scrollOffset !== null && m.offset >= s.scrollOffset) return next;
   return evaluate(next, m, keys);
 }
 
@@ -191,13 +195,39 @@ export function momentumBegan(s: FollowState, now: number): FollowState {
   return { ...s, pinned: false, momentum: true };
 }
 
-/** A momentum end. While a finger is down it is ignored (iOS reports it for programmatic scrolls too); after our own scroll it only clears the flag. */
+/** A momentum end. While a finger is down it is ignored (iOS reports it for programmatic scrolls too); during our own scroll it is ignored as well: iOS reports one for an animation the next one cut short, and `ownUntil` expires by itself (A44c). */
 export function momentumEnded(s: FollowState, m: ScrollMetrics, now: number, keys: readonly string[]): Step {
   if (s.touching) return { state: s, scroll: 'none' };
-  if (own(s, now) && !s.momentum) return { state: { ...s, ownUntil: 0 }, scroll: 'none' };
+  if (own(s, now) && !s.momentum) return { state: s, scroll: 'none' };
   const next = evaluate({ ...s, momentum: false, ownUntil: 0 }, m, keys);
   if (next.atBottom && s.pendingGrowth) return issue({ ...next, pendingGrowth: false }, now, 'instant');
   return { state: { ...next, pendingGrowth: next.atBottom ? next.pendingGrowth : false }, scroll: 'none' };
+}
+
+export interface Reopened {
+  readonly state: FollowState;
+  /** The feed starts over like the first open: the screen resets its window to the last rows. */
+  readonly reopen: boolean;
+}
+
+const reopened = (s: FollowState, keys: readonly string[]): Reopened => ({ state: { ...open(), layoutHeight: s.layoutHeight, seenKey: last(keys) }, reopen: true });
+
+/** A44c: the feed was read again (back from the background, a reconnect, a re-subscribe) and `keys` already hold the new rows. */
+export function reread(s: FollowState, now: number, keys: readonly string[]): Reopened {
+  // Still hidden from an earlier reopen (a remount, then the read after it): pin again, no second skeleton; the reveal cap keeps counting from the first conceal.
+  if (!s.revealed) return { state: { ...s, pinned: true, lastGrowthAt: now, seenKey: last(keys), away: 0 }, reopen: false };
+  if (!s.atBottom || humanBusy(s)) return { state: { ...s, away: countAfter(keys, s.seenKey, s.away) }, reopen: false };
+  const at = s.seenKey === null ? -1 : keys.lastIndexOf(s.seenKey);
+  const fresh = at < 0 ? null : keys.length - 1 - at;
+  if (fresh !== null && fresh <= REREAD_INSTANT_ROWS) {
+    return { state: { ...s, pinned: true, openedAt: now, lastGrowthAt: now, seenKey: last(keys), away: 0 }, reopen: false };
+  }
+  return reopened(s, keys);
+}
+
+/** A44c: the list was mounted again (a new epoch showed a skeleton). Away from the end the position is lost anyway and stays as it is. The old list took its gesture with it: a finger or momentum of it is over. */
+export function remounted(s: FollowState, keys: readonly string[]): Reopened {
+  return s.atBottom ? reopened(s, keys) : { state: { ...s, touching: false, momentum: false, pendingGrowth: false }, reopen: false };
 }
 
 /** The window of the list changed height (keyboard, multi-line draft, reply plate, Sleeping row, cards, mention menu). */

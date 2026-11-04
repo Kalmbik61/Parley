@@ -1,5 +1,5 @@
 // The hook over the follow-the-end controller (A44): the same wiring for the session feed and the room feed.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FlatList, LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { createFollowController } from './follow-controller';
 import type { ScrollMetrics } from './follow-end';
@@ -19,14 +19,35 @@ function scrollToEnd(list: FlatList<never> | null, animated: boolean): void {
 }
 
 /** `keys`: the item keys in list order; "new" is whatever comes after the last item the human has seen. */
-export function useFollowEnd<T>(list: React.RefObject<FlatList<T> | null>, keys: readonly string[]) {
+export function useFollowEnd<T>(list: React.RefObject<FlatList<T> | null>, keys: readonly string[], onReopen: () => void) {
   const [away, setAway] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const listRef = useRef(list);
   listRef.current = list;
+  const reopenRef = useRef(onReopen);
+  reopenRef.current = onReopen;
   const ctl = useMemo(
-    () => createFollowController({ scrollToEnd: (animated) => scrollToEnd(listRef.current.current as FlatList<never> | null, animated), onAway: setAway, onReveal: () => setRevealed(true), now: Date.now }),
+    () =>
+      createFollowController({
+        scrollToEnd: (animated) => scrollToEnd(listRef.current.current as FlatList<never> | null, animated),
+        onAway: setAway,
+        onReveal: () => setRevealed(true),
+        onConceal: () => setRevealed(false),
+        onReopen: () => reopenRef.current(),
+        now: Date.now,
+      }),
     [],
+  );
+  // A44c: the second and later instances of the list are a remount (a skeleton replaced the screen).
+  const mounted = useRef(false);
+  const attach = useCallback(
+    (instance: FlatList<T> | null) => {
+      (list as { current: FlatList<T> | null }).current = instance;
+      if (instance === null) return;
+      if (mounted.current) ctl.remounted();
+      mounted.current = true;
+    },
+    [ctl, list],
   );
   ctl.setKeys(keys);
   useEffect(() => () => ctl.dispose(), [ctl]);
@@ -35,6 +56,10 @@ export function useFollowEnd<T>(list: React.RefObject<FlatList<T> | null>, keys:
     away,
     /** A44b: false while the pin brings the list to the end; the screen draws it with opacity 0 until then. */
     revealed,
+    /** The `ref` of the list. */
+    attach,
+    /** A44c: the feed was read again; call from a layout effect after the render with the new rows. */
+    reread: ctl.reread,
     jump: ctl.jump,
     keepEnd: ctl.keepEnd,
     leave: ctl.leave,

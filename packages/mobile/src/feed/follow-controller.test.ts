@@ -10,9 +10,18 @@ function setup() {
   const calls: boolean[] = [];
   const away: number[] = [];
   const reveals: number[] = [];
-  const c = createFollowController({ scrollToEnd: (a) => calls.push(a), onAway: (n) => away.push(n), onReveal: () => reveals.push(Date.now()), now: Date.now });
+  const conceals: number[] = [];
+  const reopens: number[] = [];
+  const c = createFollowController({
+    scrollToEnd: (a) => calls.push(a),
+    onAway: (n) => away.push(n),
+    onReveal: () => reveals.push(Date.now()),
+    onConceal: () => conceals.push(Date.now()),
+    onReopen: () => reopens.push(Date.now()),
+    now: Date.now,
+  });
   c.setKeys(K);
-  return { c, calls, away, reveals };
+  return { c, calls, away, reveals, conceals, reopens };
 }
 
 describe('follow controller (A44)', () => {
@@ -179,5 +188,82 @@ describe('follow controller (A44)', () => {
     c.contentSizeChanged(500);
     expect(reveals.length).toBe(1);
     c.dispose();
+  });
+});
+
+describe('follow controller: a re-read (A44c)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** Opened, shown, the pin over, at the end. */
+  function shown() {
+    const h = setup();
+    h.c.contentSizeChanged(1000);
+    h.c.scroll(atEnd);
+    vi.advanceTimersByTime(700);
+    expect(h.reveals).toHaveLength(1);
+    h.calls.length = 0;
+    return h;
+  }
+  const rows = (n: number): string[] => [...K, ...Array.from({ length: n }, (_, i) => `r${i}`)];
+
+  it('+61 rows: concealed once, 7 growths 80 ms apart, every scroll instant, shown once within 600 ms', () => {
+    const h = shown();
+    const t0 = Date.now();
+    h.c.setKeys(rows(61));
+    expect(h.c.reread()).toBe(true);
+    expect(h.conceals).toHaveLength(1);
+    expect(h.reopens).toHaveLength(1);
+    for (let i = 0; i < 7; i++) {
+      h.c.contentSizeChanged(2000 + i * 500);
+      h.c.scroll({ offset: 2000 + i * 500 - 100, content: 2000 + i * 500, viewport: 100 });
+      vi.advanceTimersByTime(80);
+    }
+    vi.advanceTimersByTime(300);
+    expect(h.calls.every((a) => !a)).toBe(true);
+    expect(h.conceals).toHaveLength(1);
+    expect(h.reveals).toHaveLength(2);
+    expect(h.reveals[1]! - t0).toBeLessThanOrEqual(601);
+    h.c.dispose();
+  });
+
+  it('+3 rows: no conceal, the scroll is instant', () => {
+    const h = shown();
+    h.c.setKeys(rows(3));
+    expect(h.c.reread()).toBe(false);
+    h.c.contentSizeChanged(1300);
+    expect(h.conceals).toHaveLength(0);
+    expect(h.calls).toEqual([false]);
+    h.c.dispose();
+  });
+
+  it('remounted(): concealed, shown within 600 ms', () => {
+    const h = shown();
+    const t0 = Date.now();
+    expect(h.c.remounted()).toBe(true);
+    expect(h.conceals).toHaveLength(1);
+    h.c.contentSizeChanged(1000);
+    vi.advanceTimersByTime(700);
+    expect(h.reveals).toHaveLength(2);
+    expect(h.reveals[1]! - t0).toBeLessThanOrEqual(601);
+    h.c.dispose();
+  });
+
+  it('remount, then a re-read of 61 rows while hidden: one conceal, one reveal within 600 ms of the first conceal', () => {
+    const h = shown();
+    const t0 = Date.now();
+    expect(h.c.remounted()).toBe(true);
+    h.c.contentSizeChanged(1000);
+    vi.advanceTimersByTime(300);
+    h.c.setKeys(rows(61));
+    expect(h.c.reread()).toBe(false);
+    h.c.contentSizeChanged(3000);
+    h.c.scroll({ offset: 2900, content: 3000, viewport: 100 });
+    vi.advanceTimersByTime(700);
+    expect(h.conceals).toHaveLength(1);
+    expect(h.reopens).toHaveLength(1);
+    expect(h.reveals).toHaveLength(2);
+    expect(h.reveals[1]! - t0).toBeLessThanOrEqual(601);
+    h.c.dispose();
   });
 });

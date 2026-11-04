@@ -10,6 +10,10 @@ export interface FollowIo {
   onAway(away: number): void;
   /** A44b: the list became visible (once per open). */
   onReveal(): void;
+  /** A44c: the list is hidden again (a re-read or a remount reopened the feed). */
+  onConceal(): void;
+  /** A44c: the feed starts over like the first open: reset the window to the last rows. */
+  onReopen(): void;
   now(): number;
 }
 
@@ -26,6 +30,17 @@ export function createFollowController(io: FollowIo) {
     state = next;
     if (next.away !== away) io.onAway(next.away);
     if (next.revealed && !shown) io.onReveal();
+    if (!next.revealed && shown) io.onConceal();
+  };
+  const clearTimers = (): void => {
+    for (const t of [pinTimer, revealTimer, settleTimer]) if (t !== null) clearTimeout(t);
+    pinTimer = revealTimer = settleTimer = null;
+  };
+  const apply = (r: fe.Reopened): boolean => {
+    if (r.reopen) clearTimers();
+    commit(r.state);
+    if (r.reopen) io.onReopen();
+    return r.reopen;
   };
   const run = (step: fe.Step): void => {
     commit(step.state);
@@ -83,6 +98,18 @@ export function createFollowController(io: FollowIo) {
       run(fe.contentChanged(state, io.now(), keys, content));
       armPin();
       armReveal();
+    },
+    /** A44c: the feed was read again; call after the render that carries the new rows. */
+    reread(): boolean {
+      const reopen = apply(fe.reread(state, io.now(), keys));
+      if (reopen) run(fe.contentChanged(state, io.now(), keys));
+      armPin();
+      armReveal();
+      return reopen;
+    },
+    /** A44c: the list was mounted again. */
+    remounted(): boolean {
+      return apply(fe.remounted(state, keys));
     },
     layout(height: number): void {
       run(fe.viewportChanged(state, height, io.now()));

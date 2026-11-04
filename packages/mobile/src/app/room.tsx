@@ -1,7 +1,7 @@
 // Room = the chat of a room (D1 §9.7, plan A33): history by `context.messages`, live by `rooms.mail`, members and lead,
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -14,15 +14,20 @@ import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome }
 import { confirmByOwner } from '../auth/lock-instance';
 import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { useCovered } from '../auth/use-covered';
-import { devMoreRoom } from '../dev/demo';
+import { devEpoch, devMoreRoom, devRoomBurst } from '../dev/demo';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { devFocus, LONG_DRAFT, runDevScript } from '../dev/dev-script';
 import { ConnectionBanner } from '../components/ConnectionBanner';
+import { DictationStrip } from '../voice/DictationStrip';
+import { dictation } from '../voice/dictation';
+import { MicButton } from '../voice/MicButton';
+import { DictationHiddenGuard, useDictationTarget } from '../voice/use-dictation-target';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
+import { REREAD_INSTANT_ROWS } from '../feed/follow-end';
 import { useFollowEnd } from '../feed/use-follow-end';
 import { useTailWindow } from '../feed/use-tail-window';
 import { WINDOW_ROWS } from '../feed/window';
@@ -65,6 +70,15 @@ export default function RoomScreen() {
   const roomInput = useRef<React.ComponentRef<typeof TextInput>>(null);
   useEffect(() => devFocus.listen(() => roomInput.current?.focus()), []);
   const chat = useRoomChat(target, toast.show);
+  const dictationId = `room:${roomId ?? ''}`;
+  const mic = useDictationTarget({
+    id: dictationId,
+    input: roomInput,
+    value: chat.draft,
+    apply: chat.setDraft,
+    fallback: { kind: 'room', key: target === null ? '' : roomKey(target) },
+    toast: toast.show,
+  });
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
   const hostId = useRuntimeState().host?.hostId ?? null;
   const runKey = target === null ? '' : runKeyOf(hostId, target);
@@ -114,7 +128,7 @@ export default function RoomScreen() {
   const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
   // The list gets the tail window of the rows (A44b): all drawn and measured in one pass; older rows come from the top.
   const chronKeys = useMemo(() => chron.map(rowKey), [chron]);
-  const { start, widen, include, onRevealed, onScroll: trackStart } = useTailWindow(chronKeys, noSpan);
+  const { start, widen, reset, include, onRevealed, onScroll: trackStart } = useTailWindow(chronKeys, noSpan);
   const data = useMemo(() => chron.slice(start), [chron, start]);
   // A quote jump into rows outside the window widens it first, then scrolls once they are drawn.
   const jumpTo = useRef<string | null>(null);
@@ -127,12 +141,33 @@ export default function RoomScreen() {
   }, [data]);
   // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
-  const follow = useFollowEnd(list, keys);
+  // A room shown empty stays shown when its first letter comes (critic m2); a reopen (A44c) starts over, so it hides again.
+  const shownEmpty = useRef(false);
+  const follow = useFollowEnd(list, keys, () => {
+    shownEmpty.current = false;
+    reset();
+  });
+  // A44c: a room read again with letters already shown (back from the background, a reconnect) lands at the end like the first open.
+  const roomStatus = entry?.status;
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const prevStatus = useRef(roomStatus);
+  const hadRows = useRef(false);
+  useLayoutEffect(() => {
+    const before = prevStatus.current;
+    prevStatus.current = roomStatus;
+    const had = hadRows.current;
+    hadRows.current = data.length > 0;
+    if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && had && data.length > 0) follow.reread();
+    // A feed that stayed empty through the return and now brings many rows hides like a first open; 1-2 live rows keep the m2 rule.
+    else if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && !had && data.length > REREAD_INSTANT_ROWS && shownEmpty.current) {
+      shownEmpty.current = false;
+      bump();
+    }
+  }, [roomStatus]);
   useEffect(() => {
     if (follow.revealed) onRevealed();
   }, [follow.revealed]);
   // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
-  const shownEmpty = useRef(false);
   if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
   const hiddenFeed = !follow.revealed && data.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
@@ -144,6 +179,11 @@ export default function RoomScreen() {
       up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
       top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreRoom(client, target),
+      bgburst: () => undefined,
+      bgsmall: () => undefined,
+      epoch: () => devEpoch(client, { room: target }),
+      roomburst: () => devRoomBurst(client, target),
+      fill: () => undefined,
       card: () => undefined,
     });
   }, [found !== null]);
@@ -375,7 +415,7 @@ export default function RoomScreen() {
             </View>
           )}
         <FlatList
-          ref={list}
+          ref={follow.attach}
           style={{ opacity: hiddenFeed ? 0 : 1 }}
           accessibilityElementsHidden={hiddenFeed}
           data={data}
@@ -470,6 +510,7 @@ export default function RoomScreen() {
           </View>
         )}
         <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
+          <DictationHiddenGuard id={dictationId} hidden={hidden.kind === 'hidden'} />
           {hidden.kind === 'hidden' ? (
             <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center', paddingVertical: 8 }]}>
               {hidden.text}
@@ -493,6 +534,7 @@ export default function RoomScreen() {
                 />
               )}
               <ToLine names={to} />
+              <DictationStrip id={dictationId} />
               <View style={styles.row}>
                 <Pressable
                   accessibilityRole="button"
@@ -510,11 +552,13 @@ export default function RoomScreen() {
                   editable={!chat.busy && hidden.sendEnabled}
                   value={chat.draft}
                   onChangeText={chat.setDraft}
+                  onSelectionChange={mic.onSelectionChange}
                   placeholder={COMPOSER_PLACEHOLDER}
                   placeholderTextColor={c.label3}
                   style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label, opacity: chat.busy ? 0.6 : 1 }]}
                 />
-                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void chat.send()} style={styles.send}>
+                <MicButton id={dictationId} editable={!chat.busy && hidden.sendEnabled} />
+                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void (dictation.finishBeforeSend(dictationId) || chat.send())} style={styles.send}>
                   <SymbolView name="arrow.up.circle.fill" size={32} tintColor={canSend ? c.tint : c.off} />
                 </Pressable>
               </View>
