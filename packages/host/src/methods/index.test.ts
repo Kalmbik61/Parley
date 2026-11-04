@@ -50,6 +50,15 @@ it('registers the window-only decisions list and room history actions', () => {
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('session.workflowRun отдаёт запуск, который нашла активность, и не принимает чужой вид runId', async () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+  const workflowRun = vi.fn(async () => null);
+  const handlers = createHostHandlers({ ...deps, activity: { workflowRun } as unknown as MethodDeps['activity'] });
+  await handlers.methods['session.workflowRun']!({ ref, runId: 'wf_abc' } as never, {} as RequestInfo);
+  expect(workflowRun).toHaveBeenCalledWith(ref, 'wf_abc');
+});
+
 it('assistant.* регистрируются, только если сервис помощника передан', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const assistant = {} as unknown as AssistantService;
@@ -206,6 +215,7 @@ describe('методы на старте хоста ждут первого чт
         'pty.send',
         // Лента вида «Chat» сверяет сессию со снимком работ.
         'feed.snapshot',
+        'session.workflowRun',
         'feed.progress',
         'feed.subscribe',
         'feed.unsubscribe',

@@ -87,6 +87,77 @@ const waitFor = async (
   }
 };
 
+describe('createLogIndex: запуски Workflow', () => {
+  const sid = 's-wf';
+  const launchLine = `${JSON.stringify({
+    type: 'user',
+    sessionId: sid,
+    timestamp: '2026-11-04T10:00:00.000Z',
+    message: { role: 'user', content: 'запускаю' },
+    toolUseResult: { status: 'async_launched', taskType: 'local_workflow', taskId: 't1', runId: 'wf_run', workflowName: 'audit', summary: 'проверка' },
+  })}\n`;
+
+  async function writeJournal(): Promise<void> {
+    const dir = path.join(claudeRoot, '-proj', sid, 'subagents', 'workflows', 'wf_run');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, 'journal.jsonl'),
+      [{ type: 'launched' }, { type: 'started', key: 'k', agentId: 'a1', label: 'Первый', phase: 'Сбор' }].map((l) => JSON.stringify(l)).join('\n') + '\n',
+    );
+  }
+  const writeDescriptor = async (): Promise<void> => {
+    const dir = path.join(claudeRoot, '-proj', sid, 'workflows');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, 'wf_run.json'),
+      JSON.stringify({
+        workflowName: 'audit',
+        status: 'completed',
+        startTime: 1,
+        workflowProgress: [{ type: 'workflow_agent', agentId: 'a1', label: 'Первый', phaseTitle: 'Сбор', state: 'done' }],
+      }),
+    );
+  };
+
+  it('сводка идущего запуска, затем дескриптор: сводка меняется на completed, onChange задевает сессию', async () => {
+    await writeClaudeSession(sid, launchLine);
+    await writeJournal();
+    const mine = session({ providerSessionId: sid });
+
+    const idx = index({ workflowLive: () => true });
+    await idx.start();
+    expect(idx.workflows(mine)).toBeUndefined();
+
+    await idx.refreshWorkflows(mine);
+    expect(idx.workflows(mine)).toMatchObject({
+      total: 1,
+      runs: [{ runId: 'wf_run', name: 'audit', status: 'running', phase: 'Сбор', agents: { total: 1, running: 1, done: 0, failed: 0 } }],
+    });
+
+    let touched = false;
+    idx.onChange((change) => {
+      if (change?.affects(mine) === true) touched = true;
+    });
+    await writeDescriptor();
+    await waitFor(() => idx.workflows(mine)?.runs[0]?.status === 'completed', 15_000, writeDescriptor);
+    expect(touched).toBe(true);
+    expect(idx.workflows(mine)?.runs[0]?.agents).toEqual({ total: 1, running: 0, done: 1, failed: 0 });
+  }, 40_000);
+
+  it('процесс не жив: запуск без дескриптора interrupted; сессия Codex и сессия без лога — null и undefined', async () => {
+    await writeClaudeSession(sid, launchLine);
+    await writeJournal();
+    const idx = index({ workflowLive: () => false });
+    await idx.start();
+    const mine = session({ providerSessionId: sid });
+    await idx.refreshWorkflows(mine);
+    expect(idx.workflows(mine)?.runs[0]?.status).toBe('interrupted');
+    expect(idx.workflows(session({ providerSessionId: 'нет-такого' }))).toBeUndefined();
+    expect(await idx.workflowRun(mine, 'wf_run')).toMatchObject({ runId: 'wf_run', agentList: [{ label: 'Первый', state: 'stopped' }] });
+    expect(await idx.workflowRun(mine, 'wf_other')).toBeNull();
+  });
+});
+
 describe('createLogIndex', () => {
   it('providerSessionId нет — index/log отдают undefined/null', async () => {
     const idx = index();

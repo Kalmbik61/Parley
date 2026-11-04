@@ -31,10 +31,14 @@ describe('sessionFileForPath', () => {
     ).toBe(p('-proj', 's1.jsonl'));
   });
 
+  it('дескриптор законченного workflow принадлежит родительской сессии', () => {
+    expect(sessionFileForPath(p('-proj', 's1', 'workflows', 'wf_x.json'), root)).toBe(p('-proj', 's1.jsonl'));
+  });
+
   it('посторонние файлы игнорируются', () => {
     expect(sessionFileForPath(p('-proj', 'MEMORY.md'), root)).toBeNull();
     expect(sessionFileForPath(p('-proj', 'sessions-index.json'), root)).toBeNull();
-    expect(sessionFileForPath(p('-proj', 's1', 'workflows', 'wf_x.json'), root)).toBeNull();
+    expect(sessionFileForPath(p('-proj', 's1', 'workflows', 'scripts', 'a.js'), root)).toBeNull();
     expect(sessionFileForPath(p('-proj'), root)).toBeNull();
     expect(sessionFileForPath('/другое/место/f.jsonl', root)).toBeNull();
   });

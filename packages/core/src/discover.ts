@@ -183,8 +183,8 @@ export async function discoverSession(
  * родительской сессии: подсессии живут в отдельных файлах, и их изменение обязано
  * обновлять родителя.
  *
- * Возвращает null, если путь к сессиям отношения не имеет (MEMORY.md, wf_*.json,
- * sessions-index.json и прочее).
+ * Возвращает null, если путь к сессиям отношения не имеет (MEMORY.md,
+ * sessions-index.json, скрипты workflow и прочее).
  */
 export function sessionFileForPath(changedPath: string, root: string): string | null {
   const relative = path.relative(root, changedPath);
@@ -199,6 +199,15 @@ export function sessionFileForPath(changedPath: string, root: string): string | 
   // <project>/<id>.jsonl — сама сессия.
   if (segments.length === 2) {
     return second.endsWith(JSONL) ? path.join(root, project, second) : null;
+  }
+
+  // <project>/<id>/workflows/wf_*.json — дескриптор законченного запуска workflow: родитель переиндексируется.
+  // Скрипты в `workflows/scripts/` к сессии отношения не имеют.
+  if (segments[2] === 'workflows') {
+    const name = segments[3];
+    return segments.length === 4 && name !== undefined && name.startsWith('wf_') && name.endsWith('.json')
+      ? path.join(root, project, `${second}${JSONL}`)
+      : null;
   }
 
   // <project>/<id>/subagents/... — подсессия, отвечает родительский файл.

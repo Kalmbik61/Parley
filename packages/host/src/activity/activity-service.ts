@@ -59,6 +59,7 @@ import {
   type UsageSummary,
   type WorkEntry,
   type WorkSession,
+  type WorkflowRun,
 } from '@parley/core';
 import {
   refKey,
@@ -128,6 +129,11 @@ export interface ActivityService {
    * сессии нет, `providerSessionId` ещё не известен или индекс журнала не знает.
    */
   logFile(ref: SessionRef): string | null;
+  /**
+   * Полный запуск Workflow сессии по `runId` (метод `session.workflowRun`); `null` — сессии, лога или запуска нет.
+   * Пути к файлам в ответе не отдаются.
+   */
+  workflowRun(ref: SessionRef, runId: string): Promise<WorkflowRun | null>;
   /** Журнал субагента Codex по id его треда; не найден — null. */
   childLogFile(ref: SessionRef, threadId: string): string | null;
   /** Файлы журналов сессии Codex: основной и субагентов; не Codex или журнала нет — []. */
@@ -447,7 +453,17 @@ export function createActivityService(
   const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
   const limits = options.limits;
 
-  const logIndex: LogIndex = createLogIndex(roots, options.timelineReader === undefined ? {} : { reader: options.timelineReader });
+  const logIndex: LogIndex = createLogIndex(roots, {
+    ...(options.timelineReader === undefined ? {} : { reader: options.timelineReader }),
+    workflowLive: (index) =>
+      works.snapshot().entries.some((entry) =>
+        entry.map.sessions.some(
+          (session) => session.providerSessionId === index.id && session.provider !== 'codex' && session.lifecycle === 'active',
+        ),
+      ),
+  });
+  /** Была ли сессия живой при последнем пересчёте запусков Workflow: смена живости их пересчитывает (запуск без дескриптора `running` ↔ `interrupted`). */
+  const workflowLiveSeen = new Map<string, boolean>();
   const live = new Map<string, SessionLive>();
   /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
   const derivedActivity = new Map<string, Activity>();
@@ -880,6 +896,7 @@ export function createActivityService(
       mailWaiting: mailWaits.get(key) ?? null,
       context: view.context,
       compaction: view.compaction,
+      workflows: session.provider === 'codex' ? null : (logIndex.workflows(session) ?? null),
     };
   }
 
@@ -1092,6 +1109,13 @@ export function createActivityService(
         : { ...folded, lastEventAt, hooksMissing, turnBoundaryAt };
 
     const index = logIndex.index(session);
+    // Запуски Workflow считаются асинхронно: смена живости процесса и первый взгляд на сессию с логом их пересчитывают,
+    // а изменённая сводка возвращается сюда через `onChange` индекса.
+    const processLive = session.lifecycle === 'active';
+    if (index !== undefined && session.provider !== 'codex' && workflowLiveSeen.get(key) !== processLive) {
+      workflowLiveSeen.set(key, processLive);
+      void logIndex.refreshWorkflows(session).catch(() => {});
+    }
     const metrics = metricsFor(ref, key, entry, session, activity, index);
 
     // Сторож Codex: долгий вызов без вывода или конец хода с ещё незавершённой ячейкой (s21).
@@ -1379,6 +1403,7 @@ export function createActivityService(
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
     for (const key of Array.from(pointerLabelReset)) if (!validSessions.has(key)) pointerLabelReset.delete(key);
+    for (const key of Array.from(workflowLiveSeen.keys())) if (!validSessions.has(key)) workflowLiveSeen.delete(key);
     for (const key of Array.from(mailWaits.keys())) {
       if (!validSessions.has(key)) mailWaits.delete(key);
     }
@@ -1574,6 +1599,12 @@ export function createActivityService(
         .entry(ref.projectPath, ref.workId)
         ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
       return session === undefined ? null : (logIndex.index(session)?.file ?? null);
+    },
+    async workflowRun(ref, runId) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      return session === undefined ? null : logIndex.workflowRun(session, runId);
     },
     childLogFile(ref, threadId) {
       const session = works

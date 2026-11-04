@@ -11,6 +11,16 @@ import { PROVIDER_CHECK_REASONS } from './types.js';
 import * as protocolExports from './index.js';
 import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
 
+describe('session.workflowRun', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+  it('принимает runId вида wf_…, остальное (пути, пустое, длинное) отклоняет', () => {
+    expect(METHODS['session.workflowRun'].safeParse({ ref, runId: 'wf_abc-12' }).success).toBe(true);
+    for (const runId of ['', 'abc', 'wf_', '../wf_x', 'wf_a/b', `wf_${'a'.repeat(65)}`]) {
+      expect(METHODS['session.workflowRun'].safeParse({ ref, runId }).success).toBe(false);
+    }
+  });
+});
+
 describe('feed.progress registration', () => {
   const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
   it('registers a strict ref-only method and preserves existing feed params', () => {

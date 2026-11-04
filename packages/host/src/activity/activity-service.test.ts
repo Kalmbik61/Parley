@@ -888,6 +888,101 @@ describe('createActivityService', () => {
   }, 20_000);
 });
 
+describe('createActivityService: запуски Workflow', () => {
+  const sid = 's-wf';
+  const sessionDir = (): string => path.join(claudeRoot, '-proj');
+  const launchLine = (runId: string, taskId: string): string =>
+    `${JSON.stringify({
+      type: 'user',
+      sessionId: sid,
+      timestamp: '2026-11-04T10:00:00.000Z',
+      message: { role: 'user', content: 'запускаю' },
+      toolUseResult: { status: 'async_launched', taskType: 'local_workflow', taskId, runId, workflowName: 'audit', summary: 'проверка' },
+    })}\n`;
+  const lastWorkflows = (a: ActivityService, ref: SessionRef) =>
+    (a.get(ref)?.metrics as LiveMetrics | undefined)?.workflows;
+
+  async function descriptor(runId: string, body: Record<string, unknown>): Promise<void> {
+    const dir = path.join(sessionDir(), sid, 'workflows');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${runId}.json`), JSON.stringify(body));
+  }
+
+  it('идущий запуск попадает в activity.changed как running, законченный — как completed; живость берётся из lifecycle', async () => {
+    const { ref } = await activeSession({ providerSessionId: sid });
+    await mkdir(path.join(sessionDir(), sid, 'subagents', 'workflows', 'wf_run'), { recursive: true });
+    await writeFile(path.join(sessionDir(), `${sid}.jsonl`), launchLine('wf_run', 't1'));
+    await writeFile(
+      path.join(sessionDir(), sid, 'subagents', 'workflows', 'wf_run', 'journal.jsonl'),
+      `${JSON.stringify({ type: 'started', key: 'k', agentId: 'a1', label: 'Первый', phase: 'Сбор' })}\n`,
+    );
+
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await vi.waitFor(() => expect(lastWorkflows(a, ref)?.runs[0]).toMatchObject({ runId: 'wf_run', name: 'audit', status: 'running', phase: 'Сбор' }), {
+      timeout: 30_000,
+      interval: 25,
+    });
+    expect(broadcasts.some((b) => b.event === 'activity.changed' && JSON.stringify(b.data).includes('"running"'))).toBe(true);
+
+    await descriptor('wf_run', { workflowName: 'audit', status: 'completed', startTime: 5 });
+    await vi.waitFor(() => expect(lastWorkflows(a, ref)).toMatchObject({ total: 1, runs: [{ status: 'completed' }] }), {
+      timeout: 30_000,
+      interval: 100,
+    });
+  }, 60_000);
+
+  it('25 запусков: в сводке 20 новых и total = 25; сессия без запусков и Codex — null', async () => {
+    const { ref } = await activeSession({ providerSessionId: sid });
+    await mkdir(sessionDir(), { recursive: true });
+    await writeFile(path.join(sessionDir(), `${sid}.jsonl`), `${JSON.stringify({ type: 'custom-title', customTitle: 'x', sessionId: sid })}\n`);
+    for (let i = 0; i < 25; i += 1) {
+      await descriptor(`wf_${String(i).padStart(2, '0')}`, { workflowName: `n${i}`, status: 'completed', startTime: 1000 + i });
+    }
+    const plain = await activeSession({ providerSessionId: 'нет-лога' });
+    const codex = await activeSession({ provider: 'codex' });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await vi.waitFor(() => expect(lastWorkflows(a, ref)?.total).toBe(25), { timeout: 30_000, interval: 25 });
+    const summary = lastWorkflows(a, ref);
+    expect(summary?.runs).toHaveLength(20);
+    expect(summary?.runs[0]?.runId).toBe('wf_24');
+
+    await vi.waitFor(() => expect(a.get(codex.ref)).toBeDefined(), { timeout: 30_000, interval: 25 });
+    expect(lastWorkflows(a, plain.ref) ?? null).toBeNull();
+    expect(lastWorkflows(a, codex.ref)).toBeNull();
+  }, 60_000);
+
+  it('workflowRun отдаёт агентов запуска без путей к файлам; чужой runId и сессия без записи — null', async () => {
+    const { ref } = await activeSession({ providerSessionId: sid });
+    await mkdir(sessionDir(), { recursive: true });
+    await writeFile(path.join(sessionDir(), `${sid}.jsonl`), launchLine('wf_one', 't1'));
+    await descriptor('wf_one', {
+      workflowName: 'audit',
+      status: 'completed',
+      workflowProgress: [{ type: 'workflow_agent', agentId: 'a1', label: 'Первый', phaseTitle: 'Сбор', state: 'done', resultPreview: 'ок' }],
+    });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+
+    let run: Awaited<ReturnType<ActivityService['workflowRun']>> = null;
+    await vi.waitFor(
+      async () => {
+        run = await a.workflowRun(ref, 'wf_one');
+        expect(run).not.toBeNull();
+      },
+      { timeout: 30_000, interval: 50 },
+    );
+    expect(run).toMatchObject({ runId: 'wf_one', agentList: [{ agentId: 'a1', label: 'Первый', state: 'done', resultPreview: 'ок' }] });
+    expect(JSON.stringify(run)).not.toContain(claudeRoot);
+    expect(await a.workflowRun(ref, 'wf_other')).toBeNull();
+    expect(await a.workflowRun({ ...ref, sessionId: 's-99' }, 'wf_one')).toBeNull();
+  }, 60_000);
+});
+
 describe('createActivityService: субагенты и ожидание (Parley 0.2.0)', () => {
   const journalOf = (ref: SessionRef): string =>
     path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);

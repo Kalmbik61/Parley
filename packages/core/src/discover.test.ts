@@ -54,6 +54,18 @@ describe('папка помощника (спека 2026-10-14, 15.6)', () => {
   });
 });
 
+describe('sessionFileForPath: дескрипторы workflow', () => {
+  const projects = '/root';
+  it('<project>/<sid>/workflows/wf_*.json → транскрипт сессии; скрипты и посторонние файлы — null', () => {
+    const dir = path.join(projects, '-proj', 'sid');
+    expect(sessionFileForPath(path.join(dir, 'workflows', 'wf_x.json'), projects)).toBe(path.join(projects, '-proj', 'sid.jsonl'));
+    expect(sessionFileForPath(path.join(dir, 'workflows', 'scripts', 'a.js'), projects)).toBeNull();
+    expect(sessionFileForPath(path.join(dir, 'workflows', 'wf_x.json.tmp'), projects)).toBeNull();
+    expect(sessionFileForPath(path.join(dir, 'workflows', 'notes.json'), projects)).toBeNull();
+    expect(sessionFileForPath(path.join(dir, 'workflows'), projects)).toBeNull();
+  });
+});
+
 describe('история своих провайдеров (спека своих провайдеров 5.6)', () => {
   const userHome = '/u/me';
 

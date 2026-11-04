@@ -1,4 +1,16 @@
-import type { AgentPlan, ContextFill, Message, UsageSummary, WindowWorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, Message, UsageSummary, WindowWorkEntry, WorkflowRunSummary } from '@parley/core';
+
+/**
+ * Запуски Workflow сессии (`LiveMetrics.workflows`). Типы запусков живут в core — их читает и CLI, — а по проводу
+ * ходят как есть, без путей к файлам.
+ */
+export type { WorkflowAgentState, WorkflowRun, WorkflowRunStatus, WorkflowRunSummary } from '@parley/core';
+
+/** Сводка запусков: не больше 20 новых и общее число. */
+export interface WorkflowsSummary {
+  runs: WorkflowRunSummary[];
+  total: number;
+}
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -175,6 +187,8 @@ export interface LiveMetrics {
   context?: ContextFill | null;
   /** Сжатие контекста (спека 5.6); `null` — ничего. Поля нет у хоста более ранней версии. */
   compaction?: CompactionPhase | null;
+  /** Запуски Workflow (не больше 20 новых и `total`); `null` — запусков нет или у сессии их не бывает (Codex). Поля нет у хоста более ранней версии. */
+  workflows?: WorkflowsSummary | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */

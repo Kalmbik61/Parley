@@ -34,6 +34,11 @@ export type {
   SendReason,
   SendResult,
   SessionRef,
+  WorkflowAgentState,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowRunSummary,
+  WorkflowsSummary,
   WorksSnapshot,
 } from './types.js';
 export { EFFORT_TOKEN_RE, METHODS, NOTIFICATIONS, permissionModeChoice, sessionRef } from './methods.js';

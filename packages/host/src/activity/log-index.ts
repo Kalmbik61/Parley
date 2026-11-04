@@ -21,6 +21,7 @@ import {
   claudeUsageFromTimelines,
   codexUsageFromTimeline,
   createSessionIndexer,
+  createWorkflowRunsCache,
   extendUsageTimeline,
   watchSessions,
   type ActivityLog,
@@ -38,8 +39,12 @@ import {
   type UsageWindow,
   type WorkSession,
   usageKey,
+  readWorkflowRuns,
   withDescendants,
+  type WorkflowRun,
+  type WorkflowRunsCache,
 } from '@parley/core';
+import type { WorkflowsSummary } from '@parley/protocol';
 
 /**
  * Что изменилось в индексе: подписчику, который пересчитывает свои сессии, нет смысла трогать остальные.
@@ -71,6 +76,15 @@ export interface LogIndex {
    * и mtime всех прочитанных файлов: повтор без новых записей файлов не читает.
    */
   usageIn(session: WorkSession, windows: readonly UsageWindow[]): Promise<UsageSummary | undefined>;
+  /**
+   * Сводка запусков Workflow сессии Claude, как её посчитали в последний раз; `null` — запусков нет (или это Codex),
+   * `undefined` — ещё не считали или лога нет. Считает `refreshWorkflows` и переиндексация файла с запусками.
+   */
+  workflows(session: WorkSession): WorkflowsSummary | null | undefined;
+  /** Пересчитать запуски сессии; если сводка изменилась — `onChange` с этой сессией. Одновременные вызовы склеиваются. */
+  refreshWorkflows(session: WorkSession): Promise<void>;
+  /** Полный запуск по `runId` (после пересчёта); `null` — такого нет или лога нет. */
+  workflowRun(session: WorkSession, runId: string): Promise<WorkflowRun | null>;
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: (change?: LogChange) => void): () => void;
@@ -118,6 +132,21 @@ export interface LogIndexOptions {
   timelineCacheSize?: number;
   subagentTtlMs?: number;
   now?: () => number;
+  /** Жив ли процесс сессии с этим логом: от этого запуск без дескриптора `running` или `interrupted`. По умолчанию — нет. */
+  workflowLive?: (index: SessionIndex) => boolean;
+}
+
+/** Сколько новых запусков уходит окну в сводке. */
+export const WORKFLOW_SUMMARY_RUNS = 20;
+
+/** Запуски одного файла сессии: кэш чтения, последний результат и очередь пересчёта. */
+interface WorkflowState {
+  cache: WorkflowRunsCache;
+  latest: SessionIndex;
+  runs: WorkflowRun[];
+  summary: WorkflowsSummary | null | undefined;
+  queued: Promise<void> | null;
+  tail: Promise<void>;
 }
 
 /** Корни истории: к основным добавляются корни своих провайдеров (по умолчанию — найденные на диске). */
@@ -142,6 +171,8 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
   /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
   const byParent = new Map<string, SessionIndex[]>();
   const listeners = new Set<(change?: LogChange) => void>();
+  /** Запуски Workflow по файлу сессии Claude; заводятся при первом пересчёте. */
+  const workflowStates = new Map<string, WorkflowState>();
   let watcher: SessionWatcher | undefined;
   let stopped = false;
   // Прерывает построение списка на остановке: чтение истории в гигабайты держало бы процесс хоста
@@ -185,6 +216,67 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
         (session.providerSessionId !== null && ids.has(logKey(session.provider, session.providerSessionId))),
     };
     for (const listener of listeners) listener(affected);
+    // Запуски идут из того же файла, что и сессия: пересчёт после уведомления, его итог — отдельное уведомление.
+    if (change.kind === 'removed') workflowStates.delete(change.file);
+    else if (change.session.provider !== 'codex') {
+      const state = workflowStates.get(change.file);
+      if (state !== undefined || (change.session.workflowLaunches?.length ?? 0) > 0) {
+        void refreshWorkflowsOf(change.session).catch(() => {});
+      }
+    }
+  };
+
+  const summaryOf = (runs: readonly WorkflowRun[]): WorkflowsSummary | null =>
+    runs.length === 0
+      ? null
+      : {
+          total: runs.length,
+          runs: runs.slice(0, WORKFLOW_SUMMARY_RUNS).map((run) => ({
+            runId: run.runId,
+            name: run.name,
+            summary: run.summary,
+            status: run.status,
+            phase: run.phase,
+            agents: run.agents,
+            startedAt: run.startedAt,
+            endedAt: run.endedAt,
+          })),
+        };
+
+  const computeWorkflows = async (state: WorkflowState): Promise<void> => {
+    const found = state.latest;
+    state.runs = await readWorkflowRuns(found.file, found.workflowLaunches ?? [], {
+      live: options.workflowLive?.(found) ?? false,
+      cache: state.cache,
+    });
+    const summary = summaryOf(state.runs);
+    const changed = JSON.stringify(summary) !== JSON.stringify(state.summary ?? null);
+    state.summary = summary;
+    if (!changed || stopped) return;
+    const affected: LogChange = {
+      affects: (session) =>
+        session.providerSessionId !== null && logKey(session.provider, session.providerSessionId) === logKey(found.provider, found.id),
+    };
+    for (const listener of listeners) listener(affected);
+  };
+
+  /** Пересчёт запусков файла: следующий вызов, пока идёт чтение, один раз повторяет его с самой свежей записью индекса. */
+  const refreshWorkflowsOf = (found: SessionIndex): Promise<void> => {
+    let state = workflowStates.get(found.file);
+    if (state === undefined) {
+      state = { cache: createWorkflowRunsCache(), latest: found, runs: [], summary: undefined, queued: null, tail: Promise.resolve() };
+      workflowStates.set(found.file, state);
+    }
+    state.latest = found;
+    if (state.queued !== null) return state.queued;
+    const own = state;
+    const next = own.tail.then(() => {
+      own.queued = null;
+      return computeWorkflows(own);
+    });
+    own.queued = next;
+    own.tail = next.catch(() => {});
+    return next;
   };
 
   const indexOf = (session: WorkSession): SessionIndex | undefined =>
@@ -376,6 +468,21 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       for (const agent of subagents) children.push({ ...(await timelineOf(agent.file, 'claude')), agentId: agent.agentId });
       return remember(key, claudeUsageFromTimelines(parent, children, windows));
     },
+    workflows(session) {
+      const found = indexOf(session);
+      if (found === undefined) return undefined;
+      return found.provider === 'codex' ? null : workflowStates.get(found.file)?.summary;
+    },
+    async refreshWorkflows(session) {
+      const found = indexOf(session);
+      if (found !== undefined && found.provider !== 'codex') await refreshWorkflowsOf(found);
+    },
+    async workflowRun(session, runId) {
+      const found = indexOf(session);
+      if (found === undefined || found.provider === 'codex') return null;
+      await refreshWorkflowsOf(found);
+      return workflowStates.get(found.file)?.runs.find((run) => run.runId === runId) ?? null;
+    },
     log(session) {
       const found = indexOf(session);
       return found === undefined
@@ -411,6 +518,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       for (const extraWatcher of extraWatchers) extraWatcher.close();
       extraWatchers.length = 0;
       listeners.clear();
+      workflowStates.clear();
     },
   };
 }

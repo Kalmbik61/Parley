@@ -10,6 +10,7 @@ import type {
   MergeResult,
   ProjectChanges,
   RoomUsage,
+  WorkflowRun,
   WorktreeDiff,
 } from '@parley/core';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -311,6 +312,8 @@ export const METHODS = {
     // С `agentId` поле игнорируется. Старый хост поле молча отбрасывает и отдаёт полный снимок.
     scope: z.enum(['attention']).optional(),
   }),
+  // Полный запуск Workflow по требованию окна (раскрытая строка вкладки Agents). `runId` идёт в путь файла дескриптора.
+  'session.workflowRun': z.object({ ref: sessionRef, runId: z.string().regex(/^wf_[A-Za-z0-9-]{1,64}$/) }),
   'feed.subscribe': z.object({ ref: sessionRef }),
   'feed.unsubscribe': z.object({ ref: sessionRef }),
   // Решение человека — единственный путь, которым `allow`/`deny` доходит до хука (Review Focus 5).
@@ -489,6 +492,8 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
     /** Кто ответит на одобрения сессии; нет поля — как `window` (Claude, спека 2026-10-07, 5.7). */
     decisions?: FeedDecisions | null;
   };
+  /** `null` — такого запуска у сессии нет. Пути к файлам в ответе не отдаются. */
+  'session.workflowRun': WorkflowRun | null;
   'feed.subscribe': { ok: true };
   'feed.unsubscribe': { ok: true };
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
