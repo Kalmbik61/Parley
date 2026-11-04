@@ -25,6 +25,8 @@ export function MicButton({ id, editable = true }: { id: string; editable?: bool
     label = 'Stop dictation';
     hint = undefined;
     body = <View style={[styles.dot, { backgroundColor: c.danger }]} />;
+    // Never disabled by `editable` while recording: stopping must stay reachable (i1).
+    disabled = false;
   } else if (mine && state.phase === 'transcribing') {
     label = 'Transcribing';
     hint = undefined;
@@ -44,7 +46,7 @@ export function MicButton({ id, editable = true }: { id: string; editable?: bool
     hint = state.availability.reason;
     body = <SymbolView name="mic.slash" size={22} tintColor={c.off} />;
   }
-  if (!editable) body = <SymbolView name={state.availability.state === 'unavailable' ? 'mic.slash' : 'mic'} size={22} tintColor={c.off} />;
+  if (!editable && !(mine && state.phase === 'recording')) body = <SymbolView name={state.availability.state === 'unavailable' ? 'mic.slash' : 'mic'} size={22} tintColor={c.off} />;
   return (
     <Pressable
       accessibilityRole="button"

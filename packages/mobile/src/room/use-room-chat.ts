@@ -3,15 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OutLetter } from './out-letters';
 import { roomKey } from '@parley/remote-client';
+import { roomDraftOf, setRoomDraft } from './room-drafts';
 import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
 import { letterProblem, recipientsOf, roomOutgoing, sendLetter, type Mentionable, type RoomReply, type RoomTarget } from './model';
 
 const outboxes = new Map<string, OutLetter[]>();
-const drafts = new Map<string, string>();
-/** The room's draft by key, for code outside the screen (A47: a dictation that outlives its field lands here). */
-export const roomDraftOf = (key: string): string => drafts.get(key) ?? '';
-export const setRoomDraft = (key: string, text: string): void => void (text === '' ? drafts.delete(key) : drafts.set(key, text));
+export { roomDraftOf, setRoomDraft } from './room-drafts';
 
 export interface RoomChatFlow {
   draft: string;
@@ -33,7 +31,7 @@ export interface RoomChatFlow {
 export function useRoomChat(room: RoomTarget | null, notify: (text: string) => void): RoomChatFlow {
   const client = useClient();
   const key = room === null ? '' : roomKey(room);
-  const [draft, setDraftState] = useState(() => drafts.get(key) ?? '');
+  const [draft, setDraftState] = useState(() => roomDraftOf(key));
   const [chips, setChips] = useState<Mentionable[]>([]);
   const [reply, setReply] = useState<RoomReply | null>(null);
   const [out, setOutState] = useState<OutLetter[]>(() => outboxes.get(key) ?? []);
@@ -54,8 +52,7 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
   );
   const setDraft = useCallback(
     (text: string) => {
-      if (text === '') drafts.delete(key);
-      else drafts.set(key, text);
+      setRoomDraft(key, text);
       setDraftState(text);
     },
     [key],
@@ -84,7 +81,7 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
           if (ui.hideComposer) setSwitchedOff(true);
           // The text goes back to the field (when the field is free); the bubble goes.
           update((l) => l.filter((x) => x.id !== letter.id));
-          if (fromDraft || drafts.get(key) === undefined) setDraft(letter.typed ?? letter.text);
+          if (fromDraft || roomDraftOf(key) === '') setDraft(letter.typed ?? letter.text);
           notify(ui.message);
           return;
         }

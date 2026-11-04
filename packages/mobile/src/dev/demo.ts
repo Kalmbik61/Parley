@@ -435,6 +435,8 @@ export function demoRoute(raw: unknown): string | null {
       return `${s('drone1')}?${dev}`;
     case 'a47-room':
       return `/room?ref=${encodeURIComponent(w)}&room=r1&${dev}`;
+    case 'a47-check':
+      return '/dictation-check';
     case 'a47-new':
       return `/new?${dev}`;
     case 'chat':

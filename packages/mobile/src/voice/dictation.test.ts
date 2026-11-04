@@ -29,6 +29,7 @@ function setup(over: { permission?: Permission; choice?: LanguageChoice; startTh
   const drafts: Array<{ fallback: Fallback; text: string }> = [];
   const copied: string[] = [];
   const alerts: string[] = [];
+  const announced: string[] = [];
   let permission = over.permission ?? GRANTED;
   const request = vi.fn(async () => (permission = { ...permission, granted: true }));
   const state = { choice: over.choice ?? ({ ok: true, lang: 'ru-RU' } as LanguageChoice) };
@@ -51,6 +52,7 @@ function setup(over: { permission?: Permission; choice?: LanguageChoice; startTh
     showDenied: () => void alerts.push('denied'),
     showRestricted: () => void alerts.push('restricted'),
     copy: async (t) => void copied.push(t),
+    announce: (t) => void announced.push(t),
     appendDraft: (fallback, text) => void drafts.push({ fallback, text }),
     setTimeout: (fn, ms) => {
       seq += 1;
@@ -83,7 +85,7 @@ function setup(over: { permission?: Permission; choice?: LanguageChoice; startTh
   const ev = () => handlers!;
   const final = (t: string) => ev().result({ isFinal: true, results: [{ transcript: t }] });
   const setPermission = (p: Permission): void => void (permission = p);
-  return { dictation, deps, calls, toasts, inserted, drafts, copied, alerts, advance, target, ev, final, request, state, setPermission };
+  return { dictation, deps, announced, calls, toasts, inserted, drafts, copied, alerts, advance, target, ev, final, request, state, setPermission };
 }
 
 type H = ReturnType<typeof setup>;
@@ -286,7 +288,7 @@ describe('dictation: finishBeforeSend', () => {
 });
 
 describe('dictation: the field goes away', () => {
-  it('removed while transcribing: a session draft gets the text and a toast; the toast is of the old screen', async () => {
+  it('removed while transcribing: a session draft gets the text and the toast is announced (no live target)', async () => {
     const h = setup();
     const off = h.dictation.register(h.target('s', { kind: 'session', key: 'k1' }));
     await record(h, 's');
@@ -295,7 +297,7 @@ describe('dictation: the field goes away', () => {
     h.final('tail');
     h.ev().end();
     expect(h.drafts).toEqual([{ fallback: { kind: 'session', key: 'k1' }, text: 'tail' }]);
-    expect(h.toasts).toEqual([TOAST.draft]);
+    expect(h.announced).toEqual([TOAST.draft]);
   });
 
   it('a room draft goes through its own key', async () => {
@@ -319,7 +321,7 @@ describe('dictation: the field goes away', () => {
     h.ev().end();
     await flush();
     expect(h.copied).toEqual(['task']);
-    expect(h.toasts).toEqual([TOAST.copied]);
+    expect(h.announced).toEqual([TOAST.copied]);
   });
 
   it('removed or blurred during recording → abort, nothing inserted', async () => {
@@ -641,5 +643,131 @@ describe('dictation: availability', () => {
     h.dictation.toggle('a');
     await flush();
     expect(h.deps.chooseLanguage).toHaveBeenCalledWith({ useKeyboard: true, focused: true });
+  });
+});
+
+describe('dictation: review fixes', () => {
+  it('i2: a removed field shows its toast through the last registered live target', async () => {
+    const h = setup();
+    const lower = h.target('lower', { kind: 'session', key: 'l' });
+    const lowerToasts: string[] = [];
+    lower.toast = (t) => void lowerToasts.push(t);
+    h.dictation.register(lower);
+    const off = h.dictation.register(h.target('n', 'clipboard'));
+    await record(h, 'n');
+    h.dictation.toggle('n');
+    off();
+    h.final('x');
+    h.ev().end();
+    await flush();
+    expect(lowerToasts).toEqual([TOAST.copied]);
+    expect(h.announced).toEqual([]);
+  });
+
+  it('i3: the lower copy of a screen with the same id works again after re-registering', async () => {
+    const h = setup();
+    const a1 = h.target('a');
+    const a2 = h.target('a');
+    h.dictation.register(a1);
+    const offA2 = h.dictation.register(a2);
+    offA2();
+    h.dictation.toggle('a');
+    await flush();
+    expect(h.calls).toEqual([]);
+    h.dictation.register(a1);
+    await record(h, 'a');
+    h.dictation.toggle('a');
+    h.final('again');
+    h.ev().end();
+    expect(h.inserted).toEqual(['a:again']);
+  });
+
+  it('i4: the 10 s transcribe timeout with empty text shows Dictation failed', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a'));
+    await record(h, 'a');
+    h.dictation.toggle('a');
+    h.advance(10_000);
+    expect(h.toasts).toEqual([TOAST.failed]);
+    expect(h.dictation.getState().phase).toBe('cancelling');
+  });
+
+  it('i5a: the cancelling timeout while still awaiting start adds no debt (the foreign start adds it)', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a'));
+    h.dictation.toggle('a');
+    await flush();
+    h.dictation.cancel(); // cancelling, own start has not come
+    h.advance(3000); // timeout: idle, no debt yet
+    h.ev().start(); // foreign: abort, debt 1
+    expect(h.calls).toContain('abort');
+    h.ev().end(); // pays the one debt
+    await record(h, 'a'); // a stray end would not be swallowed: debt is 0
+    h.ev().end();
+    expect(h.dictation.getState().phase).toBe('idle');
+  });
+
+  it('i5b: the own late start after a starting-timeout abort aborts again and adds debt', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a'));
+    h.dictation.toggle('a');
+    await flush();
+    h.advance(5000); // abort #1, cancelling
+    h.calls.length = 0;
+    h.ev().start(); // before any end: abort #2 (its task is real)
+    expect(h.calls).toEqual(['abort']);
+    h.ev().end(); // closes the attempt
+    expect(h.dictation.getState().phase).toBe('idle');
+    h.dictation.toggle('a');
+    await flush();
+    h.ev().end(); // the second abort's late end: swallowed by the debt
+    expect(h.dictation.getState().phase).toBe('starting');
+  });
+
+  it('i5c: a late end before the attempt\'s start is swallowed in transcribing and in cancelling too', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a'));
+    await record(h, 'a');
+    h.dictation.cancel();
+    h.advance(3000); // debt 1
+    h.dictation.toggle('a');
+    await flush();
+    expect(h.dictation.finishBeforeSend('a')).toBe(true); // transcribing before its start
+    h.ev().end(); // the old attempt's end
+    expect(h.dictation.getState().phase).toBe('transcribing');
+    h.ev().start();
+    expect(h.calls).toContain('stop');
+    h.final('late');
+    h.ev().end();
+    expect(h.inserted).toEqual(['a:late']);
+
+    await record(h, 'a');
+    h.dictation.cancel();
+    h.advance(3000); // debt 1 again
+    h.dictation.toggle('a');
+    await flush();
+    h.dictation.cancel(); // cancelling before its start
+    h.ev().end(); // the old end
+    expect(h.dictation.getState().phase).toBe('cancelling');
+  });
+
+  it('I1: onHidden stops a recording like Send, and a starting one; idle and transcribing are left alone', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a'));
+    h.dictation.onHidden('a');
+    expect(h.dictation.getState().phase).toBe('idle');
+    await record(h, 'a');
+    h.dictation.onHidden('a');
+    expect(h.dictation.getState().phase).toBe('transcribing');
+    h.final('kept');
+    h.ev().end();
+    expect(h.inserted).toEqual(['a:kept']);
+    h.dictation.toggle('a');
+    await flush();
+    h.dictation.onHidden('a');
+    expect(h.dictation.getState().phase).toBe('transcribing');
+    h.ev().start();
+    expect(h.calls.at(-1)).toBe('stop');
+    h.dictation.onHidden('other');
   });
 });

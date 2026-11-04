@@ -59,6 +59,8 @@ export interface DictationDeps {
   showDenied(): void;
   showRestricted(): void;
   copy(text: string): Promise<void>;
+  /** Нет ни одной живой цели для тоста: текст объявляется через VoiceOver. */
+  announce(text: string): void;
   appendDraft(fallback: { kind: 'session' | 'room'; key: string }, text: string): void;
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -111,6 +113,8 @@ export function createDictation() {
   /** Свой `start` этой попытки ещё не приходил. */
   let awaitingStart = false;
   let afterStart: 'abort' | 'stop' | null = null;
+  /** Таймаут `starting` уже вызвал `abort()`: свой поздний `start` вызовет второй, и долг вырастет (i5b). */
+  let abortedByTimeout = false;
   let queued: string | null = null;
   let debt = 0;
   let suspended = false;
@@ -139,7 +143,14 @@ export function createDictation() {
     clear(errorTimer);
     startTimer = capTimer = transcribeTimer = cancelTimer = errorTimer = null;
   };
-  const toast = (text: string): void => snap?.toast(text);
+  /** Тост попытки (i2): тост экрана поля; поле снято — через последнюю зарегистрированную цель, иначе объявление. */
+  const toast = (text: string): void => {
+    const own = snap === null ? undefined : targets.get(snap.id);
+    if (own !== undefined) return own.toast(text);
+    const live = [...targets.values()].at(-1);
+    if (live !== undefined) return live.toast(text);
+    deps?.announce(text);
+  };
   const guarded = (fn: () => void): void => {
     try {
       fn();
@@ -179,6 +190,7 @@ export function createDictation() {
     nativeBusy = false;
     awaitingStart = false;
     afterStart = null;
+    abortedByTimeout = false;
     release();
     setIdle();
     if (wasPhase !== 'cancelling' && wasPhase !== 'idle') {
@@ -206,10 +218,10 @@ export function createDictation() {
     if (d === null) return;
     if (s.fallback === 'clipboard') {
       void d.copy(text).catch(() => undefined);
-      s.toast(TOAST.copied);
+      toast(TOAST.copied);
     } else {
       d.appendDraft(s.fallback, text);
-      s.toast(TOAST.draft);
+      toast(TOAST.draft);
     }
   }
 
@@ -259,7 +271,8 @@ export function createDictation() {
     cancelTimer = deps?.setTimeout(() => {
       // Нет `end` за 3 с: нативная сторона считается свободной, запоздалый `end` ещё придёт (§4.2 п. 8, 11).
       console.warn('[parley] voice: no end after cancel');
-      debt += 1;
+      // Пока `start` не пришёл, долг добавит `abort()` чужого `start` (п. 10): второй раз не считаем.
+      if (!awaitingStart) debt += 1;
       closeAttempt();
     }, CANCEL_TIMEOUT_MS) ?? null;
   }
@@ -274,6 +287,7 @@ export function createDictation() {
       const text = assembleTranscript(events);
       guarded(() => deps?.engine.abort());
       if (text !== '') deliver(text);
+      else toast(TOAST.failed);
       events = [];
       goCancelling();
     }, TRANSCRIBE_TIMEOUT_MS) ?? null;
@@ -293,6 +307,7 @@ export function createDictation() {
     events = [];
     lastError = null;
     afterStart = null;
+    abortedByTimeout = false;
     set({ phase: 'starting', targetId: id, level: 0, startedAt: null, lang: null });
     const stale = (): boolean => mine !== attempt || deps !== d;
     try {
@@ -313,7 +328,7 @@ export function createDictation() {
       showAvailability(choice);
       if (!choice.ok) {
         setIdle();
-        target.toast(choice.reason);
+        toast(choice.reason);
         return;
       }
       nativeBusy = true;
@@ -332,6 +347,7 @@ export function createDictation() {
       startTimer = d.setTimeout(() => {
         // Нет `start` и `end` за 5 с.
         guarded(() => d.engine.abort());
+        abortedByTimeout = true;
         afterStart = 'abort';
         fail();
         goCancelling();
@@ -359,6 +375,8 @@ export function createDictation() {
     startTimer = null;
     if (afterStart === 'abort') {
       guarded(() => d.engine.abort());
+      // У позднего `start` после таймаута есть настоящая задача: второй `abort()` пришлёт ещё один `end`.
+      if (abortedByTimeout) debt += 1;
       return;
     }
     if (afterStart === 'stop') {
@@ -378,8 +396,8 @@ export function createDictation() {
       if (debt > 0) debt -= 1;
       return;
     }
-    if (state.phase === 'starting' && awaitingStart && lastError === null && debt > 0) {
-      // Запоздалый `end` прежней попытки пришёл раньше `start` новой (§4.2 п. 11).
+    if (awaitingStart && lastError === null && debt > 0) {
+      // Запоздалый `end` прежней попытки пришёл раньше `start` новой, в том числе после ⬆ или Cancel (§4.2 п. 11).
       debt -= 1;
       return;
     }
@@ -454,6 +472,8 @@ export function createDictation() {
     },
 
     register(target: DictationTarget): () => void {
+      // Последний зарегистрированный — в конце (для тоста снятого поля).
+      targets.delete(target.id);
       targets.set(target.id, target);
       return () => {
         if (targets.get(target.id) !== target) return;
@@ -518,6 +538,11 @@ export function createDictation() {
       } catch (error) {
         console.warn('[parley] voice', error);
       }
+    },
+
+    /** Поле спряталось, экран остался (I1): запись завершается, как от ⬆, текст встаёт в поле или черновик. */
+    onHidden(id: string): void {
+      if (state.targetId === id && (state.phase === 'starting' || state.phase === 'recording')) api.finishBeforeSend(id);
     },
 
     onBackground(): void {

@@ -16,7 +16,7 @@ import { useDictationState } from '../voice/use-dictation-target';
 const VERDICT: Record<CheckVerdict, string> = {
   pass: 'PASS',
   fail: 'FAIL: recognition started',
-  'needs-network': 'Connect to the internet and run again',
+  'no-pass': 'No PASS',
   'no-language': 'No language without on-device recognition',
 };
 
@@ -25,6 +25,7 @@ export default function DictationCheck() {
   const state = useDictationState();
   const [lines, setLines] = useState<string[]>([]);
   const [verdict, setVerdict] = useState<CheckVerdict | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   if (!DEV_BUILD) return <Redirect href="/" />;
@@ -35,6 +36,7 @@ export default function DictationCheck() {
     setRunning(true);
     setLines([]);
     setVerdict(null);
+    setReason(null);
     // The library's events are global: the store must not take this start for its own.
     dictation.suspend();
     try {
@@ -42,6 +44,7 @@ export default function DictationCheck() {
       setChosen(`${choice.lang} · on-device recognition: ${choice.ok ? 'yes' : 'no'}`);
       const report = await runGuardCheck(engine, (line) => setLines((l) => [...l, line]));
       setVerdict(report.verdict);
+      setReason(report.reason ?? null);
     } finally {
       dictation.resume();
       setRunning(false);
@@ -58,7 +61,7 @@ export default function DictationCheck() {
         <PrimaryButton title="Try a language without on-device recognition" disabled={!idle || running} onPress={() => void run()} />
       </View>
       {verdict !== null && (
-        <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.headline, styles.pad, { color }]}>{VERDICT[verdict]}</Text>
+        <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.headline, styles.pad, { color }]}>{VERDICT[verdict]}{reason === null ? '' : `: ${reason}`}</Text>
       )}
       <Section header="Events">
         <Text allowFontScaling selectable style={[typography.footnote, styles.pad, { color: colors.label2, fontVariant: ['tabular-nums'] }]}>

@@ -8,7 +8,7 @@ import { typography, useColors } from '../theme';
 import { DictationStrip } from '../voice/DictationStrip';
 import { dictation } from '../voice/dictation';
 import { MicButton } from '../voice/MicButton';
-import { useDictationTarget } from '../voice/use-dictation-target';
+import { useDictationHidden, useDictationTarget } from '../voice/use-dictation-target';
 import { messageProblem, sizeCounter, type ComposerMode } from './send';
 
 export function Composer({
@@ -44,6 +44,7 @@ export function Composer({
     fallback: { kind: 'session', key: dictationProps?.draftKey ?? '' },
     toast: dictationProps?.toast ?? (() => undefined),
   });
+  useDictationHidden(dictationId, mode.kind === 'hidden');
   if (mode.kind === 'hidden') {
     return mode.text === '' ? null : (
       <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.line, { color: c.label2 }]}>

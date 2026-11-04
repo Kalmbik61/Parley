@@ -1,16 +1,17 @@
 // The glue between the dictation store and the screens (A47): the real dependencies of the store, wired once, and the hook a
 // text field uses to become a dictation target. The only file here that knows Alert, Clipboard, Linking and AppState.
 import { useEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
-import { Alert, AppState, Linking, type TextInput, type TextInputSelectionChangeEvent } from 'react-native';
+import { AccessibilityInfo, Alert, AppState, Linking, type TextInput, type TextInputSelectionChangeEvent } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { getLocales } from 'expo-localization';
 import { useIsFocused, useLocalSearchParams } from 'expo-router';
 import { DEV_VOICE } from '../dev/flags';
 import { draftOf, setDraft } from '../feed/outbox';
-import { roomDraftOf, setRoomDraft } from '../room/use-room-chat';
-import { dictation, type DictationState, type Fallback } from './dictation';
+import { roomDraftOf, setRoomDraft } from '../room/room-drafts';
+import { appendToDraft } from './draft';
+import { dictation, type DictationState, type DictationTarget, type Fallback } from './dictation';
 import { engine } from './engine';
-import { joinTranscript, spliceTranscript } from './insert';
+import { spliceTranscript } from './insert';
 import { createLanguageChooser } from './language';
 
 let wired = false;
@@ -29,11 +30,9 @@ function ensureWired(): void {
     showRestricted: () =>
       Alert.alert('Dictation is restricted on this iPhone', 'Screen Time or your organization blocks the microphone or speech recognition.', [{ text: 'OK' }]),
     copy: (text) => Clipboard.setStringAsync(text).then(() => undefined),
-    appendDraft: (fallback, text) => {
-      const [read, write] = fallback.kind === 'room' ? [roomDraftOf, setRoomDraft] : [draftOf, setDraft];
-      const before = read(fallback.key);
-      write(fallback.key, before + joinTranscript(before, text));
-    },
+    announce: (text) => AccessibilityInfo.announceForAccessibility(text),
+    appendDraft: (fallback, text) =>
+      appendToDraft({ session: { get: draftOf, set: setDraft }, room: { get: roomDraftOf, set: setRoomDraft } }, fallback, text),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
     now: () => Date.now(),
@@ -66,9 +65,10 @@ export function useDictationTarget(o: {
   const selection = useRef<number | null>(null);
   const screenFocused = useIsFocused();
   const fallbackKey = typeof o.fallback === 'string' ? o.fallback : `${o.fallback.kind}:${o.fallback.key}`;
+  const registered = useRef<DictationTarget | null>(null);
   useEffect(() => {
     ensureWired();
-    return dictation.register({
+    const target: DictationTarget = {
       id: o.id,
       fallback: latest.current.fallback,
       isFocused: () => latest.current.input.current?.isFocused() === true,
@@ -80,8 +80,15 @@ export function useDictationTarget(o: {
         selection.current = caret;
         if (input.current?.isFocused() === true) requestAnimationFrame(() => input.current?.setSelection(caret, caret));
       },
-    });
+    };
+    registered.current = target;
+    return dictation.register(target);
   }, [o.id, fallbackKey]);
+  // The same screen can stand in the stack twice with one id: the upper copy's registration replaced ours, and its removal
+  // took the id away. A screen that gets its focus back registers its own target again (i3).
+  useEffect(() => {
+    if (screenFocused && registered.current !== null) dictation.register(registered.current);
+  }, [screenFocused]);
   // Developer evidence (A47): `?dev=mic@4000,mic@10000` taps this field's microphone at those times (fake engine only).
   const { dev } = useLocalSearchParams<{ dev?: string }>();
   useEffect(() => {
@@ -96,4 +103,18 @@ export function useDictationTarget(o: {
     if (!screenFocused) dictation.onBlur(o.id);
   }, [screenFocused, o.id]);
   return { onSelectionChange: (e) => void (selection.current = e.nativeEvent.selection.start) };
+}
+
+/** The field hid while the screen stays (a question card came, the session closed, the Mac switched messaging off): the recording
+ *  ends as if ⬆ were pressed, so the text lands in the field or its draft (I1). */
+export function useDictationHidden(id: string, hidden: boolean): void {
+  useEffect(() => {
+    if (hidden) dictation.onHidden(id);
+  }, [hidden, id]);
+}
+
+/** For a screen that cannot call the hook after its early returns: render it next to the field. */
+export function DictationHiddenGuard({ id, hidden }: { id: string; hidden: boolean }): null {
+  useDictationHidden(id, hidden);
+  return null;
 }

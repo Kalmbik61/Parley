@@ -21,7 +21,7 @@ import { ConnectionBanner } from '../components/ConnectionBanner';
 import { DictationStrip } from '../voice/DictationStrip';
 import { dictation } from '../voice/dictation';
 import { MicButton } from '../voice/MicButton';
-import { useDictationTarget } from '../voice/use-dictation-target';
+import { DictationHiddenGuard, useDictationTarget } from '../voice/use-dictation-target';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
@@ -483,6 +483,7 @@ export default function RoomScreen() {
           </View>
         )}
         <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
+          <DictationHiddenGuard id={dictationId} hidden={hidden.kind === 'hidden'} />
           {hidden.kind === 'hidden' ? (
             <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center', paddingVertical: 8 }]}>
               {hidden.text}
