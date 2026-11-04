@@ -8,12 +8,17 @@ describe('остров: белый список методов хоста', () =
   it('добавляет только progress чтение без подписок или новых событий', () => {
     expect(ISLAND_METHODS.has('feed.progress')).toBe(true);
     for (const method of ['feed.subscribe', 'feed.unsubscribe', 'pty.attach', 'pty.input', 'rooms.resolve', 'plans.submit']) expect(ISLAND_METHODS.has(method)).toBe(false);
-    expect([...ISLAND_EVENTS]).toEqual(['works.changed', 'rooms.mail', 'activity.changed', 'assistant.changed', 'consents.changed', 'providers.changed']);
+    expect([...ISLAND_EVENTS]).toEqual(['works.changed', 'rooms.mail', 'activity.changed', 'assistant.changed', 'consents.changed', 'providers.changed', 'voice.session.closed']);
   });
 
   it('пропускает providers.list: без строк провайдеров значки своих провайдеров на острове — значок Parley', () => {
     expect(ISLAND_METHODS.has('providers.list')).toBe(true);
     expect(ISLAND_EVENTS.has('providers.changed')).toBe(true);
+  });
+
+  it('Live-голос: остров вызывает prepare/close/usage и получает закрытие сессии', () => {
+    for (const method of ['voice.session.prepare', 'voice.session.close', 'voice.usage.get']) expect(ISLAND_METHODS.has(method)).toBe(true);
+    expect(ISLAND_EVENTS.has('voice.session.closed')).toBe(true);
   });
 
   it('каждое имя из ISLAND_METHODS — метод протокола (опечатка не оставит остров без данных молча)', () => {

@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { LiveClient, Sideband } from './live-client.js';
 import { LiveError } from './live-client.js';
 import { DEFAULT_DAILY_MINUTES, dailyBudget, localDay } from './budget.js';
+import { liveSessionConfig } from './voice-prompt.js';
 
 export const MAX_SESSION_MS = 30 * 60_000;
 export const WARNING_BEFORE_MS = 2 * 60_000;
@@ -215,7 +216,7 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
       // Ответ создания без SDP, но с id: сессия у OpenAI есть, её нужно закрыть по id.
       let unusable = false;
       try {
-        created = await live.createSession(sdpOffer);
+        created = await live.createSession(sdpOffer, liveSessionConfig());
       } catch (error) {
         if (error instanceof LiveError && error.sessionId !== undefined) {
           created = { sessionId: error.sessionId, sdpAnswer: '' };

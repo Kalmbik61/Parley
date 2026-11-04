@@ -624,3 +624,46 @@ describe('речь: лицо, значок динамика, кадр голос
     expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'face', emo: 'joy' }), expect.any(Number), true);
   });
 });
+
+describe('Live-голос (T3)', () => {
+  const live = (patch: Partial<NonNullable<AssistantViewProps['live']>> = {}): NonNullable<AssistantViewProps['live']> => ({
+    phase: 'idle',
+    humanSpeaking: false,
+    modelPlaying: false,
+    notice: null,
+    onToggle: vi.fn(),
+    ...patch,
+  });
+
+  it('без live кнопки нет: пошаговый голос работает как раньше', () => {
+    render(<AssistantView {...props()} />);
+    expect(screen.queryByTestId('assistant-live')).toBeNull();
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('кнопка запускает и останавливает Live; во время сессии микрофон пошагового голоса занят', () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<AssistantView {...props({ live: live({ onToggle }) })} />);
+    fireEvent.click(screen.getByTestId('assistant-live'));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('assistant-live').getAttribute('aria-label')).toBe(S.assistant.live.start);
+    rerender(<AssistantView {...props({ live: live({ phase: 'live', onToggle }) })} />);
+    expect(screen.getByTestId('assistant-live').getAttribute('aria-label')).toBe(S.assistant.live.stop);
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(true);
+    rerender(<AssistantView {...props({ live: live({ phase: 'connecting' }) })} />);
+    expect((screen.getByTestId('assistant-live') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('VA-13: сообщение об отказе показано, а ввод текста и микрофон остаются доступны', () => {
+    render(<AssistantView {...props({ live: live({ notice: S.assistant.live.noKey }) })} />);
+    expect(screen.getByTestId('assistant-live-notice').textContent).toBe(S.assistant.live.noKey);
+    expect((screen.getByTestId('assistant-input') as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('пока идёт запись пошагового голоса, Live не запускается', () => {
+    render(<AssistantView {...props({ input: 'listening', listenStartedAt: 0, live: live() })} />);
+    expect((screen.getByTestId('assistant-live') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+

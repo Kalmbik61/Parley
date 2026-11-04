@@ -249,13 +249,17 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'assistant.state',
   'consents.list',
   'consents.decide',
+  // Live-голос острова (T3): хост держит ключ и бюджет, остров получает только SDP-ответ.
+  'voice.session.prepare',
+  'voice.session.close',
+  'voice.usage.get',
 ]);
 
 /**
  * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ, письма работ
  * (`rooms.mail`: запись одних писем `works.changed` уже не шлёт, и без него числа острова застыли бы до следующего
  * структурного снимка), активность сессий, состояние помощника, карточки согласия на папку и смена списка провайдеров
- * (значки). Остальное (`pty.output`
+ * (значки) и закрытие Live-сессии голоса (`voice.session.closed`: лимит, обрыв). Остальное (`pty.output`
  * всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода терминалов шёл бы в его renderer
  * впустую. Тип `EventName` ловит опечатку при сборке.
  */
@@ -266,6 +270,7 @@ export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
   'assistant.changed',
   'consents.changed',
   'providers.changed',
+  'voice.session.closed',
 ]);
 
 /** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */

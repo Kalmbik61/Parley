@@ -76,6 +76,9 @@ import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
+import { createBrowserLiveDeps } from './live/browser.js';
+import { createLiveController } from './live/controller.js';
+import { useLiveStore } from './live/store.js';
 import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
@@ -429,6 +432,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
   const assistant = useAssistantStore();
+  const live = useLiveStore();
+  useEffect(() => {
+    if (!connected) return;
+    return useLiveStore.getState().bind(createLiveController(createBrowserLiveDeps(bridge)));
+  }, [connected, bridge]);
   useEffect(() => {
     if (keyboardOwner === 'request' && !assistant.open) requestAnimationFrame(() => shapeRef.current?.focus());
   }, [keyboardOwner, assistant.open]);
@@ -795,6 +803,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           pulse: assistantPulse,
           speakOn: config.assistant.speech?.enabled === true,
           onToggleSpeak: () => useAssistantStore.getState().toggleSpeak(),
+          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle() },
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

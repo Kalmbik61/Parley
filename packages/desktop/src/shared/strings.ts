@@ -2990,6 +2990,19 @@ export const S = {
     hotkeyToTalk: (keys: string): string => `${keys} to talk`,
     mic: 'Talk',
     stopMic: 'Stop listening',
+    /** Live-голос (GPT-Live, звук-звук): кнопка и сообщения; нет ключа или лимит — текст и обычный голосовой ввод работают. */
+    live: {
+      start: 'Start Live voice',
+      stop: 'End Live voice',
+      connecting: 'Connecting Live voice…',
+      noKey: 'Live voice needs an OpenAI key. Add it in Settings → Voice. Text and push-to-talk still work.',
+      limitReached: 'The daily Live voice limit is used up. Text and push-to-talk still work.',
+      busy: 'A Live voice session is already running.',
+      mic: 'Microphone access is needed for Live voice. Text and push-to-talk still work.',
+      failed: 'Live voice could not start. Text and push-to-talk still work.',
+      closed: (reason: string): string =>
+        reason === 'close_requested' ? 'Live voice ended.' : reason === 'expired' ? 'Live voice ended: the session expired.' : 'Live voice ended unexpectedly.',
+    },
     listening: 'Listening…',
     transcribing: 'Recognizing…',
     thinking: 'Thinking…',

@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { reportLine, type ActionsReport, type ActionStepView, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
@@ -62,6 +62,8 @@ export interface AssistantViewProps {
   /** «Speak answers» включено: значок динамика нажат. */
   speakOn: boolean;
   onToggleSpeak(): void;
+  /** Live-голос (T3): кнопка рядом с микрофоном; нет — режима нет, остаётся пошаговый голос. */
+  live?: { phase: 'idle' | 'connecting' | 'live' | 'closing'; humanSpeaking: boolean; modelPlaying: boolean; notice: string | null; onToggle(): void };
   onDraft(text: string): void;
   onSubmit(text: string): void;
   onMic(): void;
@@ -430,6 +432,11 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           </div>
         ))}
         {props.notice === null ? null : <div className="text-[13px] text-muted-foreground">{props.notice}</div>}
+        {props.live?.notice == null ? null : (
+          <div data-testid="assistant-live-notice" className="text-[13px] text-muted-foreground">
+            {props.live.notice}
+          </div>
+        )}
       </div>
       <form
         className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1"
@@ -462,7 +469,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           type="button"
           data-testid="assistant-mic"
           aria-label={input === 'listening' ? S.assistant.stopMic : input === 'transcribing' ? S.assistant.transcribing : S.assistant.mic}
-          disabled={input === 'transcribing'}
+          disabled={input === 'transcribing' || (props.live !== undefined && props.live.phase !== 'idle')}
           className="cursor-pointer text-muted-foreground hover:text-foreground"
           onMouseDown={(event) => event.preventDefault()}
           onClick={props.onMic}
@@ -475,6 +482,25 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             <Mic size={16} />
           )}
         </button>
+        {props.live === undefined ? null : (
+          <button
+            type="button"
+            data-testid="assistant-live"
+            aria-label={props.live.phase === 'live' ? S.assistant.live.stop : props.live.phase === 'idle' ? S.assistant.live.start : S.assistant.live.connecting}
+            title={props.live.phase === 'live' ? S.assistant.live.stop : S.assistant.live.start}
+            aria-pressed={props.live.phase === 'live'}
+            disabled={props.live.phase === 'connecting' || props.live.phase === 'closing' || (props.live.phase === 'idle' && input !== 'idle')}
+            className={`cursor-pointer hover:text-foreground ${props.live.phase === 'live' ? 'text-[var(--color-accent)]' : 'text-muted-foreground'}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={props.live.onToggle}
+          >
+            {props.live.phase === 'connecting' || props.live.phase === 'closing' ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <AudioLines size={16} className={props.live.humanSpeaking || props.live.modelPlaying ? 'assistant-dot-pulse' : undefined} />
+            )}
+          </button>
+        )}
         <button
           type="button"
           data-testid="assistant-speak"
