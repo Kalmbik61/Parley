@@ -166,9 +166,9 @@ export function normalizeHumanText(text: string, refs: Readonly<Record<string, s
         const name = Object.hasOwn(refs, ref) ? refs[ref]?.trim() : undefined;
         if (name) return name;
         if (ref.startsWith('S')) return ref;
-        if (ref.startsWith('room:') || ref.startsWith('r-')) return 'комната';
-        if (ref.startsWith('work:') || ref.startsWith('w-')) return 'работа';
-        return 'участник';
+        if (ref.startsWith('room:') || ref.startsWith('r-')) return 'комната'; // cyrillic-ok: человеческая подпись неизвестной ссылки на комнату
+        if (ref.startsWith('work:') || ref.startsWith('w-')) return 'работа'; // cyrillic-ok: человеческая подпись неизвестной ссылки на работу
+        return 'участник'; // cyrillic-ok: человеческая подпись неизвестной ссылки на участника
       },
     )
     .replace(/\s+/g, ' ')
