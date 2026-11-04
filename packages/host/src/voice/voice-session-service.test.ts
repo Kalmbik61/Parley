@@ -35,7 +35,7 @@ class FakeSideband implements Sideband {
   }
 }
 
-const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?: number; failInsert?: boolean; attachAfterFirst?: 'fail' } = {}) => {
+const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?: number; failInsert?: boolean; attachAfterFirst?: 'fail'; dailyMinutes?: number; clock?: { date: Date } } = {}) => {
   const realDb = openMemoryDb();
   const db = opts.failInsert
     ? ({ prepare: (sql: string) => (sql.startsWith('INSERT') ? { run: () => { throw new Error('disk full'); } } : realDb.prepare(sql)) } as unknown as typeof realDb)
@@ -66,14 +66,17 @@ const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?
   const service = createVoiceSessionService({
     db,
     live,
-    now: () => new Date(2026, 10, 4, 12, 0, 0),
+    now: () => (opts.clock ? opts.clock.date : new Date(2026, 10, 4, 12, 0, 0)),
+    dailyMinutes: () => opts.dailyMinutes ?? 600,
     onWarning: (id) => warnings.push(id),
     onClosed: (id, reason) => closed.push([id, reason]),
     attachDelaysMs: [0, 0],
     reconnectDelaysMs: [0, 0],
   });
+  const addUsage = (id: string, day: string, estimate: number, final: number | null) =>
+    realDb.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES (?, ?, 'closed', ?, ?)").run(id, day, estimate, final);
   const row = (id = 'sess_1') => realDb.prepare('SELECT * FROM voice_usage WHERE voice_session_id = ?').get(id) as Record<string, unknown> | undefined;
-  return { db, service, sidebands, warnings, closed, row };
+  return { db, service, sidebands, warnings, closed, row, addUsage };
 };
 
 describe('VoiceSessionService', () => {
@@ -242,5 +245,52 @@ describe('VoiceSessionService', () => {
     await vi.advanceTimersByTimeAsync(MAX_SESSION_MS * 2);
     expect(warnings).toEqual([]);
     expect(sidebands[0]!.closeRequests).toBe(0);
+  });
+  describe('дневной лимит (B4)', () => {
+    it('ровно на лимите prepare отказывает limit_reached и не зовёт OpenAI', async () => {
+      const { service, addUsage, sidebands } = setup({ dailyMinutes: 10 });
+      addUsage('old', '2026-11-04', 0, 600);
+      expect(await service.prepare('o')).toMatchObject({ ok: false, code: 'limit_reached' });
+      expect(sidebands).toHaveLength(0);
+      expect(service.activeSessionId()).toBeNull();
+    });
+
+    it('на секунду меньше лимита сессия открывается', async () => {
+      const { service, addUsage } = setup({ dailyMinutes: 10 });
+      addUsage('old', '2026-11-04', 0, 599);
+      expect((await service.prepare('o')).ok).toBe(true);
+    });
+
+    it('строка без seconds_final считается по оценке', async () => {
+      const { service, addUsage } = setup({ dailyMinutes: 10 });
+      addUsage('lost', '2026-11-04', 600, null);
+      expect(await service.prepare('o')).toMatchObject({ ok: false, code: 'limit_reached' });
+    });
+
+    it('предупреждение за 2 минуты до конца остатка и закрытие по исчерпании', async () => {
+      const { service, addUsage, sidebands, warnings, row } = setup({ dailyMinutes: 10 });
+      addUsage('old', '2026-11-04', 0, 300);
+      await service.prepare('o');
+      // остаток: 600 - 300 - 15 (стартовая оценка) = 285 с
+      const budgetMs = 285_000;
+      await vi.advanceTimersByTimeAsync(budgetMs - WARNING_BEFORE_MS - 1);
+      expect(warnings).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(warnings).toEqual(['sess_1']);
+      expect(sidebands[0]!.closeRequests).toBe(0);
+      await vi.advanceTimersByTimeAsync(WARNING_BEFORE_MS);
+      expect(sidebands[0]!.closeRequests).toBe(1);
+      sidebands[0]!.pushClosed({ seconds: 285, reason: 'close_requested' });
+      expect(row()).toMatchObject({ state: 'closed' });
+    });
+
+    it('после смены локальных суток вчерашний расход не считается', async () => {
+      const clock = { date: new Date(2026, 10, 4, 23, 59, 0) };
+      const { service, addUsage } = setup({ dailyMinutes: 10, clock });
+      addUsage('old', '2026-11-04', 0, 600);
+      expect(await service.prepare('o')).toMatchObject({ ok: false, code: 'limit_reached' });
+      clock.date = new Date(2026, 10, 5, 0, 1, 0);
+      expect((await service.prepare('o')).ok).toBe(true);
+    });
   });
 });

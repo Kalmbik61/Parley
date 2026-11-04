@@ -5,6 +5,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { LiveClient, Sideband } from './live-client.js';
 import { LiveError } from './live-client.js';
+import { DEFAULT_DAILY_MINUTES, dailyBudget, localDay } from './budget.js';
 
 export const MAX_SESSION_MS = 30 * 60_000;
 export const WARNING_BEFORE_MS = 2 * 60_000;
@@ -24,7 +25,7 @@ export const RECONNECT_DELAYS_MS = [500, 2_000, 5_000, 10_000];
 
 export type PrepareResult =
   | { ok: true; voiceSessionId: string; sdpAnswer: string }
-  | { ok: false; code: 'busy' | 'no_key' | 'failed'; message: string };
+  | { ok: false; code: 'busy' | 'no_key' | 'failed' | 'limit_reached'; message: string };
 
 export interface VoiceSessionEvents {
   /** За две минуты до лимита. */
@@ -37,6 +38,8 @@ export interface VoiceSessionServiceDeps extends VoiceSessionEvents {
   db: DatabaseSync;
   live: LiveClient;
   now?: () => Date;
+  /** Дневной лимит в минутах (конфиг voiceDailyMinutes); читается при каждом prepare. */
+  dailyMinutes?: () => number;
   closeWaitMs?: number;
   attachDelaysMs?: number[];
   reconnectDelaysMs?: number[];
@@ -62,11 +65,10 @@ interface Active {
   closedWaiters: Array<() => void>;
 }
 
-const localDay = (date: Date): string => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-
 export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceSessionService {
   const { db, live } = deps;
   const now = deps.now ?? (() => new Date());
+  const dailyMinutes = deps.dailyMinutes ?? (() => DEFAULT_DAILY_MINUTES);
   const closeWaitMs = deps.closeWaitMs ?? CLOSE_WAIT_MS;
   const attachDelaysMs = deps.attachDelaysMs ?? ATTACH_DELAYS_MS;
   const reconnectDelaysMs = deps.reconnectDelaysMs ?? RECONNECT_DELAYS_MS;
@@ -194,6 +196,12 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
   return {
     async prepare(sdpOffer) {
       if (active !== null) return { ok: false, code: 'busy', message: 'A voice session is already active' };
+      // Бюджет исчерпан: к OpenAI не ходим. Проверка синхронная, поэтому до занятия слота.
+      try {
+        if (dailyBudget(db, dailyMinutes(), now()).remainingSeconds <= 0) return { ok: false, code: 'limit_reached', message: 'Daily voice limit reached' };
+      } catch {
+        // учёт недоступен: лимит не знаем, не блокируем голос из-за этого
+      }
       // Слот занимаем синхронно, до первого await: два одновременных prepare не пройдут оба.
       const session: Active = { voiceSessionId: '', sideband: null, estimate: INIT_BILLED_SECONDS, timers: [], finished: false, ready: false, closeWanted: null, closedWaiters: [] };
       active = session;
@@ -231,8 +239,16 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
       }
       if (unusable || insertFailed || sideband === null) return abandon(session, sideband, insertFailed);
       wire(session, sideband);
-      session.timers.push(setTimeout(() => deps.onWarning?.(session.voiceSessionId), MAX_SESSION_MS - WARNING_BEFORE_MS));
-      session.timers.push(setTimeout(() => void requestClose(session, 'time_limit').catch(() => {}), MAX_SESSION_MS));
+      // Сессия живёт до меньшего из лимита сессии и остатка дневного бюджета (в остатке уже учтена стартовая оценка).
+      let budgetMs = MAX_SESSION_MS;
+      try {
+        budgetMs = Math.min(MAX_SESSION_MS, dailyBudget(db, dailyMinutes(), now()).remainingSeconds * 1000);
+      } catch {
+        // остаётся лимит сессии
+      }
+      const reason = budgetMs < MAX_SESSION_MS ? 'daily_limit' : 'time_limit';
+      session.timers.push(setTimeout(() => deps.onWarning?.(session.voiceSessionId), Math.max(0, budgetMs - WARNING_BEFORE_MS)));
+      session.timers.push(setTimeout(() => void requestClose(session, reason).catch(() => {}), budgetMs));
       session.ready = true;
       return { ok: true, voiceSessionId: created.sessionId, sdpAnswer: created.sdpAnswer };
     },
