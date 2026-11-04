@@ -63,13 +63,14 @@ function updateEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return clean;
 }
 
-/** SIGKILL всей группе процессов `pid` (установщик и его потомки); группы уже нет — не ошибка. */
+/** SIGKILL всей группе процессов `pid` (установщик и его потомки); группы уже нет — не ошибка (ESRCH; на macOS ещё EPERM для пустой группы или группы из зомби). */
 function killGroup(pid: number | undefined): void {
   if (pid === undefined) return;
   try {
     process.kill(-pid, 'SIGKILL');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ESRCH' && code !== 'EPERM') throw error;
   }
 }
 
