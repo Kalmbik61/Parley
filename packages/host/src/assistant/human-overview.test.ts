@@ -219,6 +219,23 @@ describe('HumanOverviewV1', () => {
     for (const room of overview.rooms) expect(detailed).toContain(room.title);
     expect(overview.counts).toEqual({ needsHuman: 0, working: 1, other: 1, activityUnknown: 0 });
   });
+  it('H7 resolves canonical short tags for named sessions with preserved leading zeros', () => {
+    const src = synthetic();
+    mapOf(src).sessions.push(session('s-01', 'Tester'));
+    roomOf(src).members.push('s-01');
+    mapOf(src).plans = [{ ...plan(), goal: 'S257 @s258 S01 @s01' }];
+    expect(projected(src).task.text).toBe('Marco 5 Nina 5 Tester Tester');
+  });
+  it('H7 keeps cross-work short aliases neutral when the target is ambiguous', () => {
+    const src = synthetic();
+    const other = synthetic();
+    mapOf(other).work.id = 'w-0055';
+    mapOf(other).work.title = 'Другой проект';
+    mapOf(other).sessions[0]!.label = 'Другое имя';
+    src.entries = [...src.entries, ...other.entries];
+    mapOf(src).plans = [{ ...plan(), goal: 'S257 @s257 s-257' }];
+    expect(projected(src).task.text).toBe('участник участник участник');
+  });
   it('does not move archived-only members to unassigned, and excludes archived works', () => {
     const src = synthetic();
     mapOf(src).rooms[0]!.members = ['s-257'];

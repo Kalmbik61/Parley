@@ -1,4 +1,11 @@
-import { liveLead, sessionDotStateWithNeed, type WorkEntry, type WorkSession } from '@parley/core';
+import {
+  liveLead,
+  sessionDotStateWithNeed,
+  sessionMention,
+  sessionTag,
+  type WorkEntry,
+  type WorkSession,
+} from '@parley/core';
 import { sessionNeed } from '@parley/core/attention';
 import { normalizeHumanText } from '@parley/core/assistant';
 import type {
@@ -83,7 +90,8 @@ export function humanOverview(
       const ref = targetRef(entry, 'session', session.id);
       names.set(ref, name);
       alias(session.id, name);
-      alias(`@s${session.id.replace(/^s-0*/, '')}`, name);
+      alias(sessionMention(session.id), name);
+      alias(sessionTag(session.id), name);
       for (const tag of session.label.match(/\bS\d+\b/g) ?? []) alias(tag, name);
       refs[ref] = name;
     }
@@ -96,7 +104,14 @@ export function humanOverview(
     ))
       refs[target.id] = normalizeHumanText(target.name, {});
   }
-  for (const [key, values] of aliases) if (values.size === 1) refs[key] = [...values][0]!;
+  for (const [key, values] of aliases) {
+    refs[key] =
+      values.size === 1
+        ? [...values][0]!
+        : key.startsWith('S')
+          ? 'участник'
+          : normalizeHumanText(key, {});
+  }
   const human = (text: string): string => normalizeHumanText(text, refs);
   const readSession = (entry: WorkEntry, session: WorkSession): HumanOverviewSession => {
     const ref = targetRef(entry, 'session', session.id);
