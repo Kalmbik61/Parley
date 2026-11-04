@@ -10,6 +10,11 @@ if (variant !== 'dev' && variant !== 'release') {
 }
 const dev = variant === 'dev';
 
+// A47: the system prompts for dictation. expo-camera must carry the microphone text too: with `microphonePermission: false`
+// its Info.plist mod removes the key whatever the plugin order is, and the first tap on the microphone would crash the app.
+const MICROPHONE_TEXT = 'Parley listens only while you dictate into a message. Audio stays on this iPhone.';
+const SPEECH_TEXT = 'Parley turns your speech into text on this iPhone. Audio is not sent anywhere.';
+
 // Prebuild adds the dev launcher's own NSAllowsLocalNetworking and Local Network text even without the
 // `expo-dev-client` plugin listed, so the release variant removes them from the generated Info.plist.
 const withoutLocalNetwork = (config: ExpoConfig) =>
@@ -28,7 +33,7 @@ const config: ExpoConfig = {
   version: '0.1.0',
   scheme: 'parley',
   extra: dev
-    ? { devBuild: true, devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null, devConsent: process.env.PARLEY_MOBILE_DEV_CONSENT ?? null, devLockMs: Number(process.env.PARLEY_MOBILE_DEV_LOCK_MS) || null, devFocus: process.env.PARLEY_MOBILE_DEV_FOCUS === '1' }
+    ? { devBuild: true, devRelay: process.env.PARLEY_MOBILE_DEV_RELAY ?? null, devDemo: process.env.PARLEY_MOBILE_DEV_DEMO === '1', devRoute: process.env.PARLEY_MOBILE_DEV_ROUTE ?? null, devConsent: process.env.PARLEY_MOBILE_DEV_CONSENT ?? null, devLockMs: Number(process.env.PARLEY_MOBILE_DEV_LOCK_MS) || null, devFocus: process.env.PARLEY_MOBILE_DEV_FOCUS === '1', devVoice: process.env.PARLEY_MOBILE_DEV_VOICE ?? null }
     : {},
   platforms: ['ios'],
   orientation: 'portrait',
@@ -55,9 +60,13 @@ const config: ExpoConfig = {
       'expo-camera',
       {
         cameraPermission: 'Parley uses the camera to scan the QR code that pairs this phone with your Mac.',
-        microphonePermission: false,
+        microphonePermission: MICROPHONE_TEXT,
         recordAudioAndroid: false,
       },
+    ],
+    [
+      'expo-speech-recognition',
+      { microphonePermission: MICROPHONE_TEXT, speechRecognitionPermission: SPEECH_TEXT },
     ],
     'expo-secure-store',
     [

@@ -5,6 +5,10 @@ import { SymbolView } from 'expo-symbols';
 import { DEV_FOCUS } from '../dev/flags';
 import { devFocus } from '../dev/dev-script';
 import { typography, useColors } from '../theme';
+import { DictationStrip } from '../voice/DictationStrip';
+import { dictation } from '../voice/dictation';
+import { MicButton } from '../voice/MicButton';
+import { useDictationHidden, useDictationTarget } from '../voice/use-dictation-target';
 import { messageProblem, sizeCounter, type ComposerMode } from './send';
 
 export function Composer({
@@ -15,6 +19,7 @@ export function Composer({
   onSend,
   busy,
   measured,
+  dictation: dictationProps,
 }: {
   label: string;
   mode: ComposerMode;
@@ -24,10 +29,22 @@ export function Composer({
   busy: boolean;
   /** What would go (the draft with the reply plate's quote): the 16 KB problem, the counter and ⬆ use it (critic A42 M3). */
   measured?: string;
+  /** The microphone (A47): the field's dictation id, the key of its draft and the screen's toast. */
+  dictation?: { id: string; draftKey: string; toast(text: string): void };
 }) {
   const c = useColors();
   const input = useRef<React.ComponentRef<typeof TextInput>>(null);
   useEffect(() => devFocus.listen(() => input.current?.focus()), []);
+  const dictationId = dictationProps?.id ?? '';
+  const mic = useDictationTarget({
+    id: dictationId,
+    input,
+    value: draft,
+    apply: onChange,
+    fallback: { kind: 'session', key: dictationProps?.draftKey ?? '' },
+    toast: dictationProps?.toast ?? (() => undefined),
+  });
+  useDictationHidden(dictationId, mode.kind === 'hidden');
   if (mode.kind === 'hidden') {
     return mode.text === '' ? null : (
       <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.line, { color: c.label2 }]}>
@@ -46,6 +63,7 @@ export function Composer({
           {problem !== null && draft.trim() !== '' ? `${problem} · ${counter}` : counter}
         </Text>
       )}
+      {dictationProps !== undefined && <DictationStrip id={dictationId} />}
       <View style={styles.row}>
         <TextInput
           ref={input}
@@ -55,16 +73,18 @@ export function Composer({
           editable={!busy && mode.sendEnabled}
           value={draft}
           onChangeText={onChange}
+          onSelectionChange={mic.onSelectionChange}
           placeholder={`Message ${label}`}
           placeholderTextColor={c.label3}
           style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label, opacity: busy ? 0.6 : 1 }]}
         />
+        {dictationProps !== undefined && <MicButton id={dictationId} editable={!busy && mode.sendEnabled} />}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Send"
           accessibilityState={{ disabled: !canSend, busy }}
           disabled={!canSend}
-          onPress={onSend}
+          onPress={() => (dictationProps !== undefined && dictation.finishBeforeSend(dictationId)) || onSend()}
           style={styles.send}
         >
           <SymbolView name="arrow.up.circle.fill" size={32} tintColor={canSend ? c.tint : c.off} />
