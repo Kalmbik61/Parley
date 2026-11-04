@@ -69,4 +69,11 @@ describe('card store', () => {
     expect(store.get('p3')?.state).toBe('decided');
     expect(store.withdrawBySource('job:a')).toEqual([]);
   });
+  it('отозванную (superseded) карточку решить нельзя: claim отказывает', () => {
+    const store = createCardStore(openMemoryDb());
+    store.put(card('p1', 'job:a', 1000), 10);
+    store.withdrawBySource('job:a');
+    expect(store.claim('p1', 20)).toEqual({ ok: false, reason: 'gone' });
+    expect(store.get('p1')?.state).toBe('superseded');
+  });
 });

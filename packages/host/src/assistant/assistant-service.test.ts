@@ -2067,6 +2067,9 @@ describe('assistant-service: link_request (T5, VA-03/VA-05)', () => {
     expect(h.store.get(card.proposalId)?.state).toBe('superseded');
     expect(changes).toContainEqual([card.proposalId, 'superseded']);
     expect(h.service.state().proposal).toBeNull();
+    // Решение по отозванной карточке отклоняется, действие не исполняется.
+    expect(await h.service.decide(card.proposalId, 'send')).toMatchObject({ applied: false });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
     expect(h.requests.get(old.requestId)).toMatchObject({ stale: true, supersededBy: fresh.requestId });
     expect(h.runs.find((run) => run.jobId === old.jobId)?.cancelled).toBe(true);
     expect(h.tokens.peek(fresh.jobId).toolRefs.map((ref) => [ref.tool, ref.ok])).toEqual([['link_request', true]]);
