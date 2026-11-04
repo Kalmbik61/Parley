@@ -35,7 +35,7 @@
   - три файла в одном коммите на ветке `feat/voice-assistant-modules`;
   - `git diff --stat origin/master` показывает только эти три файла;
   - каждая задача (P0, O1–O4, T0–T7) присутствует в плане с файлами, зависимостями, критериями и проверяющим;
-  - содержимое не выходит за источники; неуверенные места помечены `<!-- check: ... -->`;
+  - содержимое не выходит за источники; неуверенные места помечены;
   - общие границы закреплены разделом 7.
 - **Исполнитель:** s-261 (Executor, Sonnet).
 - **Проверяющие:** s-258 сверяет `human-overview-spec.md` со своей спекой и правками m-3390…m-3396, а также раздел O; s-257 проверяет `modules-design`, трек V и «Общие границы».
@@ -57,7 +57,7 @@
 ### O2 — HumanOverviewV1 и проекция
 - **Файлы:**
   - новые `packages/host/src/assistant/human-overview.ts` и `human-overview.test.ts` рядом с `packages/host/src/assistant/overview.ts`;
-  - тип `HumanOverviewV1` на общей границе, согласованной в P0: `protocol/src/assistant.ts` либо отдельный соседний файл с экспортом (<!-- check: s-258 named the location as an either/or in m-3413; it is not fixed anywhere else, left to the O2 executor -->точное место уточняется исполнителем пункта).
+  - тип `HumanOverviewV1` и вложенные типы — новый файл `packages/protocol/src/human-overview.ts`; публичный экспорт — `packages/protocol/src/index.ts`; оба файла принадлежат O2. Core/MCP не импортирует protocol: он передаёт структурный payload через свой транспортный контракт; типизированные потребители host используют protocol.
 - **Зависимости:** P0, O1.
 - **Что делает:** три группы с приоритетом needsHuman; источники — существующие `OverviewSource`, `sessionDotStateWithNeed`, `liveLead`.
 - **Приёмка:** H1–H7 и H9 (Срез §4):
@@ -87,7 +87,7 @@
 - **Verifier / ревью:** s-258; senior-ревью границы MCP обязательно.
 
 ### O4 — независимая приёмка трека
-- **Файлы:** кода не меняет; результат — запись проверки (<!-- check: the form of the O4 record (note in room vs. file) is not named in the sources -->форма записи уточняется исполнителем пункта).
+- **Файлы:** кода не меняет; результат — итоговый `report` verifier-сессии плюс заметка в r-22; отдельный файл не нужен.
 - **Зависимости:** O3.
 - **Приёмка:**
   - junior-verifier проверяет H1–H11 на интегрированной ветке и один путь job → MCP → человеческий результат;
@@ -192,7 +192,7 @@
 
 | Контракт | Где определён | Владеет / правит |
 |---|---|---|
-| `HumanOverviewV1` | Срез §1 (поля), §3 (интеграция); тип на общей границе `protocol/src/assistant.ts` либо соседний файл с экспортом | O2 создаёт; O3 проводит через сервис и MCP |
+| `HumanOverviewV1` | Срез §1 (поля), §3 (интеграция); тип в `packages/protocol/src/human-overview.ts`, экспорт через `packages/protocol/src/index.ts`; core/MCP не импортирует protocol | O2 создаёт; O3 проводит через сервис и MCP |
 | Request / version / originKey | Голос↔Ассистент §4; версия Request отдельна от версии job | T2 создаёт; T4 и T5 используют |
 | `JobResult` | Голос↔Ассистент §8 п.2 | T1 |
 | allowlist инструментов job | Голос↔Ассистент §8 п.1 (явный allowlist), §5 п.3 (чтение плюс `propose_*`; `schedule_check` не read-only) | T1 задаёт; T5 опирается |
@@ -205,7 +205,7 @@
 |---|---|
 | P0 | три документа из раздела 2 |
 | O1 | `packages/core/src/assistant/text.ts`, `text.test.ts` |
-| O2 | `packages/host/src/assistant/human-overview.ts`, `human-overview.test.ts`; тип `HumanOverviewV1` — `protocol/src/assistant.ts` либо соседний файл; `overview.ts` не переписывается |
+| O2 | `packages/host/src/assistant/human-overview.ts`, `human-overview.test.ts`; `packages/protocol/src/human-overview.ts` (тип `HumanOverviewV1` и вложенные), `packages/protocol/src/index.ts` (экспорт); `overview.ts` не переписывается |
 | O3 | `packages/host/src/assistant/assistant-service.ts` (+тесты), `packages/core/src/mcp/assistant.ts`, `mcp/assistant.test.ts`, `packages/core/src/assistant/launch.ts` (+тесты) |
 | O4 | кода нет |
 | T0 | кода продукта нет; записка `docs/research/<дата выполнения>-gpt-live-transport-spike.md` |
@@ -217,7 +217,7 @@
 | T6 | уточняется исполнителем пункта |
 | T7 | кода нет |
 
-Пересечения, которые передаются последовательно: `assistant-service.ts` — T1 и O3 (не одновременно; O3 после T1); `packages/core/src/mcp/assistant.ts` — T1 и O3 (то же правило).
+Пересечения, которые передаются последовательно: `assistant-service.ts` — T1 и O3 (не одновременно; O3 после T1); `packages/core/src/mcp/assistant.ts` — T1 и O3 (то же правило); `packages/protocol/src/index.ts` — общий файл: исполнители передают его последовательно, если T1 или T2 тоже его меняют.
 
 ## 8. Ворота человека
 
