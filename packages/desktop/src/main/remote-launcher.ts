@@ -43,8 +43,9 @@ export function resolveBridgeEntry(options: { packaged: boolean; resourcesPath: 
 
 /**
  * Version of the bridge that `entry` would start: the `package.json` one level above the entry's folder, the file the
- * bridge itself reads in `bridgeVersion()`. Reading the bundle (not `app.getVersion()`) compares like with like, so dev
- * runs and test switches never see a false mismatch. `null` — unreadable, the launcher then keeps a running bridge.
+ * bridge itself reads in `bridgeVersion()`. Reading the bundle (not `app.getVersion()`) compares like with like for the
+ * packaged app and the workspace package. An overridden entry (`PARLEY_BRIDGE_ENTRY`, e.g. the e2e stub, which reports
+ * its own version) is not checked by the caller. `null` — unreadable, the launcher then keeps a running bridge.
  */
 export function bridgeEntryVersion(entry: string): string | null {
   try {
@@ -140,13 +141,13 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
     }
   }
 
-  /** Version of the connected bridge; `undefined` — it does not report one (0.28.x and older) or the call failed. */
-  async function runningVersion(): Promise<string | undefined> {
+  /** Version of the connected bridge: a string, `undefined` — status succeeded without one, `null` — the call failed. */
+  async function runningVersion(): Promise<string | undefined | null> {
     try {
       const status = (await client.call('status')) as { version?: unknown } | null;
       return typeof status?.version === 'string' ? status.version : undefined;
     } catch {
-      return undefined;
+      return null;
     }
   }
 
@@ -156,7 +157,11 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
     processes.signal(pid, 'SIGTERM');
     const deadline = Date.now() + killGraceMs;
     while (processes.alive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
-    if (processes.alive(pid)) processes.signal(pid, 'SIGKILL');
+    if (!processes.alive(pid)) return;
+    processes.signal(pid, 'SIGKILL');
+    // A killed bridge never releases `bridge.pid`: the next one must not start while the pid is still there.
+    const killDeadline = Date.now() + killGraceMs;
+    while (processes.alive(pid) && Date.now() < killDeadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 
   /** Ends the bridge the window is connected to and waits until it is gone; falls back to the pid like `stop()`. */
@@ -182,9 +187,13 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
       const expected = options.expectedVersion?.() ?? null;
       if (expected === null || restarted) return;
       const running = await runningVersion();
+      if (running === null) {
+        log('could not read the version of the running bridge; keeping it');
+        return;
+      }
       if (running === expected) return;
       restarted = true;
-      log(`restarting the bridge after an update: running ${running ?? 'unknown (no version reported)'}, app ${expected}`);
+      log(`restarting the bridge after an update: running ${running ?? 'no version reported'}, app ${expected}`);
       await replaceRunning();
     }
     // A process started earlier and still alive is given time instead of a second one (like the host).

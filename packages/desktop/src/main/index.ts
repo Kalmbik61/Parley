@@ -942,8 +942,10 @@ if (!gotLock) {
       launcher: createRemoteLauncher({
         paths: bridge,
         expectedVersion: () => {
+          // An overridden entry (the e2e stub) has its own version: no check.
+          if (switches.bridgeEntry) return null;
           try {
-            return bridgeEntryVersion(switches.bridgeEntry ?? resolveBridgeEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }));
+            return bridgeEntryVersion(resolveBridgeEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }));
           } catch {
             return null;
           }

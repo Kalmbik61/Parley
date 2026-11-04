@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LineDecoder } from '@parley/protocol';
-import { bridgePaths, createRemoteLauncher, resolveBridgeEntry } from './remote-launcher.js';
+import { bridgeEntryVersion, bridgePaths, createRemoteLauncher, resolveBridgeEntry } from './remote-launcher.js';
 import type { BridgeProcesses } from './remote-launcher.js';
 import { createControlClient, startPresence, type PowerMonitorLike } from './remote-control.js';
 
@@ -238,8 +238,8 @@ describe('presence', () => {
 
 describe('remote launcher: bridge version after an update', () => {
   /** A fake bridge + control client: `up` is whether the control socket answers, `version` what `status` reports. */
-  function fakeWorld(initial: { version?: string; stopWorks?: boolean; pid?: number }) {
-    const world = { up: true, version: initial.version, stopWorks: initial.stopWorks ?? true, calls: [] as string[], spawns: 0, signals: [] as string[], alive: true };
+  function fakeWorld(initial: { version?: string; stopWorks?: boolean; pid?: number; statusFails?: boolean; lingerPolls?: number }) {
+    const world = { up: true, version: initial.version, stopWorks: initial.stopWorks ?? true, calls: [] as string[], spawns: 0, signals: [] as string[], alive: true, order: [] as string[], lingerLeft: initial.lingerPolls ?? 0 };
     let connected = false;
     const client = {
       connect: async () => {
@@ -249,6 +249,8 @@ describe('remote launcher: bridge version after an update', () => {
       isConnected: () => connected,
       call: async (method: string) => {
         world.calls.push(method);
+        if (method === 'status' && initial.statusFails) throw new Error('timeout');
+        if (method === 'stop') world.order.push('stop');
         if (method === 'status') return world.version === undefined ? { running: true } : { running: true, version: world.version };
         if (method === 'stop' && world.stopWorks) world.up = false;
         return { ok: true };
@@ -262,7 +264,10 @@ describe('remote launcher: bridge version after an update', () => {
     const processes: BridgeProcesses = {
       readPid: async () => initial.pid ?? 4242,
       isBridge: async () => true,
-      alive: () => world.alive && !world.signals.includes('SIGKILL') && (world.up || !world.stopWorks),
+      alive: () => {
+        if (world.signals.includes('SIGKILL')) return world.lingerLeft-- > 0;
+        return world.alive && (world.up || !world.stopWorks);
+      },
       signal: (_pid, signal) => {
         world.signals.push(signal);
         if (signal === 'SIGKILL') {
@@ -283,6 +288,7 @@ describe('remote launcher: bridge version after an update', () => {
         log: (m) => logs.push(m),
         spawn: async () => {
           world.spawns += 1;
+          world.order.push(world.up || world.lingerLeft > 0 ? 'spawn-while-old-alive' : 'spawn');
           world.up = true;
           world.alive = true;
           world.version = newVersion;
@@ -310,10 +316,31 @@ describe('remote launcher: bridge version after an update', () => {
     expect(logs[0]).toContain('0.29.0');
   });
 
-  it('no version reported (0.28.x and older): counts as a mismatch', async () => {
+  it('status succeeds without a version: counts as a mismatch', async () => {
     const { world, make } = fakeWorld({ version: undefined });
     await make('0.29.0').start();
     expect(world.spawns).toBe(1);
+  });
+
+  it('a failed status call keeps a healthy bridge and logs it', async () => {
+    const { world, make, logs } = fakeWorld({ version: '0.29.0', statusFails: true });
+    await make('0.29.0').start();
+    expect(world.spawns).toBe(0);
+    expect(world.calls).toEqual(['status']);
+    expect(logs).toHaveLength(1);
+  });
+
+  it('spawns only after the old bridge is gone', async () => {
+    const { world, make } = fakeWorld({ version: '0.28.3' });
+    await make('0.29.0').start();
+    expect(world.order).toEqual(['stop', 'spawn']);
+  });
+
+  it('after SIGKILL waits until the pid is gone before spawning', async () => {
+    const { world, make } = fakeWorld({ version: '0.28.3', stopWorks: false, lingerPolls: 4 });
+    await make('0.29.0').start();
+    expect(world.lingerLeft).toBeLessThanOrEqual(0);
+    expect(world.order.at(-1)).toBe('spawn');
   });
 
   it('a stop that does not take effect falls back to SIGTERM and SIGKILL', async () => {
@@ -340,5 +367,25 @@ describe('remote launcher: bridge version after an update', () => {
     await make(null).start();
     expect(world.spawns).toBe(0);
     expect(world.calls).toEqual([]);
+  });
+});
+
+describe('bridgeEntryVersion', () => {
+  it('reads package.json one level above the entry folder (packaged and workspace layouts)', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path.join(dir, 'pkg', 'dist'), { recursive: true });
+    await writeFile(path.join(dir, 'pkg', 'package.json'), JSON.stringify({ version: '0.29.0' }));
+    expect(bridgeEntryVersion(path.join(dir, 'pkg', 'dist', 'main.js'))).toBe('0.29.0');
+  });
+
+  it('is null when package.json is missing, unreadable or has no version', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    expect(bridgeEntryVersion(path.join(dir, 'none', 'dist', 'main.js'))).toBeNull();
+    await mkdir(path.join(dir, 'bad', 'dist'), { recursive: true });
+    await writeFile(path.join(dir, 'bad', 'package.json'), '{not json');
+    expect(bridgeEntryVersion(path.join(dir, 'bad', 'dist', 'main.js'))).toBeNull();
+    await mkdir(path.join(dir, 'nov', 'dist'), { recursive: true });
+    await writeFile(path.join(dir, 'nov', 'package.json'), '{}');
+    expect(bridgeEntryVersion(path.join(dir, 'nov', 'dist', 'main.js'))).toBeNull();
   });
 });
