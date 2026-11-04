@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HumanOverviewV1 } from '@parley/protocol';
 import { JOB_TOKEN_PREFIX, type ProviderEntry } from '@parley/core';
 import { claimsDoneAction, createJobExecutor, JOB_PROMPT, type JobExecutorDeps } from './job-executor.js';
 import { createJobTokens, type JobTokens } from './job-tokens.js';
@@ -314,4 +315,23 @@ it('H11: normalizes the final human job answer before summary and result storage
   expect(end.summary).toBe(end.result.answer);
   expect(end.summary).not.toMatch(/\[\[|s-257|@s123|room:|r-123|work:|w-123|session:/);
   expect(end.summary).toContain('works-123 S256abc.');
+});
+
+
+it('uses the permitted overview names for S01, mentions and full refs, preserving arbitrary S24', async () => {
+  const ref = 'session:abc:w-1:s-01';
+  const overview = { rooms: [{ ref: 'room:abc:w-1:r-1', title: 'Auth', workLabel: 'Parley', members: [{ ref, displayName: 'Anna' }] }], unassignedSessions: [] } as unknown as HumanOverviewV1;
+  const { execute } = setup({ ok: true }, {
+    text: `[[calm]] S01 @s01 ${ref} s-01 uses S24.`,
+    during: (tokens, token) => {
+      const id = tokens.jobOf(token)!;
+      tokens.recordOverview(id, overview);
+      tokens.recordTool(id, 'parley_overview', true);
+      tokens.recordCard(id, { cardId: 'p1', kind: 'message' });
+    },
+  });
+  await expect(execute(job).done).resolves.toMatchObject({
+    ok: true, summary: 'Anna Anna Anna Anna uses S24.',
+    result: { answer: 'Anna Anna Anna Anna uses S24.', cards: [{ cardId: 'p1', kind: 'message' }], toolRefs: [{ tool: 'parley_overview', ok: true, at: 1 }] },
+  });
 });

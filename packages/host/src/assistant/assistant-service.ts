@@ -80,7 +80,7 @@ export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
   works: Pick<WorksService, 'snapshot'>;
   activity: Pick<ActivityService, 'get'>;
-  feed?: Pick<FeedService, 'snapshot' | 'decide'>;
+  feed?: Pick<FeedService, 'snapshot' | 'decide'> & Partial<Pick<FeedService, 'peekAttention'>>;
   /** Общий отправитель хоста (`createSender`) — тот же, что у `pty.send`. */
   send(params: { ref: SessionRef; text: string; submit: boolean }): Promise<SendResult>;
   /**
@@ -116,7 +116,7 @@ export interface AssistantServiceDeps {
   launchEnv(entry: ProviderEntry): Promise<NodeJS.ProcessEnv>;
   binary(command: string): Promise<string>;
   /** Запись хостом вызовов и карточек job (план голоса, T1); без неё `JobResult` приходит пустым. */
-  jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'>;
+  jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'> & Partial<Pick<JobTokens, 'recordOverview'>>;
   /** Связь голосовых поручений (`link_request`, T5) и отказ `propose_*` частичному или вытесненному Request; без неё `link_request` недоступен. */
   requestLink?: RequestLinker;
   /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
@@ -981,7 +981,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   /** One collection for tools, conversation channels and jobs; projection itself is synchronous. */
-  async function collectOverview(detailed = false): Promise<{ text: string; overview: HumanOverviewV1 }> {
+  async function collectOverview(detailed = false, jobId?: string): Promise<{ text: string; overview: HumanOverviewV1 }> {
     const context = await reasonContext();
     let src = source();
     const initial = JSON.stringify(src.entries);
@@ -1031,7 +1031,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       }
     }
     revalidate();
+    // No await between these peeks and projection: async snapshots prepare the feeds, while
+    // current reducer state proves that no card settled while another feed was still loading.
+    for (const [key, value] of collected) {
+      const current = feed?.peekAttention?.(value.ref);
+      if (current === undefined || JSON.stringify(current) !== JSON.stringify(value.cards)) collected.delete(key);
+    }
     const overview = humanOverview({ ...src, ...context, now: new Date(now()), cards: (ref) => collected.get(refKey(ref))?.cards }, { mapComplete, detailed });
+    if (jobId !== undefined) deps.jobTools?.recordOverview?.(jobId, overview);
     return { text: overview.text, overview };
   }
 
@@ -1325,7 +1332,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const hidden = hiddenOf(src);
     switch (name) {
       case 'parley_overview': {
-        return { status: 200, body: await collectOverview(input.detailed === true) };
+        return { status: 200, body: await collectOverview(input.detailed === true, owner.jobId) };
       }
       case 'parley_detail': {
         const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });

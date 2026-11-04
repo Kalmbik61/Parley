@@ -6,7 +6,9 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { JOB_TOKEN_PREFIX } from '@parley/core';
+import { JOB_TOKEN_PREFIX, sessionMention, sessionTag } from '@parley/core';
+import { normalizeHumanText } from '@parley/core/assistant';
+import type { HumanOverviewV1 } from '@parley/protocol';
 
 /** Вызов инструмента job, как его увидел хост. Аргументов (текст человека) здесь нет. */
 export interface JobToolRef {
@@ -23,6 +25,8 @@ export interface JobCardRef {
 }
 
 export interface JobRecord {
+  /** Host-owned names from the last permitted overview, never part of JobResult. */
+  humanRefs?: Record<string, string>;
   cards: JobCardRef[];
   toolRefs: JobToolRef[];
 }
@@ -36,6 +40,7 @@ export interface JobTokens {
   jobOf(token: string): string | null;
   recordTool(jobId: string, tool: string, ok: boolean): void;
   recordCard(jobId: string, card: JobCardRef): void;
+  recordOverview(jobId: string, overview: HumanOverviewV1): void;
   /** Записи о job без изъятия (для отмены, которая снимает итог до конца прогона). */
   peek(jobId: string): JobRecord;
   /** Записи о job; забирает их: повторный вызов вернёт пусто. */
@@ -79,9 +84,35 @@ export function createJobTokens(now: () => number = Date.now): JobTokens {
       if (!byJob.has(jobId)) return;
       recordOf(jobId).cards.push(card);
     },
+    recordOverview(jobId, overview) {
+      if (!byJob.has(jobId)) return;
+      const aliases = new Map<string, Set<string>>();
+      const add = (ref: string, name: string): void => {
+        const names = aliases.get(ref) ?? new Set<string>();
+        names.add(name);
+        aliases.set(ref, names);
+      };
+      for (const room of overview.rooms) {
+        add(room.ref, room.title);
+        add(room.ref.slice(room.ref.lastIndexOf(':') + 1), room.title);
+        const work = `work:${room.ref.slice(5, room.ref.lastIndexOf(':'))}`;
+        add(work, room.workLabel);
+        add(work.slice(work.lastIndexOf(':') + 1), room.workLabel);
+      }
+      for (const member of [...overview.rooms.flatMap((room) => room.members), ...overview.unassignedSessions]) {
+        const id = member.ref.slice(member.ref.lastIndexOf(':') + 1);
+        add(member.ref, member.displayName);
+        add(id, member.displayName);
+        add(sessionTag(id), member.displayName);
+        add(sessionMention(id), member.displayName);
+      }
+      recordOf(jobId).humanRefs = Object.fromEntries([...aliases].map(([ref, names]) => [
+        ref, names.size === 1 ? [...names][0]! : normalizeHumanText(ref.startsWith('S') ? 's-0' : ref, {}),
+      ]));
+    },
     peek(jobId) {
       const record = records.get(jobId);
-      return record === undefined ? { cards: [], toolRefs: [] } : { cards: [...record.cards], toolRefs: [...record.toolRefs] };
+      return record === undefined ? { cards: [], toolRefs: [] } : { cards: [...record.cards], toolRefs: [...record.toolRefs], ...(record.humanRefs === undefined ? {} : { humanRefs: { ...record.humanRefs } }) };
     },
     take(jobId) {
       const record = records.get(jobId) ?? { cards: [], toolRefs: [] };

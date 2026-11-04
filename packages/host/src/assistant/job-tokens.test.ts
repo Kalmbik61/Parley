@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { HumanOverviewV1 } from '@parley/protocol';
 import { JOB_TOKEN_PREFIX } from '@parley/core';
 import { createJobTokens } from './job-tokens.js';
 
@@ -59,4 +60,23 @@ describe('токены job', () => {
     expect(tokens.peek('job-a').cards).toHaveLength(1);
     expect(tokens.take('job-a').cards).toHaveLength(1);
   });
+});
+
+
+it('keeps overview aliases private to the job and removes them with take', () => {
+  const tokens = createJobTokens();
+  tokens.issue('a');
+  tokens.issue('b');
+  const overview = { rooms: [], unassignedSessions: [{ ref: 'session:abc:w-1:s-01', displayName: 'Anna' }] } as unknown as HumanOverviewV1;
+  tokens.recordOverview('a', overview);
+  expect(tokens.peek('a').humanRefs).toMatchObject({ S01: 'Anna', '@s01': 'Anna', 's-01': 'Anna' });
+  expect(tokens.peek('b').humanRefs).toBeUndefined();
+  const peek = tokens.peek('a');
+  peek.humanRefs!.S01 = 'changed';
+  expect(tokens.peek('a').humanRefs!.S01).toBe('Anna');
+  expect(tokens.take('a').humanRefs!.S01).toBe('Anna');
+  expect(tokens.peek('a').humanRefs).toBeUndefined();
+  tokens.revoke('a');
+  tokens.recordOverview('a', overview);
+  expect(tokens.peek('a').humanRefs).toBeUndefined();
 });
