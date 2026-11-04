@@ -43,6 +43,15 @@ describe('normalizeHumanText — общий нормализатор refs (H7, H
     expect(normalizeHumanText('[[calm]]', refs)).toBe('');
   });
 
+  it('удаляет тег [hum] из транскрипта модели и не трогает другие скобки', () => {
+    expect(normalizeHumanText('Хорошо [hum] проверю [HUM] сейчас.', refs)).toBe('Хорошо проверю сейчас.');
+    expect(normalizeHumanText('[hum]', refs)).toBe('');
+    expect(normalizeHumanText('Нужно [1], [humm], [hu m], [hum и (hum) остаются.', refs)).toBe('Нужно [1], [humm], [hu m], [hum и (hum) остаются.');
+    // Тег, разрезанный между событиями, виден только в собранном тексте.
+    expect(normalizeHumanText(['Ok [h', 'um] go'].join(''), refs)).toBe('Ok go');
+    expect(normalizeHumanText('Ok [h', refs)).toBe('Ok [h');
+  });
+
   it('распознаёт ссылки после подписи с двоеточием без пробела (H7, H11)', () => {
     expect(normalizeHumanText('Ведущий:s-257 Комната:r-22 Работа:w-0054', refs))
       .toBe('Ведущий:Marco Комната:Обсуждение Работа:Улучшайзинг');

@@ -160,6 +160,9 @@ export function speakable(text: string): string {
 export function normalizeHumanText(text: string, refs: Readonly<Record<string, string>>): string {
   return text
     .replace(/\[\[\s*(?:calm|joy|sad|surprise|anger|error)\s*(?:\]\]|\](?=\s|$))/gi, ' ')
+    // Тег `[hum]` из выходного транскрипта GPT-Live (T0 §2e): только он, остальные скобки — обычный текст. Применять к
+    // собранному транскрипту, а не к каждой дельте: тег может быть разрезан между событиями.
+    .replace(/\[hum\]/gi, ' ')
     .replace(
       /(?<![\p{L}\p{N}\p{M}_@-])(?:(?:session|room|work):[\w-]+(?::[\w-]+)*|[srw]-\d+|@s\d+|S\d+)(?![\p{L}\p{N}\p{M}_-])/gu,
       (ref) => {
