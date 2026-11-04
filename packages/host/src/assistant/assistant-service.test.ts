@@ -10,6 +10,11 @@ import { HostError } from '../errors.js';
 import { createAssistantBridge } from '../telegram/assistant-bridge.js';
 import { createCardStore } from './cards.js';
 import { createConversationStore } from './conversation-store.js';
+import { createJobTokens } from './job-tokens.js';
+import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
+import { createRequestLinker } from './request-link.js';
+import { createRequests } from './requests.js';
+import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
@@ -2016,5 +2021,108 @@ describe('assistant-service: инструменты job (VA-10, токен job)'
     expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('Room "Auth"') } });
     expect(tools.recordTool).toHaveBeenCalledWith('job-1', 'parley_overview', true);
     service.stop();
+  });
+});
+
+describe('assistant-service: link_request (T5, VA-03/VA-05)', () => {
+  function link() {
+    const db = openMemoryDb();
+    const runs: Array<{ jobId: string; cancelled: boolean }> = [];
+    const jobs = createJobs({
+      db,
+      capPerProvider: 50,
+      defaultProvider: () => 'claude',
+      execute: (job: Job): JobRun => {
+        const fake = { jobId: job.jobId, cancelled: false };
+        runs.push(fake);
+        return { cancel: () => (fake.cancelled = true), done: new Promise<JobEnd>(() => {}) };
+      },
+    });
+    const requests = createRequests({ db, jobs });
+    const store = createCardStore(db);
+    const tokens = createJobTokens();
+    const linker = createRequestLinker({ db, requests, jobs, cards: store, tokens, safeTools: JOB_CANCEL_SAFE_TOOLS });
+    const service = createAssistantService({ ...deps, cards: store, jobTools: tokens, requestLink: linker });
+    const submit = (id: string, partial = false) => {
+      const { request } = requests.submit({ conversationId: 'conv-1', voiceSessionId: 'live', delegationId: id, text: `q ${id}`, transcriptPartial: partial });
+      tokens.issue(request.jobId);
+      return request;
+    };
+    const as = (request: { jobId: string }) => ({ kind: 'job', jobId: request.jobId }) as const;
+    return { db, jobs, requests, store, tokens, service, submit, as, runs };
+  }
+
+  it('уточнение: job нового Request вытесняет прежний; карточка отозвана с событием и снята с экрана, запись хоста есть', async () => {
+    const h = link();
+    const changes: Array<[string, string]> = [];
+    h.service.onCardChanged((change) => changes.push([change.cardId, change.state]));
+    const old = h.submit('d1');
+    expect((await h.service.tool('propose_message', { target: 'Auth', text: 'old text' }, h.as(old))).status).toBe(200);
+    const card = h.store.active()[0]!;
+    expect(h.service.state().proposal?.id).toBe(card.proposalId);
+    const fresh = h.submit('d2');
+
+    const reply = await h.service.tool('link_request', { supersedes: [{ requestId: old.requestId, expectedVersion: 1 }], reason: 'corrected' }, h.as(fresh));
+    expect(reply.status).toBe(200);
+    expect(h.store.get(card.proposalId)?.state).toBe('superseded');
+    expect(changes).toContainEqual([card.proposalId, 'superseded']);
+    expect(h.service.state().proposal).toBeNull();
+    expect(h.requests.get(old.requestId)).toMatchObject({ stale: true, supersededBy: fresh.requestId });
+    expect(h.runs.find((run) => run.jobId === old.jobId)?.cancelled).toBe(true);
+    expect(h.tokens.peek(fresh.jobId).toolRefs.map((ref) => [ref.tool, ref.ok])).toEqual([['link_request', true]]);
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    h.service.stop();
+  });
+
+  it('отказ идёт job со статусом и причиной, запись о вызове с ok=false', async () => {
+    const h = link();
+    const old = h.submit('d1');
+    const fresh = h.submit('d2');
+    const reply = await h.service.tool('link_request', { supersedes: [{ requestId: old.requestId, expectedVersion: 9 }], reason: 'x' }, h.as(fresh));
+    expect(reply).toMatchObject({ status: 409, body: { error: expect.stringContaining('Nothing was changed') } });
+    expect(h.tokens.peek(fresh.jobId).toolRefs.map((ref) => [ref.tool, ref.ok])).toEqual([['link_request', false]]);
+    expect(h.requests.get(old.requestId)).toMatchObject({ version: 1, supersededBy: null });
+    h.service.stop();
+  });
+
+  it('токен разговора link_request не вызывает', async () => {
+    const h = link();
+    await h.service.ask(ASK);
+    const old = h.submit('d1');
+    const fresh = h.submit('d2');
+    const reply = await h.service.tool('link_request', { supersedes: [{ requestId: old.requestId, expectedVersion: 1 }], reason: 'x' });
+    expect(reply.status).toBe(403);
+    expect(h.requests.get(old.requestId)).toMatchObject({ supersededBy: null });
+    expect(h.requests.get(fresh.requestId)?.link).toBeNull();
+    h.service.stop();
+  });
+
+  it('без связи в зависимостях link_request недоступен', async () => {
+    const service = createAssistantService({ ...deps, jobTools: { recordTool: vi.fn(), recordCard: vi.fn() } });
+    expect((await service.tool('link_request', { supersedes: [], reason: '' }, { kind: 'job', jobId: 'job-1' })).status).toBe(409);
+    service.stop();
+  });
+
+  it('частичный Request: propose_* отказано, карточки нет; чтение работает', async () => {
+    const h = link();
+    const partial = h.submit('d1', true);
+    const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'x' }, h.as(partial));
+    expect(reply).toMatchObject({ status: 409, body: { error: expect.stringContaining('do not prepare actions') } });
+    expect(h.store.active()).toEqual([]);
+    expect((await h.service.tool('parley_overview', {}, h.as(partial))).status).toBe(200);
+    // VA-05: неоднозначная связь — [] ничего не отменяет.
+    expect((await h.service.tool('link_request', { supersedes: [], reason: 'unclear' }, h.as(partial))).status).toBe(200);
+    h.service.stop();
+  });
+
+  it('вытесненный Request больше не готовит карточек', async () => {
+    const h = link();
+    const old = h.submit('d1');
+    const fresh = h.submit('d2');
+    await h.service.tool('link_request', { supersedes: [{ requestId: old.requestId, expectedVersion: 1 }], reason: 'x' }, h.as(fresh));
+    const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'late' }, h.as(old));
+    expect(reply.status).toBe(409);
+    expect(h.store.active()).toEqual([]);
+    h.service.stop();
   });
 });

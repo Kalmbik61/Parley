@@ -4,8 +4,10 @@
  * потребителям, поэтому переживает рестарт хоста и закрытие голоса. Job при закрытии голоса не отменяется.
  *
  * Повтор события или потерянный submit с тем же `originKey` возвращает тот же Request и тот же job: второго не бывает.
- * Версия Request (`version`) — своя, не ревизия job; её поднимает связь поручений (T5), здесь поле зарезервировано.
- * Поля `supersededBy` и `transcriptPartial` тоже только хранятся: логика вытеснения и частичного текста — T4/T5.
+ * Версия Request (`version`) — своя, не ревизия job; её поднимает связь поручений (`request-link.ts`, T5).
+ * Поле `transcriptPartial` только хранится: что с ним делать, решает T4; `link_request` и `propose_*` частичному Request
+ * отказывают (T5). Вид Request несёт и ворота очереди (§5 п.5): `gate`, `heldSince`, `heldBy`, `stale` вычисляются при чтении
+ * из того, что лежит в базе, поэтому переживают рестарт хоста.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -14,6 +16,9 @@ import type { AssistantRequestAck, AssistantRequestView } from '@parley/protocol
 import type { Jobs } from './jobs.js';
 
 export type RequestView = AssistantRequestView;
+
+/** Потребитель Live: по его отметкам доставки считаются ворота очереди. */
+export const LIVE_CONSUMER = 'live';
 
 export interface SubmitRequestInput {
   conversationId: string;
@@ -32,6 +37,13 @@ export interface Requests {
   get(requestId: string): RequestView | null;
   /** Открытые Request разговора и терминальные, чьё финальное состояние потребитель ещё не получил. По возрастанию `seq`. */
   list(conversationId: string, consumer: string): RequestView[];
+  /** Request этого job; `null` — job не голосовой (телефон, повторы). */
+  byJob(jobId: string): RequestView | null;
+  /**
+   * Открытые Request разговора старше `beforeSeq` (не вытеснены; итог ещё идёт или не доставлен в Live), не больше `limit`
+   * последних, по возрастанию `seq`: то, что новый job может вытеснить.
+   */
+  openBefore(conversationId: string, beforeSeq: number, limit: number): RequestView[];
   /** Потребитель получил итог. Идемпотентно; принимается только ревизия финального состояния job (как `jobs.ackInline`). */
   ack(requestId: string, consumer: string, revision: number): AssistantRequestAck;
 }
@@ -58,6 +70,9 @@ interface Raw {
   job_id: string;
   superseded_by: string | null;
   transcript_partial: number;
+  link_kind: 'independent' | 'supersedes' | null;
+  link_supersedes_json: string | null;
+  linked_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -71,6 +86,25 @@ export function createRequests(deps: RequestsDeps): Requests {
 
   const byOrigin = (originKey: string): Raw | undefined =>
     db.prepare('SELECT * FROM assistant_requests WHERE origin_key = ?').get(originKey) as unknown as Raw | undefined;
+
+  /**
+   * Ворота очереди. Итог удерживается, пока есть более новый Request разговора, чья связь не определена: job ещё идёт и не
+   * вызвал `link_request`. Закончившийся без вызова job связь уже не определит, поэтому ворота он не держит. Вытесненный
+   * и уже доставленный в Live Request не удерживается: первого не озвучивают вовсе, второй не отозвать.
+   */
+  function gateOf(row: Raw, job: { state: string; revision: number }, delivery: Record<string, number>): Pick<RequestView, 'gate' | 'heldSince' | 'heldBy'> {
+    const open = { gate: 'open' as const, heldSince: null, heldBy: null };
+    const delivered = !OPEN_JOB_STATES.includes(job.state) && (delivery[LIVE_CONSUMER] ?? -1) >= job.revision;
+    if (row.superseded_by !== null || delivered) return open;
+    const marks = OPEN_JOB_STATES.map(() => '?').join(',');
+    const blocker = db
+      .prepare(
+        `SELECT n.request_id, n.created_at FROM assistant_requests n JOIN assistant_jobs nj ON nj.job_id = n.job_id
+          WHERE n.conversation_id = ? AND n.seq > ? AND n.link_kind IS NULL AND nj.state IN (${marks}) ORDER BY n.seq LIMIT 1`,
+      )
+      .get(row.conversation_id, row.seq, ...OPEN_JOB_STATES) as unknown as { request_id: string; created_at: number } | undefined;
+    return blocker === undefined ? open : { gate: 'held', heldSince: blocker.created_at, heldBy: blocker.request_id };
+  }
 
   function view(row: Raw): RequestView | null {
     const job = jobs.getJob(row.job_id);
@@ -91,6 +125,9 @@ export function createRequests(deps: RequestsDeps): Requests {
       supersededBy: row.superseded_by,
       transcriptPartial: row.transcript_partial === 1,
       delivery,
+      link: row.link_kind === null ? null : { kind: row.link_kind, supersedes: row.link_supersedes_json === null ? [] : (JSON.parse(row.link_supersedes_json) as string[]), linkedAt: row.linked_at ?? row.updated_at },
+      ...gateOf(row, job, delivery),
+      stale: row.superseded_by !== null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       job: { jobId: job.jobId, state: job.state, revision: job.revision, resultSummary: job.resultSummary, result: job.result },
@@ -146,6 +183,26 @@ export function createRequests(deps: RequestsDeps): Requests {
         )
         .all(consumer, conversationId, ...OPEN_JOB_STATES) as unknown as Raw[];
       return rows.map(view).filter((request): request is RequestView => request !== null);
+    },
+    byJob(jobId) {
+      const row = db.prepare('SELECT * FROM assistant_requests WHERE job_id = ?').get(jobId) as unknown as Raw | undefined;
+      return row === undefined ? null : view(row);
+    },
+    openBefore(conversationId, beforeSeq, limit) {
+      const marks = OPEN_JOB_STATES.map(() => '?').join(',');
+      const rows = db
+        .prepare(
+          `SELECT r.* FROM assistant_requests r
+             JOIN assistant_jobs j ON j.job_id = r.job_id
+             LEFT JOIN assistant_request_deliveries d ON d.request_id = r.request_id AND d.consumer = ?
+            WHERE r.conversation_id = ? AND r.seq < ? AND r.superseded_by IS NULL AND (j.state IN (${marks}) OR d.job_revision IS NULL OR d.job_revision < j.revision)
+            ORDER BY r.seq DESC LIMIT ?`,
+        )
+        .all(LIVE_CONSUMER, conversationId, beforeSeq, ...OPEN_JOB_STATES, limit) as unknown as Raw[];
+      return rows
+        .reverse()
+        .map(view)
+        .filter((request): request is RequestView => request !== null);
     },
     ack(requestId, consumer, revision) {
       const row = db.prepare('SELECT * FROM assistant_requests WHERE request_id = ?').get(requestId) as unknown as Raw | undefined;

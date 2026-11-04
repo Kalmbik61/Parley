@@ -1,6 +1,6 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов, каждый — POST в маршрут хоста
- * `/assistant/<имя>` с токеном разговора. Карту работ сервер сам не читает: всё знает хост.
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора и `link_request` только для
+ * job, каждый — POST в маршрут хоста `/assistant/<имя>` с токеном. Карту работ сервер сам не читает: всё знает хост.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -301,6 +301,33 @@ export const ASSISTANT_TOOLS: Tool[] = [
     description: 'The person asked to start over: the conversation is forgotten after this reply.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'link_request',
+    description:
+      'Call this first, once. Tell Parley whether the task you were given replaces an earlier open request of the same conversation (the person corrected or withdrew it: "no, instead…", "never mind, do this"). The open requests are listed in your task with their requestId and version. supersedes lists only the earlier requests your task replaces, each with the version you saw; use [] when your task is independent or you are not sure. Nothing is cancelled unless the host confirms that the earlier request did nothing but read and prepare cards. The reply says what was done or why nothing changed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        supersedes: {
+          type: 'array',
+          maxItems: 10,
+          description: 'The earlier open requests that this task replaces; [] when it is independent.',
+          items: {
+            type: 'object',
+            properties: {
+              requestId: { type: 'string', description: 'The requestId from the open requests in your task.' },
+              expectedVersion: { type: 'integer', minimum: 1, description: 'The version of that request as listed in your task.' },
+            },
+            required: ['requestId', 'expectedVersion'],
+            additionalProperties: false,
+          },
+        },
+        reason: { type: 'string', description: 'One short sentence: why it replaces them, or why it is independent.' },
+      },
+      required: ['supersedes', 'reason'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -325,6 +352,29 @@ export const JOB_TOOL_ALLOWLIST: readonly string[] = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'link_request',
+];
+
+/** Инструменты только для job: токен разговора их не видит, а хост отвечает ему 403 (`assistant-endpoint.ts`). */
+export const JOB_ONLY_TOOLS: readonly string[] = ['link_request'];
+
+/**
+ * Инструменты, после которых job можно отменить, не оставив исполненного действия (спека §5 п.3): чтение, `propose_*`
+ * и сама `link_request`. Список явный и не выводится из `JOB_TOOL_ALLOWLIST`: новый инструмент job не становится
+ * безопасным для отмены, пока его не добавят сюда. `schedule_check` и подобные не входят.
+ */
+export const JOB_CANCEL_SAFE_TOOLS: readonly string[] = [
+  'parley_overview',
+  'parley_detail',
+  'parley_find',
+  'parley_room',
+  'parley_session',
+  'propose_message',
+  'propose_room',
+  'propose_decision',
+  'propose_room_decision',
+  'propose_actions',
+  'link_request',
 ];
 
 export interface AssistantServerOptions {
@@ -342,7 +392,9 @@ const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text 
 export function createAssistantServer(options: AssistantServerOptions): Server {
   const call = options.fetch ?? fetch;
   const server = new Server({ name: ASSISTANT_MCP_NAME, version: '0.0.0' }, { capabilities: { tools: {} } });
-  const tools = options.token.startsWith(JOB_TOKEN_PREFIX) ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name)) : ASSISTANT_TOOLS;
+  const tools = options.token.startsWith(JOB_TOKEN_PREFIX)
+    ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
+    : ASSISTANT_TOOLS.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
     const name = request.params.name;

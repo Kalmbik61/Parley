@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ASSISTANT_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST, createAssistantServer } from './assistant.js';
+import { ASSISTANT_TOOLS, JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST, createAssistantServer } from './assistant.js';
 
 async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<Client> {
   const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token, fetch });
@@ -95,8 +95,24 @@ describe('parley-mcp в режиме помощника', () => {
       for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) expect(JOB_TOOL_ALLOWLIST).not.toContain(name);
       for (const name of JOB_TOOL_ALLOWLIST) {
         const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === name)!;
-        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_')).toBe(true);
+        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_') || name === 'link_request').toBe(true);
       }
+    });
+    it('link_request только у job: разговор его не видит и не вызывает', async () => {
+      expect(JOB_ONLY_TOOLS).toEqual(['link_request']);
+      expect(JOB_TOOL_ALLOWLIST).toContain('link_request');
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch);
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain('link_request');
+      const result = await client.callTool({ name: 'link_request', arguments: { supersedes: [], reason: 'x' } });
+      expect(result.isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      expect((await job.listTools()).tools.map((tool) => tool.name)).toContain('link_request');
+    });
+    it('список безопасных для отмены инструментов явный: чтение, propose_* и link_request', () => {
+      expect([...JOB_CANCEL_SAFE_TOOLS].sort()).toEqual([...JOB_TOOL_ALLOWLIST].sort());
+      for (const name of ['schedule_check', 'cancel_reminder', 'end_conversation', 'list_reminders']) expect(JOB_CANCEL_SAFE_TOOLS).not.toContain(name);
     });
     it('с токеном job модель видит только allowlist', async () => {
       const client = await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`);

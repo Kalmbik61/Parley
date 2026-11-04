@@ -89,6 +89,12 @@ export interface Jobs {
   getJob(jobId: string): Job | null;
   cancelJob(jobId: string): Job | null;
   /**
+   * Отмена внутри чужой транзакции (`link_request`, T5): состояние `cancelled` записывается сразу (одним UPDATE, откатывается
+   * вместе с транзакцией), а событие, остановка прогона и очередь выполняет `settle()` — его зовут после COMMIT. `null` —
+   * job не в `queued`/`running` или у `running` нет прогона: отменять нечего.
+   */
+  beginCancel(jobId: string): { job: Job; settle(): void } | null;
+  /**
    * Идемпотентно ставит флаг `deliveredInline` и больше ничего не меняет: ни состояние, ни ревизию, ни событие.
    * Принимается только ревизия финального состояния; ack устаревшей ревизии или живого job — `stale`.
    */
@@ -161,13 +167,16 @@ export function createJobs(deps: JobsDeps): Jobs {
     }
   };
   /** Переход состояния; терминальные состояния не покидаются, поэтому финал событием выходит один раз. */
-  function move(jobId: string, from: readonly JobState[], state: JobState, summary: string | null = null, result: JobResult | null = null): Job | null {
+  function write(jobId: string, from: readonly JobState[], state: JobState, summary: string | null, result: JobResult | null): boolean {
     const stamp = now();
     const marks = from.map(() => '?').join(',');
     const changed = db
       .prepare(`UPDATE assistant_jobs SET state = ?, revision = revision + 1, updated_at = ?, result_summary = COALESCE(?, result_summary), result_json = COALESCE(?, result_json) WHERE job_id = ? AND state IN (${marks})`)
       .run(state, stamp, summary, result === null ? null : JSON.stringify(result), jobId, ...from).changes;
-    if (Number(changed) !== 1) return null;
+    return Number(changed) === 1;
+  }
+  function move(jobId: string, from: readonly JobState[], state: JobState, summary: string | null = null, result: JobResult | null = null): Job | null {
+    if (!write(jobId, from, state, summary, result)) return null;
     const job = get(jobId) as Job;
     emit(job);
     return job;
@@ -291,6 +300,21 @@ export function createJobs(deps: JobsDeps): Jobs {
         return job;
       }
       return get(jobId);
+    },
+    beginCancel(jobId) {
+      const run = runs.get(jobId);
+      const partial = run?.partial?.() ?? null;
+      const wrote = write(jobId, ['queued'], 'cancelled', null, null) || (run !== undefined && write(jobId, ['running'], 'cancelled', null, partial));
+      if (!wrote) return null;
+      return {
+        job: get(jobId) as Job,
+        settle: () => {
+          emit(get(jobId) as Job);
+          runs.delete(jobId);
+          run?.cancel();
+          pump();
+        },
+      };
     },
     ackInline(jobId, revision) {
       const job = get(jobId);

@@ -283,4 +283,18 @@ describe('job executor', () => {
     await execute(job).done;
     expect(order).toEqual([`mkdir ${cwd}`, 'run']);
   });
+
+  it('promptOf: модель получает вход job (контекст Request), а не только текст; без него — текст поручения', async () => {
+    const withContext = setup({ ok: true }, { promptOf: (item) => `${item.requestText}\n[context]` });
+    await withContext.execute(job).done;
+    expect(withContext.specs[0]!.args).toContain('close the tab\n[context]');
+    const plain = setup({ ok: true });
+    await plain.execute(job).done;
+    expect(plain.specs[0]!.args).toContain('close the tab');
+  });
+
+  it('JOB_PROMPT велит начать с link_request и не произносить id Request', () => {
+    expect(JOB_PROMPT).toContain('call link_request');
+    expect(JOB_PROMPT).toContain('Request ids are only for link_request');
+  });
 });

@@ -313,6 +313,17 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN result_json TEXT');
     },
   },
+  // 11: итог `link_request` голосового Request: независимый или вытесняющий; пока `link_kind` пуст, связь не определена (T5).
+  {
+    version: 11,
+    up: (db) => {
+      const have = new Set(db.prepare('PRAGMA table_info(assistant_requests)').all().map((column) => column['name']));
+      if (!have.has('link_kind')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_kind TEXT');
+      if (!have.has('link_supersedes_json')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_supersedes_json TEXT');
+      if (!have.has('link_reason')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_reason TEXT');
+      if (!have.has('linked_at')) db.exec('ALTER TABLE assistant_requests ADD COLUMN linked_at INTEGER');
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

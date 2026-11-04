@@ -19,6 +19,7 @@ import {
   cardDetail,
   cardGist,
   codexInstructionsFile,
+  JOB_ONLY_TOOLS,
   JOB_TOOL_ALLOWLIST,
   openMemoryDb,
   parseClaudeLine,
@@ -50,6 +51,7 @@ import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
 import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
 import type { JobTokens } from './job-tokens.js';
+import type { RequestLinker } from './request-link.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
@@ -115,6 +117,8 @@ export interface AssistantServiceDeps {
   binary(command: string): Promise<string>;
   /** Запись хостом вызовов и карточек job (план голоса, T1); без неё `JobResult` приходит пустым. */
   jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'>;
+  /** Связь голосовых поручений (`link_request`, T5) и отказ `propose_*` частичному или вытесненному Request; без неё `link_request` недоступен. */
+  requestLink?: RequestLinker;
   /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
   reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
@@ -187,6 +191,9 @@ type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
  * Кто создаёт карточку. Разговор — его токен и источник карточек канала; job (план голоса, T1) — своя метка вместо
  * токена разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
  */
+/** Job нельзя готовить карточки: его Request частичный или вытеснен. Для job это отказ 409, не сбой хоста. */
+class JobRefusal extends Error {}
+
 interface Owner {
   token: string;
   source?: string;
@@ -423,6 +430,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return last === undefined ? null : pendingOf(last);
   };
   function setPending(card: Pending, owner: Owner): void {
+    // Request job вытеснили или он частичный, пока шёл `await`: карточка уже не нужна, а вытесненный её отзыв не пережил бы.
+    const refused = owner.jobId === undefined ? null : (deps.requestLink?.proposeRefusal(owner.jobId) ?? null);
+    if (refused !== null) throw new JobRefusal(refused);
     const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
     const before = cards.active();
     const row = cards.put({ proposalId: view.id, kind, view, payload, source: owner.source ?? cardSource, expiresAt: now() + cardTtl }, now());
@@ -1360,6 +1370,35 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     }
   }
 
+  /** Карточки отозваны (вытеснение Request): те же события и экран, что у погашения по сроку. */
+  function announceWithdrawn(withdrawn: readonly CardRow[]): void {
+    if (withdrawn.length === 0) return;
+    armSweep();
+    for (const card of withdrawn) emitCard(cards.get(card.proposalId));
+    if (withdrawn.some((card) => card.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
+  }
+
+  /** Инструмент job: `link_request` решает связь, `propose_*` не доходит до карточки у частичного и вытесненного Request. */
+  async function jobTool(name: string, args: unknown, jobId: string): Promise<AssistantReply> {
+    if (name === 'link_request') {
+      if (deps.requestLink === undefined) return { status: 409, body: { error: 'link_request is not available' } };
+      const outcome = deps.requestLink.link(jobId, args);
+      if (!outcome.ok) return { status: outcome.status, body: { error: outcome.error } };
+      announceWithdrawn(outcome.withdrawn);
+      return { status: 200, body: { text: outcome.text } };
+    }
+    if (name.startsWith('propose_')) {
+      const refused = deps.requestLink?.proposeRefusal(jobId) ?? null;
+      if (refused !== null) return { status: 409, body: { error: refused } };
+    }
+    try {
+      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId });
+    } catch (error) {
+      if (error instanceof JobRefusal) return { status: 409, body: { error: error.message } };
+      throw error;
+    }
+  }
+
   const CONVERSATION_CALLER: AssistantCaller = { kind: 'conversation' };
   const api: AssistantService = {
     async ask(params, origin = 'island') {
@@ -1498,10 +1537,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (caller.kind === 'job') {
         // Токен job уже отсёк приёмник; список проверяется ещё раз здесь, чтобы сервис не зависел от приёмника.
         if (!JOB_TOOL_ALLOWLIST.includes(name)) return { status: 403, body: { error: `${name} is not available to background jobs` } };
-        const reply = await dispatch(name, args, { token: `job:${caller.jobId}`, source: `job:${caller.jobId}`, jobId: caller.jobId });
+        const reply = await jobTool(name, args, caller.jobId);
         deps.jobTools?.recordTool(caller.jobId, name, reply.status >= 200 && reply.status < 300);
         return reply;
       }
+      // Токен разговора `link_request` не вызывает: приёмник его уже отсёк, здесь то же правило для сервиса.
+      if (JOB_ONLY_TOOLS.includes(name)) return { status: 403, body: { error: `${name} is only available to background jobs` } };
       const current = conversation;
       if (current === null) return { status: 409, body: { error: 'No assistant conversation is active' } };
       return dispatch(name, args, { token: current.token }, current);

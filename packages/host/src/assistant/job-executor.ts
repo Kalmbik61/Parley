@@ -27,6 +27,7 @@ export const JOB_TURN_MS = 10 * 60_000;
 export const JOB_PROMPT = [
   'You run one background task for the person; Parley reads your reply aloud later.',
   'Your first step is to call link_request, if that tool is available to you.',
+  'Pass the earlier open requests listed in the task that this task replaces (the person corrected or withdrew them), or [] if it is independent or you are not sure. Request ids are only for link_request.',
   'Look things up with the Parley tools and never guess: if the tools do not show it, say "не знаю" (or the same in the language of the task).', // cyrillic-ok: фраза, которую спека требует вместо догадки
   'Reply with one to three short plain sentences, in the language of the task.',
   'Name people, rooms and agents by their names, never by ids such as s-12, r-3 or work:…, and never read tool data blocks aloud.',
@@ -58,6 +59,8 @@ export interface JobExecutorDeps {
   cwd: string;
   /** Создаёт рабочую папку перед запуском (без неё spawn падает с ENOENT); по умолчанию `mkdir -p`. */
   ensureDir?(dir: string): Promise<void>;
+  /** Вход job (текст, контекст и открытые Request голосового поручения); без неё job получает только текст поручения. */
+  promptOf?(job: Job): string;
   /** Токены job и записи хоста о его вызовах и карточках. */
   tokens: Pick<JobTokens, 'issue' | 'revoke' | 'peek' | 'take'>;
   /** База маршрута помощника (`<origin>/assistant`); `null` — сервер хуков ещё не поднят. */
@@ -95,7 +98,7 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
         const command = assistantCommand(
           entry,
           {
-            prompt: job.requestText,
+            prompt: deps.promptOf?.(job) ?? job.requestText,
             mcpConfig: codex ? assistantCodexMcp({ url, token }) : mcpFile,
             systemPrompt: JOB_PROMPT,
             developerInstructions: codexInstructionsFile(promptFile),

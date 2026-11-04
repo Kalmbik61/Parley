@@ -54,4 +54,19 @@ describe('card store', () => {
     expect(store.claim('p1', 21)).toEqual({ ok: false, reason: 'gone' });
     expect(store.closeUnsettled(30)).toEqual([]);
   });
+  it('withdrawBySource отзывает активные карточки источника, захваченную не трогает; bySource видит все', () => {
+    const store = createCardStore(openMemoryDb());
+    store.put(card('p1', 'job:a'), 10);
+    store.put(card('p2', 'job:a'), 11); // p1 вытеснена своим источником
+    store.put(card('p3', 'job:b'), 12);
+    expect(store.bySource('job:a').map((row) => [row.proposalId, row.state])).toEqual([['p1', 'superseded'], ['p2', 'active']]);
+    const withdrawn = store.withdrawBySource('job:a');
+    expect(withdrawn.map((row) => [row.proposalId, row.state, row.revision])).toEqual([['p2', 'superseded', 2]]);
+    expect(store.get('p2')).toMatchObject({ state: 'superseded', revision: 2 });
+    expect(store.get('p3')?.state).toBe('active');
+    expect(store.claim('p3', 20)).toMatchObject({ ok: true });
+    expect(store.withdrawBySource('job:b')).toEqual([]);
+    expect(store.get('p3')?.state).toBe('decided');
+    expect(store.withdrawBySource('job:a')).toEqual([]);
+  });
 });

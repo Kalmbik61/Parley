@@ -14,6 +14,7 @@ import {
   AGENT_TOOLS_PATH,
   ASSISTANT_MIN_VERSIONS,
   ASSISTANT_PROVIDER_ORDER,
+  JOB_CANCEL_SAFE_TOOLS,
   assistantCwd,
   bothEnv,
   clearSecret,
@@ -114,8 +115,10 @@ import { createAssistantService, type AssistantService } from './assistant/assis
 import { createReminderStore } from './assistant/reminders.js';
 import { createCardStore } from './assistant/cards.js';
 import { createConversationStore } from './assistant/conversation-store.js';
-import { createJobs } from './assistant/jobs.js';
+import { createJobs, type Job } from './assistant/jobs.js';
 import { createRequests } from './assistant/requests.js';
+import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
+import { createJobPrompt } from './assistant/job-context.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
@@ -436,6 +439,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Приёмник инструментов помощника (задача 8) нужен серверу хуков при создании, сам сервис — после сессий.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание приёмника читает её раньше присваивания
   let assistantService: AssistantService | undefined;
+  // Связь голосовых поручений (T5): строится после jobs и Request, а сервис зовёт её уже при вызове инструмента job.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: сервис создаётся раньше jobs
+  let assistantLinker: RequestLinker | undefined;
   // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
   const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
@@ -767,6 +773,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       : null;
   };
   const assistantLaunchEnv = async (entry: ProviderEntry): Promise<NodeJS.ProcessEnv> => providerLaunchEnv(entry, process.env, {}, await secretOf(entry));
+  const assistantCards = createCardStore(sideDb);
   const reminders = createReminderStore({ home: parleyHome(), log: (line) => log.info(line) });
   assistantService = createAssistantService({
     broadcast: (event, data) => handle.context.broadcast(event, data),
@@ -822,8 +829,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     launchEnv: assistantLaunchEnv,
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
-    cards: createCardStore(sideDb),
+    cards: assistantCards,
     jobTools: assistantJobTokens,
+    requestLink: {
+      link: (jobId, raw) => assistantLinker?.link(jobId, raw) ?? { ok: false, status: 409, error: 'link_request is not ready' },
+      proposeRefusal: (jobId) => assistantLinker?.proposeRefusal(jobId) ?? null,
+    },
     conversations: createConversationStore(sideDb),
     home: parleyHome(),
     log: (line) => log.info(line),
@@ -831,6 +842,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const reminderTarget = assistantService;
 
+  // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
+  let jobPrompt: ((job: Job) => string) | undefined;
   // Jobs помощника: отдельный прогон CLI на job; перед стартом хоста сверяются «зависшие» running, при остановке прогоны гасятся.
   const assistantJobs = createJobs({
     db: sideDb,
@@ -841,6 +855,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
       tokens: assistantJobTokens,
+      promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
       endpointUrl: () => {
         const origin = hookServer.origin();
         return origin === null ? null : `${origin}${ASSISTANT_PATH}`;
@@ -851,6 +866,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
+  jobPrompt = createJobPrompt({ requests: assistantRequests });
+  assistantLinker = createRequestLinker({
+    db: sideDb,
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    cards: assistantCards,
+    tokens: assistantJobTokens,
+    safeTools: JOB_CANCEL_SAFE_TOOLS,
+  });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.

@@ -136,6 +136,17 @@ describe('токены job (план голоса, T1)', () => {
     expect((await post('schedule_check', 'conversation')).status).toBe(200);
   });
 
+  it('link_request только у токена job: токен разговора получает 403, сервис не вызывается', async () => {
+    const tokens = createJobTokens();
+    const { endpoint, tool, post } = await boot(okTool(), tokens);
+    endpoint.setToken('conversation');
+    expect((await post('link_request', 'conversation')).status).toBe(403);
+    expect(tool).not.toHaveBeenCalled();
+    const token = tokens.issue('job-1');
+    expect((await post('link_request', token, '{"supersedes":[],"reason":"x"}')).status).toBe(200);
+    expect(tool).toHaveBeenCalledWith('link_request', { supersedes: [], reason: 'x' }, { kind: 'job', jobId: 'job-1' });
+  });
+
   it('propose_* разрешены job', async () => {
     const tokens = createJobTokens();
     const { tool, post } = await boot(okTool(), tokens);

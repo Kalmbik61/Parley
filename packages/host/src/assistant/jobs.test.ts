@@ -256,4 +256,45 @@ describe('assistant jobs', () => {
     const { jobId } = submit('k-cancel');
     expect(jobs.cancelJob(jobId)).toMatchObject({ state: 'cancelled', result: partial });
   });
+
+  it('beginCancel: запись сразу, событие, остановка прогона и очередь — в settle; откат транзакции его отменяет', () => {
+    const { jobs, runs, submit, db } = setup({ capPerProvider: 1 });
+    const running = submit('k1');
+    const queued = submit('k2');
+    const events: string[] = [];
+    jobs.onJobChanged((job) => events.push(`${job.jobId === running.jobId ? 'r' : 'q'}:${job.state}`));
+
+    db.exec('BEGIN IMMEDIATE');
+    const first = jobs.beginCancel(running.jobId)!;
+    expect(first.job.state).toBe('cancelled');
+    expect(events).toEqual([]);
+    expect(runs[0]!.cancelled).toBe(false);
+    db.exec('ROLLBACK');
+    expect(jobs.getJob(running.jobId)?.state).toBe('running');
+    expect(runs[0]!.cancelled).toBe(false);
+
+    db.exec('BEGIN IMMEDIATE');
+    const second = jobs.beginCancel(running.jobId)!;
+    const third = jobs.beginCancel(queued.jobId)!;
+    db.exec('COMMIT');
+    expect(events).toEqual([]);
+    second.settle();
+    third.settle();
+    expect(events).toContain('r:cancelled');
+    expect(events).toContain('q:cancelled');
+    expect(runs[0]!.cancelled).toBe(true);
+    expect(jobs.getJob(queued.jobId)?.state).toBe('cancelled');
+    // Терминальный и неизвестный job отменять нечем.
+    expect(jobs.beginCancel(running.jobId)).toBeNull();
+    expect(jobs.beginCancel('nope')).toBeNull();
+  });
+
+  it('beginCancel идущего job сохраняет подготовленные карточки в результате', () => {
+    const { jobs, submit, execute } = setup();
+    const partial = { answer: '', capturedAt: 1, cards: [{ cardId: 'p1', kind: 'message' }], toolRefs: [] } as JobResult;
+    execute.mockImplementationOnce(() => ({ cancel: () => {}, partial: () => partial, done: new Promise<JobEnd>(() => {}) }));
+    const { jobId } = submit('k-cancel');
+    jobs.beginCancel(jobId)?.settle();
+    expect(jobs.getJob(jobId)).toMatchObject({ state: 'cancelled', result: partial });
+  });
 });

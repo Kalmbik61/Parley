@@ -322,7 +322,16 @@ export interface AssistantRequestJob {
   result: AssistantRequestJobResult | null;
 }
 
-/** Request на хосте. `version` отдельна от `job.revision`; `delivery` — ревизия job, доставленная потребителю. */
+/**
+ * Request на хосте. `version` отдельна от `job.revision`; `delivery` — ревизия job, доставленная потребителю.
+ *
+ * Ворота очереди (спека §5 п.5): пока у разговора есть более новый Request, чья связь не определена (job ещё идёт и не
+ * вызвал `link_request`), итог этого Request не доставлен потребителю `live` (так хост называет потребителя Live) и не вытеснен, `gate` — `held`: итог не
+ * озвучивать. Это касается и уже `completed` итога. `heldSince` — когда появился удерживающий Request, `heldBy` — его
+ * `requestId`; без удержания оба `null`. Озвучивать можно, когда `stale === false` и `gate === 'open'`.
+ * `stale` — Request вытеснен (`supersededBy` не `null`): итог неактуален, завершённый job при этом остаётся
+ * `completed`, а не выдаётся за отменённый.
+ */
 export interface AssistantRequestView {
   requestId: string;
   originKey: string;
@@ -335,6 +344,16 @@ export interface AssistantRequestView {
   supersededBy: string | null;
   transcriptPartial: boolean;
   delivery: Record<string, number>;
+  /**
+   * Связь с прежними (`link_request`, спека §5, T5); `null` — job ещё не вызвал `link_request`. `independent` — прежние
+   * не затронуты; `supersedes` — вытеснил перечисленные Request (`requestId` в `supersedes`): их `version` поднята, у них
+   * `supersededBy` этого Request.
+   */
+  link: { kind: 'independent' | 'supersedes'; supersedes: string[]; linkedAt: number } | null;
+  gate: 'open' | 'held';
+  heldSince: number | null;
+  heldBy: string | null;
+  stale: boolean;
   createdAt: number;
   updatedAt: number;
   job: AssistantRequestJob;
