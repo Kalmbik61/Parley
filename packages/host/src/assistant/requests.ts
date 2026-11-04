@@ -93,7 +93,7 @@ export function createRequests(deps: RequestsDeps): Requests {
       delivery,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      job: { jobId: job.jobId, state: job.state, revision: job.revision, resultSummary: job.resultSummary },
+      job: { jobId: job.jobId, state: job.state, revision: job.revision, resultSummary: job.resultSummary, result: job.result },
     };
   }
 

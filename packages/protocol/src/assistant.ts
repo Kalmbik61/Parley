@@ -302,12 +302,24 @@ export type CardDecideResult =
   | { applied: true; error: string | null; reason: 'applied' }
   | { applied: false; error: string; reason: 'already_handled' | 'expired' | 'not_found' | 'failed' };
 
-/** Состояние job в Request: проекция без логов и argv. `resultSummary` — итог, пока он строка (форму `JobResult` ведёт T1). */
+/**
+ * Итог job (`JobResult`, план голоса T1): `cards` и `toolRefs` записал хост, не модель. В `toolRefs` нет аргументов
+ * вызовов, в `cards` — только id и вид карточки.
+ */
+export interface AssistantRequestJobResult {
+  answer: string;
+  capturedAt: number;
+  cards: Array<{ cardId: string; kind: string }>;
+  toolRefs: Array<{ tool: string; ok: boolean; at: number }>;
+}
+
+/** Состояние job в Request: проекция без логов и argv. `result` — итог прогона; `null`, пока его нет (или он не снимался). */
 export interface AssistantRequestJob {
   jobId: string;
   state: 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
   revision: number;
   resultSummary: string | null;
+  result: AssistantRequestJobResult | null;
 }
 
 /** Request на хосте. `version` отдельна от `job.revision`; `delivery` — ревизия job, доставленная потребителю. */

@@ -3,7 +3,7 @@ import { openMemoryDb } from '@parley/core';
 import { createIngest } from '../notifications/ingest.js';
 import { createNotificationStore } from '../notifications/store.js';
 import { createRequestHandlers } from '../methods/requests.js';
-import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
+import { createJobs, type Job, type JobEnd, type JobResult, type JobRun } from './jobs.js';
 import { createRequests, originKeyOf, REQUEST_CONTEXT_LIMIT, type SubmitRequestInput } from './requests.js';
 import type { RequestInfo } from '../context.js';
 
@@ -34,6 +34,7 @@ function setup(db = openMemoryDb()) {
   const requests = createRequests({ db, jobs });
   return { db, jobs, requests, runs, execute };
 }
+const done = (answer: string): JobResult => ({ answer, capturedAt: 1, cards: [], toolRefs: [] });
 const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 const input = (delegationId: string, over: Partial<SubmitRequestInput> = {}): SubmitRequestInput => ({
   conversationId: 'conv-1',
@@ -133,7 +134,7 @@ describe('requests.list и отметки доставки', () => {
     const a = requests.submit(input('d1')).request;
     const b = requests.submit(input('d2')).request;
     expect(requests.list('conv-1', 'island-voice').map((r) => r.requestId)).toEqual([a.requestId, b.requestId]);
-    runs[0]!.end({ ok: true, summary: 'answer 1', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'answer 1', result: done('answer 1'), outcome: 'completed' });
     await settled();
     const listed = requests.list('conv-1', 'island-voice');
     expect(listed.map((r) => [r.requestId, r.job.state])).toEqual([
@@ -141,6 +142,9 @@ describe('requests.list и отметки доставки', () => {
       [b.requestId, 'running'],
     ]);
     expect(listed[0]!.job.resultSummary).toBe('answer 1');
+    // Итог job (JobResult) виден в Request целиком; у ещё идущего job его нет.
+    expect(listed[0]!.job.result).toEqual(done('answer 1'));
+    expect(listed[1]!.job.result).toBeNull();
     // ack терминального: пропадает только у этого потребителя.
     expect(requests.ack(a.requestId, 'island-voice', listed[0]!.job.revision)).toEqual({ ok: true, reason: 'acked' });
     expect(requests.list('conv-1', 'island-voice').map((r) => r.requestId)).toEqual([b.requestId]);
@@ -154,7 +158,7 @@ describe('requests.list и отметки доставки', () => {
   it('ack идемпотентен, устаревшая и неизвестная отметки не принимаются, отметка не откатывается', async () => {
     const { requests, runs, jobs } = setup();
     const { request } = requests.submit(input('d1'));
-    runs[0]!.end({ ok: true, summary: 'unsure', confirmed: false }); // needs_confirmation
+    runs[0]!.end({ ok: true, summary: 'unsure', result: done('unsure'), outcome: 'needs_confirmation' }); // needs_confirmation
     await settled();
     const first = jobs.getJob(request.jobId)!;
     expect(first.state).toBe('needs_confirmation');
@@ -183,7 +187,7 @@ describe('восстановление', () => {
     jobs.onJobChanged((job) => ingest.onJob(job));
 
     const lost = requests.submit(input('d1')); // ответ клиент не получил
-    runs[0]!.end({ ok: true, summary: 'answer', confirmed: true }); // клиент отключён
+    runs[0]!.end({ ok: true, summary: 'answer', result: done('answer'), outcome: 'completed' }); // клиент отключён
     await settled();
 
     const replay = requests.submit(input('d1')); // событие делегации пришло повторно после reconnect
@@ -219,7 +223,7 @@ describe('восстановление', () => {
     expect(jobs.getJob(request.jobId)?.state).toBe('running');
 
     for (let i = 0; i < 3; i++) expect(requests.submit(input('d1')).request.requestId).toBe(request.requestId);
-    runs[0]!.end({ ok: true, summary: 'late answer', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'late answer', result: done('late answer'), outcome: 'completed' });
     await settled();
 
     expect(execute).toHaveBeenCalledTimes(1);
@@ -231,7 +235,7 @@ describe('восстановление', () => {
     const before = setup();
     const { request } = before.requests.submit(input('d1'));
     const second = before.requests.submit(input('d2')).request;
-    before.runs[1]!.end({ ok: true, summary: 'done before restart', confirmed: true });
+    before.runs[1]!.end({ ok: true, summary: 'done before restart', result: done('done before restart'), outcome: 'completed' });
     await settled();
     before.jobs.stop();
 
@@ -254,7 +258,7 @@ describe('восстановление', () => {
   it('отметка доставки переживает рестарт; новый Request после рестарта получает следующий seq', async () => {
     const before = setup();
     const { request } = before.requests.submit(input('d1'));
-    before.runs[0]!.end({ ok: true, summary: 'answer', confirmed: true });
+    before.runs[0]!.end({ ok: true, summary: 'answer', result: done('answer'), outcome: 'completed' });
     await settled();
     const revision = before.jobs.getJob(request.jobId)!.revision;
     expect(before.requests.ack(request.requestId, 'island-voice', revision).ok).toBe(true);
@@ -282,7 +286,7 @@ describe('методы requests.* (локальный остров)', () => {
     const submitted = await call(handlers, 'requests.submit', input('d1'));
     expect(submitted.created).toBe(true);
     expect(jobs.getJob(submitted.request.jobId)?.origin).toBe('island');
-    runs[0]!.end({ ok: true, summary: 'answer', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'answer', result: done('answer'), outcome: 'completed' });
     await settled();
     const listed = await call(handlers, 'requests.list', { conversationId: 'conv-1', consumer: 'island-voice' });
     expect(listed.requests).toHaveLength(1);
