@@ -48,7 +48,21 @@ import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecision
 import { clipText, escapeHtml, lastLines } from './format.js';
 import { classify } from './ingress.js';
 import { createLinkCode, deepLink, LINK_ATTEMPTS, matchLinkCode } from './link.js';
-import { activityTransition, emptyMemory, mailTriggers, sessionWhere, worksTriggers, type TriggerLetters } from './notify.js';
+import {
+  activityTransition,
+  emptyMemory,
+  finishedEvent,
+  letterEvent,
+  mailTriggers,
+  needsYouEvent,
+  roomDecisionEvent,
+  roomDecisionKey,
+  sessionWhere,
+  worksTriggers,
+  type TriggerLetters,
+} from './notify.js';
+import type { NewNotification, NotificationStore } from '../notifications/store.js';
+import type { Router } from '../notifications/router.js';
 import { createOutbox } from './outbox.js';
 import type { Outbox, Priority } from './outbox.js';
 import { createPoller } from './poller.js';
@@ -90,6 +104,12 @@ export interface TelegramServiceDeps {
   /** `whisper-cli` и модель VAD, что передаёт окно; `null` — голос не распознаётся. */
   engine: { bin: string; vadModel: string } | null;
   macName: string;
+  /** Store уведомлений и роутер: повод пишется конвертом, доставку в Telegram ведёт drain (дизайн T3). */
+  notifications: {
+    store: Pick<NotificationStore, 'write' | 'ack' | 'markExpired' | 'dueOutbox' | 'markSent' | 'markFailed'>;
+    router: Pick<Router, 'dispatch'>;
+    hostId: string;
+  };
   now?(): number;
   log(line: string): void;
 }
@@ -122,6 +142,8 @@ const SNAPSHOT_RETRY_MS = [500, 1_500, 4_000] as const;
 const GETME_ATTEMPTS = 3;
 const GETME_TIMEOUT_MS = 15_000;
 const NOTE_MAX = 4_000;
+/** Как часто drain добирает записи: повторы `markFailed` и строки, заведённые ingest вне сервиса. */
+const DRAIN_MS = 30_000;
 
 const EMOJI: Partial<Record<ReceiptKind, string>> = {
   allowed: '✅',
@@ -208,6 +230,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   let noticeBuffer: string[] = [];
   let noticeSilent = true;
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Показ сообщения по notificationId: в store текста нет, он собирается в момент отправки. После рестарта пуст. */
+  const payloads = new Map<string, () => void>();
+  let drainTimer: ReturnType<typeof setInterval> | null = null;
 
   const owner = () => state.get().owner;
   const canSend = (): boolean => cfg?.telegramEnabled === true && token !== null && api !== null && owner() !== null && polling !== 'conflict';
@@ -471,9 +496,61 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     return found === null ? path.basename(ref.projectPath) : sessionWhere(found.entry);
   };
 
+  /** Отправка записей outbox канала `telegram`: показ — замыкание из `payloads`, нет его — запись закрывается без сообщения. */
+  function drainNotifications(): void {
+    if (!canSend()) return;
+    const { store } = deps.notifications;
+    let skipped = 0;
+    try {
+      for (const row of store.dueOutbox(now(), 'telegram')) {
+        const present = payloads.get(row.notificationId);
+        payloads.delete(row.notificationId);
+        if (present === undefined) {
+          store.markSent(row.id, now());
+          skipped += 1;
+          continue;
+        }
+        try {
+          present();
+        } catch (error) {
+          log(`telegram: notification delivery failed: ${(error as Error).message}`);
+          // Исчерпанные попытки (state 'failed') — показ отбрасываем, иначе он остался бы в памяти навсегда.
+          if (store.markFailed(row.id, now())?.state !== 'failed') payloads.set(row.notificationId, present);
+          continue;
+        }
+        // Сообщение уже ушло: сбой отметки не должен вести к повторной отправке.
+        try {
+          store.markSent(row.id, now());
+        } catch (error) {
+          log(`telegram: notification markSent failed: ${(error as Error).message}`);
+        }
+      }
+    } catch (error) {
+      log(`telegram: notification drain failed: ${(error as Error).message}`);
+    }
+    if (skipped > 0) log(`telegram: ${skipped} notification(s) without payload marked handled`);
+  }
+
+  /** Повод → store → роутер → drain. Не вышло записать — показ идёт напрямую, Telegram не молчит из-за store. */
+  function publish(event: NewNotification, present: () => void): void {
+    const { store, router } = deps.notifications;
+    try {
+      const { row, created } = store.write(event, now());
+      if (!created) return;
+      router.dispatch(row, false);
+      payloads.set(row.notificationId, present);
+    } catch (error) {
+      log(`telegram: notification write failed: ${(error as Error).message}`);
+      present();
+      return;
+    }
+    drainNotifications();
+  }
+
   /** Базовая линия поводов: что уже есть сейчас, о том бот не пишет. */
   function rebase(): void {
     cancelWatches();
+    payloads.clear();
     memory = emptyMemory();
     if (owner() === null) return;
     const snapshot = deps.works.snapshot();
@@ -672,6 +749,11 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     }
     state.audit({ kind: 'decision', shortId, result: action });
     closeCard(shortId, line(action === 'accept' ? 'accepted' : 'returned'));
+    try {
+      deps.notifications.store.ack(roomDecisionKey(record.workId, record.roomId, record.proposalId, record.rev), 'telegram', now());
+    } catch (error) {
+      log(`telegram: notification ack failed: ${(error as Error).message}`);
+    }
     return true;
   }
 
@@ -777,7 +859,13 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const trigger = activityTransition(memory, ref, found.session, live.activity);
     const key = refKey(ref);
     if (trigger === 'needs-you') {
-      watchBlocked(ref, found.entry, found.session, live.activity);
+      const { entry, session } = found;
+      // Тумблер проверяется и при записи, и перед показом: он мог смениться между ними.
+      if (cfg?.telegramNeedsYou === true) {
+        publish(needsYouEvent(ref, now(), deps.notifications.hostId), () => {
+          if (cfg?.telegramNeedsYou === true) watchBlocked(ref, entry, session, live.activity);
+        });
+      }
     } else if (memory.levels.get(key) === 'blocked') {
       // Сессия всё ещё ждёт: это может быть следующий запрос подряд или запоздавший хук.
       if (cfg?.telegramNeedsYou === true) {
@@ -786,7 +874,10 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     } else {
       cancelWatch(key);
       if (trigger === 'unseen' && cfg?.telegramFinished === true) {
-        notice(escapeHtml(T.finished(found.session.label, sessionWhere(found.entry))), true);
+        const { entry, session } = found;
+        publish(finishedEvent(ref, now(), deps.notifications.hostId), () => {
+          if (cfg?.telegramFinished === true) notice(escapeHtml(T.finished(session.label, sessionWhere(entry))), true);
+        });
       }
     }
   }
@@ -802,8 +893,22 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       for (const [shortId] of open) closeCard(shortId, text);
       const sendKey = roomKey(entry.projectPath, entry.map.work.id, roomId, previous.id, previous.rev);
       if (sending.has(sendKey)) closeEarly.set(sendKey, text);
+      // Окно действия закрылось: решение в окне — ack (false, если Telegram уже закрыл строку), иначе строка истекает.
+      const rowKey = roomDecisionKey(entry.map.work.id, roomId, previous.id, previous.rev);
+      try {
+        if (result === 'accepted' || result === 'returned') deps.notifications.store.ack(rowKey, 'island', now());
+        else deps.notifications.store.markExpired(rowKey);
+      } catch (error) {
+        log(`telegram: notification close failed: ${(error as Error).message}`);
+      }
     }
-    if (cfg?.telegramNeedsYou === true) for (const { entry, room } of triggers.decisions) sendRoomCard(entry, room.id);
+    if (cfg?.telegramNeedsYou === true) {
+      for (const { entry, room } of triggers.decisions) {
+        publish(roomDecisionEvent(entry, room, deps.notifications.hostId), () => {
+          if (cfg?.telegramNeedsYou === true) sendRoomCard(entry, room.id);
+        });
+      }
+    }
   }
 
   /**
@@ -821,8 +926,11 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const from = participantLabel(entry.map, message.from);
       const roomTitle = message.roomId === null ? null : entry.map.rooms.find((room) => room.id === message.roomId)?.title;
       const where = roomTitle === undefined || roomTitle === null ? sessionWhere(entry) : `${roomTitle} · ${sessionWhere(entry)}`;
-      send('card', `<b>${escapeHtml(T.letter(from, where))}</b>\n<pre>${escapeHtml(clipText(message.text))}</pre>`, {}, (messageId) => {
-        state.putLetter(messageId, { projectPath: entry.projectPath, workId: entry.map.work.id, roomId: message.roomId, from: message.from, at: iso() });
+      publish(letterEvent(entry, message, deps.notifications.hostId), () => {
+        if (cfg?.telegramMail !== true) return;
+        send('card', `<b>${escapeHtml(T.letter(from, where))}</b>\n<pre>${escapeHtml(clipText(message.text))}</pre>`, {}, (messageId) => {
+          state.putLetter(messageId, { projectPath: entry.projectPath, workId: entry.map.work.id, roomId: message.roomId, from: message.from, at: iso() });
+        });
       });
     }
   }
@@ -1145,6 +1253,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     noticeTimer = null;
     noticeBuffer = [];
     noticeSilent = true;
+    payloads.clear();
+    if (drainTimer !== null) clearInterval(drainTimer);
+    drainTimer = null;
     poller?.stop();
     poller = null;
     outbox?.clear();
@@ -1187,6 +1298,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       log,
     });
     rebase();
+    if (drainTimer !== null) clearInterval(drainTimer);
+    drainTimer = setInterval(drainNotifications, DRAIN_MS);
+    drainTimer.unref?.();
     if (owner() !== null) closeStaleCards(staleText);
     poller = createPoller({
       api: bot,
@@ -1325,6 +1439,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       noticeBuffer = [];
       noticeSilent = true;
       outbox?.clear();
+      payloads.clear();
       unsubscribeAll();
       inflight.clear();
       originals.clear();

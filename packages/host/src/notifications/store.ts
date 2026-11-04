@@ -177,7 +177,9 @@ export interface NotificationStore {
    * Записи outbox, которым пора на отправку, с арендой: выданная запись не выдаётся снова, пока аренда (`LEASE_MS`)
    * не истекла; истёкшая (в том числе после рестарта) снова due. Доставка at-least-once: отправка дольше аренды может уйти дважды. Отдаются только строки, чьё уведомление ещё `new`/`seen`.
    */
-  dueOutbox(now: number): OutboxRow[];
+  dueOutbox(now: number, channel?: string): OutboxRow[];
+  /** Снимает ожидающую запись канала у строки (например, `app` после показа на экране); отправленные не трогает. */
+  cancelPending(dedupeKey: string, channel: string): boolean;
   markSent(outboxId: number, now: number): void;
   /** Неудача доставки: следующая попытка через экспоненциальную паузу с jitter, после `MAX_ATTEMPTS` — `failed`. */
   markFailed(outboxId: number, now: number): OutboxRow | null;
@@ -272,17 +274,26 @@ export function createNotificationStore(db: DatabaseSync, random: () => number =
         .run(channel, at, notificationId);
       return Number(inserted.changes) === 1;
     },
-    dueOutbox(now) {
+    dueOutbox(now, channel) {
       const rows = db
         .prepare(
           `UPDATE notification_outbox SET next_attempt_at = ?
            WHERE id IN (
              SELECT o.id FROM notification_outbox o JOIN notifications n ON n.notification_id = o.notification_id
-             WHERE o.state = 'pending' AND o.next_attempt_at <= ? AND n.state IN ('new','seen'))
+             WHERE o.state = 'pending' AND o.next_attempt_at <= ? AND n.state IN ('new','seen')${channel === undefined ? '' : ' AND o.channel = ?'})
            RETURNING *`,
         )
-        .all(now + LEASE_MS, now) as unknown as RawOutbox[];
+        .all(...(channel === undefined ? [now + LEASE_MS, now] : [now + LEASE_MS, now, channel])) as unknown as RawOutbox[];
       return rows.map(outboxFromRaw).sort((x, y) => x.id - y.id);
+    },
+    cancelPending(dedupeKey, channel) {
+      const result = db
+        .prepare(
+          `DELETE FROM notification_outbox WHERE channel = ? AND state = 'pending'
+           AND notification_id = (SELECT notification_id FROM notifications WHERE dedupe_key = ?)`,
+        )
+        .run(channel, dedupeKey);
+      return Number(result.changes) > 0;
     },
     markSent(outboxId, now) {
       db.prepare(`UPDATE notification_outbox SET state = 'sent', sent_at = ? WHERE id = ? AND state = 'pending'`).run(now, outboxId);

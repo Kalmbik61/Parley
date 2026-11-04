@@ -127,6 +127,7 @@ import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { createWorktreeSweeper } from './worktrees/worktree-sweeper.js';
 import { readHostVersion } from './version.js';
 import { createIngest } from './notifications/ingest.js';
+import { createRouter } from './notifications/router.js';
 import { createNotificationStore } from './notifications/store.js';
 
 export interface HostOptions {
@@ -824,7 +825,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
-  const notificationIngest = createIngest({ store: createNotificationStore(workDb()), hostId: 'local' });
+  // До T4 канала `app` нет, поэтому режим константа TELEGRAM_ONLY: в `app` ничего не копится, Telegram получает прежнее.
+  const notificationStore = createNotificationStore(workDb());
+  // Переназначается после создания `telegram`: события ядра могут прийти раньше.
+  let telegramAllowed = (): boolean => false;
+  const notificationRouter = createRouter({
+    store: notificationStore,
+    mode: () => 'TELEGRAM_ONLY',
+    presence: () => ({ appActive: false, telegramAllowed: telegramAllowed() }),
+  });
+  const notificationIngest = createIngest({
+    store: notificationStore,
+    hostId: 'local',
+    dispatch: (row, inline) => notificationRouter.dispatch(row, inline),
+  });
   assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
   assistantService.onCardChanged((change) => notificationIngest.onCard(change));
   void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
@@ -860,8 +874,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         ? { bin: process.env.PARLEY_WHISPER_BIN, vadModel: process.env.PARLEY_WHISPER_VAD }
         : null,
     macName: os.hostname(),
+    notifications: { store: notificationStore, router: notificationRouter, hostId: 'local' },
     log: (line) => log.info(line),
   });
+  telegramAllowed = () => {
+    const s = telegram.status();
+    return s.enabled && s.token === 'set' && s.owner !== null && s.polling !== 'conflict';
+  };
   handle.context.onShutdown(async () => telegram.stop());
   handle.context.onShutdown(async () => reminders.stop());
   handle.context.onShutdown(async () => assistantService?.stop());
@@ -970,7 +989,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
-    assistantJobs,
+    assistantJobs: {
+      ...assistantJobs,
+      ackInline(jobId, rev) {
+        const r = assistantJobs.ackInline(jobId, rev);
+        if (r.ok) {
+          const job = assistantJobs.getJob(jobId);
+          if (job) notificationIngest.onInlineDelivered(job);
+        }
+        return r;
+      },
+    },
     telegram,
     health,
     profiler,

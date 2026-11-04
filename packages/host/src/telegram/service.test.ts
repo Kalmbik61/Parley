@@ -4,13 +4,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG, mapLetterTx, telegramBotId, telegramTokenFingerprint } from '@parley/core';
+import { DEFAULT_CONFIG, mapLetterTx, openMemoryDb, telegramBotId, telegramTokenFingerprint } from '@parley/core';
 import type { FeedCard, FeedItem, Message, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
 import type { AssistantCardChanged, AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
 import type { TriggerLetters } from './notify.js';
 import type { MailNotice } from '../works/works-service.js';
+import { createIngest } from '../notifications/ingest.js';
+import { createRouter, type Router } from '../notifications/router.js';
+import { createNotificationStore, type NotificationStore } from '../notifications/store.js';
 import { createTelegramService } from './service.js';
 import type { TelegramService, TelegramServiceDeps } from './service.js';
 import { T } from './texts.js';
@@ -208,7 +211,14 @@ const sendMail = (added: unknown[]): void =>
     journal: { added: added as Message[], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] },
   });
 
+/** Реальный store на памяти и роутер TELEGRAM_ONLY: общие часы с сервисом (`Date.now`). */
+let notifyStore: NotificationStore;
+let notifyDb: ReturnType<typeof openMemoryDb>;
+let notifyRouter: Router;
 function make(): TelegramService {
+  notifyDb = openMemoryDb();
+  notifyStore = createNotificationStore(notifyDb);
+  notifyRouter = createRouter({ store: notifyStore, mode: () => 'TELEGRAM_ONLY', presence: () => ({ appActive: false, telegramAllowed: true }) });
   return createTelegramService({
     home,
     host,
@@ -234,6 +244,7 @@ function make(): TelegramService {
     fetch: fakeFetch,
     engine: null,
     macName: 'MacBook',
+    notifications: { store: notifyStore, router: notifyRouter, hostId: 'local' },
     log: (line: string) => logs.push(line),
   } as unknown as TelegramServiceDeps);
 }
@@ -1225,5 +1236,176 @@ describe('createTelegramService: финальное ревью', () => {
     finish({ text: 'first the voice' });
     await settle();
     expect(assistant.ask.mock.calls.map((call) => (call[0] as { text: string }).text)).toEqual(['first the voice', 'and then this']);
+  });
+});
+
+/** Повторная привязка после unlink: токен остался, код нового /start. */
+async function bootRelink(): Promise<void> {
+  const link = await service.link();
+  push([textUpdate(`/start ${link.code}`, { from: { id: USER, username: 'kalmbik' } })]);
+  await settle();
+}
+
+describe('createTelegramService: уведомления через store (T3b)', () => {
+  const outboxStates = (): string[] =>
+    (notifyDb.prepare(`SELECT state FROM notification_outbox WHERE channel = 'telegram' ORDER BY id`).all() as Array<{ state: string }>).map((r) => r.state);
+  const rowCount = (): number => Number((notifyDb.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c);
+  const decisionKey = 'room_decision:w-01:r-01:p-01:0';
+  const foreignRow = (type: string, key: string) => ({
+    dedupeKey: key,
+    eventId: key,
+    hostId: 'local',
+    entityRef: 'room:w-01:r-01',
+    type,
+    severity: 'warning' as const,
+    channels: ['telegram'],
+  });
+
+  it('решение комнаты: одна строка, одна запись sent, одно сообщение; повтор снимка ничего не добавляет', async () => {
+    await bootLinked();
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    expect(sent()).toHaveLength(1);
+    expect(buttons(sent()[0]!)).toHaveLength(2);
+    expect(notifyStore.get(decisionKey)?.type).toBe('room-decision');
+    expect(outboxStates()).toEqual(['sent']);
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    expect(rowCount()).toBe(1);
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('Accept в Telegram: строка acked через telegram; closed accepted её не меняет', async () => {
+    await bootLinked();
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    push([tap(lastOutId, `pc1:${shortIdOf(sent().at(-1)!)}:y`)]);
+    await settle();
+    expect(notifyStore.get(decisionKey)).toMatchObject({ state: 'acked', ackedVia: 'telegram' });
+    setWorks(snap({ rooms: [] }));
+    await settle();
+    expect(notifyStore.get(decisionKey)).toMatchObject({ state: 'acked', ackedVia: 'telegram' });
+  });
+
+  it('слот опустел без Accept из бота (gone) и пересмотр: строка expired', async () => {
+    await bootLinked();
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    setWorks(snap({ rooms: [] }));
+    await settle();
+    expect(notifyStore.get(decisionKey)?.state).toBe('expired');
+  });
+
+  it('запись telegram без payload (прошлый процесс, needs-confirmation) закрывается sent без сообщения', async () => {
+    await bootLinked();
+    notifyStore.write(foreignRow('needs-confirmation', 'needs_confirmation:c-1'), Date.now());
+    notifyStore.write(foreignRow('room-decision', 'room_decision:w-09:r-01:p-01:0'), Date.now());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(outboxStates()).toEqual(['sent', 'sent']);
+    expect(sent()).toEqual([]);
+  });
+
+  it('canSend ложен: dueOutbox не зовётся, аренда не взята', async () => {
+    service = make();
+    await service.start();
+    await service.setToken(TOKEN);
+    const row = notifyStore.write(foreignRow('room-decision', 'room_decision:w-09:r-01:p-01:0'), 1_000);
+    const spy = vi.spyOn(notifyStore, 'dueOutbox');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(spy).not.toHaveBeenCalled();
+    expect((notifyDb.prepare('SELECT next_attempt_at AS n FROM notification_outbox').get() as { n: number }).n).toBe(1_000);
+    expect(row.created).toBe(true);
+  });
+
+  it('тумблер выключен в момент триггера — строки нет', async () => {
+    cfg.telegramNeedsYou = false;
+    await bootLinked();
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    expect(rowCount()).toBe(0);
+    expect(sent()).toEqual([]);
+  });
+
+  it('store.write бросает: сообщение уходит напрямую, ошибка в логе', async () => {
+    await bootLinked();
+    vi.spyOn(notifyStore, 'write').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    sendMail([letter()]);
+    await settle();
+    expect(sent().filter((call) => String(call.params.text).includes('Letter from'))).toHaveLength(1);
+    expect(logs.some((l) => l.includes('notification write failed: disk full'))).toBe(true);
+  });
+
+  it('письмо и «нужен ты» дают строки нужного вида', async () => {
+    await bootLinked();
+    sendMail([letter()]);
+    setActivity('blocked');
+    await settle();
+    expect(notifyStore.get('letter:w-01:m-01')?.type).toBe('mail-letter');
+    expect(rowCount()).toBe(2);
+  });
+
+  it('unlink между записью и drain, затем relink: сообщение не уходит (показ забыт)', async () => {
+    await bootLinked();
+    // Первый drain (из publish) пропускаем: строка остаётся pending вместе с показом в payloads.
+    vi.spyOn(notifyStore, 'dueOutbox').mockReturnValueOnce([]);
+    sendMail([letter()]);
+    await settle();
+    expect(outboxStates()).toEqual(['pending']);
+    await service.unlink();
+    await bootRelink();
+    journal.length = 0;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sent().filter((call) => String(call.params.text).includes('Letter from'))).toHaveLength(0);
+    expect(outboxStates()).toEqual(['sent']);
+  });
+
+  it('тумблер выключен между записью и drain: сообщения нет, запись sent', async () => {
+    await bootLinked();
+    vi.spyOn(notifyStore, 'dueOutbox').mockReturnValueOnce([]);
+    setWorks(snap({ rooms: [decisionRoom()] }));
+    await settle();
+    expect(outboxStates()).toEqual(['pending']);
+    service.configChanged({ ...cfg, telegramNeedsYou: false });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sent()).toEqual([]);
+    expect(outboxStates()).toEqual(['sent']);
+  });
+
+  it('needs-confirmation, как её заводит host.ts (ingest → роутер): drain закрывает sent без сообщения', async () => {
+    await bootLinked();
+    const ingest = createIngest({ store: notifyStore, hostId: 'local', dispatch: (row, inline) => notifyRouter.dispatch(row, inline) });
+    ingest.onCard({ cardId: 'c-9', kind: 'run', state: 'needs_confirmation', revision: 1, expiresAt: Date.now() + 60_000, decidedVia: null, outcome: null } as any);
+    expect(outboxStates()).toEqual(['pending']);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(outboxStates()).toEqual(['sent']);
+    expect(sent()).toEqual([]);
+  });
+
+  it('dispatch бросает после записи строки: показ прямой один раз, drain повтор не шлёт', async () => {
+    await bootLinked();
+    const real = notifyRouter.dispatch.bind(notifyRouter);
+    vi.spyOn(notifyRouter, 'dispatch').mockImplementation((row, inline) => {
+      real(row, inline);
+      throw new Error('router down');
+    });
+    sendMail([letter()]);
+    await settle();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sent().filter((call) => String(call.params.text).includes('Letter from'))).toHaveLength(1);
+    expect(logs.some((l) => l.includes('notification write failed: router down'))).toBe(true);
+  });
+
+  it('markSent бросает после успешного показа: повтор не шлёт сообщение второй раз', async () => {
+    await bootLinked();
+    vi.spyOn(notifyStore, 'markSent').mockImplementationOnce(() => {
+      throw new Error('db locked');
+    });
+    sendMail([letter()]);
+    await settle();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sent().filter((call) => String(call.params.text).includes('Letter from'))).toHaveLength(1);
+    expect(logs.some((l) => l.includes('markSent failed: db locked'))).toBe(true);
   });
 });

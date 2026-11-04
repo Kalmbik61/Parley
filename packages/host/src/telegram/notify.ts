@@ -22,6 +22,7 @@ import {
   type WorkSession,
 } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
+import type { NewNotification } from '../notifications/store.js';
 import type { WorksView } from '../works/works-service.js';
 
 export interface NotifyMemory {
@@ -200,4 +201,67 @@ export function mailTriggers(
     result.push({ entry, message });
   }
   return result;
+}
+
+// ── Конверты для store уведомлений (T3): только opaque-id, без названий, путей и текстов ─────────────────────────
+
+/** Ключ строки решения комнаты; им же `resolveRoom` и `worksTriggers.closed` находят строку. */
+export const roomDecisionKey = (workId: string, roomId: string, proposalId: string, rev: number): string =>
+  `room_decision:${workId}:${roomId}:${proposalId}:${rev}`;
+
+/** `atMs` — время перехода по часам сервиса: у эпизода «нужен ты» стабильного id нет. */
+export function needsYouEvent(ref: SessionRef, atMs: number, hostId: string): NewNotification {
+  const key = `needs_you:${ref.workId}:${ref.sessionId}:${atMs}`;
+  return {
+    dedupeKey: key,
+    eventId: key,
+    hostId,
+    entityRef: `session:${ref.workId}:${ref.sessionId}`,
+    type: 'session-needs-you',
+    severity: 'warning',
+    requiresAction: true,
+  };
+}
+
+export function finishedEvent(ref: SessionRef, atMs: number, hostId: string): NewNotification {
+  const key = `finished:${ref.workId}:${ref.sessionId}:${atMs}`;
+  return {
+    dedupeKey: key,
+    eventId: key,
+    hostId,
+    entityRef: `session:${ref.workId}:${ref.sessionId}`,
+    type: 'session-finished',
+    severity: 'info',
+    requiresAction: false,
+  };
+}
+
+/** Решение в слоте комнаты; у комнаты без предложения конверта нет (вызывающий такую не доводит до сюда). */
+export function roomDecisionEvent(entry: WorkEntry, room: Room, hostId: string): NewNotification {
+  const proposal = room.proposal;
+  if (proposal === null || proposal === undefined) throw new Error('Room has no proposal');
+  const key = roomDecisionKey(entry.map.work.id, room.id, proposal.id, proposal.rev);
+  return {
+    dedupeKey: key,
+    eventId: key,
+    hostId,
+    entityRef: `room:${entry.map.work.id}:${room.id}`,
+    type: 'room-decision',
+    severity: 'warning',
+    requiresAction: true,
+    payloadRef: `proposal:${proposal.id}:${proposal.rev}`,
+  };
+}
+
+export function letterEvent(entry: WorkEntry, message: Message, hostId: string): NewNotification {
+  const key = `letter:${entry.map.work.id}:${message.id}`;
+  return {
+    dedupeKey: key,
+    eventId: key,
+    hostId,
+    entityRef: key,
+    type: 'mail-letter',
+    severity: 'info',
+    requiresAction: false,
+  };
 }

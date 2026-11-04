@@ -2,12 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeWorkDb, createWork, deleteWorkFiles, mapLetterTx, readLetters, readMap, WorkNotFoundError, writeLetters } from '@parley/core';
+import { closeWorkDb, createWork, deleteWorkFiles, mapLetterTx, openMemoryDb, readLetters, readMap, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { Message, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 // Счётчик кэша карт ядра — только для тестов, из пакета он не экспортируется; тот же экземпляр модуля, что у `@parley/core`.
 import { mapCacheStats } from '../../../core/dist/work/store.js';
-import { activityTransition, emptyMemory, mailTriggers, sessionWhere, storeTriggerLetters, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
+import { createNotificationStore } from '../notifications/store.js';
+import { activityTransition, emptyMemory, finishedEvent, letterEvent, needsYouEvent, roomDecisionEvent, roomDecisionKey, mailTriggers, sessionWhere, storeTriggerLetters, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
 
 const ref: SessionRef = { projectPath: '/p/my_harnas', workId: 'w-01', sessionId: 's-01' };
 const session = (lifecycle: WorkSession['lifecycle'] = 'active'): WorkSession => ({ id: 's-01', lifecycle, result: null }) as unknown as WorkSession;
@@ -257,5 +258,32 @@ describe('worksTriggers: письма из базы работы (по умол�
     }
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBeInstanceOf(WorkNotFoundError);
+  });
+});
+
+describe('конверты для store (T3b)', () => {
+  const entry = {
+    projectPath: '/Users/ivan/Секретный проект',
+    map: { work: { id: 'w-0001', title: 'Работа про пароли' } },
+  } as unknown as WorkEntry;
+  const room = { id: 'r-01', title: 'Комната', proposal: { id: 'p-01', rev: 2 } } as unknown as Room;
+  const message = { id: 'm-01', text: 'Секретный текст письма' } as unknown as Message;
+
+  it('строители проходят assertEnvelope и не несут путей, названий и текстов', () => {
+    const store = createNotificationStore(openMemoryDb());
+    const events = [
+      needsYouEvent({ ...ref, workId: 'w-0001' }, 1000, 'local'),
+      finishedEvent({ ...ref, workId: 'w-0001' }, 1000, 'local'),
+      roomDecisionEvent(entry, room, 'local'),
+      letterEvent(entry, message, 'local'),
+    ];
+    for (const event of events) {
+      const { row, created } = store.write(event, 1000);
+      expect(created).toBe(true);
+      const json = JSON.stringify(row);
+      expect(json).not.toContain('/Users');
+      expect(json).not.toMatch(/[А-Яа-я]/);
+    }
+    expect(roomDecisionEvent(entry, room, 'local').dedupeKey).toBe(roomDecisionKey('w-0001', 'r-01', 'p-01', 2));
   });
 });

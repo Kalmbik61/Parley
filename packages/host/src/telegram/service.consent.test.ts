@@ -4,9 +4,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG } from '@parley/core';
+import { DEFAULT_CONFIG, openMemoryDb } from '@parley/core';
 import type { ParleyConfig } from '@parley/core';
 import type { AssistantSettings, AssistantState, ConsentCard, WorksSnapshot } from '@parley/protocol';
+import { createRouter } from '../notifications/router.js';
+import { createNotificationStore, type NotificationStore } from '../notifications/store.js';
 import { createTelegramService } from './service.js';
 import type { TelegramService, TelegramServiceDeps } from './service.js';
 import { T } from './texts.js';
@@ -109,7 +111,11 @@ const auditLines = (): any[] =>
 
 const emit = (change: Partial<Change>): void => consentListener?.({ upsert: [], removed: [], ...change });
 
+/** Реальный store на памяти и роутер TELEGRAM_ONLY: общие часы с сервисом (`Date.now`). */
+let notifyStore: NotificationStore;
 function make(): TelegramService {
+  notifyStore = createNotificationStore(openMemoryDb());
+  const notifyRouter = createRouter({ store: notifyStore, mode: () => 'TELEGRAM_ONLY', presence: () => ({ appActive: false, telegramAllowed: true }) });
   const works = { snapshot: () => ({ entries: [], branches: {} }) as unknown as WorksSnapshot, onChange: () => () => undefined, onMail: () => () => undefined };
   const activity = { get: () => undefined, onChange: () => () => undefined };
   const assistant = {
@@ -147,6 +153,7 @@ function make(): TelegramService {
     fetch: fakeFetch,
     engine: null,
     macName: 'MacBook',
+    notifications: { store: notifyStore, router: notifyRouter, hostId: 'local' },
     log: () => undefined,
   } as unknown as TelegramServiceDeps);
 }

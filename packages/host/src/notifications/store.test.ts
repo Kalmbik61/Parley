@@ -151,3 +151,33 @@ describe('notification store', () => {
     expect(() => store.write(event('ok', { payloadRef: 'room/r1:card-2' }), 1)).not.toThrow();
   });
 });
+
+describe('notification store: каналы outbox', () => {
+  it('dueOutbox(now, channel) отдаёт только свой канал; аренда чужого канала не берётся', () => {
+    const store = createNotificationStore(openMemoryDb());
+    store.write(event('k1', { channels: ['telegram', 'app'] }), 100);
+    expect(store.dueOutbox(100, 'telegram').map((r) => r.channel)).toEqual(['telegram']);
+    expect(store.dueOutbox(100, 'app').map((r) => r.channel)).toEqual(['app']);
+    expect(store.dueOutbox(100, 'app')).toEqual([]);
+  });
+
+  it('dueOutbox без канала отдаёт все каналы, как раньше', () => {
+    const store = createNotificationStore(openMemoryDb());
+    store.write(event('k1', { channels: ['telegram', 'app'] }), 100);
+    expect(store.dueOutbox(100).map((r) => r.channel).sort()).toEqual(['app', 'telegram']);
+  });
+
+  it('cancelPending снимает только ожидающую запись канала; sent и неизвестный ключ — false', () => {
+    const db = openMemoryDb();
+    const store = createNotificationStore(db);
+    store.write(event('k1', { channels: ['telegram', 'app'] }), 100);
+    expect(store.cancelPending('k1', 'app')).toBe(true);
+    expect(store.cancelPending('k1', 'app')).toBe(false);
+    const left = db.prepare('SELECT channel FROM notification_outbox').all() as { channel: string }[];
+    expect(left.map((r) => r.channel)).toEqual(['telegram']);
+    const [tg] = store.dueOutbox(100, 'telegram');
+    store.markSent(tg!.id, 100);
+    expect(store.cancelPending('k1', 'telegram')).toBe(false);
+    expect(store.cancelPending('нет-такого', 'app')).toBe(false);
+  });
+});
