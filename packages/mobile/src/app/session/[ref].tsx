@@ -1,7 +1,7 @@
 // Session = the chat of a session (D1 §9, plan A32): a pinned two-line header, the feed with folded finished turns,
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -20,7 +20,7 @@ import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
-import { devLateCard, devMoreSession } from '../../dev/demo';
+import { devBgBurst, devEpoch, devLateCard, devMoreSession } from '../../dev/demo';
 import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
 import { demoQuestionDraft } from '../../dev/demo';
@@ -200,10 +200,21 @@ export default function SessionScreen() {
   // The list gets the tail window of the folded rows (A44b): all drawn and measured in one pass; older rows come from the top.
   const allKeys = useMemo(() => allRows.map(rowKey), [allRows]);
   const spanAt = useCallback((i: number) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }, [allRows]);
-  const { start, widen, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
+  const { start, widen, reset, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
   const rows = useMemo(() => allRows.slice(start), [allRows, start]);
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
-  const follow = useFollowEnd(list, rowKeys);
+  const follow = useFollowEnd(list, rowKeys, reset);
+  // A44c: a feed read again with rows already shown (back from the background, a reconnect) lands at the end like the first open.
+  const feedStatus = feed?.status;
+  const prevStatus = useRef(feedStatus);
+  const hadRows = useRef(false);
+  useLayoutEffect(() => {
+    const before = prevStatus.current;
+    prevStatus.current = feedStatus;
+    const had = hadRows.current;
+    hadRows.current = rows.length > 0;
+    if (feedStatus === 'ready' && before !== undefined && before !== 'ready' && had && rows.length > 0) follow.reread();
+  }, [feedStatus]);
   useEffect(() => {
     if (follow.revealed) onRevealed();
   }, [follow.revealed]);
@@ -221,6 +232,10 @@ export default function SessionScreen() {
       top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
       more: () => devMoreSession(client, ref),
       card: () => devLateCard(client, ref),
+      bgburst: () => devBgBurst(client, ref, 61),
+      bgsmall: () => devBgBurst(client, ref, 3),
+      epoch: () => devEpoch(client, { ref }),
+      roomburst: () => undefined,
     });
   }, [found !== null]);
   // Developer preview of the message pieces (A42): set during render once the session is found.
@@ -494,7 +509,7 @@ export default function SessionScreen() {
           </View>
         )}
       <FlatList
-        ref={list}
+        ref={follow.attach}
         style={{ opacity: hiddenFeed ? 0 : 1 }}
         accessibilityElementsHidden={hiddenFeed}
         data={rows}

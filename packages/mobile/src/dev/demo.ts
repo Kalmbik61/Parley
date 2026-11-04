@@ -1,7 +1,7 @@
 // DEVELOPER BUILD ONLY (PARLEY_MOBILE_DEV_DEMO=1, __DEV__): fills the remote-client store with a made-up snapshot so the
 // A15 screens can be looked at on a simulator before pairing exists. Never reached in a release build.
 import type { FeedCard } from '@parley/core';
-import type { RemoteClient, SessionRef } from '@parley/remote-client';
+import { roomKey, sessionKey as sessionKeyOf, type RemoteClient, type SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
 import { EMPTY_QUESTION_DRAFT, type QuestionDraft } from '../cards/model';
@@ -330,6 +330,46 @@ export function devMoreSession(client: RemoteClient, ref: SessionRef): void {
 }
 export function devMoreRoom(client: RemoteClient, ref: { projectPath: string; workId: string; roomId: string }): void {
   client.store.dispatch({ t: 'room.loaded', ref, epoch: 'demo', next: null, messages: longRoomLetters(ref.roomId, 62) });
+}
+/** A44c evidence: a return from the background. The entry is marked to re-read, 3 s later the read brings `rows` new rows. */
+let burstSeq = 0;
+export function devBgBurst(client: RemoteClient, ref: SessionRef, rows: number): void {
+  const seq = ++burstSeq;
+  client.store.dispatch({ t: 'feed.reload', ref });
+  setTimeout(() => devFeedLoaded(client, ref, 'demo', rows, seq), 3000);
+}
+function devFeedLoaded(client: RemoteClient, ref: SessionRef, epoch: string, rows: number, seq: number): void {
+  const items = (client.store.getState().feeds[sessionKeyOf(ref)]?.items ?? []).map((i) => JSON.parse(JSON.stringify(i)) as never);
+  const fresh = Array.from({ length: rows }, (_, i) =>
+    i === rows - 1
+      ? { kind: 'text', id: `bg${seq}-last`, at: new Date().toISOString(), messageId: `mbg${seq}`, streaming: false, text: `BURST ${rows} LAST: the agent worked while the app was away.` }
+      : { kind: 'tool', id: `bg${seq}-${i}`, at: new Date().toISOString(), toolUseId: `tubg${seq}-${i}`, name: 'Read', input: { file_path: `src/burst-${seq}/file-${i}.ts` }, status: 'done' },
+  );
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch, items: [...items, ...fresh] as never[], revision: 10 + seq, mode: null, decisions: null });
+}
+/** A44c evidence: the bridge reports a new epoch (the list unmounts into a skeleton), 1.5 s later the snapshot, 1 s later the feed or the room. */
+export function devEpoch(client: RemoteClient, target: { ref: SessionRef } | { room: { projectPath: string; workId: string; roomId: string } }): void {
+  const seq = ++burstSeq;
+  const epoch = `demo-e${seq}`;
+  const state = client.store.getState();
+  client.store.dispatch({ t: 'bridge.status', host: state.hostStatus ?? 'online', epoch });
+  setTimeout(() => client.store.dispatch({ t: 'snapshot', snapshot: demoSnapshot, epoch }), 1500);
+  setTimeout(() => {
+    if ('ref' in target) devFeedLoaded(client, target.ref, epoch, 61, seq);
+    else devRoomLoaded(client, target.room, epoch, 60, seq);
+  }, 2500);
+}
+/** A44c evidence: an open room is marked to re-read, 3 s later the read brings 60 new letters. */
+export function devRoomBurst(client: RemoteClient, room: { projectPath: string; workId: string; roomId: string }): void {
+  const seq = ++burstSeq;
+  client.store.dispatch({ t: 'room.reload', ref: room });
+  setTimeout(() => devRoomLoaded(client, room, 'demo', 60, seq), 3000);
+}
+function devRoomLoaded(client: RemoteClient, room: { projectPath: string; workId: string; roomId: string }, epoch: string, count: number, seq: number): void {
+  const key = roomKey(room);
+  const old = (client.store.getState().roomChats[key]?.messages ?? []).map((m) => JSON.parse(JSON.stringify(m)) as never);
+  const fresh = Array.from({ length: count }, (_, i) => ({ id: `rb${seq}-${i}`, roomId: room.roomId, from: ['greta', 'd1', 'a13'][i % 3], to: [], at: new Date().toISOString(), text: i === count - 1 ? `ROOM BURST ${count} LAST` : `Burst letter ${i + 1}: a short note.`, kind: 'note', readBy: {} }) as never);
+  client.store.dispatch({ t: 'room.loaded', ref: room, epoch, next: null, messages: [...old, ...fresh] });
 }
 export function devLateCard(client: RemoteClient, ref: SessionRef): void {
   client.store.dispatch({ t: 'cards.loaded', ref, epoch: 'demo', items: [permission], at: Date.now() });
