@@ -56,8 +56,23 @@ export { indexSubsession, readSubagentMeta } from './subsession.js';
 export type { SubagentMeta, Subsession } from './subsession.js';
 export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js';
 export type { SessionTree } from './session-tree.js';
-export { readSessionWorkflows, readWorkflowDescriptor } from './workflow.js';
-export type { WorkflowInfo } from './workflow.js';
+export {
+  createWorkflowLaunchCollector,
+  createWorkflowRunsCache,
+  readSessionWorkflows,
+  readWorkflowDescriptor,
+  readWorkflowRuns,
+} from './workflow.js';
+export type {
+  WorkflowAgentState,
+  WorkflowInfo,
+  WorkflowLaunch,
+  WorkflowLaunchCollector,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowRunsCache,
+  WorkflowRunSummary,
+} from './workflow.js';
 export { claudeSource, codexSource, watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions, WatchSource } from './watch.js';
 export { gitBranch } from './git.js';

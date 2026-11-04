@@ -1,5 +1,6 @@
 import type { AgentPlan } from './agent-plan.js';
 import { createClaudePlanCollector } from './agent-plan-log.js';
+import { createWorkflowLaunchCollector, type WorkflowLaunch } from './workflow.js';
 import path from 'node:path';
 import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from './jsonl-tail.js';
@@ -23,6 +24,8 @@ export type TitleSource = 'custom' | 'ai' | 'last-prompt' | 'first-text';
 
 export interface SessionIndex {
   plan?: AgentPlan | null;
+  /** Строки запуска и конца workflow из транскрипта (только Claude); нет поля — индекс собран кодом до этой фичи. */
+  workflowLaunches?: WorkflowLaunch[];
   /** sessionId из записей; если его нет — имя файла. */
   id: string;
   /** Слаг каталога проекта в ~/.claude/projects. */
@@ -184,6 +187,7 @@ interface SubagentObservations {
  */
 export class ClaudeIndexAccumulator {
   planCollector = createClaudePlanCollector();
+  workflowCollector = createWorkflowLaunchCollector();
   models = new Counter();
   tools = new Counter();
   roles = new Counter();
@@ -222,6 +226,7 @@ export class ClaudeIndexAccumulator {
   clone(): ClaudeIndexAccumulator {
     return Object.assign(new ClaudeIndexAccumulator(this.file, this.adapter), this, {
       planCollector: this.planCollector.clone(),
+      workflowCollector: this.workflowCollector.clone(),
       models: this.models.clone(),
       tools: this.tools.clone(),
       roles: this.roles.clone(),
@@ -233,6 +238,7 @@ export class ClaudeIndexAccumulator {
 
   feed(raw: RawRecord, lineNo: number): void {
     this.planCollector.onRecord(raw);
+    this.workflowCollector.onRecord(raw);
     const record: SessionRecord = this.adapter.toSessionRecord(raw);
 
     this.recordTypes.add(record.type);
@@ -364,6 +370,7 @@ export class ClaudeIndexAccumulator {
 
     return {
       plan: this.planCollector.finish(),
+      workflowLaunches: this.workflowCollector.finish(),
       id: this.sessionId ?? path.basename(file, '.jsonl'),
       project: projectSlug(file, root),
       projectPath: this.cwd,
