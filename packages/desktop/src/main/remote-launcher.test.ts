@@ -235,3 +235,110 @@ describe('presence', () => {
     presence.stop();
   });
 });
+
+describe('remote launcher: bridge version after an update', () => {
+  /** A fake bridge + control client: `up` is whether the control socket answers, `version` what `status` reports. */
+  function fakeWorld(initial: { version?: string; stopWorks?: boolean; pid?: number }) {
+    const world = { up: true, version: initial.version, stopWorks: initial.stopWorks ?? true, calls: [] as string[], spawns: 0, signals: [] as string[], alive: true };
+    let connected = false;
+    const client = {
+      connect: async () => {
+        if (!world.up) throw new Error('ECONNREFUSED');
+        connected = true;
+      },
+      isConnected: () => connected,
+      call: async (method: string) => {
+        world.calls.push(method);
+        if (method === 'status') return world.version === undefined ? { running: true } : { running: true, version: world.version };
+        if (method === 'stop' && world.stopWorks) world.up = false;
+        return { ok: true };
+      },
+      onEvent: () => () => {},
+      onClose: () => () => {},
+      close: () => {
+        connected = false;
+      },
+    };
+    const processes: BridgeProcesses = {
+      readPid: async () => initial.pid ?? 4242,
+      isBridge: async () => true,
+      alive: () => world.alive && !world.signals.includes('SIGKILL') && (world.up || !world.stopWorks),
+      signal: (_pid, signal) => {
+        world.signals.push(signal);
+        if (signal === 'SIGKILL') {
+          world.up = false;
+          world.alive = false;
+        }
+      },
+    };
+    const logs: string[] = [];
+    const make = (expected: string | null, newVersion = expected ?? undefined) =>
+      createRemoteLauncher({
+        paths: bridgePaths(dir),
+        createClient: () => client,
+        processes,
+        pollMs: 2,
+        killGraceMs: 30,
+        expectedVersion: () => expected,
+        log: (m) => logs.push(m),
+        spawn: async () => {
+          world.spawns += 1;
+          world.up = true;
+          world.alive = true;
+          world.version = newVersion;
+          return { isRunning: () => true };
+        },
+      });
+    return { world, make, logs };
+  }
+
+  it('same version: reuses the running bridge', async () => {
+    const { world, make } = fakeWorld({ version: '0.29.0' });
+    await make('0.29.0').start();
+    expect(world.spawns).toBe(0);
+    expect(world.calls).toEqual(['status']);
+  });
+
+  it('different version: stops the old bridge, starts the bundled one and logs both versions', async () => {
+    const { world, make, logs } = fakeWorld({ version: '0.28.3' });
+    await make('0.29.0').start();
+    expect(world.calls).toContain('stop');
+    expect(world.spawns).toBe(1);
+    expect(world.version).toBe('0.29.0');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('0.28.3');
+    expect(logs[0]).toContain('0.29.0');
+  });
+
+  it('no version reported (0.28.x and older): counts as a mismatch', async () => {
+    const { world, make } = fakeWorld({ version: undefined });
+    await make('0.29.0').start();
+    expect(world.spawns).toBe(1);
+  });
+
+  it('a stop that does not take effect falls back to SIGTERM and SIGKILL', async () => {
+    const { world, make } = fakeWorld({ version: '0.28.3', stopWorks: false });
+    await make('0.29.0').start();
+    expect(world.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(world.spawns).toBe(1);
+  });
+
+  it('restarts at most once per launch: a new bridge that still mismatches is kept with a warning', async () => {
+    const { world, make, logs } = fakeWorld({ version: '0.28.3' });
+    const launcher = make('0.29.0', '0.28.9');
+    await launcher.start();
+    expect(world.spawns).toBe(1);
+    expect(logs.some((m) => m.includes('warning'))).toBe(true);
+    launcher.detach();
+    await launcher.start();
+    expect(world.spawns).toBe(1);
+    expect(world.calls.filter((c) => c === 'stop')).toHaveLength(1);
+  });
+
+  it('no expected version: behaviour is unchanged', async () => {
+    const { world, make } = fakeWorld({ version: '0.28.3' });
+    await make(null).start();
+    expect(world.spawns).toBe(0);
+    expect(world.calls).toEqual([]);
+  });
+});
