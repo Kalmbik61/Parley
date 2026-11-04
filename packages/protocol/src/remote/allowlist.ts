@@ -1,6 +1,11 @@
 // Белые списки роли `remote` по этапам (спека 4.2), запретный список (4.3) и правила параметров.
 // Значения из корня протокола не импортируются: сверку с METHODS делает тест.
 
+import { REMOTE_TEXT_LIMIT_BYTES, utf8Length } from './limits.js';
+import { voiceParamRules } from './voice.js';
+
+export { REMOTE_TEXT_LIMIT_BYTES };
+
 export const REMOTE_PROTOCOL = 1;
 /** The oldest phone app version (x.y.z) the bridge's hello accepts; the app's `version` in app.config.ts must not be lower. */
 export const MIN_CLIENT_VERSION = '0.1.0';
@@ -42,6 +47,16 @@ const A_METHODS = [
   // Меню комнаты (решение человека 2026-11-03, правки 21): Archive и Delete — тоже за `remoteCreate`, с воротами по комнате.
   'rooms.archive',
   'rooms.delete',
+  // Голос, jobs и карточки помощника с телефона (план голоса B3): `voice.session.prepare` хост пускает только при
+  // включённом `remoteVoice`.
+  'jobs.submit',
+  'jobs.get',
+  'jobs.cancel',
+  'jobs.ackInline',
+  'cards.decide',
+  'voice.session.prepare',
+  'voice.session.close',
+  'voice.usage.get',
 ] as const;
 const A_EVENTS = [
   'works.changed',
@@ -50,6 +65,8 @@ const A_EVENTS = [
   'host.notice',
   'feed.changed',
   'consents.changed',
+  'jobs.changed',
+  'voice.session.closed',
 ] as const;
 
 const B_METHODS = [
@@ -145,25 +162,6 @@ export function isRemoteForbidden(name: string): boolean {
   return REMOTE_FORBIDDEN.some(entry =>
     entry.endsWith('.*') ? name.startsWith(entry.slice(0, -1)) : name === entry,
   );
-}
-
-export const REMOTE_TEXT_LIMIT_BYTES = 16 * 1024;
-
-function utf8Length(text: string): number {
-  let n = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c < 0x80) n += 1;
-    else if (c < 0x800) n += 2;
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
-      const d = text.charCodeAt(i + 1);
-      if (d >= 0xdc00 && d <= 0xdfff) {
-        n += 4;
-        i++;
-      } else n += 3;
-    } else n += 3;
-  }
-  return n;
 }
 
 function record(params: unknown): Record<string, unknown> | null {
@@ -292,6 +290,7 @@ export const REMOTE_ROOM_MEMBERS_MAX = 16;
 export type RemoteParamRule = (params: unknown) => boolean;
 
 export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
+  ...voiceParamRules,
   // Этап A: без `rev` карточку решения можно принять, не видев её текста (спека 4.2).
   'rooms.resolveProposal': params => {
     const p = record(params);

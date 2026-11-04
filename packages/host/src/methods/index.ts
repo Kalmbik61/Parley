@@ -40,6 +40,7 @@ import type { WorktreeSweeper } from '../worktrees/worktree-sweeper.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createAssistantHandlers } from './assistant.js';
+import { createVoiceHandlers, type VoiceDeps } from './voice.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
 import { createCapacityHandlers } from './capacity.js';
@@ -153,6 +154,8 @@ export interface MethodDeps {
   assistant?: AssistantService;
   /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */
   assistantJobs?: Jobs;
+  /** Голосовая сессия GPT-Live и расход (план голоса, B3); без неё методов `voice.*` у хоста нет. */
+  voice?: VoiceDeps;
   /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
   telegram?: TelegramService;
   /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
@@ -259,6 +262,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects, deps.autonomousEngine) : {}),
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant, deps.assistantJobs)),
+    ...createVoiceHandlers(deps.assistantJobs, deps.voice),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
     ...createVoiceProviderHandlers(),
     // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.

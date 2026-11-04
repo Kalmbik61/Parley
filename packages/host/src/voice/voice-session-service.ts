@@ -50,6 +50,11 @@ export interface VoiceSessionService {
   /** Закрывает сессию; false, если такой активной нет. */
   close(voiceSessionId: string): Promise<boolean>;
   activeSessionId(): string | null;
+  /**
+   * Закрывает активную сессию при остановке хоста или выключении голоса: и готовую, и ещё создающуюся (её закроем,
+   * как только sideband подключится, а prepare вернёт отказ). Ждёт не дольше `closeWaitMs`; без активной сессии сразу готово.
+   */
+  stop(): Promise<void>;
 }
 
 interface Active {
@@ -189,6 +194,7 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
     }
     if (active === session) active = null;
     session.finished = true;
+    for (const resolve of session.closedWaiters.splice(0)) resolve();
     deps.onClosed?.(id, reason);
     return { ok: false, code: 'failed', message };
   };
@@ -239,6 +245,11 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
       }
       if (unusable || insertFailed || sideband === null) return abandon(session, sideband, insertFailed);
       wire(session, sideband);
+      // stop() пришёл, пока сессия создавалась: телефону она не нужна, закрываем сразу после подключения.
+      if (session.closeWanted !== null) {
+        sideband.requestClose();
+        return { ok: false, code: 'failed', message: 'Voice session was cancelled' };
+      }
       // Сессия живёт до меньшего из лимита сессии и остатка дневного бюджета (в остатке уже учтена стартовая оценка).
       let budgetMs = MAX_SESSION_MS;
       try {
@@ -258,6 +269,20 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
       if (session === null || !session.ready || session.voiceSessionId !== voiceSessionId) return false;
       await requestClose(session, 'close_requested');
       return true;
+    },
+
+    async stop() {
+      const session = active;
+      if (session === null || session.finished) return;
+      if (session.ready) return requestClose(session, 'shutdown');
+      const closed = new Promise<void>((resolve) => session.closedWaiters.push(resolve));
+      session.closeWanted = 'shutdown';
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, closeWaitMs);
+      });
+      await Promise.race([closed, timeout]);
+      clearTimeout(timer);
     },
 
     activeSessionId: () => (active !== null && active.ready ? active.voiceSessionId : null),

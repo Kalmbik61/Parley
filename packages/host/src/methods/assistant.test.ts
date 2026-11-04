@@ -53,6 +53,13 @@ describe('createAssistantHandlers', () => {
     expect(decideCard).toHaveBeenCalledWith({ cardId: 'p1', revision: 2, choice: 'send' }, 'mobile');
   });
 
+  it('cards.decide: просроченная карточка с телефона отказ expired, без действия', async () => {
+    const decideCard = vi.fn().mockResolvedValue({ applied: false, error: null, reason: 'expired' });
+    const handlers = createAssistantHandlers({ decideCard } as unknown as AssistantService);
+    const params = METHODS['cards.decide'].parse({ cardId: 'p1', revision: 1, choice: 'send' });
+    expect(await call(handlers, 'cards.decide', params)).toEqual({ applied: false, error: null, reason: 'expired' });
+  });
+
   it('jobs.ackInline: передаёт jobs; без jobs - not_found', async () => {
     const ackInline = vi.fn().mockReturnValue({ ok: true, deliveredInline: true, reason: 'acked' });
     const params = METHODS['jobs.ackInline'].parse({ jobId: 'job-1', revision: 4 });

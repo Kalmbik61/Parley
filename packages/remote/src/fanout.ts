@@ -1,5 +1,5 @@
 import type { WorksSnapshot } from '@parley/protocol';
-import { REMOTE_EVENTS, projectWorksSnapshot } from '@parley/protocol/remote';
+import { REMOTE_EVENTS, projectPhoneJob, projectWorksSnapshot } from '@parley/protocol/remote';
 import type { SessionRef } from '@parley/protocol';
 import type { HostLink, HostLinkEvent } from './host-link.js';
 import { refKey } from './host-link.js';
@@ -14,6 +14,11 @@ export interface FanoutOptions {
   coalesceMs?: number;
   /** Телефоны, подписанные на ленту `ref` (A30): `feed.changed` идёт только им. Нет — никому. */
   feedSubscribers?: (ref: SessionRef) => ReadonlySet<string>;
+  /**
+   * Кому идёт событие: `undefined` — всем, строка — одному устройству, `null` — никому (владельца нет). Голосовая
+   * сессия закрывается только для того телефона, что её открыл.
+   */
+  eventAudience?: (event: string, data: unknown) => string | null | undefined;
 }
 
 export interface Fanout {
@@ -186,11 +191,21 @@ export function createFanout(options: FanoutOptions): Fanout {
       }
       return;
     }
+    const audience = options.eventAudience?.(event.event, event.data);
+    if (audience === null) return;
+    // Job телефону — только по списку полей: хост шлёт проекцию, мост страхуется (план голоса, B3).
+    let data = event.data;
+    if (event.event === 'jobs.changed') {
+      const job = projectPhoneJob((event.data as { job?: unknown } | null)?.job);
+      if (job === null) return;
+      data = { job };
+    }
     for (const [deviceId, phone] of [...phones]) {
       if (!phone.live || phones.get(deviceId) !== phone) continue;
+      if (audience !== undefined && audience !== deviceId) continue;
       if (event.event === 'works.changed') onWorksChanged(deviceId, phone, event.data);
       else if (event.event === 'activity.changed') onActivityChanged(deviceId, phone, event.data);
-      else send(deviceId, { event: event.event, data: event.data });
+      else send(deviceId, { event: event.event, data });
     }
   });
 

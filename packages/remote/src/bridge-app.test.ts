@@ -1517,3 +1517,176 @@ describe('A34: phone.action for weighty phone actions', () => {
     expect(JSON.stringify(audits)).not.toContain('secret-repo');
   });
 });
+
+describe('голос, jobs и карточки с телефона (план голоса, B3)', () => {
+  const prepared = { ok: true, voiceSessionId: 'sess_1', sdpAnswer: 'ANSWER-SDP' };
+  const voiceCloses = () => host.calls.filter((c) => c.method === 'voice.session.close');
+  const phoneJob = (extra: Record<string, unknown> = {}) => ({
+    jobId: 'j-1', origin: 'mobile', state: 'running', revision: 2, requestText: 'do it', resultSummary: null, provider: 'claude',
+    createdAt: 1, updatedAt: 2, deliveredInline: false, correlation: { mode: 'text' }, ...extra,
+  });
+
+  beforeEach(() => {
+    online();
+    dispatcher.onOpen('d1');
+    host.handler = async (method) => (method === 'voice.session.prepare' ? prepared : { ok: true });
+  });
+
+  it('VO-14: запрещённые voice.* и jobs.* не доходят до хоста', async () => {
+    let n = 0;
+    for (const method of ['voice.settings.set', 'voice.key.set', 'voice.session.list', 'jobs.list', 'jobs.retry', 'assistant.job.changed']) {
+      const id = `x${(n += 1)}`;
+      call('d1', id, method, {});
+      await flush();
+      expect(sessions.of('d1').find((f) => f.id === id), method).toMatchObject({ error: { code: 'unknown_method' } });
+    }
+    expect(host.calls).toEqual([]);
+  });
+
+  it('параметры: лишний ключ, sdp больше 32 КиБ, плохой idempotencyKey — bad_request, хост не зван', async () => {
+    const cases: Array<[string, unknown]> = [
+      ['voice.session.prepare', { sdp: 'v=0', key: 'sk-1' }],
+      ['voice.session.prepare', { sdp: 'x'.repeat(32 * 1024 + 1) }],
+      ['jobs.submit', { text: 't', idempotencyKey: 'bad key', correlation: { mode: 'text' } }],
+      ['jobs.submit', { text: 't', idempotencyKey: 'k', correlation: { mode: 'text', delegationId: 'd' } }],
+      ['cards.decide', { cardId: 'p1', revision: 1, choice: 'send', decidedVia: 'island' }],
+    ];
+    let n = 0;
+    for (const [method, params] of cases) {
+      const id = `b${(n += 1)}`;
+      call('d1', id, method, params);
+      await flush();
+      expect(sessions.of('d1').find((f) => f.id === id), method).toMatchObject({ error: { code: 'bad_request' } });
+    }
+    expect(host.calls).toEqual([]);
+  });
+
+  it('jobs.submit и cards.decide — изменяющие: 30 в минуту, 31-й rate_limited', async () => {
+    for (let i = 0; i < 30; i++) {
+      call('d1', `s${i}`, i % 2 === 0 ? 'jobs.submit' : 'cards.decide', i % 2 === 0
+        ? { text: 't', idempotencyKey: `k${i}`, correlation: { mode: 'text' } }
+        : { cardId: 'p1', revision: 1, choice: 'send' });
+      await flush();
+    }
+    call('d1', 'over', 'jobs.cancel', { jobId: 'j-1' });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'over')).toMatchObject({ error: { code: 'rate_limited' } });
+    call('d1', 'read', 'jobs.get', { jobId: 'j-1' });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'read')?.error).toBeUndefined();
+  });
+
+  it('jobs.get: телефон получает проекцию, даже если хост прислал лишнее', async () => {
+    host.handler = async () => ({ job: phoneJob({ argv: ['claude', '--token', 'T0KEN'], log: 'LOG LINE', idempotencyKey: 'k' }) });
+    call('d1', 'g', 'jobs.get', { jobId: 'j-1' });
+    await flush();
+    const frame = sessions.of('d1').find((f) => f.id === 'g')!;
+    expect(frame.result.job).toMatchObject({ jobId: 'j-1', state: 'running' });
+    expect(JSON.stringify(frame)).not.toMatch(/argv|T0KEN|LOG LINE|idempotencyKey/);
+  });
+
+  it('jobs.changed: проекция идёт всем телефонам, лишние поля отброшены; событие без job пропадает', async () => {
+    host.event('jobs.changed', { job: phoneJob({ argv: ['x'], log: 'LOG' }) });
+    host.event('jobs.changed', { job: { jobId: 'broken' } });
+    const got = events('d1', 'jobs.changed');
+    expect(got).toHaveLength(1);
+    expect(JSON.stringify(got[0])).not.toMatch(/argv|LOG/);
+  });
+
+  it('повтор jobs.submit с тем же ключом уходит хосту как есть и получает прежний jobId', async () => {
+    host.handler = async () => ({ jobId: 'j-7', revision: 1 });
+    const params = { text: 'do it', idempotencyKey: 'same-key', correlation: { mode: 'text' } };
+    call('d1', 'a', 'jobs.submit', params);
+    call('d1', 'b', 'jobs.submit', params);
+    await flush();
+    expect(sessions.of('d1').filter((f) => f.id === 'a' || f.id === 'b').map((f) => f.result)).toEqual([{ jobId: 'j-7', revision: 1 }, { jobId: 'j-7', revision: 1 }]);
+    expect(host.calls.map((c) => c.params)).toEqual([params, params]);
+  });
+
+  it('журнал мутаций не содержит sdp: только длина и хэш', async () => {
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0 SECRET-SDP-LINE' });
+    await flush();
+    expect(JSON.stringify(audits)).not.toContain('SECRET-SDP-LINE');
+    expect(audits.at(-1)).toMatchObject({ kind: 'call', method: 'voice.session.prepare', outcome: 'ok' });
+  });
+
+  it('VO-13: сессия устройства кончилась (отзыв ведёт сюда же) — открытая голосовая сессия закрыта через voice.session.close', async () => {
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'p')?.result).toEqual(prepared);
+    expect(voiceCloses()).toEqual([]);
+    dispatcher.onClose('d1');
+    await flush();
+    expect(voiceCloses()).toEqual([{ method: 'voice.session.close', params: { voiceSessionId: 'sess_1' } }]);
+    // второй раз не закрывается: привязка снята
+    dispatcher.onClose('d1');
+    await flush();
+    expect(voiceCloses()).toHaveLength(1);
+  });
+
+  it('VO-13: чужое устройство не закрывает чужую сессию; закрытие хостом снимает привязку', async () => {
+    dispatcher.onOpen('d2');
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    dispatcher.onClose('d2');
+    await flush();
+    expect(voiceCloses()).toEqual([]);
+    host.event('voice.session.closed', { voiceSessionId: 'sess_1', reason: 'close_requested' });
+    dispatcher.onClose('d1');
+    await flush();
+    expect(voiceCloses()).toEqual([]);
+  });
+
+  it('VO-13: voice.session.close чужого устройства отклонён, владельца — доходит до хоста', async () => {
+    dispatcher.onOpen('d2');
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    call('d2', 'c2', 'voice.session.close', { voiceSessionId: 'sess_1' });
+    await flush();
+    expect(sessions.of('d2').find((f) => f.id === 'c2')).toMatchObject({ error: { code: 'not_found' } });
+    expect(voiceCloses()).toEqual([]);
+    call('d1', 'c1', 'voice.session.close', { voiceSessionId: 'sess_1' });
+    await flush();
+    expect(voiceCloses()).toEqual([{ method: 'voice.session.close', params: { voiceSessionId: 'sess_1' } }]);
+  });
+
+  it('VO-13: voice.session.closed получает только владелец сессии', async () => {
+    dispatcher.onOpen('d2');
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    host.event('voice.session.closed', { voiceSessionId: 'sess_1', reason: 'time_limit' });
+    host.event('voice.session.closed', { voiceSessionId: 'sess_unknown', reason: 'time_limit' });
+    expect(events('d1', 'voice.session.closed')).toEqual([{ event: 'voice.session.closed', data: { voiceSessionId: 'sess_1', reason: 'time_limit' } }]);
+    expect(events('d2', 'voice.session.closed')).toEqual([]);
+  });
+
+  it('VO-13: устройство ушло, пока prepare был в полёте, — сессия закрывается сразу', async () => {
+    let release: (value: unknown) => void = () => {};
+    host.handler = (method) => (method === 'voice.session.prepare' ? new Promise((resolve) => (release = resolve)) : Promise.resolve({ ok: true }));
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    dispatcher.onClose('d1');
+    release(prepared);
+    await flush();
+    expect(voiceCloses()).toEqual([{ method: 'voice.session.close', params: { voiceSessionId: 'sess_1' } }]);
+  });
+
+  it('отказ prepare (limit_reached) ничего не привязывает', async () => {
+    host.handler = async () => ({ ok: false, code: 'limit_reached', message: 'Daily voice limit reached' });
+    call('d1', 'p', 'voice.session.prepare', { sdp: 'v=0' });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'p')?.result).toMatchObject({ ok: false, code: 'limit_reached' });
+    dispatcher.onClose('d1');
+    await flush();
+    expect(voiceCloses()).toEqual([]);
+  });
+
+  it('hello: voice.session.prepare есть, только если его предложил хост эпохи', () => {
+    const offered = dispatcher.hello('d1').methods;
+    expect(offered).toContain('voice.session.prepare');
+    host.hostMethodSet = host.hostMethodSet.filter((m) => m !== 'voice.session.prepare');
+    online();
+    expect(dispatcher.hello('d1').methods).not.toContain('voice.session.prepare');
+    expect(dispatcher.hello('d1').methods).toContain('jobs.submit');
+  });
+});

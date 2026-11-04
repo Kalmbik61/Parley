@@ -35,7 +35,7 @@ class FakeSideband implements Sideband {
   }
 }
 
-const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?: number; failInsert?: boolean; attachAfterFirst?: 'fail'; dailyMinutes?: number; clock?: { date: Date } } = {}) => {
+const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?: number; failInsert?: boolean; attachAfterFirst?: 'fail'; dailyMinutes?: number; clock?: { date: Date }; attachGate?: Promise<void> } = {}) => {
   const realDb = openMemoryDb();
   const db = opts.failInsert
     ? ({ prepare: (sql: string) => (sql.startsWith('INSERT') ? { run: () => { throw new Error('disk full'); } } : realDb.prepare(sql)) } as unknown as typeof realDb)
@@ -50,6 +50,7 @@ const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?
       return { sessionId: `sess_${n}`, sdpAnswer: 'answer' };
     },
     async attach() {
+      if (opts.attachGate) await opts.attachGate;
       if (opts.attachAfterFirst === 'fail' && sidebands.length >= 1) throw new LiveError('sideband', 'gone');
       if (opts.attachError) throw opts.attachError;
       if (failures > 0) {
@@ -215,6 +216,39 @@ describe('VoiceSessionService', () => {
     expect(await pending).toBe(true);
     expect(row()).toMatchObject({ state: 'closed', close_reason: 'close_timeout', seconds_final: null, seconds_estimate: INIT_BILLED_SECONDS });
     expect(sidebands[0]!.disposed).toBe(1);
+  });
+
+  it('stop: готовую сессию закрывает через sideband и ждёт session.closed', async () => {
+    const { service, sidebands, row } = setup();
+    await service.prepare('o');
+    const pending = service.stop();
+    expect(sidebands[0]!.closeRequests).toBe(1);
+    sidebands[0]!.pushClosed({ seconds: 20, reason: 'close_requested' });
+    await pending;
+    expect(row()).toMatchObject({ state: 'closed', seconds_final: 20 });
+    expect(service.activeSessionId()).toBeNull();
+  });
+
+  it('stop во время prepare: сессия закрывается, как только подключился sideband, prepare возвращает отказ', async () => {
+    let open!: () => void;
+    const attachGate = new Promise<void>((resolve) => (open = resolve));
+    const { service, sidebands, row } = setup({ attachGate });
+    const preparing = service.prepare('o');
+    await Promise.resolve();
+    const stopping = service.stop();
+    open();
+    expect(await preparing).toMatchObject({ ok: false, code: 'failed' });
+    expect(sidebands[0]!.closeRequests).toBe(1);
+    sidebands[0]!.pushClosed({ seconds: 15, reason: 'close_requested' });
+    await stopping;
+    expect(row()).toMatchObject({ state: 'closed', seconds_final: 15 });
+    expect(service.activeSessionId()).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stop без активной сессии сразу выполнен', async () => {
+    const { service } = setup();
+    await expect(service.stop()).resolves.toBeUndefined();
   });
 
   it('close чужого id — false', async () => {

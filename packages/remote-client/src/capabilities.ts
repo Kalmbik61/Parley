@@ -22,3 +22,11 @@ export function selectLaunchCapabilities(state: Pick<RemoteState, 'methods'>): L
     canListRoles: has('roles.list'),
   };
 }
+
+/**
+ * Платный голос с телефона: `voice.session.prepare` есть в `hello.methods` только при включённом `remoteVoice` и
+ * только если хост эпохи его предложил. Отдельно от `LaunchCapabilities`: это не запуск.
+ */
+export function selectVoiceCapability(state: Pick<RemoteState, 'methods'>): { canUseVoice: boolean } {
+  return { canUseVoice: state.methods?.includes('voice.session.prepare') ?? false };
+}

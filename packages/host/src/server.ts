@@ -39,6 +39,8 @@ export interface ServerOptions {
    * закрыты, а проекты вызовов не сверяются (голый сервер в тестах; хост передаёт политику всегда).
    */
   remoteLaunch?: RemoteLaunchPolicy;
+  /** Настройка `remoteVoice` (платный голос с телефона): гейтит только `voice.session.prepare`. Нет — метод закрыт. */
+  remoteVoice?: () => boolean;
 }
 
 /** Власть хоста над запуском с телефона (спека 4.2, «Хост — власть»). */
@@ -108,6 +110,8 @@ const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEA
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
+/** Единственный метод за переключателем `remoteVoice`: он тратит деньги владельца. */
+const VOICE_PREPARE_METHOD = 'voice.session.prepare';
 /** Методы запуска с телефона: только в существующую неархивную работу (`sessions.create` — ещё и в новую). */
 const REMOTE_LAUNCH_METHODS: ReadonlySet<string> = new Set(['sessions.create', 'rooms.create', 'rooms.send']);
 /**
@@ -198,6 +202,8 @@ const closedClients = new WeakSet<Client>();
 /** Метод белого списка, открытый клиенту `remote` сейчас: запуск, сообщения и согласия — только при включённом `remoteCreate`. */
 function remoteMethodOpen(name: string, options: ServerOptions): boolean {
   if (!REMOTE_METHOD_SET.has(name)) return false;
+  // Платный голос: выключенный `remoteVoice` убирает метод из `hello.methods` и отвергает прямой вызов как неизвестный.
+  if (name === VOICE_PREPARE_METHOD) return options.remoteVoice?.() === true;
   return !REMOTE_SWITCHED_METHODS.has(name) || options.remoteLaunch?.enabled() === true;
 }
 /**

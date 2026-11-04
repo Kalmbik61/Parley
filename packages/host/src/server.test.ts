@@ -1997,3 +1997,96 @@ describe('роль remote: запуск с телефона (A2b, спека м�
     }, 40_000);
   });
 });
+
+describe('платный голос remoteVoice: гейт только для voice.session.prepare', () => {
+  const VOICE = ['jobs.submit', 'jobs.get', 'jobs.cancel', 'jobs.ackInline', 'cards.decide', 'voice.session.close', 'voice.usage.get'];
+
+  async function voiceServer(initial: boolean) {
+    const home = await tempHome();
+    homes.push(home);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const context = { version: 'test', log, liveSessions: () => 0 } as unknown as HostContext;
+    const spies = Object.fromEntries([...VOICE, 'voice.session.prepare'].map((name) => [name, vi.fn(async () => ({ ok: true }))]));
+    const state = { on: initial };
+    const server = createHostServer({
+      context,
+      token: 't',
+      helloTimeoutMs: 5000,
+      methodHandlers: spies as never,
+      notificationHandlers: {},
+      registerClient: () => {},
+      unregisterClient: () => {},
+      remoteVoice: () => state.on,
+    });
+    const socketPath = path.join(home, 'voice.sock');
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const clients: TestClient[] = [];
+    const connect = async (name: string) => {
+      const client = connectRaw(socketPath);
+      clients.push(client);
+      await waitConnected(client.socket);
+      const reply = await hello(client, 't', { client: name });
+      return { client, methods: (reply.result as { methods: string[] }).methods };
+    };
+    const ask = async (client: TestClient, id: number, method: string, params: unknown): Promise<RawMessage> => {
+      client.send({ id, method, params });
+      for (;;) {
+        const message = await client.next();
+        if (message.id === id) return message;
+      }
+    };
+    const close = () => {
+      for (const client of clients) client.close();
+      server.close();
+    };
+    return { spies, state, connect, ask, close };
+  }
+
+  it('выключено: prepare нет в hello.methods, прямой вызов — unknown_method, обработчик не вызван; остальные voice и jobs открыты; desktop видит всё', async () => {
+    const s = await voiceServer(false);
+    const remote = await s.connect('remote');
+    expect(remote.methods).not.toContain('voice.session.prepare');
+    for (const name of VOICE) expect(remote.methods, name).toContain(name);
+    expect((await s.ask(remote.client, 1, 'voice.session.prepare', { sdp: 'v=0' })).error).toMatchObject({ code: 'unknown_method' });
+    expect(s.spies['voice.session.prepare']).not.toHaveBeenCalled();
+    expect((await s.ask(remote.client, 2, 'voice.usage.get', {})).error).toBeUndefined();
+
+    const desktop = await s.connect('desktop');
+    expect(desktop.methods).toContain('voice.session.prepare');
+    s.close();
+  });
+
+  it('включено: prepare в hello.methods и вызов доходит; лишний ключ — bad_request до обработчика', async () => {
+    const s = await voiceServer(true);
+    const remote = await s.connect('remote');
+    expect(remote.methods).toContain('voice.session.prepare');
+    expect((await s.ask(remote.client, 1, 'voice.session.prepare', { sdp: 'v=0' })).error).toBeUndefined();
+    expect(s.spies['voice.session.prepare']).toHaveBeenCalledTimes(1);
+    expect((await s.ask(remote.client, 2, 'voice.session.prepare', { sdp: 'v=0', apiKey: 'sk-x' })).error).toMatchObject({ code: 'bad_request' });
+    expect((await s.ask(remote.client, 3, 'jobs.submit', { text: 't', idempotencyKey: 'k', correlation: { mode: 'text' }, origin: 'island' })).error).toMatchObject({ code: 'bad_request' });
+    expect(s.spies['voice.session.prepare']).toHaveBeenCalledTimes(1);
+    expect(s.spies['jobs.submit']).not.toHaveBeenCalled();
+    s.close();
+  });
+
+  it('VO-14: голос и jobs вне списка отвергаются хостом', async () => {
+    const s = await voiceServer(true);
+    const remote = await s.connect('remote');
+    let id = 10;
+    for (const method of ['voice.settings.set', 'voice.key.set', 'jobs.list', 'jobs.retry', 'assistant.ask']) {
+      id += 1;
+      expect((await s.ask(remote.client, id, method, {})).error, method).toMatchObject({ code: 'unknown_method' });
+    }
+    s.close();
+  });
+
+  it('настоящий хост: remoteVoice по умолчанию выключен, prepare для remote закрыт, остальное голосовое открыто', async () => {
+    const { home, token } = await boot();
+    const socket = connectRaw(hostPaths(home).socket);
+    await waitConnected(socket.socket);
+    const methods = ((await hello(socket, token, { client: 'remote' })).result as { methods: string[] }).methods;
+    expect(methods).not.toContain('voice.session.prepare');
+    for (const name of ['voice.session.close', 'voice.usage.get', 'jobs.submit', 'jobs.get', 'cards.decide']) expect(methods, name).toContain(name);
+    socket.close();
+  });
+});

@@ -10,6 +10,7 @@ import {
   bridgeEventSchemas,
   checkRemoteParams,
   phoneActionEvent,
+  projectJobResult,
   projectWorksSnapshot,
 } from '@parley/protocol/remote';
 import type { BridgeHello, PhoneActionEvent } from '@parley/protocol/remote';
@@ -77,6 +78,9 @@ const STAGE_METHODS: ReadonlySet<string> = new Set(REMOTE_METHODS);
 /** Ответы хоста, которые телефону идут только в проекции: сырой `works.list` несёт планы и `argv`/`env` проверок. */
 const RESULT_PROJECTIONS: Readonly<Record<string, (result: unknown) => unknown>> = {
   'works.list': (result) => projectWorksSnapshot(result as WorksSnapshot),
+  // Job телефону — по списку полей, без логов и `argv` (план голоса, B3): хост шлёт проекцию, мост страхуется.
+  'jobs.get': projectJobResult,
+  'jobs.cancel': projectJobResult,
 };
 
 /** Только известный `reason` хоста идёт телефону в `data`; остальное отбрасывается. */
@@ -159,7 +163,7 @@ function opaque(key: string, value: string): string {
 function targetOf(params: unknown): string | undefined {
   if (typeof params !== 'object' || params === null) return undefined;
   const p = params as Record<string, unknown>;
-  for (const key of ['roomId', 'proposalId', 'workId', 'sessionId', 'id']) {
+  for (const key of ['roomId', 'proposalId', 'workId', 'sessionId', 'id', 'jobId', 'cardId', 'voiceSessionId']) {
     if (typeof p[key] === 'string' && (p[key] as string).length <= 128) return p[key] as string;
   }
   // `pty.send`, `feed.subscribe`: цель — сессия из `ref`.
@@ -219,6 +223,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     sessions,
     log,
     feedSubscribers: (ref) => feedSubs.subscribers(ref),
+    eventAudience: (event, data) => (event === 'voice.session.closed' ? voiceOwners.get((data as { voiceSessionId?: string } | null)?.voiceSessionId ?? '') ?? null : undefined),
     ...(options.coalesceMs === undefined ? {} : { coalesceMs: options.coalesceMs }),
   });
   const sendDedupe = createSendDedupe(options.now ? { now: options.now } : {});
@@ -234,6 +239,25 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     return projected.value;
   }
   const devices = new Map<string, DeviceState>();
+  /** Голосовая сессия → устройство, которое её открыло: хост deviceId не знает, закрывает её мост (план голоса, B3). */
+  const voiceOwners = new Map<string, string>();
+
+  /** Просит хост закрыть голосовые сессии устройства; сбой не мешает закрытию самого соединения. */
+  function closeVoiceOf(deviceId: string): void {
+    for (const [voiceSessionId, owner] of [...voiceOwners]) {
+      if (owner !== deviceId) continue;
+      voiceOwners.delete(voiceSessionId);
+      host.call('voice.session.close', { voiceSessionId }).catch((error: unknown) => log.warn('dispatch.voice_close_failed', { error }));
+    }
+  }
+
+  /** Результат `voice.session.prepare` с открытой сессией привязывает её к устройству; устройство уже ушло — сразу закрываем. */
+  function bindVoice(deviceId: string, state: DeviceState, raw: unknown): void {
+    const r = raw as { ok?: unknown; voiceSessionId?: unknown } | null;
+    if (r?.ok !== true || typeof r.voiceSessionId !== 'string') return;
+    voiceOwners.set(r.voiceSessionId, deviceId);
+    if (devices.get(deviceId) !== state) closeVoiceOf(deviceId);
+  }
 
   /**
    * Ответ уходит только той сессии телефона, что прислала запрос (критик A30, M1): `id` у клиента — счётчик на
@@ -329,6 +353,11 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
 
   const unsubscribe = host.subscribe((event) => {
     if (event.type === 'status' && event.status === 'online') for (const deviceId of [...devices.keys()]) rekeyIfStale(deviceId);
+    // Порядок подписчиков: рассылка (fanout) создана раньше и успевает узнать владельца до того, как привязка снята здесь.
+    if (event.type === 'host' && event.event === 'voice.session.closed') {
+      const closed = (event.data as { voiceSessionId?: unknown } | null)?.voiceSessionId;
+      if (typeof closed === 'string') voiceOwners.delete(closed);
+    }
     if (event.type === 'host' && event.event === 'consents.changed') {
       const data = event.data as { upsert?: unknown; removed?: unknown } | null;
       learnCards(data?.upsert);
@@ -439,6 +468,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   /** Нарушение протокола: `session.closing protocol` — телефон переподключится с отступом, а не примет это за остановку моста. */
   function close(deviceId: string): void {
     devices.delete(deviceId);
+    closeVoiceOf(deviceId);
     fanout.sessionClosed(deviceId);
     feedSubs.dropDevice(deviceId);
     sessions.close(deviceId, 'protocol');
@@ -573,6 +603,11 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
   /** Вызов хоста (или подписки моста) → исход для телефона; не отвергается. */
   async function callHost(deviceId: string, state: DeviceState, method: string, params: unknown, feedRef: SessionRef | undefined): Promise<SendOutcome> {
     const mutating = MUTATING_METHODS.has(method);
+    // Закрыть голосовую сессию может только устройство, что её открыло (внутренний closeVoiceOf идёт мимо dispatch).
+    if (method === 'voice.session.close') {
+      const target = (params as { voiceSessionId?: unknown } | null | undefined)?.voiceSessionId;
+      if (typeof target !== 'string' || voiceOwners.get(target) !== deviceId) return { error: { code: 'not_found', message: 'voice session not found' } };
+    }
     try {
       let raw: unknown;
       if (feedRef !== undefined) {
@@ -599,6 +634,7 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
         if (method === 'sessions.switchOptions') learnProviders((raw as { targets?: unknown } | null)?.targets);
         if (method === 'providers.list') learnProviders((raw as { providers?: unknown } | null)?.providers);
         if (mutating) void emitPhoneActions(deviceId, method, params, raw, card, label, provider);
+        if (method === 'voice.session.prepare') bindVoice(deviceId, state, raw);
       }
       // Сбой проекции уходит ошибкой `internal`, сырой ответ телефону не отдаётся.
       const result = RESULT_PROJECTIONS[method]?.(raw) ?? raw;
@@ -639,6 +675,8 @@ export function createSessionHandler(options: BridgeOptions): SessionHandler & {
     },
     onClose(deviceId) {
       devices.delete(deviceId);
+      // Отзыв устройства и конец его сессии доходят сюда: платная голосовая сессия не живёт без телефона.
+      closeVoiceOf(deviceId);
       // Окна лимитов переживают переподключение: иначе новое соединение обнуляло бы 30 изменений в минуту (критик m4).
       helloKeys.delete(deviceId);
       fanout.sessionClosed(deviceId);

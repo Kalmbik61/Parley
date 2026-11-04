@@ -67,6 +67,7 @@ import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { ASSISTANT_ACTIONS_FEATURE, HOST_ERROR_REASONS } from '@parley/protocol';
 import type { HostNotice, Result, SessionRef } from '@parley/protocol';
+import { projectPhoneJob } from '@parley/protocol/remote';
 import { createHostHandlers } from './methods/index.js';
 import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
@@ -110,8 +111,12 @@ import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { createReminderStore } from './assistant/reminders.js';
 import { createCardStore } from './assistant/cards.js';
+import { createConversationStore } from './assistant/conversation-store.js';
 import { createJobs } from './assistant/jobs.js';
 import { createJobExecutor } from './assistant/job-executor.js';
+import { createLiveClient } from './voice/live-client.js';
+import { createVoiceSessionService } from './voice/voice-session-service.js';
+import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
@@ -803,6 +808,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
     cards: createCardStore(workDb()),
+    conversations: createConversationStore(workDb()),
     home: parleyHome(),
     log: (line) => log.info(line),
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
@@ -824,6 +830,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
+  // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.
+  assistantJobs.onJobChanged((job) => {
+    const projected = projectPhoneJob(job);
+    if (projected !== null) handle.context.broadcast('jobs.changed', { job: projected });
+  });
   // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
   // До T4 канала `app` нет, поэтому режим константа TELEGRAM_ONLY: в `app` ничего не копится, Telegram получает прежнее.
   const notificationStore = createNotificationStore(workDb());
@@ -958,7 +969,27 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
   handle.context.onShutdown(async () => profiler.stop());
 
+  // Платный голос с телефона (план голоса, B3): значения держатся здесь и меняются только через `settings.set` (ниже).
+  const initialConfig = (await loadConfig()).config;
+  let remoteVoice = initialConfig.remoteVoice;
+  let voiceDailyMinutes = initialConfig.voiceDailyMinutes;
+  // Одна сессия на хост; ключ OpenAI читает live-client из `voice:openai` в момент вызова.
+  const voiceSessions = createVoiceSessionService({
+    db: workDb(),
+    live: createLiveClient(),
+    dailyMinutes: () => voiceDailyMinutes,
+    onClosed: (voiceSessionId, reason) => handle.context.broadcast('voice.session.closed', { voiceSessionId, reason }),
+  });
+  // Остановка хоста и выключение платного голоса закрывают открытую сессию: звук идёт напрямую в OpenAI и иначе тарифицировался бы до их лимита.
+  const closeActiveVoice = async (): Promise<void> => {
+    await voiceSessions.stop().catch(() => {});
+  };
+  handle.context.onShutdown(closeActiveVoice);
   const handlers = createHostHandlers({
+    voice: {
+      service: voiceSessions,
+      usage: () => dailyBudget(workDb(), voiceDailyMinutes, new Date()),
+    },
     roleCatalog,
     backlog: backlogService,
     planEffects,
@@ -1021,6 +1052,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         remoteCreate = result.config.remoteCreate;
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
+      voiceDailyMinutes = result.config.voiceDailyMinutes;
+      // Переключатель платного голоса меняет `hello.methods` моста: клиентов `remote` закрываем, мост переподключится.
+      if (result.config.remoteVoice !== remoteVoice) {
+        remoteVoice = result.config.remoteVoice;
+        if (!remoteVoice) void closeActiveVoice();
+        for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
+      }
       return result;
     };
   }
@@ -1032,6 +1070,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     helloTimeoutMs,
     methodHandlers: handlers.methods,
     notificationHandlers: handlers.notifications,
+    remoteVoice: () => remoteVoice,
     remoteLaunch: {
       enabled: () => remoteCreate,
       workOpen: (projectPath, workId) => {

@@ -16,6 +16,7 @@ import type {
   WorksSnapshot,
 } from './types.js';
 import type { WorksSyncInvalidated } from './works-sync.js';
+import type { VoiceEvents } from './remote/voice.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
@@ -76,6 +77,10 @@ export interface Events {
   'assistant.changed': AssistantState;
   'assistant.job.changed': AssistantJobChanged;
   'assistant.card.changed': AssistantCardChanged;
+  /** Телефону: job помощника в проекции без логов и argv (план голоса, B3). */
+  'jobs.changed': VoiceEvents['jobs.changed'];
+  /** Телефону: голосовая сессия закрыта (любая причина). */
+  'voice.session.closed': VoiceEvents['voice.session.closed'];
   'telegram.changed': TelegramStatus;
   /**
    * Изменились карточки согласий (спека 2026-10-21, 4.4): `upsert` — новые и изменённые, `removed` — `id` решённых
