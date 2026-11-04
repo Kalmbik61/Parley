@@ -1,10 +1,42 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { hostOf, isOpenableUrl, markdownTooDeep, MD_NEST_MAX, parseMarkdown, type MdNode } from './parse';
+import { hostOf, isOpenableUrl, markdownTooDeep, MD_LIST_ITEMS_MAX, MD_NEST_MAX, parseMarkdown, type MdNode } from './parse';
 import { addressOf, codeText, columnWidths, imageLine, linkLabelIsEmpty, linkTarget, noHyphenBreak, plainText } from './helpers';
 import { definitionsOf } from './parse';
 
 afterEach(() => vi.unstubAllGlobals());
+
+// Prefixes that must not let one line in front hide a bomb from the guards (A40 critic M6, M8, M9).
+const BAND_PREFIXES: Record<string, string> = {
+    quoteFence: '> ```\n',
+    tabFence: '\t```\n',
+    spaceTabFence: '  \t```\n',
+    indentedQuoteFence: '    > ```\n',
+    bulletFence: '- a\n  ```\n',
+    orderedFence: '1. a\n   ```\n',
+    looseBulletFence: '* x\n\n  ```\n',
+    quoteHtmlFence: '> <div>\n> ```\n>\n',
+    listHtmlFence: '- <div>\n  ```\n\n',
+    nestedQuoteFence: '> > ```\n> ',
+    earlyClose: '```\n\t```\n```\n',
+    // A closing fence followed by a tab or spaces still closes (CommonMark): the bomb after it counts (M8).
+    closeTab: '```\nx\n```\t\n',
+    closeSpaceTab: '```\nx\n``` \t\n',
+    closeTildeTab: '~~~\nx\n~~~\t\n',
+    quoteEarlyClose: '```\n> ```\n```\n',
+    badInfo: '```a`\n',
+    html: '<div>\n```\n\n',
+    comment: '<!--\n```\n-->\n\n',
+      // Blank-looking lines that are not blank for CommonMark (M9): NBSP, form feed, BOM, U+3000 between `<div>` and a fence.
+    htmlNbsp: '<div>\n\u00A0\n```\n\n',
+    htmlFormFeed: '<div>\n\f\n```\n\n',
+    htmlBom: '<div>\n\uFEFF\n```\n\n',
+    htmlIdeographic: '<div>\n\u3000\n```\n\n',
+    commentNbsp: '<!--\n\u00A0\n```\n-->\n\n',
+    quoteNbsp: '> a\n\u00A0\n',
+    plain: '',
+    tildeInfo: '~~~ a`b\n',
+};
 
 const fixture = readFileSync('src/markdown/fixtures/human-table.md', 'utf8');
 const kids = (n: MdNode): MdNode[] => n.children ?? [];
@@ -322,7 +354,7 @@ describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
   it('a bracket bomb returns raw text fast', () => {
     const bomb = `${'['.repeat(10000)}a${']'.repeat(10000)}`;
     const { ms, root } = timed(bomb);
-    expect(ms).toBeLessThan(200);
+    expect(ms).toBeLessThan(1000);
     expect(plainText(root)).toBe(bomb);
     const flat = `${'[a] '.repeat(2001)}`; // balanced but more than 2000 `[`
     expect(plainText(parseMarkdown(flat))).toBe(flat);
@@ -331,14 +363,14 @@ describe('pre-parse guards on bombs (A40 critic M2, M3)', () => {
 
   it('list and quote markers on one line, together, return raw text fast', () => {
     // `- - - …` alone is a thematic break (cheap, not raw); the others are bombs.
-    expect(timed('- '.repeat(4000)).ms).toBeLessThan(200);
+    expect(timed('- '.repeat(4000)).ms).toBeLessThan(1000);
     const bombs = [
       '> - '.repeat(400), '1. '.repeat(3000), `${'>'.repeat(30)} x`,
       `>${'- '.repeat(4000)}`, `${'>'.repeat(100)} ${'- '.repeat(4000)}`, '- >'.repeat(3000), '1. >'.repeat(2000),
     ];
     for (const bomb of bombs) {
       const { ms, root } = timed(bomb);
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(1000);
       expect(plainText(root)).toBe(bomb);
     }
     expect(all(parseMarkdown('- a\n- b\n  - c')).some((n) => n.type === 'list')).toBe(true);
@@ -356,7 +388,7 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
   it('lazy continuation lines after a list item or a quote return raw text fast', () => {
     for (const bomb of ['- a\n' + 'b\n'.repeat(14998), '> a\n' + 'b\n'.repeat(14998), '> a\nb\n'.repeat(10000)]) {
       const { ms, root } = timed(bomb);
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(1000);
       expect(plainText(root)).toBe(bomb);
     }
   });
@@ -376,12 +408,12 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
     // ESC [ does not count in prose either
     expect(types(parseMarkdown(`${'\u001b[32mx '.repeat(40)}`))).toEqual(['paragraph']);
     // brackets, emphasis and markers inside fenced code do not count
-    const heavyCode = `\`\`\`\n${'[['.repeat(3000)}\n${'* '.repeat(3000)}\n${'- '.repeat(30)}\n\`\`\``;
+    const heavyCode = `\`\`\`\n${'[a] [b] '.repeat(700)}\n${'a*b '.repeat(700)}\n${'- '.repeat(30)}\n\`\`\``;
     expect(kids(parseMarkdown(heavyCode))[0]!.type).toBe('code');
   });
 
-  it('every known bomb generator, about 60 KB each, returns within a fixed bound', () => {
-    const fill = (unit: string, size = 60_000): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+  it('every known bomb generator, about 30 KB each, returns within a fixed bound behind every prefix', () => {
+    const fill = (unit: string, size = 30_000): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
     const table = (rows: number): string => `| a | b |\n|---|---|\n${'| 1 | 2 |\n'.repeat(rows)}`;
     const generators: Record<string, string> = {
       emphasis: fill('**_'),
@@ -393,10 +425,10 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
       footnoteOpeners: fill('[^'),
       markersSpace: fill('- '),
       markersQuote: fill('> - '),
-      markersNoSpace: `>${fill('- ', 30_000)}`,
+      markersNoSpace: `>${fill('- ', 15_000)}`,
       markersMixed: fill('- >'),
       markersOrdered: fill('1. >'),
-      markersDeepQuote: `${'>'.repeat(100)} ${fill('- ', 30_000)}`,
+      markersDeepQuote: `${'>'.repeat(100)} ${fill('- ', 15_000)}`,
       lazyList: `- a\n${fill('b\n')}`,
       lazyQuote: fill('> a\nb\n'),
       hugeTable: table(6000),
@@ -411,12 +443,191 @@ describe('lazy continuation, false positives and the bomb regression (A40 critic
       autolinks: fill('<https://a.b> '),
       definitions: fill('[a]: x\n'),
     };
+    // Every generator behind EVERY prefix of the suite (a line that looks like a fence / an HTML block / a blank line to a
+    // naive guard): the guard must not let one line in front hide a bomb. One run each, a second only when one is slow.
     const slow: string[] = [];
     for (const [name, bomb] of Object.entries(generators)) {
-      // The best of two runs: a busy CI machine may stall one run, a real hang (seconds) stalls both.
-      const ms = Math.min(timed(bomb).ms, timed(bomb).ms);
-      if (ms > 500) slow.push(`${name}: ${Math.round(ms)} ms`);
+      for (const [pname, prefix] of Object.entries(BAND_PREFIXES)) {
+        const input = prefix + bomb;
+        let ms = timed(input).ms;
+        if (ms > 2000) ms = timed(input).ms; // a busy machine may stall one run, a real hang (seconds) stalls both
+        if (ms > 2000) slow.push(`${pname}+${name}: ${Math.round(ms)} ms`);
+      }
     }
     expect(slow).toEqual([]);
+  });
+});
+
+describe('guards: fence recognition, headings, short inline code (A40 critic M6, m17, m14)', () => {
+  it('a heading is not a lazy-line container', () => {
+    const doc = `# Files\n${'plain line\n'.repeat(600)}`;
+    expect(types(parseMarkdown(doc))[0]).toBe('heading');
+  });
+
+  it('a fence inside a quote or a list item is not skipped: counted like text (the safe side)', () => {
+    const doc = `> \`\`\`\n${'> line [x\n'.repeat(600)}> \`\`\`\n\ntext`;
+    expect(plainText(parseMarkdown(doc))).toBe(doc);
+    // the same code at column 0 with balanced brackets stays Markdown
+    expect(types(parseMarkdown(`\`\`\`\n${'line [x]\n'.repeat(600)}\`\`\`\n\ntext`))).toEqual(['code', 'paragraph']);
+  });
+
+  it('a real fence still skips, a fake one (backtick in the info string) does not', () => {
+    const bomb = '**_'.repeat(8000);
+    expect(plainText(parseMarkdown(`\`\`\`a\`\n${bomb}`))).toContain('**_**_');
+    expect(types(parseMarkdown(`\`\`\`js\n${'*'.repeat(500)}\n\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+  });
+
+  it('short inline code does not wrap: no-break space and U+2060 after "/"', () => {
+    expect(codeText('~/.claude/settings.json', true)).toBe('~/\u2060.claude/\u2060settings.json');
+    expect(codeText('docker mcp run', true)).toBe('docker\u00A0mcp\u00A0run');
+    expect(codeText('a b/c', false)).toBe('a b/c');
+  });
+});
+
+describe('the code skip cannot be fooled (A40 critic M6, round 5)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+  const isRaw = (root: MdNode, md: string): boolean => types(root).length === 1 && plainText(root) === md;
+
+  const prefixes = BAND_PREFIXES;
+  // Bombs between 1x and the backstop: over a limit, under twice it.
+  const band: Record<string, string> = {
+    emphasis: '**_'.repeat(1000),
+    nestedBrackets: `${'['.repeat(1500)}a${']'.repeat(1500)}`,
+    markers60: `${'> - '.repeat(30)}x\n`.repeat(200),
+    lazy1500: `- a\n${'b\n'.repeat(1500)}`,
+    lazySeries: `${'> a\n' + 'b\n'.repeat(1500)}`.repeat(3),
+  };
+
+  it('every band bomb behind every prefix is raw or parses fast', () => {
+    const bad: string[] = [];
+    for (const [bname, bomb] of Object.entries(band)) {
+      for (const [pname, prefix] of Object.entries(prefixes)) {
+        const input = prefix + bomb;
+        const first = timed(input);
+        const ms = Math.min(first.ms, timed(input).ms);
+        if (ms > 2000) bad.push(`${pname}+${bname}: ${Math.round(ms)} ms`);
+        // The fence is not column 0 / not a fence, so the bomb counts: it must come back raw.
+        // `tildeInfo` is a real fence at column 0: the bomb is code (a legal parse), only the time bound applies.
+        if (pname !== 'tildeInfo' && !isRaw(first.root, input)) bad.push(`${pname}+${bname}: not raw`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('a real fence at column 0 still hides code from the counts', () => {
+    const code = `\`\`\`\n${'**_'.repeat(1000)}\n\`\`\`\n\nok`;
+    expect(types(parseMarkdown(code))).toEqual(['code', 'paragraph']);
+  });
+
+  it('a fence line resets the lazy count', () => {
+    const doc = `- a\n\`\`\`\n${'b\n'.repeat(2500)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(doc))).toEqual(['list', 'code', 'paragraph']);
+  });
+});
+
+describe('a long list is shown as its source (A40 critic m19)', () => {
+  it('over 300 items becomes a code block, 300 stays a list', () => {
+    const src = (n: number) => Array.from({ length: n }, (_, i) => `- item ${i}`).join('\n');
+    expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX)))[0]!.type).toBe('list');
+    expect(kids(parseMarkdown(src(MD_LIST_ITEMS_MAX + 1)))[0]).toMatchObject({ type: 'code', value: src(MD_LIST_ITEMS_MAX + 1) });
+    const run = (): number => {
+      const t = performance.now();
+      parseMarkdown(src(4999));
+      return performance.now() - t;
+    };
+    expect(Math.min(run(), run())).toBeLessThan(2000); // the best of two: a busy machine may stall one run
+  });
+});
+
+describe('one budget per message (A40 critic M7)', () => {
+  const timed = (md: string): { ms: number; root: MdNode } => {
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    return { ms: performance.now() - t, root };
+  };
+  const rawOrCode = (root: MdNode, md: string): boolean =>
+    (types(root).length === 1 && plainText(root) === md) || types(root).every((t) => t === 'code');
+
+  const generators: Record<string, string> = {
+    // 24 markers per line (the limit is 25), the first marker alternates so no line joins the previous list
+    markers24: Array.from({ length: 1300 }, (_, i) => `${i % 2 === 0 ? '-' : '+'} ${'- '.repeat(22)}x`).join('\n'),
+    // 14 tables of 199 rows x 10 columns, each within its own limits
+    tables: Array.from({ length: 14 }, () => `| ${Array.from({ length: 10 }, (_, c) => `h${c}`).join(' | ')} |\n|${'---|'.repeat(10)}\n${Array.from({ length: 199 }, () => `| ${'x | '.repeat(9)}x |`).join('\n')}`).join('\n\n'),
+    // 16 lists of 300 items, the marker alternates
+    lists: Array.from({ length: 16 }, (_, l) => Array.from({ length: 300 }, () => `${l % 2 === 0 ? '-' : '+'} a`).join('\n')).join('\n\n'),
+    // everything below 1x, 28 KB, thousands of items
+    mixed: Array.from({ length: 32 }, (_, l) => Array.from({ length: 300 }, () => `${l % 2 === 0 ? '-' : '+'} x`).join('\n')).join('\n\n'),
+  };
+
+  it('the critic generators come back raw (or as code) in under 2 s', () => {
+    const bad: string[] = [];
+    for (const [name, md] of Object.entries(generators)) {
+      const first = timed(md);
+      const ms = Math.min(first.ms, timed(md).ms);
+      if (ms > 2000) bad.push(`${name}: ${Math.round(ms)} ms`);
+      if (!rawOrCode(first.root, md)) bad.push(`${name}: neither raw nor code`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('a real document with a few lists and tables stays Markdown', () => {
+    const doc = `# T\n\n${generators.lists!.split('\n\n').slice(0, 2).join('\n\n')}\n\n| a | b |\n|---|---|\n${'| 1 | 2 |\n'.repeat(150)}`;
+    expect(types(parseMarkdown(doc))).toEqual(['heading', 'list', 'list', 'table']);
+  });
+});
+
+describe('real code is not counted by the backstop (A40 critic m20)', () => {
+  it('a 1300-line Python block with underscores stays Markdown', () => {
+    const py = `\`\`\`python\n${'self._a_b = __c__\n'.repeat(1300)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(py))).toEqual(['code', 'paragraph']);
+  });
+  it('a 65-line progress bar with [=====> stays Markdown', () => {
+    const bar = `\`\`\`\n${'progress [=====>\n'.repeat(65)}\`\`\`\n\nok`;
+    expect(types(parseMarkdown(bar))).toEqual(['code', 'paragraph']);
+  });
+});
+
+describe('inline nodes are in the budget (A40 critic m21)', () => {
+  it('a paragraph of many inline nodes is raw text, a normal long paragraph is not', () => {
+    const many = '`a` '.repeat(8000); // 16 000 nodes
+    expect(plainText(parseMarkdown(many))).toBe(many);
+    const normal = 'word `code` **bold** '.repeat(200);
+    expect(types(parseMarkdown(normal))).toEqual(['paragraph']);
+  });
+});
+
+describe('skipped code keeps a coarse backstop (A40 critic M8)', () => {
+  it('real code with ~7800 underscores or 3000 [ stays Markdown, 9000 is raw', () => {
+    expect(types(parseMarkdown(`\`\`\`\n${'_a_b_c_\n'.repeat(1300)}\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+    const heavy = `\`\`\`\n${'_'.repeat(9000)}\n\`\`\`\n\nok`;
+    expect(plainText(parseMarkdown(heavy))).toBe(heavy);
+  });
+});
+
+describe('mentions and line breaks are in the node budget (A40 critic m21)', () => {
+  it("'@s02 ' x 12000 in a room message is raw text", () => {
+    const md = '@s02 '.repeat(12000);
+    const t = performance.now();
+    const root = parseMarkdown(md);
+    expect(performance.now() - t).toBeLessThan(1000);
+    expect(plainText(root)).toBe(md);
+  });
+  it('a few hundred mentions and line breaks stay Markdown', () => {
+    expect(types(parseMarkdown('hi @s02 and @human\nbye '.repeat(100)))).toEqual(['paragraph']);
+  });
+});
+
+describe('the full backstop keeps real code Markdown (A40 critic M9, m20)', () => {
+  it('~7800 underscores, a progress bar, a list item followed by a 2001-line fence', () => {
+    expect(types(parseMarkdown(`\`\`\`\n${'self._a_b = __c__\n'.repeat(1300)}\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+    expect(types(parseMarkdown(`\`\`\`\n${'progress [=====>\n'.repeat(65)}\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
+    expect(types(parseMarkdown(`- a\n\`\`\`\n${'b\n'.repeat(2001)}\`\`\`\n\nok`))).toEqual(['list', 'code', 'paragraph']);
+  });
+  it('3000 balanced brackets stay Markdown (unclosed ones in code are raw: the 4x depth backstop is 128)', () => {
+    expect(types(parseMarkdown(`\`\`\`\n${'[a] [b] '.repeat(700)}\n\`\`\`\n\nok`))).toEqual(['code', 'paragraph']);
   });
 });

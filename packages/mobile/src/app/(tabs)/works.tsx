@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { selectWorks, workKeyOf, type WorkView } from '@parley/remote-client';
+import { attentionOfSession, selectWorks, workKeyOf, type WorkView } from '@parley/remote-client';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { useRemoteState } from '../../hooks/use-remote';
 import { workParam } from '../../nav/refs';
@@ -23,13 +23,14 @@ export default function WorksScreen() {
   const groups = useMemo(() => (state === null ? [] : selectWorks(state)), [state]);
   const open = (v: WorkView): void => router.push(`/work/${workParam({ projectPath: v.work.projectPath, workId: v.work.id })}` as never);
 
+  const summaryOf = (v: WorkView): string => worksSummary(v, (s) => (state === null ? 'idle' : attentionOfSession(state, { projectPath: v.work.projectPath, workId: v.work.id, sessionId: s.id }, s)));
   const row = (v: WorkView, last: boolean) => {
     const unread = state?.letterUnread[workKeyOf(v.work.projectPath, v.work.id)] ?? 0;
     return (
       <Pressable
         key={v.key}
         accessibilityRole="button"
-        accessibilityLabel={`${v.work.title}. ${worksSummary(v)}${v.needsYou > 0 ? `. ${v.needsYou} waiting for you` : ''}`}
+        accessibilityLabel={`${v.work.title}. ${summaryOf(v)}${v.needsYou > 0 ? `. ${v.needsYou} waiting for you` : ''}`}
         onPress={() => open(v)}
         style={[styles.work, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.separator }]}
       >
@@ -39,7 +40,7 @@ export default function WorksScreen() {
             {v.work.title}
           </Text>
           <Text numberOfLines={2} allowFontScaling style={[typography.subheadline, { color: c.label2 }]}>
-            {worksSummary(v)}
+            {summaryOf(v)}
           </Text>
         </View>
         {unread > 0 && (

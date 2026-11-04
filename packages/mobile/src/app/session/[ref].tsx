@@ -2,28 +2,41 @@
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { attentionOfSession, selectWorks, sessionKey, type SessionRef } from '@parley/remote-client';
+import type { FeedItem } from '@parley/core';
+import { attentionOfSession, selectWork, sessionKey, type SessionRef } from '@parley/remote-client';
 import { ConsentCardView } from '../../cards/ConsentViews';
 import { cardBelongsToSession } from '../../cards/consent-model';
-import { ActiveCard } from '../../cards/CardViews';
+import { PendingCardActions, PendingCardBody } from '../../cards/CardViews';
 import { goneEntries, useGoneDismiss } from '../../cards/gone';
 import { timeAgo } from '../../cards/model';
-import { capsuleOf, needReason, type Capsule } from '../../cards/status';
+import { pruneQuestionDrafts } from '../../cards/question-drafts';
+import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
+import { devLateCard, devMoreSession } from '../../dev/demo';
+import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
+import { demoQuestionDraft } from '../../dev/demo';
 import { touchAppLock } from '../../auth/lock-instance';
 import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
-import { FoldRowView, OutBubble } from '../../feed/FeedViews';
+import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
+import { splitQuote, replyQuote } from '../../feed/reply';
+import { useFollowEnd } from '../../feed/use-follow-end';
+import { useTailWindow } from '../../feed/use-tail-window';
+import { WINDOW_ROWS } from '../../feed/window';
+import { SelectTextSheet } from '../../feed/SelectTextSheet';
+import type { Selection } from '../../feed/selection';
+import { FoldRowView, OutBubble, type MessageApi } from '../../feed/FeedViews';
 import { foldFeed, type FoldRow } from '../../feed/fold';
-import { visibleOut, type OutMessage } from '../../feed/outbox';
+import { promptCount, visibleOut, type OutMessage } from '../../feed/outbox';
 import { SleepingRow } from '../../feed/ResumeViews';
 import { commandToast, confirmOf, menuItems, type MenuId } from '../../feed/session-menu';
 import { SwitchSheet } from '../../feed/SwitchSheet';
@@ -38,18 +51,21 @@ import { runtime } from '../../runtime/instance';
 import { spacing, typography, useColors } from '../../theme';
 import { barBack, BarStrip, BarStripStack, BarSymbol, barRight, useBarMaterial } from '../../ui/bar';
 import { Button } from '../../ui/Button';
-import { EmptyState, Skeleton } from '../../ui/parts';
+import { ReplyPlate } from '../../ui/ReplyPlate';
+import { EmptyState, Skeleton, toneColor } from '../../ui/parts';
+import { ClosedLinks } from '../../works/ClosedLinks';
+import { useExpansion } from '../../works/closed-store';
 import { attentionOf, TreeRows, type TreeEnv } from '../../works/TeamTree';
 import { originOf } from '../../works/origin';
-import { subtreeOf, teamLine } from '../../works/teams';
+import { countRows, sheetClosedCount, subtreeOf, teamLine } from '../../works/teams';
 
 type Row = { t: 'fold'; row: FoldRow } | { t: 'out'; message: OutMessage };
 const rowKey = (r: Row): string => (r.t === 'fold' ? `f:${r.row.key}` : `o:${r.message.id}`);
-const NEAR_BOTTOM = 80;
 
 function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule | null; meta: string }) {
   const c = useColors();
-  const tone = capsule === null ? c.idle : capsule.tone === 'needsYou' ? c.needsYou : capsule.tone === 'working' ? c.working : capsule.tone === 'danger' ? c.danger : capsule.tone === 'success' ? c.success : capsule.tone === 'idle' ? c.idle : c.off;
+  const tone = capsule === null ? c.idle : toneColor(c, capsule.tone);
+  const ring = capsule?.ring === true;
   // State first and never squeezed, then `role · model · time` (D1 §9.1).
   const word = capsule === null ? '' : capsule.label;
   const status = [word, meta].filter((x) => x !== '').join(' · ');
@@ -60,7 +76,7 @@ function HeaderTitle({ name, capsule, meta }: { name: string; capsule: Capsule |
       </Text>
       {status !== '' && (
         <View style={styles.statusLine}>
-          <View style={[styles.dot, { backgroundColor: tone }]} />
+          <View style={[styles.dot, ring ? { borderWidth: 2, borderColor: tone } : { backgroundColor: tone }]} />
           <Text numberOfLines={1} allowFontScaling style={[typography.caption1, { color: c.barSubtitle }]}>
             {status}
           </Text>
@@ -74,8 +90,9 @@ export default function SessionScreen() {
   const c = useColors();
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
-  const { ref: param, fresh, preview } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string }>();
+  const { ref: param, fresh, preview, dev: devSpec } = useLocalSearchParams<{ ref: string; fresh?: string; preview?: string; dev?: string }>();
   const ref = parseSessionParam(param);
   const client = useClient();
   const state = useRemoteState();
@@ -86,13 +103,13 @@ export default function SessionScreen() {
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
   const list = useRef<FlatList<Row>>(null);
-  const atBottom = useRef(true);
-  const [away, setAway] = useState(0);
   const [teamOpen, setTeamOpen] = useState(false);
   useCloseOnLock(teamOpen, () => setTeamOpen(false));
   const [switchOpen, setSwitchOpen] = useState(false);
   useCloseOnLock(switchOpen, () => setSwitchOpen(false));
-  const seen = useRef(0);
+  // Select Text (D1 §9.2): the message source in a read-only field; `initial` is a developer-preview selection.
+  const [selectFor, setSelectFor] = useState<{ text: string; initial?: Selection } | null>(null);
+  useCloseOnLock(selectFor !== null, () => setSelectFor(null));
 
   const load = (r: SessionRef): void => {
     setLoadFailed(false);
@@ -118,6 +135,12 @@ export default function SessionScreen() {
   useGoneDismiss(client, goneHere);
 
   const cardCount = state !== null && ref !== null ? (state.cards[sessionKey(ref)]?.cards.length ?? 0) : 0;
+  // A45: a question card that settled elsewhere (answered at the Mac, stale, gone) takes its draft with it, as in the window.
+  const pendingCards = state !== null && ref !== null ? state.cards[sessionKey(ref)] : undefined;
+  useEffect(() => {
+    if (ref === null || pendingCards === undefined || pendingCards.error) return;
+    pruneQuestionDrafts(sessionKey(ref), pendingCards.cards.map((card) => card.cardId));
+  }, [pendingCards]);
   const seenCount = useRef<number | null>(null);
   useEffect(() => {
     if (loading) return;
@@ -132,14 +155,9 @@ export default function SessionScreen() {
     return work !== undefined && session !== undefined ? { work, session } : null;
   }, [state, ref?.projectPath, ref?.workId, ref?.sessionId]);
 
-  const view = useMemo(() => {
-    if (state === null || ref === null) return null;
-    for (const g of selectWorks(state, { showClosed: true })) {
-      const v = g.works.find((w) => w.work.projectPath === ref.projectPath && w.work.id === ref.workId);
-      if (v !== undefined) return v;
-    }
-    return null;
-  }, [state, ref?.projectPath, ref?.workId]);
+  // The same set and the same per-work toggle as the Work screen (A43).
+  const { key: expandKey, expansion } = useExpansion(ref);
+  const view = useMemo(() => (state === null || ref === null ? null : selectWork(state, ref, { showClosed: expansion.closed })), [state, ref?.projectPath, ref?.workId, expansion.closed]);
 
   const feed = state !== null && ref !== null ? state.feeds[sessionKey(ref)] : undefined;
   const items = feed?.items;
@@ -165,20 +183,61 @@ export default function SessionScreen() {
       lastEventAt: state.activity[sessionKey(ref)]?.activity.lastEventAt ?? null,
     };
   }, [found, state, consents.rows, ref?.projectPath, ref?.workId, ref?.sessionId]);
-  const resume = useResume(client, ref, resumeFacts, { send: chat.sendText, textBack: chat.setDraft, notify: toast.show });
+  const resume = useResume(client, ref, resumeFacts, { send: chat.sendText, textBack: chat.giveBack, notify: toast.show });
   const hasResume = DEMO || (state?.methods?.includes('sessions.resume') ?? false);
   // ⬆ on a sleeping session asks first; the text stays in the field until the person agrees.
-  const askResumeAndSend = (text: string): void =>
+  const askResumeAndSend = (text: string, fromField = true): void =>
     Alert.alert(`${found?.session.label ?? 'This session'} is sleeping`, undefined, [
-      { text: 'Resume and send', onPress: () => { if (resume.start(text)) chat.setDraft(''); } },
+      { text: 'Resume and send', onPress: () => { if (resume.start(text) && fromField) chat.setDraft(''); } },
       { text: 'Cancel', style: 'cancel' },
     ]);
   const pendingRow = resume.view.pending;
   const pendingMessage: OutMessage | null = pendingRow === null ? null : { id: 'resume-pending', text: pendingRow.text, at: 0, state: { kind: pendingRow.held ? 'held' : 'waking' } };
-  const rows = useMemo<Row[]>(
+  const allRows = useMemo<Row[]>(
     () => [...folded.map((row): Row => ({ t: 'fold', row })), ...out.map((message): Row => ({ t: 'out', message })), ...(pendingMessage === null ? [] : [{ t: 'out', message: pendingMessage } as Row])],
     [folded, out, pendingRow?.text, pendingRow?.held],
   );
+  // The list gets the tail window of the folded rows (A44b): all drawn and measured in one pass; older rows come from the top.
+  const allKeys = useMemo(() => allRows.map(rowKey), [allRows]);
+  const spanAt = useCallback((i: number) => { const r = allRows[i]!; return r.t === 'fold' && r.row.kind === 'group' && r.row.open ? r.row.items.length : 0; }, [allRows]);
+  const { start, widen, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
+  const rows = useMemo(() => allRows.slice(start), [allRows, start]);
+  const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
+  const follow = useFollowEnd(list, rowKeys);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
+  // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
+  const shownEmpty = useRef(false);
+  if (rows.length === 0 && feed?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && rows.length > 0 && !shownEmpty.current;
+  // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
+  useEffect(() => {
+    if (!DEMO || found === null || devSpec === undefined || client === null || ref === null) return;
+    return runDevScript(devSpec, {
+      focus: devFocus.fire,
+      draft: () => chat.setDraft(LONG_DRAFT),
+      up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
+      more: () => devMoreSession(client, ref),
+      card: () => devLateCard(client, ref),
+    });
+  }, [found !== null]);
+  // Developer preview of the message pieces (A42): set during render once the session is found.
+  // The message actions, read through a ref so the feed rows keep a stable prop and `memo` works (critic A42 m8).
+  const msgRef = useRef<MessageApi | null>(null);
+  const msgApi = useMemo<MessageApi>(() => ({ actions: (i) => msgRef.current?.actions(i) ?? [], run: (i, id) => msgRef.current?.run(i, id), sheet: (i) => msgRef.current?.sheet(i), copyCode: (code) => msgRef.current?.copyCode(code) }), []);
+  const previewMsg = useRef<{ reply(): void; prompt(): void; select(): void; plate(): void } | null>(null);
+  useEffect(() => {
+    if (!DEMO || found === null || preview === undefined) return;
+    const t = setTimeout(() => {
+      if (preview === 'actions-reply') previewMsg.current?.reply();
+      else if (preview === 'actions-prompt') previewMsg.current?.prompt();
+      else if (preview === 'select') previewMsg.current?.select();
+      else if (preview === 'plate') previewMsg.current?.plate();
+    }, 900);
+    return () => clearTimeout(t);
+  }, [preview, found !== null]);
   // Developer preview of the ⋯ menu pieces: the functions exist only once the session is found (set during render).
   const previewActs = useRef<{ menu(): void; close(): void; switchSheet(): void } | null>(null);
   useEffect(() => {
@@ -203,7 +262,11 @@ export default function SessionScreen() {
   }, [preview]);
 
 
-  const toggleGroup = useCallback((key: string) => setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key]))), []);
+  // Expanding a group leaves the end (its start stays in view); collapsing keeps following (A44 m3, N4).
+  const toggleGroup = useCallback((key: string) => {
+    if (!openGroups.has(key)) follow.leave();
+    setOpenGroups((s) => (s.has(key) ? new Set([...s].filter((k) => k !== key)) : new Set([...s, key])));
+  }, [follow.leave, openGroups]);
   // The status line of a turn opens or closes every work group of that turn.
   const toggleTurn = useCallback(
     (controlKey: string) => {
@@ -214,31 +277,11 @@ export default function SessionScreen() {
         if (r.kind === 'item' && r.item.kind === 'prompt') break;
         if (r.kind === 'group') keys.push(r.key);
       }
+      if (!keys.every((k) => openGroups.has(k))) follow.leave();
       setOpenGroups((s) => (keys.every((k) => s.has(k)) ? new Set([...s].filter((k) => !keys.includes(k))) : new Set([...s, ...keys])));
     },
-    [folded],
+    [folded, follow.leave, openGroups],
   );
-
-  // New items: follow the end while the person is at the bottom; otherwise count them for "Jump to latest".
-  const onContentSizeChange = (): void => {
-    if (atBottom.current) {
-      const animated = seen.current !== 0;
-      // Row heights are estimated until drawn: scroll once now and once after layout settles.
-      list.current?.scrollToEnd({ animated });
-      setTimeout(() => atBottom.current && list.current?.scrollToEnd({ animated: false }), 120);
-    }
-    else setAway(Math.max(0, rows.length - seen.current));
-    if (atBottom.current) seen.current = rows.length;
-  };
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const bottom = contentSize.height - layoutMeasurement.height - contentOffset.y < NEAR_BOTTOM;
-    atBottom.current = bottom;
-    if (bottom && away !== 0) {
-      seen.current = rows.length;
-      setAway(0);
-    }
-  };
 
   const shell = (title: string, body: React.ReactNode) => (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
@@ -273,7 +316,7 @@ export default function SessionScreen() {
   const live = state.activity[sessionKey(ref)];
   const attention = attentionOfSession(state, ref, session);
   const need = live?.activity.need ?? session.stuck;
-  const capsule = capsuleOf({ session, attention, need, subagents: live?.activity.subagents ?? 0, waitingFor: live?.activity.waitingFor ?? null, turnEndedAt: live?.activity.turnEndedAt ?? null, now });
+  const capsule = capsuleOfSession(state, ref, session, now);
   const entry = state.cards[sessionKey(ref)];
   const cards = entry?.cards ?? [];
   const first = cards[0];
@@ -284,6 +327,7 @@ export default function SessionScreen() {
   const env: TreeEnv = {
     state,
     view,
+    now,
     actions: {
       openSession: (id) => router.push(`/session/${sessionParam({ ...ref, sessionId: id })}` as never),
       openDecision: (roomId, proposalId) => router.push({ pathname: '/decision', params: { ref: workParam(ref), room: roomId, proposal: proposalId } } as never),
@@ -291,7 +335,14 @@ export default function SessionScreen() {
     },
   };
   const team = subtreeOf(view.rows, session.id);
-  const counts = { agents: 1 + team.filter((x) => x.row.kind === 'session').length + team.reduce((n, x) => n + (x.row.kind === 'room' ? x.row.members.length : x.row.kind === 'swarm' ? x.row.members.length : 0), 0), rooms: team.filter((x) => x.row.kind === 'room').length, swarms: team.filter((x) => x.row.kind === 'swarm').length };
+  const counts = countRows(team.map((x) => x.row), session.id);
+  // "N more closed" in the sheet: closed sessions under this session that expanding would add (the full tree minus what is shown).
+  const closedUnder = sheetClosedCount(
+    selectWork(state, ref, { showClosed: false })?.rows ?? [],
+    selectWork(state, ref, { showClosed: true })?.rows ?? [],
+    session.id,
+  );
+
   const sleeping = session.lifecycle === 'sleeping';
   const blockedNoCard = first === undefined && attention === 'needs-you' && need?.kind !== 'limit' && need?.kind !== 'sign-in' && !loading;
   const mode = composerMode({
@@ -311,7 +362,7 @@ export default function SessionScreen() {
   const header = (
     <View style={styles.passport}>
       <ConnectionBanner />
-      {origin.length > 0 && (
+      {origin.length > 0 && start === 0 && (
         <View style={styles.origin}>
           <SymbolView name="arrow.turn.left.up" size={14} tintColor={c.label2} />
           <Text allowFontScaling numberOfLines={2} style={[typography.footnote, styles.flex, { color: c.label2 }]}>
@@ -361,6 +412,64 @@ export default function SessionScreen() {
     );
   };
   previewActs.current = { menu, close: () => confirmThen('close'), switchSheet: () => setSwitchOpen(true) };
+  // The message actions (D1 §9.2): one `run` for the long-press sheet and for VoiceOver's custom actions.
+  const kindOf = (item: FeedItem): 'agent' | 'prompt' => (item.kind === 'prompt' ? 'prompt' : 'agent');
+  const actionsOf = (item: FeedItem) => {
+    if (item.kind !== 'text' && item.kind !== 'prompt') return [];
+    const canSend = hidden.kind === 'input' && hidden.sendEnabled && !chat.busy && resume.view.pending === null && messageProblem(item.text.trim()) === null;
+    return messageActions({ kind: kindOf(item), hasPtySend: DEMO || (state.methods?.includes('pty.send') ?? false), closed: session.lifecycle === 'closed', canSend });
+  };
+  const runAction = (item: FeedItem, id: ActionId): void => {
+    if (item.kind !== 'text' && item.kind !== 'prompt') return;
+    const kind = kindOf(item);
+    // The list for VoiceOver may be older than the field's state: check the action against the facts of now (critic m17).
+    const now = actionsOf(item).find((a) => a.id === id);
+    if (now === undefined) return;
+    if (now.disabled === true) {
+      toast.show(sendAgainReason({ mode: hidden, busy: chat.busy || resume.view.pending !== null, text: item.text.trim() }) ?? 'Not available right now');
+      return;
+    }
+    if (id === 'copy') {
+      void Clipboard.setStringAsync(copyText(kind, item.text));
+      toast.show('Copied');
+    } else if (id === 'reply') {
+      // An own prompt that carries a quote is quoted without it (no quote inside a quote).
+      const own = splitQuote(item.text.trim()).text;
+      chat.setQuote(replyQuote(kind === 'prompt' && own !== '' ? own : item.text, ''));
+    } else if (id === 'again') {
+      const text = item.text.trim();
+      if (sleeping) askResumeAndSend(text, false);
+      else void chat.again(text, promptCount(items ?? [], text));
+    } else if (id === 'select') setSelectFor({ text: kind === 'prompt' ? item.text.trim() : item.text });
+  };
+  msgRef.current = {
+    actions: actionsOf,
+    run: runAction,
+    copyCode: (code) => {
+      void Clipboard.setStringAsync(code);
+      toast.show('Copied');
+    },
+    sheet: (item) => {
+      const actions = actionsOf(item);
+      if (actions.length === 0) return;
+      haptic.selection();
+      const off = actions.flatMap((a, i) => (a.disabled === true ? [i] : []));
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options: [...actions.map((a) => a.title), 'Cancel'], cancelButtonIndex: actions.length, ...(off.length > 0 ? { disabledButtonIndices: off } : {}) },
+        (i) => {
+          const a = actions[i];
+          if (a !== undefined) runAction(item, a.id);
+        },
+      );
+    },
+  };
+  // Developer preview of the message pieces (screenshots, A42): `?preview=actions-reply|actions-prompt|select|plate`.
+  previewMsg.current = {
+    reply: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i !== undefined) msgApi.sheet(i); },
+    prompt: () => { const i = [...(items ?? [])].reverse().find((x) => x.kind === 'prompt'); if (i !== undefined) msgApi.sheet(i); },
+    select: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i?.kind === 'text') setSelectFor({ text: i.text, initial: { start: 0, end: i.text.indexOf(' found') } }); },
+    plate: () => { const i = (items ?? []).find((x) => x.kind === 'text'); if (i !== undefined) msgApi.run(i, 'reply'); },
+  };
   // "Needs you" without a card on screen is one pinned line under the bar (D1 §9.1); with a card the card says it.
   const strip =
     attention === 'needs-you' && first === undefined && !loading
@@ -371,28 +480,45 @@ export default function SessionScreen() {
           : { icon: 'desktopcomputer' as const, text: 'Answer at your Mac — in its terminal' }
       : null;
 
-  const content = (parts: { body: React.ReactNode; actions: React.ReactNode } | null) => (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={styles.flex}>
+  const content = () => (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
       {strip !== null && (
-        <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
-          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={() => list.current?.scrollToEnd({ animated: true })} />
+        <BarStripStack onChange={follow.keepEnd}>
+          <BarStrip icon={strip.icon} iconColor={c.needsYou} text={strip.text} onPress={follow.jump} />
         </BarStripStack>
       )}
+      <View style={styles.flex}>
+        {hiddenFeed && (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+            <Skeleton rows={3} />
+          </View>
+        )}
       <FlatList
         ref={list}
+        style={{ opacity: hiddenFeed ? 0 : 1 }}
+        accessibilityElementsHidden={hiddenFeed}
         data={rows}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        initialNumToRender={WINDOW_ROWS}
+        maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+        // Not while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+        onStartReached={follow.revealed && start > 0 ? widen : undefined}
+        onStartReachedThreshold={1}
         keyExtractor={rowKey}
-        onContentSizeChange={onContentSizeChange}
-        onScroll={onScroll}
+        {...follow.handlers}
+        onScroll={(e) => {
+          follow.handlers.onScroll(e);
+          trackStart(e);
+        }}
         scrollEventThrottle={64}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={styles.list}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[styles.list, { paddingTop: strip !== null ? 8 : headerHeight + 8 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={false} onRefresh={() => { runtime.retry(); load(ref); client?.live.reloadFeed(ref); }} />}
         ListHeaderComponent={header}
-        renderItem={({ item: r }) => (r.t === 'fold' ? <FoldRowView row={r.row} onToggleGroup={toggleGroup} onToggleTurn={toggleTurn} /> : <OutBubble message={r.message} onRetry={(m) => void chat.retry(m)} onEdit={chat.edit} />)}
+        renderItem={({ item: r }) => (r.t === 'fold' ? <FoldRowView row={r.row} onToggleGroup={toggleGroup} onToggleTurn={toggleTurn} msg={msgApi} /> : <OutBubble message={r.message} onRetry={(m) => void chat.retry(m)} onEdit={chat.edit} />)}
         ListEmptyComponent={
           feed === undefined || feed.status === 'loading' ? (
             <Skeleton rows={3} />
@@ -423,7 +549,7 @@ export default function SessionScreen() {
             )}
             {first !== undefined && (
               <>
-                {parts?.body}
+                <PendingCardBody card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} {...(DEMO && demoQuestionDraft(preview) !== null ? { initialDraft: demoQuestionDraft(preview)! } : {})} />
                 {rest.length > 0 && (
                   <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
                     {rest.length} more request{rest.length === 1 ? '' : 's'} waiting — answer this one first
@@ -439,36 +565,41 @@ export default function SessionScreen() {
           </View>
         }
       />
-      {away > 0 && (
+      </View>
+      {follow.away > 0 && (
+        <View pointerEvents="box-none" style={styles.jumpAnchor}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Jump to latest, ${away} new`}
-          onPress={() => {
-            list.current?.scrollToEnd({ animated: true });
-            atBottom.current = true;
-            seen.current = rows.length;
-            setAway(0);
-          }}
+          accessibilityLabel={`Jump to latest, ${follow.away} new`}
+          onPress={follow.jump}
           style={[styles.jump, { backgroundColor: c.surface, borderColor: c.separator }]}
         >
           <SymbolView name="arrow.down" size={14} tintColor={c.tint} />
-          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {away}</Text>
+          <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {follow.away}</Text>
         </Pressable>
+        </View>
       )}
       <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
         <SwitchCards sessionRef={ref} />
         {sleeping && hasResume && first === undefined && !resume.view.hidden && <SleepingRow line={resume.view.line} enabled={canAct} onResume={() => resume.start(null)} />}
-        {first !== undefined && parts !== null ? (
-          parts.actions
+        {first !== undefined ? (
+          // The body is in the hidden list: the buttons stay out of sight and out of reach with it (critic m1).
+          <View pointerEvents={hiddenFeed ? 'none' : 'auto'} accessibilityElementsHidden={hiddenFeed} style={{ opacity: hiddenFeed ? 0 : 1 }}>
+            <PendingCardActions card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct} />
+          </View>
         ) : (
+          <>
+            {chat.quote !== null && hidden.kind === 'input' && <ReplyPlate quote={chat.quote} onClear={() => chat.setQuote(null)} />}
           <Composer
             label={session.label}
             mode={hidden}
             draft={chat.draft}
             onChange={chat.setDraft}
-            onSend={() => (sleeping ? messageProblem(chat.draft) === null && askResumeAndSend(chat.draft) : void chat.send())}
+            onSend={() => (sleeping ? messageProblem(chat.draft) === null && messageProblem(chat.composed) === null && askResumeAndSend(chat.composed) : void chat.send())}
             busy={chat.busy || resume.view.pending !== null}
+            measured={chat.composed}
           />
+          </>
         )}
       </View>
       <Toast message={toast.message} />
@@ -502,6 +633,7 @@ export default function SessionScreen() {
             <View style={[styles.box, { backgroundColor: c.surface, paddingHorizontal: 0 }]}>
               <TreeRows rows={team} env={{ ...env, actions: { openSession: (id) => { setTeamOpen(false); env.actions.openSession(id); }, openDecision: (r, p) => { setTeamOpen(false); env.actions.openDecision(r, p); }, openRoom: (r) => { setTeamOpen(false); env.actions.openRoom(r); } } }} />
             </View>
+            <ClosedLinks closedCount={closedUnder} archivedRooms={[]} storeKey={expandKey} expansion={expansion} onOpenRoom={() => undefined} />
           </ScrollView>
         </View>
       </Modal>
@@ -521,13 +653,20 @@ export default function SessionScreen() {
           }}
         />
       </Modal>
-      {first !== undefined ? (
-        <ActiveCard key={first.cardId} card={first} sessionRef={ref} projectPath={work.projectPath} canAct={canAct}>
-          {(parts) => content(parts)}
-        </ActiveCard>
-      ) : (
-        content(null)
-      )}
+      <Modal visible={selectFor !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectFor(null)}>
+        {selectFor !== null && (
+          <SelectTextSheet
+            text={selectFor.text}
+            {...(selectFor.initial === undefined ? {} : { initial: selectFor.initial })}
+            onClose={() => setSelectFor(null)}
+            onReply={(selected) => {
+              chat.setQuote(replyQuote(selectFor.text, selected));
+              setSelectFor(null);
+            }}
+          />
+        )}
+      </Modal>
+      {content()}
     </View>
   );
 }
@@ -550,6 +689,9 @@ function SwitchCards({ sessionRef }: { sessionRef: SessionRef }) {
 
 export { attentionOf };
 
+// The capsule's slot: in flow right above the composer area, overlapping the list by its own height (net layout height 0),
+// so it follows the composer through the keyboard, a taller draft, the reply plate, the Resume row and cards.
+const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
@@ -563,7 +705,8 @@ const styles = StyleSheet.create({
   headerTitle: { alignItems: 'center', maxWidth: 240 },
   statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  jump: { position: 'absolute', alignSelf: 'center', bottom: 90, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  jumpAnchor: { height: JUMP_H, marginTop: -JUMP_H, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 8 },
+  jump: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
   bar: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12 },
   teamRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, minHeight: 28 },

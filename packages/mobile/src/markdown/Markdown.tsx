@@ -20,6 +20,8 @@ export function confirmOpen(url: string): void {
 const INLINE_FILL_MAX = 24;
 
 interface Ctx {
+  /** Long press on a link or "Copy code" opens the message's action sheet instead of the link (A42). */
+  onLongPress?: () => void;
   defs: Defs;
   labelOf?: (sessionId: string) => string;
   /** Screenshots only: a table starts scrolled sideways by this much. */
@@ -59,7 +61,7 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
           case 'inlineCode':
             return (
               <Text key={i} style={[styles.mono, { fontSize: Math.max(11, size - 2) }, (n.value ?? '').length <= INLINE_FILL_MAX && { backgroundColor: c.codeFill }]}>
-                {codeText(n.value ?? '')}
+                {codeText(n.value ?? '', (n.value ?? '').length <= INLINE_FILL_MAX)}
               </Text>
             );
           case 'link':
@@ -69,7 +71,7 @@ function Inlines({ nodes, ctx, size }: { nodes: MdNode[]; ctx: Ctx; size: number
             const label = linkLabelIsEmpty(n) ? addressOf(n, ctx.defs) : kids;
             if (target === null) return <Text key={i}>{label}</Text>;
             return (
-              <Text key={i} accessibilityRole="link" onPress={() => confirmOpen(target)} style={{ color: c.tint, textDecorationLine: 'underline' }}>
+              <Text key={i} accessibilityRole="link" onPress={() => confirmOpen(target)} {...(ctx.onLongPress === undefined ? {} : { onLongPress: ctx.onLongPress })} style={{ color: c.tint, textDecorationLine: 'underline' }}>
                 {label}
               </Text>
             );
@@ -132,7 +134,7 @@ function Heading({ node, ctx }: { node: MdNode; ctx: Ctx }) {
   );
 }
 
-function CodeBlock({ node }: { node: MdNode }) {
+function CodeBlock({ node, onLongPress }: { node: MdNode; onLongPress?: () => void }) {
   const c = useColors();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -150,7 +152,7 @@ function CodeBlock({ node }: { node: MdNode }) {
         <Text allowFontScaling style={[typography.caption1, styles.flex, { color: c.label2 }]}>
           {node.caption ?? ''}
         </Text>
-        <Pressable accessibilityRole="button" accessibilityLabel={copied ? 'Copied' : 'Copy code'} hitSlop={8} onPress={copy} style={styles.copy}>
+        <Pressable accessibilityRole="button" accessibilityLabel={copied ? 'Copied' : 'Copy code'} hitSlop={8} onPress={copy} {...(onLongPress === undefined ? {} : { onLongPress })} style={styles.copy}>
           <SymbolView name={copied ? 'checkmark' : 'doc.on.doc'} size={13} tintColor={c.tint} />
           <Text allowFontScaling style={[typography.caption1, { color: c.tint }]}>
             {copied ? 'Copied' : 'Copy'}
@@ -265,7 +267,7 @@ function BlockView({ node, ctx }: { node: MdNode; ctx: Ctx }) {
     case 'heading':
       return <Heading node={node} ctx={ctx} />;
     case 'code':
-      return <CodeBlock node={node} />;
+      return <CodeBlock node={node} {...(ctx.onLongPress === undefined ? {} : { onLongPress: ctx.onLongPress })} />;
     case 'blockquote':
       return (
         <View style={[styles.quote, { borderLeftColor: c.separator }]}>
@@ -315,7 +317,7 @@ class Boundary extends Component<{ text: string; children: ReactNode }, { failed
   }
 }
 
-const Tree = memo(function Tree({ text, labelOf, tableOffset }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number }) {
+const Tree = memo(function Tree({ text, labelOf, tableOffset, onLongPress }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number; onLongPress?: () => void }) {
   const root = useMemo<MdNode>(() => {
     try {
       return parseMarkdown(text);
@@ -323,7 +325,7 @@ const Tree = memo(function Tree({ text, labelOf, tableOffset }: { text: string; 
       return rawRoot(text);
     }
   }, [text]);
-  const ctx = useMemo<Ctx>(() => ({ defs: definitionsOf(root), ...(labelOf === undefined ? {} : { labelOf }), ...(tableOffset === undefined ? {} : { tableOffset }) }), [root, labelOf, tableOffset]);
+  const ctx = useMemo<Ctx>(() => ({ defs: definitionsOf(root), ...(labelOf === undefined ? {} : { labelOf }), ...(tableOffset === undefined ? {} : { tableOffset }), ...(onLongPress === undefined ? {} : { onLongPress }) }), [root, labelOf, tableOffset, onLongPress]);
   return (
     <View style={styles.gap}>
       {(root.children ?? []).map((b, i) => (
@@ -354,11 +356,11 @@ export const STREAM_PARSE_MS = 250;
  * `labelOf` turns a session id into the name shown in a `@s-02` mention; without it mentions stay as written.
  * `streaming`: the reply is still being written, so it is parsed at most every 250 ms.
  */
-export function Markdown({ text, labelOf, tableOffset, streaming = false }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number; streaming?: boolean }) {
+export function Markdown({ text, labelOf, tableOffset, streaming = false, onLongPress }: { text: string; labelOf?: (sessionId: string) => string; tableOffset?: number; streaming?: boolean; onLongPress?: () => void }) {
   const shown = useThrottled(text, streaming, STREAM_PARSE_MS);
   return (
     <Boundary text={shown}>
-      <Tree text={shown} {...(labelOf === undefined ? {} : { labelOf })} {...(tableOffset === undefined ? {} : { tableOffset })} />
+      <Tree text={shown} {...(labelOf === undefined ? {} : { labelOf })} {...(tableOffset === undefined ? {} : { tableOffset })} {...(onLongPress === undefined ? {} : { onLongPress })} />
     </Boundary>
   );
 }

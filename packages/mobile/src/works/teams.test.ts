@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RemoteRoom, RemoteSession } from '@parley/protocol/remote';
 import type { WorkRow } from '@parley/remote-client';
-import { buildTeams, headLook, subtreeOf, teamLine } from './teams';
+import { buildTeams, closedAdded, headLook, subtreeOf, teamLine } from './teams';
 
 const sess = (id: string): RemoteSession => ({
   id, label: id, provider: 'claude', model: null, role: null, parent: null, createdBy: null,
@@ -10,7 +10,7 @@ const sess = (id: string): RemoteSession => ({
 const row = (id: string, depth: number, parent: string | null): WorkRow => ({ kind: 'session', session: sess(id), depth, parent, attention: 'idle', live: null });
 const room = (id: string, depth: number, parent: string | null, members: string[]): WorkRow => ({
   kind: 'room', room: { id, title: id, members, lead: null, ownerId: parent, mode: 'free', archived: false, proposal: null, messages: null } as RemoteRoom,
-  depth, parent, members: members.map(sess), archived: false,
+  depth, parent, members: members.map(sess), sessions: members.map(sess), archived: false,
 });
 const needs = { session: (s: RemoteSession) => s.id === 'w', room: () => false };
 
@@ -56,5 +56,16 @@ describe('a room nobody owns (A35a)', () => {
   it('a swarm nobody owns is looked at as a swarm', () => {
     const swarm = { kind: 'swarm', swarm: { id: 'sw-1', tag: 'T', creator: { kind: 'human' }, queen: 'q', members: [], status: 'running', createdAt: 'x', endedAt: null, seenAt: null }, depth: 0, parent: null, members: [] } as unknown as WorkRow;
     expect(headLook(buildTeams([swarm], needs)[0]!.head)).toEqual({ kind: 'swarm', swarmId: 'sw-1' });
+  });
+  it('closedAdded counts only closed sessions that expanding would add', () => {
+    const closed = (id: string): RemoteSession => ({ ...sess(id), lifecycle: 'closed' });
+    const swarm = (members: RemoteSession[]): WorkRow => ({
+      kind: 'swarm', swarm: { id: 'sw' } as never, depth: 1, parent: 's', members: members.map((m) => ({ session: m })) as never,
+    });
+    // A running swarm whose two drones are closed: shown in both modes, so nothing is added and no link.
+    const rows = [swarm([closed('d1'), closed('d2')])];
+    expect(closedAdded(rows, rows)).toBe(0);
+    // A closed session row that only the full tree has is added once.
+    expect(closedAdded([...rows, { ...row('x', 1, 's'), session: closed('x') } as WorkRow], rows)).toBe(1);
   });
 });
