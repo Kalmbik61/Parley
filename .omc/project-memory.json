@@ -179,6 +179,12 @@
       "type": "file"
     },
     {
+      "path": "README.md",
+      "accessCount": 5,
+      "lastAccessed": 1793734592060,
+      "type": "file"
+    },
+    {
       "path": "packages/tui/src/components/activity-dot.test.tsx",
       "accessCount": 4,
       "lastAccessed": 1788599029276,
@@ -194,12 +200,6 @@
       "path": "packages/tui/src/use-actions.ts",
       "accessCount": 4,
       "lastAccessed": 1788606569345,
-      "type": "file"
-    },
-    {
-      "path": "README.md",
-      "accessCount": 4,
-      "lastAccessed": 1788611292598,
       "type": "file"
     },
     {

@@ -25,6 +25,8 @@ export interface RemoteSettingsProps {
   save: (key: keyof ParleyConfig, value: string) => Promise<void>;
   /** Error of the last failed `settings.set` for `remoteCreate`. */
   error?: string | undefined;
+  /** Error of the last failed settings.set for remoteVoice. */
+  voiceError?: string | undefined;
 }
 
 const OFF: RemoteState = { enabled: false, process: 'off', error: null, status: null };
@@ -41,7 +43,7 @@ function timeText(iso: string): string {
   return Number.isNaN(ms) ? iso : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
 }
 
-export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSettingsProps): JSX.Element {
+export function RemoteSettings({ bridge, config, locked, save, error, voiceError }: RemoteSettingsProps): JSX.Element {
   const remote = bridge.remote;
   const [state, setState] = useState<RemoteState>(OFF);
   const [pair, dispatch] = useReducer(pairReducer, INITIAL_PAIR);
@@ -290,6 +292,20 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
             </label>
             <p className="text-xs text-muted-foreground">{TEXT.allowCreateHint}</p>
             {error !== undefined ? <p className="text-xs text-destructive">{error}</p> : null}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center justify-between gap-2">
+              <span>{TEXT.allowVoice}</span>
+              <Switch
+                data-testid="remote-allow-voice"
+                checked={config?.remoteVoice ?? false}
+                disabled={config === null || locked.remoteVoice !== undefined}
+                onCheckedChange={(checked) => void save('remoteVoice', checked ? '1' : '0')}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">{TEXT.allowVoiceHint}</p>
+            {voiceError !== undefined ? <p className="text-xs text-destructive">{voiceError}</p> : null}
           </div>
 
           <div className="flex flex-col gap-2" data-testid="remote-pair">

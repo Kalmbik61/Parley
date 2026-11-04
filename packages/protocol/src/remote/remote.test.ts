@@ -62,6 +62,13 @@ describe('allowlist', () => {
     expect(isRemoteForbidden('pty.input')).toBe(true);
   });
 
+  it('voiceProvider.* is forbidden for the phone and exists in the root protocol', () => {
+    for (const name of ['voiceProvider.get', 'voiceProvider.setKey', 'voiceProvider.clearKey', 'voiceProvider.check']) {
+      expect(isRemoteForbidden(name), name).toBe(true);
+      expect(METHODS as Record<string, unknown>, name).toHaveProperty([name]);
+    }
+  });
+
   it('every listed name exists in the root protocol', () => {
     const m = METHODS as Record<string, unknown>;
     const n = NOTIFICATIONS as Record<string, unknown>;

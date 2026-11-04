@@ -6,6 +6,14 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- The island speaks answers through OpenAI: pick a voice and save an OpenAI API key in Settings → Assistant → Voice provider (API). Without a key answers stay text and the speaker icon says why. The text of every spoken answer is sent to OpenAI and billed to your key. OpenAI removes the model used for speech (`gpt-4o-mini-tts`) on January 6, 2027; the voice will need a move to another OpenAI API before then.
+
+### Removed
+
+- The local Qwen3-TTS voice is gone: the speech engine, the voice picker and the weight downloads in Settings → Assistant are removed. On the first launch of this version Parley deletes the old weights from `~/.parley/desktop/voice/tts`, which frees up to 3.5 GB; Whisper dictation models are not touched. The assistant keeps speaking about itself in the same gender (it is carried over from the old voice choice).
+
 ## 0.28.2
 
 **Impact**

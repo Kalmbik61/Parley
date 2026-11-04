@@ -19,7 +19,6 @@ import { providerLabel } from '@parley/core/stuck';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
-import type { TtsModelId } from './tts-types.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
 const CONTEXT_NAMES: Record<ContextKind, string> = {
@@ -1459,8 +1458,36 @@ export const S = {
      */
     checkForUpdates: 'Check for updates',
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
+    /** Settings → Assistant → Voice provider (API): OpenAI key for paid voice. */
+    voiceProvider: {
+      title: 'Voice provider (API)',
+      hint: 'Paid voice through OpenAI: with Speak answers on, the text of each spoken answer is sent to OpenAI and billed to this key. The key stays on this Mac; only its last four characters are shown.',
+      tile: 'OpenAI',
+      keyLabel: 'OpenAI API key',
+      keyPlaceholder: 'Paste an OpenAI API key',
+      save: 'Save key',
+      check: 'Check',
+      checking: 'Checking…',
+      remove: 'Remove key',
+      ready: (hint: string) => `Ready · key ${hint}`,
+      saved: (hint: string) => `Key saved ${hint}. Run Check to make sure the voice model is available.`,
+      failed: {
+        no_key: 'No key saved yet.',
+        invalid_key: 'OpenAI rejected the key.',
+        model_unavailable: 'The key works, but the voice model gpt-live-1 is not available to it.',
+        rate_limited: 'OpenAI is rate limiting this key. Try again later.',
+        network: 'Could not reach OpenAI.',
+        unknown: 'OpenAI returned an unexpected answer.',
+      } as Record<string, string>,
+      dailyLabel: 'Daily limit, minutes',
+      saveError: 'Could not save the voice provider settings.',
+      loadError: 'Could not read the voice provider settings.',
+      voiceLabel: 'Voice',
+    },
     /** Settings → Remote access (mobile app plan A10, spec 12). */
     remote: {
+      allowVoice: 'Allow paid voice from the phone',
+      allowVoiceHint: 'Off by default. On: the phone can start voice sessions billed to your OpenAI key, within the daily limit. The key itself never leaves this Mac.',
       enabled: 'Remote access (beta)',
       enabledHint: 'Lets your paired phone see and answer your agents while this Mac is on. Traffic goes through your own relay, end-to-end encrypted.',
       allowCreate: 'Allow starting and messaging agents from the phone',
@@ -3038,8 +3065,8 @@ export const S = {
     micDenied: 'Microphone access is off — System Settings → Privacy & Security',
     noSpeech: "Didn't catch that — try again",
     voiceFailed: "Couldn't recognize speech — type instead",
-    /** Голос помощника не скачан (#9 §6.8, G3): один раз за сессию в режиме помощника. */
-    voiceMissing: (name: string): string => `Voice "${name}" isn't downloaded — open Settings`,
+    /** Нет ключа OpenAI (G3): один раз за сессию в режиме помощника. */
+    voiceNoKey: 'Add an OpenAI key in Settings → Assistant to hear answers',
     newConversation: 'New conversation',
     settings: {
       enabled: 'Turn on the assistant',
@@ -3060,23 +3087,8 @@ export const S = {
       islandShortcutOff: 'Turn shortcut off',
       shortcutConflictAssistant: 'This shortcut is assigned to the assistant.',
       glmSlow: 'GLM answers in about 13 seconds.',
-      /** Голос помощника (план 3b, B20; #9 §6.8). Кнопки скачивания — строки Whisper из `S.voice.settings`. */
+      /** «Speak answers» (план 3b, B20). */
       speak: 'Speak answers',
-      voice: 'Voice',
-      voiceGender: { female: 'Female', male: 'Male', neutral: 'Neutral' },
-      voiceDetails: (gender: string, languages: string, licence: string): string => `${gender} · ${languages} · ${licence}`,
-      /** Имена моделей весов по id (`TTS_MODELS`): строка на каждую. Говорит самая большая из скачанных. */
-      voiceModels: {
-        'qwen3-tts-0.6b-q8_0': 'Qwen3-TTS 0.6B CustomVoice',
-        'qwen3-tts-1.7b-q8_0': 'Qwen3-TTS 1.7B CustomVoice',
-      } satisfies Record<TtsModelId, string>,
-      voiceModelHint: 'One download for all voices.',
-      voiceModelInUse: 'In use.',
-      voiceModelIdle: 'Not in use while the larger model is downloaded.',
-      voicePreparing: 'Preparing voice…',
-      voiceUnavailable: 'Voice is unavailable on this Mac. Answers are shown as text.',
-      voiceNoLanguage: 'No voice for this language yet. Answers are shown as text.',
-      voiceCredit: 'Voices: Qwen3-TTS by Qwen Team, Alibaba Cloud (Apache-2.0). Speech runs on this Mac with speech.cpp.',
     },
   },
 

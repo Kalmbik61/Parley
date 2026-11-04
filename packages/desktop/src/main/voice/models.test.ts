@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TTS_MODELS, type TtsModel } from '../../shared/tts-types.js';
 import type { VoiceModel } from '../../shared/voice-types.js';
-import { createModelStore, ttsModelsDir, voiceModelsDir, type ModelStoreDeps } from './models.js';
+import { createModelStore, removeLegacyTtsDir, voiceModelsDir, type ModelStoreDeps } from './models.js';
 
 const CONTENT = Buffer.from('fake whisper model bytes');
 const CATALOG: readonly VoiceModel[] = [
@@ -109,106 +108,27 @@ describe('createModelStore (спека 4.2, 6.2)', () => {
   });
 });
 
-const TTS_CONTENT = Buffer.from('fake qwen3 tts gguf bytes');
-const TTS_URL = `https://huggingface.co/acme/tts-gguf/resolve/${'a'.repeat(40)}/tts.gguf`;
-const TTS_CATALOG: readonly TtsModel[] = [
-  {
-    id: 'qwen3-tts-0.6b-q8_0',
-    file: 'tts.gguf',
-    bytes: TTS_CONTENT.length,
-    sha256: createHash('sha256').update(TTS_CONTENT).digest('hex'),
-    url: TTS_URL,
-  },
-];
+describe('removeLegacyTtsDir (S-del)', () => {
+  it('удаляет только desktop/voice/tts вместе с .part; модели Whisper целы', async () => {
+    const voice = path.join(dir, 'desktop', 'voice');
+    await mkdir(path.join(voice, 'tts'), { recursive: true });
+    await mkdir(path.join(voice, 'models'), { recursive: true });
+    await writeFile(path.join(voice, 'tts', 'Qwen-TTS-12Hz-0.6B-CustomVoice-Q8_0.gguf'), 'weights');
+    await writeFile(path.join(voice, 'tts', 'Qwen-TTS-12Hz-1.7B-CustomVoice-Q8_0.gguf.part'), 'partial');
+    await writeFile(path.join(voice, 'models', 'ggml-base.bin'), 'whisper');
+    await writeFile(path.join(voice, 'other.txt'), 'x');
 
-function ttsStore(overrides: Partial<ModelStoreDeps<TtsModel>> = {}) {
-  return createModelStore({ dir, catalog: TTS_CATALOG, fetch: () => ok(TTS_CONTENT), freeBytes: async () => 10 ** 12, ...overrides });
-}
+    await expect(removeLegacyTtsDir(dir)).resolves.toBe(true);
 
-describe('ttsModelsDir', () => {
-  it('~/.parley/desktop/voice/tts от дома Parley', () => {
-    expect(ttsModelsDir('/home/p')).toBe(path.join('/home/p', 'desktop', 'voice', 'tts'));
-  });
-});
-
-describe('createModelStore с моделью TTS (план 3b, B04, E5)', () => {
-  it('качает по адресу модели, проверяет sha256, файл на месте, модель в списке', async () => {
-    const fetch = vi.fn<ModelStoreDeps['fetch']>(() => ok(TTS_CONTENT));
-    const progress = vi.fn();
-    const models = ttsStore({ fetch });
-    await expect(models.download('qwen3-tts-0.6b-q8_0', progress)).resolves.toEqual({ ok: true });
-    expect(fetch).toHaveBeenCalledWith(TTS_URL, expect.anything());
-    expect(progress).toHaveBeenLastCalledWith({
-      id: 'qwen3-tts-0.6b-q8_0',
-      receivedBytes: TTS_CONTENT.length,
-      totalBytes: TTS_CONTENT.length,
-    });
-    expect(await readdir(dir)).toEqual(['tts.gguf']);
-    await expect(models.list()).resolves.toEqual(['qwen3-tts-0.6b-q8_0']);
-    expect(models.path('qwen3-tts-0.6b-q8_0')).toBe(path.join(dir, 'tts.gguf'));
+    expect(await readdir(voice)).toEqual(['models', 'other.txt']);
+    expect(await readdir(path.join(voice, 'models'))).toEqual(['ggml-base.bin']);
   });
 
-  it('пока поток идёт, байты лежат в .part, а готового файла нет', async () => {
-    let release = (): void => undefined;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(TTS_CONTENT.subarray(0, 4));
-        release = () => {
-          controller.enqueue(TTS_CONTENT.subarray(4));
-          controller.close();
-        };
-      },
-    });
-    const models = ttsStore({ fetch: () => Promise.resolve(new Response(body)) });
-    const pending = models.download('qwen3-tts-0.6b-q8_0', vi.fn());
-    await vi.waitFor(async () => expect(await readdir(dir)).toEqual(['tts.gguf.part']));
-    await expect(models.list()).resolves.toEqual([]);
-    release();
-    await expect(pending).resolves.toEqual({ ok: true });
-    expect(await readdir(dir)).toEqual(['tts.gguf']);
-  });
-
-  it('sha256 не совпал — corrupted, ничего не осталось', async () => {
-    const models = ttsStore({ fetch: () => ok(Buffer.from('evil qwen3 tts gguf bytes')) });
-    await expect(models.download('qwen3-tts-0.6b-q8_0', vi.fn())).resolves.toEqual({ error: 'corrupted' });
-    expect(await readdir(dir)).toEqual([]);
-  });
-
-  it('места меньше размера + 10 % — disk_full, fetch не зовётся', async () => {
-    const fetch = vi.fn();
-    const models = ttsStore({ fetch, freeBytes: async () => TTS_CONTENT.length });
-    await expect(models.download('qwen3-tts-0.6b-q8_0', vi.fn())).resolves.toEqual({
-      error: 'disk_full',
-      needBytes: Math.ceil(TTS_CONTENT.length * 1.1),
-    });
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it('cancel — cancelled, .part удалён', async () => {
-    let started = false;
-    const fetch: ModelStoreDeps['fetch'] = (_url, init) =>
-      new Promise((_resolve, reject) => {
-        started = true;
-        init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
-      });
-    const models = ttsStore({ fetch });
-    const pending = models.download('qwen3-tts-0.6b-q8_0', vi.fn());
-    await vi.waitFor(() => expect(started).toBe(true));
-    models.cancel('qwen3-tts-0.6b-q8_0');
-    await expect(pending).resolves.toEqual({ error: 'cancelled' });
-    expect(await readdir(dir)).toEqual([]);
-  });
-
-  it('настоящий каталог: место считается от 1,21 ГБ, запрос идёт на закреплённый адрес', async () => {
-    const [model] = TTS_MODELS;
-    if (model === undefined) throw new Error('empty TTS catalog');
-    const fetch = vi.fn<ModelStoreDeps['fetch']>(() => ok(Buffer.from('not the model')));
-    const tight = createModelStore({ dir, catalog: TTS_MODELS, fetch, freeBytes: async () => model.bytes });
-    await expect(tight.download(model.id, vi.fn())).resolves.toEqual({ error: 'disk_full', needBytes: Math.ceil(model.bytes * 1.1) });
-    expect(fetch).not.toHaveBeenCalled();
-    const roomy = createModelStore({ dir, catalog: TTS_MODELS, fetch, freeBytes: async () => 10 ** 12 });
-    await expect(roomy.download(model.id, vi.fn())).resolves.toEqual({ error: 'corrupted' });
-    expect(fetch).toHaveBeenCalledWith(model.url, expect.anything());
-    expect(await readdir(dir)).toEqual([]);
+  it('повторный запуск и чистый дом ничего не делают', async () => {
+    await expect(removeLegacyTtsDir(dir)).resolves.toBe(false);
+    await mkdir(path.join(dir, 'desktop', 'voice', 'tts'), { recursive: true });
+    await expect(removeLegacyTtsDir(dir)).resolves.toBe(true);
+    await expect(removeLegacyTtsDir(dir)).resolves.toBe(false);
+    expect(await readdir(path.join(dir, 'desktop', 'voice'))).toEqual([]);
   });
 });

@@ -16,7 +16,7 @@ import type {
   Result,
   TrustRecord,
 } from '@parley/protocol';
-import type { AppNote, AssistantVoiceProgress, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -57,7 +57,6 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
 import type { TtsEngineState } from '../../shared/island.js';
-import { TTS_VOICES, type TtsModelId } from '../../shared/tts-types.js';
 
 type Handler = (params: never) => unknown;
 
@@ -165,13 +164,8 @@ export interface FakeBridge extends ParleyBridge {
    * Вызовы нейроголоса помощника по порядку: `voices`, `models` и `download:<id модели>`, `cancel:<id>`,
    * `remove:<id>` — с id, который получил мост.
    */
-  readonly assistantVoiceCalls: string[];
-  /** Какие модели весов голоса «скачаны»: что отдаёт `app.assistantVoiceModels`; по умолчанию ни одной. */
-  setAssistantVoiceModels(ids: TtsModelId[]): void;
-  /** Состояние движка голоса: что отдаёт `app.assistantVoiceState` и событие `onAssistantVoiceState`; по умолчанию `not-downloaded`. */
+  /** Состояние движка голоса: что отдаёт `app.assistantVoiceState` и событие `onAssistantVoiceState`; по умолчанию `no-key`. */
   setAssistantVoiceState(state: TtsEngineState): void;
-  /** Прогресс скачивания весов голоса: событие слушателям `app.onAssistantVoiceProgress`. */
-  emitAssistantVoiceProgress(progress: AssistantVoiceProgress): void;
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -345,11 +339,8 @@ export function createFakeBridge(): FakeBridge {
   const assistantOpenCalls: string[] = [];
   const assistantShortcutSuspended: boolean[] = [];
   const islandShortcutSuspended: boolean[] = [];
-  const assistantVoiceCalls: string[] = [];
-  let assistantVoiceModelIds: TtsModelId[] = [];
-  let assistantVoiceState: TtsEngineState = { state: 'not-downloaded' };
+  let assistantVoiceState: TtsEngineState = { state: 'no-key' };
   const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
-  const assistantVoiceProgressListeners = new Set<(progress: AssistantVoiceProgress) => void>();
   let saveDiagnosticsAnswer: DiagnosticsSaveResult | Error = { file: '/Users/test/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true };
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
@@ -694,16 +685,9 @@ export function createFakeBridge(): FakeBridge {
     emitVoiceProgress: (progress) => {
       for (const listener of voiceProgressListeners) listener(progress);
     },
-    assistantVoiceCalls,
-    setAssistantVoiceModels: (ids) => {
-      assistantVoiceModelIds = [...ids];
-    },
     setAssistantVoiceState: (state) => {
       assistantVoiceState = state;
       for (const listener of assistantVoiceStateListeners) listener(state);
-    },
-    emitAssistantVoiceProgress: (progress) => {
-      for (const listener of assistantVoiceProgressListeners) listener(progress);
     },
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
@@ -1002,32 +986,10 @@ export function createFakeBridge(): FakeBridge {
       },
       islandShortcut: async () => ({ accelerator: 'Control+Alt+I', ok: true }),
       islandShortcutSuspend: (on) => { islandShortcutSuspended.push(on); },
-      assistantVoices: async () => {
-        assistantVoiceCalls.push('voices');
-        return TTS_VOICES.map((voice) => ({ ...voice, downloaded: assistantVoiceModelIds.length > 0 }));
-      },
-      assistantVoiceModels: async () => {
-        assistantVoiceCalls.push('models');
-        return [...assistantVoiceModelIds];
-      },
-      assistantVoiceDownload: async (id) => {
-        assistantVoiceCalls.push(`download:${id}`);
-        return { ok: true };
-      },
-      assistantVoiceCancel: async (id) => {
-        assistantVoiceCalls.push(`cancel:${id}`);
-      },
-      assistantVoiceRemove: async (id) => {
-        assistantVoiceCalls.push(`remove:${id}`);
-      },
       assistantVoiceState: async () => assistantVoiceState,
       onAssistantVoiceState: (listener) => {
         assistantVoiceStateListeners.add(listener);
         return () => assistantVoiceStateListeners.delete(listener);
-      },
-      onAssistantVoiceProgress: (listener) => {
-        assistantVoiceProgressListeners.add(listener);
-        return () => assistantVoiceProgressListeners.delete(listener);
       },
       loadNotes: async (workKey, sessionId) => {
         loadNotesCalls.push({ workKey, sessionId });

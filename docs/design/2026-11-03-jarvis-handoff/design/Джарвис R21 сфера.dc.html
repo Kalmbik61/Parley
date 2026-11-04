@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#1E1E1E;font-family:"Golos Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased}a{color:#EFB05C;text-decoration:none}a:hover{color:#F3C180}</style>
+<script src="./orb-spec.js"></script>
+</helmet>
+<section id="R21" data-screen-label="R21 Лист сферы" style="width:1640px;box-sizing:border-box;padding:56px;background:{{ bg }};color:#F3EEE6">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:48px;padding-bottom:32px">
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:760px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <a href="#R21" style="font:600 11px/1 ui-monospace,Menlo,monospace;padding:4px 7px;border-radius:5px;background:#EFB05C;color:#2B1C08">R21</a>
+        <span style="font-size:13px;line-height:18px;color:#B5AFA7">Лист сферы · «Джарвис»</span>
+      </div>
+      <h1 style="margin:0;font-size:32px;line-height:38px;font-weight:600">10 состояний сферы</h1>
+      <p style="margin:0;font-size:16px;line-height:24px;color:#B5AFA7;text-wrap:pretty">168 и 32 px — один компонент: все размеры заданы в % диаметра. Правый столбец со сферами — та же сфера при reduced motion: циклы выключены, состояние читается по цвету, кольцу, дуге, точкам, значку и подписи.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;max-width:520px;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Можно:</span> transform, opacity, радиальные и линейные градиенты, SVG-кольца и дуги, кроссфейд двух слоёв.</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Нельзя:</span> blur, mix-blend-mode, backdrop-filter, морфинг формы. Мягкие пятна — градиенты с прозрачным краем.</div>
+      <div>Движение и таблица параметров — в <a href="./Джарвис%20прототип%20сферы.dc.html">интерактивном прототипе</a>. Голос и запись здесь на имитации громкости.</div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;padding:12px 0;border-top:1px solid rgba(255,255,255,.16);font-size:12px;line-height:16px;color:#8E8A85;text-transform:uppercase;letter-spacing:.06em">
+    <span>Состояние · подпись</span><span style="text-align:center">168 · анимация</span><span>32 · в шапке</span><span>Reduced motion · 168 и 32</span><span>Тайминг</span>
+  </div>
+
+  <div data-screen-label="R21 · 01 Покой" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">01</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Покой</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">на связи</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Ничего не происходит</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="idle" size="168" seed="11" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="idle" size="32" seed="12" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">на связи</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="idle" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="idle" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Дыхание 7 с</span> · ядро scale 1 → 1,045 · ореол opacity 0,5 → 0,78 и scale 1 → 1,07 · sine in-out · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Пятна 58 / 52 / 46 %</span> · дрейф 11,9 / 14,7 / 9,8 с · sine · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · статика, слабый ореол 0,35 · <span style="color:#F3EEE6;font-weight:500">RM</span> · ореол 0,64</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 02 Слушает" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">02</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Слушает</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">слушаю</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Только при реальной записи микрофона. Фокус в поле — не «слушает»</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="listening" size="168" seed="21" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="listening" size="32" seed="22" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">слушаю</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="listening" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="listening" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Цикл 4 с</span> · дыхание как в покое, дрейф 6,8 / 8,4 / 5,6 с</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Кольцо 108 % d</span> · scale 0,9 → 1,22 · opacity 0,65 → 0 · 2,4 с · ease-out · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">В голосе</span> · кольцо следует громкости микрофона: scale 0,96 + 0,26 × L, opacity 0,25 + 0,6 × L · атака 50 мс, спад 180 мс</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · одно кольцо 2,4 с · <span style="color:#F3EEE6;font-weight:500">RM</span> · кольцо 1,12 статично</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 03 Думает" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">03</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Думает</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">думаю</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Запрос принят, конкретного этапа ещё нет</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="thinking" size="168" seed="31" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="thinking" size="32" seed="32" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">думаю</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="thinking" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="thinking" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Цикл 3 с</span> · c2 → #F7A062, кроссфейд слоя 300 мс</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Внутренний слой</span> · rotate 0 → 360° · 7 с · linear · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · только медленное вращение блика 7 с, без дуги · <span style="color:#F3EEE6;font-weight:500">RM</span> · блик повёрнут на 150°, тёплый c2</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 04 Работает" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">04</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Работает</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">проверяю расписание</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Выполняется действие: поиск, создание задачи. Подпись называет действие</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="working" size="168" seed="41" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="working" size="32" seed="42" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">проверяю расписание</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="working" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="working" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Ядро почти неподвижно</span> · scale 1 → 1,008 · 7 с · дрейф вдвое медленнее, × 0,6</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Дуга 120°</span> · r 59,5 % d, 2 px · rotate 0 → 360° · 2 с (допуск 1,6–2,4 с) · linear · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · одна дуга · <span style="color:#F3EEE6;font-weight:500">RM</span> · дуга стоит на −30°</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 05 Формирует ответ" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">05</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Формирует ответ</span>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <span style="padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">отвечаю</span>
+        <span style="padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">собираю карточку</span>
+      </div>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Печатается текст или собирается карточка. Конец текста и конец карточки — разные моменты</span>
+    </div>
+    <div style="height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px"><dc-import name="JarvisOrb" state="forming" card="{{ true }}" size="168" seed="51" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import><span style="margin-top:20px;font-size:12px;line-height:16px;color:#8E8A85">вариант «собираю карточку»</span></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="forming" size="32" seed="52" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">отвечаю</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="forming" card="{{ true }}" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="forming" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Световой сектор</span> · внутри ядра · rotate 0 → 360° · 2,4 с · linear · ∞</div>
+      <div><span style="color:#F3EEE6;font-weight:500">«Собираю карточку»</span> · 3 точки 5,5 % d от нижнего края: translateY 0 → 20 % d, opacity 0 → 0,9 → 0 · 1,2 с · сдвиг 0,4 с · ∞ · в пределах ореола</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · светлый сектор · <span style="color:#F3EEE6;font-weight:500">RM</span> · сектор стоит на 135°, точки 0,9 / 0,6 / 0,3</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 06 Говорит" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">06</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Говорит</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">говорю</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Только когда реально играет голос. Печать текста — это «формирует»</span>
+    </div>
+    <div style="height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px"><dc-import name="JarvisOrb" state="speaking" size="168" seed="61" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import><span style="margin-top:20px;font-size:12px;line-height:16px;color:#8E8A85">имитация громкости голоса</span></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="speaking" size="32" seed="62" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">говорю</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="speaking" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="speaking" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Пульс ядра 0,62 с</span> · scale до +5 % × громкость голоса · sine · в паузах затихает</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Ореол</span> · opacity +0,28 × громкость · атака 50 мс, спад 180 мс · фон — цикл 2,4 с</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · пульс ≤ 2 % + значок динамика · <span style="color:#F3EEE6;font-weight:500">RM</span> · значок динамика, scale 1,02</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 07 Ждёт решения" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">07</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Ждёт решения</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">нужно подтверждение</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">В ленте ждёт ответа карточка подтверждения</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="awaiting" size="168" seed="71" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="awaiting" size="32" seed="72" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">нужно подтверждение</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="awaiting" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="awaiting" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Движение останавливается</span> · частота и амплитуда → 0 за 300 мс · ореол 0,95, scale 1,06, неподвижно</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Кольцо 2 px с разрывом 7 %</span> · r 59,5 % d · opacity 0 → 1 · 150 мс · один раз</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · статичное кольцо · <span style="color:#F3EEE6;font-weight:500">RM</span> · то же, смена мгновенно</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 08 Записывает" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">08</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Записывает</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">запись · 12:34</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Идёт запись встречи</span>
+    </div>
+    <div style="height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
+      <dc-import name="JarvisOrb" state="recording" size="168" seed="81" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import>
+      <div style="margin-top:18px;display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;font-variant-numeric:tabular-nums"><span style="width:8px;height:8px;border-radius:50%;background:#E5533D"></span>REC 12:34</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <span style="font-size:22px;line-height:28px;color:#8E8A85">—</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Мини-сфера не показывает запись. REC и таймер живут в отдельной постоянной полоске и видны на всех экранах</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="recording" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><span style="font-size:13px;line-height:18px;color:#8E8A85">32: —</span></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Кольцо = громкость</span> · scale 0,96 → 1,22 · opacity 0,25 → 0,85 · атака 50 мс, спад 180 мс</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Пауза</span> · всё замирает, затемнение ядра 0 → 0,2 (яркость −20 %) · 300 мс</div>
+      <div><span style="color:#F3EEE6;font-weight:500">REC и таймер</span> — рядом со сферой, не внутри · <span style="color:#F3EEE6;font-weight:500">RM</span> · кольцо 1,12 статично</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 09 Ошибка" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">09</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Ошибка</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">не удалось ответить</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Сбой текущего действия. Снимается повтором</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="error" size="168" seed="91" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="error" size="32" seed="92" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">не удалось ответить</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="error" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="error" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Коралловая палитра</span> · #DC604C / #C43F40 / #F8B287 · кроссфейд 180 мс · один раз</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Затем статично</span> · циклы → 0 за 180 мс, без тряски · значок «!»</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · знак «!» · <span style="color:#F3EEE6;font-weight:500">RM</span> · кроссфейд 100 мс</div>
+    </div>
+  </div>
+
+  <div data-screen-label="R21 · 10 Нет связи" style="display:grid;grid-template-columns:220px 250px 230px 300px minmax(0,1fr);column-gap:28px;align-items:center;border-top:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-direction:column;gap:8px;padding:24px 0">
+      <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">10</span>
+      <span style="font-size:22px;line-height:28px;font-weight:600">Нет связи</span>
+      <span style="align-self:flex-start;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;color:#E8E3DB">нет связи</span>
+      <span style="font-size:13px;line-height:18px;color:#8E8A85;text-wrap:pretty">Нет соединения. REC, если идёт захват, остаётся виден</span>
+    </div>
+    <div style="height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="offline" size="168" seed="101" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div>
+    <div style="display:flex;align-items:center;gap:10px"><dc-import name="JarvisOrb" state="offline" size="32" seed="102" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import><div style="display:flex;flex-direction:column"><span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span><span style="font-size:13px;line-height:18px;color:#B5AFA7">нет связи</span></div></div>
+    <div style="display:flex;align-items:center;gap:24px"><div style="width:220px;height:250px;display:flex;align-items:center;justify-content:center"><dc-import name="JarvisOrb" state="offline" size="168" reduced="{{ true }}" cutout="{{ bg }}" hint-size="168px,168px" style="width:168px;height:168px"></dc-import></div><dc-import name="JarvisOrb" state="offline" size="32" reduced="{{ true }}" cutout="{{ bg }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:24px 0;font-size:13px;line-height:19px;color:#B5AFA7">
+      <div><span style="color:#F3EEE6;font-weight:500">Серая палитра</span> · #9C948A / #6F665F / #C3BCB1 · кроссфейд 300 мс</div>
+      <div><span style="color:#F3EEE6;font-weight:500">Приглушена</span> · opacity 0,72 · ореол почти исчез: 0,06 → 0,1 · цикл 13 с</div>
+      <div><span style="color:#F3EEE6;font-weight:500">32</span> · серая статичная · <span style="color:#F3EEE6;font-weight:500">RM</span> · статика</div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px;padding-top:40px;border-top:1px solid rgba(255,255,255,.16);display:flex;flex-direction:column;gap:12px">
+    <h2 style="margin:0;font-size:22px;line-height:28px;font-weight:600">Три перехода на временной шкале</h2>
+    <p style="margin:0;max-width:980px;font-size:13px;line-height:19px;color:#B5AFA7;text-wrap:pretty">Полосы — что видит человек. Штриховка — задержка 150 мс перед занятым состоянием. Скобка — удержание 400 мс между занятыми. Градиент в начале полосы — кроссфейд 300 мс. Правдивые события меняют состояние сразу. Шкала — 200 px на секунду.</p>
+  </div>
+  <sc-for list="{{ timelines }}" as="tl" hint-placeholder-count="3">
+    <div style="display:flex;flex-direction:column;gap:14px;padding:28px 0;border-bottom:1px solid rgba(255,255,255,.08)">
+      <div style="display:flex;align-items:baseline;gap:12px">
+        <span style="font:500 12px/16px ui-monospace,Menlo,monospace;color:#8E8A85">{{ tl.n }}</span>
+        <span style="font-size:17px;line-height:22px;font-weight:600">{{ tl.title }}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:110px auto;column-gap:16px;row-gap:6px;justify-content:start;align-items:center">
+        <span style="font-size:12px;line-height:16px;color:#8E8A85">События</span>
+        <div style="position:relative;width:{{ tl.w }}px;height:58px">
+          <sc-for list="{{ tl.marks }}" as="m" hint-placeholder-count="4">
+            <div style="position:absolute;left:{{ m.x }}px;top:0;height:58px;box-sizing:border-box;border-left:1px dashed rgba(255,255,255,.34);padding:{{ m.pad }}px 0 0 7px;white-space:nowrap">
+              <div style="font-size:12px;line-height:16px;color:#E8E3DB">{{ m.label }}</div>
+              <div style="font:11px/14px ui-monospace,Menlo,monospace;color:#8E8A85">{{ m.t }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <span style="font-size:12px;line-height:16px;color:#8E8A85">Сфера</span>
+        <div style="position:relative;width:{{ tl.w }}px;height:64px">
+          <sc-for list="{{ tl.bands }}" as="b" hint-placeholder-count="5">
+            <div style="position:absolute;left:{{ b.x }}px;top:0;width:{{ b.w }}px;height:64px;box-sizing:border-box;border-radius:10px;border:1px solid {{ b.bd }};background:{{ b.bg }};display:flex;align-items:center;gap:10px;padding:0 10px;overflow:hidden">
+              <sc-if value="{{ b.icon }}" hint-placeholder-val="{{ false }}"><dc-import name="JarvisOrb" state="{{ b.state }}" size="32" reduced="{{ true }}" cutout="{{ b.cut }}" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import></sc-if>
+              <sc-if value="{{ b.label }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;min-width:0">
+                  <span style="font-size:13px;line-height:18px;font-weight:600;white-space:nowrap">{{ b.name }}</span>
+                  <span style="font-size:12px;line-height:16px;color:#B5AFA7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.cap }}</span>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <span style="font-size:12px;line-height:16px;color:#8E8A85">Правила</span>
+        <div style="position:relative;width:{{ tl.w }}px;height:52px">
+          <sc-for list="{{ tl.delays }}" as="n" hint-placeholder-count="1">
+            <div style="position:absolute;left:{{ n.x }}px;top:2px;display:flex;align-items:center;gap:6px;white-space:nowrap">
+              <div style="width:{{ n.w }}px;height:14px;border-radius:3px;background:repeating-linear-gradient(135deg, rgba(255,255,255,.4) 0px, rgba(255,255,255,.4) 1.5px, transparent 1.5px, transparent 5px)"></div>
+              <span style="font-size:12px;line-height:16px;color:#E8E3DB">150 мс</span>
+            </div>
+          </sc-for>
+          <sc-for list="{{ tl.holds }}" as="n" hint-placeholder-count="1">
+            <div style="position:absolute;left:{{ n.x }}px;top:24px;width:{{ n.w }}px;display:flex;flex-direction:column;gap:2px">
+              <div style="height:9px;box-sizing:border-box;border:1px solid #EFB05C;border-top:none;border-radius:0 0 3px 3px"></div>
+              <span style="font-size:12px;line-height:16px;color:#EFB05C;white-space:nowrap">мин. 400 мс</span>
+            </div>
+          </sc-for>
+        </div>
+        <span></span>
+        <div style="position:relative;width:{{ tl.w }}px;height:24px;border-top:1px solid rgba(255,255,255,.2)">
+          <sc-for list="{{ tl.ticks }}" as="k" hint-placeholder-count="12">
+            <div style="position:absolute;left:{{ k.x }}px;top:0;height:24px">
+              <div style="width:1px;height:6px;background:rgba(255,255,255,.34)"></div>
+              <span style="position:absolute;left:0;top:8px;transform:translateX(-50%);font:11px/14px ui-monospace,Menlo,monospace;color:#8E8A85;white-space:nowrap">{{ k.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <p style="margin:0;max-width:980px;font-size:13px;line-height:19px;color:#B5AFA7;text-wrap:pretty">{{ tl.note }}</p>
+    </div>
+  </sc-for>
+
+  <div style="padding-top:36px;display:flex;flex-direction:column;gap:14px">
+    <h2 style="margin:0;font-size:22px;line-height:28px;font-weight:600">Правила переходов</h2>
+    <div style="display:grid;grid-template-columns:200px 300px 110px 110px 100px 110px minmax(0,1fr);font-size:13px;line-height:19px">
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">Переход</span>
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">Свойство</span>
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">From</span>
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">To</span>
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">Длительность</span>
+      <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">Easing</span>
+      <span style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.16);font-size:12px;color:#8E8A85">Примечание</span>
+      <sc-for list="{{ rules }}" as="r" hint-placeholder-count="9">
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-weight:500">{{ r.what }}</span>
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.prop }}</span>
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.from }}</span>
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.to }}</span>
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-variant-numeric:tabular-nums">{{ r.dur }}</span>
+        <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.ease }}</span>
+        <span style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#8E8A85">{{ r.note }}</span>
+      </sc-for>
+    </div>
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;bg&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;нейтральный&quot;,&quot;A&quot;,&quot;B&quot;],&quot;default&quot;:&quot;нейтральный&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Лист&quot;}}">
+class Component extends DCLogic {
+  state = { ready: !!window.JarvisOrbSpec };
+  componentDidMount() {
+    if (!this.state.ready) this._p = setInterval(() => { if (window.JarvisOrbSpec) { clearInterval(this._p); this.setState({ ready: true }); } }, 40);
+  }
+  componentWillUnmount() { clearInterval(this._p); }
+  renderVals() {
+    const BG = { 'нейтральный': '#131313', 'A': '#100E0C', 'B': '#17191C' };
+    const bg = BG[this.props.bg] || '#131313';
+    const S = window.JarvisOrbSpec;
+    if (!S) return { bg, timelines: [], rules: [] };
+    const K = 0.2, f2 = S.f2;
+    const FILL = {
+      idle: ['rgba(255,255,255,.05)', 'rgba(255,255,255,.14)'],
+      listening: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      thinking: ['rgba(239,176,92,.11)', 'rgba(239,176,92,.34)'],
+      working: ['rgba(239,176,92,.16)', 'rgba(239,176,92,.46)'],
+      forming: ['rgba(239,176,92,.11)', 'rgba(239,176,92,.34)'],
+      speaking: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      awaiting: ['rgba(239,176,92,.20)', '#EFB05C'],
+      recording: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      error: ['rgba(220,96,76,.16)', 'rgba(220,96,76,.5)'],
+      offline: ['rgba(156,148,138,.12)', 'rgba(156,148,138,.4)']
+    };
+    const timelines = S.SCENARIOS.map((sc, i) => {
+      const sim = S.simulate(sc);
+      const bands = sim.bands.map((b, j) => {
+        const w = (b.to - b.from) * K, F = FILL[b.state], ramp = j === 0 ? 0 : Math.min(60, w);
+        return {
+          x: b.from * K, w: Math.max(2, w - 3), bd: F[1],
+          bg: ramp ? 'linear-gradient(90deg, rgba(0,0,0,0) 0px, ' + F[0] + ' ' + ramp + 'px)' : F[0],
+          state: b.state, name: S.byId[b.state].name, cap: b.caption, icon: w >= 170, label: w >= 64, cut: bg
+        };
+      });
+      const groups = {}, order = [];
+      sc.events.forEach(e => { if (!e.label) return; if (!groups[e.t]) { groups[e.t] = []; order.push(e.t); } groups[e.t].push(e.label); });
+      const marks = order.map((t, k) => ({ x: t * K, pad: (k % 2) * 24 + 2, label: groups[t].join(' · '), t: f2(t / 1000) + ' с' }));
+      const delays = sim.notes.filter(n => n.kind === 'delay').map(n => ({ x: n.from * K, w: (n.to - n.from) * K }));
+      const holds = sim.notes.filter(n => n.kind === 'hold').map(n => ({ x: n.from * K, w: (n.to - n.from) * K }));
+      const ticks = [];
+      for (let t = 0; t <= sc.end; t += 500) ticks.push({ x: t * K, label: t === 0 ? '0' : f2(t / 1000) + (t === sc.end - (sc.end % 500) ? ' с' : '') });
+      return { n: 'Переход ' + (i + 1), title: sc.title, note: sc.note, w: sc.end * K, bands, marks, delays, holds, ticks };
+    });
+    return { bg, timelines, rules: S.RULES };
+  }
+}
+</script>
+</body>
+</html>

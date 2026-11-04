@@ -100,21 +100,18 @@ like the macOS setting, stills the swarm and the island's shape changes; the sou
 
 **The assistant.** Press ⌥Space or click the small swarm on the island and ask about your agents,
 works and rooms; it prepares cards (a letter, a room, an answer to an agent) and nothing happens
-until you confirm. Settings → Assistant turns it on. With "Speak answers" it talks in a neural
-voice, Qwen3-TTS 0.6B CustomVoice run on your Mac by speech.cpp:
-- five voices: Serena (the default), Ryan, Aiden, Vivian and Ono Anna; the assistant speaks of
-  itself in the gender of the voice;
-- the weights, 1214 MB and one file for all voices, are downloaded only when you press Download in
-  Settings → Assistant, with Cancel and Delete like the Whisper models; "Preparing voice…" shows
-  until the voice is ready;
+until you confirm. Settings → Assistant turns it on. With "Speak answers" it talks through the
+OpenAI speech API, using your own OpenAI key from Settings → Voice provider (API):
+- the key is stored on your Mac and only the answer text is sent to OpenAI for the voice; nothing
+  is downloaded and no model runs locally;
+- you pick one of the OpenAI voices; the assistant keeps speaking of itself in the gender of the
+  local voice you chose before (female by default);
 - it starts speaking while the answer is still being written, sentence by sentence, and the swarm
   becomes a face: the mouth follows the voice and the mood changes from sentence to sentence. Esc,
   Send or Cancel on a card stop the voice at once, and the speaker button on the island turns
   "Speak answers" off and on;
-- the voice needs Apple Silicon and an answer language of Russian or English. On an Intel Mac or in
-  another language the answers are text only. The first answer after installing or updating Parley
-  may also come as text while the voice engine warms up (about 15 seconds);
-- the model leaves memory after 15 minutes without speech.
+- without a key the answers are text only. After updating from a version with the local voice,
+  "Speak answers" is off until you turn it on again.
 
 ## How it works
 
@@ -124,7 +121,7 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
 
 - **Official CLIs, your login.** Parley starts the unmodified `claude` and `codex` from your
   `PATH`, signed in as you. It never reads or stores their credentials and makes no requests
-  to the Anthropic or OpenAI APIs.
+  to the Anthropic or OpenAI APIs for the agents (only the optional assistant voice calls OpenAI).
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
   telemetry. Parley's own requests are a once-a-day release check on GitHub (you can turn it
   off) and, for GLM, a quota query to Z.ai. With **Remote access** on, the separate bridge

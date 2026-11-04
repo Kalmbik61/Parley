@@ -7,3 +7,4 @@ export * from './pairing.js';
 export * from './push.js';
 export * from './qr.js';
 export * from './projection.js';
+export * from './voice.js';

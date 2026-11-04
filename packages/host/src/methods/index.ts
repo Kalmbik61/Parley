@@ -3,6 +3,7 @@ import { BROWSER_AGENT_ERROR_CODES } from '@parley/protocol';
 import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, NotificationName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
+import type { Jobs } from '../assistant/jobs.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { CapacityFeed } from '../capacity/capacity-feed.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -15,6 +16,7 @@ import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { TelegramService } from '../telegram/service.js';
 import { createTelegramHandlers } from './telegram.js';
+import { createVoiceProviderHandlers } from './voice-provider.js';
 import type { HealthService } from '../health/health-service.js';
 import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
@@ -38,6 +40,7 @@ import type { WorktreeSweeper } from '../worktrees/worktree-sweeper.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createAssistantHandlers } from './assistant.js';
+import { createVoiceHandlers, type VoiceDeps } from './voice.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
 import { createCapacityHandlers } from './capacity.js';
@@ -149,6 +152,10 @@ export interface MethodDeps {
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
   /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
   assistant?: AssistantService;
+  /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */
+  assistantJobs?: Jobs;
+  /** Голосовая сессия GPT-Live и расход (план голоса, B3); без неё методов `voice.*` у хоста нет. */
+  voice?: VoiceDeps;
   /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
   telegram?: TelegramService;
   /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
@@ -254,8 +261,10 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...createHistoryHandlers(),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects, deps.autonomousEngine) : {}),
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
-    ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
+    ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant, deps.assistantJobs)),
+    ...createVoiceHandlers(deps.assistantJobs, deps.voice),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
+    ...createVoiceProviderHandlers(),
     // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.
     ...(deps.capacityFeed === undefined ? {} : { 'capacity.get': createCapacityHandlers({ capacityFeed: deps.capacityFeed }).capacityGet as AnyHandler }),
     // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.

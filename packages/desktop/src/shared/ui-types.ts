@@ -6,7 +6,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
-import { DEFAULT_VOICE, isAssistantVoiceId, TTS_VOICES, type AssistantVoiceId, type TtsVoice } from './tts-types.js';
+import { DEFAULT_VOICE, isOpenAiVoice, type AssistantVoiceId, type VoiceGender } from './tts-types.js';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
 export type Appearance = 'system' | 'dark' | 'light';
@@ -75,8 +75,10 @@ export interface AssistantUi {
   language: AssistantLanguage | null;
   /** «Speak answers» (план 3b, B15): помощник говорит ответы нейроголосом; выключено по умолчанию. */
   speak: boolean;
-  /** Голос каталога (`shared/tts-types.ts`); `null` — `DEFAULT_VOICE`. */
-  voice: AssistantVoiceId | null;
+  /** Род, в котором помощник говорит о себе; `null` — `female`. Пришёл из старого `assistant.voice` (см. `legacyVoiceGender`). */
+  gender: VoiceGender | null;
+  /** Голос OpenAI для озвучки (S-TTS). */
+  apiVoice: AssistantVoiceId;
 }
 
 /** Свёртка законченных ходов в Chat (план 2026-10-30): `off` — лента как есть, `replies` — свёрнута работа, `final` — виден только последний ответ. */
@@ -159,7 +161,7 @@ export const DEFAULT_UI: UiFile = {
     sound: { palette: 'soft', volume: 0.6, ui: false },
     motion: 'system',
   },
-  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, voice: null },
+  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null, speak: false, gender: null, apiVoice: DEFAULT_VOICE },
 };
 
 /**
@@ -330,6 +332,22 @@ function normalizeIsland(value: unknown): IslandUi {
   };
 }
 
+const isVoiceGender = (value: unknown): value is VoiceGender => value === 'female' || value === 'male' || value === 'neutral';
+
+/** Пол голосов прежнего локального движка, которые ставила прежняя версия (`assistant.voice`); новых голосов у них нет. */
+const LEGACY_QWEN_VOICE_GENDER: Readonly<Record<string, VoiceGender>> = {
+  'qwen3-0.6b/serena': 'female',
+  'qwen3-0.6b/vivian': 'female',
+  'qwen3-0.6b/ono_anna': 'female',
+  'qwen3-0.6b/ryan': 'male',
+  'qwen3-0.6b/aiden': 'male',
+};
+
+/** Разовая миграция при загрузке ui.json: пол из старого `assistant.voice`; неизвестный голос — `null`. */
+function legacyVoiceGender(voice: unknown): VoiceGender | null {
+  return typeof voice === 'string' ? (LEGACY_QWEN_VOICE_GENDER[voice] ?? null) : null;
+}
+
 function normalizeAssistant(value: unknown): AssistantUi {
   const source = isRecord(value) ? value : {};
   const fallback = DEFAULT_UI.assistant;
@@ -340,15 +358,16 @@ function normalizeAssistant(value: unknown): AssistantUi {
     model: text(source.model),
     hotkey: text(source.hotkey) ?? fallback.hotkey,
     language: isVoiceLanguage(source.language) && source.language !== 'auto' ? source.language : null,
-    speak: typeof source.speak === 'boolean' ? source.speak : fallback.speak,
-    voice: isAssistantVoiceId(source.voice) ? source.voice : null,
+    // Разовая миграция: в старом ui.json (до голоса через API) нет apiVoice — «Speak answers» выключаем один раз.
+    speak: isOpenAiVoice(source.apiVoice) && typeof source.speak === 'boolean' ? source.speak : fallback.speak,
+    gender: isVoiceGender(source.gender) ? source.gender : legacyVoiceGender(source.voice),
+    apiVoice: isOpenAiVoice(source.apiVoice) ? source.apiVoice : DEFAULT_VOICE,
   };
 }
 
-/** Голос помощника из настроек: выбранный или `DEFAULT_VOICE` (G4). Род голоса — для зеркала хосту и острова. */
-export function assistantVoice(assistant: AssistantUi): TtsVoice {
-  const id = assistant.voice ?? DEFAULT_VOICE;
-  return TTS_VOICES.find((voice) => voice.id === id) ?? TTS_VOICES[0]!;
+/** Род помощника из настроек (для зеркала хосту и острова). */
+export function assistantGender(assistant: AssistantUi): VoiceGender {
+  return assistant.gender ?? 'female';
 }
 
 /**

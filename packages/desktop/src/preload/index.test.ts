@@ -144,39 +144,21 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
   });
 
-  it('нейроголос помощника (план 3b, B15): каталог, скачанные модели, скачивание, отмена, удаление и состояние — свои каналы app:assistant-voice*; id модели уходит в main', async () => {
+  it('озвучка помощника: состояние — канал app:assistant-voice-state; события приходят подписчикам, отписка снимает их; каналов весов нет', async () => {
     const bridge = await loadPreload();
     const { ipcRenderer } = await import('electron');
-    void bridge.app.assistantVoices();
-    void bridge.app.assistantVoiceModels();
-    void bridge.app.assistantVoiceDownload('qwen3-tts-1.7b-q8_0');
-    void bridge.app.assistantVoiceCancel('qwen3-tts-1.7b-q8_0');
-    void bridge.app.assistantVoiceRemove('qwen3-tts-0.6b-q8_0');
     void bridge.app.assistantVoiceState();
-    expect(vi.mocked(ipcRenderer.invoke).mock.calls.slice(-6)).toEqual([
-      ['app:assistant-voices'],
-      ['app:assistant-voice-models'],
-      ['app:assistant-voice-download', 'qwen3-tts-1.7b-q8_0'],
-      ['app:assistant-voice-cancel', 'qwen3-tts-1.7b-q8_0'],
-      ['app:assistant-voice-remove', 'qwen3-tts-0.6b-q8_0'],
-      ['app:assistant-voice-state'],
-    ]);
-  });
-
-  it('нейроголос: прогресс скачивания и состояние движка приходят подписчикам, отписка снимает их', async () => {
-    const bridge = await loadPreload();
-    const progress = vi.fn();
+    expect(vi.mocked(ipcRenderer.invoke).mock.calls.slice(-1)).toEqual([['app:assistant-voice-state']]);
+    const app = bridge.app as unknown as Record<string, unknown>;
+    for (const name of ['assistantVoices', 'assistantVoiceModels', 'assistantVoiceDownload', 'assistantVoiceCancel', 'assistantVoiceRemove', 'onAssistantVoiceProgress']) {
+      expect(app[name], name).toBeUndefined();
+    }
     const state = vi.fn();
-    const offProgress = bridge.app.onAssistantVoiceProgress(progress);
     const offState = bridge.app.onAssistantVoiceState(state);
-    emit('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 1, totalBytes: 2 });
-    emit('app:assistant-voice-state', { state: 'warming' });
-    offProgress();
+    emit('app:assistant-voice-state', { state: 'speaking' });
     offState();
-    emit('app:assistant-voice-progress', { id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 2, totalBytes: 2 });
     emit('app:assistant-voice-state', { state: 'ready' });
-    expect(progress.mock.calls).toEqual([[{ id: 'qwen3-tts-0.6b-q8_0', receivedBytes: 1, totalBytes: 2 }]]);
-    expect(state.mock.calls).toEqual([[{ state: 'warming' }]]);
+    expect(state.mock.calls).toEqual([[{ state: 'speaking' }]]);
   });
 
   it('app.imageThumbnail: путь и необязательная сторона миниатюры уходят в канал app:image-thumbnail, ответ main возвращается как есть', async () => {

@@ -30,7 +30,7 @@ const CONFIG = {
   topInset: 38,
   anchor: 'center',
 } satisfies IslandConfig;
-const SPEAK = { utteranceId: 'u-1', text: 'Two agents are working.', voice: 'qwen3-0.6b/serena', language: 'en' };
+const SPEAK = { utteranceId: 'u-1', text: 'Two agents are working.', voice: 'alloy', language: 'en' };
 
 /** Порт голоса: сообщения по порядку. */
 function fakePort() {
@@ -313,9 +313,9 @@ describe('IPC острова: нейроголос (план 3b, B15)', () => {
     const [first, second] = state.ports;
     expect(first!.port1.close).toHaveBeenCalledTimes(1);
     expect(state.tts.cancelAll).toHaveBeenCalledTimes(1);
-    state.emitState({ state: 'warming' });
+    state.emitState({ state: 'speaking' });
     expect(first!.port1.messages).toEqual([{ type: 'state', state: { state: 'ready' } }]);
-    expect(second!.port1.messages).toEqual([{ type: 'state', state: { state: 'ready' } }, { type: 'state', state: { state: 'warming' } }]);
+    expect(second!.port1.messages).toEqual([{ type: 'state', state: { state: 'ready' } }, { type: 'state', state: { state: 'speaking' } }]);
   });
 
   it.each(['destroyed', 'render-process-gone'] as const)('окно острова пропало (%s) — порт закрыт, речь снята', (gone) => {
@@ -329,7 +329,7 @@ describe('IPC острова: нейроголос (план 3b, B15)', () => {
     listeners.get(gone)!();
     expect(live.close).toHaveBeenCalledTimes(1);
     expect(state.tts.cancelAll).toHaveBeenCalledTimes(2);
-    state.emitState({ state: 'warming' });
+    state.emitState({ state: 'speaking' });
     expect(live.messages).toEqual([{ type: 'state', state: { state: 'ready' } }]);
   });
 
@@ -387,7 +387,9 @@ describe('IPC острова: нейроголос (план 3b, B15)', () => {
       { ...SPEAK, text: 5 },
       { ...SPEAK, utteranceId: '' },
       { ...SPEAK, utteranceId: 'x'.repeat(201) },
-      { ...SPEAK, voice: 'Milena' },
+      { ...SPEAK, voice: '' },
+      { ...SPEAK, voice: 'qwen3-0.6b/serena' },
+      { ...SPEAK, voice: 5 },
       { ...SPEAK, language: 'auto' },
       { ...SPEAK, language: 'english' },
       null,

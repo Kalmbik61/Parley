@@ -216,23 +216,31 @@ export type {
   BrowserAgentTabsResult,
   BrowserAgentWaitResult,
 } from './browser-agent.js';
-export { ASSISTANT_ACTIONS_FEATURE, assistantMethodSchemas, reportLine } from './assistant.js';
+export { ASSISTANT_ACTIONS_FEATURE, assistantDecidedViaSchema, assistantJobCorrelationSchema, assistantJobOriginSchema, assistantMethodSchemas, reportLine } from './assistant.js';
 export type {
   ActionStepView,
   ActionVerb,
   ActionsReport,
+  AssistantCardChanged,
+  AssistantDecidedVia,
   AssistantDetail,
+  AssistantJobChanged,
+  AssistantJobCorrelation,
+  AssistantJobOrigin,
   AssistantMethodResults,
   AssistantOrigin,
   AssistantPhase,
   AssistantProposal,
   AssistantSettings,
   AssistantState,
+  CardDecideResult,
   ProposalCardView,
   RoomProposalView,
 } from './assistant.js';
 export { telegramMethodSchemas } from './telegram.js';
 export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';
+export { voiceProviderMethodSchemas } from './voice-provider.js';
+export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodResults, VoiceProviderState } from './voice-provider.js';
 export { consentMethodSchemas } from './consents.js';
 export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';

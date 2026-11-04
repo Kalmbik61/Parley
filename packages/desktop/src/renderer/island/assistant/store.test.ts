@@ -679,10 +679,11 @@ describe('стор помощника: речь (план 3b B22)', () => {
     off.store.getState().speechConfig({ ...SPEECH_ON, enabled: false });
     expect(off.api.warmup).not.toHaveBeenCalled();
 
-    const missing = speechSetup({ engine: { state: 'not-downloaded' } });
+    const missing = speechSetup({ engine: { state: 'no-key' } });
     missing.store.getState().speechConfig({ ...SPEECH_ON, enabled: false });
     missing.store.getState().speechConfig(SPEECH_ON);
-    expect(missing.api.warmup).not.toHaveBeenCalled();
+    // Без ключа прогрев идёт один раз — при открытии режима: это чтение секрета, оно вернёт движок в ready после сохранения ключа.
+    expect(missing.api.warmup).toHaveBeenCalledTimes(1);
   });
 
   it('первое значение настройки — точка отсчёта, а не включение: прогрева нет', () => {
@@ -796,12 +797,12 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.store.getState()).toMatchObject({ input: 'idle', notice: null, sentence: null });
   });
 
-  it('голос не скачан — ответ текстом без речи; строка про голос один раз за сессию; после загрузки следующий ответ звучит (G3)', () => {
-    const t = speechSetup({ engine: { state: 'not-downloaded' }, speech: { available: false } });
+  it('нет ключа — ответ текстом без речи; строка про голос один раз за сессию; после загрузки следующий ответ звучит (G3)', () => {
+    const t = speechSetup({ engine: { state: 'no-key' }, speech: { available: false } });
     t.host({ phase: 'thinking', question: 'q' });
     t.host({ phase: 'idle', answer: 'Two agents are busy.' });
     expect(t.api.speak).not.toHaveBeenCalled();
-    expect(t.store.getState().notice).toBe('Voice "Serena" isn\'t downloaded — open Settings');
+    expect(t.store.getState().notice).toBe('Add an OpenAI key in Settings → Assistant to hear answers');
     t.store.setState({ notice: null });
     t.host({ phase: 'thinking', question: 'q2', turn: 2 });
     t.host({ phase: 'idle', answer: 'Still busy.', turn: 2 });
@@ -820,13 +821,6 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.store.getState().notice).toBeNull();
   });
 
-  it('нет голоса для языка помощника (uk) — ответ текстом, без речи и без строки (Р8)', () => {
-    const t = speechSetup({ language: 'uk' });
-    t.host({ phase: 'thinking', question: 'q' });
-    t.host({ phase: 'idle', answer: 'Two agents are busy.' });
-    expect(t.api.speak).not.toHaveBeenCalled();
-    expect(t.store.getState().notice).toBeNull();
-  });
 
   it('голос не начал звучать за тайм-аут — отмена, ответ текстом без лица', () => {
     vi.useFakeTimers();

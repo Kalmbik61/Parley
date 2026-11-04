@@ -19,6 +19,7 @@ import {
   cardDetail,
   cardGist,
   codexInstructionsFile,
+  openMemoryDb,
   parseClaudeLine,
   parseCodexLine,
   participantLabel,
@@ -39,8 +40,10 @@ import {
   type WorkMap,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, refKey, type ActionsReport, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
+import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
+import { createConversationStore, type ConversationStore } from './conversation-store.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
@@ -57,6 +60,11 @@ import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js
 
 export const ASSISTANT_IDLE_MS = 15 * 60_000;
 export const ASSISTANT_TURN_MS = 180_000;
+/** Сколько карточка ждёт решения: потом она терминально `expired`, решить её нельзя — только запросить заново. */
+export const ASSISTANT_CARD_TTL_MS = 30 * 60_000;
+/** Сколько последних реплик и символов каждой уходит в новый диалог CLI. */
+const RECAP_MESSAGES = 10;
+const RECAP_CHARS = 500;
 const MAX_TEXT = 4000;
 const MAX_TITLE = 80;
 const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.';
@@ -109,6 +117,11 @@ export interface AssistantServiceDeps {
   log(line: string): void;
   /** Напоминание сработало, пока помощник выключен в настройках: канал сообщает об этом человеку. */
   onReminderWhileOff?(reminder: Reminder): void;
+  /** Durable-хранилище карточек (`createCardStore(workDb())`); без него карточки живут только в памяти процесса. */
+  cards?: CardStore;
+  cardTtlMs?: number;
+  /** Durable-история разговора (`createConversationStore(workDb())`); без неё она живёт только в памяти процесса. */
+  conversations?: ConversationStore;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
   now?(): number;
   idleMs?: number;
@@ -125,7 +138,20 @@ export interface AssistantService {
   settings(): AssistantSettings | null;
   cancel(): void;
   /** `action: 'actions'` — подтверждение карточки с планом; без него хост такой план не выполнит (старое окно). */
-  decide(proposalId: string, decision: 'send' | 'cancel', action?: 'actions'): Promise<{ applied: boolean; error: string | null }>;
+  decide(proposalId: string, decision: 'send' | 'cancel', action?: 'actions', via?: CardVia): Promise<{ applied: boolean; error: string | null }>;
+  /**
+   * Решение по карточке с проверкой ревизии (`cards.decide`, телефон): устаревшая ревизия, уже решённая и просроченная
+   * карточки — чистый отказ без действия. Дальше та же реализация `decide`, что у окна и Telegram.
+   */
+  decideCard(input: { cardId: string; revision: number; choice: 'send' | 'cancel' }, via?: CardVia): Promise<CardDecideResult>;
+  /** Долговечная карточка ядра по id (вид, состояние, ревизия); `null` — такой нет. Источник правды для каналов. */
+  card(proposalId: string): { kind: string; state: CardRow['state']; revision: number } | null;
+  /** Изменения карточек ядра по одной: needs_confirmation, decided, expired, superseded. Возвращает отписку. */
+  onCardChanged(listener: (change: AssistantCardChanged) => void): () => void;
+  /** Детерминированный обзор (кто работает, что зависло) без запуска CLI: тот же текст, что у `parley_overview`. */
+  overview(): Promise<string>;
+  /** «Запросить заново»: новая карточка (новый id) на месте просроченной; повторного `decide` старой нет. */
+  reissue(proposalId: string): { applied: boolean; error: string | null; proposalId: string | null };
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
@@ -144,6 +170,8 @@ interface Conversation {
   token: string;
   sessionId: string | null;
   endAfterTurn: boolean;
+  /** Диалог CLI только что начат (рестарт, idle, смена провайдера): первый ход получит выжимку истории. */
+  recapPending: boolean;
 }
 
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
@@ -151,7 +179,7 @@ type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
 
 /** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
-type Pending = PendingBody & { token: string };
+type Pending = PendingBody & { token: string; /** Откуда пришло решение; ставится в `decide`. */ via?: CardVia };
 type PendingBody =
   | {
       kind: 'message';
@@ -192,6 +220,10 @@ interface Ask {
   id: string | null;
   ticket: number;
   origin: AssistantOrigin;
+  /** Ключ хода в истории: один на вопрос, повтор запуска (resume) его не меняет. */
+  key: string;
+  /** Выжимка прошлой истории для нового диалога CLI; считается один раз на вопрос. */
+  recap?: string | null;
 }
 
 /** Чем кончился запуск хода: `not-ready` и `evicted` — повторять позже, `failed` — ошибка уже показана окну. */
@@ -286,11 +318,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let state: AssistantState = { ...EMPTY, instance };
   let conversation: Conversation | null = null;
   let turn: TurnHandle | null = null;
-  let pending: Pending | null = null;
+  const cards = deps.cards ?? createCardStore(openMemoryDb());
+  const cardTtl = deps.cardTtlMs ?? ASSISTANT_CARD_TTL_MS;
+  const history = deps.conversations ?? createConversationStore(openMemoryDb());
+  /** Источник карточек, что предлагает текущий ход: карточка вытесняет только карточку своего источника. */
+  let cardSource: string = 'island';
+  /** Растёт на `reset`: карточка, захваченная до него, после сбоя не возвращается. */
+  let resets = 0;
+  /** Один таймер проверки сроков: он всегда стоит на ближайшем `expiresAt` среди активных карточек. */
+  let sweepTimer: NodeJS.Timeout | null = null;
   /** Id карточки `actions`, чей план выполняется сейчас; пока он не `null`, второй план не предлагается и не стартует. */
   let running: string | null = null;
   let outcomeNote: string | null = null;
-  let proposals = 0;
+  let proposals = cards.lastNumber();
   let idleTimer: NodeJS.Timeout | null = null;
   /** Билет последнего вопроса: `cancel`, `reset` и новый вопрос сдвигают его, и запуск, что ещё в пути, не стартует. */
   let asks = 0;
@@ -302,6 +342,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let stopped = false;
   let mirror: AssistantSettings | null = null;
   const stateListeners = new Set<(state: AssistantState) => void>();
+  const cardListeners = new Set<(change: AssistantCardChanged) => void>();
   /** Выключенный помощник сообщает о повторяющемся напоминании один раз. */
   const notifiedOff = new Set<string>();
 
@@ -309,6 +350,41 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     state = { ...state, ...patch, instance };
     deps.broadcast('assistant.changed', state);
     for (const listener of [...stateListeners]) listener(state);
+  };
+  /** Изменение карточки ядра уходит слушателям по одной: каждый канал закрывает именно ту карточку, что решена. */
+  const changeOf = (row: CardRow): AssistantCardChanged => ({
+    cardId: row.proposalId,
+    kind: row.kind,
+    state: row.state === 'active' ? 'needs_confirmation' : row.state,
+    revision: row.revision,
+    expiresAt: row.expiresAt,
+    decidedVia: row.decidedVia,
+    outcome: row.outcome,
+  });
+  /** Переходы карточек при старте (погасли за время простоя, закрыты как unknown): слушатели ещё не подключены, каждый новый получает их при подключении. */
+  let startupChanged: string[] = [];
+  const emitCard = (row: CardRow | null): void => {
+    if (row === null || stopped) return;
+    const change = changeOf(row);
+    for (const listener of [...cardListeners]) {
+      try {
+        listener(change);
+      } catch (error) {
+        deps.log(`assistant: card listener failed: ${(error as Error).message}`);
+      }
+    }
+  };
+  /** Итог захваченной карточки с событием `decided`. */
+  const settleCard = (proposalId: string, via: CardVia, outcome: string): void => {
+    cards.settle(proposalId, via, outcome, now());
+    emitCard(cards.get(proposalId));
+  };
+  /** Карточки, что были активны до `put`/`reissue`/`reset`, а теперь вытеснены: событие `superseded` по каждой. */
+  const emitSuperseded = (before: CardRow[]): void => {
+    for (const card of before) {
+      const row = cards.get(card.proposalId);
+      if (row?.state === 'superseded') emitCard(row);
+    }
   };
   const source = (): OverviewSource => ({
     entries: deps.works.snapshot().entries,
@@ -324,16 +400,58 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     providers: await deps.providers().catch(() => undefined),
     now: new Date(now()),
   });
-  const restPhase = (): AssistantState['phase'] => (pending === null ? 'idle' : 'awaiting-confirm');
+  const pendingOf = (row: CardRow): Pending => ({ token: '', ...(row.payload as object), kind: row.kind, view: row.view }) as Pending;
+  /** Карточка, что показывается окну: последняя из активных. */
+  const shown = (): Pending | null => {
+    const rows = cards.active();
+    const last = rows[rows.length - 1];
+    return last === undefined ? null : pendingOf(last);
+  };
+  function setPending(card: Pending): void {
+    const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
+    const before = cards.active();
+    const row = cards.put({ proposalId: view.id, kind, view, payload, source: cardSource, expiresAt: now() + cardTtl }, now());
+    armSweep();
+    emitSuperseded(before);
+    emitCard(row);
+  }
+  function armSweep(): void {
+    if (sweepTimer !== null) clearTimeout(sweepTimer);
+    sweepTimer = null;
+    const due = cards.active().map((card) => card.expiresAt);
+    if (stopped || due.length === 0) return;
+    sweepTimer = setTimeout(sweep, Math.max(0, Math.min(...due) - now()) + 1);
+    sweepTimer.unref?.();
+  }
+  /** Просроченные карточки становятся `expired`; если окно показывало такую, оно получает следующую или пустоту. */
+  function sweep(): void {
+    const expired = cards.expireDue(now());
+    // Таймер стоит на ближайшем сроке всегда: иначе следующая карточка не погасла бы вовремя.
+    armSweep();
+    for (const card of expired) emitCard(card);
+    if (expired.length === 0 || stopped) return;
+    if (expired.some((card) => card.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
+  }
+  /** Сбой записи истории не должен ронять ход. */
+  const remember = (write: () => void): void => {
+    try {
+      write();
+    } catch (error) {
+      deps.log(`assistant: history write failed: ${(error as Error).message}`);
+    }
+  };
+  /** Прошлые реплики для нового диалога CLI: сессия в памяти, а история общая для каналов и переживает рестарт. */
+  const recapOf = (): string | null => {
+    const lines = history.history(RECAP_MESSAGES).map((item) => `${item.role === 'user' ? 'Person' : 'You'} (${item.channel}): ${item.text.slice(0, RECAP_CHARS)}`);
+    return lines.length === 0 ? null : `[system: earlier in this conversation, oldest first]\n${lines.join('\n')}\n[system: end of earlier conversation]`;
+  };
+  const restPhase = (): AssistantState['phase'] => (shown() === null ? 'idle' : 'awaiting-confirm');
 
   function endConversation(): void {
     conversation = null;
     deps.endpoint.setToken(null);
     outcomeNote = null;
-    if (pending !== null) {
-      pending = null;
-      publish({ proposal: null, phase: turn === null ? 'idle' : state.phase });
-    }
+    // Карточки durable и разговор переживают: конец диалога CLI их не снимает.
   }
 
   function touch(): void {
@@ -369,7 +487,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       endConversation();
     }
     if (conversation === null) {
-      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false };
+      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
       deps.endpoint.setToken(conversation.token);
     }
     return conversation;
@@ -416,8 +534,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
     // «Да» словами при ждущей карточке `actions` её не подтверждает: ход узнаёт об этом от Parley и просит нажать кнопку.
-    const buttonNote = pending?.kind === 'actions' && matchConfirm(text) === 'send' ? ACTIONS_BUTTON_NOTE : null;
-    const prompt = [voiceNote, outcomeNote, buttonNote, text].filter((part) => part !== null).join('\n');
+    const buttonNote = shown()?.kind === 'actions' && matchConfirm(text) === 'send' ? ACTIONS_BUTTON_NOTE : null;
+    // Диалог CLI новый (idle, рестарт, смена провайдера): прошлая история подаётся первым ходом одной вставкой, раньше записи этого вопроса.
+    if (ask.recap === undefined) ask.recap = current.recapPending ? recapOf() : null;
+    const prompt = [ask.recap, voiceNote, outcomeNote, buttonNote, text].filter((part) => part !== null).join('\n');
     outcomeNote = null;
     const command = assistantCommand(
       entry,
@@ -447,6 +567,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Остановка хоста во время запуска — то же самое: процесс уже не нужен.
     if (ask.ticket !== asks || stopped) return 'evicted';
     current.gender = gender;
+    current.recapPending = false;
+    if (!retried) remember(() => history.write({ turnKey: ask.key, role: 'user', channel: ask.origin, text }, now()));
     // Отчёт идущего плана переживает новый ход; законченный убирается.
     publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
 
@@ -508,6 +630,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         if (turn !== handle) return;
         turn = null;
         if (take(stripper.end())) publish({ mood: firstMood(moods), answer, moods });
+        if (end.ok && answer !== '') remember(() => history.write({ turnKey: ask.key, role: 'assistant', channel: ask.origin, text: answer }, now()));
         await finish(end, entry, model, language, text, retried, current, ask);
       })
       .catch((error: unknown) => {
@@ -610,7 +733,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     }
     const kind = input['kind'];
     proposals += 1;
-    pending = {
+    const fresh: Pending = {
       token: conversation?.token ?? '',
       kind: 'message',
       view: {
@@ -626,7 +749,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       target,
       to: mentioned.map((session) => session.ref.sessionId),
     };
-    publish({ proposal: pending.view, outcome: null });
+    setPending(fresh);
+    publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
@@ -670,7 +794,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (task.length > MAX_TEXT) return { status: 400, body: { error: `task is longer than ${MAX_TEXT} characters` } };
     const names = members.map((member) => member.name);
     proposals += 1;
-    pending = {
+    const fresh: Pending = {
       token: conversation?.token ?? '',
       kind: 'room',
       view: {
@@ -688,7 +812,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       members: members.map((member) => member.id),
       lead: lead.id,
     };
-    publish({ proposal: pending.view, outcome: null });
+    setPending(fresh);
+    publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
@@ -708,7 +833,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (note.length > MAX_TEXT) return { status: 400, body: { error: `note is longer than ${MAX_TEXT} characters` } };
     const kept = choice === 'return' && note !== '' ? note : null;
     proposals += 1;
-    pending = {
+    const fresh: Pending = {
       token: conversation?.token ?? '',
       kind: 'room-decision',
       view: {
@@ -730,7 +855,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       room,
     };
-    publish({ proposal: pending.view, outcome: null });
+    setPending(fresh);
+    publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
@@ -808,7 +934,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       decision.kind === 'permission' ? (decision.behavior === 'allow' ? 'Allow' : 'Deny') : decision.kind === 'question' ? 'Answer' : decision.choice === 'auto-accept' ? 'Accept plan' : 'Approve each edit';
     const answerLines = chosenAnswers.map((answer, index) => `\n${chosenAnswers.length === 1 ? 'A' : `A${index + 1}`}: ${answer}`).join('');
     proposals += 1;
-    pending = {
+    const fresh: Pending = {
       token: conversation?.token ?? '',
       kind: 'decision',
       view: {
@@ -822,7 +948,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       ref: session.ref,
     };
-    publish({ proposal: pending.view, outcome: null });
+    setPending(fresh);
+    publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN + note } };
   }
 
@@ -852,6 +979,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return map;
   }
 
+  /** Обзор без CLI: данные карты, живая активность и карточки ленты; тот же текст читают инструмент и голосовой канал. */
+  async function overview(): Promise<string> {
+    const src = source();
+    const waiting = await waitingCards(src);
+    return overviewText({ ...src, ...(await reasonContext()), cards: (ref) => waiting.get(refKey(ref)) });
+  }
+
   /** Ждущие карточки одной сессии для `parley_detail`; сбой ленты — без карточек. */
   async function waitingCardsOf(ref: SessionRef): Promise<readonly FeedCard[]> {
     if (deps.feed === undefined) return [];
@@ -868,7 +1002,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // в тот разговор, что создал карточку: после `reset` она ушла бы в чужой.
     if (conversation?.token === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
     touch();
-    publish({ proposal: pending?.view ?? null, outcome, phase: turn === null ? restPhase() : state.phase });
+    settleCard(current.view.id, current.via ?? 'island', outcome);
+    publish({ proposal: shown()?.view ?? null, outcome, phase: turn === null ? restPhase() : state.phase });
     return { applied: true, error: error ?? null };
   }
 
@@ -974,13 +1109,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if ('error' in prepared) return { status: 400, body: { error: prepared.error } };
     const { plan } = prepared;
     proposals += 1;
-    pending = {
+    const fresh: Pending = {
       token: conversation?.token ?? '',
       kind: 'actions',
       view: { action: 'actions', id: `p${proposals}`, target: plan.target, where: plan.where, text: plan.text, steps: plan.view },
       plan,
     };
-    publish({ proposal: pending.view, outcome: null });
+    setPending(fresh);
+    publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: ACTIONS_SHOWN } };
   }
 
@@ -1022,11 +1158,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
    * Каждый шаг публикует отчёт; в конце — итог, `outcome: 'done'` и заметка модели, если разговор тот же.
    */
   function startPlan(current: Extract<Pending, { kind: 'actions' }>): { applied: true; error: null } {
-    pending = null;
     const id = current.view.id;
     running = id;
     publish({
-      proposal: null,
+      proposal: shown()?.view ?? null,
       outcome: null,
       phase: turn === null ? restPhase() : state.phase,
       report: { proposalId: id, status: 'running', steps: current.plan.view.map((step) => ({ line: step.line, status: 'waiting' })), failedStep: null, reason: null, notes: [] },
@@ -1044,6 +1179,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       )
       .then((final) => {
         running = null;
+        settleCard(id, current.via ?? 'island', final.status === 'stopped' ? 'stopped' : 'done');
         touch();
         if (conversation?.token === current.token) outcomeNote = planNote(id, final);
         publish({ report: final, outcome: 'done', phase: turn === null ? restPhase() : state.phase });
@@ -1060,7 +1196,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     try {
       stopTurn();
       asks += 1;
-      const ask: Ask = { id: params.askId ?? null, ticket: asks, origin };
+      cardSource = origin;
+      const ask: Ask = { id: params.askId ?? null, ticket: asks, origin, key: `${instance}:${asks}` };
       try {
         const picked = await pick(params.provider);
         if ('offline' in picked) {
@@ -1117,7 +1254,16 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { status: 200, body: { text: `Scheduled ${added.id} for ${clock(Date.parse(added.at))} (${when})` } };
   }
 
-  return {
+  // Рестарт хоста: просроченное гаснет, нетерминальная карточка снова показывается окну и подтверждается как прежде.
+  startupChanged = [...cards.closeUnsettled(now()), ...cards.expireDue(now())].map((card) => card.proposalId);
+  const resumed = shown();
+  if (resumed !== null) {
+    state = { ...state, proposal: resumed.view, phase: 'awaiting-confirm' };
+    // Проверка стоит на ближайшем сроке, а не на полном TTL: у карточки могла остаться минута.
+    armSweep();
+  }
+
+  const api: AssistantService = {
     async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
       await runAsk(params, origin);
@@ -1138,25 +1284,37 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       stopTurn();
       publish({ phase: restPhase(), detail: null });
     },
-    async decide(proposalId, decision, action) {
-      const current = pending;
-      if (current === null || current.view.id !== proposalId) return { applied: false, error: 'This card is no longer current' };
+    async decide(proposalId, decision, action, via = 'island') {
+      sweep();
+      const peek = cards.get(proposalId);
+      if (peek === null) return { applied: false, error: 'This card is no longer current' };
+      // План выполняется только по кнопке карточки нового окна: клиент без поля `action` его не подтверждает.
+      if (peek.state === 'active' && peek.kind === 'actions' && decision === 'send') {
+        if (action !== 'actions') return { applied: false, error: 'Update Parley to confirm this card' };
+        if (running !== null) return { applied: false, error: 'Another plan is still running' };
+      }
+      // Карточка забирается до первого await и персистентно: второй `decide` с тем же id не выполнит действие повторно.
+      const claimed = cards.claim(proposalId, now());
+      // Срок вышел внутри claim (sweep его не успел): переход виден каналам так же, как погашение по таймеру.
+      if (!claimed.ok && claimed.reason === 'expired' && peek.state === 'active') emitCard(cards.get(proposalId));
+      if (!claimed.ok) return { applied: false, error: claimed.reason === 'expired' ? 'This card has already expired' : 'This card is no longer current' };
+      const current: Pending = { ...pendingOf(claimed.card), via };
+      const epoch = resets;
       if (current.kind === 'actions') {
-        if (decision === 'send') {
-          // План выполняется только по кнопке карточки нового окна: клиент без поля `action` его не подтверждает.
-          if (action !== 'actions') return { applied: false, error: 'Update Parley to confirm this card' };
-          if (running !== null) return { applied: false, error: 'Another plan is still running' };
-          return startPlan(current);
-        }
-        pending = null;
+        if (decision === 'send') return startPlan(current);
         return settle(current, 'cancelled');
       }
-      // Карточка забирается до первого await: второй `decide` с тем же id не выполнит действие повторно.
-      pending = null;
       if (decision === 'cancel') return settle(current, 'cancelled');
-      // Не вышло — карточка возвращается, если никто не предложил новую и разговор тот же (после `reset` её уже нет).
+      // Не вышло — карточка возвращается, если её источник не занят новой и разговор не сбрасывали. Не вернулась —
+      // закрывается явно как `failed`: `unknown` остаётся для настоящего падения хоста посреди действия.
       const restore = (): void => {
-        if (pending === null && conversation?.token === current.token) pending = current;
+        if (epoch === resets && cards.release(proposalId)) {
+          armSweep();
+          emitCard(cards.get(proposalId));
+          return;
+        }
+        const row = cards.get(proposalId);
+        if (row?.state === 'decided' && row.outcome === null) settleCard(proposalId, via, 'failed');
       };
       try {
         const result =
@@ -1174,15 +1332,69 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         return { applied: false, error: (error as Error).message };
       }
     },
+    async decideCard(input, via = 'mobile') {
+      sweep();
+      const row = cards.get(input.cardId);
+      const refuse = (reason: 'already_handled' | 'expired' | 'not_found', error: string): CardDecideResult => ({ applied: false, error, reason });
+      if (row === null) return refuse('not_found', 'This card is no longer current');
+      if (row.state === 'expired') return refuse('expired', 'This card has already expired');
+      // Уже решённая, вытесненная и с устаревшей ревизией — одно и то же для клиента: действие не повторяется.
+      if (row.state !== 'active' || row.revision !== input.revision) return refuse('already_handled', 'This card has already been handled');
+      const result = await api.decide(input.cardId, input.choice, row.kind === 'actions' ? 'actions' : undefined, via);
+      return result.applied ? { applied: true, error: result.error ?? null, reason: 'applied' } : { applied: false, error: result.error ?? 'This card is no longer current', reason: 'failed' };
+    },
+    card(proposalId) {
+      const row = cards.get(proposalId);
+      return row === null ? null : { kind: row.kind, state: row.state, revision: row.revision };
+    },
+    onCardChanged(listener) {
+      cardListeners.add(listener);
+      // Подключение после старта: слушатель получает переходы старта и все активные карточки (уведомления могут снять эскалации).
+      const replay = stopped ? [] : [...new Set(startupChanged)].map((id) => cards.get(id)).concat(cards.active());
+      for (const row of replay) {
+        if (row === null) continue;
+        try {
+          listener(changeOf(row));
+        } catch (error) {
+          deps.log(`assistant: card listener failed: ${(error as Error).message}`);
+        }
+      }
+      return () => {
+        cardListeners.delete(listener);
+      };
+    },
+    overview,
+    reissue(proposalId) {
+      sweep();
+      proposals += 1;
+      const before = cards.active();
+      const row = cards.reissue(proposalId, `p${proposals}`, now() + cardTtl, now());
+      if (row === null) {
+        proposals -= 1;
+        return { applied: false, error: 'Only an expired card can be requested again', proposalId: null };
+      }
+      armSweep();
+      emitSuperseded(before);
+      emitCard(row);
+      publish({ proposal: row.view as AssistantProposal, outcome: null, phase: turn === null ? restPhase() : state.phase });
+      return { applied: true, error: null, proposalId: row.proposalId };
+    },
     reset() {
       asks += 1;
       stopTurn();
       endConversation();
-      pending = null;
+      remember(() => void history.startNew(now()));
+      const before = cards.active();
+      cards.supersedeAll();
+      emitSuperseded(before);
+      resets += 1;
       // Идущий план продолжается: его отчёт остаётся на острове, пока не кончится.
       publish({ ...EMPTY, turn: state.turn, report: running === null ? null : (state.report ?? null) });
     },
-    state: () => state,
+    state: () => {
+      sweep();
+      return state;
+    },
     sent: (ref) => readSent(deps.home, ref),
     async tool(name, args) {
       const current = conversation;
@@ -1193,8 +1405,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const hidden = hiddenOf(src);
       switch (name) {
         case 'parley_overview': {
-          const cards = await waitingCards(src);
-          return { status: 200, body: { text: overviewText({ ...src, ...(await reasonContext()), cards: (ref) => cards.get(refKey(ref)) }) } };
+          return { status: 200, body: { text: await overview() } };
         }
         case 'parley_detail': {
           const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
@@ -1301,7 +1512,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       idleWaiters = [];
       for (const wake of waiters) wake(); // ждущие напоминания узнают, что хост останавливается
       if (idleTimer !== null) clearTimeout(idleTimer);
+      if (sweepTimer !== null) clearTimeout(sweepTimer);
+      sweepTimer = null;
       deps.endpoint.setToken(null);
     },
   };
+  return api;
 }

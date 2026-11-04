@@ -23,7 +23,6 @@ const { DatabaseSync: Database } = createRequire(import.meta.url)(
 ) as typeof import('node:sqlite');
 
 export const WORK_DB_FILE = 'parley.db';
-export const WORK_DB_SCHEMA_VERSION = 3;
 /** Сколько соединение ждёт чужую блокировку по умолчанию; запись на время транзакции ставит своё и возвращает это (спека хранилища 6.9). */
 export const BUSY_TIMEOUT_MS = 5000;
 
@@ -90,9 +89,6 @@ CREATE INDEX message_unread_seq ON message_unread(project_path, work_id, seq);
  */
 const MESSAGES_SENDER_INDEX = 'CREATE INDEX IF NOT EXISTS messages_sender ON messages(project_path, work_id, room_id, sender, seq)';
 
-/** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) `upgradeLettersSchema` поднимает до неё. */
-const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
-
 /** Номер создания не зависит от часов/rowid и не освобождается при удалении работы. */
 function upgradeIncarnations(db: DatabaseSync): void {
   db.exec(`
@@ -118,6 +114,202 @@ function upgradeIncarnations(db: DatabaseSync): void {
         WHERE project_path = NEW.project_path AND id = NEW.id;
     END;
   `);
+}
+
+/**
+ * Assistant Core: `assistant_jobs` — задания помощника (`idempotency_key` не даёт выполнить одно дело дважды),
+ * `assistant_cards` — карточки подтверждения, что переживают рестарт хоста. `payload_json` карточки — всё, что хост
+ * знает о действии помимо вида для окна (`view_json`). `IF NOT EXISTS`: шаг повторяем на базе, у которой версию опустили.
+ */
+const SCHEMA_ASSISTANT_CORE = `
+  CREATE TABLE IF NOT EXISTS assistant_jobs (
+    job_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    origin TEXT NOT NULL,
+    correlation_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued','running','needs_confirmation','completed','failed','cancelled')),
+    revision INTEGER NOT NULL,
+    request_text TEXT NOT NULL,
+    result_summary TEXT,
+    provider TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_via TEXT,
+    outcome TEXT);
+  CREATE INDEX IF NOT EXISTS assistant_jobs_state ON assistant_jobs(state, provider, created_at);
+  CREATE TABLE IF NOT EXISTS assistant_cards (
+    proposal_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    view_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('active','decided','expired','superseded')),
+    revision INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_via TEXT,
+    outcome TEXT);
+  CREATE INDEX IF NOT EXISTS assistant_cards_state ON assistant_cards(state, source, created_at);
+`;
+
+/**
+ * Уведомления (спека 2026-11-03, T1): `notifications` — каноническое хранилище событий, только конверт (виды, счётчики,
+ * маршруты, opaque-id; пользовательских текстов в строках нет). `UNIQUE(dedupe_key)` + `ON CONFLICT DO NOTHING` не дают
+ * повтору события (reconnect, рестарт) создать вторую запись. `notification_outbox` — durable очередь доставки по каналам:
+ * попытки, `next_attempt_at` и предел попыток. Пассивный сток: прошлые события при первом старте не заливаются.
+ */
+const SCHEMA_NOTIFICATIONS = `
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    event_id TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    workspace_id TEXT,
+    entity_ref TEXT NOT NULL,
+    type TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info','warning','critical')),
+    created_at INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    requires_action INTEGER NOT NULL CHECK(requires_action IN (0,1)),
+    payload_ref TEXT,
+    notification_id TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK(state IN ('new','seen','acked','expired')),
+    seen_at INTEGER,
+    acked_at INTEGER,
+    acked_via TEXT);
+  CREATE INDEX IF NOT EXISTS notifications_state ON notifications(state, created_at);
+  CREATE TABLE IF NOT EXISTS notification_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    notification_id TEXT NOT NULL REFERENCES notifications(notification_id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','sent','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL,
+    sent_at INTEGER,
+    UNIQUE(notification_id, channel));
+  CREATE INDEX IF NOT EXISTS notification_outbox_due ON notification_outbox(state, next_attempt_at);
+`;
+
+/**
+ * Учёт голосовых сессий GPT-Live (спека 2026-11-03, B2): строка на сессию. `seconds_estimate` растёт по usage-событиям,
+ * `seconds_final` и `cost_final` ставит `session.closed`; `state = 'closed'` — терминал. `cost_final` пока NULL:
+ * тариф за секунду не зашит в код. День — локальный (`YYYY-MM-DD`), по нему B4 считает дневной лимит.
+ */
+const SCHEMA_VOICE_USAGE = `
+  CREATE TABLE IF NOT EXISTS voice_usage (
+    voice_session_id TEXT PRIMARY KEY,
+    day TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('open','closed')),
+    seconds_estimate INTEGER NOT NULL DEFAULT 0,
+    seconds_final INTEGER,
+    cost_final REAL,
+    close_reason TEXT);
+  CREATE INDEX IF NOT EXISTS voice_usage_day ON voice_usage(day);
+`;
+
+/**
+ * Долговечные разговоры помощника (спека 2026-11-03, C1): история ходов острова и Telegram. Канал — атрибут сообщения,
+ * а не разговора: оба канала пишут в один. `turn_key` + `role` уникальны в разговоре: повтор записи не плодит строк.
+ * Тексты людей живут только здесь.
+ */
+const SCHEMA_ASSISTANT_CONVERSATIONS = `
+  CREATE TABLE IF NOT EXISTS assistant_conversations (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS assistant_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+    turn_key TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    channel TEXT NOT NULL CHECK(channel IN ('island','telegram','reminder','voice')),
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(conversation_id, turn_key, role));
+`;
+
+/** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
+export interface MigrationStep {
+  version: number;
+  up(db: DatabaseSync): void;
+}
+
+/**
+ * Реестр миграций: упорядоченный по возрастанию `version` список. Шаги 1–3 — записанная история схемы, не правится;
+ * новая схема — новый шаг в конец с номером на единицу больше (номера не резервируются, версию схемы задаёт последний шаг).
+ * Каждая закоммиченная промежуточная версия должна быть годной точкой старта для следующих шагов: шаг 2, например,
+ * опирается на то, что его путь для базы версии 1 переносит и пустую базу.
+ */
+export const MIGRATIONS: readonly MigrationStep[] = [
+  // 1: основа (`works`, `entries`).
+  { version: 1, up: (db) => db.exec(SCHEMA_BASE) },
+  // 2: письма в своих таблицах; базу версии 1 (письма в `entries`) здесь же переносят и сверяют (спека хранилища 6.6).
+  // Перенос читает работы вместе с `incarnation`, поэтому базе версии 1 номера создания выдаются до него.
+  {
+    version: 2,
+    up: (db) => {
+      db.exec(SCHEMA_LETTERS);
+      upgradeIncarnationsOnce(db);
+      upgradeLettersSchema(db);
+    },
+  },
+  // 3: durable-номера создания работ (базам версии 2; пройденным через шаг 2 уже выданы).
+  { version: 3, up: upgradeIncarnationsOnce },
+  // 4: durable jobs и карточки Assistant Core (спека 2026-11-03, задача C2).
+  { version: 4, up: (db) => db.exec(SCHEMA_ASSISTANT_CORE) },
+  // 5: канонические уведомления и durable outbox (спека 2026-11-03, задача T1).
+  { version: 5, up: (db) => db.exec(SCHEMA_NOTIFICATIONS) },
+  // 6: флаг «экран показал финал job» переживает рестарт (спека 2026-11-03, C2); колонку `outcome` он не занимает.
+  {
+    version: 6,
+    up: (db) => {
+      // Шаг повторяем на базе с опущенной версией: колонка, что уже есть, не добавляется второй раз.
+      const has = db.prepare('PRAGMA table_info(assistant_jobs)').all().some((column) => column['name'] === 'delivered_inline');
+      if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN delivered_inline INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  // 7: учёт голосовых сессий GPT-Live (спека 2026-11-03, B2).
+  { version: 7, up: (db) => db.exec(SCHEMA_VOICE_USAGE) },
+  // 8: долговечные разговоры помощника (спека 2026-11-03, C1).
+  { version: 8, up: (db) => db.exec(SCHEMA_ASSISTANT_CONVERSATIONS) },
+];
+
+export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+
+/**
+ * Прогоняет шаги, которых в базе ещё нет, каждый в своей `BEGIN IMMEDIATE` транзакции вместе с подъёмом `user_version`:
+ * упал шаг — откатились и его таблицы, и версия, база остаётся на предыдущем шаге. Версия читается под замком записи,
+ * поэтому второй процесс, дождавшийся замка, видит уже поднятую версию и шаг пропускает.
+ */
+export function runMigrations(db: DatabaseSync, steps: readonly MigrationStep[] = MIGRATIONS): void {
+  // Быстрый путь: база уже на последнем шаге — замок записи не берём. Под замком версия всё равно перечитывается.
+  const last = steps[steps.length - 1];
+  if (!last || userVersion(db) >= last.version) return;
+  for (const step of steps) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (userVersion(db) < step.version) {
+        step.up(db);
+        db.exec(`PRAGMA user_version = ${step.version}`);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Транзакции уже нет (COMMIT не прошёл или SQLite откатила сама): причина — исходная ошибка, её и бросаем.
+      }
+      throw error;
+    }
+  }
+}
+
+/** Номера создания выдаются один раз: у базы, где колонка уже есть (прошла шаг 2 с версии 1 или нового дома), шаг пропускается. */
+function upgradeIncarnationsOnce(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(works)').all();
+  if (!columns.some((column) => column['name'] === 'incarnation')) upgradeIncarnations(db);
 }
 
 interface Opened {
@@ -160,6 +352,13 @@ function createPrivateFile(file: string): void {
   }
 }
 
+/** База в памяти со всей схемой: для тестов и для сервисов, которым хранилище ещё не передали. */
+export function openMemoryDb(): DatabaseSync {
+  const db = new Database(':memory:');
+  runMigrations(db);
+  return db;
+}
+
 /** Закрывает базу, если она открыта: для тестов и остановки хоста. Повторный вызов ничего не делает. */
 export function closeWorkDb(): void {
   const current = opened;
@@ -169,8 +368,7 @@ export function closeWorkDb(): void {
 
 /**
  * Настройки соединения и схема. Сначала `busy_timeout`: остальные PRAGMA и создание схемы тоже могут упереться
- * в замок другого процесса (CLI агента открывает ту же базу). Версия схемы читается уже под `BEGIN IMMEDIATE`,
- * чтобы два процесса не создали таблицы дважды.
+ * в замок другого процесса (CLI агента открывает ту же базу). Схему ведёт реестр `MIGRATIONS`.
  */
 function prepare(db: DatabaseSync): void {
   db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
@@ -178,32 +376,10 @@ function prepare(db: DatabaseSync): void {
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');
 
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const version = userVersion(db);
-    if (version === 1) {
-      // База версии 1 (сборка плана 3, письма — строки `entries`): письменные таблицы создаются рядом, письма переезжают в
-      // них и сверяются, и всё это одной транзакцией с подъёмом версии — упало что-то, остаётся схема 1 (спека хранилища 6.6).
-      db.exec(SCHEMA_LETTERS);
-      upgradeIncarnations(db);
-      upgradeLettersSchema(db);
-    } else if (version === 0) {
-      db.exec(SCHEMA_V2);
-    }
-    if (version < 3 && version !== 1) upgradeIncarnations(db);
-    if (version <= WORK_DB_SCHEMA_VERSION) {
-      db.exec(MESSAGES_SENDER_INDEX);
-      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
-    }
-    db.exec('COMMIT');
-  } catch (error) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      // Транзакции уже нет (COMMIT не прошёл или SQLite откатила сама): причина — исходная ошибка, её и бросаем.
-    }
-    throw error;
-  }
+  runMigrations(db);
+  // Индекс отправителя чинится и у баз, где он пропал: `IF NOT EXISTS` у целой базы ничего не делает.
+  // База новее кода (user_version выше известной) остаётся нетронутой: схему там ведёт более новый код.
+  if (userVersion(db) <= WORK_DB_SCHEMA_VERSION) db.exec(MESSAGES_SENDER_INDEX);
 }
 
 function userVersion(db: DatabaseSync): number {

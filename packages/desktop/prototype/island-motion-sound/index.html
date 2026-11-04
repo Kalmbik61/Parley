@@ -530,10 +530,10 @@ function synth(kind,{duck=false}={}){
   A.voice.gain.cancelScheduledValues(c.currentTime);A.voice.gain.setTargetAtTime(.3,c.currentTime,.02);A.voice.gain.setTargetAtTime(1,c.currentTime+.7,.15)}}
 /* ================= voice (#9 §6): real TTS sentences, the face listens to them ================= */
 /* plan 3 seam: one sentence -> {pcm: Float32Array mono, sampleRate}; here the r-06 bench sentences play that role.
-   ru: Qwen3-TTS 0.6B CustomVoice, voice «serena» (the human's choice, m-918), Apache-2.0 — copied as voice-ru-1..4.wav.
+   ru: a local neural TTS (r-06 bench), voice «serena» (the human's choice, m-918), Apache-2.0 — copied as voice-ru-1..4.wav.
    en: Piper en_US-ljspeech-high, LJ Speech data, public domain — copied as voice-en-1..4.wav. */
 const REPLY={
- ru:{label:'ru · Qwen3-TTS 0.6B serena (Apache-2.0)',url:n=>`voice-ru-${n}.wav`,
+ ru:{label:'ru · local neural TTS serena (Apache-2.0)',url:n=>`voice-ru-${n}.wav`,
   text:['Готово: я открыл пулл-реквест и запустил тесты.','В комнате три участника; ведущий ждёт ответа до 18:30, а сборка заняла 4 минуты 12 секунд.',
    'Я повесил новый замок на ворота старого замка, и все сразу успокоились.','Сессия s-30 закончила замеры. Хотите, я прочитаю краткий отчёт вслух или отправлю его в Телеграм?']},
  en:{label:'en · Piper ljspeech-high (public domain)',url:n=>`voice-en-${n}.wav`,

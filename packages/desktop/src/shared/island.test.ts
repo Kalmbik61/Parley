@@ -55,11 +55,10 @@ describe('markSeenBatches: длинный Clear уходит порциями (2
 });
 
 describe('нейроголос острова (план 3b, B15)', () => {
-  it('голос доступен, пока движок готов, говорит или прогревается; без весов и при отказе — нет (G3, E6)', () => {
+  it('голос доступен, пока движок готов или говорит; без ключа и при отказе — нет (G3, E6)', () => {
     expect(ttsAvailable({ state: 'ready' })).toBe(true);
     expect(ttsAvailable({ state: 'speaking' })).toBe(true);
-    expect(ttsAvailable({ state: 'warming' })).toBe(true);
-    expect(ttsAvailable({ state: 'not-downloaded' })).toBe(false);
+    expect(ttsAvailable({ state: 'no-key' })).toBe(false);
     expect(ttsAvailable({ state: 'unavailable', reason: 'the voice engine needs Apple Silicon' })).toBe(false);
   });
 

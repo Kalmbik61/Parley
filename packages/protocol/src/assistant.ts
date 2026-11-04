@@ -190,6 +190,15 @@ export interface AssistantState {
 
 const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessionId: z.string() });
 
+// Схемы источника и связи job живут в `remote/job-schemas.ts`: входу `@parley/protocol/remote` нельзя выходить за свой
+// каталог, а телефон проверяет те же формы. Здесь они переэкспортируются под прежними именами.
+export { assistantJobOriginSchema, assistantJobCorrelationSchema } from './remote/job-schemas.js';
+export type { AssistantJobOrigin, AssistantJobCorrelation } from './remote/job-schemas.js';
+
+/** Откуда решена карточка: окно, кнопка Telegram или телефон. */
+export const assistantDecidedViaSchema = z.enum(['island', 'telegram', 'mobile']);
+export type AssistantDecidedVia = z.infer<typeof assistantDecidedViaSchema>;
+
 export const assistantMethodSchemas = {
   'assistant.ask': z.object({
     text: z.string().min(1).max(4000),
@@ -208,6 +217,19 @@ export const assistantMethodSchemas = {
     /** `actions` — решение по карточке с планом; без поля хост такой план не выполнит. Старый хост поле молча отбросит. */
     action: z.literal('actions').optional(),
   }),
+  /** «Запросить заново»: новая карточка на месте просроченной (новый id). */
+  'assistant.reissue': z.object({ proposalId: z.string().min(1) }),
+  /**
+   * Решение по карточке ядра с телефона (`decidedVia: 'mobile'`): `revision` — та, что клиент видел в `assistant.card.changed`;
+   * устаревшая отвергается без действия. Карточка может быть без job (письмо с острова).
+   */
+  'cards.decide': z.strictObject({
+    cardId: z.string().min(1),
+    revision: z.number().int().nonnegative(),
+    choice: z.enum(['send', 'cancel']),
+  }),
+  /** Экран показал финал job: единственный эффект — флаг `deliveredInline`, push по этому событию не нужен. */
+  'jobs.ackInline': z.strictObject({ jobId: z.string().min(1), revision: z.number().int().nonnegative() }),
   'assistant.reset': z.object({}),
   'assistant.state': z.object({}),
   'assistant.sent': z.object({ ref: sessionRef }),
@@ -229,10 +251,38 @@ export const assistantMethodSchemas = {
 /** Параметры `assistant.configure`. */
 export type AssistantSettings = z.infer<(typeof assistantMethodSchemas)['assistant.configure']>;
 
+/** Событие `assistant.job.changed`: job помощника сменил состояние; `revision` растёт только вверх. */
+export interface AssistantJobChanged {
+  jobId: string;
+  state: 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
+  revision: number;
+}
+
+/** Событие `assistant.card.changed`: карточка ядра сменила состояние; `revision` растёт только вверх. */
+export interface AssistantCardChanged {
+  cardId: string;
+  kind: string;
+  /** `needs_confirmation` — активная карточка (и после возврата в активные); остальное терминально. */
+  state: 'needs_confirmation' | 'decided' | 'expired' | 'superseded';
+  revision: number;
+  expiresAt: number;
+  decidedVia: AssistantDecidedVia | null;
+  /** Исход решённой карточки (`sent`, `done`, `cancelled`, `stopped`, `failed`, `unknown`); пока не решена — `null`. */
+  outcome: string | null;
+}
+
+/** Исход `cards.decide`: `already_handled` — карточку уже решили или её ревизия устарела; `expired` — срок вышел. */
+export type CardDecideResult =
+  | { applied: true; error: string | null; reason: 'applied' }
+  | { applied: false; error: string; reason: 'already_handled' | 'expired' | 'not_found' | 'failed' };
+
 export interface AssistantMethodResults {
   'assistant.ask': { ok: true };
   'assistant.cancel': { ok: true };
   'assistant.decide': { applied: boolean; error: string | null };
+  'assistant.reissue': { applied: boolean; error: string | null; proposalId: string | null };
+  'cards.decide': CardDecideResult;
+  'jobs.ackInline': { ok: boolean; deliveredInline: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' };
   'assistant.reset': { ok: true };
   'assistant.state': AssistantState;
   'assistant.configure': { ok: true };

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_UI, type UiFile } from '../shared/ui-types.js';
+import { assistantMethodSchemas } from '@parley/protocol';
+import { DEFAULT_UI, normalizeUi, type UiFile } from '../shared/ui-types.js';
 import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assistant-mirror.js';
 
 const voice = { downloaded: (model: string) => model === 'base', path: (model: string) => `/models/${model}.bin` };
@@ -29,9 +30,10 @@ describe('assistantSettingsOf', () => {
     expect(assistantSettingsOf(ui({}), voice, () => 'en').enabled).toBe(false);
   });
 
-  it('род голоса (Р3): без выбора — serena, female; ryan и aiden — male', () => {
+  it('род голоса (Р3): без выбора — female; gender male — male; старый голос aiden — male (S-del)', () => {
     expect(assistantSettingsOf(ui({}), voice, () => 'en').voiceGender).toBe('female');
-    expect(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/aiden' } }), voice, () => 'en').voiceGender).toBe('male');
+    expect(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, gender: 'male' } }), voice, () => 'en').voiceGender).toBe('male');
+    expect(assistantSettingsOf(normalizeUi({ assistant: { voice: 'qwen3-0.6b/aiden' } }), voice, () => 'en').voiceGender).toBe('male');
   });
 });
 
@@ -43,11 +45,11 @@ describe('defaultProvider: провайдер последней новой ра
 });
 
 describe('G1: зеркало после смены голоса', () => {
-  it('смена assistant.voice на ryan шлёт assistant.configure с voiceGender: male', async () => {
+  it('смена assistant.gender на male шлёт assistant.configure с voiceGender: male', async () => {
     const call = vi.fn().mockResolvedValue(undefined);
     const mirror = createAssistantMirror({ call, methods: () => ['assistant.configure'], log: vi.fn() });
     await mirror.push(assistantSettingsOf(ui({}), voice, () => 'ru'));
-    await mirror.push(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, voice: 'qwen3-0.6b/ryan' } }), voice, () => 'ru'));
+    await mirror.push(assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, gender: 'male' } }), voice, () => 'ru'));
     expect(call.mock.calls.map(([, settings]) => (settings as { voiceGender?: string }).voiceGender)).toEqual(['female', 'male']);
     expect(call).toHaveBeenLastCalledWith('assistant.configure', expect.objectContaining({ voiceGender: 'male' }));
   });
@@ -88,5 +90,20 @@ describe('hostExtraEnv', () => {
       PARLEY_WHISPER_BIN: '/w/bin',
       PARLEY_WHISPER_VAD: '/w/vad',
     });
+  });
+});
+
+describe('S-del: пары версий окна и хоста (схема assistant.configure не менялась)', () => {
+  const schema = assistantMethodSchemas['assistant.configure'];
+  const base = { enabled: true, provider: null, model: null, language: 'en', voiceModel: null };
+
+  it('старое окно (voiceGender из голоса Qwen) → новый хост: схема принимает', () => {
+    expect(schema.parse({ ...base, voiceGender: 'male' })).toMatchObject({ voiceGender: 'male' });
+  });
+
+  it('новое окно → хост без поля: оба варианта проходят схему, род из assistant.gender', () => {
+    const settings = assistantSettingsOf(ui({ assistant: { ...DEFAULT_UI.assistant, gender: 'neutral' } }), voice, () => 'en');
+    expect(schema.parse(settings).voiceGender).toBe('neutral');
+    expect(schema.parse(base).voiceGender).toBeUndefined();
   });
 });

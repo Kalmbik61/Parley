@@ -167,6 +167,13 @@ cases on `@parley/noise` (one side of an IK handshake, ChaCha20-Poly1305 64 KiB 
 3 warm-up and 20 timed runs each), compares with the S7 thresholds (IK one side ≤ 150 ms, 64 KiB ≤ 50 ms) and shares the JSON.
 The line on top must say `Release` and `Hermes`. Phone on the charger, Low Power Mode off, screen on; run twice, a minute apart.
 
+**Voice loopback (B1).** Settings > Diagnostics > Voice loopback (dev builds only; absent in the release variant). Start asks for the
+microphone, opens two in-process `RTCPeerConnection`s and plays the received track out of the loud speaker (`react-native-webrtc`;
+`react-native-incall-manager` sets playAndRecord, voiceChat mode and the speaker route). Below it a pulsing orb (`react-native-svg` +
+`react-native-reanimated` 4 on the UI thread) and a line in Golos Text (`expo-font`). B1 added native modules (WebRTC, incall-manager,
+svg, reanimated, worklets), so a dev client or device build made before it must be rebuilt with `scripts/device-run.sh`.
+Keep the volume low and say a few words: they come back about a quarter of a second later, without a squeal.
+
 ### What you do, in order
 
 1. **Once:** Xcode > Settings > Accounts > add the Apple ID (the Mac already has the certificate "Apple Development:

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#131313;font-family:"Golos Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased}a{color:#EFB05C;text-decoration:none}a:hover{color:#F3C180}button{font:inherit;color:inherit}</style>
+<script src="./orb-spec.js"></script>
+</helmet>
+<div data-screen-label="Прототип сферы" style="min-height:100vh;background:{{ bg }};color:#F3EEE6;display:flex;flex-direction:column">
+  <header style="display:flex;flex-wrap:wrap;gap:8px 32px;align-items:baseline;justify-content:space-between;padding:22px 32px;border-bottom:1px solid rgba(255,255,255,.08)">
+    <div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:12px">
+      <span style="font-size:22px;line-height:28px;font-weight:600">Сфера · прототип анимаций</span>
+      <span style="font-size:13px;line-height:18px;color:#B5AFA7">Motion for React · тот же компонент, что на <a href="./Джарвис%20R21%20сфера.dc.html">листе R21</a> и в <a href="./Джарвис%20R02%20палитры.dc.html">R02</a></span>
+    </div>
+    <span style="font-size:13px;line-height:18px;color:#8E8A85">Только transform, opacity, градиенты и SVG. Без blur, blend, backdrop-filter и морфинга</span>
+  </header>
+  <main style="display:flex;flex-wrap:wrap;gap:32px;padding:28px 32px 56px;align-items:flex-start">
+    <div style="flex:1 1 420px;max-width:560px;min-width:0;display:flex;flex-direction:column;gap:24px">
+      <div style="border:1px solid rgba(255,255,255,.1);border-radius:22px;overflow:hidden">
+        <div style="height:56px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid rgba(255,255,255,.08)">
+          <span style="font-size:12px;line-height:16px;color:#8E8A85">Шапка · 32</span>
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <dc-import name="JarvisOrb" state="{{ shown }}" size="32" reduced="{{ rm }}" card="{{ card }}" voice="{{ voice }}" paused="{{ paused }}" arc-period="{{ arcT }}" cutout="{{ bg }}" seed="7" hint-size="32px,32px" style="width:32px;height:32px;flex:none"></dc-import>
+            <div style="display:flex;flex-direction:column;min-width:0">
+              <span style="font-size:17px;line-height:22px;font-weight:600">Джарвис</span>
+              <span style="font-size:13px;line-height:18px;color:#B5AFA7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ caption }}</span>
+            </div>
+          </div>
+          <div style="width:96px;display:flex;justify-content:flex-end">
+            <sc-if value="{{ isRec }}" hint-placeholder-val="{{ false }}">
+              <span style="display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:#E5533D"></span>{{ recLabel }}</span>
+            </sc-if>
+          </div>
+        </div>
+        <div style="height:340px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;position:relative">
+          <div style="position:relative;width:168px;height:168px">
+            <dc-import name="JarvisOrb" state="{{ shown }}" size="168" reduced="{{ rm }}" card="{{ card }}" voice="{{ voice }}" paused="{{ paused }}" arc-period="{{ arcT }}" cutout="{{ bg }}" seed="4" hint-size="168px,168px" style="width:168px;height:168px"></dc-import>
+            <sc-if value="{{ isRec }}" hint-placeholder-val="{{ false }}">
+              <span style="position:absolute;left:196px;top:72px;display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.16);font-size:13px;line-height:18px;font-variant-numeric:tabular-nums;white-space:nowrap"><span style="width:8px;height:8px;border-radius:50%;background:#E5533D"></span>{{ recLabel }}</span>
+            </sc-if>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+            <span style="font-size:17px;line-height:22px;font-weight:600">{{ curName }}</span>
+            <span style="font-size:13px;line-height:18px;color:#B5AFA7">{{ caption }}{{ simNote }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+          <span style="font-size:13px;line-height:18px;font-weight:600">Состояние</span>
+          <span style="font-size:12px;line-height:16px;color:#8E8A85;text-align:right">{{ log }}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+          <sc-for list="{{ states }}" as="s" hint-placeholder-count="10">
+            <button onClick="{{ s.pick }}" style="min-height:52px;box-sizing:border-box;display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:10px;border:1px solid {{ s.bd }};background:{{ s.bg }};text-align:left;cursor:pointer" style-hover="border-color:rgba(239,176,92,.6)">
+              <span style="font:500 12px/20px ui-monospace,Menlo,monospace;color:#8E8A85">{{ s.n }}</span>
+              <span style="display:flex;flex-direction:column;min-width:0">
+                <span style="font-size:15px;line-height:20px;font-weight:500">{{ s.name }}</span>
+                <span style="font-size:12px;line-height:16px;color:#B5AFA7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.caption }}</span>
+              </span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ toggles }}" as="t" hint-placeholder-count="5">
+          <button onClick="{{ t.toggle }}" style="min-height:44px;display:flex;align-items:center;gap:12px;padding:6px 0;border:none;background:none;text-align:left;cursor:pointer">
+            <span style="position:relative;width:38px;height:22px;flex:none;border-radius:999px;background:{{ t.track }}">
+              <span style="position:absolute;top:2px;left:{{ t.knob }};width:18px;height:18px;border-radius:50%;background:{{ t.kc }}"></span>
+            </span>
+            <span style="display:flex;flex-direction:column">
+              <span style="font-size:14px;line-height:20px;font-weight:500">{{ t.label }}</span>
+              <span style="font-size:12px;line-height:16px;color:#8E8A85">{{ t.hint }}</span>
+            </span>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
+        <span style="font-size:13px;line-height:18px;font-weight:600">Переходы на временной шкале</span>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <sc-for list="{{ scenarios }}" as="p" hint-placeholder-count="3">
+            <button onClick="{{ p.play }}" style="min-height:44px;display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;border:1px solid {{ p.bd }};background:rgba(255,255,255,.03);text-align:left;cursor:pointer" style-hover="border-color:rgba(239,176,92,.6)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="#EFB05C"><path d="M7 4.5v15l12-7.5z"></path></svg>
+              <span style="font-size:14px;line-height:20px">{{ p.title }}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="position:relative;display:flex;flex-direction:column;gap:6px;padding-top:4px">
+          <div style="position:relative;height:52px">
+            <sc-for list="{{ pbands }}" as="b" hint-placeholder-count="5">
+              <div style="position:absolute;top:0;left:{{ b.l }}%;width:{{ b.w }}%;height:52px;box-sizing:border-box;padding:0 2px 0 0">
+                <div style="height:52px;box-sizing:border-box;border-radius:8px;border:1px solid {{ b.bd }};background:{{ b.bg }};padding:7px 8px;overflow:hidden">
+                  <sc-if value="{{ b.label }}" hint-placeholder-val="{{ true }}">
+                    <div style="font-size:12px;line-height:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.name }}</div>
+                    <div style="font-size:12px;line-height:16px;color:#B5AFA7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.cap }}</div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+            <div ref="{{ headRef }}" style="position:absolute;top:-6px;left:0;width:2px;height:64px;margin-left:-1px;background:#F3EEE6;border-radius:1px;pointer-events:none"></div>
+          </div>
+          <div style="position:relative;height:36px">
+            <sc-for list="{{ pmarks }}" as="m" hint-placeholder-count="4">
+              <div style="position:absolute;left:{{ m.l }}%;top:0;height:36px;box-sizing:border-box;border-left:1px dashed rgba(255,255,255,.34);padding:{{ m.pad }}px 0 0 6px;font-size:12px;line-height:16px;color:#D8D2CA;white-space:nowrap">{{ m.label }}</div>
+            </sc-for>
+          </div>
+          <p style="margin:0;font-size:13px;line-height:19px;color:#B5AFA7;text-wrap:pretty">{{ scNote }}</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:32px">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px">
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:22px;line-height:28px;font-weight:600">{{ curN }} {{ curName }}</span>
+            <span style="font-size:13px;line-height:18px;color:#B5AFA7">{{ tableSub }}</span>
+          </div>
+          <div style="display:flex;padding:3px;border-radius:12px;background:rgba(255,255,255,.06);gap:2px">
+            <sc-for list="{{ tabs }}" as="b" hint-placeholder-count="2">
+              <button onClick="{{ b.pick }}" style="min-width:64px;height:38px;border:none;border-radius:9px;background:{{ b.bg }};color:{{ b.fg }};font-size:14px;font-weight:500;cursor:pointer">{{ b.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <div style="min-width:880px;display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(130px,1.1fr) minmax(80px,.7fr) minmax(130px,1.2fr) 110px 120px minmax(150px,1.2fr);font-size:13px;line-height:19px">
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Слой</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Свойство</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">From</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">To</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Длительность</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Easing</span>
+            <span style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Повтор</span>
+            <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-weight:500">{{ r.layer }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.prop }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-variant-numeric:tabular-nums">{{ r.from }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-variant-numeric:tabular-nums">{{ r.to }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-variant-numeric:tabular-nums;font-weight:500">{{ r.dur }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.ease }}</span>
+              <span style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.rep }}</span>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <span style="font-size:17px;line-height:22px;font-weight:600">Переходы между состояниями</span>
+        <div style="overflow-x:auto">
+          <div style="min-width:880px;display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(170px,1.4fr) 80px 80px 100px 100px minmax(170px,1.5fr);font-size:13px;line-height:19px">
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Переход</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Свойство</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">From</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">To</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Длительность</span>
+            <span style="padding:8px 12px 8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Easing</span>
+            <span style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.18);font-size:12px;color:#8E8A85">Примечание</span>
+            <sc-for list="{{ rules }}" as="r" hint-placeholder-count="9">
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-weight:500">{{ r.what }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.prop }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08)">{{ r.from }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08)">{{ r.to }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);font-variant-numeric:tabular-nums;font-weight:500">{{ r.dur }}</span>
+              <span style="padding:9px 12px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#B5AFA7">{{ r.ease }}</span>
+              <span style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#8E8A85">{{ r.note }}</span>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <div style="max-width:880px;display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:20px;color:#B5AFA7">
+        <span style="font-size:17px;line-height:22px;font-weight:600;color:#F3EEE6">Как устроено движение</span>
+        <p style="margin:0;text-wrap:pretty">Один фазовый осциллятор на сферу: каждый кадр φ += f · dt, значение = from + (to − from) · (1 − cos 2πφ) / 2 — это sine in-out с периодом 1 / f. При смене состояния f и A идут твином 600 мс, фаза не сбрасывается, поэтому скорость дыхания меняется без рывка. Вращения дуги и сектора, расходящееся кольцо и точки считаются от той же фазы.</p>
+        <p style="margin:0;text-wrap:pretty">Цвет меняется кроссфейдом двух градиентных слоёв: новый слой проявляется поверх, старый снимается в конце. Громкость (голос, запись) сглаживается: атака 50 мс, спад 180 мс. В прототипе громкость имитируется.</p>
+        <p style="margin:0;text-wrap:pretty">Перенос в RN 0.77: scale, opacity, rotate, translate и кроссфейд — Animated с native driver + SVG. Плавная смена скорости и реакция на звук требуют покадрового осциллятора — кандидат Reanimated 3.17 / 3.18 после проверки сборки.</p>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;bg&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;нейтральный&quot;,&quot;A&quot;,&quot;B&quot;],&quot;default&quot;:&quot;нейтральный&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Прототип&quot;},&quot;arcPeriod&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;1.6&quot;,&quot;2&quot;,&quot;2.4&quot;],&quot;default&quot;:&quot;2&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Прототип&quot;}}">
+class Component extends DCLogic {
+  state = { ready: !!window.JarvisOrbSpec, shown: 'idle', caption: 'на связи', rm: false, rules: true, voice: false, card: false, paused: false, tab: '168', sc: 0, playing: false, log: 'Выберите состояние или проиграйте переход' };
+  headRef = React.createRef();
+  componentDidMount() {
+    this._since = performance.now();
+    if (!this.state.ready) this._p = setInterval(() => { if (window.JarvisOrbSpec) { clearInterval(this._p); this.setState({ ready: true }); } }, 40);
+  }
+  componentWillUnmount() { clearInterval(this._p); clearTimeout(this._pend); cancelAnimationFrame(this._raf); }
+  capFor(id, card) { const s = window.JarvisOrbSpec.byId[id]; return id === 'forming' && card ? s.alt : s.caption; }
+  show(id, log) { this._since = performance.now(); this.setState(s => ({ shown: id, caption: this.capFor(id, s.card), log: log || s.log })); }
+  stop() { cancelAnimationFrame(this._raf); if (this.headRef.current) this.headRef.current.style.left = '0%'; }
+  pick(id) {
+    const S = window.JarvisOrbSpec, name = S.byId[id].name;
+    const wasPlaying = this.state.playing;
+    this.stop(); clearTimeout(this._pend);
+    if (wasPlaying) this.setState({ playing: false });
+    if (id === this.state.shown && !wasPlaying) return;
+    if (!this.state.rules || !S.BUSY[id]) return this.show(id, name + ' — сразу');
+    if (!S.BUSY[this.state.shown]) {
+      this.setState({ log: name + ' — появится через 150 мс' });
+      this._pend = setTimeout(() => this.show(id, name + ' — показано через 150 мс'), 150);
+      return;
+    }
+    const wait = Math.round(this._since + 400 - performance.now());
+    if (wait > 0) {
+      this.setState({ log: name + ' — ждёт ' + wait + ' мс: занятое держится минимум 400 мс' });
+      this._pend = setTimeout(() => this.show(id, name + ' — показано после удержания 400 мс'), wait);
+    } else this.show(id, name + ' — сразу: 400 мс уже прошли');
+  }
+  play(i) {
+    const S = window.JarvisOrbSpec, sc = S.SCENARIOS[i], sim = S.simulate(sc);
+    this.stop(); clearTimeout(this._pend);
+    this.setState({ sc: i, playing: true, log: 'Проигрывается переход ' + (i + 1) });
+    const t0 = performance.now();
+    let last = '';
+    const tick = () => {
+      const t = performance.now() - t0;
+      const b = sim.bands.find(x => t >= x.from && t < x.to) || sim.bands[sim.bands.length - 1];
+      const key = b.state + '|' + b.caption;
+      if (key !== last) { last = key; this._since = performance.now(); this.setState({ shown: b.state, caption: b.caption }); }
+      if (this.headRef.current) this.headRef.current.style.left = Math.min(100, t / sc.end * 100) + '%';
+      if (t < sc.end) this._raf = requestAnimationFrame(tick);
+      else this.setState({ playing: false, log: 'Переход ' + (i + 1) + ' проигран' });
+    };
+    tick();
+  }
+  flip(key) {
+    this.setState(s => {
+      const next = { [key]: !s[key] };
+      if (key === 'card' && s.shown === 'forming') next.caption = this.capFor('forming', !s.card);
+      return next;
+    });
+  }
+  renderVals() {
+    const S = window.JarvisOrbSpec, st = this.state;
+    const BG = { 'нейтральный': '#131313', 'A': '#100E0C', 'B': '#17191C' };
+    const bg = BG[this.props.bg] || '#131313';
+    const arcT = String(this.props.arcPeriod || '2');
+    const empty = { bg, arcT, shown: st.shown, caption: st.caption, rm: st.rm, card: st.card, voice: st.voice, paused: st.paused, headRef: this.headRef,
+      states: [], toggles: [], scenarios: [], pbands: [], pmarks: [], rows: [], rules: [], tabs: [], curName: '', curN: '', tableSub: '', simNote: '', scNote: '', log: st.log, isRec: false, recLabel: '' };
+    if (!S) return empty;
+    const cur = S.byId[st.shown];
+    const states = S.STATES.map(s => {
+      const on = s.id === st.shown;
+      return { n: s.n, name: s.name, caption: s.id === 'forming' && st.card ? s.alt : s.caption, pick: () => this.pick(s.id),
+        bg: on ? 'rgba(239,176,92,.14)' : 'rgba(255,255,255,.03)', bd: on ? '#EFB05C' : 'rgba(255,255,255,.1)' };
+    });
+    const tg = (key, label, hint) => ({ label, hint, toggle: () => this.flip(key),
+      track: st[key] ? '#EFB05C' : 'rgba(255,255,255,.18)', knob: st[key] ? '18px' : '2px', kc: st[key] ? '#2B1C08' : '#F3EEE6' });
+    const toggles = [
+      tg('rm', 'Reduced motion', 'все циклы выключены, смена ≤ 100 мс'),
+      tg('rules', 'Правила 150 / 400 мс', 'задержка входа в занятое и удержание между занятыми'),
+      tg('voice', 'Голосовой режим', '«Слушает»: кольцо следует громкости микрофона'),
+      tg('card', 'Вариант «собираю карточку»', '«Формирует»: точки уходят вниз к карточке'),
+      tg('paused', 'Пауза записи', '«Записывает»: всё замирает, яркость −20 %')
+    ];
+    const FILL = {
+      idle: ['rgba(255,255,255,.05)', 'rgba(255,255,255,.14)'], listening: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      thinking: ['rgba(239,176,92,.11)', 'rgba(239,176,92,.34)'], working: ['rgba(239,176,92,.16)', 'rgba(239,176,92,.46)'],
+      forming: ['rgba(239,176,92,.11)', 'rgba(239,176,92,.34)'], speaking: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      awaiting: ['rgba(239,176,92,.20)', '#EFB05C'], recording: ['rgba(240,221,165,.10)', 'rgba(240,221,165,.34)'],
+      error: ['rgba(220,96,76,.16)', 'rgba(220,96,76,.5)'], offline: ['rgba(156,148,138,.12)', 'rgba(156,148,138,.4)']
+    };
+    const sc = S.SCENARIOS[st.sc], sim = S.simulate(sc);
+    const pbands = sim.bands.map(b => ({ l: b.from / sc.end * 100, w: (b.to - b.from) / sc.end * 100, bd: FILL[b.state][1], bg: FILL[b.state][0],
+      name: S.byId[b.state].name, cap: b.caption, label: (b.to - b.from) >= 380 }));
+    const groups = {}, order = [];
+    sc.events.forEach(e => { if (!e.label) return; if (!groups[e.t]) { groups[e.t] = []; order.push(e.t); } groups[e.t].push(e.label); });
+    const pmarks = order.map((t, k) => ({ l: t / sc.end * 100, pad: (k % 2) * 18, label: groups[t].join(' · ') }));
+    const scenarios = S.SCENARIOS.map((p, i) => ({ title: (i + 1) + ' · ' + p.title, play: () => this.play(i), bd: i === st.sc ? 'rgba(239,176,92,.7)' : 'rgba(255,255,255,.1)' }));
+    const opts = { mini: st.tab === '32', reduced: st.rm, card: st.card, voice: st.voice, paused: st.paused, arcT: +arcT };
+    const tabs = ['168', '32'].map(t => ({ label: t + ' px', pick: () => this.setState({ tab: t }), bg: st.tab === t ? '#F3EEE6' : 'transparent', fg: st.tab === t ? '#1A1713' : '#B5AFA7' }));
+    const lvl = (st.shown === 'listening' && st.voice) || st.shown === 'speaking' || st.shown === 'recording';
+    return Object.assign(empty, {
+      states, toggles, scenarios, pbands, pmarks, tabs,
+      rows: S.rows(st.shown, opts), rules: S.RULES,
+      curName: cur.name, curN: cur.n,
+      tableSub: (st.tab === '32' ? 'Мини-сфера 32 px' : 'Большая сфера 168 px') + (st.rm ? ' · reduced motion' : '') + ' · свойство × from/to × длительность × easing × повтор',
+      simNote: lvl && !st.rm ? ' · имитация громкости' : '',
+      scNote: sc.note, isRec: st.shown === 'recording', recLabel: st.paused ? 'Пауза 12:34' : 'REC 12:34'
+    });
+  }
+}
+</script>
+</body>
+</html>

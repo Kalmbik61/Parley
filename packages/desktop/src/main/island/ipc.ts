@@ -24,8 +24,8 @@ import {
   type IslandTtsMessage,
   type SessionVisibilitySnapshot,
 } from '../../shared/island.js';
-import { isAssistantVoiceId } from '../../shared/tts-types.js';
 import type { UiFile } from '../../shared/ui-types.js';
+import { isOpenAiVoice } from '../../shared/tts-types.js';
 import { isVoiceLanguage } from '../../shared/voice-types.js';
 import type { TtsService } from '../assistant/tts.js';
 import { HostError } from '../host-connection.js';
@@ -99,11 +99,11 @@ function isUtteranceId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= UTTERANCE_ID_MAX;
 }
 
-/** Запрос `island:tts-speak` или `null`: текст не пустой и до `ISLAND_TTS_TEXT_LIMIT`, голос каталога, язык Whisper. */
+/** Запрос `island:tts-speak` или `null`: текст не пустой и до `ISLAND_TTS_TEXT_LIMIT`, непустой голос, язык Whisper. */
 function parseSpeakRequest(value: unknown): IslandSpeakRequest | null {
   if (typeof value !== 'object' || value === null) return null;
   const { utteranceId, text, voice, language } = value as Record<string, unknown>;
-  if (!isUtteranceId(utteranceId) || !isAssistantVoiceId(voice)) return null;
+  if (!isUtteranceId(utteranceId) || !isOpenAiVoice(voice)) return null;
   if (typeof text !== 'string' || text.trim() === '' || text.length > ISLAND_TTS_TEXT_LIMIT) return null;
   if (!isVoiceLanguage(language) || language === 'auto') return null;
   return { utteranceId, text, voice, language };

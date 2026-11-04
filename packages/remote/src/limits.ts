@@ -34,6 +34,12 @@ export const MUTATING_METHODS: ReadonlySet<string> = new Set([
   // Меню комнаты (A41a, правки 21): лимит, журнал `call` и `phone.action` после удачного вызова.
   'rooms.archive',
   'rooms.delete',
+  // Голос и поручения помощнику (план голоса, B3): тратят деньги и запускают CLI. Чтения (`jobs.get`, `jobs.ackInline`,
+  // `voice.usage.get`) и `voice.session.close` лимит изменений не тратят.
+  'jobs.submit',
+  'jobs.cancel',
+  'cards.decide',
+  'voice.session.prepare',
 ]);
 
 /** Скользящее окно: не больше `max` событий за `windowMs`, по одному счётчику на ключ. */
