@@ -75,9 +75,10 @@ function setup(over: { permission?: Permission; choice?: LanguageChoice; startTh
     }
     clock = to;
   };
-  const target = (id: string, fallback: Fallback = { kind: 'session', key: id }, focused = false): DictationTarget => ({
+  const target = (id: string, fallback: Fallback = { kind: 'session', key: id }, focused = false, screenFocused = true): DictationTarget => ({
     id,
     fallback,
+    screenFocused: () => screenFocused,
     isFocused: () => focused,
     insert: (t) => void inserted.push(`${id}:${t}`),
     toast: (t) => void toasts.push(t),
@@ -769,5 +770,51 @@ describe('dictation: review fixes', () => {
     h.ev().start();
     expect(h.calls.at(-1)).toBe('stop');
     h.dictation.onHidden('other');
+  });
+});
+
+describe('dictation: the toast goes only to a focused screen (j2)', () => {
+  it('a live target on a hidden screen is skipped; the last focused one gets it', async () => {
+    const h = setup();
+    const visible = h.target('visible', { kind: 'session', key: 'v' });
+    const seen: string[] = [];
+    visible.toast = (t) => void seen.push(t);
+    const hidden = h.target('hidden', { kind: 'session', key: 'h' }, false, false);
+    const hiddenSeen: string[] = [];
+    hidden.toast = (t) => void hiddenSeen.push(t);
+    h.dictation.register(visible);
+    h.dictation.register(hidden); // registered last, but its screen is covered
+    const off = h.dictation.register(h.target('n', 'clipboard', false, false));
+    await record(h, 'n');
+    h.dictation.toggle('n');
+    off();
+    h.final('x');
+    h.ev().end();
+    await flush();
+    expect(seen).toEqual([TOAST.copied]);
+    expect(hiddenSeen).toEqual([]);
+  });
+
+  it('no focused screen at all → announced', async () => {
+    const h = setup();
+    h.dictation.register(h.target('lower', { kind: 'session', key: 'l' }, false, false));
+    const off = h.dictation.register(h.target('n', 'clipboard', false, false));
+    await record(h, 'n');
+    h.dictation.toggle('n');
+    off();
+    h.final('x');
+    h.ev().end();
+    await flush();
+    expect(h.announced).toEqual([TOAST.copied]);
+  });
+
+  it('the own target with an unfocused screen does not take the toast either', async () => {
+    const h = setup();
+    h.dictation.register(h.target('a', { kind: 'session', key: 'a' }, false, false));
+    await record(h, 'a');
+    h.ev().error('audio-capture', '');
+    h.ev().end();
+    expect(h.toasts).toEqual([]);
+    expect(h.announced).toEqual([TOAST.failed]);
   });
 });

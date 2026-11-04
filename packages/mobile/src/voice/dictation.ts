@@ -21,6 +21,8 @@ export interface DictationTarget {
   isFocused(): boolean;
   /** Вставить расшифровку на место курсора. */
   insert(text: string): void;
+  /** Экран поля сейчас в фокусе: тост на скрытом экране никто не увидит. */
+  screenFocused(): boolean;
   /** Тост экрана этого поля. */
   toast(text: string): void;
 }
@@ -143,12 +145,12 @@ export function createDictation() {
     clear(errorTimer);
     startTimer = capTimer = transcribeTimer = cancelTimer = errorTimer = null;
   };
-  /** Тост попытки (i2): тост экрана поля; поле снято — через последнюю зарегистрированную цель, иначе объявление. */
+  /** Тост попытки (i2, j2): тост экрана поля, если тот в фокусе; иначе последняя зарегистрированная цель с экраном в фокусе; иначе объявление. */
   const toast = (text: string): void => {
     const own = snap === null ? undefined : targets.get(snap.id);
-    if (own !== undefined) return own.toast(text);
-    const live = [...targets.values()].at(-1);
-    if (live !== undefined) return live.toast(text);
+    const live = [...targets.values()].reverse();
+    const shown = [...(own === undefined ? [] : [own]), ...live].find((t) => t.screenFocused());
+    if (shown !== undefined) return shown.toast(text);
     deps?.announce(text);
   };
   const guarded = (fn: () => void): void => {

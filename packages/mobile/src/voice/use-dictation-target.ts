@@ -64,6 +64,8 @@ export function useDictationTarget(o: {
   latest.current = o;
   const selection = useRef<number | null>(null);
   const screenFocused = useIsFocused();
+  const focusedNow = useRef(screenFocused);
+  focusedNow.current = screenFocused;
   const fallbackKey = typeof o.fallback === 'string' ? o.fallback : `${o.fallback.kind}:${o.fallback.key}`;
   const registered = useRef<DictationTarget | null>(null);
   useEffect(() => {
@@ -72,6 +74,7 @@ export function useDictationTarget(o: {
       id: o.id,
       fallback: latest.current.fallback,
       isFocused: () => latest.current.input.current?.isFocused() === true,
+      screenFocused: () => focusedNow.current,
       toast: (text) => latest.current.toast(text),
       insert: (text) => {
         const { value, apply, input } = latest.current;
