@@ -190,11 +190,11 @@ describe('follow the end: a finger on the feed (M2)', () => {
     expect(done.state.momentum).toBe(false);
   });
 
-  it('the momentum end of our own scroll only clears the flag', () => {
+  it('the momentum end of our own scroll does not clear the protection of the scroll (A44c)', () => {
     const s = fe.keepEnd(settled(), 3000).state;
     const step = fe.momentumEnded(s, middle, 3100, K);
     expect(step.state.atBottom).toBe(true);
-    expect(step.state.ownUntil).toBe(0);
+    expect(step.state.ownUntil).toBe(s.ownUntil);
   });
 
   it('keepEnd does nothing during a gesture', () => {
@@ -332,5 +332,88 @@ describe('follow the end: reveal (A44b)', () => {
 
   it('a touch shows the list', () => {
     expect(fe.dragBegan(fe.open()).revealed).toBe(true);
+  });
+});
+
+describe('follow the end: a re-read (A44c)', () => {
+  const rows = (n: number): string[] => [...K, ...Array.from({ length: n }, (_, i) => `r${i}`)];
+  const shown = (): fe.FollowState => ({ ...settled(), revealed: true });
+
+  it('up to one batch of new rows: pinned again, the growth scrolls instantly, the list stays shown', () => {
+    const r = fe.reread(shown(), 5000, rows(3));
+    expect(r.reopen).toBe(false);
+    expect(r.state.pinned).toBe(true);
+    expect(r.state.revealed).toBe(true);
+    expect(fe.contentChanged(r.state, 5010, rows(3)).scroll).toBe('instant');
+    expect(fe.tick(r.state, 5000 + fe.PIN_QUIET_MS).pinned).toBe(false);
+  });
+
+  it('more than one batch: reopened like the first open (hidden, pinned), shown by revealCheck after a landed scroll and a quiet frame, else at the cap', () => {
+    const r = fe.reread(shown(), 5000, rows(fe.REREAD_INSTANT_ROWS + 1));
+    expect(r.reopen).toBe(true);
+    expect(r.state.revealed).toBe(false);
+    expect(r.state.pinned).toBe(true);
+    const grown = fe.contentChanged(r.state, 5010, rows(11), 2000).state;
+    expect(fe.revealCheck(grown, 5010 + fe.REVEAL_FRAME_MS).revealed).toBe(false);
+    const landed = fe.scrolled(grown, atEnd(2000), 5100, rows(11));
+    expect(fe.revealCheck(landed, 5010 + fe.REVEAL_FRAME_MS).revealed).toBe(true);
+    expect(fe.revealCheck(grown, 5010 + fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('the anchor vanished (a folded turn): reopened', () => {
+    expect(fe.reread(shown(), 5000, ['x', 'y']).reopen).toBe(true);
+  });
+
+  it('away from the end nothing scrolls and the new rows are counted', () => {
+    const away = fe.scrolled(shown(), middle, 3000, K);
+    expect(away.atBottom).toBe(false);
+    const r = fe.reread(away, 5000, rows(7));
+    expect(r.reopen).toBe(false);
+    expect(r.state.away).toBe(7);
+    expect(r.state.pinned).toBe(false);
+  });
+
+  it('hidden from an earlier reopen: a re-read pins again without a second conceal and keeps the cap origin', () => {
+    const first = fe.remounted(shown(), K);
+    const grown = fe.contentChanged(first.state, 5000, K, 1000).state;
+    const r = fe.reread(grown, 5400, rows(61));
+    expect(r.reopen).toBe(false);
+    expect(r.state.revealed).toBe(false);
+    expect(r.state.pinned).toBe(true);
+    expect(r.state.openedAt).toBe(5000);
+    expect(fe.revealCheck(r.state, 5000 + fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('a mount again clears the finger, the momentum and the pending growth of the old list', () => {
+    const busy = { ...shown(), touching: true, momentum: true, pendingGrowth: true };
+    expect(fe.remounted(busy, K).state).toMatchObject({ touching: false, momentum: false, pendingGrowth: false });
+    const away = { ...fe.scrolled(shown(), middle, 3000, K), touching: true, pendingGrowth: true };
+    expect(fe.remounted(away, K).state).toMatchObject({ touching: false, pendingGrowth: false, atBottom: false });
+  });
+
+  it('a mount again at the end reopens; away from the end it leaves the state alone', () => {
+    expect(fe.remounted(shown(), K).reopen).toBe(true);
+    expect(fe.remounted(shown(), K).state.revealed).toBe(false);
+    const away = fe.scrolled(shown(), middle, 3000, K);
+    expect(fe.remounted(away, K)).toEqual({ state: away, reopen: false });
+  });
+});
+
+describe('follow the end: the chase does not break itself (A44c)', () => {
+  it('run 3: growth, a momentum end of the cut animation, a silent spell, a frame further down — still at the bottom', () => {
+    let s = fe.contentChanged({ ...settled(), pinned: false }, 6000, more(3), 14163).state;
+    s = fe.scrolled(s, { offset: 10000, content: 14163, viewport: 800 }, 6001, more(3));
+    s = fe.keepEnd(s, 6010).state;
+    s = fe.momentumEnded(s, { offset: 10613, content: 14163, viewport: 800 }, 6017, more(3)).state;
+    s = fe.scrolled(s, { offset: 11737, content: 14163, viewport: 800 }, 6400, more(3));
+    expect(s.atBottom).toBe(true);
+  });
+
+  it('a move down with the same height does not leave the bottom; a move up far from the end does (N6)', () => {
+    let s = fe.scrolled(settled(), { offset: 800, content: 1000, viewport: 100 }, 9000, K);
+    s = fe.scrolled(s, { offset: 850, content: 1000, viewport: 100 }, 9100, K);
+    expect(s.atBottom).toBe(true);
+    s = fe.scrolled({ ...s, ownUntil: 0 }, { offset: 300, content: 1000, viewport: 100 }, 9200, K);
+    expect(s.atBottom).toBe(false);
   });
 });

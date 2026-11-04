@@ -17,6 +17,8 @@ export function useTailWindow(keys: readonly string[], spanAt: SpanAt) {
   latest.current = { keys, spanAt, start };
   const nearStart = useRef(false);
 
+  /** A44c: the feed starts over like the first open: the last rows again, the anchor is chosen anew. */
+  const reset = useCallback(() => setAnchor(TAIL), []);
   /** One more page of older rows. */
   const widen = useCallback(() => {
     const l = latest.current;
@@ -35,6 +37,7 @@ export function useTailWindow(keys: readonly string[], spanAt: SpanAt) {
   return {
     start,
     widen,
+    reset,
     include,
     onRevealed,
     onScroll: (e: NativeSyntheticEvent<NativeScrollEvent>): void => {

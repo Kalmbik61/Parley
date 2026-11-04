@@ -1,7 +1,7 @@
 // DEVELOPER BUILD ONLY (PARLEY_MOBILE_DEV_DEMO=1, __DEV__): fills the remote-client store with a made-up snapshot so the
 // A15 screens can be looked at on a simulator before pairing exists. Never reached in a release build.
 import type { FeedCard } from '@parley/core';
-import type { RemoteClient, SessionRef } from '@parley/remote-client';
+import { roomKey, sessionKey as sessionKeyOf, type RemoteClient, type SessionRef } from '@parley/remote-client';
 import type { RemoteWorksSnapshot } from '@parley/protocol/remote';
 import { sessionParam, workParam } from '../nav/refs';
 import { EMPTY_QUESTION_DRAFT, type QuestionDraft } from '../cards/model';
@@ -98,7 +98,7 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
       rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rbig', title: 'Big history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rshort', title: 'Short letters', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('big', 'Big-feed-demo'), sess('shorts', 'Short-turns-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('big', 'Big-feed-demo'), sess('shorts', 'Short-turns-demo'), sess('tiny', 'Tiny-feed-demo'), sess('blank', 'Blank-feed-demo')], swarms: [],
     },
   ],
 };
@@ -230,6 +230,10 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'room.loaded', ref: bigRoom, epoch: 'demo', next: null, messages: longRoomLetters('rbig', 300) });
   store.dispatch({ t: 'room.open', ref: shortRoom });
   store.dispatch({ t: 'room.loaded', ref: shortRoom, epoch: 'demo', next: null, messages: shortRoomLetters('rshort', 320) });
+  // A44c: a feed that opens empty (route a44-session-blank), for the `fill` step.
+  const blankRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'blank' };
+  store.dispatch({ t: 'feed.open', ref: blankRef });
+  store.dispatch({ t: 'feed.loaded', ref: blankRef, epoch: 'demo', items: [], revision: 3, mode: null, decisions: null });
   // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
   const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
   store.dispatch({ t: 'feed.open', ref: tinyRef });
@@ -331,6 +335,50 @@ export function devMoreSession(client: RemoteClient, ref: SessionRef): void {
 export function devMoreRoom(client: RemoteClient, ref: { projectPath: string; workId: string; roomId: string }): void {
   client.store.dispatch({ t: 'room.loaded', ref, epoch: 'demo', next: null, messages: longRoomLetters(ref.roomId, 62) });
 }
+/** A44c evidence: a return from the background. The entry is marked to re-read, 3 s later the read brings `rows` new rows. */
+let burstSeq = 0;
+export function devBgBurst(client: RemoteClient, ref: SessionRef, rows: number): void {
+  const seq = ++burstSeq;
+  client.store.dispatch({ t: 'feed.reload', ref });
+  setTimeout(() => devFeedLoaded(client, ref, 'demo', rows, seq), 3000);
+}
+function devFeedLoaded(client: RemoteClient, ref: SessionRef, epoch: string, rows: number, seq: number): void {
+  const items = (client.store.getState().feeds[sessionKeyOf(ref)]?.items ?? []).map((i) => JSON.parse(JSON.stringify(i)) as never);
+  const fresh = Array.from({ length: rows }, (_, i) =>
+    i === rows - 1
+      ? { kind: 'text', id: `bg${seq}-last`, at: new Date().toISOString(), messageId: `mbg${seq}`, streaming: false, text: `BURST ${rows} LAST: the agent worked while the app was away.` }
+      : { kind: 'tool', id: `bg${seq}-${i}`, at: new Date().toISOString(), toolUseId: `tubg${seq}-${i}`, name: 'Read', input: { file_path: `src/burst-${seq}/file-${i}.ts` }, status: 'done' },
+  );
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch, items: [...items, ...fresh] as never[], revision: 10 + seq, mode: null, decisions: null });
+}
+/** A44c evidence: the bridge reports a new epoch (the list unmounts into a skeleton), 1.5 s later the snapshot, 1 s later the feed or the room. */
+export function devEpoch(client: RemoteClient, target: { ref: SessionRef } | { room: { projectPath: string; workId: string; roomId: string } }): void {
+  const seq = ++burstSeq;
+  const epoch = `demo-e${seq}`;
+  const state = client.store.getState();
+  client.store.dispatch({ t: 'bridge.status', host: state.hostStatus ?? 'online', epoch });
+  setTimeout(() => client.store.dispatch({ t: 'snapshot', snapshot: demoSnapshot, epoch }), 1500);
+  setTimeout(() => {
+    if ('ref' in target) devFeedLoaded(client, target.ref, epoch, 61, seq);
+    else devRoomLoaded(client, target.room, epoch, 60, seq);
+  }, 2500);
+}
+/** A44c evidence: an open room is marked to re-read, 3 s later the read brings 60 new letters. */
+export function devRoomBurst(client: RemoteClient, room: { projectPath: string; workId: string; roomId: string }): void {
+  const seq = ++burstSeq;
+  client.store.dispatch({ t: 'room.reload', ref: room });
+  setTimeout(() => devRoomLoaded(client, room, 'demo', 60, seq), 3000);
+}
+function devRoomLoaded(client: RemoteClient, room: { projectPath: string; workId: string; roomId: string }, epoch: string, count: number, seq: number): void {
+  const key = roomKey(room);
+  const old = (client.store.getState().roomChats[key]?.messages ?? []).map((m) => JSON.parse(JSON.stringify(m)) as never);
+  const fresh = Array.from({ length: count }, (_, i) => ({ id: `rb${seq}-${i}`, roomId: room.roomId, from: ['greta', 'd1', 'a13'][i % 3], to: [], at: new Date().toISOString(), text: i === count - 1 ? `ROOM BURST ${count} LAST` : `Burst letter ${i + 1}: a short note.`, kind: 'note', readBy: {} }) as never);
+  client.store.dispatch({ t: 'room.loaded', ref: room, epoch, next: null, messages: [...old, ...fresh] });
+}
+/** A44c evidence: a feed that opened empty gets its first rows (route a44-session-blank). */
+export function devFill(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch: 'demo', items: longFeedItems(14), revision: 5, mode: null, decisions: null });
+}
 export function devLateCard(client: RemoteClient, ref: SessionRef): void {
   client.store.dispatch({ t: 'cards.loaded', ref, epoch: 'demo', items: [permission], at: Date.now() });
 }
@@ -426,6 +474,8 @@ export function demoRoute(raw: unknown): string | null {
     case 'a44-room-big':
     case 'a44-room-shorts':
       return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=${String(name).endsWith('big') ? 'rbig' : 'rshort'}&${dev}`;
+    case 'a44-session-blank':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'blank' })}?${dev}`;
     case 'a44-tiny':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
     case 'a44-room':
