@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildPlan, decidePorts, relayAddress, sslipName } from './plan.js';
-import { parseOsRelease, type Listener, type ProbeResult } from './probe.js';
+import { buildPlan, decideLayout, relayAddress, sslipName } from './plan.js';
+import { holderOf, parseContainers, parseEnv, parseListeners, parseOsRelease, type ContainerInfo, type Listener, type ProbeResult } from './probe.js';
 import { CADDYFILE, COMPOSE_CADDY, proxySnippet } from './templates.js';
 
 const IMAGE = 'ghcr.io/kalmbik61/parley-relay@sha256:' + 'a'.repeat(64);
@@ -16,34 +16,103 @@ function probe(over: Partial<ProbeResult> = {}, listeners: Listener[] = []): Pro
     docker: false,
     compose: false,
     listeners,
+    containers: [],
+    web: null,
+    activeCommand: null,
+    previousTail: null,
+    installEdit: null,
+    proxyHealthy: null,
     ufwActive: false,
     install: null,
     previous: null,
     ...over,
   };
 }
+function container(name: string, project: string, ports: number[]): ContainerInfo {
+  return {
+    id: name,
+    name,
+    image: 'img',
+    labels: { 'com.docker.compose.project': project },
+    path: 'x',
+    args: [],
+    workdir: '',
+    mounts: [],
+    published: ports.map((hostPort) => ({ hostPort, hostIp: '0.0.0.0' })),
+    networks: [],
+    networkAliases: {},
+    networkMode: 'default',
+  };
+}
 const nginx: Listener[] = [{ port: 80, processes: ['nginx'] }, { port: 443, processes: ['nginx'] }];
 
-describe('decidePorts (spec 6.7)', () => {
+describe('decideLayout (spec 6.7)', () => {
   it('both free → Caddy on 80/443', () => {
-    expect(decidePorts(probe())).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 443 });
-    expect(decidePorts(probe({}, [{ port: 22, processes: ['sshd'] }]))).toMatchObject({ mode: 'caddy', httpsPort: 443 });
+    expect(decideLayout(probe())).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 443 });
+    expect(decideLayout(probe({}, [{ port: 22, processes: ['sshd'] }]))).toMatchObject({ mode: 'caddy', httpsPort: 443 });
   });
   it('443 busy, 80 free → Caddy on 8443', () => {
-    expect(decidePorts(probe({}, [{ port: 443, processes: ['haproxy'] }]))).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 8443 });
+    expect(decideLayout(probe({}, [{ port: 443, processes: ['haproxy'] }]))).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 8443 });
   });
   it('443 and 8443 busy → blocked', () => {
-    expect(decidePorts(probe({}, [{ port: 443, processes: [] }, { port: 8443, processes: [] }])).mode).toBe('blocked');
+    expect(decideLayout(probe({}, [{ port: 443, processes: [] }, { port: 8443, processes: [] }])).mode).toBe('blocked');
   });
   it('80 busy → loopback relay and a snippet for the server found', () => {
-    expect(decidePorts(probe({}, nginx))).toEqual({ mode: 'proxy', relayPort: 8787, server: 'nginx' });
-    expect(decidePorts(probe({}, [{ port: 80, processes: ['apache2'] }]))).toMatchObject({ mode: 'proxy', server: 'apache' });
-    expect(decidePorts(probe({}, [{ port: 80, processes: ['lighttpd'] }, { port: 8787, processes: [] }]))).toEqual({ mode: 'proxy', relayPort: 18787, server: 'other' });
+    expect(decideLayout(probe({}, nginx))).toMatchObject({ mode: 'proxy', relayPort: 8787, server: 'nginx', network: null });
+    expect(decideLayout(probe({}, [{ port: 80, processes: ['apache2'] }]))).toMatchObject({ mode: 'proxy', server: 'apache' });
+    expect(decideLayout(probe({}, [{ port: 80, processes: ['lighttpd'] }, { port: 8787, processes: [] }]))).toMatchObject({ mode: 'proxy', relayPort: 18787, server: 'other' });
   });
-  it('our own earlier install (Docker proxy, .env present) does not count as busy', () => {
+  it('docker-proxy on 80 and 443 with no container in the list → busy by an unknown container', () => {
     const own: Listener[] = [{ port: 80, processes: ['docker-proxy'] }, { port: 443, processes: ['docker-proxy'] }];
-    expect(decidePorts(probe({ install: { RELAY_DOMAIN: 'x.example.com' } }, own))).toMatchObject({ mode: 'caddy', httpsPort: 443 });
-    expect(decidePorts(probe({}, own)).mode).toBe('proxy');
+    expect(decideLayout(probe({ install: { RELAY_DOMAIN: 'x.example.com' } }, own)).mode).toBe('proxy');
+    expect(holderOf(probe({}, own), 80)).toEqual({ kind: 'unknown-docker' });
+  });
+  it('our own container (parley-relay project) publishing 80/443 does not hold them: repeat of our install', () => {
+    const own: Listener[] = [{ port: 80, processes: ['docker-proxy'] }, { port: 443, processes: ['docker-proxy'] }];
+    const ours = container('parley-relay-relay-1', 'parley-relay', [80, 443]);
+    expect(decideLayout(probe({ containers: [ours] }, own))).toEqual({ mode: 'caddy', httpPort: 80, httpsPort: 443 });
+    expect(decideLayout(probe({ containers: [ours] }, own))).toEqual(decideLayout(probe({ install: { A: '1' }, containers: [ours] }, own)));
+  });
+  it('userland-proxy off: no listener in ss, a foreign container publishes 80 → 80 is busy', () => {
+    const other = container('web-1', 'site', [80]);
+    expect(holderOf(probe({ containers: [other] }), 80)).toEqual({ kind: 'container', container: other });
+    expect(decideLayout(probe({ containers: [other] }))).toMatchObject({ mode: 'proxy', server: 'other' });
+  });
+});
+
+describe('course VPS (run 2 of 2026-11-03)', () => {
+  const dir = path.join(__dirname, 'fixtures', 'course-vps');
+  const read = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+  const course = (extra: Partial<ProbeResult> = {}): ProbeResult =>
+    probe({ listeners: parseListeners(read('ss-ltnp.txt')), containers: parseContainers(read('containers.jsonl')), install: parseEnv(read('env.txt')), previous: parseEnv(read('previous-env.txt')), docker: true, compose: true, ...extra });
+  it('parses the fixtures', () => {
+    const [caddy, relay] = parseContainers(read('containers.jsonl'));
+    expect(caddy).toMatchObject({ name: 'course-platform-prod-caddy-1', image: 'caddy:2', path: 'caddy', networks: ['course-platform-prod_default'] });
+    expect(caddy?.published.map((p) => p.hostPort).sort()).toEqual([443, 443, 80, 80].sort());
+    expect(caddy?.mounts.map((m) => `${m.source} → ${m.destination}`)).toEqual([
+      '/opt/course-platform/deploy/Caddyfile → /etc/caddy/Caddyfile',
+      '/opt/evdev-site/caddy → /etc/caddy/sites',
+    ]);
+    expect(relay).toMatchObject({ name: 'parley-relay-relay-1', published: [] });
+    expect(parseEnv(read('previous-env.txt')).RELAY_MODE).toBe('proxy');
+  });
+  it('80 and 443 are held by the course Caddy container; the decision is not caddy', () => {
+    const p = course();
+    for (const port of [80, 443]) expect(holderOf(p, port)).toMatchObject({ kind: 'container', container: { name: 'course-platform-prod-caddy-1' } });
+    expect(holderOf(p, 22)).toEqual({ kind: 'process', names: ['sshd'] });
+    expect(decideLayout(p).mode).not.toBe('caddy');
+    expect(decideLayout(course({ install: null, previous: null })).mode).not.toBe('caddy');
+  });
+});
+
+describe('a command of the previous run is still alive (spec 7.3)', () => {
+  it('blocks every intent with the command named', () => {
+    const alive = probe({ activeCommand: { id: 'files' } });
+    for (const intent of ['install', 'rollback', 'remove'] as const) {
+      const plan = buildPlan({ intent, probe: alive, decision: decideLayout(alive), name: 'x.example.com', image: IMAGE });
+      expect(plan.blocked).toMatch(/still running on the server: files\. Wait a minute/);
+      expect(plan.steps).toEqual([]);
+    }
   });
 });
 
@@ -52,12 +121,12 @@ describe('address', () => {
     expect(sslipName('203.0.113.7')).toBe('203-0-113-7.sslip.io');
     expect(relayAddress('r.example.com', { mode: 'caddy', httpPort: 80, httpsPort: 8443 })).toBe('r.example.com:8443');
     expect(relayAddress('r.example.com', { mode: 'caddy', httpPort: 80, httpsPort: 443 })).toBe('r.example.com');
-    expect(relayAddress('r.example.com', { mode: 'proxy', relayPort: 8787, server: 'nginx' })).toBe('r.example.com');
+    expect(relayAddress('r.example.com', { mode: 'proxy', relayPort: 8787, server: 'nginx', holder: 'nginx', reason: null, network: null })).toBe('r.example.com');
   });
 });
 
 describe('buildPlan: install', () => {
-  const ctx = (p: ProbeResult, name = '203-0-113-7.sslip.io') => ({ intent: 'install' as const, probe: p, decision: decidePorts(p), name, image: IMAGE });
+  const ctx = (p: ProbeResult, name = '203-0-113-7.sslip.io') => ({ intent: 'install' as const, probe: p, decision: decideLayout(p), name, image: IMAGE });
 
   it('is check → do for every step, with the image pinned by digest', () => {
     const plan = buildPlan(ctx(probe()));
@@ -72,6 +141,44 @@ describe('buildPlan: install', () => {
     expect(text).toContain(`docker pull ${IMAGE}`);
     expect(text).toContain('download.docker.com/linux/ubuntu');
     expect(text).not.toMatch(/curl[^"]*\|\s*(ba)?sh/);
+  });
+
+  it('the image step pulls the relay image and Caddy, can be interrupted, and checks all images', () => {
+    const image = buildPlan(ctx(probe())).steps.find((s) => s.id === 'image')!;
+    expect(image.interruptible).toBe(true);
+    expect(image.commands).toHaveLength(2);
+    expect(image.commands[0]!.run).toContain('fromImage=');
+    expect(image.commands[1]!.run).toContain('fromImage=caddy&tag=sha256:');
+    expect(image.check).toMatch(/^docker image inspect .* .* >\/dev\/null 2>&1$/);
+    for (const c of image.commands) expect(c.run).toContain('docker image inspect');
+    expect(buildPlan(ctx(probe())).steps.filter((s) => s.interruptible)).toHaveLength(1);
+  });
+
+  it('the log tail of a dead image download in the notes is a summary, not raw Engine API JSON', () => {
+    const text = [
+      '{"status":"Pulling from library/busybox","id":"1.36.1"}',
+      '{"status":"Pulling fs layer","progressDetail":{},"id":"821d9dafb26d"}',
+      '{"status":"Downloading","progressDetail":{"current":1048576,"total":1896265},"id":"821d9dafb26d"}',
+    ].join('\n');
+    const notes = buildPlan(ctx(probe({ previousTail: { id: 'image-1', text } }))).notes.join('\n');
+    expect(notes).toContain('image-1');
+    expect(notes).toContain('downloading: 1.0 of 1.9 MB · 0 of 1 layers');
+    expect(notes).not.toContain('{');
+    const apt = buildPlan(ctx(probe({ previousTail: { id: 'docker-2', text: 'E: dpkg was interrupted' } }))).notes.join('\n');
+    expect(apt).toContain('E: dpkg was interrupted');
+  });
+
+  it('behind another web server only the relay image is pulled (no Caddy)', () => {
+    const p = probe({}, [{ port: 80, processes: ['nginx'] }]);
+    const image = buildPlan(ctx(p)).steps.find((s) => s.id === 'image')!;
+    expect(image.commands).toHaveLength(1);
+    expect(image.check).not.toContain('caddy');
+  });
+
+  it('start and the apt/compose steps are not interruptible; start does not stream the pull', () => {
+    const plan = buildPlan(ctx(probe()));
+    expect(plan.steps.find((s) => s.id === 'start')?.interruptible).toBeUndefined();
+    expect(plan.steps.find((s) => s.id === 'start')?.commands[0]?.run).toBe('docker compose --project-directory /opt/parley-relay up -d --remove-orphans --quiet-pull');
   });
 
   it('writes Docker repo lines from the probe, not from free text', () => {
@@ -121,24 +228,24 @@ describe('buildPlan: install', () => {
 describe('buildPlan: rollback and remove', () => {
   const installed = probe({ install: { RELAY_DOMAIN: 'r.example.com' }, previous: { RELAY_DOMAIN: 'r.example.com' } });
   it('rollback needs a previous version', () => {
-    expect(buildPlan({ intent: 'rollback', probe: probe({ install: {} }), decision: decidePorts(probe()), name: '', image: IMAGE }).blocked).toMatch(/previous/);
-    const plan = buildPlan({ intent: 'rollback', probe: installed, decision: decidePorts(installed), name: '', image: IMAGE });
+    expect(buildPlan({ intent: 'rollback', probe: probe({ install: {} }), decision: decideLayout(probe()), name: '', image: IMAGE }).blocked).toMatch(/previous/);
+    const plan = buildPlan({ intent: 'rollback', probe: installed, decision: decideLayout(installed), name: '', image: IMAGE });
     expect(plan.blocked).toBeNull();
     expect(plan.steps.map((s) => s.id)).toEqual(['restore', 'start']);
   });
   it('remove keeps the data volumes unless the person confirmed, and says Docker stays', () => {
     const run = (removeData: boolean) =>
-      buildPlan({ intent: 'remove', probe: installed, decision: decidePorts(installed), name: '', image: IMAGE, removeData }).steps.flatMap((s) => s.commands.map((c) => c.run));
+      buildPlan({ intent: 'remove', probe: installed, decision: decideLayout(installed), name: '', image: IMAGE, removeData }).steps.flatMap((s) => s.commands.map((c) => c.run));
     expect(run(false).join('\n')).toContain('down');
     expect(run(false).join('\n')).not.toContain('down -v');
     expect(run(true).join('\n')).toContain('down -v');
     expect(run(false).join('\n')).toContain('rm -rf /opt/parley-relay');
     expect(run(false).join('\n')).toContain('ufw-rules');
-    const plan = buildPlan({ intent: 'remove', probe: installed, decision: decidePorts(installed), name: '', image: IMAGE });
+    const plan = buildPlan({ intent: 'remove', probe: installed, decision: decideLayout(installed), name: '', image: IMAGE });
     expect(plan.notes.join(' ')).toMatch(/Docker .* stay/);
   });
   it('remove without an install is blocked', () => {
-    expect(buildPlan({ intent: 'remove', probe: probe(), decision: decidePorts(probe()), name: '', image: IMAGE }).blocked).toMatch(/No relay/);
+    expect(buildPlan({ intent: 'remove', probe: probe(), decision: decideLayout(probe()), name: '', image: IMAGE }).blocked).toMatch(/No relay/);
   });
 });
 

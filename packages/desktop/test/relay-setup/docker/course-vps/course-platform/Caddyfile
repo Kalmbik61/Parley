@@ -1,0 +1,8 @@
+# HTTPS выпускается автоматически (Let's Encrypt), нужен только A-record домена на VPS
+{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy web:3000
+}
+
+# Сайты других проектов на этом сервере (evdev.online — /opt/evdev-site/caddy).
+import /etc/caddy/sites/*.caddy

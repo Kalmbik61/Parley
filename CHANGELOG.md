@@ -6,6 +6,42 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.28.2
+
+**Impact**
+
+- **Goal:** Let the Settings → Remote access wizard ("Set up on my server…") install the relay with essentially one button, also on a server that already runs a web server of its own, and keep its log window open until it is closed with ×; the Relay field also accepts an `https://` address.
+- **Behaviour:** The wizard reads running and stopped containers and attributes ports to the container that publishes them, so a foreign Caddy on ports 80 and 443 is no longer taken for its own. It picks a layout from what the server shows: free ports get its own Caddy; a Caddy in Docker or under systemd gets one added site; nginx gets its own Caddy on port 8443 behind one `server` block; anything else keeps the manual snippet with the reason. Every edit of a file that is not Parley's is a server-side transaction: checksum, backup in `/var/backups/parley-relay/`, check, graceful reload and a byte-exact restore on failure; the plan screen lists every such file with its full content before Run. Commands run detached from the SSH connection, the image download shows progress and can be stopped, and the run lives in the app: × only hides the window and Settings reopens the same run or result. Repeating, updating, rolling back and removing follow the live server state, and a working 0.28.1 install keeps its layout.
+- **Numbers:** From the runs on this branch: desktop 10,068 tests passed, 22 skipped, 0 failed (515 files); desktop typecheck and lint on the touched paths were clean; the Docker stands passed 15 of 15 in 156 s (3 files); the end-to-end wizard test passed 1 of 1 in 18.5 s. The change touches 71 files (+7,543 / −306 against master). Install time on a real server is not measured.
+- **Screens:** Five screens of the real window with a scripted SSH connection: the plan with a foreign file edit, the image download progress, "Cancelling after this step…", a reopened running setup, and the finished result.
+- **For the human:** Run "Install or update" on a real server to see the plan. A server whose Caddy runs in Docker should get one foreign edit (one site file) and the relay recreated with the same data volume, which restarts it briefly; the address stays the same.
+- **Risk:** Medium. The wizard now edits files of the person's web server; the transaction was exercised on real Caddy and nginx in test stands and in 16 review cases, but certificate issuance through a foreign Caddy, or through nginx to its own Caddy, was not run end to end. A relay attached to a foreign Docker network keeps that network in use.
+- **Cost:** Runtime cost is not measured.
+- **Verdict:** Ready to release; whether the wizard works on a real server is shown only by the check listed in "What is not proven yet".
+
+### Fixed
+
+- The relay setup wizard no longer mistakes a foreign container for its own earlier install: who holds port 80 and 443 is read from the listeners and the running containers, not guessed from the process name or from an old `.env`, and a stopped container that will take the ports back stops the wizard from installing its own Caddy. On a server whose Caddy owns both ports the wizard no longer plans a second Caddy.
+- Commands the wizard starts on the server keep running when the SSH connection drops, and a new run does not start while a command of the previous one is still running.
+- Removing the relay also removes the containers an earlier layout left behind and, with "Also delete the relay data", its leftover volumes; it takes its own site out of your web server first.
+- The Relay field accepts an `https://` address; `http://` is refused with a reason.
+
+### Changed
+
+- One-button install next to your own web server: the wizard adds a site to your Caddy (in Docker or under systemd) or, for nginx, runs its own Caddy on port 8443 behind one `server` block in nginx. It changes only its own file or its own marked block, shows every file, the backup in `/var/backups/parley-relay/`, the check and the reload before you press Run, and restores the file when the check or the reload fails (nginx is checked with `nginx -t` before the reload). Servers it cannot change keep the manual snippet.
+- Repeating the wizard, rolling back and removing follow what the server shows now; a working manual `proxy` install keeps its layout.
+- The image download shows its progress (megabytes when the server's Docker API is reachable, layers otherwise) and can be stopped; a download may still finish on the server.
+- Esc and a click outside no longer close the wizard. Closing it during a run only hides it: the run goes on, and Settings → Set up on my server… reopens the same run or its result, also after the window is reloaded. Quitting Parley ends the record; commands already started on the server finish on their own.
+
+### What is not proven yet
+
+- Nothing was run against a real server.
+- Certificate issuance by the person's Caddy for the wizard's site, and the HTTP-01 check through nginx to the wizard's own Caddy, were not run end to end.
+- Caddy under systemd and nginx in Docker were covered by unit tests only, with no test stand; the nginx blocks were checked with a real `nginx -t`.
+- The image download progress was parsed from a stream captured from Docker Desktop, not from Docker CE with overlay2; the test stands preload images, so their download step is skipped. Whether Docker stops a download after the window is closed or cancelled is not verified, and the window does not promise it.
+- In a packaged app, the test-only SSH seam is closed by code and a unit test only; keeping the run when quitting is cancelled was checked by code only; the end-to-end test ran on macOS only.
+- How fast a silent network loss is detected (SSH keepalive) is not measured.
+
 ## 0.28.1
 
 **Impact**
