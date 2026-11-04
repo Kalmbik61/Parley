@@ -99,7 +99,7 @@
 ## 4. Трек V — голос ↔ ассистент
 
 ### T0 — spike транспорта на реальном OpenAI
-- **Файлы:** кода продукта нет; итог — записка с фактами (<!-- check: the memo's location is not named in the sources -->место записки уточняется исполнителем пункта).
+- **Файлы:** кода продукта нет; итог — записка с фактами `docs/research/<дата выполнения>-gpt-live-transport-spike.md`.
 - **Зависимости:** P0. Идёт параллельно O1/O2.
 - **Что проверить (Голос↔Ассистент §13):**
   - сигналы речи человека и воспроизведения модели;
@@ -118,6 +118,7 @@
   - `assistant-service.ts:542–548` (токен разговора не копируется);
   - `jobs.ts:221` (сейчас любой успешный job становится `needs_confirmation`, m-3385);
   - `host.ts:829–847` (связка `assistantJobs` и `assistantService`: общий провайдер и источник обзора);
+  - `packages/core/src/mcp/assistant.ts` — только ради токена job и проверки allowlist; O3 идёт после T1;
   - остальные пути — уточняются исполнителем пункта.
 - **Зависимости:** P0. Идёт параллельно T0, O1, T2.
 - **Что делает:** токен на каждый `jobId`; явный allowlist инструментов; `JobResult { answer, capturedAt, cards, toolRefs }`, где `cards` и `toolRefs` пишет хост; различение completed / failed / needs_confirmation / cancelled; `confirm = Boolean(текст)` запрещено; кап — 2 job на провайдера; JOB_PROMPT.
@@ -138,7 +139,7 @@
 - **Зависимости:** T0.
 - **Что делает:** WebRTC, микрофон, воспроизведение, `voice.session.prepare` с `{ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } }`; ключ остаётся на хосте.
 - **Приёмка:** VA-13 (нет ключа или исчерпан лимит → понятная ошибка, текстовый режим работает); сессия создаётся с инструкциями и делегацией.
-- **Verifier / ревью:** s-257 (<!-- check: p-43 names senior reviewers for T1, T2, T5, T4 only; T3 reviewer taken as the lead s-257 by default -->).
+- **Verifier / ревью:** s-257.
 
 ### T4 — мост делегаций и очередь речи
 - **Файлы:** чистый TS, общий с телефоном; место модуля выбрать сверкой с `packages/mobile/src/voice/voice-model.ts` (Голос↔Ассистент §2, §14: уточняется исполнителем пункта).
@@ -159,7 +160,7 @@
 - **Зависимости:** T4.
 - **Что делает:** статус через `thinking.append` на `assistant.job.changed`; запасной `request_status()`; автозакрытие после 3 мин тишины без открытых Request; локальная телеметрия (§11), без аудио и текстов.
 - **Приёмка:** VA-06, VA-12.
-- **Verifier / ревью:** (<!-- check: no reviewer named for T6 in p-43; the lead s-257 assumed -->s-257).
+- **Verifier / ревью:** s-257.
 
 ### T7 — общая приёмка
 - **Файлы:** кода не меняет; результат — запись приёмки.
@@ -181,7 +182,7 @@
 ## 6. Исполнители и ревью
 
 - Код — junior-исполнители (Sonnet или Sol), по одной задаче.
-- Senior-ревью: s-257 — T1, T2, T5, T4; s-258 — O1–O3 и граница MCP.
+- Senior-ревью: s-257 — T1–T6; s-258 — O1–O3 и граница MCP.
 - Junior-verifier — O4 и проверки T7; семантику и полномочия оценивает senior.
 - Обязательное senior-ревью: T1 (безопасность), T2 (восстановление), T5 (атомарность), O3 (граница MCP).
 
@@ -207,8 +208,8 @@
 | O2 | `packages/host/src/assistant/human-overview.ts`, `human-overview.test.ts`; тип `HumanOverviewV1` — `protocol/src/assistant.ts` либо соседний файл; `overview.ts` не переписывается |
 | O3 | `packages/host/src/assistant/assistant-service.ts` (+тесты), `packages/core/src/mcp/assistant.ts`, `mcp/assistant.test.ts`, `packages/core/src/assistant/launch.ts` (+тесты) |
 | O4 | кода нет |
-| T0 | кода продукта нет; записка с фактами |
-| T1 | `job-executor.ts`, `assistant-service.ts`, `jobs.ts`, `host.ts`; остальное — уточняется исполнителем пункта |
+| T0 | кода продукта нет; записка `docs/research/<дата выполнения>-gpt-live-transport-spike.md` |
+| T1 | `job-executor.ts`, `assistant-service.ts`, `jobs.ts`, `host.ts`; `packages/core/src/mcp/assistant.ts` — только токен job и проверка allowlist; остальное — уточняется исполнителем пункта |
 | T2 | `methods/voice.ts`; остальное — уточняется исполнителем пункта |
 | T3 | `packages/desktop/src/renderer/island/live/` (новый), `packages/host/src/voice/*`; остальное — уточняется исполнителем пункта |
 | T4 | модуль моста и очереди — уточняется исполнителем пункта (сверка с `packages/mobile/src/voice/voice-model.ts`) |
@@ -217,7 +218,6 @@
 | T7 | кода нет |
 
 Пересечения, которые передаются последовательно: `assistant-service.ts` — T1 и O3 (не одновременно; O3 после T1); `packages/core/src/mcp/assistant.ts` — T1 и O3 (то же правило).
-<!-- check: the sources do not say explicitly whether T1 edits core/src/mcp/assistant.ts; the overlap with O3 follows from m-3413 ("O3 and T1 do not edit assistant-service/MCP at the same time") and is kept as stated -->
 
 ## 8. Ворота человека
 
