@@ -108,7 +108,8 @@ import { swarmMemberOf } from './swarms/spawn.js';
 import { createSwarmsService } from './swarms/swarms-service.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { addRoomMember, createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
-import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
+import { ASSISTANT_PATH, createAssistantEndpoint } from './assistant/assistant-endpoint.js';
+import { createJobTokens } from './assistant/job-tokens.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { createReminderStore } from './assistant/reminders.js';
 import { createCardStore } from './assistant/cards.js';
@@ -435,12 +436,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Приёмник инструментов помощника (задача 8) нужен серверу хуков при создании, сам сервис — после сессий.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание приёмника читает её раньше присваивания
   let assistantService: AssistantService | undefined;
+  // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
+  const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
     log,
-    tool: (name, args) =>
+    jobTokens: assistantJobTokens,
+    tool: (name, args, caller) =>
       assistantService === undefined
         ? Promise.resolve({ status: 503, body: { error: 'the assistant is not ready' } })
-        : assistantService.tool(name, args),
+        : assistantService.tool(name, args, caller),
   });
   const sessionEndpoint = createSessionEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
@@ -819,6 +823,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
     cards: createCardStore(sideDb),
+    jobTools: assistantJobTokens,
     conversations: createConversationStore(sideDb),
     home: parleyHome(),
     log: (line) => log.info(line),
@@ -835,6 +840,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launchEnv: assistantLaunchEnv,
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
+      tokens: assistantJobTokens,
+      endpointUrl: () => {
+        const origin = hookServer.origin();
+        return origin === null ? null : `${origin}${ASSISTANT_PATH}`;
+      },
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
     log: (line) => log.info(line),

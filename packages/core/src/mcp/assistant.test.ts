@@ -2,10 +2,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ASSISTANT_TOOLS, createAssistantServer } from './assistant.js';
+import { ASSISTANT_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST, createAssistantServer } from './assistant.js';
 
-async function connect(fetch: typeof globalThis.fetch): Promise<Client> {
-  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token: 't0k', fetch });
+async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<Client> {
+  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token, fetch });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const client = new Client({ name: 'test', version: '0' });
@@ -87,5 +87,31 @@ describe('parley-mcp в режиме помощника', () => {
     const client = await connect(vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
     const result = await client.callTool({ name: 'parley_overview', arguments: {} });
     expect(result.isError).toBe(true);
+  });
+
+  describe('токен job', () => {
+    it('allowlist — чтение плюс propose_*, без напоминаний и конца разговора', () => {
+      expect(JOB_TOOL_ALLOWLIST.every((name) => ASSISTANT_TOOLS.some((tool) => tool.name === name))).toBe(true);
+      for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) expect(JOB_TOOL_ALLOWLIST).not.toContain(name);
+      for (const name of JOB_TOOL_ALLOWLIST) {
+        const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === name)!;
+        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_')).toBe(true);
+      }
+    });
+    it('с токеном job модель видит только allowlist', async () => {
+      const client = await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`);
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual([...JOB_TOOL_ALLOWLIST]);
+    });
+    it('инструмент вне allowlist не доходит до хоста', async () => {
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      const result = await client.callTool({ name: 'schedule_check', arguments: { what: 'x' } });
+      expect(result.isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const allowed = await client.callTool({ name: 'parley_overview', arguments: {} });
+      expect(allowed.isError).not.toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
   });
 });

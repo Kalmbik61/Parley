@@ -19,6 +19,7 @@ import {
   cardDetail,
   cardGist,
   codexInstructionsFile,
+  JOB_TOOL_ALLOWLIST,
   openMemoryDb,
   parseClaudeLine,
   parseCodexLine,
@@ -47,7 +48,8 @@ import { createConversationStore, type ConversationStore } from './conversation-
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
-import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
+import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
+import type { JobTokens } from './job-tokens.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
@@ -111,6 +113,8 @@ export interface AssistantServiceDeps {
   ready(entry: ProviderEntry): Promise<string | null>;
   launchEnv(entry: ProviderEntry): Promise<NodeJS.ProcessEnv>;
   binary(command: string): Promise<string>;
+  /** Запись хостом вызовов и карточек job (план голоса, T1); без неё `JobResult` приходит пустым. */
+  jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'>;
   /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
   reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
@@ -155,7 +159,8 @@ export interface AssistantService {
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
-  tool(name: string, args: unknown): Promise<AssistantReply>;
+  /** `caller` — разговор по умолчанию; job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`. */
+  tool(name: string, args: unknown, caller?: AssistantCaller): Promise<AssistantReply>;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
   onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
   stop(): void;
@@ -177,6 +182,16 @@ interface Conversation {
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
 type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
+
+/**
+ * Кто создаёт карточку. Разговор — его токен и источник карточек канала; job (план голоса, T1) — своя метка вместо
+ * токена разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ */
+interface Owner {
+  token: string;
+  source?: string;
+  jobId?: string;
+}
 
 /** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
 type Pending = PendingBody & { token: string; /** Откуда пришло решение; ставится в `decide`. */ via?: CardVia };
@@ -407,10 +422,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const last = rows[rows.length - 1];
     return last === undefined ? null : pendingOf(last);
   };
-  function setPending(card: Pending): void {
+  function setPending(card: Pending, owner: Owner): void {
     const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
     const before = cards.active();
-    const row = cards.put({ proposalId: view.id, kind, view, payload, source: cardSource, expiresAt: now() + cardTtl }, now());
+    const row = cards.put({ proposalId: view.id, kind, view, payload, source: owner.source ?? cardSource, expiresAt: now() + cardTtl }, now());
+    // Карточки job записывает хост, а не модель: они попадают в `JobResult.cards`.
+    if (owner.jobId !== undefined) deps.jobTools?.recordCard(owner.jobId, { cardId: view.id, kind });
     armSweep();
     emitSuperseded(before);
     emitCard(row);
@@ -710,7 +727,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const hiddenRefusal = (target: AssistantTarget): AssistantReply | null =>
     target.hidden === undefined ? null : { status: 409, body: { error: `${target.name} is ${target.hidden}; reopen it in Parley first` } };
 
-  function propose(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function propose(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const text = stringArg(input, 'text').trim();
     if (text === '') return { status: 400, body: { error: 'text is empty' } };
     if (text.length > MAX_TEXT) return { status: 400, body: { error: `text is longer than ${MAX_TEXT} characters` } };
@@ -734,7 +751,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kind = input['kind'];
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'message',
       view: {
         action: 'message',
@@ -749,7 +766,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       target,
       to: mentioned.map((session) => session.ref.sessionId),
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
@@ -757,7 +774,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
 
-  function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function proposeRoom(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const found = resolveTarget(targets, stringArg(input, 'work'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const work = found.target;
@@ -795,7 +812,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const names = members.map((member) => member.name);
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'room',
       view: {
         action: 'room',
@@ -812,12 +829,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       members: members.map((member) => member.id),
       lead: lead.id,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
-  function proposeRoomDecision(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function proposeRoomDecision(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const room = found.target;
@@ -834,7 +851,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kept = choice === 'return' && note !== '' ? note : null;
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'room-decision',
       view: {
         action: 'room-decision',
@@ -855,7 +872,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       room,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
@@ -887,7 +904,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { error: `answers must cover every question, by its number or exact text: ${list}` };
   }
 
-  async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
+  async function proposeDecision(owner: Owner, input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
     const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const session = found.target;
@@ -935,7 +952,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const answerLines = chosenAnswers.map((answer, index) => `\n${chosenAnswers.length === 1 ? 'A' : `A${index + 1}`}: ${answer}`).join('');
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'decision',
       view: {
         action: 'decision',
@@ -948,7 +965,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       ref: session.ref,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN + note } };
   }
@@ -1096,7 +1113,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return settle(current, 'done');
   }
 
-  async function proposeActions(input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
+  async function proposeActions(owner: Owner, input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
     if (running !== null) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
     if (!deps.actionsShown()) return { status: 409, body: { error: 'No Parley window can show this card; ask the person to open or update Parley' } };
     const prepared = await preparePlan(input, {
@@ -1110,12 +1127,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const { plan } = prepared;
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'actions',
       view: { action: 'actions', id: `p${proposals}`, target: plan.target, where: plan.where, text: plan.text, steps: plan.view },
       plan,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: ACTIONS_SHOWN } };
   }
@@ -1263,6 +1280,87 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     armSweep();
   }
 
+  /** Исполняет инструмент помощника от имени `owner`; `current` — разговор (у job его нет). */
+  async function dispatch(name: string, args: unknown, owner: Owner, current?: Conversation): Promise<AssistantReply> {
+    const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    const src = source();
+    const targets = targetsOf(src);
+    const hidden = hiddenOf(src);
+    switch (name) {
+      case 'parley_overview': {
+        return { status: 200, body: { text: await overview() } };
+      }
+      case 'parley_detail': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
+        const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
+        return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
+      }
+      case 'parley_find': {
+        const query = stringArg(input, 'query').trim();
+        if (query === '') return { status: 400, body: { error: 'query is empty' } };
+        return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
+      }
+      case 'parley_room': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
+        const before = input['before'];
+        if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
+          return { status: 400, body: { error: 'before must be the number from the last reply' } };
+        }
+        const limit = input['limit'];
+        return {
+          status: 200,
+          body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
+        };
+      }
+      case 'parley_session': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
+        const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
+        let items: readonly FeedItem[] = [];
+        if (deps.feed !== undefined) {
+          try {
+            items = (await deps.feed.snapshot(target.ref)).items;
+          } catch {
+            // ленты у сессии нет — «истории пока нет»
+          }
+        }
+        const before = stringArg(input, 'before');
+        const limit = input['limit'];
+        const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
+        return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
+      }
+      case 'propose_message':
+        return propose(owner, input, src, targets, hidden);
+      case 'propose_room':
+        return proposeRoom(owner, input, src, targets, hidden);
+      case 'propose_room_decision':
+        return proposeRoomDecision(owner, input, src, targets, hidden);
+      case 'propose_decision':
+        return proposeDecision(owner, input, targets, hidden);
+      case 'propose_actions':
+        return proposeActions(owner, input, src);
+      case 'schedule_check':
+      case 'list_reminders':
+      case 'cancel_reminder':
+        return reminderTool(name, input);
+      case 'end_conversation':
+        if (current === undefined) return { status: 403, body: { error: 'Only the conversation can end itself' } };
+        current.endAfterTurn = true;
+        return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
+      default:
+        return { status: 404, body: { error: `unknown tool ${name}` } };
+    }
+  }
+
+  const CONVERSATION_CALLER: AssistantCaller = { kind: 'conversation' };
   const api: AssistantService = {
     async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
@@ -1396,84 +1494,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return state;
     },
     sent: (ref) => readSent(deps.home, ref),
-    async tool(name, args) {
+    async tool(name, args, caller = CONVERSATION_CALLER) {
+      if (caller.kind === 'job') {
+        // Токен job уже отсёк приёмник; список проверяется ещё раз здесь, чтобы сервис не зависел от приёмника.
+        if (!JOB_TOOL_ALLOWLIST.includes(name)) return { status: 403, body: { error: `${name} is not available to background jobs` } };
+        const reply = await dispatch(name, args, { token: `job:${caller.jobId}`, source: `job:${caller.jobId}`, jobId: caller.jobId });
+        deps.jobTools?.recordTool(caller.jobId, name, reply.status >= 200 && reply.status < 300);
+        return reply;
+      }
       const current = conversation;
       if (current === null) return { status: 409, body: { error: 'No assistant conversation is active' } };
-      const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-      const src = source();
-      const targets = targetsOf(src);
-      const hidden = hiddenOf(src);
-      switch (name) {
-        case 'parley_overview': {
-          return { status: 200, body: { text: await overview() } };
-        }
-        case 'parley_detail': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
-          const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
-          return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
-        }
-        case 'parley_find': {
-          const query = stringArg(input, 'query').trim();
-          if (query === '') return { status: 400, body: { error: 'query is empty' } };
-          return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
-        }
-        case 'parley_room': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
-          const before = input['before'];
-          if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
-            return { status: 400, body: { error: 'before must be the number from the last reply' } };
-          }
-          const limit = input['limit'];
-          return {
-            status: 200,
-            body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
-          };
-        }
-        case 'parley_session': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
-          const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
-          let items: readonly FeedItem[] = [];
-          if (deps.feed !== undefined) {
-            try {
-              items = (await deps.feed.snapshot(target.ref)).items;
-            } catch {
-              // ленты у сессии нет — «истории пока нет»
-            }
-          }
-          const before = stringArg(input, 'before');
-          const limit = input['limit'];
-          const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
-          return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
-        }
-        case 'propose_message':
-          return propose(input, src, targets, hidden);
-        case 'propose_room':
-          return proposeRoom(input, src, targets, hidden);
-        case 'propose_room_decision':
-          return proposeRoomDecision(input, src, targets, hidden);
-        case 'propose_decision':
-          return proposeDecision(input, targets, hidden);
-        case 'propose_actions':
-          return proposeActions(input, src);
-        case 'schedule_check':
-        case 'list_reminders':
-        case 'cancel_reminder':
-          return reminderTool(name, input);
-        case 'end_conversation':
-          current.endAfterTurn = true;
-          return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
-        default:
-          return { status: 404, body: { error: `unknown tool ${name}` } };
-      }
+      return dispatch(name, args, { token: current.token }, current);
     },
     async onReminder(reminder, late) {
       // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры

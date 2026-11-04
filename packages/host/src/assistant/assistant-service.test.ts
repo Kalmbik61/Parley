@@ -1956,3 +1956,65 @@ describe('assistant-service: durable-история разговора', () => {
     expect(store.history(10)).toEqual([]);
   });
 });
+
+describe('assistant-service: инструменты job (VA-10, токен job)', () => {
+  const JOB = { kind: 'job', jobId: 'job-1' } as const;
+  const jobTools = () => ({ recordTool: vi.fn(), recordCard: vi.fn() });
+
+  it('запись только через карточку: propose_message от job ничего не отправляет, пока человек не подтвердил', async () => {
+    const tools = jobTools();
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store, jobTools: tools });
+    // Разговора нет — job работает без него.
+    const reply = await service.tool('propose_message', { target: 'Auth', text: 'Пропусти Safari' }, JOB);
+    expect(reply.status).toBe(200);
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    expect(deps.send).not.toHaveBeenCalled();
+    const card = store.active()[0]!;
+    expect(card).toMatchObject({ kind: 'message', source: 'job:job-1', state: 'active' });
+    // Карточку записал хост, а не модель.
+    expect(tools.recordCard).toHaveBeenCalledWith('job-1', { cardId: card.proposalId, kind: 'message' });
+    expect(tools.recordTool).toHaveBeenCalledWith('job-1', 'propose_message', true);
+    await service.decide(card.proposalId, 'send');
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it('токен разговора не копируется в карточку job, карточка острова не вытесняется', async () => {
+    const store = createCardStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, cards: store, jobTools: jobTools() });
+    await service.ask(ASK);
+    await service.tool('propose_message', { target: 'Auth', text: 'из разговора' });
+    await service.tool('propose_message', { target: 'Gate', text: 'из job' }, JOB);
+    const active = store.active();
+    expect(active.map((card) => card.source)).toEqual(['island', 'job:job-1']);
+    const [own, job] = active.map((card) => (card.payload as { token: string }).token);
+    expect(own).toMatch(/^[0-9a-f]{64}$/);
+    expect(job).toBe('job:job-1');
+    expect(JSON.stringify(active[1])).not.toContain(own!);
+    service.stop();
+  });
+
+  it('инструмент вне allowlist — 403, без побочных действий', async () => {
+    const tools = jobTools();
+    const service = createAssistantService({ ...deps, jobTools: tools });
+    await service.ask(ASK);
+    for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) {
+      const reply = await service.tool(name, { what: 'x', id: '*', in_minutes: 1 }, JOB);
+      expect(reply.status).toBe(403);
+    }
+    expect(deps.reminders.add).not.toHaveBeenCalled();
+    expect(deps.reminders.cancel).not.toHaveBeenCalled();
+    expect(tools.recordTool).not.toHaveBeenCalled();
+    service.stop();
+  });
+
+  it('чтение от job работает без разговора, и вызов записывается хостом', async () => {
+    const tools = jobTools();
+    const service = createAssistantService({ ...deps, jobTools: tools });
+    const reply = await service.tool('parley_overview', {}, JOB);
+    expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('Room "Auth"') } });
+    expect(tools.recordTool).toHaveBeenCalledWith('job-1', 'parley_overview', true);
+    service.stop();
+  });
+});

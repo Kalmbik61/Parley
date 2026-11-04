@@ -305,6 +305,14 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   { version: 8, up: (db) => db.exec(SCHEMA_ASSISTANT_CONVERSATIONS) },
   // 9: Request голосовых поручений и отметки доставки (спека 2026-11-04, T2).
   { version: 9, up: (db) => db.exec(SCHEMA_ASSISTANT_REQUESTS) },
+  // 10: итог job (`JobResult`: ответ, карточки и вызовы инструментов, что записал хост; план голоса, T1).
+  {
+    version: 10,
+    up: (db) => {
+      const has = db.prepare('PRAGMA table_info(assistant_jobs)').all().some((column) => column['name'] === 'result_json');
+      if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN result_json TEXT');
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

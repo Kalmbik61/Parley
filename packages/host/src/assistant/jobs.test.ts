@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
-import { createJobs, type Job, type JobEnd, type JobRun, type JobsDeps } from './jobs.js';
+import { createJobs, type Job, type JobEnd, type JobResult, type JobRun, type JobsDeps } from './jobs.js';
 
 interface Fake {
   job: Job;
@@ -28,6 +28,7 @@ function setup(extra: Partial<JobsDeps> = {}, db = openMemoryDb()) {
   const submit = (key: string, provider = 'claude') => jobs.submitJob({ origin: 'island', text: key, idempotencyKey: key, correlation: { mode: 'text' }, provider });
   return { jobs, runs, execute, submit, db };
 }
+const result = (answer = 'done'): JobResult => ({ answer, capturedAt: 1, cards: [], toolRefs: [] });
 const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('assistant jobs', () => {
@@ -53,7 +54,7 @@ describe('assistant jobs', () => {
     const events: Job[] = [];
     jobs.onJobChanged((job) => events.push(job));
     const { jobId } = submit('k1');
-    runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'done', result: result('done'), outcome: 'completed' });
     await settled();
     expect(events.filter((job) => job.state === 'completed')).toHaveLength(1);
     const revisions = events.map((job) => job.revision);
@@ -71,7 +72,7 @@ describe('assistant jobs', () => {
   it('исход без подтверждения хоста не объявляется выполненным', async () => {
     const { jobs, runs, submit } = setup();
     const { jobId } = submit('k1');
-    runs[0]!.end({ ok: true, summary: 'sent it', confirmed: false });
+    runs[0]!.end({ ok: true, summary: 'sent it', result: result('sent it'), outcome: 'needs_confirmation' });
     await settled();
     expect(jobs.getJob(jobId)?.state).toBe('needs_confirmation');
   });
@@ -97,7 +98,7 @@ describe('assistant jobs', () => {
     const other = submit('4', 'codex');
     expect(runs.map((run) => run.job.jobId)).toEqual([j1.jobId, j2.jobId, other.jobId]);
     expect(jobs.getJob(j3.jobId)?.state).toBe('queued');
-    runs[0]!.end({ ok: true, summary: 's', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 's', result: result('s'), outcome: 'completed' });
     await settled();
     expect(jobs.getJob(j3.jobId)?.state).toBe('running');
     expect(runs).toHaveLength(4);
@@ -147,7 +148,7 @@ describe('assistant jobs', () => {
     submit('outer');
     expect(runs).toHaveLength(1);
     expect(execute).toHaveBeenCalledTimes(1);
-    runs[0]!.end({ ok: true, summary: 'x', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'x', result: result('x'), outcome: 'completed' });
     await settled();
     expect(runs).toHaveLength(2);
     expect(runs.map((run) => run.job.requestText)).toEqual(['outer', 'inner']);
@@ -171,7 +172,7 @@ describe('assistant jobs', () => {
     const events: Job[] = [];
     jobs.onJobChanged((job) => events.push(job));
     const { jobId } = submit('k1');
-    runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'done', result: result('done'), outcome: 'completed' });
     await settled();
     const final = jobs.getJob(jobId)!;
     expect(final.deliveredInline).toBe(false);
@@ -186,7 +187,7 @@ describe('assistant jobs', () => {
     const { jobs, runs, submit } = setup();
     const { jobId, revision } = submit('k1');
     expect(jobs.ackInline(jobId, jobs.getJob(jobId)!.revision)).toMatchObject({ ok: false, reason: 'stale' });
-    runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    runs[0]!.end({ ok: true, summary: 'done', result: result('done'), outcome: 'completed' });
     await settled();
     expect(jobs.ackInline(jobId, revision)).toMatchObject({ ok: false, reason: 'stale' });
     expect(jobs.getJob(jobId)!.deliveredInline).toBe(false);
@@ -196,7 +197,7 @@ describe('assistant jobs', () => {
   it('ackInline: флаг лежит в колонке delivered_inline и переживает рестарт; не терминальный job не принимается', async () => {
     const first = setup();
     const { jobId } = first.submit('k1');
-    first.runs[0]!.end({ ok: true, summary: 'done', confirmed: true });
+    first.runs[0]!.end({ ok: true, summary: 'done', result: result('done'), outcome: 'completed' });
     await settled();
     const revision = first.jobs.getJob(jobId)!.revision;
     expect(first.jobs.ackInline(jobId, revision)).toMatchObject({ ok: true, reason: 'acked' });
@@ -209,5 +210,42 @@ describe('assistant jobs', () => {
     expect(second.jobs.ackInline(live.jobId, second.jobs.getJob(live.jobId)!.revision)).toMatchObject({ ok: false, reason: 'stale' });
     expect(second.db.prepare('SELECT delivered_inline AS d FROM assistant_jobs WHERE job_id = ?').get(live.jobId)).toEqual({ d: 0 });
     second.jobs.stop();
+  });
+
+  it('JobResult сохраняется с job: completed хранит ответ, карточки и toolRefs хоста, переживает рестарт', async () => {
+    const { jobs, runs, submit, db } = setup();
+    const { jobId } = submit('k-result');
+    const full: JobResult = { answer: 'Anna works in Auth.', capturedAt: 42, cards: [{ cardId: 'p1', kind: 'message' }], toolRefs: [{ tool: 'parley_overview', ok: true, at: 41 }] };
+    runs[0]!.end({ ok: true, summary: full.answer, result: full, outcome: 'completed' });
+    await settled();
+    expect(jobs.getJob(jobId)).toMatchObject({ state: 'completed', resultSummary: full.answer, result: full });
+    jobs.stop();
+    expect(setup({}, db).jobs.getJob(jobId)?.result).toEqual(full);
+  });
+
+  it('read-only без подтверждения хоста не уходит в needs_confirmation: completed — это «ответ готов»', async () => {
+    const { jobs, runs, submit } = setup();
+    const { jobId } = submit('k-read');
+    runs[0]!.end({ ok: true, summary: 'Nobody is waiting for you.', result: result('Nobody is waiting for you.'), outcome: 'completed' });
+    await settled();
+    expect(jobs.getJob(jobId)?.state).toBe('completed');
+  });
+
+  it('заявленное без карточки — needs_confirmation с результатом; такой job повторно не запускается', async () => {
+    const { jobs, runs, submit, execute } = setup();
+    const { jobId } = submit('k-claim');
+    runs[0]!.end({ ok: true, summary: 'I sent it', result: result('I sent it'), outcome: 'needs_confirmation' });
+    await settled();
+    expect(jobs.getJob(jobId)).toMatchObject({ state: 'needs_confirmation', result: { answer: 'I sent it' } });
+    await jobs.recover();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('job без итога (failed, cancelled, неизвестный исход после рестарта) имеет result = null', async () => {
+    const { jobs, runs, submit } = setup();
+    const { jobId } = submit('k-fail');
+    runs[0]!.end({ ok: false, kind: 'other', message: 'boom' });
+    await settled();
+    expect(jobs.getJob(jobId)?.result).toBeNull();
   });
 });

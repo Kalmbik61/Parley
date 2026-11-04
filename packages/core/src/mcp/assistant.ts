@@ -303,6 +303,30 @@ export const ASSISTANT_TOOLS: Tool[] = [
   },
 ];
 
+/**
+ * Токен job (а не разговора) начинается с этого префикса. MCP-сервер по нему показывает модели только
+ * `JOB_TOOL_ALLOWLIST`; хост проверяет список независимо, по тому, чей это токен (`assistant-endpoint.ts`).
+ */
+export const JOB_TOKEN_PREFIX = 'job_';
+
+/**
+ * Явный список инструментов job: чтение плюс `propose_*` (запись только через карточки). Остальное не входит:
+ * `schedule_check`, `cancel_reminder`, `end_conversation` меняют состояние разговора, `list_reminders` читает чужое
+ * для job состояние напоминаний. Новый инструмент в job не попадает, пока его не добавят сюда.
+ */
+export const JOB_TOOL_ALLOWLIST: readonly string[] = [
+  'parley_overview',
+  'parley_detail',
+  'parley_find',
+  'parley_room',
+  'parley_session',
+  'propose_message',
+  'propose_room',
+  'propose_decision',
+  'propose_room_decision',
+  'propose_actions',
+];
+
 export interface AssistantServerOptions {
   /** База маршрута хоста (`PARLEY_ASSISTANT_URL`), без завершающего `/`. */
   url: string;
@@ -318,10 +342,11 @@ const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text 
 export function createAssistantServer(options: AssistantServerOptions): Server {
   const call = options.fetch ?? fetch;
   const server = new Server({ name: ASSISTANT_MCP_NAME, version: '0.0.0' }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: ASSISTANT_TOOLS }));
+  const tools = options.token.startsWith(JOB_TOKEN_PREFIX) ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name)) : ASSISTANT_TOOLS;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
     const name = request.params.name;
-    if (!ASSISTANT_TOOLS.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);
+    if (!tools.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);
     try {
       const response = await call(`${options.url}/${name}`, {
         method: 'POST',

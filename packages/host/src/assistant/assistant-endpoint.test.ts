@@ -2,6 +2,7 @@ import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { silentLog } from '../../test/feed-fakes.js';
+import { createJobTokens, type JobTokens } from './job-tokens.js';
 import { ASSISTANT_BODY_LIMIT, ASSISTANT_PATH, ASSISTANT_TOOL_NAMES, createAssistantEndpoint, type AssistantReply } from './assistant-endpoint.js';
 
 let servers: Server[] = [];
@@ -14,8 +15,8 @@ afterEach(async () => {
 const okTool = () => vi.fn(async (): Promise<AssistantReply> => ({ status: 200, body: { text: 'ok' } }));
 
 /** Сервер с маршрутами приёмника — как их подключает сервер хуков: только точный путь, остальное — 404. */
-async function boot(tool = okTool()) {
-  const endpoint = createAssistantEndpoint({ log: silentLog(), tool });
+async function boot(tool = okTool(), jobTokens?: Pick<JobTokens, 'jobOf'>) {
+  const endpoint = createAssistantEndpoint({ log: silentLog(), tool, ...(jobTokens === undefined ? {} : { jobTokens }) });
   const routes = endpoint.routes();
   const server = createServer((req, res) => {
     const route = routes[(req.url ?? '').split('?')[0] ?? ''];
@@ -53,7 +54,7 @@ describe('приёмник инструментов помощника (спек
     const ok = await post('parley_overview', 'secret-1');
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ text: 'ok' });
-    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 });
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, { kind: 'conversation' });
     expect((await post('parley_overview', 'secret-2')).status).toBe(401);
     endpoint.setToken(null);
     expect((await post('parley_overview', 'secret-1')).status).toBe(401);
@@ -66,8 +67,8 @@ describe('приёмник инструментов помощника (спек
     endpoint.setToken('t');
     expect((await post('propose_room', 't')).status).toBe(200);
     expect((await post('propose_room_decision', 't')).status).toBe(200);
-    expect(tool).toHaveBeenNthCalledWith(1, 'propose_room', { a: 1 });
-    expect(tool).toHaveBeenNthCalledWith(2, 'propose_room_decision', { a: 1 });
+    expect(tool).toHaveBeenNthCalledWith(1, 'propose_room', { a: 1 }, { kind: 'conversation' });
+    expect(tool).toHaveBeenNthCalledWith(2, 'propose_room_decision', { a: 1 }, { kind: 'conversation' });
   });
 
   it('статус и тело обработчика уходят как есть; исключение — 500 с текстом', async () => {
@@ -87,7 +88,7 @@ describe('приёмник инструментов помощника (спек
     const { endpoint, tool, post } = await boot();
     endpoint.setToken('t');
     expect((await post('parley_detail', 't', '')).status).toBe(200);
-    expect(tool).toHaveBeenLastCalledWith('parley_detail', {});
+    expect(tool).toHaveBeenLastCalledWith('parley_detail', {}, { kind: 'conversation' });
     expect((await post('parley_detail', 't', '{')).status).toBe(400);
     expect((await post('parley_detail', 't', '[1]')).status).toBe(400);
     expect(tool).toHaveBeenCalledTimes(1);
@@ -110,5 +111,55 @@ describe('приёмник инструментов помощника (спек
     });
     expect(status).toBe(413);
     expect(tool).not.toHaveBeenCalled();
+  });
+});
+
+describe('токены job (план голоса, T1)', () => {
+  it('токен job приводит к вызову с его jobId; токен разговора не нужен', async () => {
+    const tokens = createJobTokens();
+    const { tool, post } = await boot(okTool(), tokens);
+    const token = tokens.issue('job-1');
+    expect((await post('parley_overview', token)).status).toBe(200);
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, { kind: 'job', jobId: 'job-1' });
+  });
+
+  it('токен job не открывает инструменты вне allowlist: 403, сервис не вызывается', async () => {
+    const tokens = createJobTokens();
+    const { endpoint, tool, post } = await boot(okTool(), tokens);
+    endpoint.setToken('conversation');
+    const token = tokens.issue('job-1');
+    for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) {
+      expect((await post(name, token)).status).toBe(403);
+    }
+    expect(tool).not.toHaveBeenCalled();
+    // Тот же инструмент по токену разговора проходит: ограничен именно job.
+    expect((await post('schedule_check', 'conversation')).status).toBe(200);
+  });
+
+  it('propose_* разрешены job', async () => {
+    const tokens = createJobTokens();
+    const { tool, post } = await boot(okTool(), tokens);
+    const token = tokens.issue('job-1');
+    for (const name of ['propose_message', 'propose_room', 'propose_decision', 'propose_room_decision', 'propose_actions']) {
+      expect((await post(name, token)).status).toBe(200);
+    }
+    expect(tool).toHaveBeenCalledTimes(5);
+  });
+
+  it('отозванный, чужой и пустой токен job — 401; токен job не работает как токен разговора и наоборот', async () => {
+    const tokens = createJobTokens();
+    const { endpoint, tool, post } = await boot(okTool(), tokens);
+    const token = tokens.issue('job-1');
+    tokens.revoke('job-1');
+    expect((await post('parley_overview', token)).status).toBe(401);
+    expect((await post('parley_overview', 'job_deadbeef')).status).toBe(401);
+    endpoint.setToken('conversation');
+    const again = tokens.issue('job-2');
+    expect((await post('parley_overview', again)).status).toBe(200);
+    expect(tool).toHaveBeenLastCalledWith('parley_overview', { a: 1 }, { kind: 'job', jobId: 'job-2' });
+    // Закрытый разговор не закрывает job, а токен разговора не принадлежит job.
+    endpoint.setToken(null);
+    expect((await post('parley_overview', again)).status).toBe(200);
+    expect((await post('parley_overview', 'conversation')).status).toBe(401);
   });
 });
