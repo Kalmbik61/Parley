@@ -190,6 +190,6 @@ describe('Request голосовых поручений: requests.*', () => {
     expect(METHODS['requests.ack'].safeParse({ requestId: 'r1', consumer: 'x', revision: -1 }).success).toBe(false);
   });
   it('телефону requests.* недоступны: remote по-прежнему шлёт только jobs.submit с origin mobile', () => {
-    for (const name of ['requests.submit', 'requests.list', 'requests.ack']) expect((REMOTE_METHODS as readonly string[]).includes(name), name).toBe(false);
+    for (const name of ['requests.submit', 'requests.list', 'requests.ack', 'voice.telemetry.record', 'voice.telemetry.list']) expect((REMOTE_METHODS as readonly string[]).includes(name), name).toBe(false);
   });
 });

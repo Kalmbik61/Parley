@@ -58,6 +58,8 @@ describe('useLiveStore', () => {
     expect(useLiveStore.getState().notice).toBeNull();
     emit({ type: 'sessionClosed', reason: 'time_limit' });
     expect(useLiveStore.getState().notice).toBe(S.assistant.live.closed('time_limit'));
+    emit({ type: 'sessionClosed', reason: 'idle_timeout' });
+    expect(useLiveStore.getState().notice).toBe('Live voice ended after three minutes of silence.');
   });
 
   it('attachDelegation отражает итоги поручений и снимает их при отключении', () => {

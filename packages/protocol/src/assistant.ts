@@ -224,8 +224,31 @@ export const assistantRequestMethodSchemas = {
   'requests.ack': z.strictObject({ requestId, consumer: requestConsumer, revision: z.number().int().nonnegative() }),
 } as const;
 
+/**
+ * Локальная телеметрия голоса (спека «Голос↔Ассистент», §11, T6): остров присылает числа и перечисления, что измерил сам
+ * (`voice.telemetry.record`); хост дописывает свои (`link_request_ms`, `job_duration_ms`, `superseded_count`, `voice_seconds`,
+ * `voice_cost_estimate_usd`). Текстовых полей нет: ни аудио, ни транскрипта, ни текста итога. Чтение для приёмки — `voice.telemetry.list`.
+ * Методы только локальные: в remote-списках их нет. Без `requestId` запись относится к сессии, с ним — к Request.
+ */
+const telemetryMs = z.number().int().nonnegative().max(86_400_000);
+export const voiceTelemetryMethodSchemas = {
+  'voice.telemetry.record': z.strictObject({
+    voiceSessionId: z.string().min(1).max(128),
+    requestId: z.string().min(1).max(128).optional(),
+    firstAudioMs: telemetryMs.optional(),
+    ackAudible: z.union([z.boolean(), z.literal('unknown')]).optional(),
+    delegationToSubmitMs: telemetryMs.optional(),
+    transcriptWaitMs: telemetryMs.optional(),
+    resultHoldMs: telemetryMs.optional(),
+    speechState: z.enum(['queued', 'submitted', 'played', 'unknown', 'dropped']).optional(),
+    interrupts: z.number().int().nonnegative().max(10_000).optional(),
+  }),
+  'voice.telemetry.list': z.strictObject({ limit: z.number().int().min(1).max(500).optional() }),
+} as const;
+
 export const assistantMethodSchemas = {
   ...assistantRequestMethodSchemas,
+  ...voiceTelemetryMethodSchemas,
   'assistant.ask': z.object({
     text: z.string().min(1).max(4000),
     /** `null` — первый готовый провайдер (`claude`, `glm`, `codex`). */
@@ -361,7 +384,30 @@ export interface AssistantRequestView {
 
 export type AssistantRequestAck = { ok: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' | 'not_terminal' };
 
+/** Строка телеметрии голоса (поля — имена из спеки §11); `null` — не измерено. Только числа, перечисления и id. */
+export interface VoiceTelemetryRow {
+  voice_session_id: string;
+  /** `null` — запись уровня сессии. */
+  request_id: string | null;
+  at: number;
+  first_audio_ms: number | null;
+  ack_audible: boolean | 'unknown' | null;
+  delegation_to_submit_ms: number | null;
+  transcript_wait_ms: number | null;
+  link_request_ms: number | null;
+  job_duration_ms: number | null;
+  result_hold_ms: number | null;
+  speech_state: 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped' | null;
+  interrupts: number | null;
+  superseded_count: number | null;
+  voice_seconds: number | null;
+  /** `null` — тариф не задан (хост не выдумывает цену). */
+  voice_cost_estimate_usd: number | null;
+}
+
 export interface AssistantMethodResults {
+  'voice.telemetry.record': { ok: true };
+  'voice.telemetry.list': { rows: VoiceTelemetryRow[] };
   'requests.submit': { request: AssistantRequestView; created: boolean };
   'requests.list': { requests: AssistantRequestView[] };
   'requests.ack': AssistantRequestAck;

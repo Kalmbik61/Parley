@@ -29,6 +29,7 @@ export const JOB_PROMPT = [
   'You run one background task for the person; Parley reads your reply aloud later.',
   'Your first step is to call link_request, if that tool is available to you.',
   'Pass the earlier open requests listed in the task that this task replaces (the person corrected or withdrew them), or [] if it is independent or you are not sure. Request ids are only for link_request.',
+  'If the task asks for the status ("what is the status", "any news", "what is going on with it"), call request_status: it only reads and never repeats the work. Tell the person how long each open request has been running.',
   'Look things up with the Parley tools and never guess: if the tools do not show it, say "не знаю" (or the same in the language of the task).', // cyrillic-ok: фраза, которую спека требует вместо догадки
   'Reply with one to three short plain sentences, in the language of the task.',
   'Name people, rooms and agents by their names, never by ids such as s-12, r-3 or work:…, and never read tool data blocks aloud.',

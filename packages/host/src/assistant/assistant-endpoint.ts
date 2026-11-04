@@ -3,7 +3,7 @@
  * принимает хуки (`hooks/hook-server.ts`, параметр `routes`) — по одному точному пути на инструмент, как у
  * `/agent/browser`. Токен разговора один (`setToken`); у каждого job свой токен (`jobTokens`), привязанный к `jobId`
  * (план голоса, T1). Сравнение в постоянное время; `null` — маршруты разговора закрыты. Токен job вызывает только
- * инструменты из `JOB_TOOL_ALLOWLIST`, остальное — 403 без вызова сервиса: токен разговора job не получает; `link_request` — наоборот, только для токена job. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
+ * инструменты из `JOB_TOOL_ALLOWLIST`, остальное — 403 без вызова сервиса: токен разговора job не получает; `link_request` и `request_status` — наоборот, только для токена job. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
  * Ответ обработчика уходит как есть: `200 {text}` или не-200 `{error}` (режим помощника `parley-mcp` читает оба).
  *
  * Журнал — одна строка на вызов: инструмент и статус; аргументов (там текст человека) и токена в нём нет.
@@ -33,6 +33,7 @@ export const ASSISTANT_TOOL_NAMES = [
   'cancel_reminder',
   'end_conversation',
   'link_request',
+  'request_status',
 ] as const;
 /** Предел тела вызова: аргументы инструментов — короткие строки. */
 export const ASSISTANT_BODY_LIMIT = 1024 * 1024;
@@ -108,7 +109,7 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
       refuse(req, res, 403, 'job-tool');
       return;
     }
-    // `link_request` принадлежит job: токен разговора его не вызывает.
+    // `link_request` и `request_status` принадлежат job: токен разговора их не вызывает.
     if (caller.kind === 'conversation' && JOB_ONLY_TOOLS.includes(name)) {
       refuse(req, res, 403, 'job-only-tool');
       return;

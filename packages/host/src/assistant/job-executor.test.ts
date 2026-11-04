@@ -231,6 +231,11 @@ describe('job executor', () => {
     expect(JOB_PROMPT).toContain('propose_*');
   });
 
+  it('JOB_PROMPT: на вопрос о статусе — request_status, который только читает', () => {
+    expect(JOB_PROMPT).toContain('call request_status');
+    expect(JOB_PROMPT).toContain('never repeats the work');
+  });
+
   it('сервер хуков не поднят — start, токен не выдаётся', async () => {
     const { execute, run, tokens } = setup({ ok: true }, { endpointUrl: () => null });
     await expect(execute(job).done).resolves.toMatchObject({ ok: false, kind: 'start' });

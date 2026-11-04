@@ -118,10 +118,12 @@ import { createConversationStore } from './assistant/conversation-store.js';
 import { createJobs, type Job } from './assistant/jobs.js';
 import { createRequests } from './assistant/requests.js';
 import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
+import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
 import { createJobPrompt } from './assistant/job-context.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
+import { createVoiceTelemetry } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
@@ -442,6 +444,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Связь голосовых поручений (T5): строится после jobs и Request, а сервис зовёт её уже при вызове инструмента job.
   // eslint-disable-next-line prefer-const -- поздняя привязка: сервис создаётся раньше jobs
   let assistantLinker: RequestLinker | undefined;
+  // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
+  let assistantStatus: RequestStatusReader | undefined;
   // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
   const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
@@ -835,6 +839,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       link: (jobId, raw) => assistantLinker?.link(jobId, raw) ?? { ok: false, status: 409, error: 'link_request is not ready' },
       proposeRefusal: (jobId) => assistantLinker?.proposeRefusal(jobId) ?? null,
     },
+    requestStatus: {
+      status: (jobId) => assistantStatus?.status(jobId) ?? { ok: false, status: 409, error: 'request_status is not ready' },
+    },
     conversations: createConversationStore(sideDb),
     home: parleyHome(),
     log: (line) => log.info(line),
@@ -867,6 +874,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
   jobPrompt = createJobPrompt({ requests: assistantRequests });
+  assistantStatus = createRequestStatus({ requests: assistantRequests });
   assistantLinker = createRequestLinker({
     db: sideDb,
     requests: assistantRequests,
@@ -1068,6 +1076,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     send,
     assistant: assistantService,
     assistantRequests,
+    voiceTelemetry: createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs }),
     assistantJobs: {
       ...assistantJobs,
       ackInline(jobId, rev) {

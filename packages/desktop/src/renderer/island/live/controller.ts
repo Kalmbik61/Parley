@@ -102,7 +102,8 @@ export const LIVE_MESSAGES: Readonly<Record<LiveFailure, string>> = {
 
 export interface LiveController {
   start(): Promise<LiveStartResult>;
-  stop(): Promise<void>;
+  /** `idle_timeout` — автозакрытие после тишины (T6): человеку это называется причиной, а не «ended unexpectedly». */
+  stop(reason?: 'close_requested' | 'idle_timeout'): Promise<void>;
   /** `false` — канал данных не открыт, сообщение не ушло. */
   sendAppend(input: { kind: AppendKind; delegationId: string | null; content: string }): boolean;
   subscribe(listener: (event: LiveControllerEvent) => void): () => void;
@@ -129,6 +130,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   let live: Live | null = null;
   let generation = 0;
   let appendCounter = 0;
+  let stopReason: 'close_requested' | 'idle_timeout' | null = null;
   let deduper = createEventDeduper();
   let human: Hysteresis = humanSpeakingHysteresis();
   let model: Hysteresis = modelPlayingHysteresis();
@@ -193,9 +195,12 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   const finish = (target: Live, reason: string): void => {
     if (target.closedEmitted) return;
     target.closedEmitted = true;
+    // Закрытие по тишине просили мы: событие хоста может прийти раньше и назвать другую причину.
+    const final = stopReason === 'idle_timeout' ? 'idle_timeout' : reason;
+    stopReason = null;
     teardown(target);
     setPhase('idle');
-    emit({ type: 'sessionClosed', reason });
+    emit({ type: 'sessionClosed', reason: final });
   };
 
   const fail = (code: LiveFailure, message = LIVE_MESSAGES[code]): LiveStartResult => ({ ok: false, code, message });
@@ -226,6 +231,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     async start() {
       if (phase !== 'idle') return fail('busy');
       const mine = ++generation;
+      stopReason = null;
       deduper = createEventDeduper();
       human = humanSpeakingHysteresis();
       model = modelPlayingHysteresis();
@@ -360,7 +366,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       }
     },
 
-    async stop() {
+    async stop(reason = 'close_requested') {
       generation += 1;
       const target = live;
       if (target === null) {
@@ -368,13 +374,14 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         setPhase('idle');
         return;
       }
+      stopReason = reason;
       setPhase('closing');
       try {
         await deps.call('voice.session.close', { voiceSessionId: target.voiceSessionId });
       } catch {
         // сессию всё равно закрываем локально; хост закроет её по лимиту
       }
-      finish(target, 'close_requested');
+      finish(target, reason);
     },
 
     sendAppend({ kind, delegationId, content }) {

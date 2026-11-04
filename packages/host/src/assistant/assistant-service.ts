@@ -51,6 +51,7 @@ import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
 import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
 import type { JobTokens } from './job-tokens.js';
 import type { RequestLinker } from './request-link.js';
+import type { RequestStatusReader } from './request-status.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
 import { detailText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
@@ -119,6 +120,8 @@ export interface AssistantServiceDeps {
   jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'> & Partial<Pick<JobTokens, 'recordOverview'>>;
   /** Связь голосовых поручений (`link_request`, T5) и отказ `propose_*` частичному или вытесненному Request; без неё `link_request` недоступен. */
   requestLink?: RequestLinker;
+  /** Запасной статус голосовых поручений (`request_status`, T6): чтение открытых Request разговора вызывающего job; без него инструмент недоступен. */
+  requestStatus?: RequestStatusReader;
   /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
   reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
@@ -1420,6 +1423,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (!outcome.ok) return { status: outcome.status, body: { error: outcome.error } };
       announceWithdrawn(outcome.withdrawn);
       return { status: 200, body: { text: outcome.text } };
+    }
+    if (name === 'request_status') {
+      if (deps.requestStatus === undefined) return { status: 409, body: { error: 'request_status is not available' } };
+      const outcome = deps.requestStatus.status(jobId);
+      return outcome.ok ? { status: 200, body: { text: outcome.text } } : { status: outcome.status, body: { error: outcome.error } };
     }
     if (name.startsWith('propose_')) {
       const refused = deps.requestLink?.proposeRefusal(jobId) ?? null;

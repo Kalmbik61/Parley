@@ -6,3 +6,6 @@ export * from './transcript.js';
 export * from './ack.js';
 export * from './bridge.js';
 export * from './speech-queue.js';
+export * from './status.js';
+export * from './idle-close.js';
+export * from './telemetry.js';

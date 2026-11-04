@@ -44,6 +44,7 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
   const signals = { humanSpeaking: false, modelPlaying: false };
   const listeners = new Set<(event: LiveControllerEvent) => void>();
   const appends: Array<{ kind: string; delegationId: string | null; content: string }> = [];
+  const stops: Array<string | undefined> = [];
   const calls: Array<{ method: string; params: unknown }> = [];
   let list = initial.list ?? [];
   const submitted: AssistantRequestView[] = [];
@@ -73,6 +74,9 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
       sendAppend: (input) => {
         appends.push(input);
         return true;
+      },
+      stop: async (reason) => {
+        stops.push(reason);
       },
     },
     call: call as never,
@@ -122,7 +126,7 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
   };
   const human = (text: string, startMs: number, endMs: number): void => emit({ type: 'inputTranscript', text, startMs, endMs });
   return {
-    delegation, appends, calls, emit, advance, flush, open, human, submitted, hostListeners,
+    delegation, appends, stops, calls, commentary: () => appends.filter((append) => append.kind === 'commentary'), statuses: () => appends.filter((append) => append.kind === 'thinking'), emit, advance, flush, open, human, submitted, hostListeners,
     setList: (next: AssistantRequestView[]) => void (list = next),
     callsOf: (method: string) => calls.filter((entry) => entry.method === method),
   };
@@ -160,7 +164,7 @@ describe('createLiveDelegation', () => {
     h.setList([view({ requestId: 'req-1', job: done() })]);
     h.hostListeners.get('assistant.job.changed')?.();
     await h.advance(1500);
-    expect(h.appends).toEqual([{ kind: 'commentary', delegationId: 'd1', content: expect.stringContaining('Two rooms are waiting') }]);
+    expect(h.commentary()).toEqual([{ kind: 'commentary', delegationId: 'd1', content: expect.stringContaining('Two rooms are waiting') }]);
     expect(h.callsOf('requests.ack')[0]?.params).toEqual({ requestId: 'req-1', consumer: 'live', revision: 4 });
   });
 
@@ -172,9 +176,9 @@ describe('createLiveDelegation', () => {
     h.setList([view({ requestId: 'req-1', job: done() })]);
     h.hostListeners.get('assistant.job.changed')?.();
     await h.advance(2000);
-    expect(h.appends).toHaveLength(0);
+    expect(h.commentary()).toHaveLength(0);
     await h.advance(1500);
-    expect(h.appends).toHaveLength(1);
+    expect(h.commentary()).toHaveLength(1);
   });
 
   it('VA-02: человек перебил озвучку → карточка на экране, jobs.ackInline, повторной отправки нет', async () => {
@@ -238,13 +242,13 @@ describe('createLiveDelegation', () => {
     ]);
     h.hostListeners.get('assistant.job.changed')?.();
     await h.advance(1500);
-    expect(h.appends.map((append) => append.delegationId)).toEqual(['d1']);
+    expect(h.commentary().map((append) => append.delegationId)).toEqual(['d1']);
     h.emit({ type: 'modelPlaying', value: true });
     h.emit({ type: 'outputTranscript', text: 'Rooms are quiet today', startMs: 0, endMs: 200 });
     await h.advance(1500);
     h.emit({ type: 'modelPlaying', value: false });
     await h.advance(3000);
-    expect(h.appends.map((append) => append.delegationId)).toEqual(['d1', 'd2']);
+    expect(h.commentary().map((append) => append.delegationId)).toEqual(['d1', 'd2']);
     expect(h.callsOf('requests.ack').map((entry) => (entry.params as { requestId: string }).requestId)).toEqual(['req-1', 'req-2']);
   });
 
@@ -284,5 +288,176 @@ describe('createLiveDelegation', () => {
     h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 100 });
     await h.advance(3000);
     expect(h.submitted).toHaveLength(0);
+  });
+});
+
+describe('createLiveDelegation: статус (T6, VA-06)', () => {
+  it('смена состояния открытого Request → thinking.append с delegation_id, временем и возрастом; job не запускается заново', async () => {
+    const h = setup({ phase: 'live' });
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.advance(500);
+    // Прогресс своей делегации уходит сразу, не дожидаясь подтверждения.
+    expect(h.statuses()).toEqual([{ kind: 'thinking', delegationId: 'd1', content: expect.stringMatching(/^Status as of \d\d:\d\d: still working on the request "Check the rooms", started \d+ (second|minute)s? ago\. No result yet\.$/) }]);
+    expect(h.statuses()[0]?.content).not.toMatch(/\b(req|job|d)-?\d+\b/);
+    // «Ну что там?» — делегации нет, значит и нового Request: статус уже у модели.
+    await h.advance(5000);
+    expect(h.callsOf('requests.submit')).toHaveLength(1);
+    expect(h.submitted).toHaveLength(1);
+  });
+
+  it('дросселирование: повторные события job в том же состоянии статус не плодят; новое состояние — новый статус', async () => {
+    const h = setup({ phase: 'live', list: [view({ job: { state: 'queued' } })] });
+    await h.advance(500);
+    expect(h.statuses()).toHaveLength(1);
+    expect(h.statuses()[0]?.content).toContain('waiting in line');
+    for (let i = 0; i < 3; i += 1) {
+      h.hostListeners.get('assistant.job.changed')?.();
+      await h.advance(500);
+    }
+    expect(h.statuses()).toHaveLength(1);
+    h.setList([view({ job: { state: 'running', revision: 2 } })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(500);
+    expect(h.statuses()).toHaveLength(2);
+    expect(h.statuses()[1]?.content).toContain('still working');
+    // Итог идёт очередью речи, а не статусом.
+    h.setList([view({ job: done() })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(3000);
+    expect(h.statuses()).toHaveLength(2);
+    expect(h.commentary()).toHaveLength(1);
+  });
+
+  it('правило подтверждений: статус без привязки к делегации ждёт чужого подтверждения, но не дольше 2,5 с', async () => {
+    const h = setup({ phase: 'live' });
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.advance(250);
+    expect(h.statuses().map((append) => append.delegationId)).toEqual(['d1']);
+    // Request прежней сессии (делегации не знаем) появился, пока d1 ждёт подтверждения.
+    h.setList([view({ requestId: 'req-old', jobId: 'job-old', text: 'earlier question', job: { jobId: 'job-old', state: 'running' } }), ...h.submitted]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(1500);
+    expect(h.statuses().map((append) => append.delegationId)).toEqual(['d1']);
+    await h.advance(1500);
+    expect(h.statuses().map((append) => append.delegationId)).toEqual(['d1', null]);
+    expect(h.statuses()[1]?.content).toContain('earlier question');
+  });
+
+  it('вытесненный Request статуса не получает', async () => {
+    const h = setup({ phase: 'live', list: [view({ stale: true, supersededBy: 'req-2' })] });
+    await h.advance(3000);
+    expect(h.statuses()).toEqual([]);
+  });
+
+  it('новая сессия получает статус открытого Request заново', async () => {
+    const h = setup({ phase: 'live', list: [view()] });
+    await h.advance(500);
+    expect(h.statuses()).toHaveLength(1);
+    h.emit({ type: 'sessionClosed', reason: 'close_requested' });
+    h.emit({ type: 'phase', phase: 'idle' });
+    await h.advance(500);
+    h.open();
+    await h.advance(1500);
+    expect(h.statuses()).toHaveLength(2);
+    expect(h.statuses()[1]?.delegationId).toBeNull();
+  });
+});
+
+describe('createLiveDelegation: автозакрытие (T6, VA-12)', () => {
+  const MIN = 60_000;
+
+  it('3 минуты тишины без открытых Request и речи в очереди → закрытие один раз, причина idle_timeout', async () => {
+    const h = setup({ phase: 'live' });
+    await h.advance(3 * MIN - 1000);
+    expect(h.stops).toEqual([]);
+    await h.advance(2000);
+    expect(h.stops).toEqual(['idle_timeout']);
+    await h.advance(3 * MIN);
+    expect(h.stops).toEqual(['idle_timeout']);
+  });
+
+  it('открытый Request держит сессию; после его завершения и озвучки отсчёт идёт заново', async () => {
+    const h = setup({ phase: 'live', list: [view()] });
+    await h.advance(5 * MIN);
+    expect(h.stops).toEqual([]);
+    h.setList([view({ delivery: { live: 4 }, job: done() })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(3 * MIN - 2000);
+    expect(h.stops).toEqual([]);
+    await h.advance(4000);
+    expect(h.stops).toEqual(['idle_timeout']);
+  });
+
+  it('речь в очереди (итог ждёт паузу или ворота) держит сессию', async () => {
+    const h = setup({ phase: 'live', list: [view({ gate: 'held', heldSince: 1_000_000, job: done() })] });
+    await h.advance(5 * MIN);
+    expect(h.delegation.items()[0]?.speech).toBe('queued');
+    expect(h.stops).toEqual([]);
+  });
+
+  it('речь человека и воспроизведение модели сбрасывают отсчёт', async () => {
+    const h = setup({ phase: 'live' });
+    await h.advance(2 * MIN + 50_000);
+    h.emit({ type: 'humanSpeaking', value: true });
+    await h.advance(1000);
+    h.emit({ type: 'humanSpeaking', value: false });
+    await h.advance(2 * MIN + 50_000);
+    h.emit({ type: 'modelPlaying', value: true });
+    await h.advance(1000);
+    h.emit({ type: 'modelPlaying', value: false });
+    await h.advance(2 * MIN + 50_000);
+    expect(h.stops).toEqual([]);
+    await h.advance(15_000);
+    expect(h.stops).toEqual(['idle_timeout']);
+  });
+
+  it('закрытие по тишине не отменяет job: отмены нет, итог остаётся', async () => {
+    const h = setup({ phase: 'live' });
+    await h.advance(3 * MIN + 1000);
+    expect(h.stops).toEqual(['idle_timeout']);
+    expect(h.calls.map((entry) => entry.method).filter((method) => /cancel/.test(method))).toEqual([]);
+  });
+});
+
+describe('createLiveDelegation: телеметрия (T6)', () => {
+  it('на хост уходят числа и перечисления: submit, подтверждение, удержание, состояние речи и запись сессии; текстов нет', async () => {
+    const h = setup({ phase: 'live' });
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.flush();
+    h.emit({ type: 'modelPlaying', value: true });
+    await h.advance(1200);
+    h.emit({ type: 'modelPlaying', value: false });
+    h.setList([view({ requestId: 'req-1', job: done() })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(1500);
+    h.emit({ type: 'modelPlaying', value: true });
+    h.emit({ type: 'outputTranscript', text: 'Two rooms are waiting for you', startMs: 0, endMs: 200 });
+    await h.advance(1500);
+    h.emit({ type: 'modelPlaying', value: false });
+    await h.advance(3000);
+    h.emit({ type: 'sessionClosed', reason: 'close_requested' });
+    h.emit({ type: 'phase', phase: 'idle' });
+    await h.flush();
+
+    const records = h.callsOf('voice.telemetry.record').map((entry) => entry.params as Record<string, unknown>);
+    const merged = (key: string): unknown => records.find((record) => key in record)?.[key];
+    expect(typeof merged('delegationToSubmitMs')).toBe('number');
+    expect(typeof merged('transcriptWaitMs')).toBe('number');
+    expect(merged('ackAudible')).toBe(true);
+    expect(typeof merged('resultHoldMs')).toBe('number');
+    expect(merged('speechState')).toBe('played');
+    expect(records.at(-1)).toMatchObject({ voiceSessionId: 'vs-1', interrupts: 0, firstAudioMs: expect.any(Number) });
+    // Тексты поручения и итога в телеметрию не попадают.
+    const dump = JSON.stringify(records);
+    expect(dump).not.toContain('Check the rooms');
+    expect(dump).not.toContain('Two rooms');
+    for (const record of records) {
+      for (const [key, value] of Object.entries(record)) {
+        if (typeof value === 'string') expect(['voiceSessionId', 'requestId', 'ackAudible', 'speechState']).toContain(key);
+      }
+    }
   });
 });

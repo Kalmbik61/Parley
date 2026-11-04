@@ -259,6 +259,8 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'requests.list',
   'requests.ack',
   'jobs.ackInline',
+  // Локальная телеметрия Live (T6): остров записывает измеренное; чтение — для приёмки, не для острова.
+  'voice.telemetry.record',
 ]);
 
 /**

@@ -239,6 +239,7 @@ export type {
   CardDecideResult,
   ProposalCardView,
   RoomProposalView,
+  VoiceTelemetryRow,
 } from './assistant.js';
 export { telegramMethodSchemas } from './telegram.js';
 export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';

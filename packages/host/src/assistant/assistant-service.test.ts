@@ -13,6 +13,7 @@ import { createConversationStore } from './conversation-store.js';
 import { createJobTokens } from './job-tokens.js';
 import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
 import { createRequestLinker } from './request-link.js';
+import { createRequestStatus } from './request-status.js';
 import { createRequests } from './requests.js';
 import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
@@ -2097,6 +2098,36 @@ describe('assistant-service: link_request (T5, VA-03/VA-05)', () => {
     expect(reply.status).toBe(403);
     expect(h.requests.get(old.requestId)).toMatchObject({ supersededBy: null });
     expect(h.requests.get(fresh.requestId)?.link).toBeNull();
+    h.service.stop();
+  });
+
+  it('request_status (T6): job видит открытые Request только своего разговора, работа не повторяется', async () => {
+    const h = link();
+    const other = h.requests.submit({ conversationId: 'conv-other', voiceSessionId: 'live', delegationId: 'x', text: 'another conversation topic' }).request;
+    h.tokens.issue(other.jobId);
+    const first = h.submit('d1');
+    const asker = h.submit('d2');
+    const status = createRequestStatus({ requests: h.requests });
+    const service = createAssistantService({ ...deps, cards: h.store, jobTools: h.tokens, requestLink: createRequestLinker({ db: h.db, requests: h.requests, jobs: h.jobs, cards: h.store, tokens: h.tokens, safeTools: JOB_CANCEL_SAFE_TOOLS }), requestStatus: status });
+    const before = h.runs.length;
+    const reply = await service.tool('request_status', {}, h.as(asker));
+    expect(reply.status).toBe(200);
+    const text = 'text' in reply.body ? reply.body.text : '';
+    expect(text).toContain('q d1');
+    expect(text).not.toContain('another conversation topic');
+    expect(text).not.toContain('q d2');
+    expect(text).not.toContain(first.requestId);
+    expect(h.runs).toHaveLength(before);
+    expect(h.tokens.peek(asker.jobId).toolRefs.map((ref) => [ref.tool, ref.ok])).toEqual([['request_status', true]]);
+    service.stop();
+    h.service.stop();
+  });
+
+  it('request_status: токен разговора получает 403; без чтения в зависимостях инструмент недоступен', async () => {
+    const h = link();
+    await h.service.ask(ASK);
+    expect((await h.service.tool('request_status', {})).status).toBe(403);
+    expect((await h.service.tool('request_status', {}, { kind: 'job', jobId: 'job-1' })).status).toBe(409);
     h.service.stop();
   });
 

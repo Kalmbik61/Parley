@@ -276,6 +276,22 @@ describe('createLiveController: отправка append и остановка', 
     expect((await controller.start()).ok).toBe(true);
   });
 
+  it('stop(idle_timeout): причина закрытия по тишине сохраняется, даже если событие хоста пришло раньше с другой', async () => {
+    const { controller, events, call, hostListeners } = setup();
+    await controller.start();
+    call.mockImplementationOnce(async () => {
+      // Хост закрыл сессию и разослал событие, пока `voice.session.close` ещё не вернулся.
+      for (const listener of hostListeners) listener({ voiceSessionId: 'live_1', reason: 'close_requested' });
+      return { closed: true };
+    });
+    await controller.stop('idle_timeout');
+    expect(events.filter((event) => event.type === 'sessionClosed')).toEqual([{ type: 'sessionClosed', reason: 'idle_timeout' }]);
+    // Следующая сессия снова закрывается обычной причиной.
+    await controller.start();
+    await controller.stop();
+    expect(events.filter((event) => event.type === 'sessionClosed').at(-1)).toEqual({ type: 'sessionClosed', reason: 'close_requested' });
+  });
+
   it('stop при ошибке хоста всё равно закрывает локально', async () => {
     const { controller, call, peer } = setup();
     await controller.start();

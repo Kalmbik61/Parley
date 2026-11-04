@@ -210,6 +210,32 @@ const SCHEMA_VOICE_USAGE = `
 `;
 
 /**
+ * Локальная телеметрия голоса (спека 2026-11-04 «Голос↔Ассистент», §11, T6): одна строка на сессию (`request_id = ''`) и
+ * по строке на Request. Только числа, перечисления и id: ни аудио, ни транскрипта, ни текста итога. Строки сливаются по
+ * ключу «сессия + Request» (новый факт дописывается, прежний не затирается). Таблица ограничена хостом (последние строки).
+ */
+const SCHEMA_VOICE_TELEMETRY = `
+  CREATE TABLE IF NOT EXISTS voice_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    voice_session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL DEFAULT '',
+    at INTEGER NOT NULL,
+    first_audio_ms INTEGER,
+    ack_audible TEXT CHECK(ack_audible IN ('true','false','unknown')),
+    delegation_to_submit_ms INTEGER,
+    transcript_wait_ms INTEGER,
+    link_request_ms INTEGER,
+    job_duration_ms INTEGER,
+    result_hold_ms INTEGER,
+    speech_state TEXT CHECK(speech_state IN ('queued','submitted','played','unknown','dropped')),
+    interrupts INTEGER,
+    superseded_count INTEGER,
+    voice_seconds INTEGER,
+    voice_cost_estimate_usd REAL,
+    UNIQUE(voice_session_id, request_id));
+`;
+
+/**
  * Долговечные разговоры помощника (спека 2026-11-03, C1): история ходов острова и Telegram. Канал — атрибут сообщения,
  * а не разговора: оба канала пишут в один. `turn_key` + `role` уникальны в разговоре: повтор записи не плодит строк.
  * Тексты людей живут только здесь.
@@ -324,6 +350,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       if (!have.has('linked_at')) db.exec('ALTER TABLE assistant_requests ADD COLUMN linked_at INTEGER');
     },
   },
+  // 12: локальная телеметрия голоса (спека 2026-11-04, §11, T6).
+  { version: 12, up: (db) => db.exec(SCHEMA_VOICE_TELEMETRY) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

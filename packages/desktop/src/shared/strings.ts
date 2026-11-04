@@ -3001,7 +3001,13 @@ export const S = {
       mic: 'Microphone access is needed for Live voice. Text and push-to-talk still work.',
       failed: 'Live voice could not start. Text and push-to-talk still work.',
       closed: (reason: string): string =>
-        reason === 'close_requested' ? 'Live voice ended.' : reason === 'expired' ? 'Live voice ended: the session expired.' : 'Live voice ended unexpectedly.',
+        reason === 'close_requested'
+          ? 'Live voice ended.'
+          : reason === 'idle_timeout'
+            ? 'Live voice ended after three minutes of silence.'
+            : reason === 'expired'
+              ? 'Live voice ended: the session expired.'
+              : 'Live voice ended unexpectedly.',
       /** Результаты поручений голоса: карточки на острове, пока голос ждёт паузу или итог не прозвучал. */
       resultHeld: 'Clarifying your request — the earlier result is on hold.',
       resultCard: 'Live result',

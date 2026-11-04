@@ -63,7 +63,8 @@ export interface DelegationBridgeDeps {
 
 export interface BridgeListener {
   delegationOpened?(info: { delegationId: string; createdAt: number; offsetMs: number }): void;
-  requestSubmitted?(info: { delegationId: string; requestId: string; jobId: string; created: boolean; transcriptPartial: boolean; waitedMs: number }): void;
+  /** `waitedMs` — от `delegation.created` до принятого хостом Request; `transcriptWaitMs` — до сборки текста поручения. */
+  requestSubmitted?(info: { delegationId: string; requestId: string; jobId: string; created: boolean; transcriptPartial: boolean; waitedMs: number; transcriptWaitMs: number }): void;
   submitFailed?(info: { delegationId: string; attempts: number }): void;
 }
 
@@ -116,6 +117,7 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
   };
 
   const send = async (item: Waiting, text: string, partial: boolean, startMs: number | null): Promise<void> => {
+    const transcriptWaitMs = deps.now() - item.createdAt;
     const input: BridgeSubmitInput = {
       conversationId: deps.conversationId,
       voiceSessionId: deps.voiceSessionId,
@@ -128,7 +130,7 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
       try {
         const result = await deps.submit(input);
         if (disposed) return;
-        listener.requestSubmitted?.({ delegationId: item.delegationId, requestId: result.requestId, jobId: result.jobId, created: result.created, transcriptPartial: partial, waitedMs: deps.now() - item.createdAt });
+        listener.requestSubmitted?.({ delegationId: item.delegationId, requestId: result.requestId, jobId: result.jobId, created: result.created, transcriptPartial: partial, waitedMs: deps.now() - item.createdAt, transcriptWaitMs });
         return;
       } catch {
         const delay = SUBMIT_RETRY_DELAYS_MS[attempt];

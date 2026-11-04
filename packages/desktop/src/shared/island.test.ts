@@ -18,7 +18,8 @@ describe('остров: белый список методов хоста', () =
 
   it('Live-голос: остров вызывает prepare/close/usage и получает закрытие сессии', () => {
     for (const method of ['voice.session.prepare', 'voice.session.close', 'voice.usage.get']) expect(ISLAND_METHODS.has(method)).toBe(true);
-    for (const method of ['requests.submit', 'requests.list', 'requests.ack', 'jobs.ackInline']) expect(ISLAND_METHODS.has(method)).toBe(true);
+    for (const method of ['requests.submit', 'requests.list', 'requests.ack', 'jobs.ackInline', 'voice.telemetry.record']) expect(ISLAND_METHODS.has(method)).toBe(true);
+    expect(ISLAND_METHODS.has('voice.telemetry.list')).toBe(false);
     expect(ISLAND_EVENTS.has('voice.session.closed')).toBe(true);
   });
 

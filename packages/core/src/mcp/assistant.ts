@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора и `link_request` только для
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора, а `link_request` и `request_status` только для
  * job, каждый — POST в маршрут хоста `/assistant/<имя>` с токеном. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -328,6 +328,13 @@ export const ASSISTANT_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'request_status',
+    description:
+      'Read-only status of the open voice requests of your own conversation: for each one its state, version, how long ago it was asked and a short summary of its result when it has one. Use it when the task asks for the status ("what is the status", "any news"). It never starts, repeats or changes any work.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /**
@@ -353,10 +360,11 @@ export const JOB_TOOL_ALLOWLIST: readonly string[] = [
   'propose_room_decision',
   'propose_actions',
   'link_request',
+  'request_status',
 ];
 
 /** Инструменты только для job: токен разговора их не видит, а хост отвечает ему 403 (`assistant-endpoint.ts`). */
-export const JOB_ONLY_TOOLS: readonly string[] = ['link_request'];
+export const JOB_ONLY_TOOLS: readonly string[] = ['link_request', 'request_status'];
 
 /**
  * Инструменты, после которых job можно отменить, не оставив исполненного действия (спека §5 п.3): чтение, `propose_*`
@@ -375,6 +383,7 @@ export const JOB_CANCEL_SAFE_TOOLS: readonly string[] = [
   'propose_room_decision',
   'propose_actions',
   'link_request',
+  'request_status',
 ];
 
 export interface AssistantServerOptions {

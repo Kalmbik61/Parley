@@ -7,19 +7,29 @@
  * - Очередь отправляет `commentary.append` через контроллер и отмечает доставку `requests.ack(…, 'live', revision)`.
  * - Новая Live-сессия сразу перечитывает недоставленные итоги (VA-07): они уходят с `delegation_id: null`.
  * - Закрытие голоса job не отменяет: итог остаётся карточкой.
+ * - Статус (T6): на смену состояния открытого Request в Live уходит `thinking.append` со временем (`status.ts`), по правилу
+ *   подтверждений. Автозакрытие (T6): 3 минуты тишины без открытых Request и речи в очереди (`idle-close.ts`).
+ *   Телеметрия (T6): числа и перечисления уходят на хост (`voice.telemetry.record`), текстов в них нет.
  * Тексты не логируются.
  */
 import {
   createAckTracker,
   createDelegationBridge,
+  createIdleCloser,
   createSpeechQueue,
+  createStatusNotifier,
+  createVoiceTelemetry,
   type AckTracker,
   type DelegationBridge,
+  type IdleCloser,
   type OpenRequestSummary,
   type QueueItem,
   type ResultInput,
   type SpeechPhrases,
   type SpeechQueue,
+  type StatusInput,
+  type StatusNotifier,
+  type VoiceTelemetry,
 } from '@parley/core/voice-live';
 import type { AssistantRequestView } from '@parley/protocol';
 import { ISLAND_CONVERSATION_ID, type IslandBridge } from '../../../shared/island.js';
@@ -32,7 +42,7 @@ export const DELEGATION_TICK_MS = 250;
 const POLL_EVERY_TICKS = 4;
 
 export interface LiveDelegationDeps {
-  controller: Pick<LiveController, 'subscribe' | 'snapshot' | 'sendAppend'>;
+  controller: Pick<LiveController, 'subscribe' | 'snapshot' | 'sendAppend' | 'stop'>;
   call: IslandBridge['call'];
   onHostEvent: IslandBridge['on'];
   now(): number;
@@ -74,6 +84,11 @@ export function toResultInput(view: AssistantRequestView, delegationId: string |
     delegationId,
     deliveredLive: terminal && (view.delivery[LIVE_CONSUMER_ID] ?? -1) >= view.job.revision,
   };
+}
+
+/** Вид Request хоста → вход уведомителя статуса. */
+export function toStatusInput(view: AssistantRequestView, delegationId: string | null): StatusInput {
+  return { requestId: view.requestId, text: view.text, state: view.job.state, stale: view.stale, createdAt: view.createdAt, delegationId };
 }
 
 interface Session {
@@ -118,6 +133,29 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     },
   });
 
+  const telemetry: VoiceTelemetry = createVoiceTelemetry({
+    now: deps.now,
+    record: (entry) => {
+      // Только числа и перечисления; сбой записи голос не трогает.
+      const params = 'firstAudioMs' in entry ? { voiceSessionId: entry.voiceSessionId, interrupts: entry.interrupts, ...(entry.firstAudioMs === null ? {} : { firstAudioMs: entry.firstAudioMs }) } : entry;
+      void deps.call('voice.telemetry.record', params).catch(() => {});
+    },
+  });
+
+  const status: StatusNotifier = createStatusNotifier({
+    now: deps.now,
+    canAppend: (delegationId, purpose) => (session?.ack ?? idleAck).canAppend(delegationId, purpose),
+    send: ({ delegationId, content }) => session !== null && deps.controller.sendAppend({ kind: 'thinking', delegationId, content }),
+  });
+
+  /** Автозакрытие (VA-12): занято, пока есть открытый Request, речь в очереди или ждущая подтверждения делегация. */
+  const idle: IdleCloser = createIdleCloser({
+    now: deps.now,
+    busy: () =>
+      openRequests.length > 0 || queue.items().some((item) => item.speech === 'queued' || item.speech === 'submitted') || (session?.ack.awaiting().length ?? 0) > 0,
+    onIdle: () => void deps.controller.stop('idle_timeout').catch(() => {}),
+  });
+
   const refresh = async (): Promise<void> => {
     if (disposed) return;
     if (refreshing) {
@@ -140,6 +178,9 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
           .map((request) => ({ requestId: request.requestId, text: request.text, state: request.job.state }));
         queue.observe(requests.map((request) => toResultInput(request, delegationByRequest.get(request.requestId) ?? null)));
         queue.step();
+        status.observe(requests.map((request) => toStatusInput(request, delegationByRequest.get(request.requestId) ?? null)));
+        status.step();
+        telemetry.observeQueue(queue.items());
       } while (refreshAgain);
     } finally {
       refreshing = false;
@@ -147,7 +188,7 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
   };
 
   const startSession = (voiceSessionId: string): Session => {
-    const ack = createAckTracker({ now: deps.now });
+    const ack = createAckTracker({ now: deps.now, onResolved: (delegationId, audible) => telemetry.ackResolved(delegationId, audible) });
     const bridge = createDelegationBridge(
       {
         conversationId,
@@ -162,9 +203,13 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
         },
       },
       {
-        delegationOpened: ({ delegationId }) => ack.open(delegationId),
-        requestSubmitted: ({ delegationId, requestId }) => {
+        delegationOpened: ({ delegationId }) => {
+          ack.open(delegationId);
+          idle.activity();
+        },
+        requestSubmitted: ({ delegationId, requestId, waitedMs, transcriptWaitMs }) => {
           delegationByRequest.set(requestId, delegationId);
+          telemetry.requestSubmitted({ delegationId, requestId, delegationToSubmitMs: waitedMs, transcriptWaitMs });
           void refresh();
         },
       },
@@ -174,6 +219,12 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     const signals = deps.controller.snapshot();
     queue.setHumanSpeaking(signals.humanSpeaking);
     queue.setModelPlaying(signals.modelPlaying);
+    // Новая сессия: у модели нет прежнего контекста, статусы открытых Request нужны заново.
+    status.reset();
+    telemetry.sessionStarted(voiceSessionId);
+    idle.start();
+    idle.humanSpeaking(signals.humanSpeaking);
+    idle.modelPlaying(signals.modelPlaying);
     // Восстановление: недоставленные итоги прошлых сессий уходят с `delegation_id: null`.
     void refresh();
     return next;
@@ -185,7 +236,11 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     session = null;
     current.bridge.dispose();
     idleAck = createAckTracker({ now: deps.now });
+    idle.stop();
+    status.reset();
+    telemetry.sessionEnded();
     queue.sessionEnded();
+    telemetry.observeQueue(queue.items());
     void refresh();
   };
 
@@ -208,10 +263,14 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
         return;
       case 'humanSpeaking':
         queue.setHumanSpeaking(event.value);
+        idle.humanSpeaking(event.value);
+        telemetry.humanSpeaking(event.value);
         return;
       case 'modelPlaying':
         queue.setModelPlaying(event.value);
         session?.ack.modelPlaying(event.value);
+        idle.modelPlaying(event.value);
+        telemetry.modelPlaying(event.value);
         return;
       case 'inputTranscript':
         ensureSession()?.bridge.handle({ type: 'inputTranscript', text: event.text, startMs: event.startMs, endMs: event.endMs });
@@ -223,6 +282,7 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
       case 'delegationCreated': {
         const current = ensureSession();
         if (current === null) return;
+        idle.activity();
         current.bridge.handle({ type: 'delegationCreated', delegationId: event.delegationId, offsetMs: event.offsetMs });
         return;
       }
@@ -236,6 +296,9 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
   const stopTick = deps.setTick(() => {
     queue.step();
     session?.ack.tick();
+    status.step();
+    idle.step();
+    telemetry.observeQueue(queue.items());
     ticks += 1;
     if (ticks % POLL_EVERY_TICKS === 0 && (session !== null || openRequests.length > 0 || queue.items().some((item) => item.speech === 'queued'))) void refresh();
   }, DELEGATION_TICK_MS);
@@ -265,6 +328,7 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     },
     dispose() {
       disposed = true;
+      idle.stop();
       stopTick();
       unsubscribeController();
       unsubscribeHost();

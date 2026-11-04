@@ -95,11 +95,11 @@ describe('parley-mcp в режиме помощника', () => {
       for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) expect(JOB_TOOL_ALLOWLIST).not.toContain(name);
       for (const name of JOB_TOOL_ALLOWLIST) {
         const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === name)!;
-        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_') || name === 'link_request').toBe(true);
+        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_') || name === 'link_request' || name === 'request_status').toBe(true);
       }
     });
     it('link_request только у job: разговор его не видит и не вызывает', async () => {
-      expect(JOB_ONLY_TOOLS).toEqual(['link_request']);
+      expect(JOB_ONLY_TOOLS).toEqual(['link_request', 'request_status']);
       expect(JOB_TOOL_ALLOWLIST).toContain('link_request');
       const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
       const client = await connect(fetch);
@@ -109,6 +109,20 @@ describe('parley-mcp в режиме помощника', () => {
       expect(fetch).not.toHaveBeenCalled();
       const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
       expect((await job.listTools()).tools.map((tool) => tool.name)).toContain('link_request');
+    });
+    it('request_status (T6): только чтение, только у job, разговор его не видит и не вызывает', async () => {
+      const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === 'request_status')!;
+      expect(tool.annotations?.readOnlyHint).toBe(true);
+      expect(tool.inputSchema).toMatchObject({ properties: {}, additionalProperties: false });
+      expect(JOB_TOOL_ALLOWLIST).toContain('request_status');
+      expect(JOB_ONLY_TOOLS).toContain('request_status');
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch);
+      expect((await client.listTools()).tools.map((candidate) => candidate.name)).not.toContain('request_status');
+      expect((await client.callTool({ name: 'request_status', arguments: {} })).isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      expect((await job.listTools()).tools.map((candidate) => candidate.name)).toContain('request_status');
     });
     it('список безопасных для отмены инструментов явный: чтение, propose_* и link_request', () => {
       expect([...JOB_CANCEL_SAFE_TOOLS].sort()).toEqual([...JOB_TOOL_ALLOWLIST].sort());
