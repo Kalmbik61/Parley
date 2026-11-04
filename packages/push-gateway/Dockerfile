@@ -4,6 +4,8 @@ FROM node:22-slim AS build
 RUN corepack enable
 WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+# pnpm hashes the patches named in package.json (pnpm.patchedDependencies) during the install.
+COPY patches patches
 COPY packages/core/package.json packages/core/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/push-gateway/package.json packages/push-gateway/
