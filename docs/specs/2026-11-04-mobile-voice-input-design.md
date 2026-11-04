@@ -1,8 +1,9 @@
 # Телефон: кнопка микрофона (A47)
 
-Дата: 2026-11-04. Статус: редакция 2 лида s-174 после ревью
-`docs/audits/2026-11-04/mobile-voice-critic-A47-spec.md` (s-250: 3 блокера, 7 major, 10 minor). Источник языка
-(§2.3) ждёт решения человека.
+Дата: 2026-11-04. Статус: редакция 3 лида s-174.
+- Ревью: `docs/audits/2026-11-04/mobile-voice-critic-A47-spec.md` (s-250). Первое — 3 блокера, 7 major, 10 minor;
+  повторное (r2) — 0 блокеров, 2 major, 4 minor.
+- Источник языка (§2.3) ждёт решения человека.
 
 Задача пришла от человека через s-38. Человеку нужна своя кнопка микрофона в приложении, «как в окне», а не диктовка
 клавиатуры iOS.
@@ -138,8 +139,11 @@ if recognizer.supportsOnDeviceRecognition {
   - В момент тапа: если поле в фокусе (клавиатура поднята), первым кандидатом берётся
     `currentInputLanguage()` (§2.2, правка 4). Значения не в виде языкового тега (`emoji`, `dictation`, `nil`)
     пропускаются.
+  - Если поле не в фокусе, первым кандидатом идёт последний язык клавиатуры, полученный на прошлом тапе за этот
+    запуск приложения (ревью r2, n2). Так в одном поле язык не скачет от того, поднята ли клавиатура.
   - Иначе, а также если язык клавиатуры не дал подходящего распознавателя, берётся первый предпочитаемый язык
-    устройства: `expo-localization` `~58.0.5`, `getLocales()[0]`.
+    устройства: `expo-localization` `~58.0.5`, `getLocales()[0]`. Чтобы такой переход не прошёл незаметно, полоска
+    показывает код языка попытки (§3.2).
 - **(б) Только язык устройства:** `getLocales()[0]`.
 
 **Выбор распознавателя.** Чистая функция `localeCandidates(tag, supported)` возвращает упорядоченный список
@@ -153,7 +157,9 @@ if recognizer.supportsOnDeviceRecognition {
    - `es` → `es-ES`;
    - `pt` → `pt-BR`;
    - `zh` со скриптом `Hans` или регионом `CN`/`SG` → `zh-CN`;
-   - `zh` со скриптом `Hant` или регионом `TW` → `zh-TW`, с регионом `HK` → `zh-HK`.
+   - `zh` со скриптом `Hant` или регионом `TW` → `zh-TW`, с регионом `HK` → `zh-HK`;
+5. остальные варианты того же языка из `supported` по алфавиту. Например, если скачан только `en-GB`, `en-RU` дойдёт
+   до него (ревью r2, n2). Для `zh` шаг 5 не применяется: варианты `zh` — разные языки.
 
 Дубли из списка убираются, а кандидаты не из `supported` отбрасываются. Выбирается первый кандидат, у которого
 `supportsOnDeviceRecognition(tag)` равно `true`. Если такого нет, кнопка «недоступна» с причиной (§3.1).
@@ -208,7 +214,8 @@ if recognizer.supportsOnDeviceRecognition {
 | **готово** | `mic`, `c.tint` | «Dictate» / «Records until you tap again. The text goes into the field; nothing is sent.» | старт |
 | **запуск** этого поля | `ActivityIndicator` | «Starting dictation» | ничего |
 | **запись** этого поля | красная точка 12 pt (`c.danger`) | «Stop dictation» | стоп |
-| **распознавание** или **отмена** этого поля | `ActivityIndicator` | «Transcribing» | недоступна |
+| **распознавание** этого поля | `ActivityIndicator` | «Transcribing» | недоступна |
+| **отмена** этого поля | `ActivityIndicator` | «Stopping» | недоступна |
 | **запись** другого поля | `mic`, `c.tint` | «Dictate» | отменить ту, начать эту (§4.2) |
 | **запуск, распознавание или отмена** другого поля | `mic`, `c.off` | «Dictate», недоступна | ничего |
 
@@ -235,7 +242,11 @@ if recognizer.supportsOnDeviceRecognition {
 - **запуск:** «Starting…» и справа «Cancel»;
 - **запись:** красная точка, полоска громкости 40×4 pt, таймер `0:07` (цифры моноширинные), справа текстовая кнопка
   «Cancel» (цель 44 pt по высоте);
-- **распознавание:** «Transcribing…», без Cancel.
+- **распознавание:** «Transcribing…», без Cancel;
+- **отмена:** «Stopping…», без Cancel.
+
+При варианте (а) §2.3 в полоске запуска и записи перед таймером стоит код языка попытки: `RU`, `EN` (первая часть
+тега, заглавными). VoiceOver читает его как часть метки полоски, например «Dictating in ru-RU, 0:07».
 
 Громкость приходит в `volumechange` раз в 100 мс: `level = clamp(value, 0, 10) / 10`. Значения ≤ 0 библиотека
 называет неслышимыми. Таймер и предел 2 минуты считаются от события `start` библиотеки, а не от тапа.
@@ -262,8 +273,12 @@ if recognizer.supportsOnDeviceRecognition {
   отрисовано (`requestAnimationFrame`).
 
 **Поле исчезло** (снято с регистрации до конца распознавания):
-- **сессия и комната** — текст дописывается в конец черновика этого поля (`setDraft(key, …)` из `feed/outbox.ts`, с
-  `joinTranscript`), тост «Dictation added to the draft»;
+- **сессия и комната** — текст дописывается в конец черновика этого поля (с `joinTranscript`), тост «Dictation added
+  to the draft». Черновики живут в разных хранилищах:
+  - сессия — `draftOf`/`setDraft(sessionKey(ref), …)` из `feed/outbox.ts`;
+  - комната — закрытая `Map` `drafts` в `room/use-room-chat.ts:11`. Модуль экспортирует `roomDraftOf(key)` и
+    `setRoomDraft(key, text)` над той же `Map`, и запасной путь комнаты пишет через них под `roomKey(room)`. Тогда
+    новый `useRoomChat` того же ключа увидит дописанный текст (ревью r2, N2);
 - **New session** — `Clipboard.setStringAsync(text)`, тост «Transcript copied to clipboard».
 
 **Отмена без вставки:**
@@ -310,7 +325,7 @@ if recognizer.supportsOnDeviceRecognition {
   - **Состояние:** `{ phase: 'idle' | 'starting' | 'recording' | 'transcribing' | 'cancelling', targetId, level,
     startedAt, availability }`.
   - **Действия:** `register(target)` → функция снятия, `toggle(id)`, `cancel()`, `finishBeforeSend(id)`,
-    `refreshAvailability()`, `onBackground()`, `onBlur(id)`.
+    `refreshAvailability()`, `onBackground()`, `onBlur(id)`, `suspend()`/`resume()` для Dictation check (§4.4).
   - **Зависимости через `configure(deps)`:** движок, разрешения, выбор языка, `toast`, `alert`, `copy`,
     `appendDraft`, таймеры, `now`. Так тесты подставляют свои.
 - **`engine.ts`** — единственное место, где импортируется `expo-speech-recognition`. Тонкая обёртка:
@@ -334,7 +349,8 @@ if recognizer.supportsOnDeviceRecognition {
 - **Сессия.** `Composer.tsx` получает `dictationId` (`session:<ref>`) и черновик `sessionKey(ref)`. Обработчик ⬆
   внутри `Composer` сначала зовёт `finishBeforeSend(id)`, до `onSend`. Так это работает и для «Resume and send» у
   спящей сессии.
-- **Комната.** Обработчик ⬆ в `room.tsx` сначала зовёт `finishBeforeSend('room:<id>')`. Черновик — `roomKey(room)`.
+- **Комната.** Обработчик ⬆ в `room.tsx` сначала зовёт `finishBeforeSend('room:<id>')`. Черновик — `roomKey(room)`
+  через `roomDraftOf`/`setRoomDraft` из `room/use-room-chat.ts` (§3.3).
 - **New session.** `submit` в `new.tsx` сначала зовёт `finishBeforeSend('new-session-task')`; запасной путь — буфер
   обмена.
 
@@ -366,6 +382,21 @@ if recognizer.supportsOnDeviceRecognition {
    - `cancelling` без `end` 3 с → нативная сторона считается свободной, фаза `idle`, `console.warn`;
    - `error` без `end` 1 с → считается, что `end` пришёл. Бывает после ошибки создания распознавателя.
 9. **Результаты и громкость** в фазе `cancelling` пропускаются.
+10. **Чужой `start` гасится сразу (ревью r2, N1).** Событие `start` гасится немедленным `abort()` в трёх случаях:
+    - фаза `idle`;
+    - фаза `cancelling`;
+    - фаза `starting` с флагом отмены (п. 3).
+
+    Это инвариант, а не ветка таймаута. `abort()` библиотеки при ещё не созданной задаче сразу шлёт `end`, а старт
+    в своём `Task` идёт дальше. Поэтому после таймаута `starting` или отмены во время запуска поздний `start`
+    возможен и после `end`. Такой `start` не открывает новую попытку и не меняет фазу; его `end` в фазе `idle`
+    пропускается.
+11. **Запоздалый `end` поглощается (ревью r2, N1).** Если нативная сторона была освобождена таймаутом (`cancelling`
+    3 с или `error` 1 с), хранилище считает долг: один ожидаемый запоздалый `end`. Пока долг не погашен, первый `end`
+    (вместе с `aborted` перед ним) пропускается и гасит долг, если он пришёл в фазе `starting` новой попытки до её
+    `start` и без её `error`. Если новая попытка в это время упала сама, её закроет таймаут `starting`.
+12. **Синхронный отказ `start` (ревью r2, n4).** Если `engine.start` бросил исключение, нативная сторона свободна,
+    фаза сразу `idle`, тост «Dictation failed».
 
 ### 4.3 Доступность
 
@@ -388,11 +419,22 @@ if recognizer.supportsOnDeviceRecognition {
   (`src/dev/build.ts`): это и сборка `device-run.sh`, в release-варианте её нет. Экран показывает:
   - выбранный язык и `supportsOnDevice` для него;
   - кнопку «Try a language without on-device recognition». Она находит в `supportedLocales()` первый язык с
-    `supportsOnDevice(lang) === false`, вызывает **настоящий** `engine.start(lang)` мимо проверки JS и 3 с пишет
-    события на экран, затем `abort()`.
+    `supportsOnDevice(lang) === false` и вызывает **настоящий** `engine.start(lang)` мимо проверки JS **два раза
+    подряд** на одном языке: второй раз идёт по пути закэшированного распознавателя из ревью B1. Каждый запуск ждёт
+    `end` не дольше 3 с, события пишутся на экран.
 
-  Ожидаемо: `error language-not-supported`, `end`, события `start` нет, оранжевая точка микрофона iOS не загорается.
-  Если такого языка нет, экран так и пишет.
+  Правила проверки (ревью r2, n1):
+  - **Первое событие `start` — провал.** Сразу `abort()` и красное «FAIL: recognition started», без ожидания: если
+    охрана сломана, звук не должен успеть уйти на сервер.
+  - **Ожидаемо** в обоих запусках: `error language-not-supported`, затем `end`; события `start` нет; оранжевая точка
+    микрофона iOS не загорается. Итог — зелёное «PASS».
+  - **Нужна сеть.** Без сети язык только с серверным распознаванием даёт `service-not-allowed` (охрана `isAvailable`
+    раньше правки 1), и правка 1 не проверяется. При `service-not-allowed` экран пишет «Connect to the internet and run
+    again», итог не PASS.
+  - **Изоляция от хранилища.** Проверка запускается только при фазе хранилища `idle`. Пока она идёт, хранилище
+    приостановлено (`suspend()`/`resume()`): события библиотеки глобальны, и без этого хранилище погасило бы `start`
+    проверки по п. 10 §4.2 и спутало бы её `end` со своими. Кнопки микрофона в это время недоступны.
+  - Если языка без распознавания на устройстве нет, экран так и пишет.
 
 ## 5. Приватность
 
@@ -412,7 +454,7 @@ if recognizer.supportsOnDeviceRecognition {
    - точное совпадение, `_`;
    - `ru-US` → `ru-RU`;
    - `en-GB`;
-   - `en-RU` → `en-US`, но не `en-AE`;
+   - `en-RU` → `en-US`, но не `en-AE`; при `supported` без `en-US`, но с `en-GB` → `en-GB`;
    - `de-RU` → `de-DE`;
    - `zh-Hans-CN` → `zh-CN`, `zh-Hant-US` → `zh-TW`, `zh-Hant-HK` → `zh-HK`;
    - нет языка, пустой `supported`;
@@ -440,6 +482,13 @@ if recognizer.supportsOnDeviceRecognition {
    - каждая строка таблицы §3.4 при пустом тексте;
    - таймауты §4.2: `starting` 5 с, `transcribing` 10 с (собранное вставлено, вызван `abort`), `cancelling` 3 с,
      `error` без `end` 1 с;
+   - чужой `start` (п. 10 §4.2): `start` пришёл после таймаута `starting` и его `end` → сразу вызван `abort`, фаза
+     `idle` не меняется; `start` в `cancelling` → `abort`;
+   - запоздалый `end` (п. 11 §4.2): после таймаута `cancelling` следующая попытка не завершается чужим `end`, пришедшим
+     до её `start`; её собственная ошибка закрывает её как обычно;
+   - синхронное исключение `engine.start` → `idle` и тост, без ожидания 5 с;
+   - `suspend()`: события пропускаются, `toggle` не действует; после `resume()` всё как прежде;
+   - запасной путь комнаты: после снятия цели комнаты `roomDraftOf(roomKey(room))` содержит дописанный текст;
    - `availability`: недоступно → тап делает выбор заново и при неудаче даёт тост, `start` не вызван; язык клавиатуры
      подошёл → старт;
    - после `end` вызван `releaseAudioSession`.
@@ -463,7 +512,8 @@ if recognizer.supportsOnDeviceRecognition {
 На iPhone (человек). В «Not verified» стоит всё, что не проверено:
 - первая диктовка спрашивает оба разрешения, запись начинается сразу, текст встаёт в поле;
 - Dictation check: язык без распознавания на устройстве даёт `language-not-supported`, оранжевая точка не загорается;
-- русский и английский; при варианте (а) — переключение клавиатуры меняет язык;
+- русский и английский; при варианте (а) — переключение клавиатуры меняет язык и код в полоске;
+- сторонние клавиатуры (Gboard, SwiftKey) могут отдавать `primaryLanguage` `en-US` при любом языке;
 - «фраза, пауза, стоп» — текст ровно один раз; «стоп посреди фразы» — хвост на месте;
 - авиарежим — диктовка работает;
 - звонок посреди записи; уход в фон;
@@ -483,6 +533,7 @@ if recognizer.supportsOnDeviceRecognition {
 - `packages/mobile/app.config.ts`: тексты разрешений (в том числе у `expo-camera`), плагин, `extra.devVoice`;
 - `packages/mobile/src/dev/flags.ts`: `DEV_VOICE`;
 - `packages/mobile/src/voice/*` (новые) и тесты;
+- `packages/mobile/src/room/use-room-chat.ts`: экспорт `roomDraftOf`/`setRoomDraft`;
 - `packages/mobile/src/feed/Composer.tsx`, `src/app/session/[ref].tsx`, `src/app/room.tsx`, `src/app/new.tsx`;
 - `packages/mobile/src/app/(tabs)/settings/diagnostics.tsx` и новый экран Dictation check;
 - `docs/specs/2026-11-04-mobile-voice-input-design.md` (эта спека),
