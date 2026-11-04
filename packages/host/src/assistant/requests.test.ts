@@ -102,6 +102,13 @@ describe('Request: идемпотентный submit', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('Request без job (нарушенный инвариант) — явная ошибка, а не пустой ответ', () => {
+    const { requests, db } = setup();
+    requests.submit(input('d1'));
+    db.exec('DELETE FROM assistant_jobs');
+    expect(() => requests.submit(input('d1'))).toThrow('request job missing');
+  });
+
   it('упали между job и Request: повтор допишет Request к тому же job, второго запуска нет', () => {
     const { requests, jobs, db, execute } = setup();
     // Первый submit дошёл только до job (процесс убит до вставки Request).

@@ -8,6 +8,7 @@
  * Поля `supersededBy` и `transcriptPartial` тоже только хранятся: логика вытеснения и частичного текста — T4/T5.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AssistantRequestAck, AssistantRequestView } from '@parley/protocol';
 import type { Jobs } from './jobs.js';
@@ -101,8 +102,10 @@ export function createRequests(deps: RequestsDeps): Requests {
       const originKey = originKeyOf(input.voiceSessionId, input.delegationId);
       const existing = byOrigin(originKey);
       if (existing !== undefined) {
+        // Request без job — нарушенный инвариант (job и Request создаются парой): повторять submit нечем.
         const request = view(existing);
-        if (request !== null) return { request, created: false };
+        if (request === null) throw new Error('request job missing');
+        return { request, created: false };
       }
       const contextJson = input.context === undefined ? null : JSON.stringify(input.context);
       if (contextJson !== null && contextJson.length > REQUEST_CONTEXT_LIMIT) throw new Error(`Request context is longer than ${REQUEST_CONTEXT_LIMIT} characters`);
@@ -114,7 +117,7 @@ export function createRequests(deps: RequestsDeps): Requests {
         correlation: { voiceSessionId: input.voiceSessionId, delegationId: input.delegationId, turnId: input.turnId ?? input.delegationId },
       });
       const stamp = now();
-      const requestId = `req-${stamp.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      const requestId = `req-${randomUUID()}`;
       // `seq` выбирается тем же оператором, что и вставка: два Request разговора не получат один номер.
       const inserted = db
         .prepare(
@@ -123,8 +126,9 @@ export function createRequests(deps: RequestsDeps): Requests {
            ON CONFLICT(origin_key) DO NOTHING`,
         )
         .run(requestId, originKey, input.conversationId, input.text, contextJson, job.jobId, input.transcriptPartial === true ? 1 : 0, stamp, stamp, input.conversationId).changes;
-      const row = byOrigin(originKey) as Raw;
-      return { request: view(row) as RequestView, created: Number(inserted) === 1 };
+      const request = view(byOrigin(originKey) as Raw);
+      if (request === null) throw new Error('request job missing');
+      return { request, created: Number(inserted) === 1 };
     },
     get(requestId) {
       const row = db.prepare('SELECT * FROM assistant_requests WHERE request_id = ?').get(requestId) as unknown as Raw | undefined;
