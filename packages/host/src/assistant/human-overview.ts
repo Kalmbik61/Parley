@@ -109,9 +109,9 @@ export function humanOverview(
       alias(room.id, normalizeHumanText(room.title, {}));
     for (const session of entry.map.sessions) {
       const room = indexes.get(entry)!.firstRoom.get(session.id);
-      const role = normalizeHumanText(session.role?.name ?? 'участник', {});
+      const role = normalizeHumanText(session.role?.name ?? 'участник', {}); // cyrillic-ok: Russian human overview copy required by the overview spec
       const roomLabel = room ? normalizeHumanText(room.title, {}) : '';
-      const fallback = `${role}${roomLabel ? ` комнаты ${roomLabel}` : ''}`;
+      const fallback = `${role}${roomLabel ? ` комнаты ${roomLabel}` : ''}`; // cyrillic-ok: Russian human overview copy required by the overview spec
       // A generated prefix is naming metadata; arbitrary prose is handled only by O1.
       const generated = session.label.trim().match(/^(?:S\d+|s-\d+)(?:\s+(.+))?$/);
       const label = normalizeHumanText(generated ? (generated[1] ?? '') : session.label, {
@@ -154,7 +154,7 @@ export function humanOverview(
       values.size === 1
         ? [...values][0]!
         : key.startsWith('S')
-          ? 'участник'
+          ? 'участник' // cyrillic-ok: Russian human overview copy required by the overview spec
           : normalizeHumanText(key, {});
   }
   const human = (text: string): string => normalizeHumanText(text, refs);
@@ -170,11 +170,11 @@ export function humanOverview(
     const known = session.lifecycle !== 'active' || live !== undefined;
     if (!known) {
       activityAvailable = false;
-      reasons.add('Текущая активность части участников недоступна.');
+      reasons.add('Текущая активность части участников недоступна.'); // cyrillic-ok: Russian human overview copy required by the overview spec
     }
     if (session.lifecycle === 'active' && cards === undefined) {
       cardsAvailable = false;
-      reasons.add('Карточки ожиданий части участников недоступны.');
+      reasons.add('Карточки ожиданий части участников недоступны.'); // cyrillic-ok: Russian human overview copy required by the overview spec
     }
     const need = sessionNeed(session, live?.activity ?? null);
     const state = known
@@ -185,7 +185,7 @@ export function humanOverview(
     if (need)
       waits.push({
         text: human(
-          `${displayName}: ${need.kind === 'limit' ? 'ждёт сброса лимита' : `ждёт действия человека (${need.kind})`}${need.detail ? `: ${need.detail}` : ''}${need.resetsAt ? `, сброс ${need.resetsAt}` : ''}`,
+          `${displayName}: ${need.kind === 'limit' ? 'ждёт сброса лимита' : `ждёт действия человека (${need.kind})`}${need.detail ? `: ${need.detail}` : ''}${need.resetsAt ? `, сброс ${need.resetsAt}` : ''}`, // cyrillic-ok: Russian human overview copy required by the overview spec
         ),
         needsHuman: need.kind !== 'limit',
         actorRef: ref,
@@ -196,7 +196,7 @@ export function humanOverview(
         if (card.state !== 'pending') continue;
         waits.push({
           text: human(
-            `${displayName}: ${card.kind === 'question' ? card.questions.map((question) => question.question).join('; ') : card.kind === 'plan' ? 'ждёт одобрения плана' : 'ждёт разрешения'}`,
+            `${displayName}: ${card.kind === 'question' ? card.questions.map((question) => question.question).join('; ') : card.kind === 'plan' ? 'ждёт одобрения плана' : 'ждёт разрешения'}`, // cyrillic-ok: Russian human overview copy required by the overview spec
           ),
           needsHuman: true,
           actorRef: ref,
@@ -205,7 +205,7 @@ export function humanOverview(
       }
     if (session.queued && session.lifecycle !== 'active' && session.lifecycle !== 'closed')
       waits.push({
-        text: `${displayName}: ждёт запуска`,
+        text: `${displayName}: ждёт запуска`, // cyrillic-ok: Russian human overview copy required by the overview spec
         needsHuman: false,
         actorRef: ref,
         source: { kind: 'activity', ref, at: null },
@@ -213,7 +213,7 @@ export function humanOverview(
     if (live?.activity.waitingFor && session.lifecycle === 'active')
       waits.push({
         text: human(
-          `${displayName}: ждёт ${live.activity.waitingFor === 'inbox' ? 'почту' : live.activity.waitingFor}`,
+          `${displayName}: ждёт ${live.activity.waitingFor === 'inbox' ? 'почту' : live.activity.waitingFor}`, // cyrillic-ok: Russian human overview copy required by the overview spec
         ),
         needsHuman: false,
         actorRef: ref,
@@ -240,11 +240,11 @@ export function humanOverview(
       const members = room.members.map((id): HumanOverviewSession => {
         const session = indexes.get(entry)!.sessions.get(id);
         if (session) return readSession(entry, session);
-        reasons.add('Сведения о части участников недоступны.');
+        reasons.add('Сведения о части участников недоступны.'); // cyrillic-ok: Russian human overview copy required by the overview spec
         activityAvailable = false;
         return {
           ref: `session:${ref.slice(5, ref.lastIndexOf(':'))}:${id}`,
-          displayName: 'участник, сведения о котором недоступны',
+          displayName: 'участник, сведения о котором недоступны', // cyrillic-ok: Russian human overview copy required by the overview spec
           role: null,
           lifecycle: null,
           state: 'unknown',
@@ -257,7 +257,7 @@ export function humanOverview(
       const waits = members.flatMap((member) => member.waits);
       if (room.proposal)
         waits.unshift({
-          text: human(`Человек: требуется решение — ${room.proposal.text}`),
+          text: human(`Человек: требуется решение — ${room.proposal.text}`), // cyrillic-ok: Russian human overview copy required by the overview spec
           needsHuman: true,
           actorRef: null,
           source: {
@@ -276,28 +276,28 @@ export function humanOverview(
       const plan = plans.length === 1 ? plans[0] : undefined;
       const warnings: string[] = [];
       const activityKnown = members.every((member) => member.activityKnown);
-      if (!activityKnown) warnings.push('Текущая активность недоступна.');
-      if (members.length === 0) warnings.push('Текущая активность комнаты не подтверждена.');
+      if (!activityKnown) warnings.push('Текущая активность недоступна.'); // cyrillic-ok: Russian human overview copy required by the overview spec
+      if (members.length === 0) warnings.push('Текущая активность комнаты не подтверждена.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       else if (members.every((member) => member.lifecycle === 'closed'))
-        warnings.push('Все участники закрыты.');
+        warnings.push('Все участники закрыты.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       else if (members.some((member) => member.state === 'unseen'))
-        warnings.push('Есть непросмотренный результат.');
+        warnings.push('Есть непросмотренный результат.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       else if (members.every((member) => member.state === 'idle'))
-        warnings.push('Участники простаивают.');
+        warnings.push('Участники простаивают.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       else if (members.some((member) => member.lifecycle === 'sleeping'))
-        warnings.push('Часть участников спит.');
+        warnings.push('Часть участников спит.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       if (members.some((member) => member.state === 'blocked') && waits.length === 0)
-        warnings.push('Причина ожидания не указана.');
+        warnings.push('Причина ожидания не указана.'); // cyrillic-ok: Russian human overview copy required by the overview spec
 
       if (plans.length > 1)
-        warnings.push('Несколько несовместимых текущих планов; текущий шаг не определён.');
+        warnings.push('Несколько несовместимых текущих планов; текущий шаг не определён.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       if (members.some((member) => member.ambiguous))
-        warnings.push('Имена неоднозначны; для выбора участника требуется уточнение.');
+        warnings.push('Имена неоднозначны; для выбора участника требуется уточнение.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       const currentSteps = (plan?.items ?? [])
         .filter((item) => item.status !== 'verified' && item.status !== 'waiting')
         .map((item) => ({
           text: human(
-            `${item.title}: ${item.status === 'in_progress' ? 'по плану выполняется' : item.status === 'done' ? (plan?.mode === 'checklist' ? 'отмечено выполненным в плане' : 'сдано на проверку') : item.status === 'blocked' ? `препятствие: ${item.note || 'причина ожидания не указана'}` : item.status === 'returned' ? 'возвращено на доработку' : 'готово к началу'}`,
+            `${item.title}: ${item.status === 'in_progress' ? 'по плану выполняется' : item.status === 'done' ? (plan?.mode === 'checklist' ? 'отмечено выполненным в плане' : 'сдано на проверку') : item.status === 'blocked' ? `препятствие: ${item.note || 'причина ожидания не указана'}` : item.status === 'returned' ? 'возвращено на доработку' : 'готово к началу'}`, // cyrillic-ok: Russian human overview copy required by the overview spec
           ),
           source: {
             kind: 'plan' as const,
@@ -311,7 +311,7 @@ export function humanOverview(
         plan?.items.some((item) => item.status === 'in_progress') &&
         !members.some((member) => member.state === 'working')
       )
-        warnings.push('В плане шаг отмечен выполняющимся; текущая активность не подтверждена.');
+        warnings.push('В плане шаг отмечен выполняющимся; текущая активность не подтверждена.'); // cyrillic-ok: Russian human overview copy required by the overview spec
       const leadId = liveLead(entry.map, room);
       const lead = leadId
         ? (members.find((member) => member.ref === targetRef(entry, 'session', leadId)) ?? null)
@@ -373,7 +373,7 @@ export function humanOverview(
   }
   const visibleRooms = rooms.filter((room) => currentRooms.has(room.ref));
   if (visibleRooms.length !== rooms.length)
-    reasons.add('Во время сбора комната исчезла или была архивирована; покрытие неполно.');
+    reasons.add('Во время сбора комната исчезла или была архивирована; покрытие неполно.'); // cyrillic-ok: Russian human overview copy required by the overview spec
   const visibleSessions = unassignedSessions.filter((session) => currentSessions.has(session.ref));
   const visibleWorks = works.filter((ref) => currentWorks.has(ref));
   const mapComplete =
@@ -381,7 +381,7 @@ export function humanOverview(
     visibleRooms.length === rooms.length &&
     visibleSessions.length === unassignedSessions.length &&
     visibleWorks.length === works.length;
-  if (!mapComplete) reasons.add('Карта выбранной области неполна.');
+  if (!mapComplete) reasons.add('Карта выбранной области неполна.'); // cyrillic-ok: Russian human overview copy required by the overview spec
   visibleRooms.sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group));
   const overview: HumanOverviewV1 = {
     schemaVersion: 1,
@@ -403,18 +403,18 @@ export function humanOverview(
 
 const humanState = (member: HumanOverviewMember): string =>
   member.state === 'unknown' || member.lifecycle === null
-    ? 'активность неизвестна'
+    ? 'активность неизвестна' // cyrillic-ok: Russian human overview copy required by the overview spec
     : stateWord(member.state, member.lifecycle);
 
 /** Both lengths render the same facts; short form explicitly counts rooms left unlisted. */
 export function renderHumanOverview(overview: HumanOverviewV1, detailed = false): string {
   const labels = {
-    needsHuman: 'Ждут человека',
-    working: 'Работают',
-    other: 'Приостановлены или без текущей работы',
+    needsHuman: 'Ждут человека', // cyrillic-ok: Russian human overview copy required by the overview spec
+    working: 'Работают', // cyrillic-ok: Russian human overview copy required by the overview spec
+    other: 'Приостановлены или без текущей работы', // cyrillic-ok: Russian human overview copy required by the overview spec
   };
   const lines = [
-    `Снимок на ${overview.capturedAt}. Область: ${overview.scope.works.length} работ, ${overview.rooms.length} комнат.`,
+    `Снимок на ${overview.capturedAt}. Область: ${overview.scope.works.length} работ, ${overview.rooms.length} комнат.`, // cyrillic-ok: Russian human overview copy required by the overview spec
   ];
   for (const group of groups) {
     const rooms = overview.rooms.filter((room) => room.group === group);
@@ -422,7 +422,7 @@ export function renderHumanOverview(overview: HumanOverviewV1, detailed = false)
     const listed = detailed ? rooms : group === 'other' ? [] : rooms.slice(0, 3);
     for (const room of listed) {
       lines.push(
-        `${room.title} (${room.workLabel}): ${room.task.text}${room.task.goalKnown ? '' : ' (цель плана не указана)'}. Ведущий: ${room.lead?.displayName ?? 'нет действующего ведущего'}.`,
+        `${room.title} (${room.workLabel}): ${room.task.text}${room.task.goalKnown ? '' : ' (цель плана не указана)'}. Ведущий: ${room.lead?.displayName ?? 'нет действующего ведущего'}.`, // cyrillic-ok: Russian human overview copy required by the overview spec
       );
       lines.push(
         ...room.currentSteps.map((step) => step.text),
@@ -435,7 +435,7 @@ export function renderHumanOverview(overview: HumanOverviewV1, detailed = false)
         );
         if (room.latestLeadNote)
           lines.push(
-            `В последнем сообщении от ${room.latestLeadNote.source.at ?? 'неизвестного времени'} ведущий сообщил: ${room.latestLeadNote.text}. Это сообщение, не подтверждение текущей работы.`,
+            `В последнем сообщении от ${room.latestLeadNote.source.at ?? 'неизвестного времени'} ведущий сообщил: ${room.latestLeadNote.text}. Это сообщение, не подтверждение текущей работы.`, // cyrillic-ok: Russian human overview copy required by the overview spec
           );
       }
     }
@@ -449,15 +449,15 @@ export function renderHumanOverview(overview: HumanOverviewV1, detailed = false)
         room.waits.some((wait) => !wait.needsHuman),
       ).length;
       const unknown = omitted.filter((room) => !room.activityKnown).length;
-      if (withHumanWait) reasons.push(`ожидают действия человека: ${withHumanWait}`);
+      if (withHumanWait) reasons.push(`ожидают действия человека: ${withHumanWait}`); // cyrillic-ok: Russian human overview copy required by the overview spec
       if (withOtherWait)
-        reasons.push(`ожидают запуска, зависимости или сброса лимита: ${withOtherWait}`);
-      if (unknown) reasons.push(`активность неизвестна: ${unknown}`);
+        reasons.push(`ожидают запуска, зависимости или сброса лимита: ${withOtherWait}`); // cyrillic-ok: Russian human overview copy required by the overview spec
+      if (unknown) reasons.push(`активность неизвестна: ${unknown}`); // cyrillic-ok: Russian human overview copy required by the overview spec
       reasons.push(...new Set(omitted.flatMap((room) => room.warnings)));
-      lines.push(`Не перечислено комнат: ${omitted.length}. ${reasons.join('; ')}`);
+      lines.push(`Не перечислено комнат: ${omitted.length}. ${reasons.join('; ')}`); // cyrillic-ok: Russian human overview copy required by the overview spec
     }
   }
-  lines.push(`Вне комнат незакрытых участников: ${overview.unassignedSessions.length}.`);
+  lines.push(`Вне комнат незакрытых участников: ${overview.unassignedSessions.length}.`); // cyrillic-ok: Russian human overview copy required by the overview spec
   for (const session of overview.unassignedSessions.filter(
     (session) => detailed || session.group !== 'other',
   ))
