@@ -1028,12 +1028,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const initialConfig = (await loadConfig()).config;
   let remoteVoice = initialConfig.remoteVoice;
   let voiceDailyMinutes = initialConfig.voiceDailyMinutes;
+  // Локальная телеметрия голоса (T6): итоговый расход закрытой сессии перезаписывает прежнюю оценку.
+  const voiceTelemetry = createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs, usdPerMinute: () => LIVE_USD_PER_MINUTE });
   // Одна сессия на хост; ключ OpenAI читает live-client из `voice:openai` в момент вызова.
   const voiceSessions = createVoiceSessionService({
     db: sideDb,
     live: createLiveClient(),
     dailyMinutes: () => voiceDailyMinutes,
-    onClosed: (voiceSessionId, reason) => handle.context.broadcast('voice.session.closed', { voiceSessionId, reason }),
+    onClosed: (voiceSessionId, reason) => {
+      try {
+        voiceTelemetry.refreshSession(voiceSessionId);
+      } catch {
+        // телеметрия не мешает закрытию голоса
+      }
+      handle.context.broadcast('voice.session.closed', { voiceSessionId, reason });
+    },
   });
   // Остановка хоста и выключение платного голоса закрывают открытую сессию: звук идёт напрямую в OpenAI и иначе тарифицировался бы до их лимита.
   const closeActiveVoice = async (): Promise<void> => {
@@ -1076,7 +1085,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     send,
     assistant: assistantService,
     assistantRequests,
-    voiceTelemetry: createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs, usdPerMinute: () => LIVE_USD_PER_MINUTE }),
+    voiceTelemetry,
     assistantJobs: {
       ...assistantJobs,
       ackInline(jobId, rev) {

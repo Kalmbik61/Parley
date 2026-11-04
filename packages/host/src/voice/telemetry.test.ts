@@ -87,6 +87,28 @@ describe('VoiceTelemetry (хост)', () => {
     expect(h.telemetry.list()[0]).toMatchObject({ voice_seconds: 600, voice_cost_estimate_usd: expect.closeTo(0.5, 9) });
   });
 
+  it('после закрытия итоговое usage перезаписывает voice_seconds и оценку стоимости (85 → 96)', () => {
+    const h = setup(LIVE_USD_PER_MINUTE);
+    h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate) VALUES ('vs-1', '2026-11-04', 'open', 85)").run();
+    // Остров закрывает запись по каналу данных, раньше финального usage хоста.
+    h.telemetry.record({ voiceSessionId: 'vs-1', firstAudioMs: 700, interrupts: 1 });
+    expect(h.telemetry.list()[0]).toMatchObject({ voice_seconds: 85, voice_cost_estimate_usd: expect.closeTo((85 / 60) * LIVE_USD_PER_MINUTE, 9) });
+    h.db.prepare("UPDATE voice_usage SET state = 'closed', seconds_final = 96 WHERE voice_session_id = 'vs-1'").run();
+    h.telemetry.refreshSession('vs-1');
+    const [row] = h.telemetry.list();
+    expect(row).toMatchObject({ voice_seconds: 96, voice_cost_estimate_usd: expect.closeTo((96 / 60) * LIVE_USD_PER_MINUTE, 9), first_audio_ms: 700, interrupts: 1 });
+    // Строки Request обновление не трогает; сессии без записи — тоже.
+    h.telemetry.refreshSession('vs-unknown');
+    expect(h.telemetry.list()).toHaveLength(1);
+  });
+
+  it('запись острова после итогового usage сразу берёт итог', () => {
+    const h = setup();
+    h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-04', 'closed', 85, 96)").run();
+    h.telemetry.record({ voiceSessionId: 'vs-1', interrupts: 0 });
+    expect(h.telemetry.list()[0]?.voice_seconds).toBe(96);
+  });
+
   it('до закрытия usage берётся оценка', () => {
     const h = setup();
     h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate) VALUES ('vs-1', '2026-11-04', 'open', 42)").run();

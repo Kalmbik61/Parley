@@ -37,6 +37,11 @@ export interface VoiceTelemetryInput {
 
 export interface VoiceTelemetry {
   record(input: VoiceTelemetryInput): void;
+  /**
+   * Сессия закрыта: итоговый расход (`seconds_final` из `session.closed`) перезаписывает прежнюю оценку в строке сессии, если
+   * она уже есть, вместе с оценкой стоимости. Остров закрывает запись по каналу данных, раньше финального usage хоста.
+   */
+  refreshSession(voiceSessionId: string): void;
   /** Последние строки, новые первыми. */
   list(limit?: number): VoiceTelemetryRow[];
 }
@@ -133,6 +138,16 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
       ).run(input.voiceSessionId, requestId, now(), ...names.map((column) => values[column] ?? null));
       // Ограничение размера: остаются последние строки.
       db.prepare('DELETE FROM voice_telemetry WHERE id <= (SELECT MAX(id) FROM voice_telemetry) - ?').run(TELEMETRY_MAX_ROWS);
+    },
+    refreshSession(voiceSessionId) {
+      const values = ofSession(voiceSessionId);
+      if (values.voice_seconds === undefined) return;
+      db.prepare("UPDATE voice_telemetry SET voice_seconds = ?, voice_cost_estimate_usd = ?, superseded_count = COALESCE(?, superseded_count) WHERE voice_session_id = ? AND request_id = ''").run(
+        values.voice_seconds,
+        values.voice_cost_estimate_usd ?? null,
+        values.superseded_count ?? null,
+        voiceSessionId,
+      );
     },
     list(limit = 100) {
       const rows = db.prepare('SELECT * FROM voice_telemetry ORDER BY id DESC LIMIT ?').all(Math.max(1, Math.min(TELEMETRY_MAX_ROWS, limit))) as Raw[];
