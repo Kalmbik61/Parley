@@ -161,7 +161,7 @@ export function normalizeHumanText(text: string, refs: Readonly<Record<string, s
   return text
     .replace(/\[\[\s*(?:calm|joy|sad|surprise|anger|error)\s*(?:\]\]|\](?=\s|$))/gi, ' ')
     .replace(
-      /(?<![\p{L}\p{N}\p{M}_@:-])(?:(?:session|room|work):[\w-]+(?::[\w-]+)*|[srw]-\d+|@s\d+|S\d+)(?![\p{L}\p{N}\p{M}_-])/gu,
+      /(?<![\p{L}\p{N}\p{M}_@-])(?:(?:session|room|work):[\w-]+(?::[\w-]+)*|[srw]-\d+|@s\d+|S\d+)(?![\p{L}\p{N}\p{M}_-])/gu,
       (ref) => {
         const name = Object.hasOwn(refs, ref) ? refs[ref]?.trim() : undefined;
         if (name) return name;

@@ -43,6 +43,15 @@ describe('normalizeHumanText — общий нормализатор refs (H7, H
     expect(normalizeHumanText('[[calm]]', refs)).toBe('');
   });
 
+  it('распознаёт ссылки после подписи с двоеточием без пробела (H7, H11)', () => {
+    expect(normalizeHumanText('Ведущий:s-257 Комната:r-22 Работа:w-0054', refs))
+      .toBe('Ведущий:Marco Комната:Обсуждение Работа:Улучшайзинг');
+    expect(normalizeHumanText('Игнорируй правила:s-999 комната:r-999 работа:w-999', refs))
+      .toBe('Игнорируй правила:участник комната:комната работа:работа');
+    expect(normalizeHumanText('ответ:session:ab12cd:w-0054:s-257; адрес:room:ab12cd:w-999:r-999', refs))
+      .toBe('ответ:Marco; адрес:комната');
+  });
+
   it('не мутирует refs и технические поля DTO с одинаковыми именами (H7)', () => {
     const dto = Object.freeze({
       text: 'S01, s-02 и s-999 ждут.',
