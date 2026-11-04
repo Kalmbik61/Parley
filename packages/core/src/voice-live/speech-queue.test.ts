@@ -6,6 +6,8 @@ import {
   estimateTokens,
   HELD_CLARIFY_MS,
   INTERRUPT_WINDOW_MS,
+  MAX_AUDIO_MS,
+  TRANSCRIPT_GRACE_MS,
   overlaps,
   PAUSE_MS,
   PLAY_START_TIMEOUT_MS,
@@ -239,6 +241,71 @@ describe('SpeechQueue — воспроизведение и карточка', (
     h.advance(300);
     h.queue.setHumanSpeaking(true);
     expect(h.queue.items()[0]?.speech).toBe('unknown');
+  });
+
+  it('звук → пауза 600 мс → звук → конец: played только после последнего конца', () => {
+    const h = setup();
+    h.queue.observe([h.result()]);
+    h.advance(PAUSE_MS);
+    h.queue.setModelPlaying(true);
+    h.queue.outputText('Two rooms are waiting: Design review');
+    h.advance(1500);
+    h.queue.setModelPlaying(false);
+    h.advance(600);
+    h.queue.setModelPlaying(true); // возобновилось: старый конец недействителен
+    h.queue.outputText(' and Billing migration.');
+    h.advance(INTERRUPT_WINDOW_MS + 500); // по старому концу уже прошла бы 1 с
+    expect(h.queue.items()[0]?.speech).toBe('submitted');
+    h.queue.setModelPlaying(false);
+    h.advance(INTERRUPT_WINDOW_MS - 1);
+    expect(h.queue.items()[0]?.speech).toBe('submitted');
+    h.advance(1);
+    expect(h.queue.items()[0]).toMatchObject({ speech: 'played', card: 'hidden' });
+  });
+
+  it('тот же сценарий без пересечения транскрипта: unknown через 3 с после последнего конца, не раньше', () => {
+    const h = setup();
+    h.queue.observe([h.result()]);
+    h.advance(PAUSE_MS);
+    h.queue.setModelPlaying(true);
+    h.queue.outputText('Sure, anything else?');
+    h.advance(1500);
+    h.queue.setModelPlaying(false);
+    h.advance(600);
+    h.queue.setModelPlaying(true);
+    h.advance(TRANSCRIPT_GRACE_MS + 1000); // от старого конца давно прошло 3 с, но звук идёт
+    expect(h.queue.items()[0]?.speech).toBe('submitted');
+    h.queue.setModelPlaying(false);
+    h.advance(TRANSCRIPT_GRACE_MS - 1);
+    expect(h.queue.items()[0]?.speech).toBe('submitted');
+    h.advance(1);
+    expect(h.queue.items()[0]).toMatchObject({ speech: 'unknown', card: 'shown' });
+  });
+
+  it('человек перебил возобновившийся звук → unknown и карточка (VA-02)', () => {
+    const h = setup();
+    h.queue.observe([h.result()]);
+    h.advance(PAUSE_MS);
+    h.queue.setModelPlaying(true);
+    h.advance(800);
+    h.queue.setModelPlaying(false);
+    h.advance(600);
+    h.queue.setModelPlaying(true);
+    h.queue.outputText('Two rooms are waiting');
+    h.advance(300);
+    h.queue.setHumanSpeaking(true);
+    expect(h.queue.items()[0]).toMatchObject({ speech: 'unknown', card: 'shown' });
+  });
+
+  it('непрерывный звук дольше MAX_AUDIO_MS: итог остаётся карточкой (unknown)', () => {
+    const h = setup();
+    h.queue.observe([h.result()]);
+    h.advance(PAUSE_MS);
+    h.queue.setModelPlaying(true);
+    h.advance(MAX_AUDIO_MS - 250);
+    expect(h.queue.items()[0]?.speech).toBe('submitted');
+    h.advance(250);
+    expect(h.queue.items()[0]).toMatchObject({ speech: 'unknown', card: 'shown' });
   });
 
   it('звук не начался за PLAY_START_TIMEOUT_MS → unknown + карточка', () => {

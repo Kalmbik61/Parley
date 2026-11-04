@@ -28,6 +28,8 @@ export const PLAY_START_TIMEOUT_MS = 10_000;
 export const TRANSCRIPT_GRACE_MS = 3000;
 /** Человек заговорил не позже этого после конца звука модели — это перебивание, а не следующая реплика; `played` ставится после этого окна. */
 export const INTERRUPT_WINDOW_MS = 1000;
+/** Предел непрерывного звука при отправленном итоге: дольше этого `played` не ждём, итог остаётся карточкой (`unknown`). */
+export const MAX_AUDIO_MS = 60_000;
 
 export type SpeechState = 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped';
 export type CardState = 'hidden' | 'shown';
@@ -110,6 +112,8 @@ interface Entry extends QueueItem {
   heard: string;
   audioSeen: boolean;
   audioEndedAt: number | null;
+  /** Начало текущего непрерывного звука (последнее включение сигнала). */
+  audioStartedAt: number | null;
   clarifiedFor: number | null;
 }
 
@@ -206,6 +210,7 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
             heard: '',
             audioSeen: false,
             audioEndedAt: null,
+            audioStartedAt: null,
             clarifiedFor: null,
           };
           entries.set(entry.requestId, entry);
@@ -258,8 +263,12 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
       const at = deps.now();
       for (const entry of entries.values()) {
         if (entry.speech !== 'submitted') continue;
-        if (value) entry.audioSeen = true;
-        else if (entry.audioSeen) entry.audioEndedAt = at;
+        if (value) {
+          // Звук возобновился после паузы: прежний конец недействителен, отсчёты идут от последнего конца звука.
+          entry.audioSeen = true;
+          entry.audioEndedAt = null;
+          entry.audioStartedAt = at;
+        } else if (entry.audioSeen) entry.audioEndedAt = at;
       }
       if (!value) busyEndedAt = at;
     },
@@ -290,6 +299,8 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
         } else if (!entry.audioSeen && at - entry.submittedAt >= PLAY_START_TIMEOUT_MS && !modelPlaying) {
           toUnknown(entry);
         } else if (entry.audioEndedAt !== null && at - entry.audioEndedAt >= TRANSCRIPT_GRACE_MS) {
+          toUnknown(entry);
+        } else if (entry.audioSeen && entry.audioEndedAt === null && entry.audioStartedAt !== null && at - entry.audioStartedAt >= MAX_AUDIO_MS) {
           toUnknown(entry);
         }
       }
