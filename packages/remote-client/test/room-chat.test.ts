@@ -114,3 +114,20 @@ describe('room chat', () => {
     expect(calls('context.messages')).toEqual([]);
   });
 });
+
+describe('room re-read (A44c)', () => {
+  it('going to the background marks an open room loading; the re-read after the return makes it ready again', async () => {
+    const { client } = setup((m) => (m === 'context.messages' ? page([msg(1), msg(2)]) : {}));
+    client.setConnected(true);
+    client.openRoom(R);
+    await flush();
+    expect(client.store.getState().roomChats[K]).toMatchObject({ status: 'ready' });
+    client.setForeground(false);
+    await flush();
+    expect(client.store.getState().roomChats[K]).toMatchObject({ status: 'loading' });
+    expect(client.store.getState().roomChats[K]!.messages).toHaveLength(2);
+    client.setForeground(true);
+    await flush();
+    expect(client.store.getState().roomChats[K]).toMatchObject({ status: 'ready' });
+  });
+});

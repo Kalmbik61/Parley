@@ -64,3 +64,12 @@ describe('tail window', () => {
     expect(widenedStart(g + 2, span, 1)).toBe(g);
   });
 });
+
+describe('window after a reset (A44c)', () => {
+  it('the TAIL anchor again starts at keys.length - WINDOW_ROWS, on a block border', () => {
+    const k = keys(300);
+    expect(anchorStart(k, TAIL, none)).toBe(300 - WINDOW_ROWS);
+    const span = (i: number): number => (i === 265 ? 8 : 0);
+    expect(anchorStart(k, TAIL, span)).toBe(265);
+  });
+});
