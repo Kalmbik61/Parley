@@ -18,6 +18,7 @@ import {
   bothEnv,
   clearSecret,
   closeWorkDb,
+  openMemoryDb,
   workDb,
   createWork,
   findRunnerBinary,
@@ -260,6 +261,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   //     автозапуска сессий — ни клиент, ни наблюдатель ещё не держат старый путь, `works.create` не успеет записать в
   //     каталог, который сейчас переименуется, а служба работ первым же чтением увидит уже переехавшие карты.
   const migration = await migrateStorage(log);
+  // Хранилища помощника, уведомлений и голоса берут базу при создании. Базу, которую не поднять до текущей схемы
+  // (причина уже в журнале, работы окно покажет как нечитаемые), они получают в памяти: старт хоста она не роняет.
+  const sideDb = ((): ReturnType<typeof workDb> => {
+    try {
+      return workDb();
+    } catch {
+      return openMemoryDb();
+    }
+  })();
   // Работа, что осталась в файле, из списка окна пропадает: окну нужно её назвать. Текст — путь `map.json` (из него окно
   // берёт номер работы и имя проекта) и со следующей строки причина; подробности остаются в журнале хоста.
   const startupNotices = migration.unmoved.map(
@@ -807,8 +817,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     launchEnv: assistantLaunchEnv,
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
-    cards: createCardStore(workDb()),
-    conversations: createConversationStore(workDb()),
+    cards: createCardStore(sideDb),
+    conversations: createConversationStore(sideDb),
     home: parleyHome(),
     log: (line) => log.info(line),
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
@@ -817,7 +827,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Jobs помощника: отдельный прогон CLI на job; перед стартом хоста сверяются «зависшие» running, при остановке прогоны гасятся.
   const assistantJobs = createJobs({
-    db: workDb(),
+    db: sideDb,
     execute: createJobExecutor({
       providers: () => loadProviders(),
       ready: assistantReady,
@@ -837,7 +847,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
   // До T4 канала `app` нет, поэтому режим константа TELEGRAM_ONLY: в `app` ничего не копится, Telegram получает прежнее.
-  const notificationStore = createNotificationStore(workDb());
+  const notificationStore = createNotificationStore(sideDb);
   // Переназначается после создания `telegram`: события ядра могут прийти раньше.
   let telegramAllowed = (): boolean => false;
   const notificationRouter = createRouter({
@@ -975,7 +985,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let voiceDailyMinutes = initialConfig.voiceDailyMinutes;
   // Одна сессия на хост; ключ OpenAI читает live-client из `voice:openai` в момент вызова.
   const voiceSessions = createVoiceSessionService({
-    db: workDb(),
+    db: sideDb,
     live: createLiveClient(),
     dailyMinutes: () => voiceDailyMinutes,
     onClosed: (voiceSessionId, reason) => handle.context.broadcast('voice.session.closed', { voiceSessionId, reason }),
