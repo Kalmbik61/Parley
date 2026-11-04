@@ -209,6 +209,27 @@ const SCHEMA_VOICE_USAGE = `
   CREATE INDEX IF NOT EXISTS voice_usage_day ON voice_usage(day);
 `;
 
+/**
+ * Долговечные разговоры помощника (спека 2026-11-03, C1): история ходов острова и Telegram. Канал — атрибут сообщения,
+ * а не разговора: оба канала пишут в один. `turn_key` + `role` уникальны в разговоре: повтор записи не плодит строк.
+ * Тексты людей живут только здесь.
+ */
+const SCHEMA_ASSISTANT_CONVERSATIONS = `
+  CREATE TABLE IF NOT EXISTS assistant_conversations (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS assistant_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+    turn_key TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    channel TEXT NOT NULL CHECK(channel IN ('island','telegram','reminder','voice')),
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(conversation_id, turn_key, role));
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -251,6 +272,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   },
   // 7: учёт голосовых сессий GPT-Live (спека 2026-11-03, B2).
   { version: 7, up: (db) => db.exec(SCHEMA_VOICE_USAGE) },
+  // 8: долговечные разговоры помощника (спека 2026-11-03, C1).
+  { version: 8, up: (db) => db.exec(SCHEMA_ASSISTANT_CONVERSATIONS) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

@@ -55,7 +55,8 @@ describe('job executor', () => {
   });
 
   it('cancel гасит идущий прогон', async () => {
-    let release: (end: TurnEnd) => void = () => {};
+    const noop = () => {};
+    let release: (end: TurnEnd) => void = noop;
     const cancel = vi.fn(() => release({ ok: false, kind: 'cancelled', message: 'cancelled' }));
     const execute = createJobExecutor({
       providers: async () => ({ claude: entry }),
@@ -63,10 +64,12 @@ describe('job executor', () => {
       launchEnv: async () => ({}),
       binary: async (command) => command,
       cwd: '/tmp',
+      ensureDir: async () => {},
       run: (() => ({ cancel, done: new Promise<TurnEnd>((resolve) => (release = resolve)) })) as unknown as JobExecutorDeps['run'],
     });
     const run = execute(job);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Ждём, пока прогон дойдёт до run(): cancel до этого отменил бы старт, а не процесс.
+    await vi.waitFor(() => expect(release).not.toBe(noop));
     run.cancel();
     await expect(run.done).resolves.toMatchObject({ ok: false, kind: 'cancelled' });
     expect(cancel).toHaveBeenCalled();

@@ -9,6 +9,7 @@ import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createAssistantBridge } from '../telegram/assistant-bridge.js';
 import { createCardStore } from './cards.js';
+import { createConversationStore } from './conversation-store.js';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
@@ -1859,5 +1860,99 @@ describe('assistant-service: durable карточки', () => {
     expect(closeCard).toHaveBeenCalledWith(telegram.id, 'sent');
     bridge.stop();
     service.stop();
+  });
+});
+
+describe('assistant-service: durable-история разговора', () => {
+  const answer = async (turn: number, text: string): Promise<void> => {
+    turns[turn]?.emit({ type: 'text', delta: `[[calm]] ${text}` });
+    turns[turn]?.end({ ok: true });
+    await flush();
+  };
+
+  it('ходы острова и Telegram пишутся в одну историю и переживают рестарт (новый сервис на той же базе)', async () => {
+    const db = openMemoryDb();
+    const first = createAssistantService({ ...deps, conversations: createConversationStore(db) });
+    await first.ask(ASK);
+    await answer(0, 'Работает S03.');
+    await first.ask({ ...ASK, text: 'а из чата?' }, 'telegram');
+    await answer(1, 'Да.');
+    first.stop();
+
+    const reopened = createConversationStore(db);
+    expect(reopened.history(10).map((m) => [m.channel, m.role, m.text])).toEqual([
+      ['island', 'user', 'кто работает?'],
+      ['island', 'assistant', 'Работает S03.'],
+      ['telegram', 'user', 'а из чата?'],
+      ['telegram', 'assistant', 'Да.'],
+    ]);
+  });
+
+  it('после рестарта новый диалог CLI получает историю вставкой, а CLI-сессия в базу не пишется', async () => {
+    const db = openMemoryDb();
+    const first = createAssistantService({ ...deps, conversations: createConversationStore(db) });
+    await first.ask(ASK);
+    turns[0]?.emit({ type: 'session', id: 'sid-secret' });
+    await answer(0, 'Работает S03.');
+    first.stop();
+
+    const second = createAssistantService({ ...deps, conversations: createConversationStore(db) });
+    await second.ask({ ...ASK, text: 'продолжим' }, 'telegram');
+    const prompt = turns[1]?.spec.args[1] ?? '';
+    expect(prompt).toContain('Person (island): кто работает?');
+    expect(prompt).toContain('You (island): Работает S03.');
+    expect(prompt.endsWith('продолжим')).toBe(true);
+    expect(turns[1]?.spec.args).not.toContain('--resume');
+    expect(JSON.stringify(db.prepare('SELECT * FROM assistant_messages').all())).not.toContain('sid-secret');
+  });
+
+  it('idle заканчивает диалог CLI, но история остаётся', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createConversationStore(openMemoryDb());
+      const service = createAssistantService({ ...deps, conversations: store, idleMs: 1000 });
+      await service.ask(ASK);
+      turns[0]?.emit({ type: 'text', delta: '[[calm]] ok' });
+      turns[0]?.end({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(store.history(10)).toHaveLength(2);
+      service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('повтор запуска (resume) и двойное завершение не плодят строк', async () => {
+    const store = createConversationStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, conversations: store });
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'session', id: 'sid-1' });
+    turns[0]?.emit({ type: 'session', id: 'sid-1' });
+    turns[0]?.end({ ok: true });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'ещё' });
+    turns[1]?.end({ ok: false, kind: 'resume', message: 'no session' });
+    await flush();
+    await flush();
+    expect(turns).toHaveLength(3);
+    turns[2]?.emit({ type: 'text', delta: '[[calm]] готово' });
+    turns[2]?.end({ ok: true });
+    await flush();
+    expect(store.history(10).map((m) => [m.role, m.text])).toEqual([
+      ['user', 'кто работает?'],
+      ['user', 'ещё'],
+      ['assistant', 'готово'],
+    ]);
+  });
+
+  it('reset открывает новый разговор: старая история не уходит в новый диалог', async () => {
+    const store = createConversationStore(openMemoryDb());
+    const service = createAssistantService({ ...deps, conversations: store });
+    await service.ask(ASK);
+    await answer(0, 'старое');
+    service.reset();
+    expect(store.history(10)).toEqual([]);
   });
 });

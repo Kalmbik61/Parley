@@ -43,6 +43,7 @@ import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantM
 import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
+import { createConversationStore, type ConversationStore } from './conversation-store.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
@@ -61,6 +62,9 @@ export const ASSISTANT_IDLE_MS = 15 * 60_000;
 export const ASSISTANT_TURN_MS = 180_000;
 /** Сколько карточка ждёт решения: потом она терминально `expired`, решить её нельзя — только запросить заново. */
 export const ASSISTANT_CARD_TTL_MS = 30 * 60_000;
+/** Сколько последних реплик и символов каждой уходит в новый диалог CLI. */
+const RECAP_MESSAGES = 10;
+const RECAP_CHARS = 500;
 const MAX_TEXT = 4000;
 const MAX_TITLE = 80;
 const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.';
@@ -116,6 +120,8 @@ export interface AssistantServiceDeps {
   /** Durable-хранилище карточек (`createCardStore(workDb())`); без него карточки живут только в памяти процесса. */
   cards?: CardStore;
   cardTtlMs?: number;
+  /** Durable-история разговора (`createConversationStore(workDb())`); без неё она живёт только в памяти процесса. */
+  conversations?: ConversationStore;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
   now?(): number;
   idleMs?: number;
@@ -164,6 +170,8 @@ interface Conversation {
   token: string;
   sessionId: string | null;
   endAfterTurn: boolean;
+  /** Диалог CLI только что начат (рестарт, idle, смена провайдера): первый ход получит выжимку истории. */
+  recapPending: boolean;
 }
 
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
@@ -212,6 +220,10 @@ interface Ask {
   id: string | null;
   ticket: number;
   origin: AssistantOrigin;
+  /** Ключ хода в истории: один на вопрос, повтор запуска (resume) его не меняет. */
+  key: string;
+  /** Выжимка прошлой истории для нового диалога CLI; считается один раз на вопрос. */
+  recap?: string | null;
 }
 
 /** Чем кончился запуск хода: `not-ready` и `evicted` — повторять позже, `failed` — ошибка уже показана окну. */
@@ -308,6 +320,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let turn: TurnHandle | null = null;
   const cards = deps.cards ?? createCardStore(openMemoryDb());
   const cardTtl = deps.cardTtlMs ?? ASSISTANT_CARD_TTL_MS;
+  const history = deps.conversations ?? createConversationStore(openMemoryDb());
   /** Источник карточек, что предлагает текущий ход: карточка вытесняет только карточку своего источника. */
   let cardSource: string = 'island';
   /** Растёт на `reset`: карточка, захваченная до него, после сбоя не возвращается. */
@@ -419,6 +432,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (expired.length === 0 || stopped) return;
     if (expired.some((card) => card.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
   }
+  /** Сбой записи истории не должен ронять ход. */
+  const remember = (write: () => void): void => {
+    try {
+      write();
+    } catch (error) {
+      deps.log(`assistant: history write failed: ${(error as Error).message}`);
+    }
+  };
+  /** Прошлые реплики для нового диалога CLI: сессия в памяти, а история общая для каналов и переживает рестарт. */
+  const recapOf = (): string | null => {
+    const lines = history.history(RECAP_MESSAGES).map((item) => `${item.role === 'user' ? 'Person' : 'You'} (${item.channel}): ${item.text.slice(0, RECAP_CHARS)}`);
+    return lines.length === 0 ? null : `[system: earlier in this conversation, oldest first]\n${lines.join('\n')}\n[system: end of earlier conversation]`;
+  };
   const restPhase = (): AssistantState['phase'] => (shown() === null ? 'idle' : 'awaiting-confirm');
 
   function endConversation(): void {
@@ -461,7 +487,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       endConversation();
     }
     if (conversation === null) {
-      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false };
+      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
       deps.endpoint.setToken(conversation.token);
     }
     return conversation;
@@ -509,7 +535,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
     // «Да» словами при ждущей карточке `actions` её не подтверждает: ход узнаёт об этом от Parley и просит нажать кнопку.
     const buttonNote = shown()?.kind === 'actions' && matchConfirm(text) === 'send' ? ACTIONS_BUTTON_NOTE : null;
-    const prompt = [voiceNote, outcomeNote, buttonNote, text].filter((part) => part !== null).join('\n');
+    // Диалог CLI новый (idle, рестарт, смена провайдера): прошлая история подаётся первым ходом одной вставкой, раньше записи этого вопроса.
+    if (ask.recap === undefined) ask.recap = current.recapPending ? recapOf() : null;
+    const prompt = [ask.recap, voiceNote, outcomeNote, buttonNote, text].filter((part) => part !== null).join('\n');
     outcomeNote = null;
     const command = assistantCommand(
       entry,
@@ -539,6 +567,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Остановка хоста во время запуска — то же самое: процесс уже не нужен.
     if (ask.ticket !== asks || stopped) return 'evicted';
     current.gender = gender;
+    current.recapPending = false;
+    if (!retried) remember(() => history.write({ turnKey: ask.key, role: 'user', channel: ask.origin, text }, now()));
     // Отчёт идущего плана переживает новый ход; законченный убирается.
     publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
 
@@ -600,6 +630,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         if (turn !== handle) return;
         turn = null;
         if (take(stripper.end())) publish({ mood: firstMood(moods), answer, moods });
+        if (end.ok && answer !== '') remember(() => history.write({ turnKey: ask.key, role: 'assistant', channel: ask.origin, text: answer }, now()));
         await finish(end, entry, model, language, text, retried, current, ask);
       })
       .catch((error: unknown) => {
@@ -1166,7 +1197,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       stopTurn();
       asks += 1;
       cardSource = origin;
-      const ask: Ask = { id: params.askId ?? null, ticket: asks, origin };
+      const ask: Ask = { id: params.askId ?? null, ticket: asks, origin, key: `${instance}:${asks}` };
       try {
         const picked = await pick(params.provider);
         if ('offline' in picked) {
@@ -1352,6 +1383,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       asks += 1;
       stopTurn();
       endConversation();
+      remember(() => void history.startNew(now()));
       const before = cards.active();
       cards.supersedeAll();
       emitSuperseded(before);
