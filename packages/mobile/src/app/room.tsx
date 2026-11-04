@@ -1,7 +1,7 @@
 // Room = the chat of a room (D1 §9.7, plan A33): history by `context.messages`, live by `rooms.mail`, members and lead,
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -23,6 +23,7 @@ import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
 import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
+import { REREAD_INSTANT_ROWS } from '../feed/follow-end';
 import { useFollowEnd } from '../feed/use-follow-end';
 import { useTailWindow } from '../feed/use-tail-window';
 import { WINDOW_ROWS } from '../feed/window';
@@ -135,6 +136,7 @@ export default function RoomScreen() {
   });
   // A44c: a room read again with letters already shown (back from the background, a reconnect) lands at the end like the first open.
   const roomStatus = entry?.status;
+  const [, bump] = useReducer((n: number) => n + 1, 0);
   const prevStatus = useRef(roomStatus);
   const hadRows = useRef(false);
   useLayoutEffect(() => {
@@ -143,6 +145,11 @@ export default function RoomScreen() {
     const had = hadRows.current;
     hadRows.current = data.length > 0;
     if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && had && data.length > 0) follow.reread();
+    // A feed that stayed empty through the return and now brings many rows hides like a first open; 1-2 live rows keep the m2 rule.
+    else if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && !had && data.length > REREAD_INSTANT_ROWS && shownEmpty.current) {
+      shownEmpty.current = false;
+      bump();
+    }
   }, [roomStatus]);
   useEffect(() => {
     if (follow.revealed) onRevealed();

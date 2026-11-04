@@ -1,7 +1,7 @@
 // Session = the chat of a session (D1 §9, plan A32): a pinned two-line header, the feed with folded finished turns,
 // the live waiting card, and at the bottom either the card's actions or the message field. The data layer is
 // `remote-client`: `openFeed` keeps the subscription alive while this screen is open (A31).
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useHeaderHeight } from 'expo-router/react-navigation';
@@ -29,6 +29,7 @@ import { useCloseOnLock } from '../../auth/use-lock-sheet';
 import { Composer } from '../../feed/Composer';
 import { copyText, messageActions, sendAgainReason, type ActionId } from '../../feed/message-actions';
 import { splitQuote, replyQuote } from '../../feed/reply';
+import { REREAD_INSTANT_ROWS } from '../../feed/follow-end';
 import { useFollowEnd } from '../../feed/use-follow-end';
 import { useTailWindow } from '../../feed/use-tail-window';
 import { WINDOW_ROWS } from '../../feed/window';
@@ -211,6 +212,7 @@ export default function SessionScreen() {
   });
   // A44c: a feed read again with rows already shown (back from the background, a reconnect) lands at the end like the first open.
   const feedStatus = feed?.status;
+  const [, bump] = useReducer((n: number) => n + 1, 0);
   const prevStatus = useRef(feedStatus);
   const hadRows = useRef(false);
   useLayoutEffect(() => {
@@ -219,6 +221,11 @@ export default function SessionScreen() {
     const had = hadRows.current;
     hadRows.current = rows.length > 0;
     if (feedStatus === 'ready' && before !== undefined && before !== 'ready' && had && rows.length > 0) follow.reread();
+    // A feed that stayed empty through the return and now brings many rows hides like a first open; 1-2 live rows keep the m2 rule.
+    else if (feedStatus === 'ready' && before !== undefined && before !== 'ready' && !had && rows.length > REREAD_INSTANT_ROWS && shownEmpty.current) {
+      shownEmpty.current = false;
+      bump();
+    }
   }, [feedStatus]);
   useEffect(() => {
     if (follow.revealed) onRevealed();
