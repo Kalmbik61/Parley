@@ -4,50 +4,60 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.29.0
+
+**Impact**
+
+- **Goal:** Let the assistant speak through the person's own OpenAI key instead of a local voice, give it durable conversations, jobs and notifications that the window and Telegram share, make the relay setup wizard install next to the person's own web server, and stop finished session worktrees from piling up on disk.
+- **Behaviour:** Answers are spoken through OpenAI when a key is saved and "Speak answers" is on; without a key they stay text and the speaker icon says why. The local Qwen3-TTS voice is removed and its old weights are deleted on the first launch. Assistant history is stored in the database, so the island and Telegram share it and it survives a host restart. Telegram notifications go through a new notification store, and an event is not sent twice after a restart. A phone voice backend exists on the host and is off by default ("Allow paid voice from the phone"). The relay wizard reads the server, picks a layout (its own Caddy, a site added to your Caddy, or its own Caddy behind nginx) and shows every file it will change before Run. Parley removes the worktree folder of a closed session or archived room by itself when nothing in it is uncommitted. Stopping the host during a CLI update no longer throws on macOS.
+- **Numbers:** Voice and assistant core (PR #179): 16 commits, 154 files, +16,043 / −4,432 against master; the full suite was not run locally, CI runs it. Relay wizard (PR #175): desktop 10,068 tests passed, 22 skipped, 0 failed (515 files); Docker stands 15 of 15 in 156 s; end-to-end wizard test 1 of 1 in 18.5 s; 71 files, +7,543 / −306. Worktree cleanup (PR #174): one workspace had 80 session worktrees, 35 folders were on disk at 47 GB, and removing 27 by hand freed 17.4 GiB; its tests were not run locally. EPERM fix (PR #178): host tests 197 files, 3,843 passed, 7 skipped; `update-run.test.ts` passed 20 of 20 runs in a row. Install time on a real server, the cost of spoken answers and runtime cost on the Mac are not measured.
+- **Screens:** The relay wizard has five screens of the real window with a scripted SSH connection (PR #175). The Voice provider section was checked by hand in a dev window, without screenshots. Worktree cleanup and its Settings list were not checked in the built app.
+- **For the human:** Save the OpenAI key in Settings → Assistant → Voice provider, run Check, and turn "Speak answers" on again after the update. Watch whether Telegram notifications still arrive. Run "Install or update" in the relay wizard on a real server to see the plan. Look at Settings → Projects → Worktrees after the first start.
+- **Risk:** Medium. The Telegram notification path is new and was not run against a real bot. Deleting the Qwen weights cannot be undone. GPT-Live voice sessions were not run against real OpenAI, and the notification outbox is at-least-once. The relay wizard now edits files of the person's web server; it was exercised on real Caddy and nginx in test stands, never on a real server. Worktree removal was not run in the built app.
+- **Cost:** Spoken answers and voice minutes are billed to the person's OpenAI key; the daily limit caps phone voice. Runtime cost on the Mac is not measured.
+- **Verdict:** Ready to release; whether voice, Telegram notifications, the wizard and worktree cleanup work for real is shown only by the checks listed in "What is not proven yet".
 
 ### Added
 
 - The island speaks answers through OpenAI: pick a voice and save an OpenAI API key in Settings → Assistant → Voice provider (API). Without a key answers stay text and the speaker icon says why. The text of every spoken answer is sent to OpenAI and billed to your key. OpenAI removes the model used for speech (`gpt-4o-mini-tts`) on January 6, 2027; the voice will need a move to another OpenAI API before then.
+- Voice provider has a daily limit in minutes, set next to the key in Settings → Assistant.
+- Assistant conversations are stored in the database: the island and Telegram share one history, and it survives a host restart.
+- "Allow paid voice from the phone" in Settings → Remote access lets a paired phone open a paid voice session within the daily limit. It is off by default; a session closes when the device is revoked or disconnects, when Parley quits, or when the setting is turned off.
+- Parley removes the worktree folder of a session by itself once the session is closed, or its room or workspace is archived, and nothing in the copy is uncommitted. A branch already merged into its base goes too; an unmerged branch stays. A session that wakes up after its copy was removed gets the copy back from its branch.
+- Settings → Projects → Worktrees lists the copies Parley could not remove (uncommitted files, git refused, unsaved tab, still running) with their size, and offers Remove copy and Remove all.
+- One-button install next to your own web server: the wizard adds a site to your Caddy (in Docker or under systemd) or, for nginx, runs its own Caddy on port 8443 behind one `server` block in nginx. It changes only its own file or its own marked block, shows every file, the backup in `/var/backups/parley-relay/`, the check and the reload before you press Run, and restores the file when the check or the reload fails (nginx is checked with `nginx -t` before the reload). Servers it cannot change keep the manual snippet.
 
-### Removed
+### Changed
 
-- The local Qwen3-TTS voice is gone: the speech engine, the voice picker and the weight downloads in Settings → Assistant are removed. On the first launch of this version Parley deletes the old weights from `~/.parley/desktop/voice/tts`, which frees up to 3.5 GB; Whisper dictation models are not touched. The assistant keeps speaking about itself in the same gender (it is carried over from the old voice choice).
-
-## 0.28.2
-
-**Impact**
-
-- **Goal:** Let the Settings → Remote access wizard ("Set up on my server…") install the relay with essentially one button, also on a server that already runs a web server of its own, and keep its log window open until it is closed with ×; the Relay field also accepts an `https://` address.
-- **Behaviour:** The wizard reads running and stopped containers and attributes ports to the container that publishes them, so a foreign Caddy on ports 80 and 443 is no longer taken for its own. It picks a layout from what the server shows: free ports get its own Caddy; a Caddy in Docker or under systemd gets one added site; nginx gets its own Caddy on port 8443 behind one `server` block; anything else keeps the manual snippet with the reason. Every edit of a file that is not Parley's is a server-side transaction: checksum, backup in `/var/backups/parley-relay/`, check, graceful reload and a byte-exact restore on failure; the plan screen lists every such file with its full content before Run. Commands run detached from the SSH connection, the image download shows progress and can be stopped, and the run lives in the app: × only hides the window and Settings reopens the same run or result. Repeating, updating, rolling back and removing follow the live server state, and a working 0.28.1 install keeps its layout.
-- **Numbers:** From the runs on this branch: desktop 10,068 tests passed, 22 skipped, 0 failed (515 files); desktop typecheck and lint on the touched paths were clean; the Docker stands passed 15 of 15 in 156 s (3 files); the end-to-end wizard test passed 1 of 1 in 18.5 s. The change touches 71 files (+7,543 / −306 against master). Install time on a real server is not measured.
-- **Screens:** Five screens of the real window with a scripted SSH connection: the plan with a foreign file edit, the image download progress, "Cancelling after this step…", a reopened running setup, and the finished result.
-- **For the human:** Run "Install or update" on a real server to see the plan. A server whose Caddy runs in Docker should get one foreign edit (one site file) and the relay recreated with the same data volume, which restarts it briefly; the address stays the same.
-- **Risk:** Medium. The wizard now edits files of the person's web server; the transaction was exercised on real Caddy and nginx in test stands and in 16 review cases, but certificate issuance through a foreign Caddy, or through nginx to its own Caddy, was not run end to end. A relay attached to a foreign Docker network keeps that network in use.
-- **Cost:** Runtime cost is not measured.
-- **Verdict:** Ready to release; whether the wizard works on a real server is shown only by the check listed in "What is not proven yet".
+- Telegram notifications (needs you, finished, room decisions, letters) now go through the new notification store, and an event is not sent twice after a restart.
+- "Speak answers" is switched off once on update, because each spoken answer is now billed to your key; turn it on again in Settings → Assistant.
+- A worktree copy is never removed while its agent runs, while a window tab of its files has unsaved edits, or while no up-to-date window is connected. Changes of a closed session keeps working without the folder: its commits, the diff, Merge and Discard are all there.
+- Repeating the wizard, rolling back and removing follow what the server shows now; a working manual `proxy` install keeps its layout.
+- The image download shows its progress (megabytes when the server's Docker API is reachable, layers otherwise) and can be stopped; a download may still finish on the server.
+- Esc and a click outside no longer close the wizard. Closing it during a run only hides it: the run goes on, and Settings → Set up on my server… reopens the same run or its result, also after the window is reloaded. Quitting Parley ends the record; commands already started on the server finish on their own.
 
 ### Fixed
 
+- Stopping the host during a CLI update no longer throws on macOS: an `EPERM` from the group kill of the installer is treated as "the group is already gone".
 - The relay setup wizard no longer mistakes a foreign container for its own earlier install: who holds port 80 and 443 is read from the listeners and the running containers, not guessed from the process name or from an old `.env`, and a stopped container that will take the ports back stops the wizard from installing its own Caddy. On a server whose Caddy owns both ports the wizard no longer plans a second Caddy.
 - Commands the wizard starts on the server keep running when the SSH connection drops, and a new run does not start while a command of the previous one is still running.
 - Removing the relay also removes the containers an earlier layout left behind and, with "Also delete the relay data", its leftover volumes; it takes its own site out of your web server first.
 - The Relay field accepts an `https://` address; `http://` is refused with a reason.
 
-### Changed
+### Removed
 
-- One-button install next to your own web server: the wizard adds a site to your Caddy (in Docker or under systemd) or, for nginx, runs its own Caddy on port 8443 behind one `server` block in nginx. It changes only its own file or its own marked block, shows every file, the backup in `/var/backups/parley-relay/`, the check and the reload before you press Run, and restores the file when the check or the reload fails (nginx is checked with `nginx -t` before the reload). Servers it cannot change keep the manual snippet.
-- Repeating the wizard, rolling back and removing follow what the server shows now; a working manual `proxy` install keeps its layout.
-- The image download shows its progress (megabytes when the server's Docker API is reachable, layers otherwise) and can be stopped; a download may still finish on the server.
-- Esc and a click outside no longer close the wizard. Closing it during a run only hides it: the run goes on, and Settings → Set up on my server… reopens the same run or its result, also after the window is reloaded. Quitting Parley ends the record; commands already started on the server finish on their own.
+- The local Qwen3-TTS voice is gone: the speech engine, the voice picker and the weight downloads in Settings → Assistant are removed. On the first launch of this version Parley deletes the old weights from `~/.parley/desktop/voice/tts`, which frees up to 3.5 GB; Whisper dictation models are not touched. The assistant keeps speaking about itself in the same gender (it is carried over from the old voice choice).
 
 ### What is not proven yet
 
-- Nothing was run against a real server.
+- Telegram notifications on the new path were not run against a real bot. Spoken answers and the phone voice session were not run against real OpenAI, and billing totals were not compared with the OpenAI usage page.
+- Automatic worktree removal and the Settings → Projects → Worktrees list were not checked in the built app.
+- The kernel `EPERM` was reproduced only with a mock locally; the real check is CI on macOS.
+- Nothing in the relay wizard was run against a real server.
 - Certificate issuance by the person's Caddy for the wizard's site, and the HTTP-01 check through nginx to the wizard's own Caddy, were not run end to end.
 - Caddy under systemd and nginx in Docker were covered by unit tests only, with no test stand; the nginx blocks were checked with a real `nginx -t`.
 - The image download progress was parsed from a stream captured from Docker Desktop, not from Docker CE with overlay2; the test stands preload images, so their download step is skipped. Whether Docker stops a download after the window is closed or cancelled is not verified, and the window does not promise it.
-- In a packaged app, the test-only SSH seam is closed by code and a unit test only; keeping the run when quitting is cancelled was checked by code only; the end-to-end test ran on macOS only.
+- In a packaged app, the test-only SSH seam is closed by code and a unit test only; keeping the run when quitting is cancelled was checked by code only; the end-to-end wizard test ran on macOS only.
 - How fast a silent network loss is detected (SSH keepalive) is not measured.
 
 ## 0.28.1
