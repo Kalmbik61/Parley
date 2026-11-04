@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
 import { LiveError, type LiveClient, type LiveClosed, type Sideband } from './live-client.js';
-import { VOICE_PROMPT } from './voice-prompt.js';
+import { VOICE_PROMPT, liveSessionConfig } from './voice-prompt.js';
 import { INIT_BILLED_SECONDS, MAX_SESSION_MS, WARNING_BEFORE_MS, createVoiceSessionService } from './voice-session-service.js';
 
 class FakeSideband implements Sideband {
@@ -94,14 +94,16 @@ describe('VoiceSessionService', () => {
     expect(service.activeSessionId()).toBe('sess_1');
   });
 
-  it('prepare: сессия создаётся с инструкциями и клиентской делегацией, без acknowledgement_delay_ms', async () => {
+  it('prepare: конфиг сессии передаётся как есть; без него — прежний конфиг клиента (телефон)', async () => {
     const { service, createCalls } = setup();
-    await service.prepare('offer');
-    expect(createCalls).toHaveLength(1);
+    await service.prepare('offer', liveSessionConfig());
     expect(createCalls[0]?.offer).toBe('offer');
     const session = createCalls[0]?.session ?? {};
     expect(session).toEqual({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
     expect(JSON.stringify(session)).not.toContain('acknowledgement_delay_ms');
+    const legacy = setup();
+    await legacy.service.prepare('offer-2');
+    expect(legacy.createCalls[0]?.session).toBeUndefined();
   });
 
   it('второй prepare (в том числе одновременный) — busy', async () => {

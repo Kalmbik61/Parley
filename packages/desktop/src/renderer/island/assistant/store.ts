@@ -146,6 +146,8 @@ export interface AssistantStoreState {
   submit(text: string): Promise<void>;
   unqueue(id: number): void;
   toggleListening(): void;
+  /** Live-голос идёт: речь помощника (TTS) глушится, пошаговая запись не стартует; после остановки всё возвращается. */
+  setLiveActive(active: boolean): void;
   decide(decision: 'send' | 'cancel'): Promise<void>;
   reset(): Promise<void>;
   /** Сообщение порта голоса: кусок, срыв по длине или состояние движка. */
@@ -206,7 +208,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       if (deps?.speech === undefined || settings === undefined) return false;
       return engine === null ? settings.available : ttsAvailable(engine);
     };
-    const canSpeak = (): boolean => speechSettings()?.enabled === true && voiceReady();
+    /** Live-голос (GPT-Live) ведёт разговор сам: пошаговый микрофон и TTS молчат, чтобы не было двух голосов. */
+    let liveActive = false;
+    const canSpeak = (): boolean => !liveActive && speechSettings()?.enabled === true && voiceReady();
     const clearTimer = (timer: ReturnType<typeof setTimeout> | null): null => {
       if (timer !== null) clearTimeout(timer);
       return null;
@@ -382,7 +386,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       }));
     };
     const startListening = (mode: 'send' | 'draft'): void => {
-      if (deps === null) return;
+      if (deps === null || liveActive) return;
       // Ответ ещё не зазвучал, а человек уже говорит: голос помощника не должен попасть в запись.
       silence();
       const session = deps.listen({
@@ -522,6 +526,14 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         pump();
       },
       unqueue: (id) => set((state) => ({ queue: state.queue.filter((item) => item.id !== id) })),
+      setLiveActive: (active) => {
+        if (liveActive === active) return;
+        liveActive = active;
+        if (active) {
+          silence();
+          if (get().input === 'listening') listening?.cancel();
+        }
+      },
       toggleListening: () => {
         if (get().input === 'listening') listening?.stop();
         // Диктовка только кладёт текст в поле — идущий ход она не перебивает (перебивает хоткей, `openMode`).

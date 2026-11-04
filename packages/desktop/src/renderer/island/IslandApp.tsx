@@ -437,6 +437,14 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     if (!connected) return;
     return useLiveStore.getState().bind(createLiveController(createBrowserLiveDeps(bridge)));
   }, [connected, bridge]);
+  // Пока идёт Live, речь помощника (TTS) и пошаговая запись молчат; после остановки возвращаются.
+  useEffect(() => {
+    const sync = (phase: string): void => useAssistantStore.getState().setLiveActive(phase !== 'idle');
+    sync(useLiveStore.getState().phase);
+    return useLiveStore.subscribe((state, previous) => {
+      if (state.phase !== previous.phase) sync(state.phase);
+    });
+  }, []);
   useEffect(() => {
     if (keyboardOwner === 'request' && !assistant.open) requestAnimationFrame(() => shapeRef.current?.focus());
   }, [keyboardOwner, assistant.open]);
