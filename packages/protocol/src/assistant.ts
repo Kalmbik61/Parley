@@ -199,7 +199,33 @@ export type { AssistantJobOrigin, AssistantJobCorrelation } from './remote/job-s
 export const assistantDecidedViaSchema = z.enum(['island', 'telegram', 'mobile']);
 export type AssistantDecidedVia = z.infer<typeof assistantDecidedViaSchema>;
 
+/**
+ * Request голосового поручения (спека «Голос↔Ассистент», §4, T2): хост-сторона запись «человек поручил, Live делегировал».
+ * Методы только локальные (остров): в remote-списках их нет, `jobs.submit` телефона по-прежнему ставит `mobile`.
+ * `originKey` хост выводит из исходных `voiceSessionId` + `delegationId`: клиент при восстановлении шлёт прежние id.
+ */
+const requestId = z.string().min(1).max(128);
+const requestConsumer = z.string().min(1).max(64);
+export const assistantRequestMethodSchemas = {
+  'requests.submit': z.strictObject({
+    /** Разговор острова, а не голосовая сессия. */
+    conversationId: z.string().min(1).max(128),
+    voiceSessionId: z.string().min(1).max(128),
+    delegationId: z.string().min(1).max(128),
+    /** Без поля хост берёт `delegationId`: связь job требует turnId. */
+    turnId: z.string().min(1).max(128).optional(),
+    text: z.string().min(1).max(4000),
+    /** Последние реплики и открытые Request; хост хранит как есть (не больше 16 КБ в JSON). */
+    context: z.record(z.string(), z.unknown()).optional(),
+    transcriptPartial: z.boolean().optional(),
+  }),
+  'requests.list': z.strictObject({ conversationId: z.string().min(1).max(128), consumer: requestConsumer }),
+  /** Потребитель получил итог: `revision` — ревизия финального состояния job, как в `jobs.ackInline`. */
+  'requests.ack': z.strictObject({ requestId, consumer: requestConsumer, revision: z.number().int().nonnegative() }),
+} as const;
+
 export const assistantMethodSchemas = {
+  ...assistantRequestMethodSchemas,
   'assistant.ask': z.object({
     text: z.string().min(1).max(4000),
     /** `null` — первый готовый провайдер (`claude`, `glm`, `codex`). */
@@ -276,7 +302,38 @@ export type CardDecideResult =
   | { applied: true; error: string | null; reason: 'applied' }
   | { applied: false; error: string; reason: 'already_handled' | 'expired' | 'not_found' | 'failed' };
 
+/** Состояние job в Request: проекция без логов и argv. `resultSummary` — итог, пока он строка (форму `JobResult` ведёт T1). */
+export interface AssistantRequestJob {
+  jobId: string;
+  state: 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
+  revision: number;
+  resultSummary: string | null;
+}
+
+/** Request на хосте. `version` отдельна от `job.revision`; `delivery` — ревизия job, доставленная потребителю. */
+export interface AssistantRequestView {
+  requestId: string;
+  originKey: string;
+  conversationId: string;
+  seq: number;
+  version: number;
+  text: string;
+  context: Record<string, unknown> | null;
+  jobId: string;
+  supersededBy: string | null;
+  transcriptPartial: boolean;
+  delivery: Record<string, number>;
+  createdAt: number;
+  updatedAt: number;
+  job: AssistantRequestJob;
+}
+
+export type AssistantRequestAck = { ok: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' | 'not_terminal' };
+
 export interface AssistantMethodResults {
+  'requests.submit': { request: AssistantRequestView; created: boolean };
+  'requests.list': { requests: AssistantRequestView[] };
+  'requests.ack': AssistantRequestAck;
   'assistant.ask': { ok: true };
   'assistant.cancel': { ok: true };
   'assistant.decide': { applied: boolean; error: string | null };

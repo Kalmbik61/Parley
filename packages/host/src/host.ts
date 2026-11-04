@@ -114,6 +114,7 @@ import { createReminderStore } from './assistant/reminders.js';
 import { createCardStore } from './assistant/cards.js';
 import { createConversationStore } from './assistant/conversation-store.js';
 import { createJobs } from './assistant/jobs.js';
+import { createRequests } from './assistant/requests.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
@@ -838,6 +839,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
     log: (line) => log.info(line),
   });
+  // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
+  const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.
@@ -1030,6 +1033,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
+    assistantRequests,
     assistantJobs: {
       ...assistantJobs,
       ackInline(jobId, rev) {

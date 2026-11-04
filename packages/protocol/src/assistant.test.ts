@@ -15,6 +15,7 @@ import {
   type RoomProposalView,
 } from './assistant.js';
 import { METHODS } from './methods.js';
+import { REMOTE_METHODS } from './remote/index.js';
 
 describe('схемы методов помощника', () => {
   it('assistant.ask: текст обязателен, провайдер и модель могут быть null', () => {
@@ -168,5 +169,27 @@ describe('Assistant Core: origin, correlation, cards.decide, jobs.ackInline', ()
     expect(ack.safeParse({ jobId: 'job-1' }).success).toBe(false);
     expect(ack.safeParse({ jobId: '', revision: 3 }).success).toBe(false);
     expect(ack.safeParse({ jobId: 'job-1', revision: 3, extra: true }).success).toBe(false);
+  });
+});
+
+describe('Request голосовых поручений: requests.*', () => {
+  const submit = { conversationId: 'c1', voiceSessionId: 'live_1', delegationId: 'd1', text: 'что с комнатой?' };
+  it('requests.submit: id разговора, сессии и делегации, текст; origin клиент не задаёт', () => {
+    const schema = METHODS['requests.submit'];
+    expect(schema.safeParse(submit).success).toBe(true);
+    expect(schema.safeParse({ ...submit, turnId: 't1', context: { recent: [] }, transcriptPartial: true }).success).toBe(true);
+    expect(schema.safeParse({ ...submit, origin: 'mobile' }).success).toBe(false);
+    expect(schema.safeParse({ ...submit, text: '' }).success).toBe(false);
+    expect(schema.safeParse({ ...submit, delegationId: '' }).success).toBe(false);
+    expect(schema.safeParse({ ...submit, conversationId: undefined }).success).toBe(false);
+  });
+  it('requests.list и requests.ack: потребитель обязателен, ревизия целая', () => {
+    expect(METHODS['requests.list'].safeParse({ conversationId: 'c1', consumer: 'island-voice' }).success).toBe(true);
+    expect(METHODS['requests.list'].safeParse({ conversationId: 'c1' }).success).toBe(false);
+    expect(METHODS['requests.ack'].safeParse({ requestId: 'r1', consumer: 'x', revision: 3 }).success).toBe(true);
+    expect(METHODS['requests.ack'].safeParse({ requestId: 'r1', consumer: 'x', revision: -1 }).success).toBe(false);
+  });
+  it('телефону requests.* недоступны: remote по-прежнему шлёт только jobs.submit с origin mobile', () => {
+    for (const name of ['requests.submit', 'requests.list', 'requests.ack']) expect((REMOTE_METHODS as readonly string[]).includes(name), name).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, Notificatio
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { Jobs } from '../assistant/jobs.js';
+import type { Requests } from '../assistant/requests.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { CapacityFeed } from '../capacity/capacity-feed.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -40,6 +41,7 @@ import type { WorktreeSweeper } from '../worktrees/worktree-sweeper.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createAssistantHandlers } from './assistant.js';
+import { createRequestHandlers } from './requests.js';
 import { createVoiceHandlers, type VoiceDeps } from './voice.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
@@ -154,6 +156,8 @@ export interface MethodDeps {
   assistant?: AssistantService;
   /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */
   assistantJobs?: Jobs;
+  /** Request голосовых поручений (T2): `requests.*`, только локальные; без них методов нет. */
+  assistantRequests?: Requests;
   /** Голосовая сессия GPT-Live и расход (план голоса, B3); без неё методов `voice.*` у хоста нет. */
   voice?: VoiceDeps;
   /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
@@ -263,6 +267,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant, deps.assistantJobs)),
     ...createVoiceHandlers(deps.assistantJobs, deps.voice),
+    ...createRequestHandlers(deps.assistantRequests),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
     ...createVoiceProviderHandlers(),
     // Очередь запусков — из снимка работ: метод в `WORKS_GATED_METHODS`.

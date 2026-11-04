@@ -230,6 +230,35 @@ const SCHEMA_ASSISTANT_CONVERSATIONS = `
     UNIQUE(conversation_id, turn_key, role));
 `;
 
+/**
+ * Request голосовых поручений (спека 2026-11-04 «Голос↔Ассистент», §4, T2): строка на поручение. `origin_key` уникален
+ * (из исходных voiceSessionId + delegationId, после восстановления не меняется), `job_id` уникален: на Request ровно один
+ * job. `seq` растёт в разговоре, `version` — своя, не ревизия job. `assistant_request_deliveries` — устойчивые отметки
+ * доставки итога потребителю: `job_revision` — ревизия финального состояния job, которую он получил.
+ */
+const SCHEMA_ASSISTANT_REQUESTS = `
+  CREATE TABLE IF NOT EXISTS assistant_requests (
+    request_id TEXT PRIMARY KEY,
+    origin_key TEXT NOT NULL UNIQUE,
+    conversation_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    context_json TEXT,
+    job_id TEXT NOT NULL UNIQUE,
+    superseded_by TEXT,
+    transcript_partial INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(conversation_id, seq));
+  CREATE TABLE IF NOT EXISTS assistant_request_deliveries (
+    request_id TEXT NOT NULL REFERENCES assistant_requests(request_id) ON DELETE CASCADE,
+    consumer TEXT NOT NULL,
+    job_revision INTEGER NOT NULL,
+    delivered_at INTEGER NOT NULL,
+    PRIMARY KEY (request_id, consumer));
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -274,6 +303,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   { version: 7, up: (db) => db.exec(SCHEMA_VOICE_USAGE) },
   // 8: долговечные разговоры помощника (спека 2026-11-03, C1).
   { version: 8, up: (db) => db.exec(SCHEMA_ASSISTANT_CONVERSATIONS) },
+  // 9: Request голосовых поручений и отметки доставки (спека 2026-11-04, T2).
+  { version: 9, up: (db) => db.exec(SCHEMA_ASSISTANT_REQUESTS) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
