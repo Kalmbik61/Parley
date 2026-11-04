@@ -42,7 +42,8 @@ export default function Diagnostics() {
       {DEV_BUILD && (
         <Section header="Developer build" footer="A20 item 16: crypto speed of this phone.">
           <Row title="Crypto bench" right="chevron" onPress={() => router.push('/bench')} />
-          <Row last title="Dictation check" right="chevron" onPress={() => router.push('/dictation-check')} />
+          <Row title="Dictation check" right="chevron" onPress={() => router.push('/dictation-check')} />
+          <Row last title="Voice loopback" right="chevron" onPress={() => router.push('/voice-loopback')} />
         </Section>
       )}
       <View style={{ marginHorizontal: 16 }}>

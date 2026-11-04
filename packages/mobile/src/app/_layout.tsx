@@ -40,6 +40,7 @@ export default function RootLayout() {
       <Stack.Screen name="md" options={{ headerShown: false }} />
       <Stack.Screen name="bench" options={{ title: 'Crypto bench' }} />
       <Stack.Screen name="dictation-check" options={{ title: 'Dictation check', headerBackTitle: 'Diagnostics' }} />
+      <Stack.Screen name="voice-loopback" options={{ title: 'Voice loopback', headerBackTitle: 'Diagnostics' }} />
       <Stack.Screen name="new" options={{ presentation: 'modal', headerBackVisible: false }} />
       <Stack.Screen
         name="pair"

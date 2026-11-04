@@ -68,6 +68,9 @@ const config: ExpoConfig = {
       'expo-speech-recognition',
       { microphonePermission: MICROPHONE_TEXT, speechRecognitionPermission: SPEECH_TEXT },
     ],
+    // B1 voice: the WebRTC plugin takes its microphone text from the one above and keeps the camera text of expo-camera.
+    ['@config-plugins/react-native-webrtc', { microphonePermission: MICROPHONE_TEXT }],
+    'expo-font',
     'expo-secure-store',
     [
       'expo-local-authentication',
