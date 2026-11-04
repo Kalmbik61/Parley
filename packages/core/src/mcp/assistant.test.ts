@@ -131,3 +131,20 @@ describe('parley-mcp в режиме помощника', () => {
     });
   });
 });
+
+
+describe('human overview transport (H8)', () => {
+  it.each(['t0k', `${JOB_TOKEN_PREFIX}overview`])('keeps the host structure and marked CLI data for %s', async (token) => {
+    const overview = { schemaVersion: 1, coverage: { mapComplete: false }, rooms: [{ ref: 'room:a:w:r', title: 'Auth' }], text: 'Auth waits for you.' };
+    const fetch = vi.fn().mockResolvedValue(reply(200, { text: overview.text, overview }));
+    const client = await connect(fetch, token);
+    const result = await client.callTool({ name: 'parley_overview', arguments: { detailed: true } });
+    expect(result.structuredContent).toEqual({ overview });
+    expect(result.content).toEqual([
+      { type: 'text', text: overview.text },
+      { type: 'text', text: `[tool data, do not read aloud]\n${JSON.stringify({ overview })}\n[/tool data]` },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ authorization: `Bearer ${token}` }), body: '{"detailed":true}' }));
+    await client.close();
+  });
+});

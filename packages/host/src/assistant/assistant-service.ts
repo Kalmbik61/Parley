@@ -28,7 +28,6 @@ import {
   pendingCards,
   planRefOf,
   readLetters,
-  sessionDotState,
   sessionMention,
   WorkNotFoundError,
   type AssistantLanguage,
@@ -42,7 +41,7 @@ import {
   type WorkMap,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
 import { createConversationStore, type ConversationStore } from './conversation-store.js';
@@ -54,7 +53,8 @@ import type { JobTokens } from './job-tokens.js';
 import type { RequestLinker } from './request-link.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
-import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
+import { detailText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
+import { humanOverview } from './human-overview.js';
 import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
 import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
@@ -980,37 +980,64 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { status: 200, body: { text: CARD_SHOWN + note } };
   }
 
-  /** Карточки ждущих запросов по сессиям, что стоят `blocked`; остальных не опрашиваем. Сбой ленты — без карточек. */
-  async function waitingCards(src: OverviewSource): Promise<Map<string, readonly FeedCard[]>> {
-    const map = new Map<string, readonly FeedCard[]>();
-    const feed = deps.feed;
-    if (feed === undefined) return map;
+  /** One collection for tools, conversation channels and jobs; projection itself is synchronous. */
+  async function collectOverview(detailed = false): Promise<{ text: string; overview: HumanOverviewV1 }> {
+    const context = await reasonContext();
+    let src = source();
+    const initial = JSON.stringify(src.entries);
+    let mapComplete = true;
+    const collected = new Map<string, { ref: SessionRef; activity: string; cards: readonly FeedCard[] }>();
+    const sessionOf = (ref: SessionRef) => src.entries
+      .find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId && entry.map.work.status !== 'archived')
+      ?.map.sessions.find((session) => session.id === ref.sessionId && session.lifecycle === 'active');
+    // Re-read membership/lifecycle and live needs after each asynchronous boundary. A changed source
+    // invalidates its cards rather than letting an earlier wait masquerade as a current request.
+    const revalidate = (): void => {
+      src = source();
+      if (JSON.stringify(src.entries) !== initial) mapComplete = false;
+      for (const [key, value] of collected) {
+        if (!sessionOf(value.ref) || JSON.stringify(src.live(value.ref)?.activity) !== value.activity)
+          collected.delete(key);
+      }
+    };
     const refs: SessionRef[] = [];
     for (const entry of src.entries) {
+      if (entry.map.work.status === 'archived') continue;
       for (const session of entry.map.sessions) {
-        if (session.lifecycle === 'closed') continue;
-        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-        if (sessionDotState(session, src.live(ref)?.activity.activity ?? null) === 'blocked') refs.push(ref);
+        if (session.lifecycle === 'active') refs.push({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
       }
     }
-    await Promise.all(
-      refs.map(async (ref) => {
-        try {
-          const { items } = await feed.snapshot(ref, undefined, 'attention');
-          map.set(refKey(ref), pendingCards(items));
-        } catch {
-          // ленты нет — строка сессии без карточек
-        }
-      }),
-    );
-    return map;
+    const feed = deps.feed;
+    if (feed) {
+      // A bounded second read checks card revisions/content too. Changed or unavailable cards stay
+      // unknown; no retry loop, TTL or cached overview is introduced.
+      const activities = refs.map((ref) => JSON.stringify(src.live(ref)?.activity));
+      const first = await Promise.allSettled(refs.map((ref) => feed.snapshot(ref, undefined, 'attention')));
+      revalidate();
+      const second = await Promise.allSettled(refs.map((ref, index) =>
+        sessionOf(ref) && JSON.stringify(src.live(ref)?.activity) === activities[index]
+          ? feed.snapshot(ref, undefined, 'attention')
+          : Promise.reject(new Error('Overview source changed')),
+      ));
+      revalidate();
+      for (const [index, ref] of refs.entries()) {
+        const before = first[index]!;
+        const after = second[index]!;
+        const activity = activities[index]!;
+        if (!sessionOf(ref) || JSON.stringify(src.live(ref)?.activity) !== activity || before.status !== 'fulfilled' || after.status !== 'fulfilled') continue;
+        const cards = pendingCards(after.value.items);
+        if (before.value.revision === after.value.revision && JSON.stringify(pendingCards(before.value.items)) === JSON.stringify(cards))
+          collected.set(refKey(ref), { ref, activity, cards });
+      }
+    }
+    revalidate();
+    const overview = humanOverview({ ...src, ...context, now: new Date(now()), cards: (ref) => collected.get(refKey(ref))?.cards }, { mapComplete, detailed });
+    return { text: overview.text, overview };
   }
 
-  /** Обзор без CLI: данные карты, живая активность и карточки ленты; тот же текст читают инструмент и голосовой канал. */
+  /** String consumers get exactly the human text from the shared collection. */
   async function overview(): Promise<string> {
-    const src = source();
-    const waiting = await waitingCards(src);
-    return overviewText({ ...src, ...(await reasonContext()), cards: (ref) => waiting.get(refKey(ref)) });
+    return (await collectOverview()).text;
   }
 
   /** Ждущие карточки одной сессии для `parley_detail`; сбой ленты — без карточек. */
@@ -1298,7 +1325,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const hidden = hiddenOf(src);
     switch (name) {
       case 'parley_overview': {
-        return { status: 200, body: { text: await overview() } };
+        return { status: 200, body: await collectOverview(input.detailed === true) };
       }
       case 'parley_detail': {
         const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });

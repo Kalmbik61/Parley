@@ -19,6 +19,7 @@ import {
   parseCodexLine,
   type ProviderEntry,
 } from '@parley/core';
+import { normalizeHumanText } from '@parley/core/assistant';
 import type { JobTokens } from './job-tokens.js';
 import type { Job, JobEnd, JobResult, JobRun } from './jobs.js';
 import { runTurn, type TurnHandle, type TurnSpec } from './turn.js';
@@ -120,7 +121,7 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
         const record = deps.tokens.peek(job.jobId);
         const resultOf = (answer: string): JobResult => ({ answer, capturedAt: now(), cards: record.cards, toolRefs: record.toolRefs });
         if (end.ok) {
-          const answer = text.trim().slice(0, 2000);
+          const answer = normalizeHumanText(text, {}).slice(0, 2000);
           // Пустой ответ без карточек не «готов»; с карточкой ответ — сама карточка.
           if (answer === '' && record.cards.length === 0) return { ok: false, kind: 'other', message: 'The run finished without a reply' };
           // Карточки записал хост: заявленное без карточки действие — не исполнение.

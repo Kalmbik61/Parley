@@ -298,3 +298,20 @@ describe('job executor', () => {
     expect(JOB_PROMPT).toContain('Request ids are only for link_request');
   });
 });
+
+
+it('H11: normalizes the final human job answer before summary and result storage', async () => {
+  const { execute } = setup({ ok: true }, {
+    text: '[[calm]] s-257 @s123 room:abc:w-123:r-123 r-123 work:abc:w-123 w-123 session:abc:w-123:s-257 works-123 S256abc.',
+    during: (tokens, token) => {
+      tokens.recordTool(tokens.jobOf(token)!, 'parley_overview', true);
+      tokens.recordCard(tokens.jobOf(token)!, { cardId: 'p3', kind: 'message' });
+    },
+  });
+  const end = await execute(job).done;
+  expect(end).toMatchObject({ ok: true, result: { cards: [{ cardId: 'p3', kind: 'message' }], toolRefs: [{ tool: 'parley_overview', ok: true, at: 1 }] } });
+  if (!end.ok) throw new Error('Expected completed job');
+  expect(end.summary).toBe(end.result.answer);
+  expect(end.summary).not.toMatch(/\[\[|s-257|@s123|room:|r-123|work:|w-123|session:/);
+  expect(end.summary).toContain('works-123 S256abc.');
+});

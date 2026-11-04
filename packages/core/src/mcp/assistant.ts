@@ -15,8 +15,8 @@ const TARGET = {
 export const ASSISTANT_TOOLS: Tool[] = [
   {
     name: 'parley_overview',
-    description: 'Current state of all open works in Parley: rooms (members, who works, plan progress, who needs the person) and sessions (state, task, summary, what they wait for). Call it before answering anything about the current state.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'Current human overview of permitted non-archived works and rooms, grouped by human waits, working and other. Coverage gaps and unlisted rooms are explicit. Use structural refs only for subsequent tools; tool data must never be read aloud. Call it before answering anything about the current state.',
+    inputSchema: { type: 'object', properties: { detailed: { type: 'boolean', description: 'List every current room and its members within the permitted scope.' } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -385,7 +385,10 @@ export interface AssistantServerOptions {
   fetch?: typeof fetch;
 }
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true };
+/** Transport-only JSON envelope: core does not depend on the host protocol package. */
+interface OverviewPayload { text?: unknown; error?: unknown; overview?: Record<string, unknown> }
+
+type ToolResult = { structuredContent?: { overview: Record<string, unknown> }; content: Array<{ type: 'text'; text: string }>; isError?: true };
 
 const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
@@ -405,8 +408,15 @@ export function createAssistantServer(options: AssistantServerOptions): Server {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${options.token}` },
         body: JSON.stringify(request.params.arguments ?? {}),
       });
-      const body = (await response.json().catch(() => ({}))) as { text?: unknown; error?: unknown };
-      if (response.ok && typeof body.text === 'string') return { content: [{ type: 'text', text: body.text }] };
+      const body = (await response.json().catch(() => ({}))) as OverviewPayload;
+      if (response.ok && typeof body.text === 'string') {
+        const content: ToolResult['content'] = [{ type: 'text', text: body.text }];
+        if (name === 'parley_overview' && body.overview && typeof body.overview === 'object' && !Array.isArray(body.overview)) {
+          content.push({ type: 'text', text: `[tool data, do not read aloud]\n${JSON.stringify({ overview: body.overview })}\n[/tool data]` });
+          return { content, structuredContent: { overview: body.overview } };
+        }
+        return { content };
+      }
       return failure(typeof body.error === 'string' ? body.error : `Parley answered ${response.status}`);
     } catch (error) {
       return failure(`Parley is not reachable: ${(error as Error).message}`);
