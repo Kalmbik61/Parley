@@ -83,7 +83,7 @@ import { createRootsRegistry, createSyncRootsRegistry, worktreeRootPolicy, type 
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
-import { createRemoteLauncher, bridgePaths, resolveBridgeEntry } from './remote-launcher.js';
+import { createRemoteLauncher, bridgeEntryVersion, bridgePaths, resolveBridgeEntry } from './remote-launcher.js';
 import { createRemoteService, registerRemoteIpc } from './remote-ipc.js';
 import { createPhoneActionNotifier } from './phone-actions.js';
 import { createAppRelaySetup, fakeSshModulePath, loadFakeSsh, registerRelaySetupIpc } from './relay-setup/ipc.js';
@@ -941,6 +941,15 @@ if (!gotLock) {
       onPhoneAction: (data) => phoneActions.handle(data),
       launcher: createRemoteLauncher({
         paths: bridge,
+        expectedVersion: () => {
+          // An overridden entry (the e2e stub) has its own version: no check.
+          if (switches.bridgeEntry) return null;
+          try {
+            return bridgeEntryVersion(resolveBridgeEntry({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }));
+          } catch {
+            return null;
+          }
+        },
         spawn: async () => {
           const nodeBin = await resolveNodeBin(shellEnv.env, { packaged: app.isPackaged, resourcesPath: process.resourcesPath });
           if (nodeBin === null) return null;

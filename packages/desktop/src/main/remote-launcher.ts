@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -38,6 +39,21 @@ export function bridgePaths(home: string = parleyHome()): BridgePaths {
 export function resolveBridgeEntry(options: { packaged: boolean; resourcesPath: string }): string {
   if (options.packaged) return path.join(options.resourcesPath, 'remote', 'dist', 'main.js');
   return require.resolve('@parley/remote/main');
+}
+
+/**
+ * Version of the bridge that `entry` would start: the `package.json` one level above the entry's folder, the file the
+ * bridge itself reads in `bridgeVersion()`. Reading the bundle (not `app.getVersion()`) compares like with like for the
+ * packaged app and the workspace package. An overridden entry (`PARLEY_BRIDGE_ENTRY`, e.g. the e2e stub, which reports
+ * its own version) is not checked by the caller. `null` — unreadable, the launcher then keeps a running bridge.
+ */
+export function bridgeEntryVersion(entry: string): string | null {
+  try {
+    const version = (JSON.parse(readFileSync(path.join(path.dirname(entry), '..', 'package.json'), 'utf8')) as { version?: unknown }).version;
+    return typeof version === 'string' ? version.slice(0, 64) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** What the launcher needs to find and end a bridge it has no control socket to (spec 5.1: the bridge outlives the window). */
@@ -88,6 +104,9 @@ export interface RemoteLauncherOptions {
   killGraceMs?: number;
   startTimeoutMs?: number;
   pollMs?: number;
+  /** Version the launcher would start; a running bridge reporting another one (or none) is replaced once. `null`/absent — no check. */
+  expectedVersion?: () => string | null;
+  log?: (message: string) => void;
 }
 
 export interface RemoteLauncher {
@@ -110,6 +129,8 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
   const killGraceMs = options.killGraceMs ?? 3000;
   let spawned: SpawnedHost | null = null;
   let starting: Promise<void> | null = null;
+  let restarted = false;
+  const log = options.log ?? ((message: string) => console.log(`[parley] ${message}`));
 
   async function tryConnect(): Promise<boolean> {
     try {
@@ -120,8 +141,61 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
     }
   }
 
+  /** Version of the connected bridge: a string, `undefined` — status succeeded without one, `null` — the call failed. */
+  async function runningVersion(): Promise<string | undefined | null> {
+    try {
+      const status = (await client.call('status')) as { version?: unknown } | null;
+      return typeof status?.version === 'string' ? status.version : undefined;
+    } catch {
+      return null;
+    }
+  }
+
+  /** SIGTERM, then SIGKILL after the grace period, for a pid that is really a bridge. */
+  async function killByPid(pid: number): Promise<void> {
+    if (!(await processes.isBridge(pid))) return;
+    processes.signal(pid, 'SIGTERM');
+    const deadline = Date.now() + killGraceMs;
+    while (processes.alive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
+    if (!processes.alive(pid)) return;
+    processes.signal(pid, 'SIGKILL');
+    // A killed bridge never releases `bridge.pid`: the next one must not start while the pid is still there.
+    const killDeadline = Date.now() + killGraceMs;
+    while (processes.alive(pid) && Date.now() < killDeadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  /** Ends the bridge the window is connected to and waits until it is gone; falls back to the pid like `stop()`. */
+  async function replaceRunning(): Promise<void> {
+    const pid = await processes.readPid();
+    try {
+      await client.call('stop');
+    } catch {
+      // The bridge may close the socket while stopping.
+    }
+    client.close();
+    const deadline = Date.now() + killGraceMs;
+    while (Date.now() < deadline && (await tryConnect())) {
+      client.close();
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+    client.close();
+    if (pid !== null && processes.alive(pid)) await killByPid(pid);
+  }
+
   async function doStart(): Promise<void> {
-    if (client.isConnected() || (await tryConnect())) return;
+    if (client.isConnected() || (await tryConnect())) {
+      const expected = options.expectedVersion?.() ?? null;
+      if (expected === null || restarted) return;
+      const running = await runningVersion();
+      if (running === null) {
+        log('could not read the version of the running bridge; keeping it');
+        return;
+      }
+      if (running === expected) return;
+      restarted = true;
+      log(`restarting the bridge after an update: running ${running ?? 'no version reported'}, app ${expected}`);
+      await replaceRunning();
+    }
     // A process started earlier and still alive is given time instead of a second one (like the host).
     if (!spawned?.isRunning()) {
       spawned = await options.spawn();
@@ -130,7 +204,14 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, pollMs));
-      if (await tryConnect()) return;
+      if (await tryConnect()) {
+        const expected = options.expectedVersion?.() ?? null;
+        if (restarted && expected !== null) {
+          const running = await runningVersion();
+          if (running !== expected) log(`warning: the restarted bridge reports ${running ?? 'no version'}, app ${expected}; keeping it`);
+        }
+        return;
+      }
       if (!spawned.isRunning()) break;
     }
     throw new Error('The bridge did not start');
@@ -159,11 +240,7 @@ export function createRemoteLauncher(options: RemoteLauncherOptions): RemoteLaun
       }
       client.close();
       const pid = await processes.readPid();
-      if (pid === null || !(await processes.isBridge(pid))) return;
-      processes.signal(pid, 'SIGTERM');
-      const deadline = Date.now() + killGraceMs;
-      while (processes.alive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
-      if (processes.alive(pid)) processes.signal(pid, 'SIGKILL');
+      if (pid !== null) await killByPid(pid);
     },
     detach() {
       client.close();
