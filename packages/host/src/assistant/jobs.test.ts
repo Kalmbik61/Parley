@@ -248,4 +248,12 @@ describe('assistant jobs', () => {
     await settled();
     expect(jobs.getJob(jobId)?.result).toBeNull();
   });
+
+  it('cancel идущего job сохраняет карточки, что он успел подготовить: состояние cancelled, result с карточками', async () => {
+    const partial: JobResult = { answer: '', capturedAt: 3, cards: [{ cardId: 'p9', kind: 'message' }], toolRefs: [] };
+    const { jobs, submit, execute } = setup();
+    execute.mockImplementationOnce(() => ({ cancel: () => {}, partial: () => partial, done: new Promise<JobEnd>(() => {}) }));
+    const { jobId } = submit('k-cancel');
+    expect(jobs.cancelJob(jobId)).toMatchObject({ state: 'cancelled', result: partial });
+  });
 });

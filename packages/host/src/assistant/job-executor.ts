@@ -59,7 +59,7 @@ export interface JobExecutorDeps {
   /** Создаёт рабочую папку перед запуском (без неё spawn падает с ENOENT); по умолчанию `mkdir -p`. */
   ensureDir?(dir: string): Promise<void>;
   /** Токены job и записи хоста о его вызовах и карточках. */
-  tokens: Pick<JobTokens, 'issue' | 'revoke' | 'take'>;
+  tokens: Pick<JobTokens, 'issue' | 'revoke' | 'peek' | 'take'>;
   /** База маршрута помощника (`<origin>/assistant`); `null` — сервер хуков ещё не поднят. */
   endpointUrl(): string | null;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
@@ -114,17 +114,23 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
           },
         );
         const end = await handle.done;
+        const record = deps.tokens.peek(job.jobId);
+        const resultOf = (answer: string): JobResult => ({ answer, capturedAt: now(), cards: record.cards, toolRefs: record.toolRefs });
         if (end.ok) {
           const answer = text.trim().slice(0, 2000);
-          if (answer === '') return { ok: false, kind: 'other', message: 'The run finished without a reply' };
-          const record = deps.tokens.take(job.jobId);
-          const result: JobResult = { answer, capturedAt: now(), cards: record.cards, toolRefs: record.toolRefs };
+          // Пустой ответ без карточек не «готов»; с карточкой ответ — сама карточка.
+          if (answer === '' && record.cards.length === 0) return { ok: false, kind: 'other', message: 'The run finished without a reply' };
           // Карточки записал хост: заявленное без карточки действие — не исполнение.
-          const outcome = result.cards.length === 0 && claimsDoneAction(answer) ? 'needs_confirmation' : 'completed';
-          return { ok: true, summary: answer, result, outcome };
+          const outcome = record.cards.length === 0 && claimsDoneAction(answer) ? 'needs_confirmation' : 'completed';
+          return { ok: true, summary: answer, result: resultOf(answer), outcome };
         }
         // Лимит узнаётся и по тексту: job в этом случае возвращается в очередь, а не падает.
         const kind = end.kind === 'other' ? classifyAssistantError(end.message) : end.kind;
+        // Карточка уже показана человеку: повтор прогона подготовил бы вторую такую же (повтор действия запрещён),
+        // поэтому сбой после карточки не уходит ни в повтор, ни в failed, а ждёт человека.
+        if (kind !== 'cancelled' && record.cards.length > 0) {
+          return { ok: true, summary: `The run ended (${kind}) after preparing a card: ${end.message}`.slice(0, 2000), result: resultOf(''), outcome: 'needs_confirmation' };
+        }
         return { ok: false, kind, message: end.message };
       } finally {
         // Токен действует, пока идёт прогон: дальше маршруты помощника отвечают ему 401.
@@ -138,6 +144,10 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
         cancelled = true;
         deps.tokens.revoke(job.jobId);
         handle?.cancel();
+      },
+      partial: () => {
+        const record = deps.tokens.peek(job.jobId);
+        return record.cards.length === 0 && record.toolRefs.length === 0 ? null : { answer: '', capturedAt: now(), cards: record.cards, toolRefs: record.toolRefs };
       },
       done,
     };

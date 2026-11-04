@@ -112,7 +112,64 @@ describe('job executor', () => {
     }
   });
 
-  it('пустой ответ — не готовый ответ: job failed (other), а не completed', async () => {
+  const propose = (tokens: JobTokens, token: string): void => {
+    const jobId = tokens.jobOf(token)!;
+    tokens.recordTool(jobId, 'propose_message', true);
+    tokens.recordCard(jobId, { cardId: 'p7', kind: 'message' });
+  };
+
+  it('лимит после карточки: повтора нет, needs_confirmation, карточка в result', async () => {
+    const { execute } = setup({ ok: false, kind: 'limit', message: 'You hit your limit' }, { text: '', during: propose });
+    const end = await execute(job).done;
+    expect(end).toMatchObject({ ok: true, outcome: 'needs_confirmation', result: { answer: '', cards: [{ cardId: 'p7', kind: 'message' }] } });
+    if (end.ok) expect(end.summary).toContain('limit');
+  });
+
+  it('timeout и сбой после карточки — тоже needs_confirmation с карточкой', async () => {
+    for (const failure of [{ ok: false, kind: 'timeout', message: 'too slow' }, { ok: false, kind: 'other', message: 'crash' }] as const) {
+      const { execute } = setup(failure, { text: '', during: propose });
+      await expect(execute(job).done).resolves.toMatchObject({ ok: true, outcome: 'needs_confirmation', result: { cards: [{ cardId: 'p7' }] } });
+    }
+  });
+
+  it('сбой без карточек остаётся сбоем: лимит возвращается в очередь, прочее failed', async () => {
+    const { execute } = setup({ ok: false, kind: 'limit', message: 'You hit your limit' }, { text: '' });
+    await expect(execute(job).done).resolves.toMatchObject({ ok: false, kind: 'limit' });
+  });
+
+  it('пустой ответ с карточкой — completed с answer пустым', async () => {
+    const { execute } = setup({ ok: true }, { text: '', during: propose });
+    await expect(execute(job).done).resolves.toMatchObject({ ok: true, outcome: 'completed', summary: '', result: { answer: '', cards: [{ cardId: 'p7' }] } });
+  });
+
+  it('cancel после карточки: partial() отдаёт карточки, прогон кончается cancelled', async () => {
+    const noop = () => {};
+    let release: (end: TurnEnd) => void = noop;
+    const tokens = createJobTokens(() => 1);
+    const execute = createJobExecutor({
+      providers: async () => ({ claude: entry }),
+      ready: async () => null,
+      launchEnv: async () => ({}),
+      binary: async (command) => command,
+      cwd,
+      endpointUrl: () => 'http://127.0.0.1:9/assistant',
+      tokens,
+      now: () => 9,
+      run: ((spec: TurnSpec) => {
+        const config = readFileSync(spec.args[spec.args.indexOf('--mcp-config') + 1]!, 'utf8');
+        propose(tokens, config.match(/job_[0-9a-f]+/)![0]);
+        return { cancel: () => release({ ok: false, kind: 'cancelled', message: 'cancelled' }), done: new Promise<TurnEnd>((resolve) => (release = resolve)) };
+      }) as unknown as JobExecutorDeps['run'],
+    });
+    const run = execute(job);
+    await vi.waitFor(() => expect(release).not.toBe(noop));
+    const partial = run.partial!();
+    run.cancel();
+    expect(partial).toEqual({ answer: '', capturedAt: 9, cards: [{ cardId: 'p7', kind: 'message' }], toolRefs: [{ tool: 'propose_message', ok: true, at: 1 }] });
+    await expect(run.done).resolves.toMatchObject({ ok: false, kind: 'cancelled' });
+  });
+
+  it('пустой ответ без карточек — не готовый ответ: job failed (other), а не completed', async () => {
     const { execute } = setup({ ok: true }, { text: '   ' });
     await expect(execute(job).done).resolves.toEqual({ ok: false, kind: 'other', message: 'The run finished without a reply' });
   });

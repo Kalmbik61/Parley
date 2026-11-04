@@ -54,6 +54,8 @@ export type JobEnd =
 
 export interface JobRun {
   cancel(): void;
+  /** Что job успел подготовить к этому моменту (карточки и вызовы хоста); `null` — ничего. Нужен отмене. */
+  partial?(): JobResult | null;
   readonly done: Promise<JobEnd>;
 }
 
@@ -279,7 +281,9 @@ export function createJobs(deps: JobsDeps): Jobs {
     getJob: get,
     cancelJob(jobId) {
       const run = runs.get(jobId);
-      const job = move(jobId, ['queued', 'needs_confirmation'], 'cancelled') ?? (run === undefined ? null : move(jobId, ['running'], 'cancelled'));
+      // Карточки, что job уже показал человеку, остаются в итоге отменённого job: их можно найти и отозвать.
+      const partial = run?.partial?.() ?? null;
+      const job = move(jobId, ['queued', 'needs_confirmation'], 'cancelled') ?? (run === undefined ? null : move(jobId, ['running'], 'cancelled', null, partial));
       if (job !== null) {
         runs.delete(jobId);
         run?.cancel();

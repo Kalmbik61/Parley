@@ -50,4 +50,13 @@ describe('токены job', () => {
     tokens.recordCard('job-a', { cardId: 'p1', kind: 'message' });
     expect(tokens.take('job-a')).toEqual({ cards: [], toolRefs: [] });
   });
+
+  it('peek читает записи, не забирая их', () => {
+    const tokens = createJobTokens(() => 5);
+    tokens.issue('job-a');
+    tokens.recordCard('job-a', { cardId: 'p1', kind: 'message' });
+    expect(tokens.peek('job-a').cards).toHaveLength(1);
+    expect(tokens.peek('job-a').cards).toHaveLength(1);
+    expect(tokens.take('job-a').cards).toHaveLength(1);
+  });
 });

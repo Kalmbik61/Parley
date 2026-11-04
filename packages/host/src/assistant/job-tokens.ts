@@ -36,6 +36,8 @@ export interface JobTokens {
   jobOf(token: string): string | null;
   recordTool(jobId: string, tool: string, ok: boolean): void;
   recordCard(jobId: string, card: JobCardRef): void;
+  /** Записи о job без изъятия (для отмены, которая снимает итог до конца прогона). */
+  peek(jobId: string): JobRecord;
   /** Записи о job; забирает их: повторный вызов вернёт пусто. */
   take(jobId: string): JobRecord;
 }
@@ -76,6 +78,10 @@ export function createJobTokens(now: () => number = Date.now): JobTokens {
     recordCard(jobId, card) {
       if (!byJob.has(jobId)) return;
       recordOf(jobId).cards.push(card);
+    },
+    peek(jobId) {
+      const record = records.get(jobId);
+      return record === undefined ? { cards: [], toolRefs: [] } : { cards: [...record.cards], toolRefs: [...record.toolRefs] };
     },
     take(jobId) {
       const record = records.get(jobId) ?? { cards: [], toolRefs: [] };
