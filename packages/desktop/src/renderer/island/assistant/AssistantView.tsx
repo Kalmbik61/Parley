@@ -63,7 +63,16 @@ export interface AssistantViewProps {
   speakOn: boolean;
   onToggleSpeak(): void;
   /** Live-голос (T3): кнопка рядом с микрофоном; нет — режима нет, остаётся пошаговый голос. */
-  live?: { phase: 'idle' | 'connecting' | 'live' | 'closing'; humanSpeaking: boolean; modelPlaying: boolean; notice: string | null; onToggle(): void };
+  live?: {
+    phase: 'idle' | 'connecting' | 'live' | 'closing';
+    humanSpeaking: boolean;
+    modelPlaying: boolean;
+    notice: string | null;
+    onToggle(): void;
+    /** Итоги поручений голоса (T4): карточка с текстом или «удержан» (уточнение поручения). */
+    results?: ReadonlyArray<{ requestId: string; text: string; kind: 'card' | 'held' }>;
+    onDismissResult?(requestId: string): void;
+  };
   onDraft(text: string): void;
   onSubmit(text: string): void;
   onMic(): void;
@@ -437,6 +446,22 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             {props.live.notice}
           </div>
         )}
+        {(props.live?.results ?? []).map((result) => (
+          <div key={result.requestId} data-testid={`assistant-live-result-${result.kind}`} className="flex items-start gap-2 text-[13px] text-muted-foreground">
+            <span className="min-w-0 flex-1">{result.kind === 'held' ? S.assistant.live.resultHeld : `${S.assistant.live.resultCard}: ${result.text}`}</span>
+            {result.kind === 'card' && props.live?.onDismissResult !== undefined ? (
+              <button
+                type="button"
+                aria-label={S.assistant.live.dismissResult}
+                className="shrink-0 cursor-pointer hover:text-foreground"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => props.live?.onDismissResult?.(result.requestId)}
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+        ))}
       </div>
       <form
         className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1"

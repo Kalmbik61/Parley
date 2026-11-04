@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import { S } from '../../../shared/strings.js';
 import type { LiveCallPhase, LiveController } from './controller.js';
+import type { LiveDelegation, LiveResultView } from './delegation.js';
 
 export interface LiveStoreState {
   phase: LiveCallPhase;
@@ -14,15 +15,21 @@ export interface LiveStoreState {
   /** Отказ запуска или причина неожиданного закрытия; `null` — сказать нечего. */
   notice: string | null;
   controller: LiveController | null;
+  /** Итоги поручений на экране: вышедшие карточкой и удержанные (T4). */
+  results: readonly LiveResultView[];
+  dismissResult(requestId: string): void;
   bind(controller: LiveController | null): () => void;
+  /** Подключает мост делегаций: стор отражает его итоги. Возврат — отключение. */
+  attachDelegation(delegation: LiveDelegation | null): () => void;
   toggle(): Promise<void>;
 }
 
-const INITIAL = { phase: 'idle', humanSpeaking: false, modelPlaying: false, notice: null } as const;
+const INITIAL = { phase: 'idle', humanSpeaking: false, modelPlaying: false, notice: null, results: [] } as const;
 
 export const useLiveStore = create<LiveStoreState>((set, get) => ({
   ...INITIAL,
   controller: null,
+  dismissResult: () => {},
 
   bind(controller) {
     get().controller?.dispose();
@@ -38,6 +45,21 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
       unsubscribe();
       if (get().controller === controller) set({ ...INITIAL, controller: null });
       controller.dispose();
+    };
+  },
+
+  attachDelegation(delegation) {
+    if (delegation === null) {
+      set({ results: [], dismissResult: () => {} });
+      return () => {};
+    }
+    const sync = (): void => set({ results: delegation.results() });
+    sync();
+    set({ dismissResult: (requestId) => delegation.dismiss(requestId) });
+    const unsubscribe = delegation.subscribe(sync);
+    return () => {
+      unsubscribe();
+      set({ results: [], dismissResult: () => {} });
     };
   },
 

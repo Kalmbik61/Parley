@@ -253,6 +253,12 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'voice.session.prepare',
   'voice.session.close',
   'voice.usage.get',
+  // Мост делегаций Live (T4): Request поручений, список недоставленных итогов (восстановление) и отметка доставки;
+  // `jobs.ackInline` — итог показан карточкой на острове (push на телефон не нужен).
+  'requests.submit',
+  'requests.list',
+  'requests.ack',
+  'jobs.ackInline',
 ]);
 
 /**
@@ -271,7 +277,12 @@ export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
   'consents.changed',
   'providers.changed',
   'voice.session.closed',
+  // Итог job готов или изменился: очередь речи Live перечитывает свои Request.
+  'assistant.job.changed',
 ]);
+
+/** Разговор острова для Request голосовых поручений (T4): один на остров, не зависит от голосовой сессии. */
+export const ISLAND_CONVERSATION_ID = 'island';
 
 /** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */
 export const ISLAND_MARK_SEEN_LIMIT = 50;

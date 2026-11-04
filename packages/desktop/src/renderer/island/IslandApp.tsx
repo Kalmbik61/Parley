@@ -78,6 +78,8 @@ import { createSpeaker } from './assistant/speaker.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
 import { createBrowserLiveDeps } from './live/browser.js';
 import { createLiveController } from './live/controller.js';
+import { createLiveDelegation } from './live/delegation.js';
+import { S } from '../../shared/strings.js';
 import { useLiveStore } from './live/store.js';
 import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
@@ -435,7 +437,31 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const live = useLiveStore();
   useEffect(() => {
     if (!connected) return;
-    return useLiveStore.getState().bind(createLiveController(createBrowserLiveDeps(bridge)));
+    const controller = createLiveController(createBrowserLiveDeps(bridge));
+    const unbind = useLiveStore.getState().bind(controller);
+    // Мост делегаций и очередь речи (T4): Request поручений, итоги в паузе, восстановление после обрыва.
+    const delegation = createLiveDelegation({
+      controller,
+      call: bridge.call,
+      onHostEvent: bridge.on,
+      now: Date.now,
+      setTimer: (callback, ms) => {
+        const id = setTimeout(callback, ms);
+        return () => clearTimeout(id);
+      },
+      setTick: (callback, ms) => {
+        const id = setInterval(callback, ms);
+        return () => clearInterval(id);
+      },
+      phrases: { detailsOnScreen: S.assistant.live.detailsOnScreen, clarifying: S.assistant.live.clarifying },
+      fallbackText: S.assistant.live.untranscribed,
+    });
+    const detach = useLiveStore.getState().attachDelegation(delegation);
+    return () => {
+      detach();
+      delegation.dispose();
+      unbind();
+    };
   }, [connected, bridge]);
   // Пока идёт Live, речь помощника (TTS) и пошаговая запись молчат; после остановки возвращаются.
   useEffect(() => {
@@ -811,7 +837,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           pulse: assistantPulse,
           speakOn: config.assistant.speech?.enabled === true,
           onToggleSpeak: () => useAssistantStore.getState().toggleSpeak(),
-          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle() },
+          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle(), results: live.results, onDismissResult: live.dismissResult },
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

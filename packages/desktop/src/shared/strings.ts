@@ -3002,6 +3002,15 @@ export const S = {
       failed: 'Live voice could not start. Text and push-to-talk still work.',
       closed: (reason: string): string =>
         reason === 'close_requested' ? 'Live voice ended.' : reason === 'expired' ? 'Live voice ended: the session expired.' : 'Live voice ended unexpectedly.',
+      /** Результаты поручений голоса: карточки на острове, пока голос ждёт паузу или итог не прозвучал. */
+      resultHeld: 'Clarifying your request — the earlier result is on hold.',
+      resultCard: 'Live result',
+      dismissResult: 'Dismiss result',
+      /** Реплики, которые остров добавляет в Live как `commentary.append`: модель говорит их на языке человека. */
+      detailsOnScreen: 'Details are on the screen.',
+      clarifying: 'Say one short sentence: you are clarifying the request.',
+      /** Текст Request, если речь совсем не распозналась (уходит агенту, не человеку). */
+      untranscribed: '(the spoken request was not transcribed)',
     },
     listening: 'Listening…',
     transcribing: 'Recognizing…',

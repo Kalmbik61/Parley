@@ -343,6 +343,14 @@ describe('SpeechQueue — несколько Request и сессии', () => {
     expect(items[1]).toMatchObject({ speech: 'queued', delegationId: null });
   });
 
+  it('привязка к делегации дописывается, если вид пришёл раньше моста', () => {
+    const h = setup();
+    h.queue.observe([h.result({ delegationId: null })]);
+    h.queue.observe([h.result({ delegationId: 'd1' })]);
+    h.advance(PAUSE_MS);
+    expect(h.sent[0]?.delegationId).toBe('d1');
+  });
+
   it('обновление ревизии ожидающего итога подменяет текст и ревизию', () => {
     const h = setup();
     h.queue.observe([h.result({ revision: 3, text: 'Old answer.' })]);

@@ -60,6 +60,33 @@ describe('useLiveStore', () => {
     expect(useLiveStore.getState().notice).toBe(S.assistant.live.closed('time_limit'));
   });
 
+  it('attachDelegation отражает итоги поручений и снимает их при отключении', () => {
+    let listener: (() => void) | null = null;
+    let current = [{ requestId: 'req-1', text: 'Rooms are quiet.', kind: 'card' as const }];
+    const dismiss = vi.fn();
+    const delegation = {
+      items: () => [],
+      results: () => current,
+      subscribe: (callback: () => void) => {
+        listener = callback;
+        return () => void (listener = null);
+      },
+      dismiss,
+      dispose: vi.fn(),
+    };
+    const detach = useLiveStore.getState().attachDelegation(delegation);
+    expect(useLiveStore.getState().results).toEqual(current);
+    current = [];
+    listener?.();
+    expect(useLiveStore.getState().results).toEqual([]);
+    useLiveStore.getState().dismissResult('req-1');
+    expect(dismiss).toHaveBeenCalledWith('req-1');
+    current = [{ requestId: 'req-2', text: 'x', kind: 'card' as const }];
+    listener?.();
+    detach();
+    expect(useLiveStore.getState().results).toEqual([]);
+  });
+
   it('без контроллера toggle ничего не делает; отвязка освобождает контроллер', async () => {
     await useLiveStore.getState().toggle();
     const { controller } = fakeController();

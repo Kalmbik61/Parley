@@ -218,6 +218,8 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
           changed = true;
         }
         if (existing.speech === 'queued') {
+          // Вид Request мог прийти раньше, чем мост узнал делегацию: привязка дописывается.
+          if (existing.delegationId === null && input.delegationId !== null) existing.delegationId = input.delegationId;
           // Уточнение вытеснило итог, пока он ждал: не озвучивается и не показывается (даже отменённым).
           if (input.stale) {
             existing.speech = 'dropped';

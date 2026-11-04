@@ -661,6 +661,28 @@ describe('Live-голос (T3)', () => {
     expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('T4: итог карточкой и удержанный итог показаны, карточку можно убрать', () => {
+    const onDismissResult = vi.fn();
+    render(
+      <AssistantView
+        {...props({
+          live: live({
+            phase: 'live',
+            results: [
+              { requestId: 'req-1', text: 'Two rooms are waiting.', kind: 'card' },
+              { requestId: 'req-2', text: '', kind: 'held' },
+            ],
+            onDismissResult,
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId('assistant-live-result-card').textContent).toContain('Two rooms are waiting.');
+    expect(screen.getByTestId('assistant-live-result-held').textContent).toBe(S.assistant.live.resultHeld);
+    fireEvent.click(screen.getByLabelText(S.assistant.live.dismissResult));
+    expect(onDismissResult).toHaveBeenCalledWith('req-1');
+  });
+
   it('пока идёт запись пошагового голоса, Live не запускается', () => {
     render(<AssistantView {...props({ input: 'listening', listenStartedAt: 0, live: live() })} />);
     expect((screen.getByTestId('assistant-live') as HTMLButtonElement).disabled).toBe(true);
