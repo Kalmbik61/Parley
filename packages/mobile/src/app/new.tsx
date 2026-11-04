@@ -3,9 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
+import { DictationStrip } from '../voice/DictationStrip';
+import { dictation } from '../voice/dictation';
+import { MicButton } from '../voice/MicButton';
+import { useDictationTarget } from '../voice/use-dictation-target';
 import { Toast, useToast } from '../components/Toast';
 import { ConnectionBanner } from '../components/ConnectionBanner';
-import { DEMO, DEV_FOCUS } from '../dev/flags';
+import { DEMO, DEV_FOCUS, DEV_VOICE } from '../dev/flags';
 import { touchAppLock } from '../auth/lock-instance';
 import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { KeyboardAvoider } from '../ui/KeyboardAvoider';
@@ -44,6 +48,7 @@ import { spacing, typography, useColors } from '../theme';
 import { barLeftText } from '../ui/bar';
 
 type Kind = 'session' | 'room';
+const TASK_DICTATION_ID = 'new-session-task';
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 export default function NewScreen() {
@@ -99,6 +104,15 @@ export default function NewScreen() {
   const [role, setRole] = useState<RoleChoice | null>(null);
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
+  const taskInput = useRef<React.ComponentRef<typeof TextInput>>(null);
+  // Developer evidence (A47): with the fake engine the form scrolls to the Task field by itself (no finger on a simulator).
+  const scroller = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  useEffect(() => {
+    if (DEV_VOICE === null) return;
+    const timer = setTimeout(() => scroller.current?.scrollToEnd({ animated: false }), 2500);
+    return () => clearTimeout(timer);
+  }, []);
+  const taskMic = useDictationTarget({ id: TASK_DICTATION_ID, input: taskInput, value: task, apply: setTask, fallback: 'clipboard', toast: toast.show });
   const [worktree, setWorktree] = useState(false);
   useEffect(() => {
     if (provider === '' && providers.length > 0) setProvider((providers.find((p) => p.available) ?? providers[0]!).id);
@@ -161,6 +175,8 @@ export default function NewScreen() {
   };
 
   const submit = async () => {
+    // A dictation in the Task field ends first: its text lands in the field and nothing is sent (A47).
+    if (dictation.finishBeforeSend(TASK_DICTATION_ID)) return;
     if (client === null || ws === null || sending.current || !ready) return;
     sending.current = true;
     setBusy(true);
@@ -246,7 +262,7 @@ export default function NewScreen() {
       <Stack.Screen options={{ title: step === 'letter' ? 'Room created' : kind === 'session' ? 'New session' : 'New room', ...barLeftText(step === 'letter' ? 'Later' : 'Cancel', step === 'letter' ? later : close) }} />
       {/* The footer rides on the keyboard: the sheet's offset in the window counts (plan A35e). */}
       <KeyboardAvoider style={styles.flex}>
-        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scroller} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           {/* First child of the scroll view, so it sits below a translucent sheet header (as on the M1 screens). */}
           <View style={styles.banner}>
             <ConnectionBanner />
@@ -338,7 +354,13 @@ export default function NewScreen() {
                   <Label>Session name</Label>
                   <TextInput accessibilityLabel="Session name" value={name} onChangeText={setName} placeholder="Optional" placeholderTextColor={c.label3} maxLength={64} style={[typography.body, styles.field, { backgroundColor: c.surface, color: c.label }]} />
                   <Label>Task</Label>
-                  <TextInput autoFocus={DEV_FOCUS} accessibilityLabel="Task" multiline value={task} onChangeText={setTask} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label }]} />
+                  <DictationStrip id={TASK_DICTATION_ID} />
+                  <View style={styles.taskRow}>
+                    <TextInput ref={taskInput} autoFocus={DEV_FOCUS} accessibilityLabel="Task" multiline value={task} onChangeText={setTask} onSelectionChange={taskMic.onSelectionChange} placeholder="What should the agent do?" placeholderTextColor={c.label3} style={[typography.body, styles.input, styles.taskInput, { backgroundColor: c.surface, color: c.label }]} />
+                    <View style={styles.taskMic}>
+                      <MicButton id={TASK_DICTATION_ID} />
+                    </View>
+                  </View>
                   <Card>
                     <View style={[styles.row, styles.pad]}>
                       <SymbolView name="arrow.triangle.branch" size={18} tintColor={c.label2} />
@@ -462,6 +484,9 @@ const styles = StyleSheet.create({
   loading: { padding: 20, alignItems: 'center' },
   field: { borderRadius: spacing.nestedRadius, paddingHorizontal: 16, minHeight: spacing.minTouchTarget },
   input: { borderRadius: spacing.nestedRadius, padding: 12, minHeight: 120, textAlignVertical: 'top', marginBottom: 12 },
+  taskRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
+  taskInput: { flex: 1 },
+  taskMic: { marginBottom: 12 },
   note: { marginTop: 8, marginHorizontal: 16 },
   addAgent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: spacing.minTouchTarget, borderRadius: 22, borderWidth: 1, marginTop: 12 },
   created: { alignItems: 'center', gap: 6, paddingVertical: 12 },

@@ -1,37 +1,39 @@
 // The room's message flow (D1 §9.7): draft with chips, reply, `rooms.send`, the bubble of what is on its way. The text
 // returns to the field when the host refuses; a lost answer is "Not sent · Retry" once the client's re-read found nothing.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Message } from '@parley/core';
 import type { OutLetter } from './out-letters';
 import { roomKey } from '@parley/remote-client';
+import { roomDraftOf, setRoomDraft } from './room-drafts';
 import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
-import { letterProblem, recipientsOf, sendLetter, type Mentionable, type RoomTarget } from './model';
+import { letterProblem, recipientsOf, roomOutgoing, sendLetter, type Mentionable, type RoomReply, type RoomTarget } from './model';
 
 const outboxes = new Map<string, OutLetter[]>();
-const drafts = new Map<string, string>();
+export { roomDraftOf, setRoomDraft } from './room-drafts';
 
 export interface RoomChatFlow {
   draft: string;
   setDraft(text: string): void;
   chips: Mentionable[];
   addChip(chip: Mentionable): void;
-  reply: Message | null;
-  setReply(m: Message | null): void;
+  reply: RoomReply | null;
+  setReply(r: RoomReply | null): void;
   out: OutLetter[];
   busy: boolean;
   /** `rooms.send` answered `unknown_method`: the Mac switch is off. */
   switchedOff: boolean;
   send(): Promise<void>;
   retry(letter: OutLetter): Promise<void>;
+  /** Developer preview only: put a letter on its way without a call. */
+  seedOut(letter: OutLetter): void;
 }
 
 export function useRoomChat(room: RoomTarget | null, notify: (text: string) => void): RoomChatFlow {
   const client = useClient();
   const key = room === null ? '' : roomKey(room);
-  const [draft, setDraftState] = useState(() => drafts.get(key) ?? '');
+  const [draft, setDraftState] = useState(() => roomDraftOf(key));
   const [chips, setChips] = useState<Mentionable[]>([]);
-  const [reply, setReply] = useState<Message | null>(null);
+  const [reply, setReply] = useState<RoomReply | null>(null);
   const [out, setOutState] = useState<OutLetter[]>(() => outboxes.get(key) ?? []);
   const [busy, setBusy] = useState(false);
   const [switchedOff, setSwitchedOff] = useState(false);
@@ -50,8 +52,7 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
   );
   const setDraft = useCallback(
     (text: string) => {
-      if (text === '') drafts.delete(key);
-      else drafts.set(key, text);
+      setRoomDraft(key, text);
       setDraftState(text);
     },
     [key],
@@ -80,7 +81,7 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
           if (ui.hideComposer) setSwitchedOff(true);
           // The text goes back to the field (when the field is free); the bubble goes.
           update((l) => l.filter((x) => x.id !== letter.id));
-          if (fromDraft || drafts.get(key) === undefined) setDraft(letter.text);
+          if (fromDraft || roomDraftOf(key) === '') setDraft(letter.typed ?? letter.text);
           notify(ui.message);
           return;
         }
@@ -104,10 +105,12 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
     busy,
     switchedOff,
     send: async () => {
-      if (letterProblem(draft) !== null) return;
+      const out = roomOutgoing(draft, reply);
+      if (letterProblem(draft) !== null || letterProblem(out.text) !== null) return;
       const to = recipientsOf(draft, chips).map((c) => c.id);
-      await run({ id: `out-${Date.now().toString(36)}`, text: draft, to, replyTo: reply?.id ?? null, at: Date.now(), state: 'sending', note: null, messageId: null }, true);
+      await run({ id: `out-${Date.now().toString(36)}`, text: out.text, typed: draft, to, replyTo: out.replyTo, at: Date.now(), state: 'sending', note: null, messageId: null }, true);
     },
     retry: (letter) => run(letter, false),
+    seedOut: (letter) => update((l) => [...l, letter]),
   };
 }

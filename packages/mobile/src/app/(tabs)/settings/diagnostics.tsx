@@ -41,7 +41,8 @@ export default function Diagnostics() {
       </Section>
       {DEV_BUILD && (
         <Section header="Developer build" footer="A20 item 16: crypto speed of this phone.">
-          <Row last title="Crypto bench" right="chevron" onPress={() => router.push('/bench')} />
+          <Row title="Crypto bench" right="chevron" onPress={() => router.push('/bench')} />
+          <Row last title="Dictation check" right="chevron" onPress={() => router.push('/dictation-check')} />
         </Section>
       )}
       <View style={{ marginHorizontal: 16 }}>

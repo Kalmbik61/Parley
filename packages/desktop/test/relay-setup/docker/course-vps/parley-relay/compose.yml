@@ -1,0 +1,23 @@
+# Parley relay behind the course platform Caddy (course-platform-prod-caddy-1 owns 80/443).
+# Set up by hand on 2026-11-03: the relay joins the course network as "parley-relay"; the site block is
+# /opt/evdev-site/caddy/parley-relay.caddy. The wizard file is kept as compose.yml.wizard-caddy.
+services:
+  relay:
+    image: ${RELAY_IMAGE:?set RELAY_IMAGE}
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: "1"
+    volumes:
+      - relay-data:/data
+    expose:
+      - "8787"
+    networks:
+      course:
+        aliases:
+          - parley-relay
+volumes:
+  relay-data:
+networks:
+  course:
+    name: course-platform-prod_default
+    external: true

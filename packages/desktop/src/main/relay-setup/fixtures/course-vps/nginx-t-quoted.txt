@@ -1,0 +1,8 @@
+# configuration file /etc/nginx/nginx.conf:
+events {}
+http {
+    log_format j '{"t":"$time_iso8601",
+                   "r":"$request"}';
+    include "/etc/nginx/conf.d/*.conf";
+    include '/etc/nginx/extra/*.conf';
+}

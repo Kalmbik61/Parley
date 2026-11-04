@@ -1,4 +1,5 @@
 import { Alert } from 'react-native';
+import { clearQuestionDrafts } from '../cards/question-drafts';
 import { haptic } from '../haptics';
 import { runtime } from '../runtime/instance';
 
@@ -11,6 +12,7 @@ export function confirmRemove(hostId: string, name: string, onRemoved?: () => vo
       style: 'destructive',
       onPress: () => {
         void runtime.removeHost(hostId).then(() => {
+          clearQuestionDrafts();
           haptic.warning();
           onRemoved?.();
         });

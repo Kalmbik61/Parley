@@ -5,6 +5,7 @@ import type { Message } from '@parley/core';
 import type { RemoteRoom, RemoteSession } from '@parley/protocol/remote';
 import type { RemoteClient, SendRoomMessageOutcome } from '@parley/remote-client';
 import { TEXT_MAX_BYTES, utf8Length } from '../launch/launch-model';
+import { withQuote } from '../feed/reply';
 
 export const FIVE_MIN = 5 * 60 * 1000;
 
@@ -160,4 +161,19 @@ export async function sendLetter(
   replyTo: string | null,
 ): Promise<RoomSendUi> {
   return uiOfRoomSend(await client.sendRoomMessage({ ...room, text, kind: 'note', to: [...to], ...(replyTo !== null ? { replyTo } : {}) }));
+}
+
+/** The room's reply plate: the letter answered, and the fragment picked in the Select Text sheet ('' — none). */
+export interface RoomReply {
+  message: Message;
+  selected: string;
+}
+
+/**
+ * What `rooms.send` gets: `replyTo` always, and the selected fragment as a `withQuote` block before the text, as the
+ * window's RoomPanel does (D1 §9.7). A plain Reply sends the text as typed.
+ */
+export function roomOutgoing(draft: string, reply: RoomReply | null): { text: string; replyTo: string | null } {
+  if (reply === null) return { text: draft, replyTo: null };
+  return { text: reply.selected.trim() === '' ? draft : withQuote(reply.selected.trim(), draft), replyTo: reply.message.id };
 }

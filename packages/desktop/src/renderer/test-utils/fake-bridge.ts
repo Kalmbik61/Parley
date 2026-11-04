@@ -52,7 +52,7 @@ import type { RecipeSaveRequest, RecipeSaveResult } from '../../shared/recipe-sa
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import type { RemoteCallName, RemoteCalls, RemoteEvent } from '../../shared/remote-types.js';
-import type { RelaySetupCallName, RelaySetupCalls, RelaySetupEvent } from '../../shared/relay-setup-types.js';
+import type { RelaySetupCallName, RelaySetupCalls, RelaySetupEvent, RelaySetupEventBody } from '../../shared/relay-setup-types.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
 import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
@@ -76,7 +76,8 @@ export interface FakeBridge extends ParleyBridge {
   /** Handler of a `relaySetup.call` (the relay setup wizard); without one the call is rejected. */
   setRelaySetupHandler<N extends RelaySetupCallName>(name: N, handler: (params: RelaySetupCalls[N]['params']) => RelaySetupCalls[N]['result'] | Promise<RelaySetupCalls[N]['result']>): void;
   readonly relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }>;
-  emitRelaySetup(event: RelaySetupEvent): void;
+  /** The fake numbers the events (`seq`) like the service does, unless the test gives one. */
+  emitRelaySetup(event: RelaySetupEventBody & { seq?: number }): void;
   /** Вызовы `call` — для проверки, что и с какими параметрами позвали. */
   readonly calls: Array<{ method: MethodName; params: unknown }>;
   emit<E extends EventName>(event: E, data: EventData<E>): void;
@@ -429,6 +430,7 @@ export function createFakeBridge(): FakeBridge {
   const setupHandlers = new Map<string, (params: never) => unknown>();
   const setupListeners = new Set<(event: RelaySetupEvent) => void>();
   const relaySetupCalls: Array<{ name: RelaySetupCallName; params: unknown }> = [];
+  let setupSeq = 0;
   const bridge: FakeBridge = {
     // P4a: типизированный мост доступен, но fake не запускает renderer sync до P6.
     worksSync: { subscribe: () => () => {}, retry: () => {} },
@@ -437,7 +439,8 @@ export function createFakeBridge(): FakeBridge {
     },
     relaySetupCalls,
     emitRelaySetup: (event) => {
-      for (const listener of setupListeners) listener(event);
+      setupSeq = event.seq ?? setupSeq + 1;
+      for (const listener of setupListeners) listener({ ...event, seq: setupSeq });
     },
     relaySetup: {
       call: async (name, params) => {

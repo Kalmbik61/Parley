@@ -1,24 +1,41 @@
 // Room = the chat of a room (D1 §9.7, plan A33): history by `context.messages`, live by `rooms.mail`, members and lead,
 // a field with @mentions that sends `rooms.send`. Reached from the room container (Work), the session menu, the origin
 // line and Decision. Params: `ref` (work) and `room`.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
+import { ActionSheetIOS, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Message } from '@parley/core';
+import { capsuleOfSession } from '../cards/status';
 import { attentionOfSession, roomKey, type RoomRef, type SessionCommandOutcome } from '@parley/remote-client';
 import { confirmByOwner } from '../auth/lock-instance';
+import { useCloseOnLock } from '../auth/use-lock-sheet';
 import { useCovered } from '../auth/use-covered';
+import { devEpoch, devMoreRoom, devRoomBurst } from '../dev/demo';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
+import { devFocus, LONG_DRAFT, runDevScript } from '../dev/dev-script';
 import { ConnectionBanner } from '../components/ConnectionBanner';
+import { DictationStrip } from '../voice/DictationStrip';
+import { dictation } from '../voice/dictation';
+import { MicButton } from '../voice/MicButton';
+import { DictationHiddenGuard, useDictationTarget } from '../voice/use-dictation-target';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
-import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, type Mentionable } from '../room/model';
+import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
-import { LetterView, MentionMenu, OutLetterView, ReplyPlate, ToLine, type Who } from '../room/RoomViews';
+import { REREAD_INSTANT_ROWS } from '../feed/follow-end';
+import { useFollowEnd } from '../feed/use-follow-end';
+import { useTailWindow } from '../feed/use-tail-window';
+import { WINDOW_ROWS } from '../feed/window';
+import { LetterView, MentionMenu, OutLetterView, ToLine, type Who } from '../room/RoomViews';
+import { SelectTextSheet } from '../feed/SelectTextSheet';
+import type { Selection } from '../feed/selection';
+import { replyQuote, withQuote } from '../feed/reply';
+import { ReplyPlate } from '../ui/ReplyPlate';
 import { ResultSheet } from '../room/ResultSheet';
 import { archiveSheet, deleteConfirm, FACE_ID_PROMPT, membersWhere, ownerGate, roomMenu, roomToast, sleepConfirm, startToast, type RoomMenuFacts } from '../room/room-menu';
 import { roomRuns, runKeyOf } from '../room/room-runs';
@@ -32,15 +49,16 @@ import { Button } from '../ui/Button';
 import { EmptyState, Skeleton } from '../ui/parts';
 
 type RoomRow = { t: 'line'; l: Line } | { t: 'out'; o: OutLetter };
-const NEAR_BOTTOM = 80;
+const noSpan = (): number => 0;
 const str = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
 export default function RoomScreen() {
   const c = useColors();
   const material = useBarMaterial();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
-  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string }>();
+  const params = useLocalSearchParams<{ ref?: string; room?: string; preview?: string; dev?: string }>();
   const work = parseWorkParam(str(params.ref));
   const roomId = str(params.room);
   const target: RoomRef | null = work !== null && roomId !== undefined && roomId !== '' ? { ...work, roomId } : null;
@@ -49,10 +67,18 @@ export default function RoomScreen() {
   const canAct = useCanAct();
   const toast = useToast();
   const list = useRef<FlatList<RoomRow>>(null);
-  const atBottom = useRef(true);
-  const seen = useRef(0);
-  const [away, setAway] = useState(0);
+  const roomInput = useRef<React.ComponentRef<typeof TextInput>>(null);
+  useEffect(() => devFocus.listen(() => roomInput.current?.focus()), []);
   const chat = useRoomChat(target, toast.show);
+  const dictationId = `room:${roomId ?? ''}`;
+  const mic = useDictationTarget({
+    id: dictationId,
+    input: roomInput,
+    value: chat.draft,
+    apply: chat.setDraft,
+    fallback: { kind: 'room', key: target === null ? '' : roomKey(target) },
+    toast: toast.show,
+  });
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
   const hostId = useRuntimeState().host?.hostId ?? null;
   const runKey = target === null ? '' : runKeyOf(hostId, target);
@@ -60,11 +86,14 @@ export default function RoomScreen() {
   const covered = useCovered();
   const focused = useIsFocused();
   const [deleted, setDeleted] = useState(false);
+  // Select Text (D1 §9.7, as 9.2); `initial` is a developer-preview selection.
+  const [selectFor, setSelectFor] = useState<{ message: Message; initial?: Selection } | null>(null);
+  useCloseOnLock(selectFor !== null, () => setSelectFor(null));
   // Back after a successful delete: only while this screen is in front, and only if there is somewhere to go (critic m1).
   useEffect(() => {
     if (deleted && focused && router.canGoBack()) router.back();
   }, [deleted, focused]);
-  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void } | null>(null);
+  const previewActs = useRef<{ menu(): void; archive(): void; remove(): void; result(): void; busy(): void; plate(): void; select(): void; outgoing(): void } | null>(null);
 
   useEffect(() => {
     if (client === null || target === null || DEMO) return;
@@ -84,8 +113,8 @@ export default function RoomScreen() {
   const mentionables = useMemo<Mentionable[]>(
     () =>
       members.map((s) => {
-        const a = found === null || target === null ? 'idle' : attentionOfSession(state!, { projectPath: target.projectPath, workId: target.workId, sessionId: s.id }, s);
-        return { id: s.id, label: s.label, meta: `${s.model ?? s.provider} · ${a === 'needs-you' ? 'needs you' : a === 'working' ? 'working' : 'idle'}` };
+        const word = found === null || target === null ? 'idle' : capsuleOfSession(state!, { projectPath: target.projectPath, workId: target.workId, sessionId: s.id }, s, Date.now()).label.toLowerCase();
+        return { id: s.id, label: s.label, meta: `${s.model ?? s.provider} · ${word}` };
       }),
     [members, state, found, target],
   );
@@ -95,34 +124,79 @@ export default function RoomScreen() {
   const messages = entry?.messages ?? [];
   const rows = useMemo(() => lines(messages), [messages]);
   const out = useMemo(() => visibleOutLetters(chat.out, messages), [chat.out, messages]);
-  const data = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
-  const total = data.length;
+  const chron = useMemo<RoomRow[]>(() => [...rows.map((l): RoomRow => ({ t: 'line', l })), ...out.map((o): RoomRow => ({ t: 'out', o }))], [rows, out]);
+  const rowKey = (r: RoomRow): string => (r.t === 'line' ? r.l.message.id : r.o.id);
+  // The list gets the tail window of the rows (A44b): all drawn and measured in one pass; older rows come from the top.
+  const chronKeys = useMemo(() => chron.map(rowKey), [chron]);
+  const { start, widen, reset, include, onRevealed, onScroll: trackStart } = useTailWindow(chronKeys, noSpan);
+  const data = useMemo(() => chron.slice(start), [chron, start]);
+  // A quote jump into rows outside the window widens it first, then scrolls once they are drawn.
+  const jumpTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (jumpTo.current === null) return;
+    const index = data.findIndex((r) => rowKey(r) === jumpTo.current);
+    if (index < 0) return;
+    jumpTo.current = null;
+    list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+  }, [data]);
+  // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
+  const keys = useMemo(() => data.map(rowKey), [data]);
+  // A room shown empty stays shown when its first letter comes (critic m2); a reopen (A44c) starts over, so it hides again.
+  const shownEmpty = useRef(false);
+  const follow = useFollowEnd(list, keys, () => {
+    shownEmpty.current = false;
+    reset();
+  });
+  // A44c: a room read again with letters already shown (back from the background, a reconnect) lands at the end like the first open.
+  const roomStatus = entry?.status;
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const prevStatus = useRef(roomStatus);
+  const hadRows = useRef(false);
+  useLayoutEffect(() => {
+    const before = prevStatus.current;
+    prevStatus.current = roomStatus;
+    const had = hadRows.current;
+    hadRows.current = data.length > 0;
+    if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && had && data.length > 0) follow.reread();
+    // A feed that stayed empty through the return and now brings many rows hides like a first open; 1-2 live rows keep the m2 rule.
+    else if (roomStatus === 'ready' && before !== undefined && before !== 'ready' && !had && data.length > REREAD_INSTANT_ROWS && shownEmpty.current) {
+      shownEmpty.current = false;
+      bump();
+    }
+  }, [roomStatus]);
+  useEffect(() => {
+    if (follow.revealed) onRevealed();
+  }, [follow.revealed]);
+  // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
+  if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
+  const hiddenFeed = !follow.revealed && data.length > 0 && !shownEmpty.current;
+  // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
+  useEffect(() => {
+    if (!DEMO || found === null || params.dev === undefined || client === null || target === null) return;
+    return runDevScript(params.dev, {
+      focus: devFocus.fire,
+      draft: () => chat.setDraft(LONG_DRAFT),
+      up: () => list.current?.scrollToOffset({ offset: 1500, animated: false }),
+      top: () => list.current?.scrollToOffset({ offset: 0, animated: false }),
+      more: () => devMoreRoom(client, target),
+      bgburst: () => undefined,
+      bgsmall: () => undefined,
+      epoch: () => devEpoch(client, { room: target }),
+      roomburst: () => devRoomBurst(client, target),
+      fill: () => undefined,
+      card: () => undefined,
+    });
+  }, [found !== null]);
   const lastHuman = useMemo(() => [...messages].reverse().find((m) => m.from === 'human')?.id ?? null, [messages]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
   const labels = useMemo(() => mentionables.map((m) => m.label), [mentionables]);
 
-  const onContentSizeChange = (): void => {
-    if (atBottom.current) {
-      list.current?.scrollToEnd({ animated: seen.current !== 0 });
-      setTimeout(() => atBottom.current && list.current?.scrollToEnd({ animated: false }), 120);
-      seen.current = total;
-    } else setAway(Math.max(0, total - seen.current));
-  };
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    atBottom.current = contentSize.height - layoutMeasurement.height - contentOffset.y < NEAR_BOTTOM;
-    if (atBottom.current && away !== 0) {
-      seen.current = total;
-      setAway(0);
-    }
-    // Scrolled to the start: the next older page.
-    if (contentOffset.y < 40 && target !== null) client?.loadOlder(target);
-  };
-
   const onLongPress = (m: Message): void => {
-    ActionSheetIOS.showActionSheetWithOptions({ options: ['Reply', 'Copy', 'Cancel'], cancelButtonIndex: 2 }, (i) => {
-      if (i === 0) chat.setReply(m);
+    haptic.selection();
+    ActionSheetIOS.showActionSheetWithOptions({ options: ['Reply', 'Copy', 'Select Text', 'Cancel'], cancelButtonIndex: 3 }, (i) => {
+      if (i === 0) chat.setReply({ message: m, selected: '' });
       else if (i === 1) void Clipboard.setStringAsync(m.text);
+      else if (i === 2) setSelectFor({ message: m });
     });
   };
   // Demo data has no hello: every menu method counts as present (screenshots).
@@ -246,6 +320,18 @@ export default function RoomScreen() {
     archive,
     remove,
     result: () => void runSession('sleep', previewCall),
+    plate: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) chat.setReply({ message: m, selected: '' });
+    },
+    select: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) setSelectFor({ message: m, initial: { start: 0, end: Math.max(0, m.text.indexOf(' A28')) } });
+    },
+    outgoing: () => {
+      const m = messages.find((x) => x.from !== 'human' && x.from !== 'system');
+      if (m !== undefined) chat.seedOut({ id: 'out-demo', text: withQuote('Wave 3 is merged; next A27', 'Why not in parallel with A28?'), typed: 'Why not in parallel with A28?', to: [], replyTo: m.id, at: Date.now(), state: 'sent', note: null, messageId: null });
+    },
     busy: () => {
       roomRuns.seedPending(runKey, { kind: 'sleep', done: 2, total: 4 });
       // The menu reads the facts of the last render: let the screen see the progress first.
@@ -261,6 +347,9 @@ export default function RoomScreen() {
       else if (params.preview === 'delete') p?.remove();
       else if (params.preview === 'result') p?.result();
       else if (params.preview === 'busy') p?.busy();
+      else if (params.preview === 'plate') p?.plate();
+      else if (params.preview === 'select') p?.select();
+      else if (params.preview === 'outgoing') p?.outgoing();
     }, 700);
     return () => clearTimeout(t);
   }, [params.preview, found !== null]);
@@ -278,7 +367,9 @@ export default function RoomScreen() {
   const q = mentionQuery(chat.draft);
   const menu = q === null || hidden.kind === 'hidden' ? null : filterMentionable(mentionables, q.query);
   const to = recipientsOf(chat.draft, chat.chips).map((x) => x.label);
-  const problem = letterProblem(chat.draft);
+  const outgoing = roomOutgoing(chat.draft, chat.reply);
+  // The whole letter is measured, with the selected fragment's quote block (critic A42 M3).
+  const problem = letterProblem(chat.draft) ?? letterProblem(outgoing.text);
   const canSend = hidden.kind === 'input' && hidden.sendEnabled && problem === null && !chat.busy;
   const memberIds = room.members;
 
@@ -306,9 +397,9 @@ export default function RoomScreen() {
           ...barRight(<BarSymbol name="ellipsis.circle" label="More" onPress={openMenu} />),
         }}
       />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={-insets.bottom} style={styles.flex}>
         {(room.proposal !== null || waiting[0] !== undefined) && (
-          <BarStripStack onChange={() => atBottom.current && list.current?.scrollToEnd({ animated: false })}>
+          <BarStripStack onChange={follow.keepEnd}>
             {room.proposal !== null && (
               <BarStrip icon="checkmark.seal" iconColor={c.tint} text={`Decision ${room.proposal.id} · rev ${room.proposal.rev}`} action="Review" onPress={() => router.push({ pathname: '/decision', params: { ref: workParam(target), room: room.id, proposal: room.proposal!.id } } as never)} />
             )}
@@ -317,22 +408,40 @@ export default function RoomScreen() {
             )}
           </BarStripStack>
         )}
+        <View style={styles.flex}>
+          {hiddenFeed && (
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, { paddingTop: headerHeight + 8, paddingHorizontal: 16 }]}>
+              <Skeleton rows={4} />
+            </View>
+          )}
         <FlatList
-          ref={list}
+          ref={follow.attach}
+          style={{ opacity: hiddenFeed ? 0 : 1 }}
+          accessibilityElementsHidden={hiddenFeed}
           data={data}
-          keyExtractor={(r) => (r.t === 'line' ? r.l.message.id : r.o.id)}
-          onContentSizeChange={onContentSizeChange}
-          onScroll={onScroll}
+          keyExtractor={rowKey}
+          {...follow.handlers}
+          onScroll={(e) => {
+            follow.handlers.onScroll(e);
+            trackStart(e);
+          }}
+          initialNumToRender={WINDOW_ROWS}
+          maxToRenderPerBatch={hiddenFeed ? WINDOW_ROWS : 10}
+          // Towards the start: the local rows first, then the next page from the Mac (not while the list is hidden).
+          // Not passed while hidden: the list would remember a call that was dropped and not repeat it (A44b round 3, R3B1).
+          onStartReached={follow.revealed ? () => { if (start > 0) widen(); else if (target !== null) client?.loadOlder(target); } : undefined}
+          onStartReachedThreshold={1}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           scrollEventThrottle={64}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={styles.list}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={[styles.list, { paddingTop: room.proposal !== null || waiting[0] !== undefined ? 8 : headerHeight + 8 }]}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           ListHeaderComponent={
             <View style={{ gap: 8, marginBottom: 8 }}>
               <ConnectionBanner />
-              {entry?.older != null && (
+              {entry?.older != null && start === 0 && (
                 <View style={styles.older}>
                   {entry.more === 'error' ? (
                     <Button variant="plain" title="Couldn't load earlier messages · Try again" onPress={() => client?.loadOlder(target)} />
@@ -373,30 +482,35 @@ export default function RoomScreen() {
                 onLongPress={onLongPress}
                 onOpenQuote={(id) => {
                   const at = rows.findIndex((r) => r.message.id === id);
-                  if (at >= 0) list.current?.scrollToIndex({ index: at, animated: true, viewPosition: 0.3 });
+                  if (at < 0) return;
+                  follow.leave();
+                  if (at >= start) list.current?.scrollToIndex({ index: at - start, animated: true, viewPosition: 0.3 });
+                  else {
+                    jumpTo.current = id;
+                    include(at);
+                  }
                 }}
               />
             )
           }
           onScrollToIndexFailed={() => undefined}
         />
-        {away > 0 && (
+        </View>
+        {follow.away > 0 && (
+          <View pointerEvents="box-none" style={styles.jumpAnchor}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Jump to latest, ${away} new`}
-            onPress={() => {
-              list.current?.scrollToEnd({ animated: true });
-              atBottom.current = true;
-              seen.current = total;
-              setAway(0);
-            }}
+            accessibilityLabel={`Jump to latest, ${follow.away} new`}
+            onPress={follow.jump}
             style={[styles.jump, { backgroundColor: c.surface, borderColor: c.separator }]}
           >
             <SymbolView name="arrow.down" size={14} tintColor={c.tint} />
-            <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {away}</Text>
+            <Text allowFontScaling style={[typography.footnote, { color: c.tint }]}>Jump to latest · {follow.away}</Text>
           </Pressable>
+          </View>
         )}
         <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator, paddingBottom: insets.bottom + 8 }]}>
+          <DictationHiddenGuard id={dictationId} hidden={hidden.kind === 'hidden'} />
           {hidden.kind === 'hidden' ? (
             <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, { color: c.label2, textAlign: 'center', paddingVertical: 8 }]}>
               {hidden.text}
@@ -412,8 +526,15 @@ export default function RoomScreen() {
                   }}
                 />
               )}
-              {chat.reply !== null && <ReplyPlate message={chat.reply} who={who} onClear={() => chat.setReply(null)} />}
+              {chat.reply !== null && (
+                <ReplyPlate
+                  title={`Reply to ${chat.reply.message.from === 'human' ? 'yourself' : who.label(chat.reply.message.from)}`}
+                  quote={replyQuote(chat.reply.message.text, chat.reply.selected)}
+                  onClear={() => chat.setReply(null)}
+                />
+              )}
               <ToLine names={to} />
+              <DictationStrip id={dictationId} />
               <View style={styles.row}>
                 <Pressable
                   accessibilityRole="button"
@@ -424,17 +545,20 @@ export default function RoomScreen() {
                   <SymbolView name="at" size={22} tintColor={c.tint} />
                 </Pressable>
                 <TextInput
+                  ref={roomInput}
                   autoFocus={DEV_FOCUS}
                   accessibilityLabel="Message the room"
                   multiline
                   editable={!chat.busy && hidden.sendEnabled}
                   value={chat.draft}
                   onChangeText={chat.setDraft}
+                  onSelectionChange={mic.onSelectionChange}
                   placeholder={COMPOSER_PLACEHOLDER}
                   placeholderTextColor={c.label3}
                   style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label, opacity: chat.busy ? 0.6 : 1 }]}
                 />
-                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void chat.send()} style={styles.send}>
+                <MicButton id={dictationId} editable={!chat.busy && hidden.sendEnabled} />
+                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void (dictation.finishBeforeSend(dictationId) || chat.send())} style={styles.send}>
                   <SymbolView name="arrow.up.circle.fill" size={32} tintColor={canSend ? c.tint : c.off} />
                 </Pressable>
               </View>
@@ -453,8 +577,21 @@ export default function RoomScreen() {
         </View>
         <Toast message={toast.message} />
       </KeyboardAvoidingView>
+      <Modal visible={selectFor !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSelectFor(null)}>
+        {selectFor !== null && (
+          <SelectTextSheet
+            text={selectFor.message.text}
+            {...(selectFor.initial === undefined ? {} : { initial: selectFor.initial })}
+            onClose={() => setSelectFor(null)}
+            onReply={(selected) => {
+              chat.setReply({ message: selectFor.message, selected });
+              setSelectFor(null);
+            }}
+          />
+        )}
+      </Modal>
       {/* The result opens by itself, so it waits for the unlock instead of opening over the lock cover (critic M1). */}
-      <Modal visible={run.unseen !== null && !covered && focused} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
+      <Modal visible={run.unseen !== null && !covered && focused && selectFor === null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => roomRuns.seen(runKey)}>
         {run.unseen !== null && <ResultSheet title={run.unseen.title} results={run.unseen.results} onClose={() => roomRuns.seen(runKey)} />}
       </Modal>
     </View>
@@ -472,6 +609,9 @@ function Shell({ title, body }: { title: string; body: React.ReactNode }) {
   );
 }
 
+// The capsule's slot: in flow right above the composer area, overlapping the list by its own height (net layout height 0),
+// so it follows the composer through the keyboard, a taller draft, the reply plate, the Resume row and cards.
+const JUMP_H = 52;
 const styles = StyleSheet.create({
   page: { flex: 1 },
   flex: { flex: 1 },
@@ -487,5 +627,6 @@ const styles = StyleSheet.create({
   at: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   input: { flex: 1, minHeight: 44, maxHeight: 130, borderRadius: 22, paddingHorizontal: 16, paddingTop: 11, paddingBottom: 11 },
   send: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  jump: { position: 'absolute', alignSelf: 'center', bottom: 140, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+  jumpAnchor: { height: JUMP_H, marginTop: -JUMP_H, justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 8 },
+  jump: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseArch, parseEnv, parseListeners, parseOsRelease, parseUfwActive, probeBase, probeFull, PROBE } from './probe.js';
+import { parseArch, parseContainers, parseEnv, parseListeners, parseOsRelease, parseUfwActive, probeBase, probeFull, PROBE } from './probe.js';
 import type { RemoteShell, RunResult } from './shell.js';
 
 const UBUNTU = 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\nID=ubuntu\n';
@@ -50,6 +50,37 @@ function fakeShell(answers: Record<string, Partial<RunResult>>): RemoteShell & {
   };
 }
 
+describe('parseContainers', () => {
+  it('is fine with empty output and skips broken lines', () => {
+    expect(parseContainers('')).toEqual([]);
+    expect(parseContainers('\n  \n')).toEqual([]);
+    expect(parseContainers('not json\n{"id":"a","name":"/x","labels":null,"ports":{"80/tcp":[{"HostIp":"::","HostPort":"80"}],"53/udp":[{"HostPort":"53"}],"1/tcp":null},"mounts":null,"networks":{"n":{}}}\n[]\n{"name":"no id"}')).toEqual([
+      { id: 'a', name: 'x', image: '', labels: {}, path: '', args: [], workdir: '', mounts: [], published: [{ hostPort: 80, hostIp: '::' }], networks: ['n'], networkAliases: { n: [] }, networkMode: '', running: true, restartPolicy: '', boundPorts: [] },
+    ]);
+  });
+  it('the inspect template is one single-quote-free constant', () => {
+    expect(PROBE.containers.match(/'/g)).toHaveLength(2);
+    expect(PROBE.containers.startsWith('docker ps -aq | xargs -r docker inspect --format ')).toBe(true);
+  });
+  it('stopped containers: running, restart policy and the ports they are set to publish are read', () => {
+    const line = '{"id":"b","name":"/shop","running":false,"restart":"unless-stopped","ports":{},"bindings":{"80/tcp":[{"HostIp":"","HostPort":"80"}],"443/tcp":[{"HostPort":"443"}],"53/udp":[{"HostPort":"53"}]}}';
+    expect(parseContainers(line)[0]).toMatchObject({ running: false, restartPolicy: 'unless-stopped', boundPorts: [80, 443], published: [] });
+    // Older output without these keys counts as running.
+    expect(parseContainers('{"id":"c","name":"/x"}')[0]).toMatchObject({ running: true, restartPolicy: '', boundPorts: [] });
+  });
+  it('stage 2: containers that were printed count even when inspect exits 1 (one vanished)', async () => {
+    const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
+    const line = '{"id":"a","name":"/x","ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}';
+    const probe = await probeFull(base, fakeShell({ [PROBE.containers]: { code: 1, stdout: `${line}\n` } }));
+    expect(probe.containers.map((c) => c.name)).toEqual(['x']);
+  });
+  it('stage 2: no Docker gives an empty list', async () => {
+    const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
+    expect((await probeFull(base, fakeShell({ [PROBE.containers]: { code: 127, stdout: 'garbage' } }))).containers).toEqual([]);
+    expect((await probeFull(base, fakeShell({ [PROBE.containers]: { code: 0, stdout: '' } }))).containers).toEqual([]);
+  });
+});
+
 describe('probe stages', () => {
   it('stage 1 runs only unprivileged reads; root skips the sudo test', async () => {
     const shell = fakeShell({ [PROBE.os]: { code: 0, stdout: UBUNTU }, [PROBE.arch]: { code: 0, stdout: 'x86_64' }, [PROBE.uid]: { code: 0, stdout: '0\n' } });
@@ -71,7 +102,8 @@ describe('probe stages', () => {
     });
     const base = { os: parseOsRelease(UBUNTU), arch: 'amd64' as const, root: true, sudoPasswordless: true };
     const probe = await probeFull(base, shell);
+    expect(shell.ran).toContain(PROBE.containers);
     expect(probe).toMatchObject({ docker: true, compose: true, ufwActive: true, install: { RELAY_DOMAIN: 'r.example.com' }, previous: null });
-    for (const command of shell.ran) expect(command).toMatch(/^(ss -ltnp|ufw status|docker --version|docker compose version|cat \/opt\/parley-relay\/(previous\/)?\.env)$/);
+    for (const command of shell.ran.filter((c) => c !== PROBE.containers)) expect(command).toMatch(/^(ss -ltnp|ufw status|docker --version|docker compose version|cat \/opt\/parley-relay\/(previous\/)?\.env)$/);
   });
 });

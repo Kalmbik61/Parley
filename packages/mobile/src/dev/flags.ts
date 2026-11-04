@@ -13,3 +13,9 @@ const devLockMs: unknown = Constants.expoConfig?.extra?.devLockMs;
 export const DEV_LOCK_MS: number | null = __DEV__ && typeof devLockMs === 'number' && devLockMs > 0 ? devLockMs : null;
 /** Developer build with PARLEY_MOBILE_DEV_FOCUS=1: the main text field of a screen takes focus, so the keyboard is up in screenshots (plan A35e). */
 export const DEV_FOCUS = __DEV__ && Constants.expoConfig?.extra?.devFocus === true;
+/**
+ * Developer build with PARLEY_MOBILE_DEV_VOICE=fake (or fake-off): the dictation engine is a fake one, so the microphone button
+ * can be looked at on a simulator; fake-off has no recognition for any language (spec A47 §4.4). Never in release.
+ */
+const devVoice: unknown = Constants.expoConfig?.extra?.devVoice;
+export const DEV_VOICE: 'fake' | 'fake-off' | null = __DEV__ && (devVoice === 'fake' || devVoice === 'fake-off') ? devVoice : null;

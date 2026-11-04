@@ -356,6 +356,8 @@ export function createLiveSync({ store, rpc, clock }: { store: RemoteStore; rpc:
         // A refused feed stays in its error state (and a waiting retry stays scheduled): a reconnect is no new reason.
         if (!o.blocked) store.dispatch({ t: 'feed.reload', ref: o.ref });
       }
+      // A44c: an open room is marked the same way, so the screen tells a re-read from a new letter.
+      for (const r of rooms.values()) store.dispatch({ t: 'room.reload', ref: r.ref });
       return;
     }
     void syncConsents();

@@ -1,0 +1,91 @@
+diff --git a/build/ExpoSpeechRecognitionModule.types.d.ts b/build/ExpoSpeechRecognitionModule.types.d.ts
+index 4643d9917ee22ea6af32474057b79f9282bd40f9..daec337e10fbea01bec92eec4dd3dcae2b00fda4 100644
+--- a/build/ExpoSpeechRecognitionModule.types.d.ts
++++ b/build/ExpoSpeechRecognitionModule.types.d.ts
+@@ -664,7 +664,9 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
+     /**
+      * Whether the on-device speech recognition is available on the device.
+      */
+-    supportsOnDeviceRecognition(): boolean;
++    supportsOnDeviceRecognition(lang?: string): boolean;
++    /** Parley: primary language of the keyboard of the focused text field (iOS), or null. */
++    currentInputLanguage(): Promise<string | null>;
+     /**
+      * Whether the recording feature is available on the device.
+      *
+diff --git a/ios/ExpoSpeechRecognitionModule.swift b/ios/ExpoSpeechRecognitionModule.swift
+index 9dc90826634fe3424c0c143eb7cfd72efe90498a..896f6c79850b0dcdd6e70d49ff0bbfe739783f2c 100644
+--- a/ios/ExpoSpeechRecognitionModule.swift
++++ b/ios/ExpoSpeechRecognitionModule.swift
+@@ -1,6 +1,17 @@
+ import AVFoundation
+ import ExpoModulesCore
+ import Speech
++import UIKit
++
++enum ParleyFirstResponder {
++  static weak var current: UIResponder?
++}
++
++extension UIResponder {
++  @objc func parleyCaptureFirstResponder(_ sender: Any?) {
++    ParleyFirstResponder.current = self
++  }
++}
+ 
+ struct Segment {
+   let startTimeMillis: Double
+@@ -349,11 +360,21 @@ public class ExpoSpeechRecognitionModule: Module {
+       try AVAudioSession.sharedInstance().setActive(value, options: setActiveOptions)
+     }
+ 
+-    Function("supportsOnDeviceRecognition") { () -> Bool in
+-      let recognizer = SFSpeechRecognizer()
++    Function("supportsOnDeviceRecognition") { (lang: String?) -> Bool in
++      // Parley: check the recognizer of the language that will be started, not the device default.
++      let recognizer = lang.map { SFSpeechRecognizer(locale: Locale(identifier: $0)) } ?? SFSpeechRecognizer()
+       return recognizer?.supportsOnDeviceRecognition ?? false
+     }
+ 
++    // Parley: primary language of the keyboard of the first responder (nil when none or not a text input).
++    AsyncFunction("currentInputLanguage") { () -> String? in
++      var responder: UIResponder?
++      UIApplication.shared.sendAction(#selector(UIResponder.parleyCaptureFirstResponder(_:)), to: nil, from: nil, for: nil)
++      responder = ParleyFirstResponder.current
++      ParleyFirstResponder.current = nil
++      return responder?.textInputMode?.primaryLanguage
++    }.runOnQueue(.main)
++
+     Function("supportsRecording") { () -> Bool in
+       return true
+     }
+diff --git a/ios/ExpoSpeechRecognizer.swift b/ios/ExpoSpeechRecognizer.swift
+index b27842501f72e1a5a9382636397cbef30d5a2b30..8cec03b5c4c8eed93927f516f77e0902ce294f60 100644
+--- a/ios/ExpoSpeechRecognizer.swift
++++ b/ios/ExpoSpeechRecognizer.swift
+@@ -221,6 +221,13 @@ actor ExpoSpeechRecognizer: ObservableObject {
+       return
+     }
+ 
++    // Parley: never fall back to Apple's servers (Apple honours requiresOnDeviceRecognition only when supported).
++    if options.requiresOnDeviceRecognition && !recognizer.supportsOnDeviceRecognition {
++      errorHandler(RecognizerError.nilRecognizer)
++      reset(andEmitEnd: true)
++      return
++    }
++
+     do {
+       let request = Self.prepareRequest(
+         options: options,
+@@ -585,9 +592,8 @@ actor ExpoSpeechRecognizer: ObservableObject {
+     // These won't get emitted to the user, however
+     request.shouldReportPartialResults = options.interimResults || !options.continuous
+ 
+-    if recognizer.supportsOnDeviceRecognition {
+-      request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition
+-    }
++    // Parley: set unconditionally; startRecognizer refuses to start when on-device recognition is unsupported.
++    request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition
+ 
+     if let taskHint = options.iosTaskHint {
+       request.taskHint = taskHint.sfSpeechRecognitionTaskHint
