@@ -214,6 +214,8 @@ const reopened = (s: FollowState, keys: readonly string[]): Reopened => ({ state
 
 /** A44c: the feed was read again (back from the background, a reconnect, a re-subscribe) and `keys` already hold the new rows. */
 export function reread(s: FollowState, now: number, keys: readonly string[]): Reopened {
+  // Still hidden from an earlier reopen (a remount, then the read after it): pin again, no second skeleton; the reveal cap keeps counting from the first conceal.
+  if (!s.revealed) return { state: { ...s, pinned: true, lastGrowthAt: now, seenKey: last(keys), away: 0 }, reopen: false };
   if (!s.atBottom || humanBusy(s)) return { state: { ...s, away: countAfter(keys, s.seenKey, s.away) }, reopen: false };
   const at = s.seenKey === null ? -1 : keys.lastIndexOf(s.seenKey);
   const fresh = at < 0 ? null : keys.length - 1 - at;
@@ -223,9 +225,9 @@ export function reread(s: FollowState, now: number, keys: readonly string[]): Re
   return reopened(s, keys);
 }
 
-/** A44c: the list was mounted again (a new epoch showed a skeleton). Away from the end the position is lost anyway and stays as it is. */
+/** A44c: the list was mounted again (a new epoch showed a skeleton). Away from the end the position is lost anyway and stays as it is. The old list took its gesture with it: a finger or momentum of it is over. */
 export function remounted(s: FollowState, keys: readonly string[]): Reopened {
-  return s.atBottom && !humanBusy(s) ? reopened(s, keys) : { state: s, reopen: false };
+  return s.atBottom ? reopened(s, keys) : { state: { ...s, touching: false, momentum: false, pendingGrowth: false }, reopen: false };
 }
 
 /** The window of the list changed height (keyboard, multi-line draft, reply plate, Sleeping row, cards, mention menu). */

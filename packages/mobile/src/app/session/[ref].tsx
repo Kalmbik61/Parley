@@ -20,7 +20,7 @@ import { capsuleOfSession, needReason, type Capsule } from '../../cards/status';
 import { useConsents } from '../../cards/use-consents';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Toast, useToast } from '../../components/Toast';
-import { devBgBurst, devEpoch, devLateCard, devMoreSession } from '../../dev/demo';
+import { devBgBurst, devEpoch, devFill, devLateCard, devMoreSession } from '../../dev/demo';
 import { devFocus, LONG_DRAFT, runDevScript } from '../../dev/dev-script';
 import { DEMO } from '../../dev/flags';
 import { demoQuestionDraft } from '../../dev/demo';
@@ -203,7 +203,12 @@ export default function SessionScreen() {
   const { start, widen, reset, onRevealed, onScroll: trackStart } = useTailWindow(allKeys, spanAt);
   const rows = useMemo(() => allRows.slice(start), [allRows, start]);
   const rowKeys = useMemo(() => rows.map(rowKey), [rows]);
-  const follow = useFollowEnd(list, rowKeys, reset);
+  // A feed that was shown empty stays shown when its first row comes (critic m2); a reopen (A44c) starts over, so it hides again.
+  const shownEmpty = useRef(false);
+  const follow = useFollowEnd(list, rowKeys, () => {
+    shownEmpty.current = false;
+    reset();
+  });
   // A44c: a feed read again with rows already shown (back from the background, a reconnect) lands at the end like the first open.
   const feedStatus = feed?.status;
   const prevStatus = useRef(feedStatus);
@@ -219,7 +224,6 @@ export default function SessionScreen() {
     if (follow.revealed) onRevealed();
   }, [follow.revealed]);
   // A feed that was shown empty stays shown when its first row comes (critic m2); otherwise it is hidden until the pin has settled it.
-  const shownEmpty = useRef(false);
   if (rows.length === 0 && feed?.status === 'ready') shownEmpty.current = true;
   const hiddenFeed = !follow.revealed && rows.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more,card` — see dev/dev-script.ts.
@@ -236,6 +240,7 @@ export default function SessionScreen() {
       bgsmall: () => devBgBurst(client, ref, 3),
       epoch: () => devEpoch(client, { ref }),
       roomburst: () => undefined,
+      fill: () => devFill(client, ref),
     });
   }, [found !== null]);
   // Developer preview of the message pieces (A42): set during render once the session is found.

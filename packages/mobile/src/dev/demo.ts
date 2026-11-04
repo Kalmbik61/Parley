@@ -98,7 +98,7 @@ export const demoSnapshot: RemoteWorksSnapshot = {
     {
       projectPath: '/Users/me/codex-bridge', id: 'w2', title: 'Codex bridge', status: 'active', messages: { direct: null, inline: 0 },
       rooms: [{ id: 'rlong', title: 'Long history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rbig', title: 'Big history', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }, { id: 'rshort', title: 'Short letters', members: ['cb1', 'long'], lead: 'cb1', ownerId: null, mode: 'free', archived: false, proposal: null, messages: null }],
-      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('big', 'Big-feed-demo'), sess('shorts', 'Short-turns-demo'), sess('tiny', 'Tiny-feed-demo')], swarms: [],
+      sessions: [sess('cb1', 'Bridge-planner'), sess('mdfeed', 'Markdown-demo'), sess('long', 'Long-feed-demo'), sess('big', 'Big-feed-demo'), sess('shorts', 'Short-turns-demo'), sess('tiny', 'Tiny-feed-demo'), sess('blank', 'Blank-feed-demo')], swarms: [],
     },
   ],
 };
@@ -230,6 +230,10 @@ export function installDemo(client: RemoteClient, onlyConsent?: unknown): void {
   store.dispatch({ t: 'room.loaded', ref: bigRoom, epoch: 'demo', next: null, messages: longRoomLetters('rbig', 300) });
   store.dispatch({ t: 'room.open', ref: shortRoom });
   store.dispatch({ t: 'room.loaded', ref: shortRoom, epoch: 'demo', next: null, messages: shortRoomLetters('rshort', 320) });
+  // A44c: a feed that opens empty (route a44-session-blank), for the `fill` step.
+  const blankRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'blank' };
+  store.dispatch({ t: 'feed.open', ref: blankRef });
+  store.dispatch({ t: 'feed.loaded', ref: blankRef, epoch: 'demo', items: [], revision: 3, mode: null, decisions: null });
   // A44: a short feed of three rows (route a44-tiny): it must rest below the header, not under it.
   const tinyRef: SessionRef = { projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' };
   store.dispatch({ t: 'feed.open', ref: tinyRef });
@@ -371,6 +375,10 @@ function devRoomLoaded(client: RemoteClient, room: { projectPath: string; workId
   const fresh = Array.from({ length: count }, (_, i) => ({ id: `rb${seq}-${i}`, roomId: room.roomId, from: ['greta', 'd1', 'a13'][i % 3], to: [], at: new Date().toISOString(), text: i === count - 1 ? `ROOM BURST ${count} LAST` : `Burst letter ${i + 1}: a short note.`, kind: 'note', readBy: {} }) as never);
   client.store.dispatch({ t: 'room.loaded', ref: room, epoch, next: null, messages: [...old, ...fresh] });
 }
+/** A44c evidence: a feed that opened empty gets its first rows (route a44-session-blank). */
+export function devFill(client: RemoteClient, ref: SessionRef): void {
+  client.store.dispatch({ t: 'feed.loaded', ref, epoch: 'demo', items: longFeedItems(14), revision: 5, mode: null, decisions: null });
+}
 export function devLateCard(client: RemoteClient, ref: SessionRef): void {
   client.store.dispatch({ t: 'cards.loaded', ref, epoch: 'demo', items: [permission], at: Date.now() });
 }
@@ -466,6 +474,8 @@ export function demoRoute(raw: unknown): string | null {
     case 'a44-room-big':
     case 'a44-room-shorts':
       return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=${String(name).endsWith('big') ? 'rbig' : 'rshort'}&${dev}`;
+    case 'a44-session-blank':
+      return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'blank' })}?${dev}`;
     case 'a44-tiny':
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
     case 'a44-room':

@@ -373,6 +373,24 @@ describe('follow the end: a re-read (A44c)', () => {
     expect(r.state.pinned).toBe(false);
   });
 
+  it('hidden from an earlier reopen: a re-read pins again without a second conceal and keeps the cap origin', () => {
+    const first = fe.remounted(shown(), K);
+    const grown = fe.contentChanged(first.state, 5000, K, 1000).state;
+    const r = fe.reread(grown, 5400, rows(61));
+    expect(r.reopen).toBe(false);
+    expect(r.state.revealed).toBe(false);
+    expect(r.state.pinned).toBe(true);
+    expect(r.state.openedAt).toBe(5000);
+    expect(fe.revealCheck(r.state, 5000 + fe.REVEAL_CAP_MS).revealed).toBe(true);
+  });
+
+  it('a mount again clears the finger, the momentum and the pending growth of the old list', () => {
+    const busy = { ...shown(), touching: true, momentum: true, pendingGrowth: true };
+    expect(fe.remounted(busy, K).state).toMatchObject({ touching: false, momentum: false, pendingGrowth: false });
+    const away = { ...fe.scrolled(shown(), middle, 3000, K), touching: true, pendingGrowth: true };
+    expect(fe.remounted(away, K).state).toMatchObject({ touching: false, pendingGrowth: false, atBottom: false });
+  });
+
   it('a mount again at the end reopens; away from the end it leaves the state alone', () => {
     expect(fe.remounted(shown(), K).reopen).toBe(true);
     expect(fe.remounted(shown(), K).state.revealed).toBe(false);

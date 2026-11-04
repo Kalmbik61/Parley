@@ -127,7 +127,12 @@ export default function RoomScreen() {
   }, [data]);
   // "New" is whatever comes after the last item the person has seen, so earlier pages at the top are never counted.
   const keys = useMemo(() => data.map(rowKey), [data]);
-  const follow = useFollowEnd(list, keys, reset);
+  // A room shown empty stays shown when its first letter comes (critic m2); a reopen (A44c) starts over, so it hides again.
+  const shownEmpty = useRef(false);
+  const follow = useFollowEnd(list, keys, () => {
+    shownEmpty.current = false;
+    reset();
+  });
   // A44c: a room read again with letters already shown (back from the background, a reconnect) lands at the end like the first open.
   const roomStatus = entry?.status;
   const prevStatus = useRef(roomStatus);
@@ -143,7 +148,6 @@ export default function RoomScreen() {
     if (follow.revealed) onRevealed();
   }, [follow.revealed]);
   // A room shown empty stays shown when its first letter comes; otherwise the list is hidden until the pin has settled it (critic m2).
-  const shownEmpty = useRef(false);
   if (data.length === 0 && entry?.status === 'ready') shownEmpty.current = true;
   const hiddenFeed = !follow.revealed && data.length > 0 && !shownEmpty.current;
   // Developer evidence (A44): `?dev=focus,draft,up,more` — see dev/dev-script.ts.
@@ -159,6 +163,7 @@ export default function RoomScreen() {
       bgsmall: () => undefined,
       epoch: () => devEpoch(client, { room: target }),
       roomburst: () => devRoomBurst(client, target),
+      fill: () => undefined,
       card: () => undefined,
     });
   }, [found !== null]);

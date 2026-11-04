@@ -248,4 +248,22 @@ describe('follow controller: a re-read (A44c)', () => {
     expect(h.reveals[1]! - t0).toBeLessThanOrEqual(601);
     h.c.dispose();
   });
+
+  it('remount, then a re-read of 61 rows while hidden: one conceal, one reveal within 600 ms of the first conceal', () => {
+    const h = shown();
+    const t0 = Date.now();
+    expect(h.c.remounted()).toBe(true);
+    h.c.contentSizeChanged(1000);
+    vi.advanceTimersByTime(300);
+    h.c.setKeys(rows(61));
+    expect(h.c.reread()).toBe(false);
+    h.c.contentSizeChanged(3000);
+    h.c.scroll({ offset: 2900, content: 3000, viewport: 100 });
+    vi.advanceTimersByTime(700);
+    expect(h.conceals).toHaveLength(1);
+    expect(h.reopens).toHaveLength(1);
+    expect(h.reveals).toHaveLength(2);
+    expect(h.reveals[1]! - t0).toBeLessThanOrEqual(601);
+    h.c.dispose();
+  });
 });
