@@ -236,6 +236,96 @@ describe('HumanOverviewV1', () => {
     mapOf(src).plans = [{ ...plan(), goal: 'S257 @s257 s-257' }];
     expect(projected(src).task.text).toBe('участник участник участник');
   });
+  it('review: disambiguates normalized names across works before asking for clarification', () => {
+    const src = synthetic();
+    const other = synthetic();
+    mapOf(src).work.title = 'Work A';
+    mapOf(other).work.id = 'w-0055';
+    mapOf(other).work.title = 'Work B';
+    mapOf(src).sessions[0]!.label = 'Alex';
+    mapOf(other).sessions[0]!.label = 'S257 Alex [[calm]]';
+    src.entries = [...src.entries, ...other.entries];
+    const leads = humanOverview(src)
+      .rooms.filter((room) => room.lead)
+      .map((room) => room.lead!);
+    expect(leads.map((lead) => lead.displayName)).toEqual([
+      expect.stringContaining('Work A'),
+      expect.stringContaining('Work B'),
+    ]);
+    expect(leads.every((lead) => !lead.ambiguous)).toBe(true);
+    expect(new Set(leads.map((lead) => lead.ref)).size).toBe(2);
+  });
+  it('review: collapses only omitted waits without reading participant names or repeating listed waits', () => {
+    const src = synthetic();
+    const map = mapOf(src);
+    map.sessions = Array.from({ length: 5 }, (_, index) =>
+      session(`s-${index + 1}`, `Agent ${index + 1}`, {
+        lifecycle: 'pending',
+        queued: { reason: 'limit' } as WorkSession['queued'],
+      }),
+    );
+    map.rooms = map.sessions.map((member, index) => ({
+      ...roomOf(fixture()),
+      id: `r-${index + 30}`,
+      title: `Room ${index}`,
+      members: [member.id],
+      lead: member.id,
+    }));
+    const result = humanOverview(src);
+    expect(result.text).toContain('Не перечислено комнат: 5');
+    expect(result.text).toContain('ожидают запуска, зависимости или сброса лимита: 5');
+    expect(result.text).not.toMatch(/Agent \d/);
+    expect(renderHumanOverview(result, true)).toContain('Agent 1');
+    for (const member of map.sessions) {
+      member.lifecycle = 'active';
+      member.queued = null;
+    }
+    src.live = () => live('working', 'approval');
+    const waiting = humanOverview(src);
+    expect(waiting.text).toContain('Не перечислено комнат: 2');
+    expect(waiting.text.match(/ждёт действия человека/g)).toHaveLength(3);
+    expect(waiting.text).not.toMatch(/Agent [45]/);
+  });
+  it('review: renders canonical sleep and consistent unknown activity for assigned/unassigned sessions', () => {
+    const src = synthetic();
+    mapOf(src).sessions[0]!.lifecycle = 'sleeping';
+    mapOf(src).sessions.push(session('s-01', 'Tester', { lifecycle: 'sleeping' }));
+    let result = humanOverview(src, { detailed: true });
+    expect(result.text).toContain('Marco 5: asleep');
+    expect(result.text).toContain('Tester: asleep');
+    expect(result.text).not.toContain('exited');
+    for (const member of mapOf(src).sessions) member.lifecycle = 'active';
+    src.live = () => undefined;
+    result = humanOverview(src, { detailed: true });
+    expect(result.text).toContain('Marco 5: активность неизвестна');
+    expect(result.text).toContain('Tester: активность неизвестна');
+  });
+  it('review: revalidation does not rescan rooms for every projected entity', () => {
+    const src = synthetic();
+    const map = mapOf(src);
+    map.sessions = Array.from({ length: 100 }, (_, index) =>
+      session(`s-${index + 1}`, `Agent ${index}`),
+    );
+    const base = roomOf(fixture());
+    map.rooms = map.sessions.map((member, index) => ({
+      ...base,
+      id: `r-${index + 30}`,
+      members: [member.id],
+      lead: member.id,
+    }));
+    let visits = 0;
+    for (const room of map.rooms) {
+      const value = room.id;
+      Object.defineProperty(room, 'id', {
+        get: () => {
+          visits++;
+          return value;
+        },
+      });
+    }
+    expect(humanOverview(src).rooms).toHaveLength(100);
+    expect(visits).toBeLessThan(2000);
+  });
   it('does not move archived-only members to unassigned, and excludes archived works', () => {
     const src = synthetic();
     mapOf(src).rooms[0]!.members = ['s-257'];

@@ -3,6 +3,8 @@ import {
   sessionDotStateWithNeed,
   sessionMention,
   sessionTag,
+  stateWord,
+  type Room,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
@@ -45,65 +47,108 @@ export function humanOverview(
   const reasons = new Set<string>();
   let activityAvailable = true;
   let cardsAvailable = true;
-  const targetRef = (entry: WorkEntry, kind: 'work' | 'room' | 'session', id: string): string => {
-    const target = targets.find(
-      (target) =>
-        target.kind === kind &&
-        (target.kind === 'session'
-          ? target.ref.projectPath === entry.projectPath &&
-            target.ref.workId === entry.map.work.id &&
-            target.ref.sessionId === id
-          : target.projectPath === entry.projectPath &&
-            target.workId === entry.map.work.id &&
-            (target.kind === 'work' || target.roomId === id)),
+  const key = (entry: WorkEntry, kind: string, id: string): string =>
+    JSON.stringify([entry.projectPath, entry.map.work.id, kind, id]);
+  const refIndex = new Map<string, string>();
+  for (const target of targets) {
+    const location = target.kind === 'session' ? target.ref : target;
+    const id =
+      target.kind === 'session'
+        ? target.ref.sessionId
+        : target.kind === 'room'
+          ? target.roomId
+          : target.workId;
+    refIndex.set(
+      JSON.stringify([location.projectPath, location.workId, target.kind, id]),
+      target.id,
     );
-    if (!target) throw new Error('Overview target disappeared before projection');
-    return target.id;
+  }
+  const targetRef = (entry: WorkEntry, kind: 'work' | 'room' | 'session', id: string): string => {
+    const ref = refIndex.get(key(entry, kind, id));
+    if (!ref) throw new Error('Overview target disappeared before projection');
+    return ref;
   };
+  const indexes = new Map(
+    source.entries.map((entry) => {
+      const memberships = new Set<string>();
+      const firstRoom = new Map<string, Room>();
+      for (const room of entry.map.rooms)
+        for (const id of room.members) {
+          memberships.add(id);
+          if (!archived(room) && !firstRoom.has(id)) firstRoom.set(id, room);
+        }
+      return [
+        entry,
+        {
+          sessions: new Map(entry.map.sessions.map((session) => [session.id, session])),
+          memberships,
+          firstRoom,
+        },
+      ] as const;
+    }),
+  );
   // Raw ids are work-local. Ambiguous aliases are deliberately left to the neutral normalizer fallback.
   const aliases = new Map<string, Set<string>>();
   const alias = (key: string, name: string): void => {
-    const names = aliases.get(key) ?? new Set<string>();
-    names.add(name);
-    aliases.set(key, names);
+    const values = aliases.get(key) ?? new Set<string>();
+    values.add(name);
+    aliases.set(key, values);
   };
   const names = new Map<string, string>();
+  const candidates: {
+    ref: string;
+    session: WorkSession;
+    role: string;
+    room: string;
+    work: string;
+  }[] = [];
   for (const entry of source.entries.filter((entry) => entry.map.work.status !== 'archived')) {
-    alias(entry.map.work.id, normalizeHumanText(entry.map.work.title, {}));
+    const work = normalizeHumanText(entry.map.work.title, {});
+    alias(entry.map.work.id, work);
     for (const room of entry.map.rooms.filter((room) => !archived(room)))
       alias(room.id, normalizeHumanText(room.title, {}));
     for (const session of entry.map.sessions) {
-      const room = entry.map.rooms.find(
-        (room) => !archived(room) && room.members.includes(session.id),
-      );
-      const fallback = `${session.role?.name ?? 'участник'}${room ? ` комнаты ${normalizeHumanText(room.title, {})}` : ''}`;
+      const room = indexes.get(entry)!.firstRoom.get(session.id);
+      const role = normalizeHumanText(session.role?.name ?? 'участник', {});
+      const roomLabel = room ? normalizeHumanText(room.title, {}) : '';
+      const fallback = `${role}${roomLabel ? ` комнаты ${roomLabel}` : ''}`;
       // A generated prefix is naming metadata; arbitrary prose is handled only by O1.
       const generated = session.label.trim().match(/^(?:S\d+|s-\d+)(?:\s+(.+))?$/);
-      const label = normalizeHumanText(generated ? (generated[1] ?? '') : session.label, {});
-      const base = label || normalizeHumanText(fallback, {});
-      const duplicates =
-        entry.map.sessions.filter((other) => other.label.trim() === session.label.trim()).length >
-        1;
-      const name = duplicates
-        ? `${base}, ${normalizeHumanText(session.role?.name ?? 'участник', {})}${room ? `, ${normalizeHumanText(room.title, {})}` : ''}, ${normalizeHumanText(entry.map.work.title, {})}`
-        : base;
+      const label = normalizeHumanText(generated ? (generated[1] ?? '') : session.label, {
+        [sessionTag(session.id)]: fallback,
+      });
       const ref = targetRef(entry, 'session', session.id);
-      names.set(ref, name);
-      alias(session.id, name);
-      alias(sessionMention(session.id), name);
-      alias(sessionTag(session.id), name);
-      for (const tag of session.label.match(/\bS\d+\b/g) ?? []) alias(tag, name);
-      refs[ref] = name;
+      names.set(ref, label || fallback);
+      candidates.push({ ref, session, role, room: roomLabel, work });
     }
-    for (const target of targets.filter(
-      (target) =>
-        target.kind !== 'session' &&
-        target.projectPath === entry.projectPath &&
-        target.workId === entry.map.work.id &&
-        !target.hidden,
-    ))
-      refs[target.id] = normalizeHumanText(target.name, {});
   }
+  const nameCounts = (): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return counts;
+  };
+  // Resolve normalized collisions across the entire permitted scope, in the specified order.
+  for (const qualifier of ['role', 'room', 'work'] as const) {
+    const counts = nameCounts();
+    for (const candidate of candidates) {
+      const name = names.get(candidate.ref)!;
+      if (counts.get(name)! > 1 && candidate[qualifier])
+        names.set(candidate.ref, `${name}, ${candidate[qualifier]}`);
+    }
+  }
+  const ambiguousNames = new Set(
+    [...nameCounts()].filter(([, count]) => count > 1).map(([name]) => name),
+  );
+  for (const { ref, session } of candidates) {
+    const name = names.get(ref)!;
+    alias(session.id, name);
+    alias(sessionMention(session.id), name);
+    alias(sessionTag(session.id), name);
+    refs[ref] = name;
+  }
+  for (const target of targets)
+    if (target.kind !== 'session' && !target.hidden)
+      refs[target.id] = normalizeHumanText(target.name, {});
   for (const [key, values] of aliases) {
     refs[key] =
       values.size === 1
@@ -181,7 +226,7 @@ export function humanOverview(
       lifecycle: session.lifecycle,
       state,
       activityKnown: known,
-      ambiguous: [...names.values()].filter((name) => name === displayName).length > 1,
+      ambiguous: ambiguousNames.has(displayName),
     };
     return { ...member, group: groupOf([member], waits), waits };
   };
@@ -193,7 +238,7 @@ export function humanOverview(
     for (const room of entry.map.rooms.filter((room) => !archived(room))) {
       const ref = targetRef(entry, 'room', room.id);
       const members = room.members.map((id): HumanOverviewSession => {
-        const session = entry.map.sessions.find((session) => session.id === id);
+        const session = indexes.get(entry)!.sessions.get(id);
         if (session) return readSession(entry, session);
         reasons.add('Сведения о части участников недоступны.');
         activityAvailable = false;
@@ -305,40 +350,32 @@ export function humanOverview(
     // Membership in archived rooms does not turn a participant into an unassigned session.
     for (const session of entry.map.sessions.filter(
       (session) =>
-        session.lifecycle !== 'closed' &&
-        !entry.map.rooms.some((room) => room.members.includes(session.id)),
+        session.lifecycle !== 'closed' && !indexes.get(entry)!.memberships.has(session.id),
     ))
       unassignedSessions.push(readSession(entry, session));
   }
   // A caller's card reader can reveal a concurrent archive/removal. Do not publish stale entities.
-  const visibleRooms = rooms.filter((room) =>
-    source.entries.some(
-      (entry) =>
-        entry.map.work.status !== 'archived' &&
-        entry.map.rooms.some(
-          (current) => !archived(current) && targetRef(entry, 'room', current.id) === room.ref,
-        ),
-    ),
-  );
+  const currentWorks = new Set<string>();
+  const currentRooms = new Set<string>();
+  const currentSessions = new Set<string>();
+  for (const entry of source.entries) {
+    if (entry.map.work.status === 'archived') continue;
+    const work = refIndex.get(key(entry, 'work', entry.map.work.id));
+    if (work) currentWorks.add(work);
+    for (const room of entry.map.rooms) {
+      const ref = refIndex.get(key(entry, 'room', room.id));
+      if (ref && !archived(room)) currentRooms.add(ref);
+    }
+    for (const session of entry.map.sessions) {
+      const ref = refIndex.get(key(entry, 'session', session.id));
+      if (ref && session.lifecycle !== 'closed') currentSessions.add(ref);
+    }
+  }
+  const visibleRooms = rooms.filter((room) => currentRooms.has(room.ref));
   if (visibleRooms.length !== rooms.length)
     reasons.add('Во время сбора комната исчезла или была архивирована; покрытие неполно.');
-  const visibleSessions = unassignedSessions.filter((session) =>
-    source.entries.some(
-      (entry) =>
-        entry.map.work.status !== 'archived' &&
-        entry.map.sessions.some(
-          (current) =>
-            current.lifecycle !== 'closed' &&
-            targetRef(entry, 'session', current.id) === session.ref,
-        ),
-    ),
-  );
-  const visibleWorks = works.filter((ref) =>
-    source.entries.some(
-      (entry) =>
-        entry.map.work.status !== 'archived' && targetRef(entry, 'work', entry.map.work.id) === ref,
-    ),
-  );
+  const visibleSessions = unassignedSessions.filter((session) => currentSessions.has(session.ref));
+  const visibleWorks = works.filter((ref) => currentWorks.has(ref));
   const mapComplete =
     options.mapComplete !== false &&
     visibleRooms.length === rooms.length &&
@@ -363,6 +400,11 @@ export function humanOverview(
   overview.text = renderHumanOverview(overview, options.detailed);
   return overview;
 }
+
+const humanState = (member: HumanOverviewMember): string =>
+  member.state === 'unknown' || member.lifecycle === null
+    ? 'активность неизвестна'
+    : stateWord(member.state, member.lifecycle);
 
 /** Both lengths render the same facts; short form explicitly counts rooms left unlisted. */
 export function renderHumanOverview(overview: HumanOverviewV1, detailed = false): string {
@@ -389,10 +431,7 @@ export function renderHumanOverview(overview: HumanOverviewV1, detailed = false)
       );
       if (detailed) {
         lines.push(
-          ...room.members.map(
-            (member) =>
-              `${member.displayName}: ${member.state === 'unknown' ? 'активность неизвестна' : member.state}.`,
-          ),
+          ...room.members.map((member) => `${member.displayName}: ${humanState(member)}.`),
         );
         if (room.latestLeadNote)
           lines.push(
@@ -400,17 +439,30 @@ export function renderHumanOverview(overview: HumanOverviewV1, detailed = false)
           );
       }
     }
-    if (listed.length < rooms.length)
-      lines.push(
-        `Не перечислено комнат: ${rooms.length - listed.length}. ${[...new Set(rooms.flatMap((room) => [...room.warnings, ...room.waits.map((wait) => wait.text)]))].join(' ')}`,
-      );
+    if (listed.length < rooms.length) {
+      const omitted = rooms.slice(listed.length);
+      const reasons: string[] = [];
+      const withHumanWait = omitted.filter((room) =>
+        room.waits.some((wait) => wait.needsHuman),
+      ).length;
+      const withOtherWait = omitted.filter((room) =>
+        room.waits.some((wait) => !wait.needsHuman),
+      ).length;
+      const unknown = omitted.filter((room) => !room.activityKnown).length;
+      if (withHumanWait) reasons.push(`ожидают действия человека: ${withHumanWait}`);
+      if (withOtherWait)
+        reasons.push(`ожидают запуска, зависимости или сброса лимита: ${withOtherWait}`);
+      if (unknown) reasons.push(`активность неизвестна: ${unknown}`);
+      reasons.push(...new Set(omitted.flatMap((room) => room.warnings)));
+      lines.push(`Не перечислено комнат: ${omitted.length}. ${reasons.join('; ')}`);
+    }
   }
   lines.push(`Вне комнат незакрытых участников: ${overview.unassignedSessions.length}.`);
   for (const session of overview.unassignedSessions.filter(
     (session) => detailed || session.group !== 'other',
   ))
     lines.push(
-      `${session.displayName}: ${session.state}. ${session.waits.map((wait) => wait.text).join(' ')}`,
+      `${session.displayName}: ${humanState(session)}. ${session.waits.map((wait) => wait.text).join(' ')}`,
     );
   lines.push(...overview.coverage.reasons);
   return lines.join('\n');
