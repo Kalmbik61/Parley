@@ -18,6 +18,10 @@ import { devMoreRoom } from '../dev/demo';
 import { DEMO, DEV_FOCUS } from '../dev/flags';
 import { devFocus, LONG_DRAFT, runDevScript } from '../dev/dev-script';
 import { ConnectionBanner } from '../components/ConnectionBanner';
+import { DictationStrip } from '../voice/DictationStrip';
+import { dictation } from '../voice/dictation';
+import { MicButton } from '../voice/MicButton';
+import { useDictationTarget } from '../voice/use-dictation-target';
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
@@ -65,6 +69,15 @@ export default function RoomScreen() {
   const roomInput = useRef<React.ComponentRef<typeof TextInput>>(null);
   useEffect(() => devFocus.listen(() => roomInput.current?.focus()), []);
   const chat = useRoomChat(target, toast.show);
+  const dictationId = `room:${roomId ?? ''}`;
+  const mic = useDictationTarget({
+    id: dictationId,
+    input: roomInput,
+    value: chat.draft,
+    apply: chat.setDraft,
+    fallback: { kind: 'room', key: target === null ? '' : roomKey(target) },
+    toast: toast.show,
+  });
   // The menu's action in flight and the unseen result live outside the screen (room-runs.ts): leaving does not stop a run.
   const hostId = useRuntimeState().host?.hostId ?? null;
   const runKey = target === null ? '' : runKeyOf(hostId, target);
@@ -493,6 +506,7 @@ export default function RoomScreen() {
                 />
               )}
               <ToLine names={to} />
+              <DictationStrip id={dictationId} />
               <View style={styles.row}>
                 <Pressable
                   accessibilityRole="button"
@@ -510,11 +524,13 @@ export default function RoomScreen() {
                   editable={!chat.busy && hidden.sendEnabled}
                   value={chat.draft}
                   onChangeText={chat.setDraft}
+                  onSelectionChange={mic.onSelectionChange}
                   placeholder={COMPOSER_PLACEHOLDER}
                   placeholderTextColor={c.label3}
                   style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label, opacity: chat.busy ? 0.6 : 1 }]}
                 />
-                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void chat.send()} style={styles.send}>
+                <MicButton id={dictationId} editable={!chat.busy && hidden.sendEnabled} />
+                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void (dictation.finishBeforeSend(dictationId) || chat.send())} style={styles.send}>
                   <SymbolView name="arrow.up.circle.fill" size={32} tintColor={canSend ? c.tint : c.off} />
                 </Pressable>
               </View>

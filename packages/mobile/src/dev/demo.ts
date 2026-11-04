@@ -430,6 +430,13 @@ export function demoRoute(raw: unknown): string | null {
       return `/session/${sessionParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2', sessionId: 'tiny' })}?${dev}`;
     case 'a44-room':
       return `/room?ref=${encodeURIComponent(workParam({ projectPath: '/Users/me/codex-bridge', workId: 'w2' }))}&room=rlong&${dev}`;
+    // A47 screenshots: `a47-session:mic@4000,mic@10000` taps the microphone at those milliseconds (fake engine, dev/dev-script).
+    case 'a47-session':
+      return `${s('drone1')}?${dev}`;
+    case 'a47-room':
+      return `/room?ref=${encodeURIComponent(w)}&room=r1&${dev}`;
+    case 'a47-new':
+      return `/new?${dev}`;
     case 'chat':
       return s('drone1');
     case 'room':

@@ -598,6 +598,7 @@ export default function SessionScreen() {
             onSend={() => (sleeping ? messageProblem(chat.draft) === null && messageProblem(chat.composed) === null && askResumeAndSend(chat.composed) : void chat.send())}
             busy={chat.busy || resume.view.pending !== null}
             measured={chat.composed}
+            dictation={{ id: `session:${sessionKey(ref)}`, draftKey: sessionKey(ref), toast: toast.show }}
           />
           </>
         )}

@@ -9,6 +9,9 @@ import { letterProblem, recipientsOf, roomOutgoing, sendLetter, type Mentionable
 
 const outboxes = new Map<string, OutLetter[]>();
 const drafts = new Map<string, string>();
+/** The room's draft by key, for code outside the screen (A47: a dictation that outlives its field lands here). */
+export const roomDraftOf = (key: string): string => drafts.get(key) ?? '';
+export const setRoomDraft = (key: string, text: string): void => void (text === '' ? drafts.delete(key) : drafts.set(key, text));
 
 export interface RoomChatFlow {
   draft: string;
