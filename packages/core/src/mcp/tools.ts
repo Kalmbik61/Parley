@@ -64,6 +64,7 @@ import { readProjectMemory } from '../work/project-memory.js';
 import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
+import { isReportLetterAbout, lastTaskGiver, reportLetterText } from '../work/task-giver.js';
 import { SHORT_PROFILE_HIDDEN_TOOLS } from '../work/mcp-config.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
@@ -889,6 +890,14 @@ async function report(
     session.artifacts = artifacts;
   });
   if (status !== 'progress') {
+    // Письмо уже лежит, когда смена результата разбудит ожидающего по id.
+    writeLetters(context.projectPath, context.workId, (letters, current) => {
+      const giver = lastTaskGiver(current, letters, sessionId);
+      if (giver === null) return;
+      const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
+      letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
+      letters.add({ from: 'system', roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
+    });
     // Итоговые метрики в карту фиксирует общий код жизненного цикла.
     map = await finishSession(context.projectPath, context.workId, sessionId, status);
   }
@@ -1153,7 +1162,15 @@ async function waitFor(
     const unsettledMs = target === 'inbox' ? settleDelay(unreadLetters(context.projectPath, context.workId, sessionId)) : 0;
     wakeOnPending = unsettledMs === 0;
     const found = await waitOnce(unsettledMs > 0 ? Math.min(timeLeftMs, unsettledMs + SETTLE_SLACK_MS) : timeLeftMs);
-    if (target !== 'inbox') return found === null ? { state: 'running' } : found;
+    if (target !== 'inbox') {
+      if (found !== null && typeof found === 'object' && 'state' in found && (found.state === 'done' || found.state === 'failed')) {
+        writeLetters(context.projectPath, context.workId, (letters) => {
+          const reports = letters.unreadFor(sessionId).filter((message) => isReportLetterAbout(message, target));
+          letters.markRead(sessionId, reports.map((message) => message.id), new Date().toISOString());
+        });
+      }
+      return found === null ? { state: 'running' } : found;
+    }
     if (found === PENDING) continue;
     if (found === null) {
       if (cancelled()) return { state: 'running' };
