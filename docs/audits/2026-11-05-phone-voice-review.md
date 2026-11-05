@@ -287,3 +287,63 @@
   исполнителя M2/M3. Тесты `cards-model`/`screen-model` вошли в прогон mobile из первой части (671 passed).
 - Показ RN `Modal` из невидимой вкладки `NativeTabs`, его поведение при открытом pageSheet и над `FullWindowOverlay` —
   выводы по комментариям `LockGate.tsx` и коду, на устройстве не проверены.
+
+## Проверка исправлений
+
+Область: `da788a99..HEAD` — `3d149f82` (M2, M3, m1, m2, заметки, порядок `stop()`), `0a3c6d37` (M1, решение человека A),
+`b08c418e` (B1, M4, M5, M6, m4, m5, m6, текст неудачного решения). Код читался по диффам. Полные наборы тестов не
+запускались: их гоняет лид. m3 (сверка jobs после переподключения) отложена намеренно.
+
+**Итоговый вердикт: ship with fixes.** Блокеров не осталось. Исправление M3 открыло одну новую проблему (N1, major):
+пока карточка ждёт подтверждения, автозакрытие не срабатывает. Правка в две строки.
+
+| Находка | Итог | Где и почему |
+|---|---|---|
+| B1 карточка над замком | исправлено | `cards-model.ts` `sheetVisible`/`canDecide`: лист и решение только при `!covered`; `covered` — тот же предикат `shouldCover`, что у `LockGate` (`auth/use-covered.ts`), включая обложку `inactive`. Замок, взятый при открытом листе, закрывает его через `useCloseOnLock` (`use-live-voice.ts`, `hiddenByLock`) |
+| M1 обход `remoteCreate` | исправлено | `server.ts:135`: `cards.decide` в `REMOTE_SWITCHED_METHODS`. При выключенном `remoteCreate` метода нет в `hello.methods`, вызов получает `unknown_method`; `cards.list` открыт (тесты `server.test.ts`, «cards.decide за переключателем remoteCreate»). Телефон по `hello.methods` показывает «Confirm on Mac» (`cards-model.ts` `sheetMode`) |
+| M2 осиротевшая сессия | исправлено | `protocol/remote/voice.ts`: мост 60 с, телефон 75 с; хост в худшем случае 51,25 с (`voice-session-service.ts` `PREPARE_WORST_CASE_MS`), порядок закреплён тестом. Применяются в `host-link.ts` `request` и `rpc.ts` `defaultTimeoutFor`; `jobs.submit` и `cards.decide` получили 45 с. Ветка `abandon` может отвечать дольше 60 с, но отвечает отказом с уже закрытой сессией — потеря такого ответа безвредна |
+| M3 нет автозакрытия | исправлено, но см. N1 | `live-controller.ts`: `createIdleCloser` в `openSession`, сигналы речи, `activity()` на делегацию, `step()` в тике, `start()` после открытия канала, `stop()` в `teardown`; `onIdle` → `stopLive`. Тесты «3 минуты тишины…», «открытый job…», «недавняя речь…» |
+| M4 лист запирает экран | исправлено | `CardSheet.tsx`: «Later» и `onRequestClose={onLater}`; после «Later» Stop/Mute доступны, на экране кнопка «1 card waiting · Open» (`VoiceScreen.tsx`); лист только при `useIsFocused()` вкладки Voice |
+| M5 нет повтора после R15 | исправлено | `screen-model.ts`: `retry: true` для `no_key`/`limit_reached`/`mic`, кнопка «Try again» (`VoiceScreen.tsx`); отказ сбрасывается при возврате на передний план и при `macBack` (`use-live-voice.ts`, `needsReset`); в `limit_reached` остаток перечитывается, положительный снимает шаблон |
+| M6 текст микрофона | исправлено | `app.config.ts:15`: «Live voice audio is sent through your Mac to OpenAI; dictation stays on this iPhone.» Вступит в силу только с новой нативной сборкой (prebuild) |
+| m1 `daily_limit` → `stop` | исправлено | `live-controller.ts` `finish`: `daily_limit` → `limitReached`; двойное событие при закрытии во время подключения убрано (`closedEmitted` → `refuseQuietly`, и в `catch`) |
+| m2 `catch` по глобальной `live` | исправлено | `live-controller.ts`: `own` — сессия этого вызова; поздний `ok` после `stop()` закрывается на хосте через `dropLocal`, а не `openSession`. Тесты «поздний отказ prepare…», «поздний ok…» |
+| m3 сверка после reconnect | не исправлено (отложено) | — |
+| m4 сбой `cards.list` | исправлено | `use-live-voice.ts`: буфер применяется и при сбое, один повтор через 5 с, таймер снимается в cleanup |
+| m5 дубль текстового job | исправлено | `screen-model.ts` `keyForText`: тот же текст после сбоя уходит с прежним ключом; ключ сбрасывается, когда итог показан (см. n9) |
+| m6 контроллер в `useMemo` | исправлено | `use-live-voice.ts`: контроллер создаётся в эффекте и освобождается его cleanup; повторный mount получает новый |
+| n1, n2 комментарии и триггер эмоции | исправлено | `voice-prompt.ts` `liveSessionConfig({emotion})`, `methods/voice.ts`: телефону без `triggers` (тест); комментарии обновлены |
+| n4 микрофон ждёт ответа хоста | исправлено | `stopLive` → `finish(target, 'close_requested')`: `voice.session.close` отправляется без ожидания, `teardown` сразу (тест «close без ответа…») |
+| n6 текст неудачного решения | исправлено | `cards-model.ts`: `reason: 'failed'` → `kind: 'failed'`, «Could not send — try again», карточка остаётся |
+
+### N1 (major, новая). Карточка, ждущая подтверждения, отключает автозакрытие голоса
+
+- **Где:** `packages/mobile/src/voice/live-controller.ts`, `busy()` в `openSession`: `[...jobs.values()].some(isOpen)`, а
+  `isOpen` включает `needs_confirmation` (`:156`). Там же `openDelegations.size > 0`: делегация закрывается только на
+  `completed | failed | cancelled` (`onJobChanged` → `endDelegation`), то есть job в `needs_confirmation` держит её
+  открытой. У острова «занято» — только `queued | running` (`desktop/.../island/live/delegation.ts:192-193`).
+- **Сценарий:** «Закрой S05» голосом → помощник готовит карточку, job в `needs_confirmation`. При выключенном
+  `remoteCreate` (M1) телефон показывает «Confirm on Mac», человек кладёт телефон экраном вверх и идёт к Mac или
+  забывает. Карточка живёт `ASSISTANT_CARD_TTL_MS` = 30 мин (`assistant-service.ts:70`). Всё это время `busy()` истинно,
+  автозакрытие не срабатывает, и сессия тарифицируется до `MAX_SESSION_MS` = 30 мин. Это ровно тот сценарий, ради
+  которого чинили M3.
+- **Исправление:** в `busy()` считать открытыми только `queued | running` (как у острова). Делегацию считать
+  закрытой и на `needs_confirmation`, либо не учитывать `openDelegations`, чей job уже не `queued`/`running`. Тест: job
+  `needs_confirmation` + 3 мин тишины → сессия закрыта, job не отменён.
+
+### Заметки проверки
+
+- n8. После «Later» на карточке A карточка B с более поздним сроком не видна, пока A не решена или не погасла:
+  `currentCard` всегда берёт первую, а подпись «1 card waiting» не показывает число. Неудобно, но не опасно.
+- n9. `keyForText` сбрасывается только при показе итога. Если человек сознательно повторит тот же текст, пока первый job
+  ещё идёт или ждёт подтверждения, хост вернёт прежний job (дедупликация по ключу), а не создаст новый. Для текстового
+  поля это скорее верно.
+- n10. После закрытия по `daily_limit` посреди сессии `voice.usage.get` может вернуть небольшой положительный остаток:
+  оценка против финала (`voice-session-service.ts:131-140`). Тогда шаблон снимется, и человек сможет открыть ещё одну
+  короткую сессию (минимум `INIT_BILLED_SECONDS` = 15 с). Хост её ограничит остатком бюджета.
+
+### Not verified (проверка)
+
+- Тесты, typecheck и lint на `HEAD` не запускались (их гоняет лид). Новые тесты прочитаны по названиям и диффу.
+- Поведение `Modal` при `useIsFocused() === false` во вкладках `NativeTabs` и порядок «Face ID → `inactive` → обложка
+  замка → лист скрыт → возврат» — на устройстве не проверены.
