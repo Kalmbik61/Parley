@@ -109,7 +109,7 @@ export function stableGuidance({ skillNavigator = false, skillList, toolProfile 
     'create_session — launch a new peer in the current workspace. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate. Implementation: standard-tier models (Executor); strong ones plan, lead, review.',
     // Одно длинное ожидание вместо цепочки коротких: каждый вызов и каждая реплика «жду» — полный ход модели.
     // 1500, а не 1800: у вызова MCP в Claude Code потолок простоя 30 минут (CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT).
-    'wait_for — wait for a session by id or mail ("inbox"; marks it read). Mail: one wait_for("inbox", 1500), no text before or after, no Monitor, sleep or loops; on {"state":"running"} repeat once, then end the turn without report (not done). By id: repeat while running. New task to a session that reported: wait via "inbox", not by id.',
+    'wait_for — session by id or mail ("inbox"; marks it read). Mail: one wait_for("inbox", 1500), no text before or after, no Monitor, sleep or loops; on {"state":"running"} repeat once, then end the turn without report (not done). By id: repeat while running. New job: wait via "inbox", not by id (its report arrives as a letter).',
     'send_message — to a session or to a room (room): question — waiting for an answer, decision — we have agreed, note — the default; replyTo — in a room, the id of the message you answer, above all the human\'s question: the window quotes it.',
     // В окне письма объявляет указатель: хост печатает его после хода агента (`delivery.ts`), а сессии окна
     // запускает без канала. Тег `<channel source="parley">` — только у сессий CLI `parley-core`; его оговорка

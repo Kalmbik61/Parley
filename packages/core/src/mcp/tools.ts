@@ -486,7 +486,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     annotations: WRITES,
     description:
-      'Report on your own session: done or failed hands in the result (the session stays reachable, not closed); progress is an interim summary. A repeat overwrites the summary and artifacts.',
+      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed also mails the session that last tasked you directly or via create_session.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -514,7 +514,7 @@ export const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: WRITES,
     description:
-      'Wait for a session to finish (target = its id) or for mail (target = "inbox"); mail comes back marked read, so check_inbox is not needed. Timeout returns {"state":"running"}. {"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox".',
+      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read; no check_inbox needed. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
     inputSchema: {
       type: 'object',
       properties: {
